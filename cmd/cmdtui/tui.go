@@ -1002,15 +1002,6 @@ func (m model) View() string {
 	b.WriteString(renderStatusLine(m.snap, w))
 	b.WriteByte('\n')
 
-	// Tracker status.
-	if ts := renderTrackers(m.snap.Trackers, w); ts != "" {
-		b.WriteString(ts)
-		b.WriteByte('\n')
-	} else if m.fetching && m.snap.Trackers == nil {
-		b.WriteString("  " + m.spinner.View() + subtleStyle.Render(" Connecting trackers..."))
-		b.WriteByte('\n')
-	}
-
 	// Tab bar (only when 2+ projects).
 	if tabBar := renderTabBar(m.tabs(), m.activeTab, w); tabBar != "" {
 		b.WriteString(tabBar)
@@ -1025,8 +1016,19 @@ func (m model) View() string {
 		return b.String()
 	}
 
-	// Instances (filtered by active tab) and tmux panes.
+	// --- Instances panel ---
 	m.renderInstancesAndPanes(&b, w)
+
+	// --- Trackers panel ---
+	if ts := renderTrackers(m.snap.Trackers, w); ts != "" {
+		b.WriteByte('\n')
+		b.WriteString(ts)
+		b.WriteByte('\n')
+	} else if m.fetching && m.snap.Trackers == nil {
+		b.WriteByte('\n')
+		b.WriteString("  " + subtleStyle.Render("Trackers") + "  " + m.spinner.View() + subtleStyle.Render(" connecting..."))
+		b.WriteByte('\n')
+	}
 
 	// Issues panel.
 	if ip := renderIssuesPanel(m.issues, m.issuesFetched, w, m.issueCursor); ip != "" {
