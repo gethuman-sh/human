@@ -270,6 +270,52 @@ func SendConfirmDecision(addr, token, id string, approved bool) error {
 	return err
 }
 
+// Subscribe opens a persistent connection to the daemon's subscribe endpoint.
+// It returns a channel that receives a signal each time the daemon's state
+// changes, and a cleanup function that closes the connection.
+// The channel is closed when the connection drops or cleanup is called.
+func Subscribe(addr, token string) (<-chan SubscribeEvent, func(), error) {
+	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+	if err != nil {
+		return nil, nil, errors.WrapWithDetails(err, "cannot reach daemon", "addr", addr)
+	}
+
+	cwd, _ := os.Getwd()
+	req := Request{
+		Token:     token,
+		Args:      []string{"subscribe"},
+		ClientPID: os.Getpid(),
+		Cwd:       cwd,
+	}
+	enc := json.NewEncoder(conn)
+	if err := enc.Encode(req); err != nil {
+		_ = conn.Close()
+		return nil, nil, errors.WrapWithDetails(err, "failed to send subscribe request")
+	}
+
+	ch := make(chan SubscribeEvent, 1)
+	go func() {
+		defer close(ch)
+		reader := bufio.NewReader(conn)
+		for {
+			line, readErr := reader.ReadBytes('\n')
+			if readErr != nil {
+				return
+			}
+			var evt SubscribeEvent
+			if json.Unmarshal(line, &evt) == nil {
+				select {
+				case ch <- evt:
+				default: // coalesce if TUI hasn't consumed yet
+				}
+			}
+		}
+	}()
+
+	cleanup := func() { _ = conn.Close() }
+	return ch, cleanup, nil
+}
+
 // deliverCallback performs an HTTP GET to the callback URL, delivering the
 // OAuth callback to the local listener (e.g. Claude Code) from inside the
 // container where localhost is reachable.

@@ -24,7 +24,7 @@ type Monitor struct {
 	dockerClient claude.DockerClient
 
 	// parsersMu guards parsers. Although the TUI currently serialises
-	// FetchFull/FetchQuick via its own m.fetching flag, future callers
+	// FetchFull via its own m.fetching flag, future callers
 	// (background health checks, parallel tests) must not rely on that
 	// invariant — concurrent map access on parsers would otherwise crash
 	// the program.
@@ -128,56 +128,6 @@ func (m *Monitor) FetchFull(ctx context.Context) *Snapshot {
 	return m.FetchHeavy(ctx, m.FetchSkeleton())
 }
 
-// FetchQuick updates daemon status, pane states, and hook-based working/idle
-// on an existing snapshot. Instances, sessions, agents, and tasks are carried
-// forward to avoid flicker.
-func (m *Monitor) FetchQuick(_ context.Context, prev *Snapshot) *Snapshot {
-	if prev == nil {
-		return nil
-	}
-
-	// Shallow copy carried-forward data.
-	snap := *prev
-	snap.FetchedAt = time.Now()
-
-	pid, alive := daemon.ReadAlivePid()
-	snap.Daemon = DaemonState{PID: pid, Alive: alive}
-	if info, err := daemon.ReadInfo(); err == nil {
-		snap.Daemon.ProxyAddr = info.ProxyAddr
-	}
-	snap.Daemon.ProxyActiveConns = proxy.ReadStats(proxy.StatsPath()).ActiveConns
-	snap.connectedPIDs = readConnectedPIDs()
-	snap.NetworkEvents = fetchDaemonNetworkEvents(snap.Daemon.Alive)
-
-	// Re-read hook events from daemon for sub-second state transitions.
-	hookSnaps := fetchDaemonHookSnapshots(snap.Daemon.Alive)
-	if len(hookSnaps) > 0 {
-		// Deep-copy sessionByPath before mutating.
-		byPath := make(map[string]logparser.SessionState, len(snap.sessionByPath))
-		for k, v := range snap.sessionByPath {
-			byPath[k] = v
-		}
-		overlayHookState(byPath, hookSnaps)
-		fillMissingFromHooks(extractInstances(prev.Instances), byPath, hookSnaps)
-		snap.sessionByPath = byPath
-
-		// Rebuild instance views with updated sessions.
-		snap.Instances = matchInstances(extractUsages(prev.Instances), byPath)
-	}
-
-	applyDaemonConnectedViews(snap.Instances, snap.connectedPIDs)
-
-	// Carry forward panes from prev, updating only their states from hook data.
-	if len(prev.Panes) > 0 {
-		panes := make([]claude.TmuxPane, len(prev.Panes))
-		copy(panes, prev.Panes)
-		matchPaneStates(panes, snap.sessionByPath, extractInstances(prev.Instances))
-		snap.Panes = panes
-	}
-
-	return &snap
-}
-
 // --- internal helpers ---
 
 func (m *Monitor) findPanes(ctx context.Context, instances []claude.Instance) []claude.TmuxPane {
@@ -264,42 +214,6 @@ func collectContainerIDs(instances []claude.Instance) []string {
 		}
 	}
 	return ids
-}
-
-// fetchDaemonHookSnapshots reads hook state from the daemon's in-memory store.
-// Returns nil when daemon is unavailable.
-func fetchDaemonHookSnapshots(daemonAlive bool) map[string]hookevents.SessionSnapshot {
-	if !daemonAlive {
-		return nil
-	}
-	info, err := daemon.ReadInfo()
-	if err != nil || info.Addr == "" {
-		return nil
-	}
-	snap, err := daemon.GetHookSnapshot(info.Addr, info.Token)
-	if err != nil {
-		return nil
-	}
-	return snap
-}
-
-// fetchDaemonNetworkEvents reads the ambient network activity buffer
-// from the daemon. Returns nil when the daemon is unavailable or the
-// call fails so the renderer collapses the panel gracefully rather
-// than showing a misleading empty frame.
-func fetchDaemonNetworkEvents(daemonAlive bool) []daemon.NetworkEvent {
-	if !daemonAlive {
-		return nil
-	}
-	info, err := daemon.ReadInfo()
-	if err != nil || info.Addr == "" {
-		return nil
-	}
-	events, err := daemon.GetNetworkEvents(info.Addr, info.Token)
-	if err != nil {
-		return nil
-	}
-	return events
 }
 
 // overlayHookState updates sessions in byPath from hook snapshots.

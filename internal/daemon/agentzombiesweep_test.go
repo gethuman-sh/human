@@ -67,7 +67,7 @@ func TestSweepZombieAgents_SkipsHealthy(t *testing.T) {
 func TestSweepZombieAgents_SkipsGracePeriod(t *testing.T) {
 	s := &mockSweeper{
 		agents: []AgentInfo{
-			{Name: "agent-1", ContainerID: "c1", CreatedAt: time.Now().Add(-10 * time.Second)},
+			{Name: "agent-1", ContainerID: "c1", CreatedAt: time.Now().Add(-3 * time.Second)},
 		},
 		processUp: map[string]bool{"c1": false},
 	}
@@ -95,7 +95,7 @@ func TestSweepZombieAgents_MixedAgents(t *testing.T) {
 		agents: []AgentInfo{
 			{Name: "healthy", ContainerID: "c1", CreatedAt: time.Now().Add(-5 * time.Minute)},
 			{Name: "zombie", ContainerID: "c2", CreatedAt: time.Now().Add(-3 * time.Minute)},
-			{Name: "new", ContainerID: "c3", CreatedAt: time.Now().Add(-10 * time.Second)},
+			{Name: "new", ContainerID: "c3", CreatedAt: time.Now().Add(-3 * time.Second)},
 		},
 		processUp: map[string]bool{"c1": true, "c2": false, "c3": false},
 	}

@@ -289,20 +289,6 @@ func TestSessionToState(t *testing.T) {
 	assert.Equal(t, claude.StateReady, sessionToState(logparser.SessionState{Status: logparser.StatusEnded}))
 }
 
-// --- fetchDaemonHookSnapshots tests ---
-
-func TestFetchDaemonHookSnapshots_DaemonNotAlive(t *testing.T) {
-	snaps := fetchDaemonHookSnapshots(false)
-	assert.Nil(t, snaps)
-}
-
-// --- fetchDaemonNetworkEvents tests ---
-
-func TestFetchDaemonNetworkEvents_DaemonNotAlive(t *testing.T) {
-	events := fetchDaemonNetworkEvents(false)
-	assert.Nil(t, events)
-}
-
 // --- FetchFull integration test ---
 
 func TestFetchFull_NoInstances(t *testing.T) {
@@ -319,43 +305,6 @@ func TestFetchFull_FinderError(t *testing.T) {
 	snap := mon.FetchFull(context.Background())
 	require.NotNil(t, snap)
 	assert.ErrorIs(t, snap.Err, context.DeadlineExceeded)
-}
-
-// --- FetchQuick tests ---
-
-func TestFetchQuick_NilPrev(t *testing.T) {
-	mon := New(&stubFinder{}, nil)
-	snap := mon.FetchQuick(context.Background(), nil)
-	assert.Nil(t, snap)
-}
-
-func TestFetchQuick_UpdatesDaemon(t *testing.T) {
-	mon := New(&stubFinder{}, nil)
-	prev := &Snapshot{
-		FetchedAt:  time.Now().Add(-time.Second),
-		TotalUsage: &claude.UsageSummary{Models: map[string]*claude.ModelUsage{}},
-	}
-	snap := mon.FetchQuick(context.Background(), prev)
-	require.NotNil(t, snap)
-	assert.True(t, snap.FetchedAt.After(prev.FetchedAt))
-}
-
-func TestFetchQuick_CarriesForwardPanes(t *testing.T) {
-	mon := New(&stubFinder{}, nil)
-	prev := &Snapshot{
-		FetchedAt:  time.Now().Add(-time.Second),
-		TotalUsage: &claude.UsageSummary{Models: map[string]*claude.ModelUsage{}},
-		Panes: []claude.TmuxPane{
-			{SessionName: "main", WindowIndex: 0, PaneIndex: 0, ClaudePID: 100},
-		},
-		Instances: []InstanceView{
-			{Usage: claude.InstanceUsage{Instance: claude.Instance{PID: 100, FilePath: "/a.jsonl"}}},
-		},
-	}
-	snap := mon.FetchQuick(context.Background(), prev)
-	require.NotNil(t, snap)
-	require.Len(t, snap.Panes, 1, "panes should be carried forward")
-	assert.Equal(t, "main", snap.Panes[0].SessionName)
 }
 
 // --- parseSessions tests ---

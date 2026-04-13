@@ -114,22 +114,6 @@ func TestModelUpdate_StaleSnapshot(t *testing.T) {
 	}
 }
 
-func TestModelUpdate_FastTickWhileFetching(t *testing.T) {
-	m := testModel()
-	// m.fetching is true from newModel — fastTick should be skipped.
-	updated, cmd := m.Update(fastTickMsg(time.Now()))
-	um := updated.(model)
-	if !um.fetching {
-		t.Error("fetching should remain true")
-	}
-	if um.fetchGen != 1 {
-		t.Errorf("fetchGen should remain 1, got %d", um.fetchGen)
-	}
-	if cmd == nil {
-		t.Error("expected reschedule tick command")
-	}
-}
-
 func TestModelUpdate_FullTickWhileFetching(t *testing.T) {
 	m := testModel()
 	updated, cmd := m.Update(fullTickMsg(time.Now()))
@@ -145,10 +129,10 @@ func TestModelUpdate_FullTickWhileFetching(t *testing.T) {
 	}
 }
 
-func TestModelUpdate_FastTickDispatchesFetch(t *testing.T) {
+func TestModelUpdate_FullTickDispatchesFetch(t *testing.T) {
 	m := testModel()
 	m.fetching = false // simulate idle
-	updated, cmd := m.Update(fastTickMsg(time.Now()))
+	updated, cmd := m.Update(fullTickMsg(time.Now()))
 	um := updated.(model)
 	if !um.fetching {
 		t.Error("fetching should be true after dispatching")
@@ -821,7 +805,7 @@ func TestDispatchStatusAutoClear(t *testing.T) {
 	m.dispatchStatus = "Spawned agent-1 for HUM-42"
 	m.dispatchAt = time.Now().Add(-4 * time.Second) // 4s ago
 
-	updated, _ := m.Update(fastTickMsg(time.Now()))
+	updated, _ := m.Update(fullTickMsg(time.Now()))
 	um := updated.(model)
 	assert.Equal(t, "", um.dispatchStatus)
 }
@@ -832,7 +816,7 @@ func TestDispatchStatusNotClearedEarly(t *testing.T) {
 	m.dispatchStatus = "Spawned agent-1 for HUM-42"
 	m.dispatchAt = time.Now() // just now
 
-	updated, _ := m.Update(fastTickMsg(time.Now()))
+	updated, _ := m.Update(fullTickMsg(time.Now()))
 	um := updated.(model)
 	assert.Equal(t, "Spawned agent-1 for HUM-42", um.dispatchStatus)
 }
@@ -1232,14 +1216,18 @@ func TestHandleSpawnAgent_NotInTmux(t *testing.T) {
 
 func TestHandleSpawnAgentResult_Success(t *testing.T) {
 	m := testModel()
-	m.handleSpawnAgentResult(spawnAgentMsg{name: "agent-1"})
-	assert.Contains(t, m.dispatchStatus, "Spawned agent-1")
+	updated, cmd := m.handleSpawnAgentResult(spawnAgentMsg{name: "agent-1"})
+	um := updated.(model)
+	assert.Contains(t, um.dispatchStatus, "Spawned agent-1")
+	assert.NotNil(t, cmd, "expected FetchFull command after successful spawn")
 }
 
 func TestHandleSpawnAgentResult_Error(t *testing.T) {
 	m := testModel()
-	m.handleSpawnAgentResult(spawnAgentMsg{name: "agent-1", err: fmt.Errorf("pane too small")})
-	assert.Contains(t, m.dispatchStatus, "Spawn failed")
+	updated, cmd := m.handleSpawnAgentResult(spawnAgentMsg{name: "agent-1", err: fmt.Errorf("pane too small")})
+	um := updated.(model)
+	assert.Contains(t, um.dispatchStatus, "Spawn failed")
+	assert.Nil(t, cmd, "no command expected on spawn failure")
 }
 
 func TestFooterContainsAgentHint(t *testing.T) {

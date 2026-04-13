@@ -88,6 +88,9 @@ func runTUI(projectDirs []string) error {
 	finder, dc := buildFinder()
 	mon := monitor.New(finder, dc)
 	m := newModel(mon)
+	if m.daemonUnsub != nil {
+		defer m.daemonUnsub()
+	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
@@ -155,10 +158,12 @@ type model struct {
 	width    int
 	height   int
 	quitting bool
-	fetchGen  uint64 // monotonic counter; assigned when dispatching a fetch
-	fetching  bool   // true while a fetch command is in flight
-	showSplash bool  // true during the initial logo display period
-	logMode   string // traffic log mode: "off", "meta", "full"
+	fetchGen     uint64 // monotonic counter; assigned when dispatching a fetch
+	fetching     bool   // true while a fetch command is in flight
+	showSplash   bool   // true during the initial logo display period
+	logMode      string // traffic log mode: "off", "meta", "full"
+	daemonEvents <-chan daemon.SubscribeEvent // push notifications from daemon
+	daemonUnsub  func()                      // closes daemon subscription
 
 	issues        []trackerIssues // issues from configured tracker projects
 	issuesLoading bool            // true while issue fetch is in flight
@@ -196,14 +201,24 @@ type model struct {
 func newModel(mon *monitor.Monitor) model {
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	sp.Style = lipgloss.NewStyle().Foreground(humanRed)
-	return model{mon: mon, spinner: sp, width: defaultWidth, fetchGen: 1, fetching: true, showSplash: true, logMode: "off", prevStatuses: make(map[string]logparser.SessionStatus)}
+	m := model{mon: mon, spinner: sp, width: defaultWidth, fetchGen: 1, fetching: true, showSplash: true, logMode: "off", prevStatuses: make(map[string]logparser.SessionStatus)}
+	// Subscribe to daemon push notifications (best-effort; falls back to polling).
+	if info, err := daemon.ReadInfo(); err == nil && info.Addr != "" {
+		if ch, unsub, subErr := daemon.Subscribe(info.Addr, info.Token); subErr == nil {
+			m.daemonEvents = ch
+			m.daemonUnsub = unsub
+		}
+	}
+	return m
 }
 
 // --- messages ---
 
-type fastTickMsg time.Time
 type fullTickMsg time.Time
-type splashDoneMsg struct{} // fired after the splash logo display period
+type splashDoneMsg struct{}    // fired after the splash logo display period
+type daemonEventMsg struct {
+	event daemon.SubscribeEvent
+}
 
 type snapshotMsg struct {
 	snap     *monitor.Snapshot
@@ -231,7 +246,7 @@ type createResultMsg struct {
 
 func (m model) Init() tea.Cmd {
 	splashTimer := tea.Tick(2*time.Second, func(_ time.Time) tea.Msg { return splashDoneMsg{} })
-	return tea.Batch(fetchSkeleton(m.mon, 1), splashTimer, m.spinner.Tick, fastTickCmd(), fullTickCmd(), fetchLogModeCmd(), fetchIssuesCmd(), issueTickCmd(), fetchProjectsCmd())
+	return tea.Batch(fetchSkeleton(m.mon, 1), splashTimer, m.spinner.Tick, fullTickCmd(), listenDaemonEvents(m.daemonEvents), fetchLogModeCmd(), fetchIssuesCmd(), issueTickCmd(), fetchProjectsCmd())
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -307,14 +322,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyProjects(msg)
 	case tea.WindowSizeMsg:
 		m.applyWindowSize(msg)
-	case fastTickMsg:
-		return m.handleFastTick()
 	case fullTickMsg:
 		return m.handleFullTick()
 	case snapshotMsg:
 		return m.handleSnapshot(msg)
 	case splashDoneMsg:
 		m.showSplash = false
+	case daemonEventMsg:
+		return m.handleDaemonEvent(msg)
 	case issueTickMsg:
 		return m.handleIssueTick()
 	case spawnAgentMsg:
@@ -333,7 +348,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleDaemonEvent reacts to a push notification from the daemon.
+// For agent-stopped events, the instance is removed from the snapshot
+// immediately so the TUI doesn't wait for the next discovery cycle.
+func (m model) handleDaemonEvent(msg daemonEventMsg) (tea.Model, tea.Cmd) {
+	listen := listenDaemonEvents(m.daemonEvents)
+
+	// Immediate removal for stopped agents. Container names follow the
+	// pattern "human-agent-<name>", which appears quoted in the label.
+	if msg.event.Type == "agent-stopped" && msg.event.AgentName != "" && m.snap != nil {
+		containerName := "human-agent-" + msg.event.AgentName
+		filtered := m.snap.Instances[:0:0]
+		for _, iv := range m.snap.Instances {
+			if !strings.Contains(iv.Usage.Instance.Label, containerName) {
+				filtered = append(filtered, iv)
+			}
+		}
+		m.snap.Instances = filtered
+	}
+
+	if m.fetching {
+		return m, listen
+	}
+	m.fetching = true
+	m.fetchGen++
+	return m, tea.Batch(fetchFull(m.mon, m.fetchGen), listen)
+}
+
 func (m model) handleFullTick() (tea.Model, tea.Cmd) {
+	m.clearExpiredDispatchStatus()
 	if m.fetching {
 		return m, fullTickCmd()
 	}
@@ -403,16 +446,6 @@ func (m model) checkIdleTransitions() {
 }
 
 // handleFastTick processes the fast (100ms) tick for quick snapshot refreshes.
-func (m model) handleFastTick() (tea.Model, tea.Cmd) {
-	m.clearExpiredDispatchStatus()
-	if m.fetching {
-		return m, fastTickCmd()
-	}
-	m.fetching = true
-	m.fetchGen++
-	return m, tea.Batch(fetchQuick(m.mon, m.snap, m.fetchGen), fastTickCmd())
-}
-
 // applyProjects updates the project list and clamps the active tab.
 func (m *model) applyProjects(projects projectsMsg) {
 	m.projects = []daemon.ProjectInfo(projects)
@@ -595,6 +628,19 @@ func (m model) handleSpawnAgent() (tea.Model, tea.Cmd) {
 	}
 	m.dispatchStatus = fmt.Sprintf("Spawning %s...", name)
 	m.dispatchAt = time.Now()
+	// Inject a placeholder so the instance appears immediately while the
+	// devcontainer builds and Claude starts up.
+	if m.snap != nil {
+		m.snap.Instances = append(m.snap.Instances, monitor.InstanceView{
+			Usage: claude.InstanceUsage{
+				Instance: claude.Instance{
+					Label:  fmt.Sprintf("Container %q (starting...)", "human-agent-"+name),
+					Source: "container",
+					Cwd:    projectDir,
+				},
+			},
+		})
+	}
 	return m, spawnAgentCmd(name, projectDir, tmuxTarget)
 }
 
@@ -1072,12 +1118,23 @@ func (m model) View() string {
 
 // --- commands ---
 
-func fastTickCmd() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return fastTickMsg(t) })
-}
-
 func fullTickCmd() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return fullTickMsg(t) })
+}
+
+// listenDaemonEvents waits for the next push notification from the daemon
+// subscription channel. Returns nil when the channel is closed.
+func listenDaemonEvents(ch <-chan daemon.SubscribeEvent) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		evt, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return daemonEventMsg{event: evt}
+	}
 }
 
 // fetchSkeleton returns a fast snapshot from local file reads so the TUI
@@ -1101,15 +1158,6 @@ func fetchFull(mon *monitor.Monitor, gen uint64) tea.Cmd {
 	}
 }
 
-func fetchQuick(mon *monitor.Monitor, prev *monitor.Snapshot, gen uint64) tea.Cmd {
-	return func() tea.Msg {
-		snap := mon.FetchQuick(context.Background(), prev)
-		if snap == nil {
-			snap = prev // carry forward to avoid blank flash
-		}
-		return snapshotMsg{snap: snap, gen: gen}
-	}
-}
 
 // --- render: header + status ---
 

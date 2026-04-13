@@ -34,6 +34,14 @@ type Response struct {
 	ConfirmPrompt string `json:"confirm_prompt,omitempty"` // human-readable prompt, e.g. "Delete JIRA-123?"
 }
 
+// SubscribeEvent is a notification sent over a persistent subscribe connection.
+// For "agent-stopped" events, AgentName identifies the agent to remove
+// immediately without waiting for the next discovery cycle.
+type SubscribeEvent struct {
+	Type      string `json:"type"`                 // "change", "agent-stopped"
+	AgentName string `json:"agent,omitempty"`       // set for agent lifecycle events
+}
+
 // PendingConfirm is the wire type for a single pending destructive operation
 // awaiting user confirmation via the TUI.
 type PendingConfirm struct {

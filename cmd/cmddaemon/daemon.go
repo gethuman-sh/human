@@ -984,7 +984,7 @@ func (c *dockerAgentCleaner) StopContainer(ctx context.Context, containerID stri
 	}
 	defer func() { _ = docker.Close() }()
 
-	timeout := 10
+	timeout := 2
 	_ = docker.ContainerStop(ctx, containerID, &timeout)
 	return docker.ContainerRemove(ctx, containerID, devcontainer.ContainerRemoveOptions{Force: true})
 }

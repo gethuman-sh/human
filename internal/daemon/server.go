@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/StephanSchmidt/human/internal/browser"
+	"github.com/StephanSchmidt/human/internal/claude/hookevents"
 	"github.com/StephanSchmidt/human/internal/config"
 	"github.com/StephanSchmidt/human/internal/env"
 	"github.com/StephanSchmidt/human/internal/proxy"
@@ -280,6 +281,9 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 	case "agent-stop-async":
 		s.handleAgentStopAsync(conn, args[1:])
 		return true
+	case "subscribe":
+		s.handleSubscribe(conn)
+		return true
 	}
 
 	// Intercept browser commands with OAuth redirect_uri for relay.
@@ -439,6 +443,15 @@ func (s *Server) handleAgentStopAsync(conn net.Conn, args []string) {
 		s.Logger.Warn().Err(err).Str("agent", name).Msg("async agent decommission failed")
 	}
 
+	// Notify subscribers (TUI) so they refresh immediately.
+	if s.HookEvents != nil {
+		s.HookEvents.Append(hookevents.Event{
+			EventName: "AgentStopped",
+			AgentName: name,
+			Timestamp: time.Now().UTC(),
+		})
+	}
+
 	// Tear down the container in the background.
 	if containerID != "" {
 		go func() {
@@ -455,6 +468,36 @@ func (s *Server) handleAgentStopAsync(conn net.Conn, args []string) {
 	resp := Response{Stdout: fmt.Sprintf("Agent %q stopped\n", name)}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
+}
+
+// handleSubscribe keeps the connection open and writes a JSON line each time
+// the HookEventStore signals a change. For agent lifecycle events, the event
+// carries the agent name so the TUI can remove the instance immediately.
+func (s *Server) handleSubscribe(conn net.Conn) {
+	if s.HookEvents == nil {
+		s.writeError(conn, "hook events not available", 1)
+		return
+	}
+	ch := s.HookEvents.Subscribe()
+	defer s.HookEvents.Unsubscribe(ch)
+
+	enc := json.NewEncoder(conn)
+	lastSeen := 0 // index into event store for delta reads
+	for {
+		<-ch
+		events := s.HookEvents.RecentEvents()
+		evt := SubscribeEvent{Type: "change"}
+		// Check new events for agent lifecycle changes.
+		for i := lastSeen; i < len(events); i++ {
+			if events[i].EventName == "AgentStopped" && events[i].AgentName != "" {
+				evt = SubscribeEvent{Type: "agent-stopped", AgentName: events[i].AgentName}
+			}
+		}
+		lastSeen = len(events)
+		if err := enc.Encode(evt); err != nil {
+			return
+		}
+	}
 }
 
 func (s *Server) writeError(conn net.Conn, msg string, code int) {

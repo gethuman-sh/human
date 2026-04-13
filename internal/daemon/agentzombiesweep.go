@@ -23,10 +23,10 @@ type AgentZombieSweeper interface {
 }
 
 const (
-	zombieSweepInterval = 30 * time.Second
+	zombieSweepInterval = 5 * time.Second
 	// Grace period before a container without Claude is considered a zombie.
 	// Allows time for Claude to start after the container comes up.
-	zombieGracePeriod = 60 * time.Second
+	zombieGracePeriod = 10 * time.Second
 )
 
 // RunAgentZombieSweep periodically checks for agent containers that are

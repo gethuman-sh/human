@@ -52,7 +52,7 @@ func RunAgentCleanup(ctx context.Context, store *HookEventStore, cleaner AgentCl
 				go func(name string) {
 					// Wait for Claude to fully exit before stopping the container.
 					select {
-					case <-time.After(3 * time.Second):
+					case <-time.After(1 * time.Second):
 					case <-ctx.Done():
 						return
 					}
