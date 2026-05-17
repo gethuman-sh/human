@@ -445,6 +445,10 @@ func toTrackerIssue(owner, repo string, gi ghIssue) tracker.Issue {
 	}
 	if len(gi.Labels) > 0 {
 		issue.Type = gi.Labels[0].Name
+		issue.Labels = make([]string, 0, len(gi.Labels))
+		for _, l := range gi.Labels {
+			issue.Labels = append(issue.Labels, l.Name)
+		}
 	}
 	if gi.Assignee != nil {
 		issue.Assignee = gi.Assignee.Login

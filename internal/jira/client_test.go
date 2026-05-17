@@ -143,8 +143,8 @@ func TestListIssues_happy(t *testing.T) {
 		assert.Equal(t, "10", r.URL.Query().Get("maxResults"))
 
 		_, _ = fmt.Fprint(w, `{"issues":[
-			{"key":"KAN-1","fields":{"summary":"First issue","status":{"name":"To Do"}}},
-			{"key":"KAN-2","fields":{"summary":"Second issue","status":{"name":"In Progress"}}}
+			{"key":"KAN-1","fields":{"summary":"First issue","status":{"name":"To Do"},"issuetype":{"name":"Bug"}}},
+			{"key":"KAN-2","fields":{"summary":"Second issue","status":{"name":"In Progress"},"issuetype":{"name":"Task"}}}
 		]}`)
 	}))
 	defer srv.Close()
@@ -161,11 +161,13 @@ func TestListIssues_happy(t *testing.T) {
 	assert.Equal(t, "KAN-1", issues[0].Key)
 	assert.Equal(t, "First issue", issues[0].Title)
 	assert.Equal(t, "To Do", issues[0].Status)
+	assert.Equal(t, "Bug", issues[0].Type)
 	assert.Equal(t, srv.URL+"/browse/KAN-1", issues[0].URL)
 
 	assert.Equal(t, "KAN-2", issues[1].Key)
 	assert.Equal(t, "Second issue", issues[1].Title)
 	assert.Equal(t, "In Progress", issues[1].Status)
+	assert.Equal(t, "Task", issues[1].Type)
 	assert.Equal(t, srv.URL+"/browse/KAN-2", issues[1].URL)
 }
 
@@ -258,6 +260,7 @@ func TestGetIssue_happy(t *testing.T) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/rest/api/3/issue/KAN-42", r.URL.Path)
 
+		assert.Contains(t, r.URL.RawQuery, "issuetype", "GetIssue must request issuetype so bug detection works")
 		_, _ = fmt.Fprint(w, `{
 			"key": "KAN-42",
 			"fields": {
@@ -266,7 +269,8 @@ func TestGetIssue_happy(t *testing.T) {
 				"priority": {"displayName": "High", "name": "High"},
 				"assignee": {"displayName": "Alice", "name": "alice"},
 				"reporter": {"displayName": "Bob", "name": "bob"},
-				"description": {"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello world"}]}]}
+				"description": {"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello world"}]}]},
+				"issuetype": {"name": "Bug"}
 			}
 		}`)
 	}))
@@ -279,6 +283,7 @@ func TestGetIssue_happy(t *testing.T) {
 	assert.Equal(t, "KAN-42", issue.Key)
 	assert.Equal(t, "The answer", issue.Title)
 	assert.Equal(t, "Done", issue.Status)
+	assert.Equal(t, "Bug", issue.Type)
 	assert.Equal(t, "High", issue.Priority)
 	assert.Equal(t, "Alice", issue.Assignee)
 	assert.Equal(t, "Bob", issue.Reporter)

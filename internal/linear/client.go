@@ -639,6 +639,10 @@ func toTrackerIssue(li linearIssue, project string) tracker.Issue {
 	}
 	if len(li.Labels.Nodes) > 0 {
 		issue.Type = li.Labels.Nodes[0].Name
+		issue.Labels = make([]string, 0, len(li.Labels.Nodes))
+		for _, n := range li.Labels.Nodes {
+			issue.Labels = append(issue.Labels, n.Name)
+		}
 	}
 
 	return issue

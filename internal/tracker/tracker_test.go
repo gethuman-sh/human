@@ -432,3 +432,31 @@ func TestExtractProject_edges(t *testing.T) {
 		})
 	}
 }
+
+func TestIssue_IsBug(t *testing.T) {
+	tests := []struct {
+		name string
+		i    Issue
+		want bool
+	}{
+		{"empty issue", Issue{}, false},
+		{"type bug lowercase", Issue{Type: "bug"}, true},
+		{"type Bug titlecase", Issue{Type: "Bug"}, true},
+		{"type BUG uppercase", Issue{Type: "BUG"}, true},
+		{"type feature", Issue{Type: "Feature"}, false},
+		{"type empty", Issue{Type: ""}, false},
+		{"label plain bug", Issue{Labels: []string{"bug"}}, true},
+		{"label kind/bug", Issue{Labels: []string{"kind/bug"}}, true},
+		{"label type:bug", Issue{Labels: []string{"type:bug"}}, true},
+		{"label Bug among others, not first", Issue{Labels: []string{"priority/high", "Bug"}}, true},
+		{"label bugfix is not a bug", Issue{Labels: []string{"bugfix"}}, false},
+		{"label debug is not a bug", Issue{Labels: []string{"debug"}}, false},
+		{"label kind/feature", Issue{Labels: []string{"kind/feature"}}, false},
+		{"type wins even with non-bug labels", Issue{Type: "bug", Labels: []string{"priority/high"}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.i.IsBug())
+		})
+	}
+}

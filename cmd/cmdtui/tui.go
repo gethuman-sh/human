@@ -509,10 +509,15 @@ func (m model) handleDispatch() (tea.Model, tea.Cmd) {
 	}
 	sel := flat[m.issueCursor]
 
-	// Build slash command based on tracker kind.
+	// Bug-ness wins regardless of tracker — a Shortcut bug story still wants
+	// root-cause analysis, not the generic planner. Otherwise the PM/eng
+	// split decides: Shortcut tickets are PM and want planning; everything
+	// else is engineering and goes straight to execution.
 	var prompt string
-	switch sel.TrackerKind {
-	case "shortcut":
+	switch {
+	case sel.Issue.IsBug():
+		prompt = "/human-bug-plan " + sel.Issue.Key
+	case sel.TrackerKind == "shortcut":
 		prompt = "/human-plan " + sel.Issue.Key
 	default:
 		prompt = "/human-execute " + sel.Issue.Key
@@ -2045,7 +2050,7 @@ func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor in
 			subtleStyle.Render(g.Project))
 
 		for _, issue := range g.Issues {
-			title := truncate(issue.Title, w-34)
+			title := truncate(issue.Title, w-38)
 			stage := pipelineStage(g.TrackerKind, g.TrackerRole, issue.Status, issue.StatusType)
 			stageStyled := pipelineStageStyle(issue.StatusType).Render(truncate(stage, 14))
 			keyStyle := titleStyle
@@ -2054,15 +2059,22 @@ func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor in
 				keyStyle = selectedStyle
 				prefix = "    ▸ "
 			}
-			// (R) marker when this engineering ticket is flagged ready for
-			// review on its PM ticket (see CLAUDE.md "Review handoff").
+			// (B) marks defect tickets so the eye can spot bugs without
+			// reading types; (R) marks engineering tickets currently flagged
+			// ready for review on their PM ticket. The two markers are
+			// independent — a ticket may carry both.
+			bugMarker := "   "
+			if issue.IsBug() {
+				bugMarker = errorStyle.Render("(B)")
+			}
 			reviewMarker := "   "
 			if g.ReadyForReview[issue.Key] {
 				reviewMarker = specialStyle.Render("(R)")
 			}
-			_, _ = fmt.Fprintf(&b, "%s%-12s %s %-14s %s\n",
+			_, _ = fmt.Fprintf(&b, "%s%-12s %s %s %-14s %s\n",
 				prefix,
 				keyStyle.Render(issue.Key),
+				bugMarker,
 				reviewMarker,
 				stageStyled,
 				title)

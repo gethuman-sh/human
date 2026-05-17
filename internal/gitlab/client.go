@@ -453,6 +453,7 @@ func toTrackerIssue(project string, gi glIssue) tracker.Issue {
 	}
 	if len(gi.Labels) > 0 {
 		issue.Type = gi.Labels[0]
+		issue.Labels = append([]string(nil), gi.Labels...)
 	}
 	if len(gi.Assignees) > 0 {
 		issue.Assignee = gi.Assignees[0].Username

@@ -191,6 +191,33 @@ type Issue struct {
 	Labels      []string  `json:"labels,omitempty"`     // tags/labels on the issue
 }
 
+// IsBug reports whether this issue represents a defect, normalised across
+// trackers. A match is any segment equal to "bug" (case-insensitive) in Type
+// or in any label, after splitting on '/' and ':'. This covers Shortcut's
+// story_type="bug", Azure DevOps's WorkItemType="Bug", and label conventions
+// like "bug", "Bug", "kind/bug", "type:bug" on Linear/GitHub/GitLab. Segment
+// equality is used (not substring) so "debug" and "bugfix" do not match.
+func (i Issue) IsBug() bool {
+	if isBugToken(i.Type) {
+		return true
+	}
+	for _, l := range i.Labels {
+		if isBugToken(l) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBugToken(s string) bool {
+	for _, seg := range strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == ':' }) {
+		if strings.EqualFold(strings.TrimSpace(seg), "bug") {
+			return true
+		}
+	}
+	return false
+}
+
 // Comment is a provider-agnostic comment representation.
 type Comment struct {
 	ID      string

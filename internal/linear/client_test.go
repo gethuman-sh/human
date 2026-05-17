@@ -468,6 +468,26 @@ func Test_toTrackerIssue(t *testing.T) {
 				Assignee: "Alice", Reporter: "Bob", Type: "bug",
 				Description: "Desc",
 				URL:         "https://linear.app/eng/issue/ENG-1/title",
+				Labels:      []string{"bug"},
+			},
+		},
+		{
+			name: "multiple labels populate full slice, Type stays first",
+			input: linearIssue{
+				Identifier: "ENG-4",
+				Title:      "Multi",
+				State:      stateNode{Name: "Todo", Type: "backlog"},
+				Labels: labelConnection{Nodes: []nameNode{
+					{Name: "priority/high"},
+					{Name: "Bug"},
+				}},
+			},
+			project: "ENG",
+			want: tracker.Issue{
+				Key: "ENG-4", Project: "ENG", Title: "Multi",
+				Status: "Todo", StatusType: "unstarted",
+				Type:   "priority/high",
+				Labels: []string{"priority/high", "Bug"},
 			},
 		},
 		{

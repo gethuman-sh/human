@@ -81,6 +81,7 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 			Key:     iss.Key,
 			Project: projectFromKey(iss.Key),
 			Title:   iss.Fields.Summary,
+			Type:    iss.Fields.IssueType.Name,
 			Status:  iss.Fields.Status.Name,
 			URL:     c.baseURL + "/browse/" + iss.Key,
 		}
@@ -95,7 +96,7 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, error) {
 	path := fmt.Sprintf("/rest/api/3/issue/%s", url.PathEscape(key))
 	query := url.Values{
-		"fields": {"summary,status,description,assignee,reporter,priority"},
+		"fields": {"summary,status,description,assignee,reporter,priority,issuetype"},
 	}
 
 	resp, err := c.doRequest(ctx, http.MethodGet, path, query.Encode(), nil)
@@ -121,6 +122,7 @@ func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, erro
 	return &tracker.Issue{
 		Key:         detail.Key,
 		Title:       f.Summary,
+		Type:        f.IssueType.Name,
 		Status:      f.Status.Name,
 		Priority:    nameOrEmpty(f.Priority),
 		Assignee:    nameOrEmpty(f.Assignee),

@@ -144,6 +144,7 @@ func TestGetIssue_happy(t *testing.T) {
 	assert.Equal(t, "The answer", issue.Title)
 	assert.Equal(t, "opened", issue.Status)
 	assert.Equal(t, "enhancement", issue.Type)
+	assert.Equal(t, []string{"enhancement", "help wanted"}, issue.Labels)
 	assert.Equal(t, "", issue.Priority)
 	assert.Equal(t, "bob", issue.Assignee)
 	assert.Equal(t, "alice", issue.Reporter)

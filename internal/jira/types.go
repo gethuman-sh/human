@@ -12,9 +12,10 @@ type issue struct {
 }
 
 type issueFields struct {
-	Summary string      `json:"summary"`
-	Status  statusField `json:"status"`
-	Updated string      `json:"updated"`
+	Summary   string      `json:"summary"`
+	Status    statusField `json:"status"`
+	Updated   string      `json:"updated"`
+	IssueType nameOnly    `json:"issuetype"`
 }
 
 type statusField struct {
@@ -33,6 +34,7 @@ type issueDetailFields struct {
 	Assignee    *nameField      `json:"assignee"`
 	Reporter    *nameField      `json:"reporter"`
 	Description json.RawMessage `json:"description"`
+	IssueType   nameOnly        `json:"issuetype"`
 }
 
 type nameField struct {
