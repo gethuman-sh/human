@@ -649,7 +649,7 @@ func TestDevcontainerStep_BasicConfig(t *testing.T) {
 	assert.Contains(t, data, "ghcr.io/devcontainers/features/node:1")
 	assert.Contains(t, data, "ghcr.io/stephanschmidt/treehouse/human:1")
 	assert.Contains(t, data, `"BROWSER": "human-browser"`)
-	assert.Contains(t, data, ".human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly")
+	assert.NotContains(t, data, "ca.crt")
 	assert.Contains(t, data, `"HUMAN_DAEMON_ADDR": "host.docker.internal:19285"`)
 	assert.Contains(t, data, `"HUMAN_DAEMON_TOKEN": "${localEnv:HUMAN_DAEMON_TOKEN}"`)
 	assert.Contains(t, data, `"HUMAN_CHROME_ADDR": "host.docker.internal:19286"`)
@@ -717,6 +717,7 @@ func TestDevcontainerStep_WithProxyAndIntercept(t *testing.T) {
 	assert.Contains(t, data, "sudo -E human-proxy-setup")
 	assert.Contains(t, data, "NODE_EXTRA_CA_CERTS")
 	assert.Contains(t, data, "update-ca-certificates")
+	assert.Contains(t, data, ".human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly")
 	assert.Contains(t, data, "human install --agent claude")
 }
 

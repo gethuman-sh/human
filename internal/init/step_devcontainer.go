@@ -205,7 +205,6 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType) devconta
 		Image:        "mcr.microsoft.com/devcontainers/base:ubuntu",
 		RemoteUser:   "vscode",
 		Features:     features,
-		Mounts:       []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"},
 		RunArgs:      []string{"--add-host=host.docker.internal:host-gateway"},
 		ForwardPorts: []int{19285, 19286},
 		RemoteEnv: map[string]string{ // #nosec G101 -- not a credential, just env var name referencing localEnv
@@ -219,6 +218,7 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType) devconta
 
 	switch {
 	case proxy && intercept:
+		cfg.Mounts = []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"}
 		cfg.CapAdd = []string{"NET_ADMIN"}
 		cfg.RemoteEnv["NODE_EXTRA_CA_CERTS"] = "/home/vscode/.human/ca.crt"
 		cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
