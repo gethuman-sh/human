@@ -103,7 +103,7 @@ type daemonState struct {
 
 // initDaemon performs the early initialization steps for the daemon: token,
 // PID file, project registry, daemon info, and signal context.
-func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command) (*daemonState, error) {
+func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) (*daemonState, error) {
 	token, err := daemon.LoadOrCreateToken()
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "failed to load/create token")
@@ -130,6 +130,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		ProxyAddr:  proxyFullAddr,
 		Token:      token,
 		PID:        os.Getpid(),
+		Version:    version,
 		Projects:   projectInfos,
 	}
 	if err := daemon.WriteInfo(info); err != nil {
@@ -217,9 +218,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 // runDaemonForeground runs the daemon in the current process (blocking).
 // It writes a PID file on start and removes it on shutdown.
 func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
-	_ = version // reserved for future use
-
-	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs, cmdFactory)
+	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs, cmdFactory, version)
 	if err != nil {
 		return err
 	}
