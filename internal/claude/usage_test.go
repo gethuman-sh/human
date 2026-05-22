@@ -90,6 +90,7 @@ func TestCalculateUsage(t *testing.T) {
 	sonnet := summary.Models["sonnet 4.5"]
 	if sonnet == nil {
 		t.Fatal("expected sonnet 4.5 model entry")
+		return
 	}
 	if sonnet.InputTokens != 1_000_000 {
 		t.Errorf("sonnet input = %d, want 1000000", sonnet.InputTokens)
@@ -97,6 +98,7 @@ func TestCalculateUsage(t *testing.T) {
 	opus := summary.Models["opus 4.6"]
 	if opus == nil {
 		t.Fatal("expected opus 4.6 model entry")
+		return
 	}
 	if opus.OutputTokens != 1_000_000 {
 		t.Errorf("opus output = %d, want 1000000", opus.OutputTokens)
@@ -119,6 +121,7 @@ func TestCalculateUsageCacheTokens(t *testing.T) {
 	sonnet := summary.Models["sonnet 4.5"]
 	if sonnet == nil {
 		t.Fatal("expected sonnet 4.5 model entry")
+		return
 	}
 	if sonnet.CacheCreate != 1_000_000 {
 		t.Errorf("sonnet cache_create = %d, want 1000000", sonnet.CacheCreate)
@@ -227,6 +230,7 @@ func TestMergeUsage(t *testing.T) {
 	opus := dst.Models["opus 4.6"]
 	if opus == nil {
 		t.Fatal("expected opus 4.6 in dst after merge")
+		return
 	}
 	if opus.InputTokens != 300 {
 		t.Errorf("opus input = %d, want 300", opus.InputTokens)
@@ -240,6 +244,7 @@ func TestMergeUsage(t *testing.T) {
 	sonnet := dst.Models["sonnet 4.5"]
 	if sonnet == nil {
 		t.Fatal("expected sonnet 4.5 in dst after merge")
+		return
 	}
 	if sonnet.InputTokens != 300 {
 		t.Errorf("sonnet input = %d, want 300", sonnet.InputTokens)
@@ -506,6 +511,7 @@ func TestCollectInstanceUsage(t *testing.T) {
 	opus := results[0].Summary.Models["opus 4.6"]
 	if opus == nil {
 		t.Fatal("expected opus 4.6 model entry")
+		return
 	}
 	if opus.InputTokens != 500 {
 		t.Errorf("opus input = %d, want 500", opus.InputTokens)
