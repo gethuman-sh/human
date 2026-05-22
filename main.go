@@ -464,7 +464,7 @@ func isLocalSubcommand(args []string) bool {
 // and skew warnings are suppressed in non-interactive contexts (pipes, CI,
 // daemon child processes) to avoid polluting structured output.
 func isTTY() bool {
-	return term.IsTerminal(int(os.Stderr.Fd()))
+	return term.IsTerminal(int(os.Stderr.Fd())) // #nosec G115 -- fd is from os.Stderr.Fd(), safe range
 }
 
 // printUpdateNotice writes a one-line update hint to stderr when a newer
