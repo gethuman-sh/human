@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
 	"github.com/StephanSchmidt/human/cmd/cmdagent"
 	"github.com/StephanSchmidt/human/cmd/cmdamplitude"
@@ -38,7 +37,6 @@ import (
 	"github.com/StephanSchmidt/human/internal/config"
 	"github.com/StephanSchmidt/human/internal/daemon"
 	"github.com/StephanSchmidt/human/internal/tracker"
-	"github.com/StephanSchmidt/human/internal/update"
 )
 
 var (
@@ -458,60 +456,6 @@ func isLocalSubcommand(args []string) bool {
 	return false
 }
 
-// --- update notices ---
-
-// isTTY reports whether stderr is an interactive terminal. Update notices
-// and skew warnings are suppressed in non-interactive contexts (pipes, CI,
-// daemon child processes) to avoid polluting structured output.
-func isTTY() bool {
-	return term.IsTerminal(int(os.Stderr.Fd()))
-}
-
-// printUpdateNotice writes a one-line update hint to stderr when a newer
-// version is available in the GitHub releases cache. The check itself runs
-// in the background so it never blocks the command on the critical path.
-func printUpdateNotice(currentVersion string) {
-	if currentVersion == "" || currentVersion == "dev" {
-		return
-	}
-	// Daemon child processes share the same binary but should not print to
-	// the operator's terminal — messages would appear in the daemon log.
-	if os.Getenv("_HUMAN_DAEMON_CHILD") != "" {
-		return
-	}
-	if !isTTY() {
-		return
-	}
-	cachePath := update.CachePath()
-	// Refresh the cache in the background so the notice appears on the next
-	// invocation after the cache goes stale, never blocking this one.
-	go update.CheckAndRefresh(cachePath)
-	latest := update.CachedLatestVersion(cachePath)
-	if update.IsNewer(currentVersion, latest) {
-		hint := update.InstallHint()
-		fmt.Fprintf(os.Stderr, "\nA new version %s is available — run `%s`\n\n", latest, hint)
-	}
-}
-
-// printDaemonSkewWarning alerts the operator when the CLI binary version
-// differs from the version of the currently running daemon. A skew can mean
-// the daemon still has the old code path and a restart is needed.
-func printDaemonSkewWarning(clientVersion, daemonVersion string) {
-	if clientVersion == "" || clientVersion == "dev" {
-		return
-	}
-	if daemonVersion == "" || daemonVersion == "dev" {
-		return
-	}
-	if clientVersion == daemonVersion {
-		return
-	}
-	if !isTTY() {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "warning: client v%s is talking to daemon v%s — consider restarting the daemon after upgrading\n", clientVersion, daemonVersion)
-}
-
 // --- main ---
 
 // subcmdFromBinary checks whether the binary was invoked via a symlink
@@ -599,16 +543,6 @@ func main() {
 	if addr == "" {
 		addr, token = discoverDaemon(token)
 	}
-
-	// Warn when the CLI binary and the running daemon are on different versions.
-	// Skipped silently when the daemon is unreachable or its info file is absent.
-	if addr != "" {
-		if info, infoErr := daemon.ReadInfo(); infoErr == nil {
-			printDaemonSkewWarning(version, info.Version)
-		}
-	}
-	// Passive update notice — fires a background goroutine then reads the cache.
-	printUpdateNotice(version)
 
 	if addr != "" && !isLocalSubcommand(args) {
 		exitCode, err := daemon.RunRemote(addr, token, args, version)
