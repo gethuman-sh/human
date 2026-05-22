@@ -58,7 +58,6 @@ func TestManager_Up_NewContainer(t *testing.T) {
 	}
 	if meta == nil {
 		t.Fatal("expected non-nil meta")
-		return
 	}
 	if meta.Status != StatusRunning {
 		t.Errorf("status = %q, want %q", meta.Status, StatusRunning)
