@@ -586,4 +586,3 @@ func runHostCommand(cmd interface{}, projectDir string) error {
 		return nil
 	}
 }
-

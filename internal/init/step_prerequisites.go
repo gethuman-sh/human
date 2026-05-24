@@ -47,7 +47,7 @@ func (OSPathLooker) LookPath(file string) (string, error) {
 }
 
 type prerequisitesStep struct {
-	looker PathLooker
+	looker  PathLooker
 	prereqs []Prerequisite
 }
 

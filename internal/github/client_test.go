@@ -148,9 +148,9 @@ func TestGetIssue_happy(t *testing.T) {
 	assert.Equal(t, "octocat/hello-world#42", issue.Key)
 	assert.Equal(t, "The answer", issue.Title)
 	assert.Equal(t, "open", issue.Status)
-	assert.Equal(t, "enhancement", issue.Type)                              // first label
-	assert.Equal(t, []string{"enhancement", "help wanted"}, issue.Labels)   // full label set, for IsBug() and other consumers
-	assert.Equal(t, "", issue.Priority)                                     // GitHub has no priority
+	assert.Equal(t, "enhancement", issue.Type)                            // first label
+	assert.Equal(t, []string{"enhancement", "help wanted"}, issue.Labels) // full label set, for IsBug() and other consumers
+	assert.Equal(t, "", issue.Priority)                                   // GitHub has no priority
 	assert.Equal(t, "bob", issue.Assignee)
 	assert.Equal(t, "alice", issue.Reporter)
 	assert.Equal(t, "## Description\n\nThis is markdown.", issue.Description)

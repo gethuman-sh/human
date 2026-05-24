@@ -825,8 +825,8 @@ func TestDockerFinder_FindsContainerWithClaude(t *testing.T) {
 		},
 		execResults: map[string]mockExecResult{
 			"abc123def456|HUMAN_PROXY_ADDR": {exitCode: 0, data: []byte("192.168.1.5:19287\n\n")},
-			"abc123def456|find":        {exitCode: 0, data: []byte("1711000000 /root/.claude/projects/session.jsonl\n")},
-			"abc123def456|cat":         {exitCode: 0, data: jsonlData},
+			"abc123def456|find":             {exitCode: 0, data: []byte("1711000000 /root/.claude/projects/session.jsonl\n")},
+			"abc123def456|cat":              {exitCode: 0, data: jsonlData},
 		},
 		statsResults: map[string]mockStatsResult{
 			"abc123def456": {mem: &MemoryInfo{Usage: 512 * 1024 * 1024, Limit: 2 * 1024 * 1024 * 1024}},

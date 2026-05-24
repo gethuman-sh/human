@@ -278,4 +278,3 @@ func (m *Manager) restartDaemon(projectDir, host string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
-

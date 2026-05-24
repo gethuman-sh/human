@@ -408,10 +408,10 @@ func TestIsVersionDigit(t *testing.T) {
 		{"4", true},
 		{"45", true},
 		{"", false},
-		{"123", false},       // too long
-		{"20250514", false},  // date stamp, too long
-		{"ab", false},        // non-digit
-		{"4a", false},        // mixed
+		{"123", false},      // too long
+		{"20250514", false}, // date stamp, too long
+		{"ab", false},       // non-digit
+		{"4a", false},       // mixed
 	}
 	for _, tt := range tests {
 		got := isVersionDigit(tt.s)

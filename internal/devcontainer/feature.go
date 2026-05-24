@@ -227,4 +227,3 @@ func sortedFeatureRefs(features map[string]interface{}) []string {
 	sort.Strings(refs)
 	return refs
 }
-

@@ -45,8 +45,8 @@ type Response struct {
 // For "agent-stopped" events, AgentName identifies the agent to remove
 // immediately without waiting for the next discovery cycle.
 type SubscribeEvent struct {
-	Type      string `json:"type"`                 // "change", "agent-stopped"
-	AgentName string `json:"agent,omitempty"`       // set for agent lifecycle events
+	Type      string `json:"type"`            // "change", "agent-stopped"
+	AgentName string `json:"agent,omitempty"` // set for agent lifecycle events
 }
 
 // PendingConfirm is the wire type for a single pending destructive operation

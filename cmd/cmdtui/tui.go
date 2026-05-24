@@ -21,12 +21,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/StephanSchmidt/human/internal/agent"
-	"github.com/StephanSchmidt/human/internal/logo"
 	"github.com/StephanSchmidt/human/internal/browser"
 	"github.com/StephanSchmidt/human/internal/claude"
 	"github.com/StephanSchmidt/human/internal/claude/logparser"
 	"github.com/StephanSchmidt/human/internal/claude/monitor"
 	"github.com/StephanSchmidt/human/internal/daemon"
+	"github.com/StephanSchmidt/human/internal/logo"
 	"github.com/StephanSchmidt/human/internal/stats"
 	"github.com/StephanSchmidt/human/internal/tracker"
 )
@@ -153,18 +153,18 @@ func buildFinder() (claude.InstanceFinder, claude.DockerClient) {
 // --- bubbletea model ---
 
 type model struct {
-	mon      *monitor.Monitor
-	snap     *monitor.Snapshot
-	spinner  spinner.Model
-	width    int
-	height   int
-	quitting bool
-	fetchGen     uint64 // monotonic counter; assigned when dispatching a fetch
-	fetching     bool   // true while a fetch command is in flight
-	showSplash   bool   // true during the initial logo display period
-	logMode      string // traffic log mode: "off", "meta", "full"
+	mon          *monitor.Monitor
+	snap         *monitor.Snapshot
+	spinner      spinner.Model
+	width        int
+	height       int
+	quitting     bool
+	fetchGen     uint64                       // monotonic counter; assigned when dispatching a fetch
+	fetching     bool                         // true while a fetch command is in flight
+	showSplash   bool                         // true during the initial logo display period
+	logMode      string                       // traffic log mode: "off", "meta", "full"
 	daemonEvents <-chan daemon.SubscribeEvent // push notifications from daemon
-	daemonUnsub  func()                      // closes daemon subscription
+	daemonUnsub  func()                       // closes daemon subscription
 
 	issues        []trackerIssues // issues from configured tracker projects
 	issuesLoading bool            // true while issue fetch is in flight
@@ -216,7 +216,7 @@ func newModel(mon *monitor.Monitor) model {
 // --- messages ---
 
 type fullTickMsg time.Time
-type splashDoneMsg struct{}    // fired after the splash logo display period
+type splashDoneMsg struct{} // fired after the splash logo display period
 type daemonEventMsg struct {
 	event daemon.SubscribeEvent
 }
@@ -1172,7 +1172,6 @@ func fetchFull(mon *monitor.Monitor, gen uint64) tea.Cmd {
 		return snapshotMsg{snap: mon.FetchFull(context.Background()), gen: gen}
 	}
 }
-
 
 // --- render: header + status ---
 

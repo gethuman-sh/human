@@ -117,4 +117,3 @@ func DeleteMeta(name string) error {
 	}
 	return nil
 }
-

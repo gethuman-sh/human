@@ -10,11 +10,11 @@ import (
 )
 
 type mockSweeper struct {
-	agents      []AgentInfo
-	processUp   map[string]bool // containerID → running
-	deleted     []string
-	processErr  map[string]error
-	listErr     error
+	agents     []AgentInfo
+	processUp  map[string]bool // containerID → running
+	deleted    []string
+	processErr map[string]error
+	listErr    error
 }
 
 func (m *mockSweeper) RunningAgents() ([]AgentInfo, error) {

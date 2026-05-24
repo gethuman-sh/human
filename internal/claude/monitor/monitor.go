@@ -12,10 +12,10 @@ import (
 	"github.com/StephanSchmidt/human/internal/claude/logparser"
 	"github.com/StephanSchmidt/human/internal/daemon"
 	"github.com/StephanSchmidt/human/internal/proxy"
-	"github.com/StephanSchmidt/human/internal/tracker"
 	"github.com/StephanSchmidt/human/internal/slack"
 	"github.com/StephanSchmidt/human/internal/stats"
 	"github.com/StephanSchmidt/human/internal/telegram"
+	"github.com/StephanSchmidt/human/internal/tracker"
 )
 
 // Monitor owns the data-fetching and state-reconciliation cycle for the TUI.
