@@ -14,7 +14,7 @@ import (
 )
 
 func TestSocketConnector_ConnectToSocket(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	sockPath := filepath.Join(dir, "123.sock")
 
 	// Create a real Unix socket listener.
@@ -57,7 +57,7 @@ func TestSocketConnector_ConnectToSocket(t *testing.T) {
 }
 
 func TestSocketConnector_SkipStaleSocket(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 
 	// Create a stale socket file (not listening).
 	stalePath := filepath.Join(dir, "stale.sock")
@@ -90,7 +90,7 @@ func TestSocketConnector_SkipStaleSocket(t *testing.T) {
 }
 
 func TestSocketConnector_EmptyDir(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 
 	sc := &SocketConnector{
 		SocketDir: dir,
@@ -103,7 +103,7 @@ func TestSocketConnector_EmptyDir(t *testing.T) {
 }
 
 func TestSocketConnector_AllStale(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 
 	// Create stale socket files (not listening).
 	for _, name := range []string{"a.sock", "b.sock"} {

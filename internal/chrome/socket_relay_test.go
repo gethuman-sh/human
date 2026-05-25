@@ -15,7 +15,7 @@ import (
 )
 
 func TestSocketRelay_HappyPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,7 +75,7 @@ func TestSocketRelay_HappyPath(t *testing.T) {
 }
 
 func TestSocketRelay_ChromeBeforeSpawn(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,7 +127,7 @@ func TestSocketRelay_ChromeBeforeSpawn(t *testing.T) {
 }
 
 func TestSocketRelay_SpawnBlocksUntilChrome(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -191,7 +191,7 @@ func TestSocketRelay_SpawnBlocksUntilChrome(t *testing.T) {
 }
 
 func TestSocketRelay_SpawnContextCancellation(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -214,7 +214,7 @@ func TestSocketRelay_SpawnContextCancellation(t *testing.T) {
 }
 
 func TestSocketRelay_CleanShutdown(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
