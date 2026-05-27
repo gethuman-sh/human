@@ -1,7 +1,6 @@
 package chrome
 
 import (
-	"bufio"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -79,9 +78,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	// Bound the time we wait for the initial auth line.
 	_ = conn.SetReadDeadline(time.Now().Add(chromeAuthDeadline))
 
-	// Read the auth request (single JSON line).
-	scanner := bufio.NewScanner(conn)
-	if !scanner.Scan() {
+	// Read the auth request (single JSON line) without buffering past it, so
+	// the long-lived session below sees the full subsequent stream on conn.
+	line, err := readHandshakeLine(conn)
+	if err != nil {
 		s.writeAck(conn, false, "failed to read request")
 		return
 	}
@@ -91,7 +91,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Time{})
 
 	var req proxyRequest
-	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+	if err := json.Unmarshal(line, &req); err != nil {
 		s.writeAck(conn, false, "invalid request JSON")
 		return
 	}

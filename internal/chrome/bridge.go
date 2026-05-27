@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -124,6 +125,11 @@ func (b *Bridge) handleConn(ctx context.Context, conn net.Conn) {
 	}
 	defer func() { _ = tcpConn.Close() }()
 
+	// Bound the auth handshake so a daemon that accepts the connection but never
+	// replies (e.g. wedged in a stuck handler) cannot block this goroutine
+	// indefinitely. Cleared before the long-lived bidirectional copy below.
+	_ = tcpConn.SetDeadline(time.Now().Add(chromeAuthDeadline))
+
 	// Authenticate with the daemon's chrome proxy.
 	if err := sendProxyRequest(tcpConn, b.Token, b.Version); err != nil {
 		b.Logger.Error().Err(err).Msg("failed to send proxy request")
@@ -135,6 +141,7 @@ func (b *Bridge) handleConn(ctx context.Context, conn net.Conn) {
 		b.Logger.Error().Err(err).Msg("failed to read proxy ack")
 		return
 	}
+	_ = tcpConn.SetDeadline(time.Time{})
 	if !ack.OK {
 		b.Logger.Error().Str("error", ack.Error).Msg("daemon rejected connection")
 		return

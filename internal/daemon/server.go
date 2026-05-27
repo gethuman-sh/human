@@ -56,6 +56,12 @@ type Server struct {
 	VaultResolver    *vault.Resolver                          // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
+
+	// shutdown fires when the server is stopping. Set once at the start of
+	// ListenAndServe (before any connection is accepted) and only read by
+	// handlers, so no additional synchronization is needed. Long-lived
+	// handlers (e.g. subscribe) select on it so they don't pin s.wg.Wait().
+	shutdown <-chan struct{}
 }
 
 // ListenAndServe starts the TCP listener and blocks until ctx is cancelled.
@@ -69,6 +75,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = ln.Close() }()
+
+	s.shutdown = ctx.Done()
 
 	s.Logger.Info().Str("addr", ln.Addr().String()).Msg("daemon listening")
 
@@ -483,18 +491,26 @@ func (s *Server) handleSubscribe(conn net.Conn) {
 	defer s.HookEvents.Unsubscribe(ch)
 
 	enc := json.NewEncoder(conn)
-	lastSeen := 0 // index into event store for delta reads
+	var lastSeq uint64 // monotonic event sequence already delivered
 	for {
-		<-ch
-		events := s.HookEvents.RecentEvents()
+		// Return on daemon shutdown so this long-lived handler does not pin
+		// ListenAndServe's s.wg.Wait() and hang the daemon on SIGINT/SIGTERM.
+		select {
+		case <-s.shutdown:
+			return
+		case <-ch:
+		}
+		// Read the delta by monotonic sequence, not slice length: once the
+		// event ring saturates its length stops growing, and a length-based
+		// cursor would never advance again — silently dropping notifications.
+		newEvents, seq := s.HookEvents.EventsSince(lastSeq)
+		lastSeq = seq
 		evt := SubscribeEvent{Type: "change"}
-		// Check new events for agent lifecycle changes.
-		for i := lastSeen; i < len(events); i++ {
-			if events[i].EventName == "AgentStopped" && events[i].AgentName != "" {
-				evt = SubscribeEvent{Type: "agent-stopped", AgentName: events[i].AgentName}
+		for i := range newEvents {
+			if newEvents[i].EventName == "AgentStopped" && newEvents[i].AgentName != "" {
+				evt = SubscribeEvent{Type: "agent-stopped", AgentName: newEvents[i].AgentName}
 			}
 		}
-		lastSeen = len(events)
 		if err := enc.Encode(evt); err != nil {
 			return
 		}

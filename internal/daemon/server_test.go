@@ -1009,7 +1009,7 @@ func TestServer_ConfirmOpEndpoint_SelfApprovalRejected(t *testing.T) {
 		Args:      []string{"confirm-op", "self-approve", "yes"},
 	})
 	assert.Equal(t, 1, resp.ExitCode)
-	assert.Contains(t, resp.Stderr, "distinct clients")
+	assert.Contains(t, resp.Stderr, "approver PID matches requester PID")
 
 	// The entry must still be pending — no decision was delivered.
 	assert.Equal(t, 1, store.Len())

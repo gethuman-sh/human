@@ -51,10 +51,22 @@ func (d *InteractiveDecider) Allowed(hostname string) bool {
 	}
 
 	if cond, ok := d.pending[host]; ok {
-		cond.Wait() // another goroutine is prompting; wait for result
-		result := d.cache[host]
-		d.mu.Unlock()
-		return result
+		// Another goroutine is prompting. Wait in a loop per the sync.Cond
+		// contract: a wake-up does not by itself prove the decision is ready,
+		// so re-check the cache and only return once it is populated. The
+		// stillPending guard avoids blocking forever if the prompter ever
+		// disappears without recording a result.
+		for {
+			cond.Wait()
+			if result, cached := d.cache[host]; cached {
+				d.mu.Unlock()
+				return result
+			}
+			if _, stillPending := d.pending[host]; !stillPending {
+				d.mu.Unlock()
+				return false
+			}
+		}
 	}
 
 	cond := sync.NewCond(&d.mu)
