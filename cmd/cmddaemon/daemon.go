@@ -254,9 +254,19 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	statsPath := proxy.StatsPath()
 	connectedPath := daemon.ConnectedPath()
-	go writeDaemonStats(ctx, proxySrv, ds.connTracker, statsPath, connectedPath)
-	defer proxy.RemoveStats(statsPath)
-	defer daemon.RemoveConnected(connectedPath)
+	statsDone := make(chan struct{})
+	go func() {
+		defer close(statsDone)
+		writeDaemonStats(ctx, proxySrv, ds.connTracker, statsPath, connectedPath)
+	}()
+	// Wait for the stats writer to observe ctx cancellation and exit before
+	// removing its files; otherwise a ticker tick can recreate them after
+	// removal, leaving stale files that outlive the daemon.
+	defer func() {
+		<-statsDone
+		proxy.RemoveStats(statsPath)
+		daemon.RemoveConnected(connectedPath)
+	}()
 
 	cwd, _ := os.Getwd()
 	if unmount := fuseMount(cwd, safe, logger); unmount != nil {

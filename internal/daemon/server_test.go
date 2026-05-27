@@ -586,6 +586,35 @@ func TestDetectDestructive_ArbitraryFlagsStripped(t *testing.T) {
 	assert.Equal(t, "HUM-1", op.Key)
 }
 
+func TestDetectDestructive_SpaceSeparatedValueFlagBypass(t *testing.T) {
+	// A space-separated global value flag ("--tracker jira") must not shift the
+	// positional indices and let the delete slip past detection.
+	op, ok := detectDestructive([]string{"jira", "issue", "--tracker", "jira", "delete", "KAN-1"})
+	assert.True(t, ok)
+	assert.Equal(t, "DeleteIssue", op.Operation)
+	assert.Equal(t, "KAN-1", op.Key)
+}
+
+func TestDetectDestructive_StatusTransition(t *testing.T) {
+	op, ok := detectDestructive([]string{"jira", "issue", "status", "KAN-1", "Done"})
+	assert.True(t, ok)
+	assert.Equal(t, "TransitionIssue", op.Operation)
+	assert.Equal(t, "KAN-1", op.Key)
+}
+
+func TestDetectDestructive_Start(t *testing.T) {
+	op, ok := detectDestructive([]string{"jira", "issue", "start", "KAN-1"})
+	assert.True(t, ok)
+	assert.Equal(t, "StartIssue", op.Operation)
+	assert.Equal(t, "KAN-1", op.Key)
+}
+
+func TestDetectDestructive_StatusesListNotDestructive(t *testing.T) {
+	// The read-only "statuses" listing verb must not be intercepted.
+	_, ok := detectDestructive([]string{"jira", "issue", "statuses", "KAN-1"})
+	assert.False(t, ok)
+}
+
 // --- Server destructive confirmation tests ---
 
 func startTestServerWithConfirm(t *testing.T, token string) (addr string, cancel context.CancelFunc, store *PendingConfirmStore) {

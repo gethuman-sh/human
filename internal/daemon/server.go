@@ -19,6 +19,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/browser"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/cliflags"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/proxy"
@@ -541,11 +542,18 @@ type destructiveOp struct {
 // should be intercepted. The daemon always intercepts — --yes is ignored
 // when the daemon is running; confirmation must come from the TUI.
 func detectDestructive(args []string) (destructiveOp, bool) {
-	// Strip all flags to find positional subcommands only.
-	// This prevents bypass via arbitrary flags between "issue" and the verb.
+	// Strip flags to find positional subcommands only. A space-separated value
+	// flag (e.g. "--tracker jira") must also drop its value token, otherwise
+	// that value shifts the positional indices and a delete/edit slips past
+	// detection. The known value-flag set is shared with client-side forwarding
+	// via internal/cliflags so the two cannot drift apart.
 	cleaned := make([]string, 0, len(args))
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if strings.HasPrefix(a, "-") {
+			if cliflags.ValueFlags[a] && i+1 < len(args) {
+				i++ // skip the flag's value token
+			}
 			continue
 		}
 		cleaned = append(cleaned, a)
@@ -579,6 +587,14 @@ func detectDestructive(args []string) (destructiveOp, bool) {
 		return destructiveOp{Operation: "DeleteIssue", Tracker: trackerKind, Key: key}, true
 	case "edit":
 		return destructiveOp{Operation: "EditIssue", Tracker: trackerKind, Key: key}, true
+	case "status":
+		// "issue status KEY STATUS" mutates state via TransitionIssue, which the
+		// tracker layer already classifies as destructive — gate it too. (Note:
+		// the read-only "statuses" listing verb is intentionally not matched.)
+		return destructiveOp{Operation: "TransitionIssue", Tracker: trackerKind, Key: key}, true
+	case "start":
+		// "issue start KEY" transitions to In Progress and assigns the user.
+		return destructiveOp{Operation: "StartIssue", Tracker: trackerKind, Key: key}, true
 	default:
 		return destructiveOp{}, false
 	}
