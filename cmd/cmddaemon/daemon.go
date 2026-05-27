@@ -1121,6 +1121,9 @@ func (s *dockerAgentSweeper) IsProcessRunning(ctx context.Context, containerID s
 	if err != nil {
 		return false, err
 	}
+	// Drain the multiplexed stream to EOF before inspecting: ExecInspect's exit
+	// code is only reliable once the exec has finished and the stream closed.
+	_, _ = io.Copy(io.Discard, resp.Reader)
 	_ = resp.Close()
 
 	inspect, err := docker.ExecInspect(ctx, execID)

@@ -579,10 +579,7 @@ func printAmplitudeCohortsTable(out io.Writer, cohorts []amplitude.Cohort) error
 		if c.Archived {
 			archived = "yes"
 		}
-		desc := c.Description
-		if len(desc) > 60 {
-			desc = desc[:60] + "..."
-		}
+		desc := cmdutil.TruncateRunes(c.Description, 60)
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", c.ID, c.Name, size, archived, desc)
 	}
 	return w.Flush()

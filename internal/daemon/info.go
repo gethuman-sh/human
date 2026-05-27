@@ -34,8 +34,8 @@ type DaemonInfo struct {
 	Addr       string        `json:"addr"`
 	ChromeAddr string        `json:"chrome_addr,omitempty"`
 	ProxyAddr  string        `json:"proxy_addr,omitempty"`
-	Token    string `json:"token"`
-	PID      int    `json:"pid"`
+	Token      string        `json:"token,omitempty"`
+	PID        int           `json:"pid,omitempty"`
 	// Version carries the daemon binary's build version so clients can warn
 	// about skew between the running daemon and the CLI binary.
 	// omitempty preserves backward-compatibility with daemon.json files

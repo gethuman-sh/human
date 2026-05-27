@@ -375,10 +375,7 @@ func printFigmaNodesTable(out io.Writer, nodes []figma.NodeSummary) error {
 		if n.Size != nil {
 			size = fmt.Sprintf("%.0fx%.0f", n.Size.Width, n.Size.Height)
 		}
-		text := n.Text
-		if len(text) > 50 {
-			text = text[:50] + "..."
-		}
+		text := cmdutil.TruncateRunes(n.Text, 50)
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", n.ID, n.Name, n.Type, size, text)
 	}
 	return w.Flush()
@@ -409,10 +406,7 @@ func printFigmaCommentsTable(out io.Writer, comments []figma.FileComment) error 
 		if c.Resolved {
 			resolved = "yes"
 		}
-		msg := c.Message
-		if len(msg) > 60 {
-			msg = msg[:60] + "..."
-		}
+		msg := cmdutil.TruncateRunes(c.Message, 60)
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", c.ID, c.Author, resolved, msg)
 	}
 	return w.Flush()

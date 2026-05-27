@@ -13,6 +13,20 @@ func PrintJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
+// TruncateRunes limits s to at most maxRunes runes, appending "..." when it
+// had to cut. It counts runes rather than bytes so a multi-byte character is
+// never split mid-encoding (which would emit a replacement glyph).
+func TruncateRunes(s string, maxRunes int) string {
+	if maxRunes < 0 {
+		maxRunes = 0
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "..."
+}
+
 // SplitIDs splits a comma-separated string into trimmed, non-empty parts.
 func SplitIDs(ids string) []string {
 	if ids == "" {
