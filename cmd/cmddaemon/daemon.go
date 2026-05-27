@@ -1041,7 +1041,10 @@ func latestReadyKeys(comments []tracker.Comment) []string {
 	if !haveHandoff {
 		return nil
 	}
-	if haveComplete && latestComplete.Created.After(latestHandoff.Created) {
+	// Inclusive boundary: tracker timestamps are second-granular, so a
+	// review-complete posted in the same second as the handoff must still
+	// clear it (otherwise the (R) annotation lingers after review is done).
+	if haveComplete && !latestComplete.Created.Before(latestHandoff.Created) {
 		return nil
 	}
 	return daemon.ParseEngineeringKeysFromHandoff(latestHandoff.Body)

@@ -34,6 +34,14 @@ func TestLatestReadyKeys(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "same-second review-complete clears the flag",
+			comments: []tracker.Comment{
+				{Body: "[human:ready-for-review]\nengineering: HUM-89", Created: t0},
+				{Body: "[human:review-complete]\nverdict: pass", Created: t0},
+			},
+			want: nil,
+		},
+		{
 			name: "newer handoff after a review-complete re-flags",
 			comments: []tracker.Comment{
 				{Body: "[human:ready-for-review]\nengineering: HUM-89", Created: t0},

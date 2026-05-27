@@ -451,12 +451,23 @@ func parseIssueKey(key string) (string, int, error) {
 }
 
 // toTrackerIssue converts a GitLab API issue to a tracker.Issue.
+// glStateCategory maps GitLab's opened/closed issue state to a tracker.Category,
+// mirroring ListStatuses so issue listings carry the same semantics the TUI's
+// pipeline-stage rendering depends on.
+func glStateCategory(state string) tracker.Category {
+	if state == "closed" {
+		return tracker.CategoryClosed
+	}
+	return tracker.CategoryStarted
+}
+
 func toTrackerIssue(project string, gi glIssue) tracker.Issue {
 	issue := tracker.Issue{
 		Key:         fmt.Sprintf("%s#%d", project, gi.IID),
 		Project:     project,
 		Title:       gi.Title,
 		Status:      gi.State,
+		StatusType:  glStateCategory(gi.State),
 		Description: gi.Description,
 		URL:         gi.WebURL,
 	}

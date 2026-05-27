@@ -444,12 +444,23 @@ func parseIssueKey(key string) (string, string, int, error) {
 }
 
 // toTrackerIssue converts a GitHub API issue to a tracker.Issue.
+// ghStateCategory maps GitHub's open/closed issue state to a tracker.Category,
+// mirroring ListStatuses so issue listings carry the same semantics the TUI's
+// pipeline-stage rendering depends on.
+func ghStateCategory(state string) tracker.Category {
+	if state == "closed" {
+		return tracker.CategoryClosed
+	}
+	return tracker.CategoryStarted
+}
+
 func toTrackerIssue(owner, repo string, gi ghIssue) tracker.Issue {
 	issue := tracker.Issue{
 		Key:         fmt.Sprintf("%s/%s#%d", owner, repo, gi.Number),
 		Project:     fmt.Sprintf("%s/%s", owner, repo),
 		Title:       gi.Title,
 		Status:      gi.State,
+		StatusType:  ghStateCategory(gi.State),
 		Description: gi.Body,
 		URL:         gi.HTMLURL,
 	}

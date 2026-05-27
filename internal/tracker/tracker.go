@@ -467,16 +467,31 @@ func resolveAutoDetect(instances []Instance, keyHint string) (*Instance, error) 
 		return nil, errors.WithDetails("no tracker configured, add jiras:, githubs:, gitlabs:, linears:, shortcuts:, or clickups: to .humanconfig.yaml")
 	}
 
-	// Try to narrow by key format.
-	if kind := DetectKind(keyHint); kind != "" {
+	// Narrow by key format. A key shape can be valid for several kinds
+	// (e.g. "namespace/project#IID" is both GitHub and GitLab), so intersect
+	// the shape's candidate kinds with what is actually configured rather than
+	// committing to a single guessed kind — otherwise a gitlab-only config
+	// rejects a perfectly resolvable GitLab key.
+	if candidates := DetectCandidateKinds(keyHint); len(candidates) > 0 {
+		candidateSet := make(map[string]bool, len(candidates))
+		for _, k := range candidates {
+			candidateSet[k] = true
+		}
 		var filtered []Instance
+		filteredKinds := make(map[string]bool)
 		for _, inst := range instances {
-			if inst.Kind == kind {
+			if candidateSet[inst.Kind] {
 				filtered = append(filtered, inst)
+				filteredKinds[inst.Kind] = true
 			}
 		}
 		if len(filtered) == 0 {
-			return nil, errors.WithDetails("no tracker of detected kind configured", "kind", kind, "key", keyHint)
+			return nil, errors.WithDetails("no tracker of detected kind configured",
+				"candidateKinds", strings.Join(candidates, ","), "key", keyHint)
+		}
+		if len(filteredKinds) > 1 {
+			return nil, errors.WithDetails("multiple tracker types match the key, specify --tracker=<name>",
+				"key", keyHint)
 		}
 		return &filtered[0], nil
 	}

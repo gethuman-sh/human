@@ -204,16 +204,45 @@ func TestResolve_keyHintGitHubNoInstance(t *testing.T) {
 	assert.Contains(t, err.Error(), "no tracker of detected kind configured")
 }
 
-func TestResolve_keyHintNonGitHubFallsBack(t *testing.T) {
+func TestResolve_keyHintGitLabOnlyResolves(t *testing.T) {
+	// "namespace/project#IID" is valid for both GitHub and GitLab; a
+	// gitlab-only config must still resolve it rather than failing because the
+	// shape was guessed as github.
+	instances := []Instance{
+		{Name: "work", Kind: "gitlab", Provider: stubProvider{}},
+	}
+
+	inst, err := Resolve("", instances, "group/proj#7")
+	require.NoError(t, err)
+	assert.Equal(t, "work", inst.Name)
+	assert.Equal(t, "gitlab", inst.Kind)
+}
+
+func TestResolve_keyHintGitHubGitLabAmbiguous(t *testing.T) {
+	// With both kinds configured the key is genuinely ambiguous, so the
+	// resolver must ask the user to disambiguate rather than silently guessing.
+	instances := []Instance{
+		{Name: "gh", Kind: "github", Provider: stubProvider{}},
+		{Name: "gl", Kind: "gitlab", Provider: stubProvider{}},
+	}
+
+	_, err := Resolve("", instances, "group/proj#7")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple tracker types match the key")
+}
+
+func TestResolve_keyHintNarrowsToCandidateKind(t *testing.T) {
 	instances := []Instance{
 		{Name: "work", Kind: "jira", Provider: stubProvider{}},
 		{Name: "personal", Kind: "github", Provider: stubProvider{}},
 	}
 
-	// Jira-style key — DetectKind returns "", so falls back to multi-kind error
-	_, err := Resolve("", instances, "KAN-1")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "multiple tracker types configured")
+	// "KAN-1" is a jira/linear shape; github is not a candidate, so even with
+	// multiple kinds configured the resolver narrows to the sole matching kind.
+	inst, err := Resolve("", instances, "KAN-1")
+	require.NoError(t, err)
+	assert.Equal(t, "work", inst.Name)
+	assert.Equal(t, "jira", inst.Kind)
 }
 
 func TestResolve_keyHintNonGitHubSingleKind(t *testing.T) {
