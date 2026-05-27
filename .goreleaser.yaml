@@ -31,7 +31,7 @@ brews:
   - repository:
       owner: gethuman-sh
       name: homebrew-tap
-    homepage: https://github.com/StephanSchmidt/human
+    homepage: https://github.com/gethuman-sh/human
     description: Issue tracker CLI for AIs
     license: MIT
     install: |
