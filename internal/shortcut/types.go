@@ -20,6 +20,10 @@ type scStory struct {
 type scSearchRequest struct {
 	GroupIDs       []string `json:"group_ids,omitempty"`
 	UpdatedAtStart string   `json:"updated_at_start,omitempty"`
+	// Archived filters by archived status. Always set to false when searching
+	// without other filters so the body is non-empty — sending {} returns no
+	// results on some Shortcut workspaces.
+	Archived *bool `json:"archived,omitempty"`
 }
 
 // scComment is a single story comment.

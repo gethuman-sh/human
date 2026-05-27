@@ -949,18 +949,20 @@ func TestListIssues_searchStories(t *testing.T) {
 
 func TestListIssues_searchAllStories(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v3/groups":
+		switch {
+		case r.URL.Path == "/api/v3/groups":
 			_, _ = fmt.Fprint(w, `[{"id":"grp-uuid-1","name":"Human"},{"id":"grp-uuid-2","name":"Other"}]`)
-		case "/api/v3/groups/grp-uuid-1/stories":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/stories/search":
+			body, _ := io.ReadAll(r.Body)
+			var req map[string]any
+			_ = json.Unmarshal(body, &req)
+			// archived:false must be set so the body is never empty
+			assert.Equal(t, false, req["archived"])
 			_, _ = fmt.Fprint(w, `[
-				{"id":1,"name":"Story A","story_type":"feature","workflow_state_id":500,"group_id":"grp-uuid-1","owner_ids":[],"requested_by_id":""}
-			]`)
-		case "/api/v3/groups/grp-uuid-2/stories":
-			_, _ = fmt.Fprint(w, `[
+				{"id":1,"name":"Story A","story_type":"feature","workflow_state_id":500,"group_id":"grp-uuid-1","owner_ids":[],"requested_by_id":""},
 				{"id":2,"name":"Story B","story_type":"bug","workflow_state_id":500,"group_id":"grp-uuid-2","owner_ids":[],"requested_by_id":""}
 			]`)
-		case "/api/v3/workflows":
+		case r.URL.Path == "/api/v3/workflows":
 			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -970,12 +972,42 @@ func TestListIssues_searchAllStories(t *testing.T) {
 
 	client := New(srv.URL, "tok-test")
 	issues, err := client.ListIssues(context.Background(), tracker.ListOptions{
-		Project: "", // empty = search all groups
+		Project: "", // empty = search across all groups via search endpoint
 	})
 	require.NoError(t, err)
 	require.Len(t, issues, 2)
 	assert.Equal(t, "Human", issues[0].Project)
 	assert.Equal(t, "Other", issues[1].Project)
+}
+
+func TestListIssues_noTeamStories(t *testing.T) {
+	// Stories with no group_id must be returned when listing without a project filter.
+	// The old team-iteration approach silently dropped such stories.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v3/groups":
+			_, _ = fmt.Fprint(w, `[{"id":"grp-uuid-1","name":"Human"}]`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/stories/search":
+			_, _ = fmt.Fprint(w, `[
+				{"id":1,"name":"Teamless story","story_type":"feature","workflow_state_id":500,"group_id":"","owner_ids":[],"requested_by_id":""}
+			]`)
+		case r.URL.Path == "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	issues, err := client.ListIssues(context.Background(), tracker.ListOptions{
+		Project: "",
+	})
+	require.NoError(t, err)
+	require.Len(t, issues, 1)
+	assert.Equal(t, "Teamless story", issues[0].Title)
+	// No group assigned, project field should be empty
+	assert.Equal(t, "", issues[0].Project)
 }
 
 func TestResolveStateByName_caseInsensitive(t *testing.T) {

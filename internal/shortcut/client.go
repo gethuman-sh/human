@@ -77,12 +77,12 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 			stories, err = c.listGroupStories(ctx, groupID)
 		}
 	} else {
-		// Fetch stories across all groups.
-		if !opts.UpdatedSince.IsZero() {
-			stories, err = c.searchAllStories(ctx, opts.UpdatedSince)
-		} else {
-			stories, err = c.listAllGroupStories(ctx)
-		}
+		// Use search for all stories regardless of team assignment.
+		// listAllGroupStories only returns stories with a group_id set, so
+		// stories with no team are silently dropped. searchAllStories with
+		// {"archived":false} returns everything and avoids the empty-body
+		// problem seen on some Shortcut workspaces.
+		stories, err = c.searchAllStories(ctx, opts.UpdatedSince)
 	}
 	if err != nil {
 		return nil, err
@@ -127,37 +127,6 @@ func (c *Client) listGroupStories(ctx context.Context, groupID string) ([]scStor
 	return stories, nil
 }
 
-// listAllGroupStories fetches stories from every group via the group endpoint.
-// This avoids POST /api/v3/stories/search with an empty body, which returns
-// no results on some Shortcut workspaces.
-func (c *Client) listAllGroupStories(ctx context.Context) ([]scStory, error) {
-	if _, err := c.resolveGroupID(ctx, ""); err != nil {
-		return nil, err
-	}
-	c.groupsMu.Lock()
-	groups := make(map[string]string, len(c.groups))
-	for name, id := range c.groups {
-		groups[name] = id
-	}
-	c.groupsMu.Unlock()
-
-	// Collect and sort group IDs for deterministic output order.
-	ids := make([]string, 0, len(groups))
-	for _, id := range groups {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-
-	var all []scStory
-	for _, gid := range ids {
-		stories, err := c.listGroupStories(ctx, gid)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, stories...)
-	}
-	return all, nil
-}
 
 // searchStories uses POST /api/v3/stories/search with updated_at_start filter.
 func (c *Client) searchStories(ctx context.Context, groupID string, since time.Time) ([]scStory, error) {
@@ -182,8 +151,12 @@ func (c *Client) searchStories(ctx context.Context, groupID string, since time.T
 }
 
 // searchAllStories searches across all groups, optionally filtering by updated time.
+// Archived is always set to false so the request body is never empty — sending {}
+// returns no results on some Shortcut workspaces, while {"archived":false} returns
+// all non-archived stories regardless of team assignment.
 func (c *Client) searchAllStories(ctx context.Context, since time.Time) ([]scStory, error) {
-	body := scSearchRequest{}
+	archived := false
+	body := scSearchRequest{Archived: &archived}
 	if !since.IsZero() {
 		body.UpdatedAtStart = since.Format(time.RFC3339)
 	}
