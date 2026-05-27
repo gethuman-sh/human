@@ -1,12 +1,12 @@
 <img src="h-l2.svg" width="80" alt="human logo">
 
-[![CI](https://github.com/StephanSchmidt/human/actions/workflows/ci.yml/badge.svg)](https://github.com/StephanSchmidt/human/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/StephanSchmidt/human/branch/main/graph/badge.svg)](https://codecov.io/gh/StephanSchmidt/human)
-[![Go Report Card](https://goreportcard.com/badge/github.com/StephanSchmidt/human)](https://goreportcard.com/report/github.com/StephanSchmidt/human)
-[![Go Reference](https://pkg.go.dev/badge/github.com/StephanSchmidt/human.svg)](https://pkg.go.dev/github.com/StephanSchmidt/human)
-[![Latest Release](https://img.shields.io/github/v/release/StephanSchmidt/human)](https://github.com/StephanSchmidt/human/releases/latest)
-[![Dependabot](https://img.shields.io/badge/dependabot-enabled-blue?logo=dependabot)](https://github.com/StephanSchmidt/human/network/updates)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/StephanSchmidt/human/blob/main/LICENSE)
+[![CI](https://github.com/gethuman-sh/human/actions/workflows/ci.yml/badge.svg)](https://github.com/gethuman-sh/human/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/gethuman-sh/human/branch/main/graph/badge.svg)](https://codecov.io/gh/gethuman-sh/human)
+[![Go Report Card](https://goreportcard.com/badge/github.com/gethuman-sh/human)](https://goreportcard.com/report/github.com/gethuman-sh/human)
+[![Go Reference](https://pkg.go.dev/badge/github.com/gethuman-sh/human.svg)](https://pkg.go.dev/github.com/gethuman-sh/human)
+[![Latest Release](https://img.shields.io/github/v/release/gethuman-sh/human)](https://github.com/gethuman-sh/human/releases/latest)
+[![Dependabot](https://img.shields.io/badge/dependabot-enabled-blue?logo=dependabot)](https://github.com/gethuman-sh/human/network/updates)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/gethuman-sh/human/blob/main/LICENSE)
 
 # human
 
@@ -32,25 +32,25 @@ curl -sSfL gethuman.sh/install.sh | bash
 Or with Homebrew:
 
 ```bash
-brew install stephanschmidt/tap/human
+brew install gethuman-sh/tap/human
 ```
 
 Or with [mise](https://mise.jdx.dev):
 
 ```bash
-mise use -g github:StephanSchmidt/human
+mise use -g github:gethuman-sh/human
 ```
 
 Or with Go:
 
 ```bash
-go install github.com/StephanSchmidt/human@latest
+go install github.com/gethuman-sh/human@latest
 ```
 
-Or add as a [devcontainer Feature](https://github.com/StephanSchmidt/treehouse):
+Or add as a [devcontainer Feature](https://github.com/gethuman-sh/treehouse):
 
 ```json
-{ "features": { "ghcr.io/stephanschmidt/treehouse/human:1": {} } }
+{ "features": { "ghcr.io/gethuman-sh/treehouse/human:1": {} } }
 ```
 
 ## Quick start
@@ -112,7 +112,7 @@ human telegram list                    # Telegram
 
 ## Devcontainer / Remote mode
 
-> **Quick start:** Use the [treehouse devcontainer Feature](https://github.com/StephanSchmidt/treehouse) — it installs `human`, sets up OAuth browser forwarding, and optionally configures the HTTPS proxy. Add it to your `devcontainer.json` and you're done.
+> **Quick start:** Use the [treehouse devcontainer Feature](https://github.com/gethuman-sh/treehouse) — it installs `human`, sets up OAuth browser forwarding, and optionally configures the HTTPS proxy. Add it to your `devcontainer.json` and you're done.
 
 AI agents running inside devcontainers need access to issue trackers, Notion, Figma, and Amplitude, but credentials should stay on the host. The daemon mode splits `human` into two roles: a **daemon** on the host (holds credentials, executes commands) and a **client** inside the container (forwards CLI args, prints results). You need `human` installed on both sides: on the host (via Homebrew, curl, etc.) to run the daemon, and inside the container (via the devcontainer Feature) as the client. It's the same binary — the mode is determined by the `HUMAN_DAEMON_ADDR` environment variable.
 
@@ -124,12 +124,12 @@ human daemon token          # print token for copy/paste
 human daemon status         # check if daemon is reachable
 ```
 
-In `devcontainer.json`, add the [devcontainer Feature](https://github.com/StephanSchmidt/treehouse) to install `human` and configure the daemon connection:
+In `devcontainer.json`, add the [devcontainer Feature](https://github.com/gethuman-sh/treehouse) to install `human` and configure the daemon connection:
 
 ```json
 {
   "features": {
-    "ghcr.io/stephanschmidt/treehouse/human:1": {}
+    "ghcr.io/gethuman-sh/treehouse/human:1": {}
   },
   "forwardPorts": [19285, 19286],
   "remoteEnv": {
@@ -162,7 +162,7 @@ The bridge requires `HUMAN_CHROME_ADDR` and `HUMAN_DAEMON_TOKEN` environment var
 
 ### OAuth / browser forwarding
 
-Tools like Claude Code require OAuth authentication, which needs to open a browser on the host. The [treehouse Feature](https://github.com/StephanSchmidt/treehouse) handles this automatically by creating a `human-browser` symlink and setting `BROWSER=human-browser`. When Claude Code triggers OAuth, `human-browser` forwards the request to the daemon, which opens the real browser on the host and relays the callback back to the container.
+Tools like Claude Code require OAuth authentication, which needs to open a browser on the host. The [treehouse Feature](https://github.com/gethuman-sh/treehouse) handles this automatically by creating a `human-browser` symlink and setting `BROWSER=human-browser`. When Claude Code triggers OAuth, `human-browser` forwards the request to the daemon, which opens the real browser on the host and relays the callback back to the container.
 
 If you're not using the treehouse Feature, add `"BROWSER": "human-browser"` to your `remoteEnv` and ensure the `human-browser` symlink exists in the container (pointing to the `human` binary).
 
@@ -185,12 +185,12 @@ proxy:
 - `blocklist`: only listed domains blocked, everything else passes
 - No `proxy:` section: block all (safe default)
 
-Enable in `devcontainer.json` using the [treehouse](https://github.com/StephanSchmidt/treehouse) devcontainer Feature:
+Enable in `devcontainer.json` using the [treehouse](https://github.com/gethuman-sh/treehouse) devcontainer Feature:
 
 ```json
 {
   "features": {
-    "ghcr.io/stephanschmidt/treehouse/human:1": {
+    "ghcr.io/gethuman-sh/treehouse/human:1": {
       "proxy": true
     }
   },
@@ -207,7 +207,7 @@ Enable in `devcontainer.json` using the [treehouse](https://github.com/StephanSc
 }
 ```
 
-See the [treehouse README](https://github.com/StephanSchmidt/treehouse#https-proxy) for full setup instructions.
+See the [treehouse README](https://github.com/gethuman-sh/treehouse#https-proxy) for full setup instructions.
 
 ## Claude Code skills
 
@@ -313,10 +313,10 @@ make build
 
 ## Star History
 
-<a href="https://www.star-history.com/#StephanSchmidt/human&Date">
+<a href="https://www.star-history.com/#gethuman-sh/human&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=StephanSchmidt/human&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=StephanSchmidt/human&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=StephanSchmidt/human&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=gethuman-sh/human&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=gethuman-sh/human&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=gethuman-sh/human&type=Date" />
  </picture>
 </a>

@@ -1,7 +1,7 @@
 package tracker
 
 import (
-	"github.com/StephanSchmidt/human/internal/config"
+	"github.com/gethuman-sh/human/internal/config"
 )
 
 // LoadPolicyConfig reads the policies section from .humanconfig.yaml in dir.

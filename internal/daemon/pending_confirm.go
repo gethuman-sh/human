@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 const confirmTimeout = 5 * time.Minute

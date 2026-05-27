@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/claude/hookevents"
-	"github.com/StephanSchmidt/human/internal/stats"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/stats"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 const dialTimeout = 5 * time.Second

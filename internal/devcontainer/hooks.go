@@ -9,7 +9,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // RunHook executes a lifecycle command inside a container.

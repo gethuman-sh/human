@@ -12,8 +12,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/daemon"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // Manager orchestrates devcontainer lifecycle operations.

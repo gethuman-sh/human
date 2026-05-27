@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // Action represents the result of a policy evaluation.

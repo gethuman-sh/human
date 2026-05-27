@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/StephanSchmidt/human/internal/config"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // WarnSkippedTrackers checks which trackers are configured in .humanconfig but

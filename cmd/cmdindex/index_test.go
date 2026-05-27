@@ -9,9 +9,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/index"
-	"github.com/StephanSchmidt/human/internal/notion"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/index"
+	"github.com/gethuman-sh/human/internal/notion"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // testDeps returns IndexDeps with an in-memory store.

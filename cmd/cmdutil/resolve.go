@@ -9,13 +9,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/config"
-	"github.com/StephanSchmidt/human/internal/dispatch"
-	"github.com/StephanSchmidt/human/internal/env"
-	"github.com/StephanSchmidt/human/internal/slack"
-	"github.com/StephanSchmidt/human/internal/telegram"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/dispatch"
+	"github.com/gethuman-sh/human/internal/env"
+	"github.com/gethuman-sh/human/internal/slack"
+	"github.com/gethuman-sh/human/internal/telegram"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // Deps holds injectable dependencies for command builders that need

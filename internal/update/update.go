@@ -19,7 +19,7 @@ const (
 	cacheFileName  = "update-check.json"
 	checkInterval  = 24 * time.Hour
 	cacheMaxAge    = 48 * time.Hour
-	githubReleases = "https://api.github.com/repos/StephanSchmidt/human/releases/latest"
+	githubReleases = "https://api.github.com/repos/gethuman-sh/human/releases/latest"
 )
 
 // fs is the filesystem abstraction — replaced with MemMapFs in tests.
@@ -130,7 +130,7 @@ func IsNewer(currentVersion, latestVersion string) bool {
 func InstallHint() string {
 	exe, err := os.Executable()
 	if err != nil {
-		return "https://github.com/StephanSchmidt/human/releases"
+		return "https://github.com/gethuman-sh/human/releases"
 	}
 	lower := strings.ToLower(exe)
 
@@ -147,10 +147,10 @@ func InstallHint() string {
 	if (gopath != "" && strings.HasPrefix(exe, filepath.Join(gopath, "bin"))) ||
 		(gobin != "" && strings.HasPrefix(exe, gobin)) ||
 		strings.HasPrefix(exe, homeGoBin) {
-		return "go install github.com/StephanSchmidt/human@latest"
+		return "go install github.com/gethuman-sh/human@latest"
 	}
 
-	return "https://github.com/StephanSchmidt/human/releases"
+	return "https://github.com/gethuman-sh/human/releases"
 }
 
 // --- internal helpers ---

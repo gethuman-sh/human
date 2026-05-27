@@ -6,7 +6,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/StephanSchmidt/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 )
 
 // writerBufSize is the capacity of the async write channel. Events are

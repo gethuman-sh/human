@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // GraphQLRequest is the standard GraphQL request body.

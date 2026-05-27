@@ -8,9 +8,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/claude"
-	"github.com/StephanSchmidt/human/internal/daemon"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // DevcontainerPrompter abstracts TUI interactions for the devcontainer step.
@@ -125,7 +125,7 @@ type devcontainerConfig struct {
 	PostStartCommand string                 `json:"postStartCommand,omitempty"`
 }
 
-const humanFeatureKey = "ghcr.io/stephanschmidt/treehouse/human:1"
+const humanFeatureKey = "ghcr.io/gethuman-sh/treehouse/human:1"
 const claudeFeatureKey = "ghcr.io/anthropics/devcontainer-features/claude-code:1"
 const nodeFeatureKey = "ghcr.io/devcontainers/features/node:1"
 

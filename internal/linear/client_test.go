@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/StephanSchmidt/human/internal/apiclient"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/apiclient"
+	"github.com/gethuman-sh/human/internal/tracker"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

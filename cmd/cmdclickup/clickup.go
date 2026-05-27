@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/cmd/cmdutil"
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/clickup"
-	"github.com/StephanSchmidt/human/internal/config"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/cmd/cmdutil"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/clickup"
+	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // BuildClickUpCommands returns ClickUp-specific commands (hierarchy browsing,

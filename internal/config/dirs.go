@@ -3,7 +3,7 @@ package config
 import (
 	"context"
 
-	"github.com/StephanSchmidt/human/internal/env"
+	"github.com/gethuman-sh/human/internal/env"
 )
 
 const (

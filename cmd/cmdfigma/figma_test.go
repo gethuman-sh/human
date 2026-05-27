@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/cmd/cmdutil"
-	"github.com/StephanSchmidt/human/internal/figma"
+	"github.com/gethuman-sh/human/cmd/cmdutil"
+	"github.com/gethuman-sh/human/internal/figma"
 )
 
 // --- mock figma client ---

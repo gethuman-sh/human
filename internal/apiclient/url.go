@@ -3,7 +3,7 @@ package apiclient
 import (
 	"net/url"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // URLBuilder constructs a full URL from a parsed base URL, path, and raw query string.

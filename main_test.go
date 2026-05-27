@@ -13,11 +13,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/cmd/cmdprovider"
-	"github.com/StephanSchmidt/human/cmd/cmdtracker"
-	"github.com/StephanSchmidt/human/cmd/cmdutil"
-	"github.com/StephanSchmidt/human/internal/daemon"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/cmd/cmdprovider"
+	"github.com/gethuman-sh/human/cmd/cmdtracker"
+	"github.com/gethuman-sh/human/cmd/cmdutil"
+	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 func TestAuditLogPath(t *testing.T) {

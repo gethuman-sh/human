@@ -3,7 +3,7 @@ package hookevents
 import (
 	"time"
 
-	"github.com/StephanSchmidt/human/internal/claude/logparser"
+	"github.com/gethuman-sh/human/internal/claude/logparser"
 )
 
 // Event represents a single hook event line from events.jsonl.

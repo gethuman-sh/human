@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/StephanSchmidt/human/internal/platform"
+	"github.com/gethuman-sh/human/internal/platform"
 )
 
 // soundPlayerTimeout bounds a notification player invocation. Hung

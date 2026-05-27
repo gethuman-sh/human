@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/claude"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude"
 )
 
 // ServicesPrompter abstracts TUI interactions for the services step.

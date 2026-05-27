@@ -1,9 +1,9 @@
 package vault
 
 import (
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/config"
-	"github.com/StephanSchmidt/human/internal/platform"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/platform"
 )
 
 // Config holds the vault configuration from .humanconfig.

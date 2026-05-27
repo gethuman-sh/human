@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/cmd/cmdutil"
-	"github.com/StephanSchmidt/human/internal/index"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/cmd/cmdutil"
+	"github.com/gethuman-sh/human/internal/index"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // IndexDeps holds injectable dependencies for index commands.

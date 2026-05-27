@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // mockProvider implements tracker.Provider for testing.

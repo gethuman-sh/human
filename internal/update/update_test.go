@@ -250,7 +250,7 @@ func TestInstallHint_GoPath(t *testing.T) {
 	// Must be one of the three expected forms.
 	if !strings.Contains(hint, "brew") &&
 		!strings.Contains(hint, "go install") &&
-		!strings.Contains(hint, "github.com/StephanSchmidt/human/releases") {
+		!strings.Contains(hint, "github.com/gethuman-sh/human/releases") {
 		t.Errorf("unexpected hint: %q", hint)
 	}
 }

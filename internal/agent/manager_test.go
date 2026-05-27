@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/StephanSchmidt/human/internal/devcontainer"
+	"github.com/gethuman-sh/human/internal/devcontainer"
 )
 
 // mockDockerClient implements devcontainer.DockerClient for agent tests.

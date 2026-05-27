@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude"
 )
 
 // stubFinder is a mock InstanceFinder for testing.

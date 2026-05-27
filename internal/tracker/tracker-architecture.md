@@ -29,7 +29,7 @@ main.go ──→ shortcut    ──→ tracker  (Instance)
 ```go
 package linear
 
-import "github.com/StephanSchmidt/human/internal/tracker"
+import "github.com/gethuman-sh/human/internal/tracker"
 
 var _ tracker.Provider = (*Client)(nil)
 

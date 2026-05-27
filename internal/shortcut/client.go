@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/apiclient"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/apiclient"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 var _ tracker.Provider = (*Client)(nil)

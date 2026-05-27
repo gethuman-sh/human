@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/claude"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude"
 )
 
 // LspPlugin describes an LSP server and its Claude Code plugin.

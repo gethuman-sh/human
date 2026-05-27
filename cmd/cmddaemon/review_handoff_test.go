@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 func TestLatestReadyKeys(t *testing.T) {

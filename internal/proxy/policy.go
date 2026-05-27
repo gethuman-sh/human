@@ -3,7 +3,7 @@ package proxy
 import (
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // Mode determines whether the domain list is an allowlist or blocklist.

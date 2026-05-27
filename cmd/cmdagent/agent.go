@@ -12,10 +12,10 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/agent"
-	"github.com/StephanSchmidt/human/internal/daemon"
-	"github.com/StephanSchmidt/human/internal/devcontainer"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/agent"
+	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/devcontainer"
 )
 
 func isTerminal(fd uintptr) bool {

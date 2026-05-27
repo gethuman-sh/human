@@ -6,9 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/cmd/cmdprovider"
-	"github.com/StephanSchmidt/human/cmd/cmdutil"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/cmd/cmdprovider"
+	"github.com/gethuman-sh/human/cmd/cmdutil"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // BuildAutoGetCmd creates the top-level "get" command that auto-detects the tracker.

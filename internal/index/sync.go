@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // SyncResult summarises one sync run.

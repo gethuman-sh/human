@@ -1,7 +1,7 @@
 package slack
 
 import (
-	"github.com/StephanSchmidt/human/internal/config"
+	"github.com/gethuman-sh/human/internal/config"
 )
 
 // Config holds the configuration for a single Slack instance.

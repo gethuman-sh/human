@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/StephanSchmidt/human/internal/claude/logparser"
+	"github.com/gethuman-sh/human/internal/claude/logparser"
 )
 
 // Parse reads all event lines and returns the latest snapshot per session.

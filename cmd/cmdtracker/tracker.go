@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // TrackerEntry is the JSON output structure for a single tracker instance.

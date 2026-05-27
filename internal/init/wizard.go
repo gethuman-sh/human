@@ -7,9 +7,9 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/claude"
-	"github.com/StephanSchmidt/human/internal/logo"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/logo"
 )
 
 // WizardStep is a self-contained phase of the init wizard.

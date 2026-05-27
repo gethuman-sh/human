@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/daemon"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 const dialTimeout = 2 * time.Second

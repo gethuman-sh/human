@@ -9,7 +9,7 @@ import (
 
 	"github.com/1password/onepassword-sdk-go"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // secretRefPrefix is the user-facing prefix for 1Password secret references.

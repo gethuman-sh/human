@@ -1,6 +1,6 @@
 package cmdutil
 
-import "github.com/StephanSchmidt/human/internal/tracker"
+import "github.com/gethuman-sh/human/internal/tracker"
 
 func init() {
 	tracker.CredSpecs = map[string]tracker.CredSpec{

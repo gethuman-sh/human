@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/StephanSchmidt/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude"
 )
 
 // TmuxSender sends prompts to tmux panes via send-keys.

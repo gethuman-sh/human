@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // opRefPattern whitelists the characters permitted in a resolved

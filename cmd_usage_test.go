@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/cmd/cmdusage"
-	"github.com/StephanSchmidt/human/internal/claude"
+	"github.com/gethuman-sh/human/cmd/cmdusage"
+	"github.com/gethuman-sh/human/internal/claude"
 )
 
 type stubWalker struct {

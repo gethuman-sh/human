@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/notion"
+	"github.com/gethuman-sh/human/internal/notion"
 )
 
 // mockNotionClient implements NotionClient for testing.

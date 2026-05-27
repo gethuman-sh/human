@@ -20,10 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/env"
-	"github.com/StephanSchmidt/human/internal/proxy"
-	"github.com/StephanSchmidt/human/internal/stats"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/env"
+	"github.com/gethuman-sh/human/internal/proxy"
+	"github.com/gethuman-sh/human/internal/stats"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 func echoCmd() *cobra.Command {

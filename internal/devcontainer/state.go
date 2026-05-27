@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // Status represents the lifecycle state of a managed devcontainer.

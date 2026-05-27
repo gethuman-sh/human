@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/proxy"
+	"github.com/gethuman-sh/human/internal/proxy"
 )
 
 // Compile-time assertion that the store satisfies the proxy emitter

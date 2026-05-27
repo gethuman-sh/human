@@ -92,12 +92,12 @@ Wildcard `*.example.com` matches subdomains but not `example.com` itself.
 
 ### Devcontainer setup
 
-Enable the `proxy` option in the [treehouse](https://github.com/StephanSchmidt/treehouse) devcontainer Feature:
+Enable the `proxy` option in the [treehouse](https://github.com/gethuman-sh/treehouse) devcontainer Feature:
 
 ```json
 {
   "features": {
-    "ghcr.io/stephanschmidt/treehouse/human:1": {
+    "ghcr.io/gethuman-sh/treehouse/human:1": {
       "proxy": true
     }
   },

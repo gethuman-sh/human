@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/config"
+	"github.com/gethuman-sh/human/internal/config"
 )
 
 // testVaultConfig is a minimal config struct for integration testing.

@@ -5,7 +5,7 @@ package cmddaemon
 import (
 	"github.com/rs/zerolog"
 
-	"github.com/StephanSchmidt/human/internal/fusefs"
+	"github.com/gethuman-sh/human/internal/fusefs"
 )
 
 // fuseMount mounts the FUSE .env filter overlay.

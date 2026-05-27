@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // WindowStart returns the start of the current 5-hour usage window in UTC.

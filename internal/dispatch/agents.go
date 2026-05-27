@@ -3,7 +3,7 @@ package dispatch
 import (
 	"context"
 
-	"github.com/StephanSchmidt/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude"
 )
 
 // TmuxAgentFinder discovers Claude tmux panes that are available for dispatch.

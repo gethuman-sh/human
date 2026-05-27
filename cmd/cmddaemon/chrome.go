@@ -14,8 +14,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/chrome"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/chrome"
 )
 
 const chromeBridgeChildEnv = "_HUMAN_CHROME_BRIDGE_CHILD"

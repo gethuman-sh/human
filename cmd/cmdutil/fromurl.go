@@ -1,13 +1,13 @@
 package cmdutil
 
 import (
-	"github.com/StephanSchmidt/human/internal/azuredevops"
-	"github.com/StephanSchmidt/human/internal/github"
-	"github.com/StephanSchmidt/human/internal/gitlab"
-	"github.com/StephanSchmidt/human/internal/jira"
-	"github.com/StephanSchmidt/human/internal/linear"
-	"github.com/StephanSchmidt/human/internal/shortcut"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/azuredevops"
+	"github.com/gethuman-sh/human/internal/github"
+	"github.com/gethuman-sh/human/internal/gitlab"
+	"github.com/gethuman-sh/human/internal/jira"
+	"github.com/gethuman-sh/human/internal/linear"
+	"github.com/gethuman-sh/human/internal/shortcut"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // InstanceFromURL attempts to build a tracker Instance from a parsed URL

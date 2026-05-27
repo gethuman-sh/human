@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"github.com/StephanSchmidt/human/internal/config"
+	"github.com/gethuman-sh/human/internal/config"
 )
 
 // Config holds the proxy section of .humanconfig.yaml.

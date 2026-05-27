@@ -12,7 +12,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/rs/zerolog"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // FileKind classifies a file for the FUSE security filter.

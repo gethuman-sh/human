@@ -1,6 +1,6 @@
 package daemon
 
-import "github.com/StephanSchmidt/human/internal/tracker"
+import "github.com/gethuman-sh/human/internal/tracker"
 
 // TrackerIssuesResult is the wire type for a single tracker/project's issues.
 //

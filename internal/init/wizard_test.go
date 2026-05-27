@@ -10,7 +10,7 @@ import (
 
 	"io"
 
-	"github.com/StephanSchmidt/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -647,7 +647,7 @@ func TestDevcontainerStep_BasicConfig(t *testing.T) {
 	data := string(fw.files[".devcontainer/devcontainer.json"])
 	assert.Contains(t, data, "mcr.microsoft.com/devcontainers/base:ubuntu")
 	assert.Contains(t, data, "ghcr.io/devcontainers/features/node:1")
-	assert.Contains(t, data, "ghcr.io/stephanschmidt/treehouse/human:1")
+	assert.Contains(t, data, "ghcr.io/gethuman-sh/treehouse/human:1")
 	assert.Contains(t, data, `"BROWSER": "human-browser"`)
 	assert.Contains(t, data, ".human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly")
 	assert.Contains(t, data, `"HUMAN_DAEMON_ADDR": "host.docker.internal:19285"`)
@@ -742,7 +742,7 @@ func TestDevcontainerStep_OverwriteDeclined_InjectsFeature(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Added human feature to existing devcontainer config.")
 	data := string(fw.files[".devcontainer/devcontainer.json"])
-	assert.Contains(t, data, "ghcr.io/stephanschmidt/treehouse/human:1")
+	assert.Contains(t, data, "ghcr.io/gethuman-sh/treehouse/human:1")
 	assert.Contains(t, data, "node:20")
 }
 
@@ -752,7 +752,7 @@ func TestDevcontainerStep_OverwriteDeclined_FeatureAlreadyPresent(t *testing.T) 
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 	require.NoError(t, os.Chdir(tmpDir))
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".devcontainer"), 0o755))
-	existing := `{"features":{"ghcr.io/stephanschmidt/treehouse/human:1":{}}}`
+	existing := `{"features":{"ghcr.io/gethuman-sh/treehouse/human:1":{}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".devcontainer/devcontainer.json"), []byte(existing), 0o644))
 
 	prompter := &mockPrompter{
@@ -890,7 +890,7 @@ func TestDevcontainerStep_WithStacks(t *testing.T) {
 	data := string(fw.files[".devcontainer/devcontainer.json"])
 	assert.Contains(t, data, "ghcr.io/devcontainers/features/go:1")
 	assert.Contains(t, data, "ghcr.io/devcontainers/features/python:1")
-	assert.Contains(t, data, "ghcr.io/stephanschmidt/treehouse/human:1")
+	assert.Contains(t, data, "ghcr.io/gethuman-sh/treehouse/human:1")
 }
 
 func TestDevcontainerStep_StacksWithProxy(t *testing.T) {
@@ -1029,7 +1029,7 @@ func TestRunInit_FullWizardFlow(t *testing.T) {
 	assert.Contains(t, yaml, "githubs:")
 
 	dcJSON := string(fw.files[".devcontainer/devcontainer.json"])
-	assert.Contains(t, dcJSON, "ghcr.io/stephanschmidt/treehouse/human:1")
+	assert.Contains(t, dcJSON, "ghcr.io/gethuman-sh/treehouse/human:1")
 }
 
 func TestRunInit_FullWizardWithAgentInstall(t *testing.T) {

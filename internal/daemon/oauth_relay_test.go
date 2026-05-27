@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/oauth"
+	"github.com/gethuman-sh/human/internal/oauth"
 )
 
 // mockOpener records the URL it was asked to open without launching a real browser.

@@ -18,7 +18,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 const maxBodyLog = 10 * 1024 * 1024 // 10 MB max body logged

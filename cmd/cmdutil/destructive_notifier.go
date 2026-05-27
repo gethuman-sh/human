@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/StephanSchmidt/human/internal/dispatch"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/dispatch"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // DispatchDestructiveNotifier adapts dispatch.Notifier to tracker.DestructiveNotifier.

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // ContainerPrefix is prepended to all managed agent container names.

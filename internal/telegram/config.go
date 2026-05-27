@@ -3,7 +3,7 @@ package telegram
 import (
 	"fmt"
 
-	"github.com/StephanSchmidt/human/internal/config"
+	"github.com/gethuman-sh/human/internal/config"
 )
 
 // Config holds the configuration for a single Telegram bot instance.

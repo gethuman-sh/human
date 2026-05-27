@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/internal/claude/monitor"
-	"github.com/StephanSchmidt/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/claude/monitor"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // baseTime is a fixed reference time so relative timestamps in the

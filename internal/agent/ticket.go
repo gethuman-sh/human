@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // FetchTicketPrompt loads the ticket identified by key from the configured

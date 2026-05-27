@@ -3,7 +3,7 @@ package cmdbrowser
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/internal/browser"
+	"github.com/gethuman-sh/human/internal/browser"
 )
 
 // BuildBrowserCmd creates the "browser" command.

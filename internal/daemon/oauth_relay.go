@@ -9,8 +9,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/StephanSchmidt/human/internal/browser"
-	"github.com/StephanSchmidt/human/internal/oauth"
+	"github.com/gethuman-sh/human/internal/browser"
+	"github.com/gethuman-sh/human/internal/oauth"
 )
 
 const oauthAcceptTimeout = 5 * time.Minute

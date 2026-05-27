@@ -1,8 +1,8 @@
 package gitlab
 
 import (
-	"github.com/StephanSchmidt/human/internal/config"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // Config holds the configuration for a single GitLab instance.

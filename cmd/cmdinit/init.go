@@ -5,12 +5,12 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/internal/claude"
-	initpkg "github.com/StephanSchmidt/human/internal/init"
+	"github.com/gethuman-sh/human/internal/claude"
+	initpkg "github.com/gethuman-sh/human/internal/init"
 )
 
 // huhPrompter implements initpkg.Prompter using charmbracelet/huh forms.

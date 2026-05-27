@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/config"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/config"
 )
 
 // ProjectEntry holds the loaded config context for one registered project directory.

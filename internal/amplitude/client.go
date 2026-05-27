@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/StephanSchmidt/human/internal/apiclient"
+	"github.com/gethuman-sh/human/internal/apiclient"
 )
 
 // Client is an Amplitude API client.

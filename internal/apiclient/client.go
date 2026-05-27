@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // DefaultTimeout is the HTTP client timeout applied when no custom HTTPDoer is provided.

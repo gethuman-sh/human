@@ -3,7 +3,7 @@ package tracker
 import (
 	"context"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // SafeProvider wraps a Provider and blocks mutating operations.

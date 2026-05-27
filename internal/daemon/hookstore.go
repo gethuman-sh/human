@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/StephanSchmidt/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 )
 
 // maxHookEventsPerSession caps per-session buffered events so a burst

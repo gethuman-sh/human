@@ -12,7 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // mcpBufSize is the max line size for reading JSON-RPC responses from the

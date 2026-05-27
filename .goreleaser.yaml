@@ -29,7 +29,7 @@ checksum:
 
 brews:
   - repository:
-      owner: StephanSchmidt
+      owner: gethuman-sh
       name: homebrew-tap
     homepage: https://github.com/StephanSchmidt/human
     description: Issue tracker CLI for AIs

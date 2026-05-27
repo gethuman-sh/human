@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/cmd/cmdinit"
+	"github.com/gethuman-sh/human/cmd/cmdinit"
 )
 
 func TestBuildInitCmd_Exists(t *testing.T) {

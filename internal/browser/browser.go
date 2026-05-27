@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/url"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 )
 
 // Opener opens a URL in the default browser.

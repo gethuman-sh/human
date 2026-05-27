@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/StephanSchmidt/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // setupTestProject creates a temp project dir with a devcontainer.json.

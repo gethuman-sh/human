@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/daemon"
-	"github.com/StephanSchmidt/human/internal/devcontainer"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/devcontainer"
 )
 
 // validNameRe matches agent names: alphanumeric, hyphens, underscores.

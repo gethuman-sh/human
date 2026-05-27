@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/StephanSchmidt/human/errors"
+	"github.com/gethuman-sh/human/errors"
 
 	"github.com/rs/zerolog/log"
 )

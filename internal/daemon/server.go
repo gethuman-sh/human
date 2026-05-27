@@ -17,14 +17,14 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
-	"github.com/StephanSchmidt/human/internal/browser"
-	"github.com/StephanSchmidt/human/internal/claude/hookevents"
-	"github.com/StephanSchmidt/human/internal/config"
-	"github.com/StephanSchmidt/human/internal/env"
-	"github.com/StephanSchmidt/human/internal/proxy"
-	"github.com/StephanSchmidt/human/internal/stats"
-	"github.com/StephanSchmidt/human/internal/tracker"
-	"github.com/StephanSchmidt/human/internal/vault"
+	"github.com/gethuman-sh/human/internal/browser"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/env"
+	"github.com/gethuman-sh/human/internal/proxy"
+	"github.com/gethuman-sh/human/internal/stats"
+	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/vault"
 )
 
 // defaultBrowserOpener wraps browser.DefaultOpener for production use.

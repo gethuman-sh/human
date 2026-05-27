@@ -10,8 +10,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/apiclient"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/apiclient"
 )
 
 const notionVersion = "2022-06-28"

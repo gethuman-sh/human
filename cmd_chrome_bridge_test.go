@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/StephanSchmidt/human/cmd/cmddaemon"
+	"github.com/gethuman-sh/human/cmd/cmddaemon"
 )
 
 func TestBuildChromeBridgeCmd_Exists(t *testing.T) {

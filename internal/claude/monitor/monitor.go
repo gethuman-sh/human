@@ -7,15 +7,15 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/StephanSchmidt/human/internal/claude"
-	"github.com/StephanSchmidt/human/internal/claude/hookevents"
-	"github.com/StephanSchmidt/human/internal/claude/logparser"
-	"github.com/StephanSchmidt/human/internal/daemon"
-	"github.com/StephanSchmidt/human/internal/proxy"
-	"github.com/StephanSchmidt/human/internal/slack"
-	"github.com/StephanSchmidt/human/internal/stats"
-	"github.com/StephanSchmidt/human/internal/telegram"
-	"github.com/StephanSchmidt/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/claude/logparser"
+	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/proxy"
+	"github.com/gethuman-sh/human/internal/slack"
+	"github.com/gethuman-sh/human/internal/stats"
+	"github.com/gethuman-sh/human/internal/telegram"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // Monitor owns the data-fetching and state-reconciliation cycle for the TUI.

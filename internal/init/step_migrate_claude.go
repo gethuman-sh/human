@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/claude"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude"
 )
 
 // ClaudeMigratePrompter abstracts TUI interactions for the Claude migration step.

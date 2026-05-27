@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/StephanSchmidt/human/errors"
-	"github.com/StephanSchmidt/human/internal/apiclient"
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/apiclient"
 )
 
 // Client is a Slack Bot API client.
