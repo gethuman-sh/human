@@ -208,10 +208,18 @@ func yamlSafeString(s string) string {
 	if s == "" {
 		return `""`
 	}
-	leadingIndicator := strings.IndexByte("-?@%'", s[0]) >= 0
+	// Quote only when a plain scalar would actually misparse. Crucially this
+	// does NOT quote every ':' — a value like a URL ("https://x") is a valid
+	// plain scalar; YAML only treats ':' as a mapping separator when followed
+	// by a space (or at end), and '#' as a comment only after a space (or at
+	// the start). Over-quoting would needlessly wrap URLs and emails.
+	leadingIndicator := strings.IndexByte("-?@%'#:", s[0]) >= 0
 	if leadingIndicator ||
 		s != strings.TrimSpace(s) ||
-		strings.ContainsAny(s, "\"\n\r\\{}[]|>&*!:#") {
+		strings.Contains(s, ": ") ||
+		strings.HasSuffix(s, ":") ||
+		strings.Contains(s, " #") ||
+		strings.ContainsAny(s, "\"\n\r\\{}[]|>&*!") {
 		escaped := strings.ReplaceAll(s, `\`, `\\`)
 		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 		escaped = strings.ReplaceAll(escaped, "\n", `\n`)

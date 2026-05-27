@@ -216,6 +216,34 @@ func TestGenerateConfig_SingleJira(t *testing.T) {
 	assert.Contains(t, got, "export JIRA_WORK_KEY=your-key")
 }
 
+func TestYamlSafeString(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// Plain scalars must stay unquoted — including URLs and emails whose
+		// ':'/'@' do not make them mapping separators.
+		{"plain", "Product backlog", "Product backlog"},
+		{"url not quoted", "https://myorg.atlassian.net", "https://myorg.atlassian.net"},
+		{"email not quoted", "me@example.com", "me@example.com"},
+		{"colon without space not quoted", "a:b", "a:b"},
+		// Genuine YAML hazards must be quoted.
+		{"colon space quoted", "Note: tracks bugs", `"Note: tracks bugs"`},
+		{"trailing colon quoted", "Note:", `"Note:"`},
+		{"inline comment quoted", "value #1", `"value #1"`},
+		{"leading hash quoted", "#tag", `"#tag"`},
+		{"leading dash quoted", "- item", `"- item"`},
+		{"empty quoted", "", `""`},
+		{"leading space quoted", " x", `" x"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, yamlSafeString(tc.in))
+		})
+	}
+}
+
 func TestGenerateConfig_MultipleServices(t *testing.T) {
 	instances := []serviceInstance{
 		{
