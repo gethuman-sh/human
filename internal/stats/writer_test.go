@@ -91,6 +91,32 @@ func TestWriter_ContextCancellationDrains(t *testing.T) {
 	assert.LessOrEqual(t, total, 5, "at most 5 events should be persisted")
 }
 
+func TestWriter_CloseAfterContextCancelDoesNotHang(t *testing.T) {
+	// Regression: ctx cancellation and Close are two independent shutdown
+	// signals. Close must return promptly even after the run loop already
+	// exited via ctx.Done() — and must never busy-spin on a closed channel.
+	store := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	w := NewWriter(ctx, store, zerolog.Nop())
+
+	w.Send(hookevents.Event{SessionID: "s1", EventName: "PostToolUse", ToolName: "Bash", Cwd: "/proj", Timestamp: time.Now().UTC()})
+
+	cancel() // run loop drains and exits via ctx.Done()
+
+	done := make(chan struct{})
+	go func() {
+		w.Close()        // must not hang
+		w.Send(hookevents.Event{SessionID: "s2"}) // must not panic on a closed channel
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hung after context cancellation")
+	}
+}
+
 func TestWriter_ChannelFullDrops(t *testing.T) {
 	store := newTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -755,7 +755,10 @@ func TestManager_Up_ExistingRunning(t *testing.T) {
 	projectDir, _, _ := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
 
 	containerName := ContainerName(projectDir)
-	// Mock that returns existing running container in list.
+	configData, _ := os.ReadFile(filepath.Join(projectDir, ".devcontainer", "devcontainer.json"))
+	hash := ConfigHash(configData)
+	// Mock that returns existing running container in list, labelled with the
+	// current config hash so it is reused as-is.
 	existingMock := &existingContainerMock{
 		mockDockerClient: &mockDockerClient{
 			imageInspectErr:    fmt.Errorf("not found"),
@@ -768,7 +771,7 @@ func TestManager_Up_ExistingRunning(t *testing.T) {
 			Names:  []string{"/" + containerName},
 			Image:  "ubuntu:22.04",
 			State:  "running",
-			Labels: map[string]string{LabelManaged: "true"},
+			Labels: map[string]string{LabelManaged: "true", LabelConfigHash: hash},
 		}},
 	}
 
@@ -786,6 +789,39 @@ func TestManager_Up_ExistingRunning(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "already running") {
 		t.Errorf("expected 'already running' in output: %s", buf.String())
+	}
+}
+
+func TestManager_handleExisting_RunningConfigChanged(t *testing.T) {
+	// A running container whose stored config hash no longer matches the
+	// current config must be removed and signalled for rebuild — not silently
+	// reused. This is the core of the running-container rebuild fix.
+	mock := &mockDockerClient{}
+	mgr := &Manager{Docker: mock, Logger: testLogger()}
+
+	existing := ContainerSummary{
+		ID:     "existing-id",
+		State:  "running",
+		Labels: map[string]string{LabelManaged: "true", LabelConfigHash: "stale-hash"},
+	}
+	cfg := &DevcontainerConfig{Image: "ubuntu:22.04"}
+
+	var buf bytes.Buffer
+	_, err := mgr.handleExisting(context.Background(), existing, cfg, "current-hash", "human-test", t.TempDir(), &buf)
+	if err == nil {
+		t.Fatal("expected 'config changed' error for stale running container")
+	}
+	if !strings.Contains(err.Error(), "config changed") {
+		t.Errorf("error = %v, want 'config changed'", err)
+	}
+	found := false
+	for _, id := range mock.removeCalls {
+		if id == "existing-id" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected stale running container to be removed for rebuild")
 	}
 }
 

@@ -1,4 +1,4 @@
-.PHONY: all build install test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks
+.PHONY: all build install test check-test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks
 
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
@@ -11,6 +11,15 @@ install:
 
 test:
 	go tool gotestsum ./...
+
+# check-test is the pre-push test gate. It runs the suite fresh (-count=1) so a
+# stale go test cache can never mask a failure — the cached `test` target above
+# stays fast for local iteration, but `check` must not trust it. Scoped to CI's
+# package set (excluding /cmd/). The coverage threshold is intentionally NOT
+# enforced here: it is environment-sensitive (fuse-backed tests skip without
+# fuse3 installed, under-reporting locally) and is enforced by CI instead.
+check-test:
+	go tool gotestsum -- -count=1 $$(go list ./... | grep -v /cmd/)
 
 coverage:
 	go tool gotestsum -- -coverprofile=coverage.out $$(go list ./... | grep -v /cmd/)
@@ -40,7 +49,7 @@ secrets:
 test-integration: build
 	go run ./cmd/integrationtest
 
-check: lint sec secrets
+check: check-test lint sec secrets
 
 clean:
 	go clean -cache -i

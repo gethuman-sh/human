@@ -141,7 +141,7 @@ func TestPendingConfirmStore_SelfApprovalRejected(t *testing.T) {
 	// Same PID as requester → rejected.
 	err := store.Resolve("op-self", true, 12345)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "distinct")
+	assert.Contains(t, err.Error(), "approver PID matches requester PID")
 	assert.Equal(t, 1, store.Len()) // still pending
 
 	// Different PID → allowed.

@@ -88,16 +88,15 @@ func (p *FileParser) parseBytes(data []byte) int {
 		return consumed
 	}
 
-	// If data doesn't end with newline, there may be a partial line.
-	// bufio.Scanner consumes it, but we should only count up to the last newline.
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		// Find the last newline and only consume up to there.
-		lastNL := bytes.LastIndexByte(data, '\n')
-		if lastNL >= 0 {
-			consumed = lastNL + 1
-		} else {
-			consumed = 0 // no complete lines at all
-		}
+	// Consume up to and including the last complete line's newline. Deriving
+	// this from the final newline position is correct for both LF and CRLF:
+	// bufio.Scanner's ScanLines strips a trailing '\r', so summing len(line)+1
+	// would undercount every CRLF line by one byte and drift the file offset.
+	// It also naturally drops any unterminated trailing partial line.
+	if lastNL := bytes.LastIndexByte(data, '\n'); lastNL >= 0 {
+		consumed = lastNL + 1
+	} else {
+		consumed = 0 // no complete lines at all
 	}
 
 	return consumed

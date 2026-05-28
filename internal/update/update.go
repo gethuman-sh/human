@@ -28,7 +28,13 @@ var fs afero.Fs = afero.NewOsFs()
 // userHomeDir resolves the user's home directory — replaced with a stub in tests.
 var userHomeDir = os.UserHomeDir
 
-// httpGet is the HTTP client — replaced with a mock in tests.
+// updateHTTPClient bounds the release check so a black-holed connection cannot
+// leak a goroutine (the long-lived daemon also runs this check).
+var updateHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// httpGet is the HTTP client — replaced with a mock in tests. The bounded
+// client Timeout covers connect + body read, so no request context is needed
+// (and would risk cancelling the returned body on function exit).
 var httpGet = func(url string) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -36,7 +42,7 @@ var httpGet = func(url string) (*http.Response, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	return http.DefaultClient.Do(req)
+	return updateHTTPClient.Do(req)
 }
 
 // updateCache is the persisted JSON for the cached release information.

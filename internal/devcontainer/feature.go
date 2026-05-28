@@ -172,9 +172,13 @@ func copyAndRunFeature(ctx context.Context, docker DockerClient, containerID str
 		return errors.WrapWithDetails(err, "running install.sh")
 	}
 
-	// Clean up.
+	// Clean up. Non-fatal, but warn on failure: a left-behind staging dir gets
+	// baked into the committed image (along with the feature tarball and any
+	// option values it carries) and reused for every subsequent container.
 	cleanCmd := []string{"/bin/sh", "-c", "rm -rf /tmp/devcontainer-feature"}
-	_ = execInContainer(ctx, docker, containerID, "root", cleanCmd, nil, logger)
+	if err := execInContainer(ctx, docker, containerID, "root", cleanCmd, nil, logger); err != nil {
+		logger.Warn().Err(err).Msg("failed to remove staged feature directory; it will be baked into the image")
+	}
 
 	return nil
 }

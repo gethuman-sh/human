@@ -197,6 +197,11 @@ func (s *SQLiteStore) SearchWithKind(ctx context.Context, query, kind string, li
 	// Quote each word so FTS5 special characters (hyphens, colons) are
 	// treated as literals rather than operators.
 	ftsQuery := sanitizeFTSQuery(query)
+	// A blank or punctuation-only query sanitizes to "", which FTS5 rejects as
+	// a syntax error; treat it as "no results" rather than surfacing raw SQL.
+	if ftsQuery == "" {
+		return nil, nil
+	}
 
 	var rows *sql.Rows
 	var err error

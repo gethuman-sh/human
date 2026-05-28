@@ -46,6 +46,19 @@ func (c *Client) SetHTTPDoer(doer apiclient.HTTPDoer) {
 	c.api.SetHTTPDoer(doer)
 }
 
+// clampPerPage bounds a requested page size to GitLab's accepted 1..100 range;
+// a zero or negative MaxResults falls back to a sane default.
+func clampPerPage(n int) int {
+	switch {
+	case n <= 0:
+		return 50
+	case n > 100:
+		return 100
+	default:
+		return n
+	}
+}
+
 // ListIssues implements tracker.Lister.
 func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
 	var path string
@@ -60,7 +73,7 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 	}
 
 	query := url.Values{
-		"per_page": {fmt.Sprintf("%d", opts.MaxResults)},
+		"per_page": {fmt.Sprintf("%d", clampPerPage(opts.MaxResults))},
 	}
 	if opts.Project == "" {
 		query.Set("scope", "all")
@@ -438,12 +451,23 @@ func parseIssueKey(key string) (string, int, error) {
 }
 
 // toTrackerIssue converts a GitLab API issue to a tracker.Issue.
+// glStateCategory maps GitLab's opened/closed issue state to a tracker.Category,
+// mirroring ListStatuses so issue listings carry the same semantics the TUI's
+// pipeline-stage rendering depends on.
+func glStateCategory(state string) tracker.Category {
+	if state == "closed" {
+		return tracker.CategoryClosed
+	}
+	return tracker.CategoryStarted
+}
+
 func toTrackerIssue(project string, gi glIssue) tracker.Issue {
 	issue := tracker.Issue{
 		Key:         fmt.Sprintf("%s#%d", project, gi.IID),
 		Project:     project,
 		Title:       gi.Title,
 		Status:      gi.State,
+		StatusType:  glStateCategory(gi.State),
 		Description: gi.Description,
 		URL:         gi.WebURL,
 	}

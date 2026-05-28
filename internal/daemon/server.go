@@ -19,6 +19,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/browser"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/cliflags"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/proxy"
@@ -55,6 +56,12 @@ type Server struct {
 	VaultResolver    *vault.Resolver                          // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
+
+	// shutdown fires when the server is stopping. Set once at the start of
+	// ListenAndServe (before any connection is accepted) and only read by
+	// handlers, so no additional synchronization is needed. Long-lived
+	// handlers (e.g. subscribe) select on it so they don't pin s.wg.Wait().
+	shutdown <-chan struct{}
 }
 
 // ListenAndServe starts the TCP listener and blocks until ctx is cancelled.
@@ -68,6 +75,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = ln.Close() }()
+
+	s.shutdown = ctx.Done()
 
 	s.Logger.Info().Str("addr", ln.Addr().String()).Msg("daemon listening")
 
@@ -482,18 +491,26 @@ func (s *Server) handleSubscribe(conn net.Conn) {
 	defer s.HookEvents.Unsubscribe(ch)
 
 	enc := json.NewEncoder(conn)
-	lastSeen := 0 // index into event store for delta reads
+	var lastSeq uint64 // monotonic event sequence already delivered
 	for {
-		<-ch
-		events := s.HookEvents.RecentEvents()
+		// Return on daemon shutdown so this long-lived handler does not pin
+		// ListenAndServe's s.wg.Wait() and hang the daemon on SIGINT/SIGTERM.
+		select {
+		case <-s.shutdown:
+			return
+		case <-ch:
+		}
+		// Read the delta by monotonic sequence, not slice length: once the
+		// event ring saturates its length stops growing, and a length-based
+		// cursor would never advance again — silently dropping notifications.
+		newEvents, seq := s.HookEvents.EventsSince(lastSeq)
+		lastSeq = seq
 		evt := SubscribeEvent{Type: "change"}
-		// Check new events for agent lifecycle changes.
-		for i := lastSeen; i < len(events); i++ {
-			if events[i].EventName == "AgentStopped" && events[i].AgentName != "" {
-				evt = SubscribeEvent{Type: "agent-stopped", AgentName: events[i].AgentName}
+		for i := range newEvents {
+			if newEvents[i].EventName == "AgentStopped" && newEvents[i].AgentName != "" {
+				evt = SubscribeEvent{Type: "agent-stopped", AgentName: newEvents[i].AgentName}
 			}
 		}
-		lastSeen = len(events)
 		if err := enc.Encode(evt); err != nil {
 			return
 		}
@@ -541,11 +558,18 @@ type destructiveOp struct {
 // should be intercepted. The daemon always intercepts — --yes is ignored
 // when the daemon is running; confirmation must come from the TUI.
 func detectDestructive(args []string) (destructiveOp, bool) {
-	// Strip all flags to find positional subcommands only.
-	// This prevents bypass via arbitrary flags between "issue" and the verb.
+	// Strip flags to find positional subcommands only. A space-separated value
+	// flag (e.g. "--tracker jira") must also drop its value token, otherwise
+	// that value shifts the positional indices and a delete/edit slips past
+	// detection. The known value-flag set is shared with client-side forwarding
+	// via internal/cliflags so the two cannot drift apart.
 	cleaned := make([]string, 0, len(args))
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if strings.HasPrefix(a, "-") {
+			if cliflags.ValueFlags[a] && i+1 < len(args) {
+				i++ // skip the flag's value token
+			}
 			continue
 		}
 		cleaned = append(cleaned, a)
@@ -579,6 +603,14 @@ func detectDestructive(args []string) (destructiveOp, bool) {
 		return destructiveOp{Operation: "DeleteIssue", Tracker: trackerKind, Key: key}, true
 	case "edit":
 		return destructiveOp{Operation: "EditIssue", Tracker: trackerKind, Key: key}, true
+	case "status":
+		// "issue status KEY STATUS" mutates state via TransitionIssue, which the
+		// tracker layer already classifies as destructive — gate it too. (Note:
+		// the read-only "statuses" listing verb is intentionally not matched.)
+		return destructiveOp{Operation: "TransitionIssue", Tracker: trackerKind, Key: key}, true
+	case "start":
+		// "issue start KEY" transitions to In Progress and assigns the user.
+		return destructiveOp{Operation: "StartIssue", Tracker: trackerKind, Key: key}, true
 	default:
 		return destructiveOp{}, false
 	}

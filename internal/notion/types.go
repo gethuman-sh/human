@@ -187,10 +187,11 @@ type paginatedResponse[T any] struct {
 
 // searchRequest is the body for POST /v1/search.
 type searchRequest struct {
-	Query    string        `json:"query,omitempty"`
-	Filter   *searchFilter `json:"filter,omitempty"`
-	Sort     *searchSort   `json:"sort,omitempty"`
-	PageSize int           `json:"page_size,omitempty"`
+	Query       string        `json:"query,omitempty"`
+	Filter      *searchFilter `json:"filter,omitempty"`
+	Sort        *searchSort   `json:"sort,omitempty"`
+	PageSize    int           `json:"page_size,omitempty"`
+	StartCursor string        `json:"start_cursor,omitempty"`
 }
 
 type searchFilter struct {
@@ -205,7 +206,8 @@ type searchSort struct {
 
 // databaseQueryRequest is the body for POST /v1/databases/{id}/query.
 type databaseQueryRequest struct {
-	PageSize int `json:"page_size,omitempty"`
+	PageSize    int    `json:"page_size,omitempty"`
+	StartCursor string `json:"start_cursor,omitempty"`
 }
 
 // --- Output types ---

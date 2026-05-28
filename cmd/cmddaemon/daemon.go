@@ -254,9 +254,19 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	statsPath := proxy.StatsPath()
 	connectedPath := daemon.ConnectedPath()
-	go writeDaemonStats(ctx, proxySrv, ds.connTracker, statsPath, connectedPath)
-	defer proxy.RemoveStats(statsPath)
-	defer daemon.RemoveConnected(connectedPath)
+	statsDone := make(chan struct{})
+	go func() {
+		defer close(statsDone)
+		writeDaemonStats(ctx, proxySrv, ds.connTracker, statsPath, connectedPath)
+	}()
+	// Wait for the stats writer to observe ctx cancellation and exit before
+	// removing its files; otherwise a ticker tick can recreate them after
+	// removal, leaving stale files that outlive the daemon.
+	defer func() {
+		<-statsDone
+		proxy.RemoveStats(statsPath)
+		daemon.RemoveConnected(connectedPath)
+	}()
 
 	cwd, _ := os.Getwd()
 	if unmount := fuseMount(cwd, safe, logger); unmount != nil {
@@ -1041,7 +1051,10 @@ func latestReadyKeys(comments []tracker.Comment) []string {
 	if !haveHandoff {
 		return nil
 	}
-	if haveComplete && latestComplete.Created.After(latestHandoff.Created) {
+	// Inclusive boundary: tracker timestamps are second-granular, so a
+	// review-complete posted in the same second as the handoff must still
+	// clear it (otherwise the (R) annotation lingers after review is done).
+	if haveComplete && !latestComplete.Created.Before(latestHandoff.Created) {
 		return nil
 	}
 	return daemon.ParseEngineeringKeysFromHandoff(latestHandoff.Body)
@@ -1121,6 +1134,9 @@ func (s *dockerAgentSweeper) IsProcessRunning(ctx context.Context, containerID s
 	if err != nil {
 		return false, err
 	}
+	// Drain the multiplexed stream to EOF before inspecting: ExecInspect's exit
+	// code is only reliable once the exec has finished and the stream closed.
+	_, _ = io.Copy(io.Discard, resp.Reader)
 	_ = resp.Close()
 
 	inspect, err := docker.ExecInspect(ctx, execID)

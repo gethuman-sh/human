@@ -58,7 +58,7 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 		state = "all"
 	}
 	query := url.Values{
-		"per_page": {fmt.Sprintf("%d", opts.MaxResults)},
+		"per_page": {fmt.Sprintf("%d", clampPerPage(opts.MaxResults))},
 		"state":    {state},
 	}
 	if !opts.UpdatedSince.IsZero() {
@@ -84,6 +84,20 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 	return issues, nil
 }
 
+// clampPerPage bounds a requested page size to GitHub's accepted 1..100 range;
+// a zero or negative MaxResults falls back to a sane default rather than
+// producing an undefined per_page value.
+func clampPerPage(n int) int {
+	switch {
+	case n <= 0:
+		return 50
+	case n > 100:
+		return 100
+	default:
+		return n
+	}
+}
+
 // listAllIssues uses GET /search/issues to list issues across all repos.
 func (c *Client) listAllIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
 	q := "is:issue"
@@ -93,7 +107,7 @@ func (c *Client) listAllIssues(ctx context.Context, opts tracker.ListOptions) ([
 
 	query := url.Values{
 		"q":        {q},
-		"per_page": {fmt.Sprintf("%d", opts.MaxResults)},
+		"per_page": {fmt.Sprintf("%d", clampPerPage(opts.MaxResults))},
 		"sort":     {"created"},
 		"order":    {"desc"},
 	}
@@ -430,12 +444,23 @@ func parseIssueKey(key string) (string, string, int, error) {
 }
 
 // toTrackerIssue converts a GitHub API issue to a tracker.Issue.
+// ghStateCategory maps GitHub's open/closed issue state to a tracker.Category,
+// mirroring ListStatuses so issue listings carry the same semantics the TUI's
+// pipeline-stage rendering depends on.
+func ghStateCategory(state string) tracker.Category {
+	if state == "closed" {
+		return tracker.CategoryClosed
+	}
+	return tracker.CategoryStarted
+}
+
 func toTrackerIssue(owner, repo string, gi ghIssue) tracker.Issue {
 	issue := tracker.Issue{
 		Key:         fmt.Sprintf("%s/%s#%d", owner, repo, gi.Number),
 		Project:     fmt.Sprintf("%s/%s", owner, repo),
 		Title:       gi.Title,
 		Status:      gi.State,
+		StatusType:  ghStateCategory(gi.State),
 		Description: gi.Body,
 		URL:         gi.HTMLURL,
 	}

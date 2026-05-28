@@ -75,6 +75,41 @@ func TestHookEventStore_RingBufferTrim(t *testing.T) {
 	assert.Equal(t, maxHookEventsPerSession, count, "single-session flood must not exceed per-session cap")
 }
 
+func TestHookEventStore_EventsSinceSurvivesSaturation(t *testing.T) {
+	store := NewHookEventStore()
+
+	// Saturate the global ring across many sessions (so the per-session cap
+	// does not trip first); len(events) pins at maxHookEvents and stops growing.
+	for i := 0; i < maxHookEvents; i++ {
+		store.Append(hookevents.Event{
+			EventName: "UserPromptSubmit",
+			SessionID: fmt.Sprintf("s%d", i%200),
+			Timestamp: time.Now(),
+		})
+	}
+	store.mu.Lock()
+	require.Equal(t, maxHookEvents, len(store.events))
+	store.mu.Unlock()
+
+	// Current high-water sequence (a huge "since" returns no events).
+	_, seq := store.EventsSince(^uint64(0))
+
+	// A new event after saturation must still be delivered by sequence even
+	// though the ring length no longer grows — the bug a length-based cursor
+	// would silently miss.
+	store.Append(hookevents.Event{EventName: "AgentStopped", AgentName: "agent-x", SessionID: "s1", Timestamp: time.Now()})
+
+	newEvents, newSeq := store.EventsSince(seq)
+	require.Greater(t, newSeq, seq)
+	found := false
+	for _, e := range newEvents {
+		if e.EventName == "AgentStopped" && e.AgentName == "agent-x" {
+			found = true
+		}
+	}
+	assert.True(t, found, "new AgentStopped must be delivered after ring saturation")
+}
+
 func TestHookEventStore_PerSessionCapProtectsOtherSessions(t *testing.T) {
 	store := NewHookEventStore()
 

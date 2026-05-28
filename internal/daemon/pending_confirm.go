@@ -47,9 +47,14 @@ func (s *PendingConfirmStore) Add(pc *PendingConfirmation) {
 
 // Resolve sends the decision to the waiting goroutine and removes the entry.
 // approverPID is the PID of the client resolving the confirmation and must
-// be a positive integer. A call whose approverPID matches the original
-// requester's PID is rejected — requester and approver must be distinct
-// clients.
+// be a positive integer.
+//
+// The approverPID != requester PID check below is only a best-effort sanity
+// guard, NOT an authorization boundary: ClientPID is supplied by the client
+// and the requester's PID is typically resolved inside the agent's container
+// namespace while the approver's is on the host, so the two are not comparable
+// as a trust signal. Actual authorization is the daemon token required to reach
+// this endpoint at all — do not rely on the PID check for security.
 //
 // Resolve is for client-initiated decisions. Internal lifecycle events
 // (timeouts, encode failures) must use ResolveTimeout instead.
@@ -63,9 +68,11 @@ func (s *PendingConfirmStore) Resolve(id string, approved bool, approverPID int)
 		s.mu.Unlock()
 		return errors.WithDetails("no pending confirmation with id %q", "id", id)
 	}
+	// Best-effort sanity guard only (see Resolve doc): reject the degenerate
+	// case where the approver reports the same PID as the requester.
 	if approverPID == pc.ClientPID {
 		s.mu.Unlock()
-		return errors.WithDetails("requester and approver must be distinct clients (id=%q, pid=%d)", "id", id, "pid", approverPID)
+		return errors.WithDetails("approver PID matches requester PID (id=%q, pid=%d)", "id", id, "pid", approverPID)
 	}
 	delete(s.ops, id)
 	s.mu.Unlock()

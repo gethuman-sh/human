@@ -39,45 +39,56 @@ func (c *Client) SetHTTPDoer(doer apiclient.HTTPDoer) {
 	c.api.SetHTTPDoer(doer)
 }
 
-// Search searches the Notion workspace for pages and databases matching the query.
+// Search searches the Notion workspace for pages and databases matching the
+// query, following pagination so workspaces with more than one page of results
+// are returned in full (a truncated result set also drives index pruning).
 func (c *Client) Search(ctx context.Context, query string) ([]SearchResult, error) {
-	body, err := json.Marshal(searchRequest{
-		Query:    query,
-		PageSize: 100,
-	})
-	if err != nil {
-		return nil, errors.WrapWithDetails(err, "marshalling search request")
-	}
-
-	resp, err := c.doRequest(ctx, http.MethodPost, "/v1/search", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	var paginated paginatedResponse[json.RawMessage]
-	if err := apiclient.DecodeJSON(resp, &paginated); err != nil {
-		return nil, err
-	}
-
 	var results []SearchResult
-	for _, raw := range paginated.Results {
-		var obj struct {
-			Object     string                    `json:"object"`
-			ID         string                    `json:"id"`
-			URL        string                    `json:"url"`
-			Properties map[string]notionProperty `json:"properties"`
-			Title      []notionRichText          `json:"title"`
-		}
-		if err := json.Unmarshal(raw, &obj); err != nil {
-			continue
+	cursor := ""
+	for {
+		body, err := json.Marshal(searchRequest{
+			Query:       query,
+			PageSize:    100,
+			StartCursor: cursor,
+		})
+		if err != nil {
+			return nil, errors.WrapWithDetails(err, "marshalling search request")
 		}
 
-		title := extractTitle(obj.Object, obj.Properties, obj.Title)
-		results = append(results, SearchResult{
-			ID:    obj.ID,
-			Title: title,
-			URL:   obj.URL,
-			Type:  obj.Object,
-		})
+		resp, err := c.doRequest(ctx, http.MethodPost, "/v1/search", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		var paginated paginatedResponse[json.RawMessage]
+		if err := apiclient.DecodeJSON(resp, &paginated); err != nil {
+			return nil, err
+		}
+
+		for _, raw := range paginated.Results {
+			var obj struct {
+				Object     string                    `json:"object"`
+				ID         string                    `json:"id"`
+				URL        string                    `json:"url"`
+				Properties map[string]notionProperty `json:"properties"`
+				Title      []notionRichText          `json:"title"`
+			}
+			if err := json.Unmarshal(raw, &obj); err != nil {
+				continue
+			}
+
+			title := extractTitle(obj.Object, obj.Properties, obj.Title)
+			results = append(results, SearchResult{
+				ID:    obj.ID,
+				Title: title,
+				URL:   obj.URL,
+				Type:  obj.Object,
+			})
+		}
+
+		if !paginated.HasMore || paginated.NextCursor == "" {
+			break
+		}
+		cursor = paginated.NextCursor
 	}
 	return results, nil
 }
@@ -110,67 +121,86 @@ func (c *Client) GetPage(ctx context.Context, pageID string) (string, error) {
 	return md, nil
 }
 
-// QueryDatabase queries a Notion database and returns its rows.
+// QueryDatabase queries a Notion database and returns its rows, following
+// pagination so databases with more than one page of rows are returned in full.
 func (c *Client) QueryDatabase(ctx context.Context, dbID string) ([]DatabaseRow, error) {
-	body, err := json.Marshal(databaseQueryRequest{PageSize: 100})
-	if err != nil {
-		return nil, errors.WrapWithDetails(err, "marshalling database query request")
-	}
-
-	resp, err := c.doRequest(ctx, http.MethodPost, "/v1/databases/"+url.PathEscape(dbID)+"/query", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	var paginated paginatedResponse[notionPage]
-	if err := apiclient.DecodeJSON(resp, &paginated, "databaseID", dbID); err != nil {
-		return nil, err
-	}
-
 	var rows []DatabaseRow
-	for _, page := range paginated.Results {
-		props := make(map[string]string)
-		for name, prop := range page.Properties {
-			props[name] = propertyToString(prop)
+	cursor := ""
+	for {
+		body, err := json.Marshal(databaseQueryRequest{PageSize: 100, StartCursor: cursor})
+		if err != nil {
+			return nil, errors.WrapWithDetails(err, "marshalling database query request")
 		}
-		rows = append(rows, DatabaseRow{
-			ID:         page.ID,
-			URL:        page.URL,
-			Properties: props,
-		})
+
+		resp, err := c.doRequest(ctx, http.MethodPost, "/v1/databases/"+url.PathEscape(dbID)+"/query", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		var paginated paginatedResponse[notionPage]
+		if err := apiclient.DecodeJSON(resp, &paginated, "databaseID", dbID); err != nil {
+			return nil, err
+		}
+
+		for _, page := range paginated.Results {
+			props := make(map[string]string)
+			for name, prop := range page.Properties {
+				props[name] = propertyToString(prop)
+			}
+			rows = append(rows, DatabaseRow{
+				ID:         page.ID,
+				URL:        page.URL,
+				Properties: props,
+			})
+		}
+
+		if !paginated.HasMore || paginated.NextCursor == "" {
+			break
+		}
+		cursor = paginated.NextCursor
 	}
 	return rows, nil
 }
 
-// ListDatabases lists all databases shared with the integration.
+// ListDatabases lists all databases shared with the integration, following
+// pagination so more than one page of databases is returned in full.
 func (c *Client) ListDatabases(ctx context.Context) ([]DatabaseEntry, error) {
-	body, err := json.Marshal(searchRequest{
-		Filter: &searchFilter{
-			Value:    "database",
-			Property: "object",
-		},
-		PageSize: 100,
-	})
-	if err != nil {
-		return nil, errors.WrapWithDetails(err, "marshalling databases list request")
-	}
-
-	resp, err := c.doRequest(ctx, http.MethodPost, "/v1/search", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	var paginated paginatedResponse[notionDatabase]
-	if err := apiclient.DecodeJSON(resp, &paginated); err != nil {
-		return nil, err
-	}
-
 	var entries []DatabaseEntry
-	for _, db := range paginated.Results {
-		title := richTextPlain(db.Title)
-		entries = append(entries, DatabaseEntry{
-			ID:    db.ID,
-			Title: title,
-			URL:   db.URL,
+	cursor := ""
+	for {
+		body, err := json.Marshal(searchRequest{
+			Filter: &searchFilter{
+				Value:    "database",
+				Property: "object",
+			},
+			PageSize:    100,
+			StartCursor: cursor,
 		})
+		if err != nil {
+			return nil, errors.WrapWithDetails(err, "marshalling databases list request")
+		}
+
+		resp, err := c.doRequest(ctx, http.MethodPost, "/v1/search", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		var paginated paginatedResponse[notionDatabase]
+		if err := apiclient.DecodeJSON(resp, &paginated); err != nil {
+			return nil, err
+		}
+
+		for _, db := range paginated.Results {
+			title := richTextPlain(db.Title)
+			entries = append(entries, DatabaseEntry{
+				ID:    db.ID,
+				Title: title,
+				URL:   db.URL,
+			})
+		}
+
+		if !paginated.HasMore || paginated.NextCursor == "" {
+			break
+		}
+		cursor = paginated.NextCursor
 	}
 	return entries, nil
 }

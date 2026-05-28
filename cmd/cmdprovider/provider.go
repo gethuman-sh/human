@@ -278,6 +278,9 @@ func RunGetIssue(ctx context.Context, p tracker.Provider, out io.Writer, key str
 	if err != nil {
 		return err
 	}
+	if issue == nil {
+		return errors.WithDetails("get returned no issue", "key", key)
+	}
 
 	displayOrNone := func(s string) string {
 		if s == "" {
@@ -313,6 +316,9 @@ func RunCreateIssue(ctx context.Context, p tracker.Provider, out io.Writer, proj
 	})
 	if err != nil {
 		return err
+	}
+	if issue == nil {
+		return errors.WithDetails("create returned no issue", "project", project)
 	}
 	_, _ = fmt.Fprintf(out, "%s\t%s\n", issue.Key, issue.Title)
 	return nil
@@ -389,6 +395,9 @@ func RunAddComment(ctx context.Context, p tracker.Provider, out io.Writer, key, 
 	comment, err := p.AddComment(ctx, key, body)
 	if err != nil {
 		return err
+	}
+	if comment == nil {
+		return errors.WithDetails("add comment returned no comment", "key", key)
 	}
 	_, _ = fmt.Fprintf(out, "%s\t%s\n", comment.ID, comment.Body)
 	return nil

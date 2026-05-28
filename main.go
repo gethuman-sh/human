@@ -35,6 +35,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/cliflags"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -409,27 +410,10 @@ var localSubcommands = map[string]bool{
 
 // globalValueFlags lists global persistent flags that take a value. When these
 // appear in space-separated form (e.g. "--tracker work"), the value token must
-// be skipped so it isn't mistaken for the subcommand name. Keep this list in
-// sync with PersistentFlags() in newRootCmd.
-var globalValueFlags = map[string]bool{
-	"--tracker":        true,
-	"--jira-key":       true,
-	"--jira-url":       true,
-	"--jira-user":      true,
-	"--github-token":   true,
-	"--github-url":     true,
-	"--gitlab-token":   true,
-	"--gitlab-url":     true,
-	"--linear-token":   true,
-	"--linear-url":     true,
-	"--azure-token":    true,
-	"--azure-url":      true,
-	"--azure-org":      true,
-	"--shortcut-token": true,
-	"--shortcut-url":   true,
-	"--clickup-token":  true,
-	"--clickup-url":    true,
-}
+// be skipped so it isn't mistaken for the subcommand name. Shared with the
+// daemon's destructive-command detection via internal/cliflags so the two
+// cannot drift apart.
+var globalValueFlags = cliflags.ValueFlags
 
 // isLocalSubcommand returns true if args represent a command that must
 // execute locally rather than being forwarded to the daemon. It understands

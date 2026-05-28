@@ -146,10 +146,23 @@ func (c *Client) SetHTTPDoer(doer apiclient.HTTPDoer) {
 	c.api.SetHTTPDoer(doer)
 }
 
+// clampFirst bounds Linear's GraphQL `first` pagination arg to its accepted
+// 1..250 range; a zero or negative MaxResults falls back to a sane default.
+func clampFirst(n int) int {
+	switch {
+	case n <= 0:
+		return 50
+	case n > 250:
+		return 250
+	default:
+		return n
+	}
+}
+
 // ListIssues implements tracker.Lister.
 func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
 	vars := map[string]any{
-		"first": opts.MaxResults,
+		"first": clampFirst(opts.MaxResults),
 	}
 
 	var query string

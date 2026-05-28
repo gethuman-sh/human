@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +101,13 @@ type LoggingInterceptor struct {
 	LeafCache *LeafCache
 	Logger    zerolog.Logger
 	LogDir    string // directory for traffic log files
+
+	// logMu serialises appends to the shared daily JSONL file. Each MITM'd
+	// connection logs from its own goroutine, and entries can reach ~10 MB
+	// (maxBodyLog); O_APPEND only guarantees atomicity up to PIPE_BUF, so
+	// without this lock concurrent multi-MB writes can interleave and corrupt
+	// the file.
+	logMu sync.Mutex
 
 	// Dialer connects to upstream servers. Injected for testing.
 	// If nil, tls.Dial is used.
@@ -275,6 +283,10 @@ func (li *LoggingInterceptor) logTraffic(entry TrafficLog) {
 	}
 	data = append(data, '\n')
 
+	// Serialise the append so concurrent connections cannot interleave their
+	// (potentially multi-MB) lines and corrupt the JSONL.
+	li.logMu.Lock()
+	defer li.logMu.Unlock()
 	if _, err := f.Write(data); err != nil {
 		li.Logger.Warn().Err(err).Msg("failed to write traffic log entry")
 	}

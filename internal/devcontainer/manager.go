@@ -186,7 +186,11 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 
 	name := SanitizeName(filepath.Base(projectDir))
 
-	if existing.State == "running" {
+	// Only reuse a running container when its build config is unchanged.
+	// Otherwise fall through to the removal/rebuild path below so an edited
+	// devcontainer.json actually takes effect instead of silently reusing the
+	// stale container.
+	if existing.State == "running" && existingHash == hash {
 		_, _ = fmt.Fprintf(out, "Devcontainer already running: %s\n", containerName)
 		meta, readErr := ReadMeta(name)
 		if readErr != nil {

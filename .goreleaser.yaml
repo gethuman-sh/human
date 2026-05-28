@@ -27,15 +27,23 @@ archives:
 checksum:
   name_template: checksums.txt
 
-brews:
-  - repository:
+homebrew_casks:
+  - name: human
+    binaries:
+      - human
+    repository:
       owner: gethuman-sh
       name: homebrew-tap
-    homepage: https://github.com/StephanSchmidt/human
+    homepage: https://github.com/gethuman-sh/human
     description: Issue tracker CLI for AIs
-    license: MIT
-    install: |
-      bin.install "human"
+    # The released binaries are unsigned, so strip the quarantine attribute on
+    # install or macOS Gatekeeper blocks the CLI on first run.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/human"]
+          end
 
 changelog:
   sort: asc

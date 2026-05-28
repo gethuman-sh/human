@@ -777,9 +777,13 @@ func findNewestJSONL(root string) (string, error) {
 			newest = path
 		case mod >= newestMod-mtimeTolerance:
 			// Within tolerance window — use lexicographic tiebreaker for stability.
+			// Never lower the anchor: a within-tolerance *older* file winning the
+			// tiebreak must not shrink the comparison window for later files.
 			if path > newest {
-				newestMod = mod
 				newest = path
+				if mod > newestMod {
+					newestMod = mod
+				}
 			}
 		}
 		return nil

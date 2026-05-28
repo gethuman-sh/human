@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
@@ -69,7 +70,14 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 	}
 
 	if !opts.Interactive && opts.Prompt != "" {
-		m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, opts)
+		if err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, opts); err != nil {
+			// The agent process never started; don't leave a container tracked
+			// as a running agent. Best-effort teardown, then surface the error.
+			timeout := 10
+			_ = m.Docker.ContainerStop(ctx, dcMeta.ContainerID, &timeout)
+			_ = m.Docker.ContainerRemove(ctx, dcMeta.ContainerID, devcontainer.ContainerRemoveOptions{Force: true})
+			return Meta{}, errors.WrapWithDetails(err, "launching agent process", "name", opts.Name)
+		}
 	}
 
 	meta := Meta{
@@ -121,23 +129,62 @@ func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDi
 	})
 }
 
-func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser string, opts StartOpts) {
+// execClaudeDetached launches the agent's `claude -p <prompt>` process inside
+// the container and detaches. The prompt is passed as a discrete argv element
+// (no intermediate shell), so multi-word prompts and shell metacharacters can
+// neither be word-split nor injected. Errors are returned so a failed launch is
+// not silently reported as a running agent.
+func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser string, opts StartOpts) error {
 	claudeArgs := m.BuildClaudeArgs(opts)
 	claudeArgs = append(claudeArgs, "-p", opts.Prompt)
-	cmd := []string{"/bin/sh", "-c", "claude " + strings.Join(claudeArgs, " ")}
-	execID, execErr := m.Docker.ExecCreate(ctx, containerID, cmd, devcontainer.ExecOptions{
+	cmd := append([]string{"claude"}, claudeArgs...)
+	execID, err := m.Docker.ExecCreate(ctx, containerID, cmd, devcontainer.ExecOptions{
 		User: remoteUser, AttachStdout: true, AttachStderr: true,
 		Env: []string{"HUMAN_AGENT_NAME=" + opts.Name},
 	})
-	if execErr == nil {
-		if attach, attachErr := m.Docker.ExecAttach(ctx, execID); attachErr == nil {
-			_ = attach.Close()
-		}
+	if err != nil {
+		return errors.WrapWithDetails(err, "creating agent exec")
 	}
+	// ExecAttach starts the exec; closing the hijacked stream detaches without
+	// stopping the process, which keeps running in the container.
+	attach, err := m.Docker.ExecAttach(ctx, execID)
+	if err != nil {
+		return errors.WrapWithDetails(err, "starting agent exec")
+	}
+	_ = attach.Close()
+	return nil
+}
+
+// agentLocks serialises lifecycle operations per agent name. Stop/Delete can be
+// invoked concurrently for the same agent by independent daemon goroutines
+// (cleanup sweep, zombie sweep, an explicit stop request), each through its own
+// Manager instance; the shared resource is the on-disk metadata file, so the
+// lock has to live at package scope rather than on Manager.
+var (
+	agentLocksMu sync.Mutex
+	agentLocks   = map[string]*sync.Mutex{}
+)
+
+func lockAgent(name string) func() {
+	agentLocksMu.Lock()
+	mu, ok := agentLocks[name]
+	if !ok {
+		mu = &sync.Mutex{}
+		agentLocks[name] = mu
+	}
+	agentLocksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // Stop stops and removes an agent's container.
 func (m *Manager) Stop(ctx context.Context, name string) error {
+	defer lockAgent(name)()
+	return m.stopLocked(ctx, name)
+}
+
+// stopLocked is the body of Stop; callers must already hold the per-name lock.
+func (m *Manager) stopLocked(ctx context.Context, name string) error {
 	meta, err := ReadMeta(name)
 	if err != nil {
 		return err
@@ -158,8 +205,11 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 
 // Delete stops the container and deletes the agent metadata so no trace
 // remains. Best-effort: always deletes metadata even if container cleanup fails.
+// The whole sequence holds the per-name lock so a concurrent Stop cannot
+// re-create the metadata file after DeleteMeta removes it.
 func (m *Manager) Delete(ctx context.Context, name string) error {
-	_ = m.Stop(ctx, name)
+	defer lockAgent(name)()
+	_ = m.stopLocked(ctx, name)
 	return DeleteMeta(name)
 }
 

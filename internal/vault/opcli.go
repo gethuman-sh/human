@@ -62,6 +62,12 @@ func (o *OpCLI) Resolve(ref string) (string, error) {
 		out, err = exec.CommandContext(ctx, o.Binary, "read", sdkRef).Output() // #nosec G204 -- binary is a static default, ref is from config
 	}
 	if err != nil {
+		// .Output() stashes the command's stderr on *exec.ExitError; surfacing
+		// it turns an opaque "exit status 1" into the actual op diagnostic.
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return "", errors.WrapWithDetails(err, "resolving 1Password secret via CLI",
+				"ref", ref, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+		}
 		return "", errors.WrapWithDetails(err, "resolving 1Password secret via CLI", "ref", ref)
 	}
 	return strings.TrimSpace(string(out)), nil

@@ -25,13 +25,16 @@ const maxHookEvents = 10000
 type HookEventStore struct {
 	mu          sync.Mutex
 	events      []hookevents.Event
+	eventSeqs   []uint64 // monotonic id per event, index-aligned with events
+	appended    uint64   // total events ever appended (last assigned sequence)
 	subscribers []chan struct{}
 }
 
 // NewHookEventStore creates an empty store.
 func NewHookEventStore() *HookEventStore {
 	return &HookEventStore{
-		events: make([]hookevents.Event, 0, maxHookEvents),
+		events:    make([]hookevents.Event, 0, maxHookEvents),
+		eventSeqs: make([]uint64, 0, maxHookEvents),
 	}
 }
 
@@ -54,15 +57,20 @@ func (s *HookEventStore) Append(evt hookevents.Event) {
 			for i, e := range s.events {
 				if e.SessionID == evt.SessionID {
 					s.events = append(s.events[:i], s.events[i+1:]...)
+					s.eventSeqs = append(s.eventSeqs[:i], s.eventSeqs[i+1:]...)
 					break
 				}
 			}
 		}
 	}
+	s.appended++
 	s.events = append(s.events, evt)
+	s.eventSeqs = append(s.eventSeqs, s.appended)
 	if len(s.events) > maxHookEvents {
 		copy(s.events, s.events[len(s.events)-maxHookEvents:])
 		s.events = s.events[:maxHookEvents]
+		copy(s.eventSeqs, s.eventSeqs[len(s.eventSeqs)-maxHookEvents:])
+		s.eventSeqs = s.eventSeqs[:maxHookEvents]
 	}
 	subs := make([]chan struct{}, len(s.subscribers))
 	copy(subs, s.subscribers)
@@ -131,6 +139,23 @@ func (s *HookEventStore) RecentEvents() []hookevents.Event {
 	out := make([]hookevents.Event, len(s.events))
 	copy(out, s.events)
 	return out
+}
+
+// EventsSince returns the events appended after the given sequence, plus the
+// current high-water sequence to pass on the next call. Sequences are
+// monotonic and independent of the ring's length, so a subscriber keeps
+// receiving new events even after the ring saturates and stops growing — the
+// failure mode of tracking deltas by slice length. Pass 0 for the first call.
+func (s *HookEventStore) EventsSince(since uint64) ([]hookevents.Event, uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []hookevents.Event
+	for i, seq := range s.eventSeqs {
+		if seq > since {
+			out = append(out, s.events[i])
+		}
+	}
+	return out, s.appended
 }
 
 // hookFieldMaxLen bounds every captured hook event field. Without a

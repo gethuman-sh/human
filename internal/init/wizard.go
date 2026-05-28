@@ -200,8 +200,26 @@ const configTemplate = `{{- range $i, $section := .Sections }}{{ if $i }}
 
 // yamlSafeString returns s quoted if it contains characters that could
 // break YAML structure or inject fields, otherwise returns it as-is.
+// Beyond the structural/flow indicators it also quotes values containing the
+// key separator ':' or the comment introducer '#', values with leading or
+// trailing whitespace, the empty string, and values beginning with a reserved
+// YAML indicator — all of which a plain scalar would otherwise mis-parse.
 func yamlSafeString(s string) string {
-	if strings.ContainsAny(s, "\"\n\r\\{}[]|>&*!") {
+	if s == "" {
+		return `""`
+	}
+	// Quote only when a plain scalar would actually misparse. Crucially this
+	// does NOT quote every ':' — a value like a URL ("https://x") is a valid
+	// plain scalar; YAML only treats ':' as a mapping separator when followed
+	// by a space (or at end), and '#' as a comment only after a space (or at
+	// the start). Over-quoting would needlessly wrap URLs and emails.
+	leadingIndicator := strings.IndexByte("-?@%'#:", s[0]) >= 0
+	if leadingIndicator ||
+		s != strings.TrimSpace(s) ||
+		strings.Contains(s, ": ") ||
+		strings.HasSuffix(s, ":") ||
+		strings.Contains(s, " #") ||
+		strings.ContainsAny(s, "\"\n\r\\{}[]|>&*!") {
 		escaped := strings.ReplaceAll(s, `\`, `\\`)
 		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 		escaped = strings.ReplaceAll(escaped, "\n", `\n`)

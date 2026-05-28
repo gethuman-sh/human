@@ -118,6 +118,14 @@ func (s *Server) awaitCallback(ln net.Listener, info *oauth.RedirectInfo) (strin
 			http.Error(w, "state mismatch", http.StatusBadRequest)
 			return
 		}
+		// A valid OAuth2 authorization response always carries either an
+		// authorization code or an error (RFC 6749 §4.1.2). Rejecting anything
+		// else keeps stray local requests on this port from being mistaken for
+		// the callback — the main residual exposure when no state is present.
+		if r.URL.Query().Get("code") == "" && r.URL.Query().Get("error") == "" {
+			http.Error(w, "missing authorization code", http.StatusBadRequest)
+			return
+		}
 
 		u := fmt.Sprintf("http://localhost:%d%s?%s", info.Port, r.URL.Path, r.URL.RawQuery)
 		paramKeys := make([]string, 0, len(r.URL.Query()))
@@ -148,6 +156,10 @@ func (s *Server) awaitCallback(ln net.Listener, info *oauth.RedirectInfo) (strin
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, "<html><body><h1>Authorization successful</h1><p>You can close this tab.</p></body></html>")
 	})
+
+	if info.State == "" {
+		s.Logger.Warn().Msg("OAuth relay running without a state parameter; CSRF protection is limited to the loopback callback race")
+	}
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: oauthAcceptTimeout} //nolint:gosec // short-lived local server for OAuth callback
 	go func() {

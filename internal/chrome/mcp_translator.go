@@ -209,6 +209,17 @@ func (t *McpTranslator) outbound(scanner *bufio.Scanner, conn net.Conn) error {
 			continue
 		}
 
+		// The subprocess can emit responses up to mcpBufSize (e.g. screenshots
+		// or full a11y trees), but Chrome's native messaging caps a single
+		// message at MaxMessageSize. Such a response cannot be delivered to the
+		// extension regardless; drop just that frame with a warning rather than
+		// returning an error, which would tear down the entire bridge session.
+		if len(data) > MaxMessageSize {
+			t.Logger.Warn().Int("size", len(data)).Int("limit", MaxMessageSize).
+				Msg("dropping oversized MCP response (exceeds native messaging limit)")
+			continue
+		}
+
 		if err := WriteMessage(conn, data); err != nil {
 			return err
 		}
