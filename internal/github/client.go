@@ -181,13 +181,45 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		return nil, err
 	}
 
+	// GitHub has no parent field on create — the sub-issue link is a separate
+	// call keyed by the new issue's internal ID, made only once it exists.
+	if issue.ParentKey != "" {
+		if err := c.addSubIssue(ctx, issue.ParentKey, result.ID); err != nil {
+			return nil, err
+		}
+	}
+
 	return &tracker.Issue{
 		Key:         fmt.Sprintf("%s/%s#%d", owner, repo, result.Number),
 		Project:     issue.Project,
 		Title:       result.Title,
 		Description: result.Body,
 		URL:         fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, result.Number),
+		ParentKey:   issue.ParentKey,
 	}, nil
+}
+
+// addSubIssue links a freshly created issue under a parent via GitHub's
+// sub-issues API. The parent is addressed by its issue number, while the child
+// is referenced by its internal ID (not its number).
+func (c *Client) addSubIssue(ctx context.Context, parentKey string, childID int) error {
+	owner, repo, number, err := parseIssueKey(parentKey)
+	if err != nil {
+		return errors.WrapWithDetails(err, "invalid parent key", "parentKey", parentKey)
+	}
+
+	payload, err := json.Marshal(map[string]int{"sub_issue_id": childID})
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshalling sub-issue request", "parentKey", parentKey)
+	}
+
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/sub_issues", url.PathEscape(owner), url.PathEscape(repo), number)
+	resp, err := c.doRequest(ctx, http.MethodPost, path, "", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
 }
 
 // AddComment implements tracker.Commenter.

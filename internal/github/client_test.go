@@ -982,3 +982,57 @@ func TestTransitionIssue_caseInsensitive(t *testing.T) {
 	err := client.TransitionIssue(context.Background(), "octocat/hello-world#1", "Open")
 	require.NoError(t, err)
 }
+
+func TestCreateIssue_withParent(t *testing.T) {
+	var subIssueBody map[string]int
+	createCalled, subCalled := false, false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/octocat/hello-world/issues":
+			createCalled = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":555,"number":99,"title":"Child","body":""}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/octocat/hello-world/issues/7/sub_issues":
+			subCalled = true
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &subIssueBody))
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project:   "octocat/hello-world",
+		Title:     "Child",
+		ParentKey: "octocat/hello-world#7",
+	})
+	require.NoError(t, err)
+	assert.True(t, createCalled, "create endpoint should be called")
+	assert.True(t, subCalled, "sub_issues endpoint should be called")
+	assert.Equal(t, 555, subIssueBody["sub_issue_id"]) // child's internal id, not its number
+	assert.Equal(t, "octocat/hello-world#99", issue.Key)
+	assert.Equal(t, "octocat/hello-world#7", issue.ParentKey)
+}
+
+func TestCreateIssue_invalidParent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"id":555,"number":99,"title":"Child","body":""}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project:   "octocat/hello-world",
+		Title:     "Child",
+		ParentKey: "nohash",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid parent key")
+}
