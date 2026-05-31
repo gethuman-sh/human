@@ -116,6 +116,45 @@ func BuildAutoStatusCmd(deps cmdutil.Deps) *cobra.Command {
 	}
 }
 
+// BuildAutoPRCreateCmd creates the top-level "pr create" command that derives
+// the code forge and repository from the local git "origin" remote, so a PR
+// can be opened from inside the repo without naming the forge kind or --repo.
+func BuildAutoPRCreateCmd(deps cmdutil.Deps) *cobra.Command {
+	var repo, base, head, title, body string
+
+	prCmd := &cobra.Command{
+		Use:   "pr",
+		Short: "Pull request operations (auto-detect forge from git origin)",
+	}
+
+	createCmd := &cobra.Command{
+		Use:     "create",
+		Short:   "Open a pull request on the forge derived from the git origin remote",
+		Example: `  human pr create --head fix-login --title "Fix login" --body "Closes #42"`,
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			f, originRepo, err := cmdutil.OriginForge(cmd, deps)
+			if err != nil {
+				return err
+			}
+			if repo == "" {
+				repo = originRepo
+			}
+			return cmdprovider.RunCreatePullRequest(cmd.Context(), f, cmd.OutOrStdout(), repo, base, head, title, body)
+		},
+	}
+	createCmd.Flags().StringVar(&repo, "repo", "", "Repository owner/repo (defaults to the git origin remote)")
+	createCmd.Flags().StringVar(&head, "head", "", "Head branch holding the changes")
+	_ = createCmd.MarkFlagRequired("head")
+	createCmd.Flags().StringVar(&base, "base", "main", "Base branch to merge into")
+	createCmd.Flags().StringVar(&title, "title", "", "Pull request title")
+	_ = createCmd.MarkFlagRequired("title")
+	createCmd.Flags().StringVar(&body, "body", "", "Pull request description in markdown")
+
+	prCmd.AddCommand(createCmd)
+	return prCmd
+}
+
 // PrintAutoHints prints contextual guidance to stderr after auto-detected commands.
 func PrintAutoHints(w io.Writer, kind, key, project, afterCmd string) {
 	_, _ = fmt.Fprintf(w, "\nDetected tracker: %s\n", kind)

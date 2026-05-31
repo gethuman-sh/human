@@ -14,6 +14,7 @@ import (
 	"github.com/gethuman-sh/human/internal/dispatch"
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/forge"
+	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/slack"
 	"github.com/gethuman-sh/human/internal/telegram"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -130,6 +131,49 @@ func ResolveForge(cmd *cobra.Command, kind string, deps Deps) (forge.Forge, erro
 		return nil, errors.WithDetails("pull requests not supported by this tracker", "kind", kind)
 	}
 	return f, nil
+}
+
+// OriginForge derives the code forge from the local git "origin" remote and
+// returns it together with the "owner/repo" parsed from that remote. The forge
+// kind comes from the remote host (e.g. github.com → github); the configured
+// instance is then resolved by kind via ResolveForge. Use it for commands that
+// should default to "the repository I'm standing in".
+func OriginForge(cmd *cobra.Command, deps Deps) (forge.Forge, string, error) {
+	ctx := cmdContext(cmd)
+	dir := config.ResolveDirCtx(ctx, config.DirProject)
+	raw, err := gitrepo.OriginURL(ctx, dir)
+	if err != nil {
+		return nil, "", err
+	}
+	host, repo, ok := forge.ParseRemoteURL(raw)
+	if !ok {
+		return nil, "", errors.WithDetails("could not parse git origin remote", "remote", raw)
+	}
+	kind := forge.KindForHost(host)
+	if kind == "" {
+		return nil, "", errors.WithDetails("git origin host is not a supported forge", "host", host)
+	}
+	f, err := ResolveForge(cmd, kind, deps)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, repo, nil
+}
+
+// OriginRepo returns the "owner/repo" parsed from the local git "origin"
+// remote. Used by the per-kind `pr create` command to default --repo.
+func OriginRepo(cmd *cobra.Command) (string, error) {
+	ctx := cmdContext(cmd)
+	dir := config.ResolveDirCtx(ctx, config.DirProject)
+	raw, err := gitrepo.OriginURL(ctx, dir)
+	if err != nil {
+		return "", err
+	}
+	_, repo, ok := forge.ParseRemoteURL(raw)
+	if !ok {
+		return "", errors.WithDetails("could not parse git origin remote", "remote", raw)
+	}
+	return repo, nil
 }
 
 // ResolveAutoProvider loads all instances, applies flag overrides, and resolves

@@ -132,11 +132,17 @@ func buildPRCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if repo == "" {
+				// Default to the repository of the local git origin remote.
+				repo, err = cmdutil.OriginRepo(cmd)
+				if err != nil {
+					return err
+				}
+			}
 			return RunCreatePullRequest(cmd.Context(), f, cmd.OutOrStdout(), repo, base, head, title, body)
 		},
 	}
-	cmd.Flags().StringVar(&repo, "repo", "", "Repository (GitHub: owner/repo)")
-	_ = cmd.MarkFlagRequired("repo")
+	cmd.Flags().StringVar(&repo, "repo", "", "Repository (GitHub: owner/repo); defaults to the git origin remote")
 	cmd.Flags().StringVar(&head, "head", "", "Head branch holding the changes")
 	_ = cmd.MarkFlagRequired("head")
 	cmd.Flags().StringVar(&base, "base", "main", "Base branch to merge into")

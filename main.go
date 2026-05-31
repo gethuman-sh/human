@@ -195,6 +195,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	autoStatusCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoStatusCmd)
 
+	autoPRCmd := cmdauto.BuildAutoPRCreateCmd(autoDeps)
+	autoPRCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoPRCmd)
+
 	// --- Provider commands (dynamic registration) ---
 	providers := []string{"jira", "github", "gitlab", "linear", "azuredevops", "shortcut", "clickup"}
 	for _, kind := range providers {

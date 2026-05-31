@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
+	"github.com/gethuman-sh/human/internal/github"
+	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -841,6 +845,44 @@ func TestBuildProviderCommands_NonForgeKindHasNoPRCommand(t *testing.T) {
 	for _, c := range cmds {
 		assert.NotEqual(t, "pr", c.Name(), "non-forge kind must not expose a 'pr' command")
 	}
+}
+
+func TestPRCreate_DefaultsRepoFromOrigin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/repos/gethuman-sh/human/pulls", r.URL.Path)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"number":9,"title":"Fix","html_url":"https://github.com/gethuman-sh/human/pull/9"}`))
+	}))
+	defer srv.Close()
+
+	prev := gitrepo.OriginURL
+	gitrepo.OriginURL = func(_ context.Context, _ string) (string, error) {
+		return "https://github.com/gethuman-sh/human.git", nil
+	}
+	defer func() { gitrepo.OriginURL = prev }()
+
+	deps := cmdutil.Deps{
+		LoadInstances: func(_ string) ([]tracker.Instance, error) {
+			return []tracker.Instance{{
+				Name: "gh", Kind: "github", URL: srv.URL, Provider: github.New(srv.URL, "t"),
+			}}, nil
+		},
+		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },
+		AuditLogPath:      func() string { return "" },
+	}
+
+	root := &cobra.Command{Use: "human"}
+	for _, c := range BuildProviderCommands("github", deps) {
+		root.AddCommand(c)
+	}
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	// --repo omitted on purpose: it must be filled from the git origin remote.
+	root.SetArgs([]string{"pr", "create", "--head", "fix-login", "--title", "Fix"})
+
+	require.NoError(t, root.Execute())
+	assert.Contains(t, out.String(), "https://github.com/gethuman-sh/human/pull/9")
 }
 
 func TestBuildProviderCommands_IssuesHasListSubcommand(t *testing.T) {
