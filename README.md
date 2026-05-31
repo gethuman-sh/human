@@ -229,7 +229,7 @@ This writes skill and agent files to `.claude/` in the current directory. Re-run
 | `/human-brainstorm` | Explores the codebase and generates 2-3 implementation approaches |
 | `/human-plan` | Fetches a ticket and produces a structured implementation plan |
 | `/human-bug-plan` | Analyzes a bug ticket for root cause and writes a fix plan |
-| `/human-autofix` | Autonomously verifies, reproduces, fixes, and opens a PR for a bug end to end — the whole trail recorded on the tracker |
+| `/human-autofix` | Autonomously triages, fixes, verifies, and opens a PR for a bug end to end — the whole trail recorded on the tracker |
 | `/human-execute` | Loads a plan, executes step by step, runs a review checkpoint |
 | `/human-review` | Diffs the current branch against acceptance criteria |
 | `/human-findbugs` | Multi-agent pipeline to find logic errors, race conditions, and security issues |
@@ -248,6 +248,26 @@ This writes skill and agent files to `.claude/` in the current directory. Re-run
 ```
 
 All outputs are saved to `.human/` (plans, reviews, done reports, bug analyses, security audits, health reports).
+
+### Autonomous bug fixing
+
+`/human-autofix` runs the full bug-fix pipeline autonomously — pointed at a bug ticket, it never asks the user a question:
+
+```bash
+/human-autofix SC-86               # triage, fix, verify, and open a PR for a bug
+```
+
+It moves through six phases: triage and reproduce the bug, gate on the verdict, plan a regression-test-first fix and create a linked engineering ticket, write the failing regression test then fix the root cause and push, verify the fix is "done done", and finally open a PR and hand off.
+
+Triage returns one of three verdicts, posted as a `[human:bug-verdict]` comment on the ticket:
+
+- **`confirmed`** — the bug is reproduced; the pipeline proceeds to fix it.
+- **`not-a-bug`** — the ticket is closed or reclassified, with no code changes.
+- **`undetermined`** — the ticket is left open, with no code changes.
+
+Only a `confirmed` bug that passes the verification gate (regression test fails before the fix, passes after, and the full suite is green) gets a PR. The fix lands on an `autofix/<eng-key>` branch with commits referencing both the PM and engineering keys, then `human pr create` opens the PR (forge and repo derived from the git origin remote). A `[human:ready-for-review]` handoff comment is posted on the PM ticket carrying the `engineering:`, `branch:`, `commits:`, and `pr:` lines, and the TUI's `(R)` marker links straight to the PR.
+
+The whole trail lives on the trackers — bug comment, engineering ticket, and PR — so no `.human/` working files are produced. If the build or tests aren't green, or `human pr create` fails, the pipeline stops and reports honestly rather than claiming success.
 
 ## Configuration
 
