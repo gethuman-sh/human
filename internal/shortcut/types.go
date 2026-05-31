@@ -12,7 +12,8 @@ type scStory struct {
 	RequestedByID   string   `json:"requested_by_id"`
 	Archived        bool     `json:"archived"`
 	ProjectID       *int64   `json:"project_id"`
-	GroupID         string   `json:"group_id"` // UUID of the group (team)
+	GroupID         string   `json:"group_id"`        // UUID of the group (team)
+	ParentStoryID   *int64   `json:"parent_story_id"` // set when this story is a subtask
 	UpdatedAt       string   `json:"updated_at"`
 }
 

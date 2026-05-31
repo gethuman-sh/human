@@ -1091,3 +1091,66 @@ func TestListStatuses_caching(t *testing.T) {
 
 	assert.Equal(t, 1, fetchCount)
 }
+
+func TestCreateIssue_withParent(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		case "/api/v3/groups":
+			_, _ = fmt.Fprint(w, `[{"id":"grp-uuid-1","name":"Human"}]`)
+		case "/api/v3/stories":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &gotBody))
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":99,"name":"Child","parent_story_id":42}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project:   "Human",
+		Title:     "Child",
+		ParentKey: "42",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "99", issue.Key)
+	assert.Equal(t, "42", issue.ParentKey)
+	assert.Equal(t, float64(42), gotBody["parent_story_id"])
+}
+
+func TestCreateIssue_invalidParent(t *testing.T) {
+	client := New("http://localhost", "tok-test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project:   "Human",
+		Title:     "Child",
+		ParentKey: "not-a-number",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid parent story ID")
+}
+
+func TestGetIssue_withParent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/stories/99":
+			_, _ = fmt.Fprint(w, `{"id":99,"name":"Child","workflow_state_id":500,"parent_story_id":42}`)
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	issue, err := client.GetIssue(context.Background(), "99")
+	require.NoError(t, err)
+	assert.Equal(t, "42", issue.ParentKey)
+}

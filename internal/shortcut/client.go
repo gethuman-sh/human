@@ -251,6 +251,15 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	if isValidStoryType(issue.Type) {
 		body["story_type"] = issue.Type
 	}
+	// A subtask in Shortcut is a story that points at a parent story; the
+	// key the caller passes is the numeric parent story ID.
+	if issue.ParentKey != "" {
+		parentID, err := parseStoryID(issue.ParentKey)
+		if err != nil {
+			return nil, errors.WrapWithDetails(err, "invalid parent story ID", "parentKey", issue.ParentKey)
+		}
+		body["parent_story_id"] = parentID
+	}
 
 	stateID, err := c.defaultWorkflowStateID(ctx)
 	if err != nil {
@@ -289,6 +298,7 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		Description: story.Description,
 		Type:        story.StoryType,
 		URL:         story.AppURL,
+		ParentKey:   parentStoryKey(story.ParentStoryID),
 	}, nil
 }
 
@@ -730,10 +740,20 @@ func (c *Client) toTrackerIssue(ctx context.Context, story scStory, project stri
 		Description: story.Description,
 		URL:         story.AppURL,
 	}
+	issue.ParentKey = parentStoryKey(story.ParentStoryID)
 	if story.UpdatedAt != "" {
 		issue.UpdatedAt, _ = time.Parse(time.RFC3339, story.UpdatedAt)
 	}
 	return issue, nil
+}
+
+// parentStoryKey renders a parent story ID as a tracker issue key, or "" when
+// the story has no parent.
+func parentStoryKey(id *int64) string {
+	if id == nil {
+		return ""
+	}
+	return strconv.FormatInt(*id, 10)
 }
 
 // toTrackerComment converts a Shortcut comment to a tracker.Comment.
