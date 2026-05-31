@@ -103,6 +103,8 @@ human jira issue start KAN-1           # transition + assign
 human jira issue edit KAN-1 --title "New title"
 human jira issue comment add KAN-1 "Shipped"
 
+human github pr create --repo owner/repo --head fix-login --base main --title "Fix login" --body "Closes #42"  # open a PR (forge backends only)
+
 human search "retry logic"             # cross-tracker search
 human notion search "quarterly report" # Notion
 human figma file get <file-key>        # Figma
