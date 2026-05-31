@@ -197,6 +197,26 @@ func TestRunGetIssue_EmptyFields(t *testing.T) {
 	assert.Contains(t, out, "| Assignee | None |")
 	assert.Contains(t, out, "| Reporter | None |")
 	assert.NotContains(t, out, "## Description")
+	// No parent row when the issue is not a subtask.
+	assert.NotContains(t, out, "| Parent")
+}
+
+func TestRunGetIssue_WithParent(t *testing.T) {
+	p := &mockProvider{
+		getIssueFn: func(_ context.Context, _ string) (*tracker.Issue, error) {
+			return &tracker.Issue{
+				Key:       "KAN-50",
+				Title:     "Child task",
+				Status:    "To Do",
+				ParentKey: "KAN-1",
+			}, nil
+		},
+	}
+
+	var buf bytes.Buffer
+	err := RunGetIssue(context.Background(), p, &buf, "KAN-50")
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "| Parent   | KAN-1 |")
 }
 
 func TestRunGetIssue_Error(t *testing.T) {

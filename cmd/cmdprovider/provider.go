@@ -101,7 +101,7 @@ func buildIssueCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 	_ = cmd.MarkFlagRequired("project")
 	cmd.Flags().StringVar(&typ, "type", "Task", "Issue type (Jira only, e.g. Task, Bug, Story)")
 	cmd.Flags().StringVar(&description, "description", "", "Issue description in markdown (separate from title)")
-	cmd.Flags().StringVar(&parent, "parent", "", "Parent task ID for creating subtasks (ClickUp)")
+	cmd.Flags().StringVar(&parent, "parent", "", "Parent issue key to create this as a subtask (Linear, Jira, Shortcut, Azure DevOps, GitHub, ClickUp; not supported on GitLab)")
 	return cmd
 }
 
@@ -296,6 +296,9 @@ func RunGetIssue(ctx context.Context, p tracker.Provider, out io.Writer, key str
 	_, _ = fmt.Fprintf(out, "| Priority | %s |\n", displayOrNone(issue.Priority))
 	_, _ = fmt.Fprintf(out, "| Assignee | %s |\n", displayOrNone(issue.Assignee))
 	_, _ = fmt.Fprintf(out, "| Reporter | %s |\n", displayOrNone(issue.Reporter))
+	if issue.ParentKey != "" {
+		_, _ = fmt.Fprintf(out, "| Parent   | %s |\n", issue.ParentKey)
+	}
 
 	if issue.Description != "" {
 		_, _ = fmt.Fprintf(out, "\n## Description\n\n%s", issue.Description)
@@ -305,7 +308,8 @@ func RunGetIssue(ctx context.Context, p tracker.Provider, out io.Writer, key str
 }
 
 // RunCreateIssue creates a new issue. When parent is non-empty, the issue is
-// created as a subtask of the given parent key (ClickUp).
+// created as a subtask of the given parent key. Subtask support is
+// provider-specific (see the --parent flag help); GitLab rejects it.
 func RunCreateIssue(ctx context.Context, p tracker.Provider, out io.Writer, project, typ, title, description, parent string) error {
 	issue, err := p.CreateIssue(ctx, &tracker.Issue{
 		Project:     project,
