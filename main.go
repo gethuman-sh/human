@@ -21,6 +21,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdclickup"
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
+	"github.com/gethuman-sh/human/cmd/cmdgui"
 	"github.com/gethuman-sh/human/cmd/cmdindex"
 	"github.com/gethuman-sh/human/cmd/cmdinit"
 	"github.com/gethuman-sh/human/cmd/cmdnotion"
@@ -285,6 +286,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	tuiCmd.GroupID = "utility"
 	rootCmd.AddCommand(tuiCmd)
 
+	guiCmd := cmdgui.BuildGuiCmd()
+	guiCmd.GroupID = "utility"
+	rootCmd.AddCommand(guiCmd)
+
 	agentCmd := cmdagent.BuildAgentCmd()
 	agentCmd.GroupID = "utility"
 	rootCmd.AddCommand(agentCmd)
@@ -406,6 +411,7 @@ var localSubcommands = map[string]bool{
 	"usage":         true,
 	"index":         true,
 	"tui":           true,
+	"gui":           true,
 	"ping":          true,
 	"proxy":         true,
 	"hook":          true,
