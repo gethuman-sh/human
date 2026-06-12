@@ -1,0 +1,463 @@
+/* Human brand palette, mirroring cmd/cmdtui/theme.go. */
+:root {
+  --gold: #fac86a;
+  --yellow: #ffee97;
+  --pink: #d73d73;
+  --teal: #4ee8c4;
+  --purple: #555598;
+  --red: #e05050;
+  --blue: #6ab0f3;
+  --orange: #f0a050;
+  --bg: #14141f;
+  --bg-panel: #1b1b29;
+  --bg-raised: #23233a;
+  --fg: #d8d8e4;
+  --subtle: #8585a8;
+  --border: #2e2e4a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas,
+    monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 12px 16px 40px;
+  gap: 10px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* --- header / status --- */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.header .title {
+  color: var(--gold);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.header .hostname,
+.header .window {
+  color: var(--subtle);
+}
+
+.statusline {
+  display: flex;
+  justify-content: space-between;
+  color: var(--subtle);
+}
+
+.statusline .ok {
+  color: var(--teal);
+}
+
+.statusline .bad {
+  color: var(--red);
+}
+
+/* --- tabs --- */
+.tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.tabs button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--subtle);
+  font: inherit;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.tabs button.active {
+  background: var(--bg-raised);
+  color: var(--gold);
+  border-color: var(--gold);
+}
+
+/* --- panels --- */
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.panel h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.panel h2 .meta {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  margin-left: 8px;
+}
+
+.empty {
+  color: var(--subtle);
+  font-style: italic;
+}
+
+/* --- instances --- */
+.instance {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.instance:last-child {
+  border-bottom: none;
+}
+
+.instance .row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.instance .label {
+  font-weight: 600;
+}
+
+.instance .marker {
+  color: var(--subtle);
+}
+
+.instance .slug {
+  color: var(--purple);
+}
+
+.status-ready { color: var(--teal); }
+.status-working { color: var(--red); }
+.status-blocked { color: var(--blue); }
+.status-waiting { color: var(--blue); }
+.status-error { color: var(--pink); }
+.status-ended { color: var(--subtle); }
+.status-starting { color: var(--orange); }
+
+.modelbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 2px 0 0 16px;
+  color: var(--subtle);
+}
+
+.modelbar .name {
+  min-width: 130px;
+}
+
+.modelbar .track {
+  flex: 0 0 180px;
+  height: 7px;
+  background: var(--bg-raised);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.modelbar .fill {
+  height: 100%;
+  border-radius: 4px;
+}
+
+.fill-opus { background: var(--gold); }
+.fill-sonnet { background: var(--teal); }
+.fill-haiku { background: var(--purple); }
+.fill-other { background: var(--blue); }
+
+.subagents,
+.tasks {
+  margin: 2px 0 0 16px;
+  color: var(--subtle);
+}
+
+.subagents .running {
+  color: var(--yellow);
+}
+
+.subagents .done {
+  color: var(--teal);
+}
+
+.stop-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--pink);
+  font: inherit;
+  font-size: 11px;
+  padding: 0 8px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+/* --- trackers --- */
+.trackers {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.trackers .tracker.ok { color: var(--teal); }
+.trackers .tracker.broken { color: var(--pink); }
+
+/* --- pipeline --- */
+.pipeline-group {
+  margin-bottom: 8px;
+}
+
+.pipeline-group .group-head {
+  color: var(--subtle);
+  margin-bottom: 2px;
+}
+
+.role-pm { color: var(--yellow); font-weight: 600; }
+.role-eng { color: var(--teal); font-weight: 600; }
+
+.issue-row {
+  display: grid;
+  grid-template-columns: 14px 130px 30px 30px 120px 1fr;
+  gap: 6px;
+  padding: 1px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  align-items: baseline;
+}
+
+.issue-row:hover {
+  background: var(--bg-raised);
+}
+
+.issue-row.selected {
+  background: var(--bg-raised);
+}
+
+.issue-row.selected .key {
+  color: var(--teal);
+  font-weight: 700;
+}
+
+.issue-row .cursor {
+  color: var(--gold);
+}
+
+.issue-row .key {
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-row .bug { color: var(--pink); }
+.issue-row .review { color: var(--teal); text-decoration: none; }
+.issue-row .review:hover { text-decoration: underline; }
+
+.stage-started { color: var(--yellow); }
+.stage-done { color: var(--teal); }
+.stage-subtle { color: var(--subtle); }
+
+.issue-row .title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fetch-error {
+  color: var(--pink);
+}
+
+/* --- network --- */
+.net-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 80px;
+  gap: 8px;
+  color: var(--subtle);
+}
+
+.net-tag-proxy-forward { color: var(--teal); }
+.net-tag-proxy-intercept { color: var(--gold); }
+.net-tag-proxy-block { color: var(--pink); }
+.net-tag-oauth { color: var(--teal); }
+.net-tag-fail { color: var(--pink); }
+
+/* --- tool stats --- */
+.spark {
+  color: var(--purple);
+  letter-spacing: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tool-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 90px;
+  gap: 8px;
+  align-items: center;
+}
+
+.tool-row .name { color: var(--gold); }
+
+.tool-row .track {
+  height: 7px;
+  background: var(--bg-raised);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.tool-row .fill {
+  height: 100%;
+  background: var(--teal);
+  border-radius: 4px;
+}
+
+.tool-row .count { color: var(--subtle); text-align: right; }
+
+.outcomes { color: var(--subtle); margin-top: 4px; }
+
+/* --- footer --- */
+.footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  padding: 6px 16px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  color: var(--subtle);
+  font-size: 12px;
+}
+
+.footer .live { color: var(--teal); }
+.footer .disconnected { color: var(--red); }
+.footer .flash { color: var(--gold); }
+.footer .hints { margin-left: auto; }
+.footer kbd {
+  background: var(--bg-raised);
+  border-radius: 3px;
+  padding: 0 4px;
+  color: var(--fg);
+  font: inherit;
+}
+
+/* --- dialogs --- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 18, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.dialog {
+  background: var(--bg-panel);
+  border: 1px solid var(--gold);
+  border-radius: 8px;
+  padding: 18px 22px;
+  min-width: 420px;
+  max-width: 560px;
+}
+
+.dialog h3 {
+  margin: 0 0 12px;
+  color: var(--gold);
+}
+
+.dialog label {
+  display: block;
+  margin: 10px 0 2px;
+  color: var(--subtle);
+}
+
+.dialog input,
+.dialog textarea,
+.dialog select {
+  width: 100%;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font: inherit;
+  padding: 5px 8px;
+}
+
+.dialog input:focus,
+.dialog textarea:focus,
+.dialog select:focus {
+  outline: 1px solid var(--gold);
+}
+
+.dialog .actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.dialog button {
+  font: inherit;
+  border-radius: 4px;
+  padding: 4px 14px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--fg);
+}
+
+.dialog button.primary {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #14141f;
+  font-weight: 600;
+}
+
+.dialog button.danger {
+  background: var(--pink);
+  border-color: var(--pink);
+  color: #fff;
+  font-weight: 600;
+}
+
+.dialog .warn {
+  color: var(--orange);
+}
+
+.dialog .error {
+  color: var(--pink);
+  margin-top: 8px;
+}
