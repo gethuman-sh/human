@@ -38,6 +38,12 @@ type StartOpts struct {
 // Manager orchestrates agent lifecycle using devcontainers.
 type Manager struct {
 	Docker devcontainer.DockerClient
+
+	// DaemonInfo, when set, is used directly for container wiring instead
+	// of ensureDaemonForContainers. The daemon itself dispatches agents
+	// (GUI dispatch); letting it run the ensure path would have it execute
+	// `daemon stop` against its own PID and kill itself mid-request.
+	DaemonInfo *daemon.DaemonInfo
 }
 
 // Start creates a new container-based agent.
@@ -116,7 +122,10 @@ func resolveDirectories(opts StartOpts) (workspace, configDir string) {
 
 func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDir, workspace string, rebuild bool) (*devcontainer.Meta, error) {
 	// Ensure daemon is running and reachable from containers (0.0.0.0).
-	daemonInfo := m.ensureDaemonForContainers(configDir)
+	daemonInfo := m.DaemonInfo
+	if daemonInfo == nil {
+		daemonInfo = m.ensureDaemonForContainers(configDir)
+	}
 
 	dcMgr := &devcontainer.Manager{Docker: m.Docker}
 	return dcMgr.Up(ctx, devcontainer.UpOptions{

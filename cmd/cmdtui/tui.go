@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +16,6 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/internal/agent"
@@ -35,14 +33,14 @@ const defaultWidth = 80
 
 // trackerIssues groups issues from one tracker instance and project.
 type trackerIssues struct {
-	TrackerName    string
-	TrackerKind    string
-	TrackerRole    string // "pm", "engineering", or empty
-	Project        string
-	Issues         []tracker.Issue
-	ReadyForReview map[string]bool // issue keys currently flagged ready for review (see CLAUDE.md Review handoff)
+	TrackerName       string
+	TrackerKind       string
+	TrackerRole       string // "pm", "engineering", or empty
+	Project           string
+	Issues            []tracker.Issue
+	ReadyForReview    map[string]bool   // issue keys currently flagged ready for review (see CLAUDE.md Review handoff)
 	ReadyForReviewPRs map[string]string // issue key -> pull-request URL from the handoff's pr: line, when present
-	Err            error
+	Err               error
 }
 
 // flatIssue is a single issue with its tracker context, used for cursor indexing.
@@ -87,7 +85,7 @@ func runTUI(projectDirs []string) error {
 	defer zerolog.SetGlobalLevel(prev)
 
 	ensureDaemon(projectDirs)
-	finder, dc := buildFinder()
+	finder, dc := monitor.DefaultFinder()
 	mon := monitor.New(finder, dc)
 	m := newModel(mon)
 	if m.daemonUnsub != nil {
@@ -132,23 +130,6 @@ func ensureDaemon(projectDirs []string) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-}
-
-func buildFinder() (claude.InstanceFinder, claude.DockerClient) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Debug().Err(err).Msg("cannot resolve home dir for host finder")
-		home = ""
-	}
-	finders := []claude.InstanceFinder{
-		&claude.HostFinder{Runner: claude.OSCommandRunner{}, HomeDir: home},
-	}
-	var dc claude.DockerClient
-	if client, dcErr := claude.NewEngineDockerClient(); dcErr == nil {
-		dc = client
-		finders = append(finders, &claude.DockerFinder{Client: dc})
-	}
-	return &claude.CombinedFinder{Finders: finders}, dc
 }
 
 // --- bubbletea model ---
@@ -510,21 +491,9 @@ func (m model) handleDispatch() (tea.Model, tea.Cmd) {
 	}
 	sel := flat[m.issueCursor]
 
-	// Bug-ness wins regardless of tracker — a Shortcut bug story still wants
-	// root-cause analysis, not the generic planner. Otherwise the PM/eng
-	// split decides: Shortcut tickets are PM and want planning; everything
-	// else is engineering and goes straight to execution.
-	var prompt string
-	switch {
-	case sel.Issue.IsBug():
-		prompt = "/human-bug-plan " + sel.Issue.Key
-	case sel.TrackerKind == "shortcut":
-		prompt = "/human-plan " + sel.Issue.Key
-	default:
-		prompt = "/human-execute " + sel.Issue.Key
-	}
+	prompt := agent.PromptForIssue(sel.TrackerKind, sel.Issue.IsBug(), sel.Issue.Key)
 
-	name := nextAgentName()
+	name := agent.NextName()
 	projectDir := m.activeProjectDir()
 	var tmuxTarget string
 	if m.snap != nil {
@@ -631,7 +600,7 @@ func (m model) handleSpawnAgent() (tea.Model, tea.Cmd) {
 		m.dispatchAt = time.Now()
 		return m, nil
 	}
-	name := nextAgentName()
+	name := agent.NextName()
 	projectDir := m.activeProjectDir()
 	// Find a tmux window belonging to this project so the agent pane
 	// opens next to the project's existing Claude instances.
@@ -691,23 +660,6 @@ func spawnAgentCmd(name, projectDir, tmuxTarget string) tea.Cmd {
 		err := spawnAgentInTmux(name, projectDir, tmuxTarget, "--interactive", "--skip-permissions")
 		return spawnAgentMsg{name: name, err: err}
 	}
-}
-
-// nextAgentName returns agent-1, agent-2, etc. based on existing agent metadata.
-func nextAgentName() string {
-	metas, err := agent.ListMetas()
-	if err != nil {
-		return fmt.Sprintf("agent-%d", time.Now().Unix())
-	}
-	maxN := 0
-	for _, m := range metas {
-		if strings.HasPrefix(m.Name, "agent-") {
-			if n, parseErr := strconv.Atoi(strings.TrimPrefix(m.Name, "agent-")); parseErr == nil && n > maxN {
-				maxN = n
-			}
-		}
-	}
-	return fmt.Sprintf("agent-%d", maxN+1)
 }
 
 // --- destructive confirmation overlay ---
@@ -967,7 +919,7 @@ func (m model) handleCreateResult(msg createResultMsg) (tea.Model, tea.Cmd) {
 
 	// Auto-dispatch /human-ready via a new agent.
 	if !m.dispatching && os.Getenv("TMUX") != "" {
-		name := nextAgentName()
+		name := agent.NextName()
 		projectDir := m.activeProjectDir()
 		var tmuxTarget string
 		if m.snap != nil {

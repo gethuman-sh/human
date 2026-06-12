@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"os"
 	"sync"
 	"time"
 
@@ -39,6 +40,27 @@ func New(finder claude.InstanceFinder, dc claude.DockerClient) *Monitor {
 		dockerClient: dc,
 		parsers:      make(map[string]*logparser.FileParser),
 	}
+}
+
+// DefaultFinder builds the standard production instance finder: host
+// process discovery plus Docker container discovery when a Docker engine
+// is reachable. Shared by the TUI and the daemon's GUI poller so both
+// surfaces discover the same instances.
+func DefaultFinder() (claude.InstanceFinder, claude.DockerClient) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Debug().Err(err).Msg("cannot resolve home dir for host finder")
+		home = ""
+	}
+	finders := []claude.InstanceFinder{
+		&claude.HostFinder{Runner: claude.OSCommandRunner{}, HomeDir: home},
+	}
+	var dc claude.DockerClient
+	if client, dcErr := claude.NewEngineDockerClient(); dcErr == nil {
+		dc = client
+		finders = append(finders, &claude.DockerFinder{Client: dc})
+	}
+	return &claude.CombinedFinder{Finders: finders}, dc
 }
 
 // FetchSkeleton returns a minimal snapshot from cheap local file reads.

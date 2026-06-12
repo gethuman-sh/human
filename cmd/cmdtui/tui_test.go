@@ -1196,15 +1196,6 @@ func TestModelView_TabBarSingleProject(t *testing.T) {
 	assert.Contains(t, view, "Tab switch")
 }
 
-func TestNextAgentName(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-
-	// No existing agents: should return agent-1.
-	name := nextAgentName()
-	assert.Equal(t, "agent-1", name)
-}
-
 func TestHandleSpawnAgent_NotInTmux(t *testing.T) {
 	t.Setenv("TMUX", "")
 
