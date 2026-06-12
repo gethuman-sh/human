@@ -127,7 +127,6 @@ func (c *Client) listGroupStories(ctx context.Context, groupID string) ([]scStor
 	return stories, nil
 }
 
-
 // searchStories uses POST /api/v3/stories/search with updated_at_start filter.
 func (c *Client) searchStories(ctx context.Context, groupID string, since time.Time) ([]scStory, error) {
 	body := scSearchRequest{
