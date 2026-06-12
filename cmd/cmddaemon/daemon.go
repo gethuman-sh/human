@@ -23,10 +23,12 @@ import (
 	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/chrome"
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude/monitor"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/dispatch"
+	"github.com/gethuman-sh/human/internal/gui"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/slack"
 	"github.com/gethuman-sh/human/internal/stats"
@@ -55,6 +57,7 @@ func buildDaemonStartCmd(cmdFactory func() *cobra.Command, version string) *cobr
 	var addr string
 	var chromeAddr string
 	var proxyAddr string
+	var guiAddr string
 	var interactive bool
 	var safe bool
 	var debug bool
@@ -71,15 +74,16 @@ func buildDaemonStartCmd(cmdFactory func() *cobra.Command, version string) *cobr
 			}
 
 			if foreground || os.Getenv(daemonChildEnv) != "" {
-				return runDaemonForeground(cmd, addr, chromeAddr, proxyAddr, interactive, safe, debug, projectDirs, cmdFactory, version)
+				return runDaemonForeground(cmd, addr, chromeAddr, proxyAddr, guiAddr, interactive, safe, debug, projectDirs, cmdFactory, version)
 			}
-			return runDaemonBackground(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs)
+			return runDaemonBackground(cmd, addr, chromeAddr, proxyAddr, guiAddr, safe, debug, projectDirs)
 		},
 	}
 
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:19285", "Listen address (host:port)")
 	cmd.Flags().StringVar(&chromeAddr, "chrome-addr", "127.0.0.1:19286", "Chrome proxy listen address (host:port)")
 	cmd.Flags().StringVar(&proxyAddr, "proxy-addr", "127.0.0.1:19287", "HTTPS proxy listen address (host:port)")
+	cmd.Flags().StringVar(&guiAddr, "gui-addr", "127.0.0.1:19288", "GUI (browser dashboard) listen address (host:port; keep loopback)")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "Prompt for unknown domains instead of blocking them")
 	cmd.Flags().BoolVar(&safe, "safe", os.Getenv("HUMAN_SAFE") == "1", "Block destructive operations for all daemon requests")
 	cmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
@@ -99,11 +103,12 @@ type daemonState struct {
 	vaultResolver *vault.Resolver
 	statsStore    *stats.StatsStore
 	statsWriter   *stats.Writer
+	info          daemon.DaemonInfo
 }
 
 // initDaemon performs the early initialization steps for the daemon: token,
 // PID file, project registry, daemon info, and signal context.
-func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) (*daemonState, error) {
+func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr, guiAddr string, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) (*daemonState, error) {
 	token, err := daemon.LoadOrCreateToken()
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "failed to load/create token")
@@ -128,10 +133,14 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		Addr:       daemonAddr,
 		ChromeAddr: chromeFullAddr,
 		ProxyAddr:  proxyFullAddr,
-		Token:      token,
-		PID:        os.Getpid(),
-		Version:    version,
-		Projects:   projectInfos,
+		// Deliberately not rewritten to the host IP: the GUI cookie auth
+		// is only safe on loopback, so the advertised address stays as
+		// configured.
+		GuiAddr:  guiAddr,
+		Token:    token,
+		PID:      os.Getpid(),
+		Version:  version,
+		Projects: projectInfos,
 	}
 	if err := daemon.WriteInfo(info); err != nil {
 		return nil, errors.WrapWithDetails(err, "failed to write daemon info")
@@ -212,13 +221,14 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		vaultResolver: vaultResolver,
 		statsStore:    statsStore,
 		statsWriter:   statsWriter,
+		info:          info,
 	}, nil
 }
 
 // runDaemonForeground runs the daemon in the current process (blocking).
 // It writes a PID file on start and removes it on shutdown.
-func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
-	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs, cmdFactory, version)
+func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr, guiAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
+	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, guiAddr, safe, debug, projectDirs, cmdFactory, version)
 	if err != nil {
 		return err
 	}
@@ -237,6 +247,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	logger := ds.logger
 
 	startChromeServices(ctx, chromeAddr, ds.srv.Token, logger)
+	startGuiServer(ctx, guiAddr, ds, logger)
 
 	proxySrv, proxyStatus, proxyErr := buildProxyServer(proxyAddr, interactive, logger, ds.networkStore)
 	if proxyErr != nil {
@@ -291,6 +302,50 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	return ds.srv.ListenAndServe(ctx)
 }
 
+// startGuiServer launches the browser dashboard listener and its snapshot
+// poller. All daemon stores are shared in-process; only ticket creation
+// loops back through the TCP endpoint so it follows the same interception
+// path as any other client.
+func startGuiServer(ctx context.Context, guiAddr string, ds *daemonState, logger zerolog.Logger) {
+	finder, dc := monitor.DefaultFinder()
+	poller := gui.NewPoller(monitor.New(finder, dc))
+	hub := gui.NewHub(poller)
+
+	guiSrv := &gui.Server{
+		Addr:      guiAddr,
+		Token:     ds.srv.Token,
+		Logger:    logger,
+		Snapshots: poller,
+		Issues:    gui.IssueFetcher(ds.srv.IssueFetcher),
+		Projects: func() []daemon.ProjectInfo {
+			var infos []daemon.ProjectInfo
+			for _, e := range ds.srv.Projects.Entries() {
+				infos = append(infos, daemon.ProjectInfo(e))
+			}
+			return infos
+		},
+		Confirms: ds.srv.PendingConfirms,
+		LogMode:  gui.ProxyLogMode{},
+		Commands: gui.LoopbackRunner{Addr: ds.info.Addr, Token: ds.srv.Token},
+		Agents: &gui.ManagerRunner{
+			DaemonInfo: &ds.info,
+			Hooks:      ds.srv.HookEvents,
+			Cleaner:    ds.srv.AgentCleaner,
+			Logger:     logger,
+		},
+		Hooks:       ds.srv.HookEvents,
+		ApproverPID: os.Getpid(),
+	}
+	guiSrv.AttachHub(hub)
+
+	go poller.Run(ctx)
+	go func() {
+		if err := guiSrv.ListenAndServe(ctx); err != nil {
+			logger.Error().Err(err).Msg("gui server failed")
+		}
+	}()
+}
+
 // startChromeServices launches the socket relay and Chrome MCP proxy.
 func startChromeServices(ctx context.Context, chromeAddr, token string, logger zerolog.Logger) {
 	socketDir, sdErr := chrome.SocketDir()
@@ -329,7 +384,7 @@ func startChromeServices(ctx context.Context, chromeAddr, token string, logger z
 }
 
 // runDaemonBackground re-execs the current binary as a detached child process.
-func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string) error {
+func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr, guiAddr string, safe, debug bool, projectDirs []string) error {
 	out := cmd.OutOrStdout()
 
 	// Check if already running.
@@ -354,6 +409,7 @@ func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		"--addr", addr,
 		"--chrome-addr", chromeAddr,
 		"--proxy-addr", proxyAddr,
+		"--gui-addr", guiAddr,
 	}
 	if safe {
 		args = append(args, "--safe")

@@ -17,6 +17,8 @@ const (
 	DefaultChromePort = 19286
 	// DefaultProxyPort is the well-known HTTPS proxy port.
 	DefaultProxyPort = 19287
+	// DefaultGuiPort is the well-known GUI (browser dashboard) port.
+	DefaultGuiPort = 19288
 
 	// DockerHost is the hostname Docker provides for reaching the host machine
 	// from inside a container. Enabled by --add-host=host.docker.internal:host-gateway.
@@ -31,11 +33,15 @@ type ProjectInfo struct {
 
 // DaemonInfo holds the runtime details of a running daemon instance.
 type DaemonInfo struct {
-	Addr       string        `json:"addr"`
-	ChromeAddr string        `json:"chrome_addr,omitempty"`
-	ProxyAddr  string        `json:"proxy_addr,omitempty"`
-	Token      string        `json:"token,omitempty"`
-	PID        int           `json:"pid,omitempty"`
+	Addr       string `json:"addr"`
+	ChromeAddr string `json:"chrome_addr,omitempty"`
+	ProxyAddr  string `json:"proxy_addr,omitempty"`
+	// GuiAddr is the browser dashboard listen address. Unlike the other
+	// listeners it stays loopback by default: its cookie-based auth must
+	// not travel a plain-HTTP network link.
+	GuiAddr string `json:"gui_addr,omitempty"`
+	Token   string `json:"token,omitempty"`
+	PID     int    `json:"pid,omitempty"`
 	// Version carries the daemon binary's build version so clients can warn
 	// about skew between the running daemon and the CLI binary.
 	// omitempty preserves backward-compatibility with daemon.json files

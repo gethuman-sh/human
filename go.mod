@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/google/go-containerregistry v0.21.6
+	github.com/gorilla/websocket v1.5.3
 	github.com/hanwen/go-fuse/v2 v2.10.1
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/afero v1.15.0
@@ -304,7 +305,6 @@ require (
 	github.com/goreleaser/goreleaser/v2 v2.14.1 // indirect
 	github.com/goreleaser/nfpm/v2 v2.45.0 // indirect
 	github.com/goreleaser/quill v0.0.0-20251224035235-ab943733386f // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.5.0 // indirect
 	github.com/gostaticanalysis/forcetypeassert v0.2.0 // indirect
