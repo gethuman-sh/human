@@ -127,21 +127,38 @@ func InstallFeatures(ctx context.Context, docker DockerClient, puller FeaturePul
 		return nil
 	}
 
-	// Sort feature refs for deterministic installation order.
-	refs := sortedFeatureRefs(features)
+	// Pull every feature's metadata up front: the install order depends on each
+	// feature's installsAfter edges, which are only known after Pull. Caching the
+	// tarball and meta here also avoids a second Pull during installation.
+	pulled := make(map[string]*pulledFeature, len(features))
+	metas := make(map[string]*FeatureMeta, len(features))
+	for ref := range features {
+		tarData, meta, err := puller.Pull(ctx, ref)
+		if err != nil {
+			return errors.WrapWithDetails(err, "pulling feature", "ref", ref)
+		}
+		pulled[ref] = &pulledFeature{tarData: tarData, meta: meta}
+		metas[ref] = meta
+	}
+
+	// Order features so each is installed only after the features it lists in
+	// installsAfter (when those features are present in the set).
+	refs, err := orderFeatures(metas)
+	if err != nil {
+		return err
+	}
 
 	for _, ref := range refs {
 		opts, _ := features[ref].(map[string]interface{})
 		_, _ = fmt.Fprintf(out, "  Installing feature: %s\n", ref) // #nosec G705 -- CLI output
 
-		tarData, meta, err := puller.Pull(ctx, ref)
-		if err != nil {
-			return errors.WrapWithDetails(err, "pulling feature", "ref", ref)
+		pf := pulled[ref]
+		if pf == nil {
+			return errors.WithDetails("ordered feature missing pulled data", "ref", ref)
 		}
+		env := featureEnv(opts, pf.meta, remoteUser)
 
-		env := featureEnv(opts, meta, remoteUser)
-
-		if err := copyAndRunFeature(ctx, docker, containerID, tarData, env, logger); err != nil {
+		if err := copyAndRunFeature(ctx, docker, containerID, pf.tarData, env, logger); err != nil {
 			return errors.WrapWithDetails(err, "installing feature", "ref", ref)
 		}
 
@@ -149,6 +166,13 @@ func InstallFeatures(ctx context.Context, docker DockerClient, puller FeaturePul
 	}
 
 	return nil
+}
+
+// pulledFeature holds a feature's downloaded tarball and parsed metadata so the
+// install loop can run without re-pulling after ordering.
+type pulledFeature struct {
+	tarData []byte
+	meta    *FeatureMeta
 }
 
 // copyAndRunFeature copies the entire feature tarball into the container using
@@ -221,13 +245,129 @@ func featureEnv(opts map[string]interface{}, meta *FeatureMeta, remoteUser strin
 	return env
 }
 
-// sortedFeatureRefs returns feature references in deterministic order
-// (lexicographic by ref string).
-func sortedFeatureRefs(features map[string]interface{}) []string {
-	refs := make([]string, 0, len(features))
-	for ref := range features {
+// normalizeRef reduces a feature reference to its registry/repository part,
+// dropping any tag or digest. installsAfter entries are conventionally untagged
+// (ghcr.io/devcontainers/features/node) while config refs are tagged
+// (ghcr.io/devcontainers/features/node:1); edge matching must compare on the
+// repository part so the two resolve to the same node.
+func normalizeRef(ref string) string {
+	parsed, err := name.ParseReference(ref)
+	if err != nil {
+		// Fall back to a tag/digest strip so an unparseable ref still matches
+		// deterministically rather than silently never matching.
+		ref = strings.TrimSuffix(ref, "/")
+		if at := strings.LastIndex(ref, "@"); at != -1 {
+			ref = ref[:at]
+		}
+		if slash := strings.LastIndex(ref, "/"); slash != -1 {
+			if colon := strings.LastIndex(ref[slash:], ":"); colon != -1 {
+				ref = ref[:slash+colon]
+			}
+		}
+		return ref
+	}
+	return parsed.Context().Name()
+}
+
+// orderFeatures returns feature references in installation order, respecting
+// each feature's installsAfter edges (restricted to features present in the
+// set) and using alphabetical order as a deterministic tie-break. Edges to
+// features that are absent from the set are ignored. A cycle in the edges is
+// reported as an error rather than looping.
+func orderFeatures(metas map[string]*FeatureMeta) ([]string, error) {
+	refs := make([]string, 0, len(metas))
+	for ref := range metas {
 		refs = append(refs, ref)
 	}
 	sort.Strings(refs)
-	return refs
+
+	dependents, indegree := buildFeatureGraph(refs, metas)
+
+	order := kahnSort(refs, dependents, indegree)
+
+	if len(order) != len(refs) {
+		remaining := make([]string, 0, len(refs)-len(order))
+		for _, ref := range refs {
+			if indegree[ref] > 0 {
+				remaining = append(remaining, ref)
+			}
+		}
+		sort.Strings(remaining)
+		return nil, errors.WithDetails("feature installsAfter cycle", "features", remaining)
+	}
+
+	return order, nil
+}
+
+// buildFeatureGraph constructs the installsAfter dependency graph over the
+// present features. An edge dep -> ref means dep must install before ref.
+// Edges to absent features and self-edges are ignored; duplicate edges are
+// collapsed so the returned indegree stays accurate.
+func buildFeatureGraph(refs []string, metas map[string]*FeatureMeta) (dependents map[string][]string, indegree map[string]int) {
+	// Map each present feature's normalized repository to its config ref so
+	// untagged installsAfter entries can resolve to tagged config refs.
+	byRepo := make(map[string]string, len(refs))
+	for _, ref := range refs {
+		byRepo[normalizeRef(ref)] = ref
+	}
+
+	dependents = make(map[string][]string, len(refs))
+	indegree = make(map[string]int, len(refs))
+	for _, ref := range refs {
+		indegree[ref] = 0
+	}
+	for _, ref := range refs {
+		meta := metas[ref]
+		if meta == nil {
+			continue
+		}
+		seen := make(map[string]struct{})
+		for _, after := range meta.InstallsAfter {
+			dep, present := byRepo[normalizeRef(after)]
+			if !present || dep == ref {
+				continue
+			}
+			if _, dup := seen[dep]; dup {
+				continue
+			}
+			seen[dep] = struct{}{}
+			dependents[dep] = append(dependents[dep], ref)
+			indegree[ref]++
+		}
+	}
+	return dependents, indegree
+}
+
+// kahnSort topologically sorts refs via Kahn's algorithm, picking the
+// alphabetically smallest install-ready node at each step for determinism.
+// A returned order shorter than refs signals a cycle (nodes with residual
+// indegree were never released).
+func kahnSort(refs []string, dependents map[string][]string, indegree map[string]int) []string {
+	ready := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if indegree[ref] == 0 {
+			ready = append(ready, ref)
+		}
+	}
+	sort.Strings(ready)
+
+	order := make([]string, 0, len(refs))
+	for len(ready) > 0 {
+		ref := ready[0]
+		ready = ready[1:]
+		order = append(order, ref)
+
+		newlyReady := make([]string, 0)
+		for _, dep := range dependents[ref] {
+			indegree[dep]--
+			if indegree[dep] == 0 {
+				newlyReady = append(newlyReady, dep)
+			}
+		}
+		if len(newlyReady) > 0 {
+			ready = append(ready, newlyReady...)
+			sort.Strings(ready)
+		}
+	}
+	return order
 }

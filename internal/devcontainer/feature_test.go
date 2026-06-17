@@ -154,6 +154,46 @@ func TestInstallFeatures_ExecCalls(t *testing.T) {
 	}
 }
 
+func TestInstallFeatures_InstallsInDependencyOrder(t *testing.T) {
+	mock := &mockDockerClient{}
+
+	claude := "ghcr.io/anthropics/devcontainer-features/claude-code:1"
+	node := "ghcr.io/devcontainers/features/node:1"
+
+	// Each feature carries a distinct option default so its run exec call can be
+	// attributed back to the feature via its env var.
+	puller := &mockFeaturePuller{
+		tarData: buildFeatureTar(t, "shared", "1.0.0"),
+		metaByRef: map[string]*FeatureMeta{
+			claude: {ID: "claude-code", InstallsAfter: []string{"ghcr.io/devcontainers/features/node"},
+				Options: map[string]FeatureOption{"marker": {Default: "claude"}}},
+			node: {ID: "node",
+				Options: map[string]FeatureOption{"marker": {Default: "node"}}},
+		},
+	}
+
+	features := map[string]interface{}{claude: map[string]interface{}{}, node: map[string]interface{}{}}
+
+	if err := InstallFeatures(context.Background(), mock, puller, "container-123",
+		features, "vscode", testLogger(), &strings.Builder{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Each feature produces mkdir, run, cleanup; the run call (index 1 of each
+	// triple) carries the MARKER env that identifies the feature.
+	var installOrder []string
+	for i, call := range mock.execCalls {
+		if i%3 != 1 {
+			continue
+		}
+		installOrder = append(installOrder, toEnvMap(call.Opts.Env)["MARKER"])
+	}
+
+	if indexOf(installOrder, "node") > indexOf(installOrder, "claude") {
+		t.Errorf("node must install before claude-code; install order = %v", installOrder)
+	}
+}
+
 func TestInstallFeatures_Empty(t *testing.T) {
 	err := InstallFeatures(context.Background(), &mockDockerClient{}, &mockFeaturePuller{},
 		"cid", nil, "user", testLogger(), &strings.Builder{})
@@ -162,30 +202,162 @@ func TestInstallFeatures_Empty(t *testing.T) {
 	}
 }
 
-func TestSortedFeatureRefs(t *testing.T) {
-	features := map[string]interface{}{
-		"ghcr.io/z/feature:1": nil,
-		"ghcr.io/a/feature:1": nil,
-		"ghcr.io/m/feature:1": nil,
+func TestOrderFeatures_Independent(t *testing.T) {
+	metas := map[string]*FeatureMeta{
+		"ghcr.io/z/feature:1": {},
+		"ghcr.io/a/feature:1": {},
+		"ghcr.io/m/feature:1": {},
 	}
-	refs := sortedFeatureRefs(features)
-	if refs[0] != "ghcr.io/a/feature:1" || refs[2] != "ghcr.io/z/feature:1" {
-		t.Errorf("not sorted: %v", refs)
+	order, err := orderFeatures(metas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ghcr.io/a/feature:1", "ghcr.io/m/feature:1", "ghcr.io/z/feature:1"}
+	if !equalStrings(order, want) {
+		t.Errorf("order = %v, want alphabetical %v", order, want)
 	}
 }
 
-// mockFeaturePuller returns pre-configured feature content.
+func TestOrderFeatures_ReorderByDependency(t *testing.T) {
+	// claude-code sorts alphabetically before node but must install after it.
+	claude := "ghcr.io/anthropics/devcontainer-features/claude-code:1"
+	node := "ghcr.io/devcontainers/features/node:1"
+	metas := map[string]*FeatureMeta{
+		claude: {InstallsAfter: []string{"ghcr.io/devcontainers/features/node"}},
+		node:   {},
+	}
+	order, err := orderFeatures(metas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(order, node) > indexOf(order, claude) {
+		t.Errorf("expected %s before %s, got %v", node, claude, order)
+	}
+}
+
+func TestOrderFeatures_TagMismatchMatching(t *testing.T) {
+	// Dependency declared untagged (...node) but present tagged (...node:1).
+	dependent := "ghcr.io/x/dependent:2"
+	node := "ghcr.io/devcontainers/features/node:1"
+	metas := map[string]*FeatureMeta{
+		dependent: {InstallsAfter: []string{"ghcr.io/devcontainers/features/node"}},
+		node:      {},
+	}
+	order, err := orderFeatures(metas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(order, node) > indexOf(order, dependent) {
+		t.Errorf("untagged edge should resolve to tagged ref; order = %v", order)
+	}
+}
+
+func TestOrderFeatures_AbsentDependencyIgnored(t *testing.T) {
+	a := "ghcr.io/a/feature:1"
+	b := "ghcr.io/b/feature:1"
+	metas := map[string]*FeatureMeta{
+		a: {InstallsAfter: []string{"ghcr.io/not/present"}},
+		b: {},
+	}
+	order, err := orderFeatures(metas)
+	if err != nil {
+		t.Fatalf("edge to absent feature must be ignored, got error: %v", err)
+	}
+	want := []string{a, b}
+	if !equalStrings(order, want) {
+		t.Errorf("order = %v, want deterministic alphabetical %v", order, want)
+	}
+}
+
+func TestOrderFeatures_Cycle(t *testing.T) {
+	a := "ghcr.io/a/feature:1"
+	b := "ghcr.io/b/feature:1"
+	metas := map[string]*FeatureMeta{
+		a: {InstallsAfter: []string{"ghcr.io/b/feature"}},
+		b: {InstallsAfter: []string{"ghcr.io/a/feature"}},
+	}
+	_, err := orderFeatures(metas)
+	if err == nil {
+		t.Fatal("expected cycle error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Errorf("expected cycle error, got %v", err)
+	}
+}
+
+func TestNormalizeRef(t *testing.T) {
+	cases := map[string]string{
+		"ghcr.io/devcontainers/features/node:1": "ghcr.io/devcontainers/features/node",
+		"ghcr.io/devcontainers/features/node":   "ghcr.io/devcontainers/features/node",
+	}
+	for in, want := range cases {
+		if got := normalizeRef(in); got != want {
+			t.Errorf("normalizeRef(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestNormalizeRef_UnparseableFallback(t *testing.T) {
+	// An uppercase repository is invalid for name.ParseReference, exercising the
+	// string-strip fallback. The tag must still be dropped so edge matching works.
+	cases := map[string]string{
+		"REG.io/Org/Repo:7":          "REG.io/Org/Repo",
+		"REG.io/Org/Repo@sha256:abc": "REG.io/Org/Repo",
+		"REG.io/Org/Repo/":           "REG.io/Org/Repo",
+	}
+	for in, want := range cases {
+		if got := normalizeRef(in); got != want {
+			t.Errorf("normalizeRef(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// mockFeaturePuller returns pre-configured feature content. When metaByRef is
+// set, it serves per-ref metadata so multi-feature ordering can be exercised;
+// otherwise it falls back to the single fixed tarData/meta.
 type mockFeaturePuller struct {
-	tarData []byte
-	meta    *FeatureMeta
-	err     error
+	tarData   []byte
+	meta      *FeatureMeta
+	metaByRef map[string]*FeatureMeta
+	tarByRef  map[string][]byte
+	err       error
+	pulled    []string
 }
 
-func (m *mockFeaturePuller) Pull(_ context.Context, _ string) ([]byte, *FeatureMeta, error) {
+func (m *mockFeaturePuller) Pull(_ context.Context, ref string) ([]byte, *FeatureMeta, error) {
 	if m.err != nil {
 		return nil, nil, m.err
 	}
+	m.pulled = append(m.pulled, ref)
+	if m.metaByRef != nil {
+		tar := m.tarData
+		if t, ok := m.tarByRef[ref]; ok {
+			tar = t
+		}
+		return tar, m.metaByRef[ref], nil
+	}
 	return m.tarData, m.meta, nil
+}
+
+func indexOf(s []string, v string) int {
+	for i, e := range s {
+		if e == v {
+			return i
+		}
+	}
+	return -1
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func toEnvMap(env []string) map[string]string {
