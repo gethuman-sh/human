@@ -1,5 +1,12 @@
 version: 2
 
+# Never add a desktop (Wails) build entry here, e.g. `main: ./desktop` — that
+# is a plain `go build` which links but fails at startup (Wails requires the
+# `desktop,production` build tags that only `wails build` injects). When the
+# desktop artifact ships, build it with scripts/build-desktop.sh (wraps
+# `wails build`) and attach it via release.extra_files. See
+# docs/desktop-app.md.
+
 builds:
   - main: .
     binary: human

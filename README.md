@@ -380,6 +380,25 @@ See [documentation.md](docs/documentation.md) for full configuration details.
 make build
 ```
 
+### Desktop app (macOS)
+
+The desktop GUI must be built via the Wails CLI, **never** plain `go build ./desktop/` — Wails v2 requires build tags that only `wails build` (or `wails dev`) injects; a plain `go build` links but panics at startup.
+
+Prerequisites:
+
+```bash
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+xcode-select --install
+```
+
+Then build:
+
+```bash
+make desktop
+```
+
+`wails build` automatically links the `UniformTypeIdentifiers` framework required on macOS arm64. See [docs/desktop-app.md](docs/desktop-app.md) for details, the regression-guard requirements, and why `go build` is not a valid smoke test.
+
 ## Star History
 
 <a href="https://www.star-history.com/#gethuman-sh/human&Date">
