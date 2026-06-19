@@ -9,6 +9,23 @@ import (
 	"testing"
 )
 
+// isInstallRun reports whether an exec call is a feature's install.sh run (as
+// opposed to the staging mkdir, cleanup, or the base-env printenv probe).
+func isInstallRun(c mockExecCall) bool {
+	return len(c.Cmd) > 0 && strings.Contains(c.Cmd[len(c.Cmd)-1], "./install.sh")
+}
+
+func findInstallRun(t *testing.T, calls []mockExecCall) mockExecCall {
+	t.Helper()
+	for _, c := range calls {
+		if isInstallRun(c) {
+			return c
+		}
+	}
+	t.Fatal("no install.sh run exec call found")
+	return mockExecCall{}
+}
+
 func TestFeatureEnv_BasicOptions(t *testing.T) {
 	opts := map[string]interface{}{
 		"version": "22",
@@ -129,19 +146,14 @@ func TestInstallFeatures_ExecCalls(t *testing.T) {
 		"ghcr.io/devcontainers/features/node:1": map[string]interface{}{"version": "22"},
 	}
 
-	err := InstallFeatures(context.Background(), mock, puller, "container-123",
+	_, err := InstallFeatures(context.Background(), mock, puller, "container-123",
 		features, "vscode", testLogger(), &strings.Builder{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Should have 3 exec calls: mkdir, run install.sh, cleanup.
-	if len(mock.execCalls) < 2 {
-		t.Fatalf("expected at least 2 exec calls, got %d", len(mock.execCalls))
-	}
-
-	// The run call (second) should have env vars.
-	runCall := mock.execCalls[1]
+	// The install.sh run call carries the feature env vars.
+	runCall := findInstallRun(t, mock.execCalls)
 	if runCall.Opts.User != "root" {
 		t.Errorf("run call user = %q, want root", runCall.Opts.User)
 	}
@@ -174,19 +186,18 @@ func TestInstallFeatures_InstallsInDependencyOrder(t *testing.T) {
 
 	features := map[string]interface{}{claude: map[string]interface{}{}, node: map[string]interface{}{}}
 
-	if err := InstallFeatures(context.Background(), mock, puller, "container-123",
+	if _, err := InstallFeatures(context.Background(), mock, puller, "container-123",
 		features, "vscode", testLogger(), &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Each feature produces mkdir, run, cleanup; the run call (index 1 of each
-	// triple) carries the MARKER env that identifies the feature.
+	// Each feature's install.sh run carries the MARKER env identifying it; the
+	// order of those runs is the install order.
 	var installOrder []string
-	for i, call := range mock.execCalls {
-		if i%3 != 1 {
-			continue
+	for _, call := range mock.execCalls {
+		if isInstallRun(call) {
+			installOrder = append(installOrder, toEnvMap(call.Opts.Env)["MARKER"])
 		}
-		installOrder = append(installOrder, toEnvMap(call.Opts.Env)["MARKER"])
 	}
 
 	if indexOf(installOrder, "node") > indexOf(installOrder, "claude") {
@@ -195,10 +206,93 @@ func TestInstallFeatures_InstallsInDependencyOrder(t *testing.T) {
 }
 
 func TestInstallFeatures_Empty(t *testing.T) {
-	err := InstallFeatures(context.Background(), &mockDockerClient{}, &mockFeaturePuller{},
+	_, err := InstallFeatures(context.Background(), &mockDockerClient{}, &mockFeaturePuller{},
 		"cid", nil, "user", testLogger(), &strings.Builder{})
 	if err != nil {
 		t.Errorf("expected nil error for empty features: %v", err)
+	}
+}
+
+// TestInstallFeatures_ContainerEnvPropagates is the regression test for the bug
+// where a feature's containerEnv (e.g. the node feature putting node/npm on PATH)
+// never reached the features installed after it, so claude-code could not find
+// node. It asserts the env is layered onto later installs and returned for the
+// image bake, and that a feature does not yet see its own containerEnv.
+func TestInstallFeatures_ContainerEnvPropagates(t *testing.T) {
+	mock := &mockDockerClient{}
+
+	first := "ghcr.io/test/first:1"
+	second := "ghcr.io/test/second:1"
+	puller := &mockFeaturePuller{
+		tarData: buildFeatureTar(t, "shared", "1.0.0"),
+		metaByRef: map[string]*FeatureMeta{
+			// first publishes PATH and a marker var; second depends on first.
+			first: {ID: "first", ContainerEnv: map[string]string{
+				"PATH":   "/opt/first/bin:${PATH}",
+				"FIRSTV": "yes",
+			}, Options: map[string]FeatureOption{"marker": {Default: "first"}}},
+			second: {ID: "second", InstallsAfter: []string{"ghcr.io/test/first"},
+				Options: map[string]FeatureOption{"marker": {Default: "second"}}},
+		},
+	}
+	features := map[string]interface{}{first: map[string]interface{}{}, second: map[string]interface{}{}}
+
+	baked, err := InstallFeatures(context.Background(), mock, puller, "cid",
+		features, "vscode", testLogger(), &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Returned env (baked into the image) carries first's containerEnv.
+	if !strings.Contains(baked["PATH"], "/opt/first/bin") {
+		t.Errorf("baked PATH = %q, want it to contain /opt/first/bin", baked["PATH"])
+	}
+	if baked["FIRSTV"] != "yes" {
+		t.Errorf("baked FIRSTV = %q, want yes", baked["FIRSTV"])
+	}
+
+	// Map each install.sh run to its feature via MARKER, then check env exposure.
+	envByFeature := map[string]map[string]string{}
+	for _, c := range mock.execCalls {
+		if isInstallRun(c) {
+			env := toEnvMap(c.Opts.Env)
+			envByFeature[env["MARKER"]] = env
+		}
+	}
+
+	// second runs after first and must see first's PATH addition + FIRSTV.
+	if got := envByFeature["second"]["PATH"]; !strings.Contains(got, "/opt/first/bin") {
+		t.Errorf("second's install PATH = %q, want it to contain /opt/first/bin", got)
+	}
+	if got := envByFeature["second"]["FIRSTV"]; got != "yes" {
+		t.Errorf("second's install FIRSTV = %q, want yes", got)
+	}
+	// first must NOT yet see its own containerEnv (applied only after it installs).
+	if got := envByFeature["first"]["FIRSTV"]; got != "" {
+		t.Errorf("first should not see its own FIRSTV during install, got %q", got)
+	}
+}
+
+func TestExpandEnvRefs(t *testing.T) {
+	lookup := map[string]string{"PATH": "/usr/bin", "HOME": "/root"}
+	cases := []struct{ in, want string }{
+		{"/opt/bin:${PATH}", "/opt/bin:/usr/bin"},
+		{"$HOME/go", "/root/go"},
+		{"literal", "literal"},
+		{"${MISSING}/x", "/x"},
+	}
+	for _, c := range cases {
+		if got := expandEnvRefs(c.in, lookup); got != c.want {
+			t.Errorf("expandEnvRefs(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestMapToEnvSlice_Sorted(t *testing.T) {
+	got := mapToEnvSlice(map[string]string{"B": "2", "A": "1", "C": "3"})
+	want := []string{"A=1", "B=2", "C=3"}
+	if !equalStrings(got, want) {
+		t.Errorf("mapToEnvSlice = %v, want sorted %v", got, want)
 	}
 }
 

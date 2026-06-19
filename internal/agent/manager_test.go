@@ -65,7 +65,7 @@ func (m *mockDockerClient) ContainerList(_ context.Context, _ devcontainer.Conta
 func (m *mockDockerClient) ContainerLogs(_ context.Context, _ string, _ devcontainer.LogsOptions) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
-func (m *mockDockerClient) ContainerCommit(_ context.Context, _ string, _ string) (string, error) {
+func (m *mockDockerClient) ContainerCommit(_ context.Context, _ string, _ string, _ map[string]string) (string, error) {
 	return "sha256:committed", nil
 }
 func (m *mockDockerClient) CopyToContainer(_ context.Context, _, _ string, _ io.Reader) error {

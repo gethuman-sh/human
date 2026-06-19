@@ -11,10 +11,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/docker/docker/client"
+
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
+	"github.com/gethuman-sh/human/internal/dockerhost"
 )
+
+// isDockerUnreachable reports whether err is (or wraps) a Docker daemon
+// connection failure. errors.As traverses the wrap chain, so SDK connection
+// errors are detected even after tozd/go/errors wrapping.
+func isDockerUnreachable(err error) bool {
+	return client.IsErrConnectionFailed(err)
+}
 
 // validNameRe matches agent names: alphanumeric, hyphens, underscores.
 var validNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
@@ -66,6 +76,12 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 
 	dcMeta, err := m.startDevcontainer(ctx, containerName, configDir, workspace, opts.Rebuild)
 	if err != nil {
+		// A failure here is most often an unreachable Docker engine. Surface an
+		// actionable error naming the active context and attempted endpoint
+		// instead of the opaque generic message.
+		if isDockerUnreachable(err) {
+			return Meta{}, dockerhost.UnreachableError(err, dockerhost.Resolve())
+		}
 		return Meta{}, errors.WrapWithDetails(err, "starting agent container", "name", opts.Name)
 	}
 

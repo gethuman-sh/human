@@ -9,11 +9,23 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+
+	"github.com/gethuman-sh/human/internal/dockerhost"
 )
 
 // NewEngineDockerClient creates a DockerClient backed by the Docker Engine API.
+//
+// When DOCKER_HOST is unset, it resolves the active docker CLI context's
+// endpoint (colima/OrbStack/Rancher/Docker-Desktop/Podman) so the TUI's
+// container discovery and `human usage` reach the engine out-of-the-box. The
+// resolution is shared with devcontainer.NewDockerClient via
+// internal/dockerhost so the two never diverge.
 func NewEngineDockerClient() (DockerClient, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	if host := dockerhost.Resolve().Host; host != "" {
+		opts = append(opts, client.WithHost(host))
+	}
+	cli, err := client.NewClientWithOpts(opts...)
 	if err != nil {
 		return nil, err
 	}

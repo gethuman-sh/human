@@ -3,6 +3,7 @@ package devcontainer
 import (
 	"context"
 	"io"
+	"sort"
 
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
@@ -11,11 +12,26 @@ import (
 	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+
+	"github.com/gethuman-sh/human/internal/dockerhost"
 )
 
 // NewDockerClient creates a DockerClient backed by the Docker Engine API.
+//
+// When DOCKER_HOST is unset, it resolves the active docker CLI context's
+// endpoint (colima/OrbStack/Rancher/Docker-Desktop/Podman) so human reaches the
+// engine out-of-the-box, mirroring what the docker CLI does. Explicit
+// DOCKER_HOST / DOCKER_CONTEXT always win. The resolution is shared with
+// claude.NewEngineDockerClient via internal/dockerhost so the two never diverge.
 func NewDockerClient() (DockerClient, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	// A non-empty host means the active context resolved to a concrete
+	// endpoint; layer it on top of FromEnv. Empty means "use env/platform
+	// default", so we leave FromEnv to do its job.
+	if host := dockerhost.Resolve().Host; host != "" {
+		opts = append(opts, client.WithHost(host))
+	}
+	cli, err := client.NewClientWithOpts(opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -185,9 +201,18 @@ func (e *engineClient) ContainerLogs(ctx context.Context, containerID string, op
 	})
 }
 
-func (e *engineClient) ContainerCommit(ctx context.Context, containerID string, ref string) (string, error) {
+func (e *engineClient) ContainerCommit(ctx context.Context, containerID string, ref string, env map[string]string) (string, error) {
+	// Bake feature-contributed env into the image as ENV directives. Sorted for
+	// a deterministic image (stable layer regardless of map iteration order).
+	changes := make([]string, 0, len(env))
+	for k, v := range env {
+		changes = append(changes, "ENV "+k+"="+v)
+	}
+	sort.Strings(changes)
+
 	resp, err := e.cli.ContainerCommit(ctx, containerID, container.CommitOptions{
 		Reference: ref,
+		Changes:   changes,
 	})
 	if err != nil {
 		return "", err

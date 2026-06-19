@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -119,12 +120,18 @@ func extractFeatureMeta(tarData []byte, ref string) (*FeatureMeta, error) {
 // InstallFeatures downloads and installs devcontainer features into a running
 // container using exec. Each feature's install.sh is copied in via base64
 // encoding, then executed with the appropriate option environment variables.
+// InstallFeatures installs each feature into the container and returns the
+// accumulated containerEnv contributed by the features. A feature's containerEnv
+// (e.g. the node feature putting node/npm on PATH) must reach both the features
+// installed after it and the committed image — otherwise a dependent feature
+// like claude-code can't find node and fails. The returned map is baked into the
+// image by the caller via ContainerCommit.
 func InstallFeatures(ctx context.Context, docker DockerClient, puller FeaturePuller,
 	containerID string, features map[string]interface{}, remoteUser string,
-	logger zerolog.Logger, out io.Writer) error {
+	logger zerolog.Logger, out io.Writer) (map[string]string, error) {
 
 	if len(features) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Pull every feature's metadata up front: the install order depends on each
@@ -135,7 +142,7 @@ func InstallFeatures(ctx context.Context, docker DockerClient, puller FeaturePul
 	for ref := range features {
 		tarData, meta, err := puller.Pull(ctx, ref)
 		if err != nil {
-			return errors.WrapWithDetails(err, "pulling feature", "ref", ref)
+			return nil, errors.WrapWithDetails(err, "pulling feature", "ref", ref)
 		}
 		pulled[ref] = &pulledFeature{tarData: tarData, meta: meta}
 		metas[ref] = meta
@@ -145,8 +152,19 @@ func InstallFeatures(ctx context.Context, docker DockerClient, puller FeaturePul
 	// installsAfter (when those features are present in the set).
 	refs, err := orderFeatures(metas)
 	if err != nil {
-		return err
+		return nil, err
 	}
+
+	// Seed the expansion lookup with the container's existing environment so that
+	// ${PATH}-style references in feature containerEnv resolve against the real
+	// base PATH. lookup also accumulates feature additions so PATH chains across
+	// features; featureAccum tracks only the feature-contributed keys, which are
+	// layered onto later installs and returned for baking into the image.
+	lookup, err := captureContainerEnv(ctx, docker, containerID, "root", logger)
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "reading container environment")
+	}
+	featureAccum := make(map[string]string)
 
 	for _, ref := range refs {
 		opts, _ := features[ref].(map[string]interface{})
@@ -154,18 +172,62 @@ func InstallFeatures(ctx context.Context, docker DockerClient, puller FeaturePul
 
 		pf := pulled[ref]
 		if pf == nil {
-			return errors.WithDetails("ordered feature missing pulled data", "ref", ref)
+			return nil, errors.WithDetails("ordered feature missing pulled data", "ref", ref)
 		}
-		env := featureEnv(opts, pf.meta, remoteUser)
+		// install.sh runs with the env contributed by features installed before
+		// it (concrete values — Docker exec does not shell-expand env entries).
+		env := append(featureEnv(opts, pf.meta, remoteUser), mapToEnvSlice(featureAccum)...)
 
 		if err := copyAndRunFeature(ctx, docker, containerID, pf.tarData, env, logger); err != nil {
-			return errors.WrapWithDetails(err, "installing feature", "ref", ref)
+			return nil, errors.WrapWithDetails(err, "installing feature", "ref", ref)
+		}
+
+		// Layer this feature's containerEnv (with ${VAR} expanded against what is
+		// known so far) so later features and the committed image inherit it.
+		for k, v := range pf.meta.ContainerEnv {
+			expanded := expandEnvRefs(v, lookup)
+			lookup[k] = expanded
+			featureAccum[k] = expanded
 		}
 
 		logger.Info().Str("feature", ref).Msg("feature installed")
 	}
 
-	return nil
+	return featureAccum, nil
+}
+
+// captureContainerEnv reads the container's current environment as a map. It
+// seeds containerEnv expansion so a feature's "${PATH}" resolves against the
+// real base PATH instead of an empty string.
+func captureContainerEnv(ctx context.Context, docker DockerClient, containerID, user string, logger zerolog.Logger) (map[string]string, error) {
+	out, err := execCapture(ctx, docker, containerID, user, []string{"printenv"}, nil, logger)
+	if err != nil {
+		return nil, err
+	}
+	env := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		if i := strings.IndexByte(line, '='); i > 0 {
+			env[line[:i]] = strings.TrimRight(line[i+1:], "\r")
+		}
+	}
+	return env, nil
+}
+
+// expandEnvRefs expands $VAR and ${VAR} references in val against lookup,
+// resolving unknown variables to empty (matching docker/shell behavior).
+func expandEnvRefs(val string, lookup map[string]string) string {
+	return os.Expand(val, func(k string) string { return lookup[k] })
+}
+
+// mapToEnvSlice converts an env map to a sorted KEY=VALUE slice for a stable,
+// deterministic exec environment.
+func mapToEnvSlice(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k, v := range m {
+		out = append(out, k+"="+v)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // pulledFeature holds a feature's downloaded tarball and parsed metadata so the

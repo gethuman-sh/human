@@ -23,7 +23,10 @@ type DockerClient interface {
 	ContainerInspect(ctx context.Context, containerID string) (ContainerInspectResponse, error)
 	ContainerList(ctx context.Context, opts ContainerListOptions) ([]ContainerSummary, error)
 	ContainerLogs(ctx context.Context, containerID string, opts LogsOptions) (io.ReadCloser, error)
-	ContainerCommit(ctx context.Context, containerID string, ref string) (string, error)
+	// ContainerCommit commits the container as an image. env entries are baked
+	// into the image as ENV so feature-contributed variables (e.g. the node and
+	// go features' PATH additions) persist into containers created from the image.
+	ContainerCommit(ctx context.Context, containerID string, ref string, env map[string]string) (string, error)
 
 	// File transfer
 	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader) error
