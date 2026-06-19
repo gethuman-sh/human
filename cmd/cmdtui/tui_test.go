@@ -1501,3 +1501,16 @@ func TestBuildPaneCmd(t *testing.T) {
 	// Both modes still hold the pane open on failure to surface the error.
 	assert.Contains(t, dispatched, "Press enter to close")
 }
+
+func TestShellJoin_quotesSpacedPrompt(t *testing.T) {
+	// A slash-command prompt contains a space; without quoting the shell would
+	// split it and `agent start` would see two positional args.
+	parts := []string{"/usr/bin/human", "agent", "start", "agent-2", "--prompt", "/human-execute HUM-126"}
+	got := shellJoin(parts)
+	assert.Contains(t, got, "'/human-execute HUM-126'", "spaced prompt must stay one quoted token")
+	assert.Equal(t, "'/usr/bin/human' 'agent' 'start' 'agent-2' '--prompt' '/human-execute HUM-126'", got)
+}
+
+func TestShellQuote_escapesEmbeddedQuote(t *testing.T) {
+	assert.Equal(t, `'it'\''s'`, shellQuote("it's"))
+}

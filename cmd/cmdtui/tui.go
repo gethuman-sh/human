@@ -35,14 +35,14 @@ const defaultWidth = 80
 
 // trackerIssues groups issues from one tracker instance and project.
 type trackerIssues struct {
-	TrackerName    string
-	TrackerKind    string
-	TrackerRole    string // "pm", "engineering", or empty
-	Project        string
-	Issues         []tracker.Issue
-	ReadyForReview map[string]bool // issue keys currently flagged ready for review (see CLAUDE.md Review handoff)
+	TrackerName       string
+	TrackerKind       string
+	TrackerRole       string // "pm", "engineering", or empty
+	Project           string
+	Issues            []tracker.Issue
+	ReadyForReview    map[string]bool   // issue keys currently flagged ready for review (see CLAUDE.md Review handoff)
 	ReadyForReviewPRs map[string]string // issue key -> pull-request URL from the handoff's pr: line, when present
-	Err            error
+	Err               error
 }
 
 // flatIssue is a single issue with its tracker context, used for cursor indexing.
@@ -564,7 +564,11 @@ func spawnAgentInTmux(name, projectDir, tmuxTarget string, stopOnExit bool, extr
 		parts = append(parts, "--workspace", projectDir)
 		paneDir = projectDir
 	}
-	cmd := buildPaneCmd(strings.Join(parts, " "), humanExe, name, stopOnExit)
+	// The pane command is interpreted by a shell, so every token must be quoted.
+	// The dispatch prompt (e.g. "/human-execute HUM-42") contains a space; left
+	// unquoted the shell splits it and `agent start` sees an extra positional
+	// argument, failing with "accepts 1 arg(s), received 2".
+	cmd := buildPaneCmd(shellJoin(parts), shellQuote(humanExe), name, stopOnExit)
 	tmuxArgs := []string{"split-window", "-h", "-c", paneDir}
 	if tmuxTarget != "" {
 		tmuxArgs = append(tmuxArgs, "-t", tmuxTarget)
@@ -595,6 +599,23 @@ func buildPaneCmd(agentCmd, humanExe, name string, stopOnExit bool) string {
 		return fmt.Sprintf("%s; EC=$?; %s agent stop --async %s 2>/dev/null; %s", agentCmd, humanExe, name, holdOnError)
 	}
 	return fmt.Sprintf("%s; EC=$?; %s", agentCmd, holdOnError)
+}
+
+// shellQuote wraps a token in single quotes so a POSIX shell treats it as one
+// literal argument, preserving spaces and metacharacters. Embedded single
+// quotes are closed, escaped, and reopened ('\'').
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellJoin shell-quotes each token and joins them with spaces into a single
+// command line safe to hand to a shell.
+func shellJoin(parts []string) string {
+	quoted := make([]string, len(parts))
+	for i, p := range parts {
+		quoted[i] = shellQuote(p)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // --- open in browser ---
