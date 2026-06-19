@@ -3,6 +3,7 @@ package devcontainer
 import (
 	"context"
 	"io"
+	"sort"
 
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
@@ -200,9 +201,18 @@ func (e *engineClient) ContainerLogs(ctx context.Context, containerID string, op
 	})
 }
 
-func (e *engineClient) ContainerCommit(ctx context.Context, containerID string, ref string) (string, error) {
+func (e *engineClient) ContainerCommit(ctx context.Context, containerID string, ref string, env map[string]string) (string, error) {
+	// Bake feature-contributed env into the image as ENV directives. Sorted for
+	// a deterministic image (stable layer regardless of map iteration order).
+	changes := make([]string, 0, len(env))
+	for k, v := range env {
+		changes = append(changes, "ENV "+k+"="+v)
+	}
+	sort.Strings(changes)
+
 	resp, err := e.cli.ContainerCommit(ctx, containerID, container.CommitOptions{
 		Reference: ref,
+		Changes:   changes,
 	})
 	if err != nil {
 		return "", err

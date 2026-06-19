@@ -38,6 +38,7 @@ type mockDockerClient struct {
 
 	commitCalls []string
 	commitID    string
+	commitEnv   map[string]string
 }
 
 type mockExecCall struct {
@@ -118,9 +119,10 @@ func (m *mockDockerClient) ContainerLogs(_ context.Context, _ string, _ LogsOpti
 	return io.NopCloser(strings.NewReader("log output")), nil
 }
 
-func (m *mockDockerClient) ContainerCommit(_ context.Context, id string, ref string) (string, error) {
+func (m *mockDockerClient) ContainerCommit(_ context.Context, id string, ref string, env map[string]string) (string, error) {
 	m.mu.Lock()
 	m.commitCalls = append(m.commitCalls, id+":"+ref)
+	m.commitEnv = env
 	m.mu.Unlock()
 	if m.commitID != "" {
 		return m.commitID, nil

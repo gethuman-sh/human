@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog"
@@ -87,6 +88,16 @@ func runParallelHooks(ctx context.Context, docker DockerClient, containerID, use
 
 // execInContainer runs a command inside a container and waits for completion.
 func execInContainer(ctx context.Context, docker DockerClient, containerID, user string, cmd, env []string, logger zerolog.Logger) error {
+	_, err := execCapture(ctx, docker, containerID, user, cmd, env, logger)
+	return err
+}
+
+// execCapture runs cmd in the container and returns its stdout. It is the core
+// used by execInContainer; callers that need the command's output (e.g. reading
+// the container environment) use it directly. On a non-zero exit it returns an
+// error carrying the exit code plus both streams — feature install.sh scripts
+// frequently print their fatal reason to stdout, so stdout must be surfaced too.
+func execCapture(ctx context.Context, docker DockerClient, containerID, user string, cmd, env []string, logger zerolog.Logger) (string, error) {
 	logger.Info().Strs("cmd", cmd).Str("user", user).Msg("exec in container")
 
 	execID, err := docker.ExecCreate(ctx, containerID, cmd, ExecOptions{
@@ -96,12 +107,12 @@ func execInContainer(ctx context.Context, docker DockerClient, containerID, user
 		AttachStderr: true,
 	})
 	if err != nil {
-		return errors.WrapWithDetails(err, "creating exec", "cmd", fmt.Sprint(cmd))
+		return "", errors.WrapWithDetails(err, "creating exec", "cmd", fmt.Sprint(cmd))
 	}
 
 	attach, err := docker.ExecAttach(ctx, execID)
 	if err != nil {
-		return errors.WrapWithDetails(err, "attaching to exec")
+		return "", errors.WrapWithDetails(err, "attaching to exec")
 	}
 	defer func() { _ = attach.Close() }()
 
@@ -118,15 +129,30 @@ func execInContainer(ctx context.Context, docker DockerClient, containerID, user
 
 	inspect, err := docker.ExecInspect(ctx, execID)
 	if err != nil {
-		return errors.WrapWithDetails(err, "inspecting exec result")
+		return stdout.String(), errors.WrapWithDetails(err, "inspecting exec result")
 	}
 	if inspect.ExitCode != 0 {
-		return errors.WithDetails("exec failed",
+		return stdout.String(), errors.WithDetails("exec failed",
 			"exit_code", inspect.ExitCode,
 			"cmd", fmt.Sprint(cmd),
-			"stderr", stderr.String())
+			"stdout", lastLines(stdout.String(), 4000),
+			"stderr", lastLines(stderr.String(), 4000))
 	}
-	return nil
+	return stdout.String(), nil
+}
+
+// lastLines returns at most the final maxBytes of s, trimmed to a line boundary,
+// so a failing command's tail (where the actual error usually is) is preserved
+// without bloating the error with the entire build log.
+func lastLines(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	tail := s[len(s)-maxBytes:]
+	if i := strings.IndexByte(tail, '\n'); i >= 0 && i+1 < len(tail) {
+		tail = tail[i+1:]
+	}
+	return "...\n" + tail
 }
 
 // RunLifecycleHooks executes the devcontainer lifecycle hooks in order inside a container.

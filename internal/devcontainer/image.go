@@ -22,6 +22,9 @@ import (
 type ImageBuilder struct {
 	Docker DockerClient
 	Logger zerolog.Logger
+	// Puller fetches devcontainer features; defaults to an OCI registry puller
+	// when nil. Injectable so feature installation can be tested without a registry.
+	Puller FeaturePuller
 }
 
 // EnsureImage ensures a devcontainer image exists. If not cached (or rebuild
@@ -106,14 +109,20 @@ func (b *ImageBuilder) buildWithFeatures(ctx context.Context, cfg *DevcontainerC
 		return "", "", errors.WrapWithDetails(err, "starting temp container")
 	}
 
-	// Install features.
-	puller := &OCIFeaturePuller{}
-	if err := InstallFeatures(ctx, b.Docker, puller, tempID, cfg.Features, remoteUser, b.Logger, out); err != nil {
+	// Install features. The returned env is each feature's containerEnv (e.g. the
+	// node/go features' PATH additions), which must be baked into the committed
+	// image so containers created from it inherit it.
+	puller := b.Puller
+	if puller == nil {
+		puller = &OCIFeaturePuller{}
+	}
+	featureEnv, err := InstallFeatures(ctx, b.Docker, puller, tempID, cfg.Features, remoteUser, b.Logger, out)
+	if err != nil {
 		return "", "", errors.WrapWithDetails(err, "installing features")
 	}
 
-	// Commit the container as the cached image.
-	committedID, err := b.Docker.ContainerCommit(ctx, tempID, imageName)
+	// Commit the container as the cached image, baking in the feature env.
+	committedID, err := b.Docker.ContainerCommit(ctx, tempID, imageName, featureEnv)
 	if err != nil {
 		return "", "", errors.WrapWithDetails(err, "committing image with features")
 	}

@@ -8,6 +8,41 @@ import (
 	"testing"
 )
 
+// TestBuildWithFeatures_BakesContainerEnv asserts that feature containerEnv is
+// passed to ContainerCommit so it is baked into the committed image — the fix
+// that lets node/go end up on PATH for containers created from the image.
+func TestBuildWithFeatures_BakesContainerEnv(t *testing.T) {
+	mock := &mockDockerClient{createID: "temp-cid", commitID: "sha256:withenv"}
+	puller := &mockFeaturePuller{
+		tarData: buildFeatureTar(t, "node", "1.0.0"),
+		metaByRef: map[string]*FeatureMeta{
+			"ghcr.io/devcontainers/features/node:1": {ID: "node", ContainerEnv: map[string]string{
+				"PATH":    "/usr/local/share/nvm/current/bin:${PATH}",
+				"NVM_DIR": "/usr/local/share/nvm",
+			}},
+		},
+	}
+	builder := &ImageBuilder{Docker: mock, Logger: testLogger(), Puller: puller}
+
+	cfg := &DevcontainerConfig{
+		Image:    "mcr.microsoft.com/devcontainers/base:ubuntu",
+		Features: map[string]interface{}{"ghcr.io/devcontainers/features/node:1": map[string]interface{}{}},
+	}
+	id, _, err := builder.buildWithFeatures(context.Background(), cfg, "base:ref", "human-dc-test:hash", &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "sha256:withenv" {
+		t.Errorf("commit id = %q, want sha256:withenv", id)
+	}
+	if mock.commitEnv["NVM_DIR"] != "/usr/local/share/nvm" {
+		t.Errorf("commit env NVM_DIR = %q, want it baked in", mock.commitEnv["NVM_DIR"])
+	}
+	if !strings.Contains(mock.commitEnv["PATH"], "/usr/local/share/nvm/current/bin") {
+		t.Errorf("commit env PATH = %q, want nvm bin path baked in", mock.commitEnv["PATH"])
+	}
+}
+
 func TestEnsureImage_Cached(t *testing.T) {
 	mock := &mockDockerClient{
 		imageInspectResult: ImageInspectResponse{ID: "sha256:cached", Tags: []string{"human-dc-test:abc123abc123"}},
