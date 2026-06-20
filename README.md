@@ -81,6 +81,62 @@ devcontainer up --workspace-folder .
 | Dashboard | TUI with agent monitoring, token usage, tracker issues, pipeline state |
 | Search | Cross-tracker and Notion full-text index |
 
+## Module features
+
+Each module ships a short `FEATURE.md` describing what it does for you, in plain language.
+
+**Issue trackers & forges**
+
+- [Cross-Tracker Operations](internal/tracker/FEATURE.md) — one set of commands for every tracker
+- [Jira Tracker](internal/tracker/jira/FEATURE.md) — work with Jira issues
+- [Linear Tracker](internal/tracker/linear/FEATURE.md) — plan and track Linear tickets
+- [GitHub Tracker](internal/tracker/github/FEATURE.md) — work with GitHub issues
+- [GitLab](internal/tracker/gitlab/FEATURE.md) — read and manage GitLab issues
+- [Shortcut Tracker](internal/tracker/shortcut/FEATURE.md) — work with Shortcut stories
+- [Azure DevOps Tracker](internal/tracker/azuredevops/FEATURE.md) — track Azure DevOps work items
+- [ClickUp Tracker](internal/tracker/clickup/FEATURE.md) — manage ClickUp tasks
+- [Pull Requests](internal/forge/FEATURE.md) — open PRs on code-hosting platforms
+- [GitHub Forge](internal/forge/github/FEATURE.md) — open GitHub pull requests
+
+**Docs, design & analytics**
+
+- [Notion Knowledge Base](internal/knowledge/notion/FEATURE.md) — read Notion pages and databases
+- [Figma Designs](internal/knowledge/figma/FEATURE.md) — inspect files, components, and exports
+- [Amplitude Analytics](internal/knowledge/amplitude/FEATURE.md) — events, funnels, retention, users
+
+**Messaging & agents**
+
+- [Slack Messaging](internal/messaging/slack/FEATURE.md) — post and read channel messages
+- [Telegram Inbox](internal/messaging/telegram/FEATURE.md) — receive tasks over a Telegram bot
+- [Message Dispatch](internal/dispatch/FEATURE.md) — route chat messages to idle agents
+- [AI Developer Agents](internal/agent/FEATURE.md) — run Claude Code in isolated containers
+- [Claude Code Integration](internal/claude/FEATURE.md) — skills, agents, and live monitoring
+- [Activity Statistics](internal/stats/FEATURE.md) — rolling record of agent tool usage
+
+**Infrastructure & security**
+
+- [Background Daemon](internal/daemon/FEATURE.md) — holds credentials, answers commands fast
+- [Dev Containers](internal/devcontainer/FEATURE.md) — reproducible sandbox for agents
+- [HTTPS Proxy](internal/proxy/FEATURE.md) — filter outbound agent traffic by domain
+- [Chrome Bridge](internal/chrome/FEATURE.md) — drive host Chrome from a container
+- [OAuth Sign-In](internal/oauth/FEATURE.md) — handle localhost OAuth callbacks
+- [Browser Opener](internal/browser/FEATURE.md) — open links in your default browser
+- [Secret-Redacting Filesystem](internal/fusefs/FEATURE.md) — hide secrets from agents
+- [Secret Vault](internal/vault/FEATURE.md) — resolve `1pw://` references at startup
+
+**Core & utilities**
+
+- [Project Configuration](internal/config/FEATURE.md) — `.humanconfig.yaml` and credentials
+- [Cross-Tracker Search](internal/index/FEATURE.md) — local full-text index over all issues
+- [Git Repository](internal/gitrepo/FEATURE.md) — detect forge and project from git
+- [Tracker Connections](internal/apiclient/FEATURE.md) — shared networking for every backend
+- [Setup Wizard](internal/init/FEATURE.md) — guided `human init` onboarding
+- [Update Notifications](internal/update/FEATURE.md) — background new-release checks
+- [Per-Request Settings](internal/env/FEATURE.md) — isolated settings per daemon request
+- [Command Flags](internal/cliflags/FEATURE.md) — consistent CLI option parsing
+- [Platform Detection](internal/platform/FEATURE.md) — adapt behavior per operating system
+- [CLI Banner](internal/logo/FEATURE.md) — the gradient `human` startup banner
+
 ## Dashboard
 
 ```bash
