@@ -157,6 +157,9 @@ var bugFixerAgentContent []byte
 //go:embed embed/human-bug-verify-agent.md
 var bugVerifyAgentContent []byte
 
+//go:embed embed/codenav-skill.md
+var codenavSkillContent []byte
+
 var userHomeDir = os.UserHomeDir
 
 // FileWriter abstracts filesystem operations for testability.
@@ -248,6 +251,7 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: bugTriageAgentContent, relPath: filepath.Join("agents", "human-bug-triage.md")},
 		{content: bugFixerAgentContent, relPath: filepath.Join("agents", "human-bug-fixer.md")},
 		{content: bugVerifyAgentContent, relPath: filepath.Join("agents", "human-bug-verify.md")},
+		{content: codenavSkillContent, relPath: filepath.Join("skills", "codenav", "SKILL.md")},
 	}
 
 	for _, f := range files {
