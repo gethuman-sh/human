@@ -291,7 +291,7 @@ func relWithin(root, path string) (string, bool) {
 }
 
 func hashFile(path string) string {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- hashes a repo source file by path
 	if err != nil {
 		return ""
 	}

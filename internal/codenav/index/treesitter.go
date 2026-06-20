@@ -109,7 +109,7 @@ func scanTSFile(root, path string, d fs.DirEntry, sink Sink, nameToQNames map[st
 	if err != nil || info.Size() > maxFileBytes {
 		return tsFile{}, false
 	}
-	src, err := os.ReadFile(path)
+	src, err := os.ReadFile(path) // #nosec G304 -- reads a source file discovered under the repo root
 	if err != nil {
 		return tsFile{}, false
 	}
@@ -204,7 +204,7 @@ func firstLine(src []byte, start, end uint32) string {
 		return ""
 	}
 	if int(end) > len(src) {
-		end = uint32(len(src))
+		end = uint32(len(src)) // #nosec G115 -- len(src) is bounded by maxFileBytes (1 MiB)
 	}
 	seg := src[start:end]
 	if nl := strings.IndexByte(string(seg), '\n'); nl >= 0 {

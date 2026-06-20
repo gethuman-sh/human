@@ -545,7 +545,7 @@ func readLines(root, rel string, want map[int]bool) map[int]string {
 	if len(want) == 0 {
 		return out
 	}
-	f, err := os.Open(filepath.Join(root, rel))
+	f, err := os.Open(filepath.Join(root, rel)) // #nosec G304 -- reads a source file from the indexed repo by recorded path
 	if err != nil {
 		return out
 	}
@@ -576,7 +576,7 @@ func readSnippet(root, rel string, start, end int) string {
 	if end-start > 60 {
 		end = start + 60 // cap runaway snippets
 	}
-	f, err := os.Open(filepath.Join(root, rel))
+	f, err := os.Open(filepath.Join(root, rel)) // #nosec G304 -- reads a source file from the indexed repo by recorded path
 	if err != nil {
 		return ""
 	}

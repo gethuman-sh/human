@@ -763,7 +763,7 @@ type diffHunk struct {
 // gitDiffHunks returns the changed line ranges (new-file side) of uncommitted
 // changes vs HEAD, parsed from a zero-context unified diff.
 func gitDiffHunks(root string) ([]diffHunk, error) {
-	out, err := exec.Command("git", "-C", root, "diff", "--unified=0", "HEAD").Output()
+	out, err := exec.Command("git", "-C", root, "diff", "--unified=0", "HEAD").Output() // #nosec G204 -- fixed git argv against a known repo root
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "git diff failed (is this a git repo?)", "root", root)
 	}
@@ -815,7 +815,7 @@ func parseHunkRange(h string) (lo, hi int) {
 
 // gitRev returns the HEAD sha for root, or "" if not a git repo.
 func gitRev(root string) string {
-	out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output() // #nosec G204 -- fixed git argv against a known repo root
 	if err != nil {
 		return ""
 	}

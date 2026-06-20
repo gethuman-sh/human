@@ -27,7 +27,7 @@ type Store struct {
 // open connection keeps WAL writes simple for a CLI.
 func Open(path string) (*Store, error) {
 	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("create db dir: %w", err)
 		}
 	}
