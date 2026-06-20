@@ -143,6 +143,12 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	pf := rootCmd.PersistentFlags()
 	pf.String("tracker", "", "Named tracker instance from .humanconfig")
 	pf.Bool("safe", os.Getenv("HUMAN_SAFE") == "1", "Block destructive operations (deletes)")
+	// --yes skips the interactive confirmation for a destructive operation. The
+	// daemon injects it after a TUI approval when re-executing the command, so it
+	// must be accepted by every (current and future) destructive subcommand —
+	// hence a single persistent flag here rather than per-command registration.
+	pf.Bool("yes", false, "Skip interactive confirmation for destructive operations")
+	_ = pf.MarkHidden("yes")
 
 	// Credential flags — functional but hidden from help (use env vars or .humanconfig).
 	credFlags := []struct{ name, env, help string }{

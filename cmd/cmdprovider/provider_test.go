@@ -916,6 +916,7 @@ func newTestRoot(mp *mockProvider) (*cobra.Command, cmdutil.Deps) {
 	root := &cobra.Command{Use: "human"}
 	root.PersistentFlags().String("tracker", "", "")
 	root.PersistentFlags().Bool("safe", false, "")
+	root.PersistentFlags().Bool("yes", false, "") // mirrors the real root (main.go); daemon injects --yes on re-exec
 
 	jiraCmd := &cobra.Command{Use: "jira"}
 	cmds := BuildProviderCommands("jira", deps)
@@ -1096,6 +1097,43 @@ func TestCmd_IssueStart_Success(t *testing.T) {
 	assert.Contains(t, buf.String(), "Started KAN-1")
 }
 
+// TestCmd_DestructiveVerbs_AcceptYesFlag is a regression guard for HUM-132: the
+// daemon re-executes an approved destructive op with "--yes" appended, so every
+// destructive verb detectDestructive intercepts (delete/edit/status/start) must
+// accept the root-persistent --yes flag — not just the two that used to register
+// it locally.
+func TestCmd_DestructiveVerbs_AcceptYesFlag(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"status", []string{"jira", "issue", "status", "KAN-1", "Done", "--yes"}},
+		{"start", []string{"jira", "issue", "start", "KAN-1", "--yes"}},
+		{"edit", []string{"jira", "issue", "edit", "KAN-1", "--title", "x", "--yes"}},
+		{"delete", []string{"jira", "issue", "delete", "KAN-1", "--yes"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := &mockProvider{
+				transitionFn:     func(_ context.Context, _, _ string) error { return nil },
+				assignFn:         func(_ context.Context, _, _ string) error { return nil },
+				getCurrentUserFn: func(_ context.Context) (string, error) { return "user-1", nil },
+				deleteIssueFn:    func(_ context.Context, _ string) error { return nil },
+				editIssueFn: func(_ context.Context, _ string, _ tracker.EditOptions) (*tracker.Issue, error) {
+					return &tracker.Issue{Key: "KAN-1"}, nil
+				},
+			}
+			root, _ := newTestRoot(mp)
+			var buf bytes.Buffer
+			root.SetOut(&buf)
+			root.SetErr(&buf)
+			root.SetArgs(tc.args)
+			require.NoError(t, root.Execute())
+			assert.NotContains(t, buf.String(), "unknown flag")
+		})
+	}
+}
+
 func TestCmd_IssueStatuses_Success(t *testing.T) {
 	mp := &mockProvider{
 		listStatusesFn: func(_ context.Context, key string) ([]tracker.Status, error) {
@@ -1142,6 +1180,7 @@ func TestCmd_LoadInstancesError(t *testing.T) {
 	root := &cobra.Command{Use: "human"}
 	root.PersistentFlags().String("tracker", "", "")
 	root.PersistentFlags().Bool("safe", false, "")
+	root.PersistentFlags().Bool("yes", false, "") // mirrors the real root (main.go); daemon injects --yes on re-exec
 	jiraCmd := &cobra.Command{Use: "jira"}
 	cmds := BuildProviderCommands("jira", deps)
 	for _, c := range cmds {
