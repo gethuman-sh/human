@@ -43,13 +43,18 @@ func TestInstallHooks_NewSettings(t *testing.T) {
 	hooks, ok := settings["hooks"].(map[string]interface{})
 	require.True(t, ok, "hooks key should exist")
 
-	// All 12 events registered.
+	// All 12 events registered. SessionStart carries two commands: the
+	// monitoring `human hook` and the priming `human agent-context`.
 	for _, evt := range []string{"UserPromptSubmit", "Stop", "SubagentStart", "SubagentStop",
 		"PreToolUse", "PostToolUse", "PostToolUseFailure",
 		"PermissionRequest", "Notification", "StopFailure", "SessionStart", "SessionEnd"} {
 		matchers, ok := hooks[evt].([]interface{})
 		require.True(t, ok, "event %s should have matchers", evt)
-		assert.Len(t, matchers, 1)
+		want := 1
+		if evt == "SessionStart" {
+			want = 2
+		}
+		assert.Len(t, matchers, want, "event %s", evt)
 	}
 
 	// No hook script file should be written — hooks invoke `human hook` directly.
@@ -159,7 +164,11 @@ func TestInstallHooks_Idempotent(t *testing.T) {
 		"PreToolUse", "PostToolUse", "PostToolUseFailure",
 		"PermissionRequest", "Notification", "StopFailure", "SessionStart", "SessionEnd"} {
 		matchers := hooks[evt].([]interface{})
-		assert.Len(t, matchers, 1, "event %s should still have exactly 1 matcher", evt)
+		want := 1
+		if evt == "SessionStart" {
+			want = 2 // human hook + human agent-context, still no duplicates
+		}
+		assert.Len(t, matchers, want, "event %s should not gain duplicate matchers", evt)
 	}
 }
 

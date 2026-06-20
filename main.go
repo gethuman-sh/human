@@ -15,6 +15,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/gethuman-sh/human/cmd/cmdagent"
+	"github.com/gethuman-sh/human/cmd/cmdagentcontext"
 	"github.com/gethuman-sh/human/cmd/cmdamplitude"
 	"github.com/gethuman-sh/human/cmd/cmdauto"
 	"github.com/gethuman-sh/human/cmd/cmdbrowser"
@@ -308,6 +309,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	codenavCmd.GroupID = "utility"
 	rootCmd.AddCommand(codenavCmd)
 
+	agentContextCmd := cmdagentcontext.BuildAgentContextCmd()
+	agentContextCmd.GroupID = "utility"
+	rootCmd.AddCommand(agentContextCmd)
+
 	// hook reads Claude Code hook JSON from stdin, extracts event fields,
 	// and forwards them to the daemon as hook-event args. Runs locally
 	// (listed in isLocalSubcommand) so stdin is available.
@@ -417,6 +422,7 @@ var localSubcommands = map[string]bool{
 	"usage":         true,
 	"index":         true,
 	"codenav":       true,
+	"agent-context": true,
 	"tui":           true,
 	"ping":          true,
 	"proxy":         true,

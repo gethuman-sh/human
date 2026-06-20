@@ -12,6 +12,11 @@ import (
 
 const hookCommand = "human hook"
 
+// agentContextHookCommand primes each new session with the guidance from
+// `human agent-context` via the SessionStart hook's additionalContext output.
+// It runs in addition to the monitoring `human hook` on SessionStart.
+const agentContextHookCommand = "human agent-context --hook"
+
 // hookEvents lists the Claude Code hook events we register for.
 var hookEvents = []struct {
 	name    string
@@ -70,9 +75,14 @@ func mergeHooksIntoSettings(w io.Writer, fw FileWriter, path string) error {
 
 	changed := false
 	for _, evt := range hookEvents {
-		if addHookMatcher(hooks, evt.name, evt.async, evt.matcher) {
+		if addHookCommand(hooks, evt.name, hookCommand, evt.async, evt.matcher) {
 			changed = true
 		}
+	}
+	// SessionStart also injects the agent-context guidance. It runs synchronously
+	// (not async) so Claude Code reads its additionalContext output as context.
+	if addHookCommand(hooks, "SessionStart", agentContextHookCommand, false, "") {
+		changed = true
 	}
 
 	if !changed {
@@ -96,12 +106,12 @@ func mergeHooksIntoSettings(w io.Writer, fw FileWriter, path string) error {
 	return nil
 }
 
-// addHookMatcher adds our hook matcher to an event if not already present.
-// Returns true if a new matcher was added.
-func addHookMatcher(hooks map[string]interface{}, eventName string, async bool, matcher string) bool {
+// addHookCommand registers a command for an event if that exact command is not
+// already present. Returns true if a new matcher was added.
+func addHookCommand(hooks map[string]interface{}, eventName, command string, async bool, matcher string) bool {
 	matchers, _ := hooks[eventName].([]interface{})
 
-	// Check if our hook already exists.
+	// Check if this command is already registered for the event.
 	for _, m := range matchers {
 		matcherObj, ok := m.(map[string]interface{})
 		if !ok {
@@ -113,7 +123,7 @@ func addHookMatcher(hooks map[string]interface{}, eventName string, async bool, 
 			if !ok {
 				continue
 			}
-			if cmd, _ := hookDef["command"].(string); cmd == hookCommand {
+			if cmd, _ := hookDef["command"].(string); cmd == command {
 				return false // already registered
 			}
 		}
@@ -121,7 +131,7 @@ func addHookMatcher(hooks map[string]interface{}, eventName string, async bool, 
 
 	hookDef := map[string]interface{}{
 		"type":    "command",
-		"command": hookCommand,
+		"command": command,
 	}
 	if async {
 		hookDef["async"] = true
