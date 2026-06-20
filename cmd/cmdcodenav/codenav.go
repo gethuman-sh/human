@@ -34,7 +34,12 @@ func BuildCodenavCmd() *cobra.Command {
 		Short: "Index and navigate code structure (local SQLite, for AI agents)",
 		Long: "codenav indexes repositories into a local SQLite database and answers " +
 			"structural questions — go-to-definition, find-references, call graphs, " +
-			"blast radius, and full-text search — fast, offline, and token-frugal.",
+			"blast radius, and full-text search — fast, offline, and token-frugal.\n\n" +
+			"Run `human codenav index .` once per repository before querying.",
+		// Query subcommands need an index. Fail fast with an actionable message
+		// when the repo hasn't been indexed yet, so a caller (human or agent)
+		// runs `index` instead of mistaking an empty result for "not found".
+		PersistentPreRunE: requireIndexForQueries,
 	}
 	// --db and --json are shared by every subcommand. --db defaults to
 	// ~/.human/codenav.db, overridable per invocation.
@@ -62,6 +67,31 @@ func BuildCodenavCmd() *cobra.Command {
 }
 
 // --- shared helpers --------------------------------------------------------
+
+// requireIndexForQueries runs before every codenav subcommand and, for the
+// query verbs, returns an actionable error when no repository has been indexed
+// yet. Index-management verbs (index/projects/status/rm) are exempt because
+// they are expected to work against an empty database.
+func requireIndexForQueries(cmd *cobra.Command, _ []string) error {
+	switch cmd.Name() {
+	case "codenav", "index", "projects", "status", "rm", "help":
+		return nil
+	}
+	st, err := openStore(cmd)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	projs, err := st.ListProjects()
+	if err != nil {
+		return err
+	}
+	if len(projs) == 0 {
+		return errors.WithDetails(
+			"no repository is indexed yet — run: human codenav index <path> (e.g. human codenav index .)")
+	}
+	return nil
+}
 
 func openStore(cmd *cobra.Command) (*store.Store, error) {
 	db, _ := cmd.Flags().GetString("db")
@@ -105,9 +135,10 @@ func buildIndexCmd() *cobra.Command {
 	var name string
 	var full bool
 	cmd := &cobra.Command{
-		Use:   "index <path>",
-		Short: "Index or refresh a repository",
-		Args:  cobra.ExactArgs(1),
+		Use:     "index <path>",
+		Short:   "Index or refresh a repository",
+		Example: "  human codenav index .\n  human codenav index . --name myrepo --full",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, err := filepath.Abs(args[0])
 			if err != nil {
@@ -396,9 +427,10 @@ func buildSearchCmd() *cobra.Command {
 	var symbols bool
 	var limit int
 	cmd := &cobra.Command{
-		Use:   "search <query>",
-		Short: "Full-text search (code bodies by default, --symbols for names)",
-		Args:  cobra.MinimumNArgs(1),
+		Use:     "search <query>",
+		Short:   "Full-text search (code bodies by default, --symbols for names)",
+		Example: "  human codenav search \"ListenAndServe\"\n  human codenav search ResolveForge --symbols   # find the qualified name to feed def/refs",
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := strings.Join(args, " ")
 			st, err := openStore(cmd)
@@ -443,9 +475,10 @@ func buildSearchCmd() *cobra.Command {
 func buildDefCmd() *cobra.Command {
 	var outline bool
 	cmd := &cobra.Command{
-		Use:   "def <name|qname>",
-		Short: "Go-to-definition (+ source body; --outline for signature only)",
-		Args:  cobra.ExactArgs(1),
+		Use:     "def <name|qname>",
+		Short:   "Go-to-definition (+ source body; --outline for signature only)",
+		Example: "  human codenav def BuildProxyCmd\n  human codenav def BuildProxyCmd --outline   # signature + location only (token-frugal)",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := openStore(cmd)
 			if err != nil {
@@ -565,9 +598,10 @@ func buildCallPathCmd() *cobra.Command {
 	var from, to string
 	var maxDepth, limit int
 	cmd := &cobra.Command{
-		Use:   "callpath --from A --to B",
-		Short: "Concrete call paths between two symbols (shortest first)",
-		Args:  cobra.NoArgs,
+		Use:     "callpath --from A --to B",
+		Short:   "Concrete call paths between two symbols (shortest first)",
+		Example: "  human codenav callpath --from main --to ResolveForge --max 12 --limit 8",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if from == "" || to == "" {
 				return errors.WithDetails("callpath requires --from and --to")
@@ -654,9 +688,10 @@ func buildImpactCmd() *cobra.Command {
 	var diff bool
 	var depth int
 	cmd := &cobra.Command{
-		Use:   "impact <qname>",
-		Short: "Blast radius: transitive callers of a symbol (or of a git diff with --diff)",
-		Args:  cobra.ArbitraryArgs,
+		Use:     "impact <qname>",
+		Short:   "Blast radius: transitive callers of a symbol (or of a git diff with --diff)",
+		Example: "  human codenav impact ResolveForge\n  human codenav impact --diff   # what your uncommitted changes put at risk",
+		Args:    cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := openStore(cmd)
 			if err != nil {
