@@ -154,7 +154,6 @@ func buildPRCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 
 func buildIssueEditCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 	var title, description string
-	var yes bool
 
 	cmd := &cobra.Command{
 		Use:     "edit KEY",
@@ -179,19 +178,15 @@ func buildIssueEditCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 				opts.Description = &description
 			}
 
-			_ = yes // consumed by daemon interceptor via --yes flag; unused here
 			return RunEditIssue(cmd.Context(), p, cmd.OutOrStdout(), args[0], opts)
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "New issue title")
 	cmd.Flags().StringVar(&description, "description", "", "New issue description (markdown)")
-	cmd.Flags().BoolVar(&yes, "yes", false, "Skip interactive confirmation")
 	return cmd
 }
 
 func buildIssueDeleteCmd(kind string, deps cmdutil.Deps) *cobra.Command {
-	var yes bool
-
 	cmd := &cobra.Command{
 		Use:   "delete KEY",
 		Short: "Delete (or close) an issue by key",
@@ -202,10 +197,12 @@ func buildIssueDeleteCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 				return err
 			}
 			defer cleanup()
+			// --yes is a hidden root persistent flag: the daemon injects it after a
+			// TUI approval, and direct CLI use can pass it to skip the stdin prompt.
+			yes, _ := cmd.Flags().GetBool("yes")
 			return RunDeleteIssue(cmd.Context(), p, os.Stdin, cmd.OutOrStdout(), args[0], yes)
 		},
 	}
-	cmd.Flags().BoolVar(&yes, "yes", false, "Skip interactive confirmation")
 	return cmd
 }
 
