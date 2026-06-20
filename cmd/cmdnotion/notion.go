@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/errors"
-	"github.com/gethuman-sh/human/internal/notion"
+	"github.com/gethuman-sh/human/internal/knowledge/notion"
 )
 
 // notionSearcher searches the Notion workspace.

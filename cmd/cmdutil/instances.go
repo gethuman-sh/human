@@ -8,17 +8,19 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
-	"github.com/gethuman-sh/human/internal/azuredevops"
-	"github.com/gethuman-sh/human/internal/clickup"
 	"github.com/gethuman-sh/human/internal/config"
-	"github.com/gethuman-sh/human/internal/github"
-	"github.com/gethuman-sh/human/internal/gitlab"
+	"github.com/gethuman-sh/human/internal/forge"
+	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/index"
-	"github.com/gethuman-sh/human/internal/jira"
-	"github.com/gethuman-sh/human/internal/linear"
-	"github.com/gethuman-sh/human/internal/notion"
-	"github.com/gethuman-sh/human/internal/shortcut"
+	"github.com/gethuman-sh/human/internal/knowledge/notion"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker/azuredevops"
+	"github.com/gethuman-sh/human/internal/tracker/clickup"
+	"github.com/gethuman-sh/human/internal/tracker/github"
+	"github.com/gethuman-sh/human/internal/tracker/gitlab"
+	"github.com/gethuman-sh/human/internal/tracker/jira"
+	"github.com/gethuman-sh/human/internal/tracker/linear"
+	"github.com/gethuman-sh/human/internal/tracker/shortcut"
 	"github.com/gethuman-sh/human/internal/vault"
 )
 
@@ -127,20 +129,23 @@ func InstanceFromFlags(cmd *cobra.Command) *tracker.Instance {
 		return inst
 	}
 
-	// Simple token-based providers: token flag, url flag, default URL, kind, constructor.
+	// Simple token-based providers: token flag, url flag, default URL, kind,
+	// tracker constructor, and an optional forge constructor for backends that
+	// also host pull requests (GitHub).
 	type simpleProvider struct {
 		tokenFlag  string
 		urlFlag    string
 		defaultURL string
 		kind       string
 		newClient  func(url, token string) tracker.Provider
+		newForge   func(url, token string) forge.Forge
 	}
 	simpleProviders := []simpleProvider{
-		{"github-token", "github-url", "https://api.github.com", "github", func(u, t string) tracker.Provider { return github.New(u, t) }},
-		{"gitlab-token", "gitlab-url", "https://gitlab.com", "gitlab", func(u, t string) tracker.Provider { return gitlab.New(u, t) }},
-		{"linear-token", "linear-url", "https://api.linear.app", "linear", func(u, t string) tracker.Provider { return linear.New(u, t) }},
-		{"shortcut-token", "shortcut-url", "https://api.app.shortcut.com", "shortcut", func(u, t string) tracker.Provider { return shortcut.New(u, t) }},
-		{"clickup-token", "clickup-url", "https://api.clickup.com", "clickup", func(u, t string) tracker.Provider { return clickup.New(u, t, "") }},
+		{"github-token", "github-url", "https://api.github.com", "github", func(u, t string) tracker.Provider { return github.New(u, t) }, func(u, t string) forge.Forge { return forgegithub.New(u, t) }},
+		{"gitlab-token", "gitlab-url", "https://gitlab.com", "gitlab", func(u, t string) tracker.Provider { return gitlab.New(u, t) }, nil},
+		{"linear-token", "linear-url", "https://api.linear.app", "linear", func(u, t string) tracker.Provider { return linear.New(u, t) }, nil},
+		{"shortcut-token", "shortcut-url", "https://api.app.shortcut.com", "shortcut", func(u, t string) tracker.Provider { return shortcut.New(u, t) }, nil},
+		{"clickup-token", "clickup-url", "https://api.clickup.com", "clickup", func(u, t string) tracker.Provider { return clickup.New(u, t, "") }, nil},
 	}
 	for _, sp := range simpleProviders {
 		token := getFlag(sp.tokenFlag)
@@ -151,11 +156,15 @@ func InstanceFromFlags(cmd *cobra.Command) *tracker.Instance {
 		if url == "" {
 			url = sp.defaultURL
 		}
-		return &tracker.Instance{
+		inst := &tracker.Instance{
 			Kind:     sp.kind,
 			URL:      url,
 			Provider: sp.newClient(url, token),
 		}
+		if sp.newForge != nil {
+			inst.Forge = sp.newForge(url, token)
+		}
+		return inst
 	}
 
 	return nil

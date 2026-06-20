@@ -1,13 +1,14 @@
 package cmdutil
 
 import (
-	"github.com/gethuman-sh/human/internal/azuredevops"
-	"github.com/gethuman-sh/human/internal/github"
-	"github.com/gethuman-sh/human/internal/gitlab"
-	"github.com/gethuman-sh/human/internal/jira"
-	"github.com/gethuman-sh/human/internal/linear"
-	"github.com/gethuman-sh/human/internal/shortcut"
+	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker/azuredevops"
+	"github.com/gethuman-sh/human/internal/tracker/github"
+	"github.com/gethuman-sh/human/internal/tracker/gitlab"
+	"github.com/gethuman-sh/human/internal/tracker/jira"
+	"github.com/gethuman-sh/human/internal/tracker/linear"
+	"github.com/gethuman-sh/human/internal/tracker/shortcut"
 )
 
 // InstanceFromURL attempts to build a tracker Instance from a parsed URL
@@ -53,6 +54,8 @@ func buildInstanceFromCreds(parsed *tracker.ParsedURL, creds tracker.CredResult)
 			Kind:     "github",
 			URL:      parsed.BaseURL,
 			Provider: github.New(parsed.BaseURL, creds.Available["TOKEN"]),
+			// GitHub is also a code forge — expose PR creation.
+			Forge: forgegithub.New(parsed.BaseURL, creds.Available["TOKEN"]),
 		}
 	case "gitlab":
 		return &tracker.Instance{

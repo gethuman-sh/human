@@ -13,8 +13,8 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/apiclient"
-	"github.com/gethuman-sh/human/internal/jira/adf"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker/jira/adf"
 )
 
 var _ tracker.Provider = (*Client)(nil)

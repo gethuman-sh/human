@@ -5,8 +5,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"github.com/gethuman-sh/human/errors"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/gethuman-sh/human/errors"
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/internal/claude"

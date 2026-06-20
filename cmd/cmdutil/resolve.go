@@ -15,8 +15,8 @@ import (
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/gitrepo"
-	"github.com/gethuman-sh/human/internal/slack"
-	"github.com/gethuman-sh/human/internal/telegram"
+	"github.com/gethuman-sh/human/internal/messaging/slack"
+	"github.com/gethuman-sh/human/internal/messaging/telegram"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -126,11 +126,10 @@ func ResolveForge(cmd *cobra.Command, kind string, deps Deps) (forge.Forge, erro
 		return nil, err
 	}
 
-	f, ok := instance.Provider.(forge.Forge)
-	if !ok {
+	if instance.Forge == nil {
 		return nil, errors.WithDetails("pull requests not supported by this tracker", "kind", kind)
 	}
-	return f, nil
+	return instance.Forge, nil
 }
 
 // OriginForge derives the code forge from the local git "origin" remote and

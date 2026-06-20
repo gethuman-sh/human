@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gethuman-sh/human/internal/notion"
+	"github.com/gethuman-sh/human/internal/knowledge/notion"
 )
 
 // NotionClient is the subset of notion.Client methods needed by SyncNotion.

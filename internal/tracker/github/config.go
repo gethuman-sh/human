@@ -2,6 +2,7 @@ package github
 
 import (
 	"github.com/gethuman-sh/human/internal/config"
+	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -52,6 +53,9 @@ var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 			Safe:        cfg.Safe,
 			Projects:    cfg.Projects,
 			Provider:    New(cfg.URL, cfg.Token),
+			// GitHub is also a code forge — expose PR creation alongside the
+			// issue-tracker provider via a separate forge client.
+			Forge: forgegithub.New(cfg.URL, cfg.Token),
 		}, true
 	},
 }

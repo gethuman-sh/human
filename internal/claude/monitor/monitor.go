@@ -11,10 +11,10 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/claude/logparser"
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/messaging/slack"
+	"github.com/gethuman-sh/human/internal/messaging/telegram"
 	"github.com/gethuman-sh/human/internal/proxy"
-	"github.com/gethuman-sh/human/internal/slack"
 	"github.com/gethuman-sh/human/internal/stats"
-	"github.com/gethuman-sh/human/internal/telegram"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 

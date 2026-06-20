@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gethuman-sh/human/internal/amplitude"
+	"github.com/gethuman-sh/human/internal/knowledge/amplitude"
 )
 
 // --- mock amplitude client ---

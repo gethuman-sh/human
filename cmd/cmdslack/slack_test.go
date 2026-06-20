@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gethuman-sh/human/internal/slack"
+	"github.com/gethuman-sh/human/internal/messaging/slack"
 )
 
 // --- mock slack client ---

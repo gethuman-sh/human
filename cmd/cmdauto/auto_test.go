@@ -12,9 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
-	"github.com/gethuman-sh/human/internal/github"
+	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker/github"
 )
 
 func TestBuildAutoPRCreateCmd_structure(t *testing.T) {
@@ -53,6 +54,7 @@ func TestBuildAutoPRCreateCmd_run(t *testing.T) {
 				Kind:     "github",
 				URL:      srv.URL,
 				Provider: github.New(srv.URL, "t"),
+				Forge:    forgegithub.New(srv.URL, "t"),
 			}}, nil
 		},
 		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },

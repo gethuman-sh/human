@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/forge"
 )
 
 // githubIssueRe matches GitHub issue keys like "owner/repo#123".
@@ -271,6 +272,11 @@ type Instance struct {
 	Safe        bool     // when true, destructive operations (deletes) are blocked
 	Projects    []string // projects to index (e.g. ["KAN", "INFRA"])
 	Provider    Provider
+	// Forge is the optional code-host capability of this backend. It is set
+	// only for backends that also host pull requests (e.g. GitHub); pure issue
+	// trackers leave it nil. Kept separate from Provider so the tracker and
+	// forge clients can be built and evolve independently.
+	Forge forge.Forge
 }
 
 // InferRole returns the instance's role, falling back to kind-based inference

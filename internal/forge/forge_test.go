@@ -22,9 +22,9 @@ func TestIsForgeKind(t *testing.T) {
 
 func TestKindForHost(t *testing.T) {
 	tests := map[string]string{
-		"github.com": "github",
-		"GitHub.com": "github", // case-insensitive
-		"gitlab.com": "",       // not yet supported
+		"github.com":  "github",
+		"GitHub.com":  "github", // case-insensitive
+		"gitlab.com":  "",       // not yet supported
 		"example.com": "",
 		"":            "",
 	}

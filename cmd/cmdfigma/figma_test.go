@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
-	"github.com/gethuman-sh/human/internal/figma"
+	"github.com/gethuman-sh/human/internal/knowledge/figma"
 )
 
 // --- mock figma client ---

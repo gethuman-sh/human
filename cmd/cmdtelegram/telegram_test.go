@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gethuman-sh/human/internal/telegram"
+	"github.com/gethuman-sh/human/internal/messaging/telegram"
 )
 
 // --- mock telegram client ---

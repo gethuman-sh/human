@@ -34,19 +34,6 @@ type createResponse struct {
 	Body   string `json:"body"`
 }
 
-type pullCreateRequest struct {
-	Title string `json:"title"`
-	Head  string `json:"head"`
-	Base  string `json:"base"`
-	Body  string `json:"body,omitempty"`
-}
-
-type pullCreateResponse struct {
-	Number  int    `json:"number"`
-	Title   string `json:"title"`
-	HTMLURL string `json:"html_url"`
-}
-
 type commentRequest struct {
 	Body string `json:"body"`
 }

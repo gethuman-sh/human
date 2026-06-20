@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/errors"
-	"github.com/gethuman-sh/human/internal/telegram"
+	"github.com/gethuman-sh/human/internal/messaging/telegram"
 )
 
 // telegramMessageLister lists pending Telegram messages.

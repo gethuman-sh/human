@@ -10,7 +10,7 @@ import (
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
-	"github.com/gethuman-sh/human/internal/figma"
+	"github.com/gethuman-sh/human/internal/knowledge/figma"
 )
 
 // --- Interfaces ---

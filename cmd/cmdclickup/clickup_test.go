@@ -11,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
-	"github.com/gethuman-sh/human/internal/clickup"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker/clickup"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

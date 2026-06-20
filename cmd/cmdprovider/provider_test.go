@@ -16,9 +16,10 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
-	"github.com/gethuman-sh/human/internal/github"
+	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker/github"
 )
 
 // --- fake forge.Creator ---
@@ -864,7 +865,9 @@ func TestPRCreate_DefaultsRepoFromOrigin(t *testing.T) {
 	deps := cmdutil.Deps{
 		LoadInstances: func(_ string) ([]tracker.Instance, error) {
 			return []tracker.Instance{{
-				Name: "gh", Kind: "github", URL: srv.URL, Provider: github.New(srv.URL, "t"),
+				Name: "gh", Kind: "github", URL: srv.URL,
+				Provider: github.New(srv.URL, "t"),
+				Forge:    forgegithub.New(srv.URL, "t"),
 			}}, nil
 		},
 		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },

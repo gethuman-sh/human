@@ -11,9 +11,9 @@ import (
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
-	"github.com/gethuman-sh/human/internal/clickup"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker/clickup"
 )
 
 // BuildClickUpCommands returns ClickUp-specific commands (hierarchy browsing,

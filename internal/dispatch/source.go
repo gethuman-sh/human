@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/gethuman-sh/human/internal/telegram"
+	"github.com/gethuman-sh/human/internal/messaging/telegram"
 )
 
 // TelegramFetcher is the subset of telegram.Client needed to fetch messages.

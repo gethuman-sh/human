@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/internal/index"
-	"github.com/gethuman-sh/human/internal/notion"
+	"github.com/gethuman-sh/human/internal/knowledge/notion"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 

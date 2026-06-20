@@ -9,9 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/gethuman-sh/human/internal/github"
+	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/tracker/github"
 )
 
 func stubOrigin(t *testing.T, url string, err error) {
@@ -29,6 +30,7 @@ func githubDeps() Deps {
 				Kind:     "github",
 				URL:      "https://api.github.com",
 				Provider: github.New("https://api.github.com", "t"),
+				Forge:    forgegithub.New("https://api.github.com", "t"),
 			}}, nil
 		},
 		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },

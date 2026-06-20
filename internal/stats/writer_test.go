@@ -105,7 +105,7 @@ func TestWriter_CloseAfterContextCancelDoesNotHang(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		w.Close()        // must not hang
+		w.Close()                                 // must not hang
 		w.Send(hookevents.Event{SessionID: "s2"}) // must not panic on a closed channel
 		close(done)
 	}()
