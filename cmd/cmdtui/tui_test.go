@@ -469,7 +469,7 @@ func TestRenderIssuesPanel_WithIssues(t *testing.T) {
 			},
 		},
 	}
-	out := renderIssuesPanel(groups, time.Now(), 80, -1)
+	out := renderIssuesPanel(groups, time.Now(), 80, -1, 0)
 	assert.Contains(t, out, "Pipeline")
 	assert.Contains(t, out, "Eng")
 	assert.Contains(t, out, "HUM")
@@ -481,7 +481,7 @@ func TestRenderIssuesPanel_WithIssues(t *testing.T) {
 }
 
 func TestRenderIssuesPanel_Empty(t *testing.T) {
-	out := renderIssuesPanel(nil, time.Time{}, 80, -1)
+	out := renderIssuesPanel(nil, time.Time{}, 80, -1, 0)
 	assert.Equal(t, "", out)
 }
 
@@ -493,7 +493,7 @@ func TestRenderIssuesPanel_TrackerError(t *testing.T) {
 			Err:         fmt.Errorf("unauthorized"),
 		},
 	}
-	out := renderIssuesPanel(groups, time.Now(), 80, -1)
+	out := renderIssuesPanel(groups, time.Now(), 80, -1, 0)
 	assert.Contains(t, out, "Pipeline")
 	assert.Contains(t, out, "jira/KAN")
 	assert.Contains(t, out, "fetch failed")
@@ -514,7 +514,7 @@ func TestRenderIssuesPanel_MixedSuccess(t *testing.T) {
 			},
 		},
 	}
-	out := renderIssuesPanel(groups, time.Now(), 80, -1)
+	out := renderIssuesPanel(groups, time.Now(), 80, -1, 0)
 	assert.Contains(t, out, "Pipeline")
 	assert.Contains(t, out, "fetch failed")
 	assert.Contains(t, out, "HUM-1")
@@ -832,9 +832,65 @@ func TestRenderIssuesPanelCursor(t *testing.T) {
 			{Key: "HUM-2", Status: "Todo", StatusType: "unstarted", Title: "Second"},
 		}},
 	}
-	out := renderIssuesPanel(groups, time.Now(), 80, 1)
+	out := renderIssuesPanel(groups, time.Now(), 80, 1, 0)
 	// Second issue should have the selection indicator.
 	assert.Contains(t, out, "▸")
+}
+
+// TestRenderIssuesPanel_CapWindowsAroundCursor guards the vertical-budget
+// cap: with more tickets than fit, only a window is rendered, it keeps the
+// cursor's ticket visible, the panel never exceeds the line budget, and a
+// "+N more" line accounts for the hidden tickets.
+func TestRenderIssuesPanel_CapWindowsAroundCursor(t *testing.T) {
+	issues := make([]tracker.Issue, 20)
+	for i := range issues {
+		issues[i] = tracker.Issue{
+			Key:        fmt.Sprintf("HUM-%d", i),
+			Status:     "Todo",
+			StatusType: "unstarted",
+			Title:      fmt.Sprintf("Ticket %d", i),
+		}
+	}
+	groups := []trackerIssues{{TrackerKind: "linear", Project: "HUM", Issues: issues}}
+
+	// Cursor near the end with a small budget: that ticket must still show,
+	// the first ticket must be scrolled out, the tail counted as "more", and
+	// the panel must not emit more lines than the budget allows.
+	const maxLines = 6
+	out := renderIssuesPanel(groups, time.Now(), 80, 18, maxLines)
+	assert.Contains(t, out, "HUM-18", "cursor ticket must stay visible")
+	assert.NotContains(t, out, "HUM-0 ", "scrolled-out ticket must be hidden")
+	assert.Contains(t, out, "more", "hidden tickets must be summarised")
+	assert.LessOrEqual(t, strings.Count(out, "\n"), maxLines,
+		"panel must respect its line budget")
+}
+
+// TestView_LongPipelineKeepsFooterVisible is the end-to-end guard that a
+// pipeline longer than the terminal cannot push the footer off-screen.
+func TestView_LongPipelineKeepsFooterVisible(t *testing.T) {
+	const terminalHeight = 12
+
+	issues := make([]tracker.Issue, 40)
+	for i := range issues {
+		issues[i] = tracker.Issue{
+			Key:        fmt.Sprintf("HUM-%d", i),
+			Status:     "Todo",
+			StatusType: "unstarted",
+			Title:      fmt.Sprintf("Ticket %d", i),
+		}
+	}
+
+	m := testModel()
+	m.width = 120
+	m.height = terminalHeight
+	m.snap = testSnapshot()
+	m.issues = []trackerIssues{{TrackerKind: "linear", Project: "HUM", Issues: issues}}
+	m.issuesFetched = time.Now()
+
+	view := m.View()
+	assert.LessOrEqual(t, strings.Count(view, "\n"), terminalHeight,
+		"View() must not emit more newlines than m.height — footer would be clipped")
+	assert.Contains(t, view, "q quit", "footer must stay visible")
 }
 
 func TestRenderFooter_ShowsDispatchStatus(t *testing.T) {

@@ -1134,14 +1134,16 @@ func (m model) View() string {
 		b.WriteByte('\n')
 	}
 
-	// Issues panel.
-	if ip := renderIssuesPanel(m.issues, m.issuesFetched, w, m.issueCursor); ip != "" {
-		b.WriteByte('\n')
-		b.WriteString(ip)
-	}
+	// Issues panel — capped to the rows left after the panels below it so a
+	// long pipeline cannot push the footer (and the panels between) off the
+	// screen. The tool-stats panel is rendered first (it does not depend on
+	// the issues) so its height can be reserved before sizing the issues.
+	const footerLines = 2 // one blank separator + the footer line itself
+	tp := renderToolStatsPanel(m.snap.ToolStats, w)
+	m.appendIssuesPanel(&b, w, footerLines+toolStatsReserve(tp))
 
 	// Tool stats panel.
-	if tp := renderToolStatsPanel(m.snap.ToolStats, w); tp != "" {
+	if tp != "" {
 		b.WriteByte('\n')
 		b.WriteString(tp)
 	}
@@ -1153,7 +1155,6 @@ func (m model) View() string {
 	// any rows, the panel renders nothing rather than clipping the
 	// footer or the issues panel above it.
 	footer := renderFooter(w, m.logMode, m.dispatchStatus, len(m.tabs()) > 0)
-	const footerLines = 2 // one blank separator + the footer line itself
 	consumed := strings.Count(b.String(), "\n")
 	available := m.height - consumed - footerLines
 	if dp := renderDomainsPanel(m.snap.NetworkEvents, w, available, m.snap.FetchedAt); dp != "" {
@@ -2046,32 +2047,57 @@ func pipelineName(trackerKind, trackerRole string) string {
 	}
 }
 
-func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor int) string {
-	if len(groups) == 0 {
-		return ""
+// toolStatsReserve is the number of lines the tool-stats panel will occupy
+// below the issues panel (its rows plus the blank separator above it), so
+// the issues panel can keep that space clear of the footer. Zero when the
+// panel is empty.
+func toolStatsReserve(tp string) int {
+	if tp == "" {
+		return 0
 	}
+	return strings.Count(tp, "\n") + 2
+}
 
-	var b strings.Builder
-
-	header := "  " + subtleStyle.Render("Pipeline")
-	if !fetchedAt.IsZero() {
-		header += "  " + subtleStyle.Render(formatElapsed(time.Since(fetchedAt))+" ago")
+// appendIssuesPanel sizes the issues panel to the rows left below it and
+// appends it to b. reserved is the line budget already claimed by the panels
+// that must stay visible underneath (tool stats + footer). Until a
+// WindowSizeMsg sets the height the panel renders uncapped.
+func (m model) appendIssuesPanel(b *strings.Builder, w, reserved int) {
+	maxLines := 0 // 0 disables the cap
+	if m.height > 0 {
+		// One line is the issues panel's own leading blank separator.
+		maxLines = m.height - strings.Count(b.String(), "\n") - reserved - 1
+		if maxLines < 2 { // no room for the Pipeline header plus a body line
+			return
+		}
 	}
-	b.WriteString(header)
-	b.WriteByte('\n')
+	if ip := renderIssuesPanel(m.issues, m.issuesFetched, w, m.issueCursor, maxLines); ip != "" {
+		b.WriteByte('\n')
+		b.WriteString(ip)
+	}
+}
 
+// buildIssuesBody renders every body line of the issues panel (group
+// headers, ticket rows, error rows and the blank separators between groups)
+// up front so the panel can window precisely against a line budget. The
+// parallel isTicket slice marks ticket rows (for the hidden count) and
+// cursorLine is the body index of the cursor's ticket, or -1 when absent.
+func buildIssuesBody(groups []trackerIssues, w, cursor int) (bodyLines []string, isTicket []bool, cursorLine int) {
+	bodyLines = []string{}
+	isTicket = []bool{}
+	cursorLine = -1
 	flatIdx := 0
 	first := true
 	for _, g := range groups {
 		if g.Err != nil {
 			if !first {
-				b.WriteByte('\n')
+				bodyLines, isTicket = append(bodyLines, ""), append(isTicket, false)
 			}
 			first = false
-			_, _ = fmt.Fprintf(&b, "    %s %s/%s: %s\n",
-				errorStyle.Render("!"),
-				g.TrackerKind, g.Project,
-				subtleStyle.Render("fetch failed"))
+			bodyLines = append(bodyLines, fmt.Sprintf("    %s %s/%s: %s",
+				errorStyle.Render("!"), g.TrackerKind, g.Project,
+				subtleStyle.Render("fetch failed")))
+			isTicket = append(isTicket, false)
 			continue
 		}
 		if len(g.Issues) == 0 {
@@ -2079,46 +2105,132 @@ func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor in
 		}
 
 		if !first {
-			b.WriteByte('\n')
+			bodyLines, isTicket = append(bodyLines, ""), append(isTicket, false)
 		}
 		first = false
 
-		pipelineLabel := pipelineName(g.TrackerKind, g.TrackerRole)
-		_, _ = fmt.Fprintf(&b, "    %s %s %s\n",
+		bodyLines = append(bodyLines, fmt.Sprintf("    %s %s %s",
 			subtleStyle.Render("▸"),
-			pipelineLabel,
-			subtleStyle.Render(g.Project))
+			pipelineName(g.TrackerKind, g.TrackerRole),
+			subtleStyle.Render(g.Project)))
+		isTicket = append(isTicket, false)
 
 		for _, issue := range g.Issues {
-			title := truncate(issue.Title, w-38)
-			stage := pipelineStage(g.TrackerKind, g.TrackerRole, issue.Status, issue.StatusType)
-			stageStyled := pipelineStageStyle(issue.StatusType).Render(truncate(stage, 14))
-			keyStyle := titleStyle
-			prefix := "      "
 			if flatIdx == cursor {
-				keyStyle = selectedStyle
-				prefix = "    ▸ "
+				cursorLine = len(bodyLines)
 			}
-			// (B) marks defect tickets so the eye can spot bugs without
-			// reading types; (R) marks engineering tickets currently flagged
-			// ready for review on their PM ticket. The two markers are
-			// independent — a ticket may carry both.
-			bugMarker := "   "
-			if issue.IsBug() {
-				bugMarker = errorStyle.Render("(B)")
-			}
-			_, _ = fmt.Fprintf(&b, "%s%-12s %s %s %-14s %s\n",
-				prefix,
-				keyStyle.Render(issue.Key),
-				bugMarker,
-				reviewMarker(g.ReadyForReview[issue.Key], g.ReadyForReviewPRs[issue.Key]),
-				stageStyled,
-				title)
+			bodyLines = append(bodyLines, renderIssueRow(g, issue, flatIdx == cursor, w))
+			isTicket = append(isTicket, true)
 			flatIdx++
 		}
 	}
+	return bodyLines, isTicket, cursorLine
+}
+
+// renderIssueRow formats a single ticket row. selected highlights the key
+// and swaps the gutter for the cursor caret.
+func renderIssueRow(g trackerIssues, issue tracker.Issue, selected bool, w int) string {
+	title := truncate(issue.Title, w-38)
+	stage := pipelineStage(g.TrackerKind, g.TrackerRole, issue.Status, issue.StatusType)
+	stageStyled := pipelineStageStyle(issue.StatusType).Render(truncate(stage, 14))
+	keyStyle := titleStyle
+	prefix := "      "
+	if selected {
+		keyStyle = selectedStyle
+		prefix = "    ▸ "
+	}
+	// (B) marks defect tickets so the eye can spot bugs without reading
+	// types; (R) marks engineering tickets currently flagged ready for
+	// review on their PM ticket. The two markers are independent — a
+	// ticket may carry both.
+	bugMarker := "   "
+	if issue.IsBug() {
+		bugMarker = errorStyle.Render("(B)")
+	}
+	return fmt.Sprintf("%s%-12s %s %s %-14s %s",
+		prefix,
+		keyStyle.Render(issue.Key),
+		bugMarker,
+		reviewMarker(g.ReadyForReview[issue.Key], g.ReadyForReviewPRs[issue.Key]),
+		stageStyled,
+		title)
+}
+
+// maxLines caps the total lines the panel may emit (Pipeline header plus
+// every group header and ticket row) so a long pipeline cannot push the
+// panels and footer below it off-screen. The visible window always keeps
+// the cursor's ticket on screen and scrolls with it; a trailing "+N more"
+// line stands in for the hidden tickets. maxLines <= 0 disables the cap.
+func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor, maxLines int) string {
+	if len(groups) == 0 {
+		return ""
+	}
+
+	bodyLines, isTicket, cursorLine := buildIssuesBody(groups, w, cursor)
+
+	start, end := windowBodyLines(len(bodyLines), cursorLine, maxLines)
+
+	// A blank separator at the window top reads as a stray gap, so drop it.
+	for start < end && bodyLines[start] == "" {
+		start++
+	}
+
+	hidden := 0
+	for i, t := range isTicket {
+		if t && (i < start || i >= end) {
+			hidden++
+		}
+	}
+
+	var b strings.Builder
+	header := "  " + subtleStyle.Render("Pipeline")
+	if !fetchedAt.IsZero() {
+		header += "  " + subtleStyle.Render(formatElapsed(time.Since(fetchedAt))+" ago")
+	}
+	b.WriteString(header)
+	b.WriteByte('\n')
+	for _, line := range bodyLines[start:end] {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	if hidden > 0 {
+		b.WriteString("      " + subtleStyle.Render(fmt.Sprintf("+%d more", hidden)))
+		b.WriteByte('\n')
+	}
 
 	return b.String()
+}
+
+// windowBodyLines selects the [start,end) slice of body lines to show so the
+// total panel height (Pipeline header + body slice + optional "+N more")
+// stays within maxLines while keeping cursorLine visible. maxLines <= 0
+// returns the full range.
+func windowBodyLines(total, cursorLine, maxLines int) (int, int) {
+	if maxLines <= 0 {
+		return 0, total
+	}
+	budget := maxLines - 1 // Pipeline header always takes one line
+	if budget < 1 {
+		budget = 1
+	}
+	if total <= budget {
+		return 0, total
+	}
+	budget-- // reserve a line for the "+N more" marker
+	if budget < 1 {
+		budget = 1
+	}
+	start := 0
+	if cursorLine >= 0 {
+		start = cursorLine - budget/2
+	}
+	if start > total-budget {
+		start = total - budget
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start, start + budget
 }
 
 // renderDomainsPanel renders the ambient network activity panel at the
