@@ -25,39 +25,8 @@ type MutatingOp struct {
 // it is testable without a running daemon and reusable by a future client-side
 // emitter. detectDestructive is deliberately left untouched.
 func DetectMutating(args []string) (MutatingOp, bool) {
-	// Capture --tracker and --project before stripping value-flag tokens, since
-	// stripping would otherwise discard their values along with the flags.
-	var trackerName, project string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--tracker" && i+1 < len(args):
-			trackerName = args[i+1]
-		case strings.HasPrefix(a, "--tracker="):
-			trackerName = strings.TrimPrefix(a, "--tracker=")
-		case a == "--project" && i+1 < len(args):
-			project = args[i+1]
-		case strings.HasPrefix(a, "--project="):
-			project = strings.TrimPrefix(a, "--project=")
-		}
-	}
-
-	// Strip flags to leave only positional subcommands. A space-separated value
-	// flag (e.g. "--tracker work") must also drop its value token, otherwise
-	// that value shifts the positional indices. The known value-flag set is
-	// shared with client-side forwarding and detectDestructive via
-	// internal/cliflags so the three cannot drift apart.
-	cleaned := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if strings.HasPrefix(a, "-") {
-			if cliflags.ValueFlags[a] && i+1 < len(args) {
-				i++ // skip the flag's value token
-			}
-			continue
-		}
-		cleaned = append(cleaned, a)
-	}
+	trackerName, project := captureValueFlags(args)
+	cleaned := stripFlags(args)
 
 	// Locate the "issue" subcommand; everything before it is the tracker kind.
 	trackerKind := ""
@@ -73,8 +42,60 @@ func DetectMutating(args []string) (MutatingOp, bool) {
 		return MutatingOp{}, false
 	}
 
+	op, ok := classifyVerb(cleaned, issueIdx)
+	if !ok {
+		return MutatingOp{}, false
+	}
+	op.TrackerKind = trackerKind
+	op.TrackerName = trackerName
+	op.Project = project
+	return op, true
+}
+
+// captureValueFlags extracts --tracker and --project (both "--flag value" and
+// "--flag=value" forms) before flag-stripping discards their values.
+func captureValueFlags(args []string) (trackerName, project string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--tracker" && i+1 < len(args):
+			trackerName = args[i+1]
+		case strings.HasPrefix(a, "--tracker="):
+			trackerName = strings.TrimPrefix(a, "--tracker=")
+		case a == "--project" && i+1 < len(args):
+			project = args[i+1]
+		case strings.HasPrefix(a, "--project="):
+			project = strings.TrimPrefix(a, "--project=")
+		}
+	}
+	return trackerName, project
+}
+
+// stripFlags removes flags so only positional subcommands remain. A
+// space-separated value flag (e.g. "--tracker work") must also drop its value
+// token, otherwise that value shifts the positional indices. The known
+// value-flag set is shared with client-side forwarding and detectDestructive
+// via internal/cliflags so the three cannot drift apart.
+func stripFlags(args []string) []string {
+	cleaned := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			if cliflags.ValueFlags[a] && i+1 < len(args) {
+				i++ // skip the flag's value token
+			}
+			continue
+		}
+		cleaned = append(cleaned, a)
+	}
+	return cleaned
+}
+
+// classifyVerb maps the verb (and its trailing positional key) at issueIdx+1
+// into a MutatingOp, returning ok=false for read-only or malformed commands.
+// Only the operation and key are filled; the caller adds tracker context.
+func classifyVerb(cleaned []string, issueIdx int) (MutatingOp, bool) {
 	verb := cleaned[issueIdx+1]
-	op := MutatingOp{TrackerKind: trackerKind, TrackerName: trackerName, Project: project}
 
 	// keyAt returns the positional token at the given offset past the verb, or
 	// "" when absent.
@@ -88,41 +109,19 @@ func DetectMutating(args []string) (MutatingOp, bool) {
 
 	switch verb {
 	case "create":
-		op.Operation = "create"
-		return op, true
-	case "edit":
+		return MutatingOp{Operation: "create"}, true
+	case "edit", "delete", "status", "start":
+		// Each requires a key as the next positional. "status" is exact, so the
+		// read-only "statuses" listing verb never reaches here.
 		if key := keyAt(1); key != "" {
-			op.Operation = "edit"
-			op.Key = key
-			return op, true
-		}
-	case "delete":
-		if key := keyAt(1); key != "" {
-			op.Operation = "delete"
-			op.Key = key
-			return op, true
+			return MutatingOp{Operation: verb, Key: key}, true
 		}
 	case "comment":
 		// Only "comment add <KEY>" mutates; "comment list <KEY>" is read-only.
 		if keyAt(1) == "add" {
 			if key := keyAt(2); key != "" {
-				op.Operation = "comment"
-				op.Key = key
-				return op, true
+				return MutatingOp{Operation: "comment", Key: key}, true
 			}
-		}
-	case "status":
-		// Exact "status" mutates state; the "statuses" listing verb does not.
-		if key := keyAt(1); key != "" {
-			op.Operation = "status"
-			op.Key = key
-			return op, true
-		}
-	case "start":
-		if key := keyAt(1); key != "" {
-			op.Operation = "start"
-			op.Key = key
-			return op, true
 		}
 	}
 

@@ -283,6 +283,21 @@ func (s *Server) handleLogMode(conn net.Conn, args []string) {
 	_ = enc.Encode(resp)
 }
 
+// routeDataStores handles read routes backed by the daemon's SQLite stores
+// (tool-stats, audit-query). Split out of routeIntercept so each switch stays
+// small and the analytics/query reads live together. Returns true if handled.
+func (s *Server) routeDataStores(conn net.Conn, args []string) bool {
+	switch args[0] {
+	case "tool-stats":
+		s.handleToolStats(conn)
+		return true
+	case "audit-query":
+		s.handleAuditQuery(conn, args[1:])
+		return true
+	}
+	return false
+}
+
 // routeIntercept handles special commands that don't need subprocess execution.
 // projectDir is the resolved project directory for this request.
 // clientPID identifies the requesting client for authorization checks.
@@ -290,6 +305,9 @@ func (s *Server) handleLogMode(conn net.Conn, args []string) {
 func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []string, projectDir string, clientPID int) bool {
 	if len(args) == 0 {
 		return false
+	}
+	if s.routeDataStores(conn, args) {
+		return true
 	}
 	switch args[0] {
 	case "log-mode":
@@ -315,12 +333,6 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 		return true
 	case "confirm-op":
 		s.handleConfirmOp(conn, args[1:], clientPID)
-		return true
-	case "tool-stats":
-		s.handleToolStats(conn)
-		return true
-	case "audit-query":
-		s.handleAuditQuery(conn, args[1:])
 		return true
 	case "agent-stop-async":
 		s.handleAgentStopAsync(conn, args[1:])
@@ -504,63 +516,56 @@ func parseAuditFilter(args []string) audit.Filter {
 		Until: now,
 	}
 
-	valueOf := func(i int, raw, name string) (string, bool) {
-		if v, ok := strings.CutPrefix(raw, name+"="); ok {
-			return v, true
-		}
-		if raw == name && i+1 < len(args) {
-			return args[i+1], true
-		}
-		return "", false
-	}
-
 	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case strings.HasPrefix(a, "--since"):
-			if v, ok := valueOf(i, a, "--since"); ok {
-				if t, err := time.Parse(time.RFC3339, v); err == nil {
-					f.Since = t.UTC()
-				}
-				if a == "--since" {
-					i++
-				}
-			}
-		case strings.HasPrefix(a, "--until"):
-			if v, ok := valueOf(i, a, "--until"); ok {
-				if t, err := time.Parse(time.RFC3339, v); err == nil {
-					f.Until = t.UTC()
-				}
-				if a == "--until" {
-					i++
-				}
-			}
-		case strings.HasPrefix(a, "--subject"):
-			if v, ok := valueOf(i, a, "--subject"); ok {
-				f.Subject = v
-				if a == "--subject" {
-					i++
-				}
-			}
-		case strings.HasPrefix(a, "--tracker"):
-			if v, ok := valueOf(i, a, "--tracker"); ok {
-				f.TrackerKind = v
-				if a == "--tracker" {
-					i++
-				}
-			}
-		case strings.HasPrefix(a, "--limit"):
-			if v, ok := valueOf(i, a, "--limit"); ok {
-				if n, err := strconv.Atoi(v); err == nil {
-					f.Limit = n
-				}
-				if a == "--limit" {
-					i++
-				}
-			}
+		name, value, consumed := auditFlagValue(args, i)
+		if name == "" {
+			continue
 		}
+		applyAuditFlag(&f, name, value)
+		i += consumed
 	}
 	return f
+}
+
+// auditFlagValue resolves the flag at args[i] into its name and value,
+// supporting both "--flag=value" and "--flag value" forms. consumed is the
+// number of extra tokens to skip (1 for the space form). A non-flag or
+// unterminated flag yields an empty name.
+func auditFlagValue(args []string, i int) (name, value string, consumed int) {
+	a := args[i]
+	if !strings.HasPrefix(a, "--") {
+		return "", "", 0
+	}
+	if eq := strings.IndexByte(a, '='); eq >= 0 {
+		return a[:eq], a[eq+1:], 0
+	}
+	if i+1 < len(args) {
+		return a, args[i+1], 1
+	}
+	return "", "", 0
+}
+
+// applyAuditFlag sets the matching field on f, ignoring unknown flags and
+// unparseable time/int values (the defaults already on f then stand).
+func applyAuditFlag(f *audit.Filter, name, value string) {
+	switch name {
+	case "--since":
+		if t, err := time.Parse(time.RFC3339, value); err == nil {
+			f.Since = t.UTC()
+		}
+	case "--until":
+		if t, err := time.Parse(time.RFC3339, value); err == nil {
+			f.Until = t.UTC()
+		}
+	case "--subject":
+		f.Subject = value
+	case "--tracker":
+		f.TrackerKind = value
+	case "--limit":
+		if n, err := strconv.Atoi(value); err == nil {
+			f.Limit = n
+		}
+	}
 }
 
 // handleAgentStopAsync removes the agent from the list immediately and

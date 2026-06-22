@@ -104,6 +104,49 @@ type daemonState struct {
 	auditWriter   *audit.Writer
 }
 
+// runMaintenanceLoop periodically cleans up stale pending confirmations and
+// prunes the stats and audit stores past their retention windows. It runs until
+// ctx is cancelled.
+func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore *daemon.PendingConfirmStore, statsStore *stats.StatsStore, auditStore *audit.Store) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			confirmStore.Cleanup(2 * 5 * time.Minute)
+			if statsStore != nil {
+				if _, pruneErr := statsStore.Prune(ctx); pruneErr != nil {
+					logger.Warn().Err(pruneErr).Msg("periodic stats prune failed")
+				}
+			}
+			if auditStore != nil {
+				if _, pruneErr := auditStore.Prune(ctx); pruneErr != nil {
+					logger.Warn().Err(pruneErr).Msg("periodic audit prune failed")
+				}
+			}
+		}
+	}
+}
+
+// initAuditStore opens the audit database and starts its async writer, pruning
+// stale events on startup. A failed open disables the trail (both returns nil)
+// rather than aborting daemon startup.
+func initAuditStore(ctx context.Context, logger zerolog.Logger) (*audit.Store, *audit.Writer) {
+	store, err := audit.NewStore(audit.DefaultDBPath())
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to open audit database, audit trail disabled")
+		return nil, nil
+	}
+	if deleted, pruneErr := store.Prune(ctx); pruneErr != nil {
+		logger.Warn().Err(pruneErr).Msg("audit prune on startup failed")
+	} else if deleted > 0 {
+		logger.Info().Int64("deleted", deleted).Msg("pruned old audit events")
+	}
+	return store, audit.NewWriter(ctx, store, logger)
+}
+
 // initDaemon performs the early initialization steps for the daemon: token,
 // PID file, project registry, daemon info, and signal context.
 func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) (*daemonState, error) {
@@ -168,44 +211,9 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		statsWriter = stats.NewWriter(ctx, statsStore, logger)
 	}
 
-	auditStore, err := audit.NewStore(audit.DefaultDBPath())
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to open audit database, audit trail disabled")
-		auditStore = nil
-	}
+	auditStore, auditWriter := initAuditStore(ctx, logger)
 
-	var auditWriter *audit.Writer
-	if auditStore != nil {
-		if deleted, pruneErr := auditStore.Prune(ctx); pruneErr != nil {
-			logger.Warn().Err(pruneErr).Msg("audit prune on startup failed")
-		} else if deleted > 0 {
-			logger.Info().Int64("deleted", deleted).Msg("pruned old audit events")
-		}
-		auditWriter = audit.NewWriter(ctx, auditStore, logger)
-	}
-
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				confirmStore.Cleanup(2 * 5 * time.Minute)
-				if statsStore != nil {
-					if _, pruneErr := statsStore.Prune(ctx); pruneErr != nil {
-						logger.Warn().Err(pruneErr).Msg("periodic stats prune failed")
-					}
-				}
-				if auditStore != nil {
-					if _, pruneErr := auditStore.Prune(ctx); pruneErr != nil {
-						logger.Warn().Err(pruneErr).Msg("periodic audit prune failed")
-					}
-				}
-			}
-		}
-	}()
+	go runMaintenanceLoop(ctx, logger, confirmStore, statsStore, auditStore)
 
 	srv := &daemon.Server{
 		Addr:             addr,
