@@ -17,6 +17,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdagent"
 	"github.com/gethuman-sh/human/cmd/cmdagentcontext"
 	"github.com/gethuman-sh/human/cmd/cmdamplitude"
+	"github.com/gethuman-sh/human/cmd/cmdaudit"
 	"github.com/gethuman-sh/human/cmd/cmdauto"
 	"github.com/gethuman-sh/human/cmd/cmdbrowser"
 	"github.com/gethuman-sh/human/cmd/cmdclickup"
@@ -279,6 +280,8 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	usageCmd := cmdusage.BuildUsageCmd()
 	usageCmd.GroupID = "utility"
 	rootCmd.AddCommand(usageCmd)
+
+	rootCmd.AddCommand(cmdaudit.BuildAuditCmd())
 
 	indexDeps := cmdindex.DefaultIndexDeps()
 	indexCmd := cmdindex.BuildIndexCmd(indexDeps)
