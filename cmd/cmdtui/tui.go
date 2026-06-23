@@ -1134,26 +1134,38 @@ func (m model) View() string {
 		b.WriteByte('\n')
 	}
 
-	// Issues panel.
-	if ip := renderIssuesPanel(m.issues, m.issuesFetched, w, m.issueCursor); ip != "" {
+	m.renderBottomPanels(&b, w)
+
+	return b.String()
+}
+
+// renderBottomPanels appends the issues, tool-stats and domains panels plus
+// the footer, sizing them against the terminal height so a long ticket list
+// cannot push the footer off-screen. The tool-stats panel is rendered first
+// (though shown after the issues panel) so its height can be reserved when
+// budgeting the issues panel; the domains panel then fills whatever space is
+// left above the footer.
+func (m model) renderBottomPanels(b *strings.Builder, w int) {
+	footer := renderFooter(w, m.logMode, m.dispatchStatus, len(m.tabs()) > 0)
+	const footerLines = 2 // one blank separator + the footer line itself
+
+	toolStats := renderToolStatsPanel(m.snap.ToolStats, w)
+	toolStatsLines := 0
+	if toolStats != "" {
+		toolStatsLines = strings.Count(toolStats, "\n") + 2 // panel body + blank separator
+	}
+
+	issuesBudget := m.issuesBudget(b.String(), footerLines+toolStatsLines+1) // +1 separator
+	if ip := renderIssuesPanel(m.issues, m.issuesFetched, w, m.issueCursor, issuesBudget); ip != "" {
 		b.WriteByte('\n')
 		b.WriteString(ip)
 	}
 
-	// Tool stats panel.
-	if tp := renderToolStatsPanel(m.snap.ToolStats, w); tp != "" {
+	if toolStats != "" {
 		b.WriteByte('\n')
-		b.WriteString(tp)
+		b.WriteString(toolStats)
 	}
 
-	// Domains panel — bottom anchored, fills the gap between the issues
-	// panel and the footer. Height is computed from what View() has
-	// already emitted, the known footer height (2 lines: blank + footer),
-	// and the terminal height. When the terminal is too short to show
-	// any rows, the panel renders nothing rather than clipping the
-	// footer or the issues panel above it.
-	footer := renderFooter(w, m.logMode, m.dispatchStatus, len(m.tabs()) > 0)
-	const footerLines = 2 // one blank separator + the footer line itself
 	consumed := strings.Count(b.String(), "\n")
 	available := m.height - consumed - footerLines
 	if dp := renderDomainsPanel(m.snap.NetworkEvents, w, available, m.snap.FetchedAt); dp != "" {
@@ -1161,12 +1173,24 @@ func (m model) View() string {
 		b.WriteString(dp)
 	}
 
-	// Footer.
 	b.WriteByte('\n')
 	b.WriteString(footer)
 	b.WriteByte('\n')
+}
 
-	return b.String()
+// issuesBudget returns the line cap for the issues panel: the terminal height
+// minus what has already been emitted and the rows reserved below it. A zero
+// terminal height (before the first window-size message) returns 0, which
+// disables the cap.
+func (m model) issuesBudget(emitted string, reserved int) int {
+	if m.height <= 0 {
+		return 0
+	}
+	budget := m.height - strings.Count(emitted, "\n") - reserved
+	if budget < 1 {
+		budget = 1
+	}
+	return budget
 }
 
 // --- commands ---
@@ -2046,32 +2070,39 @@ func pipelineName(trackerKind, trackerRole string) string {
 	}
 }
 
-func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor int) string {
+// renderIssuesPanel renders the pipeline of open tickets. maxRows caps the
+// total number of lines the panel emits (header included) so a long ticket
+// list cannot push the panels below it — and the footer — off the bottom of
+// the terminal; when the list does not fit it is windowed around the cursor.
+// A maxRows of 0 or less means "no cap", used by tests and before the first
+// window-size message when the terminal height is still unknown.
+func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor, maxRows int) string {
 	if len(groups) == 0 {
 		return ""
 	}
-
-	var b strings.Builder
 
 	header := "  " + subtleStyle.Render("Pipeline")
 	if !fetchedAt.IsZero() {
 		header += "  " + subtleStyle.Render(formatElapsed(time.Since(fetchedAt))+" ago")
 	}
-	b.WriteString(header)
-	b.WriteByte('\n')
 
+	// Build the body as discrete lines so it can be windowed to fit the
+	// vertical budget while keeping the cursor row visible. cursorLine
+	// tracks where the selection lands among the emitted lines.
+	var lines []string
+	cursorLine := -1
 	flatIdx := 0
 	first := true
 	for _, g := range groups {
 		if g.Err != nil {
 			if !first {
-				b.WriteByte('\n')
+				lines = append(lines, "")
 			}
 			first = false
-			_, _ = fmt.Fprintf(&b, "    %s %s/%s: %s\n",
+			lines = append(lines, fmt.Sprintf("    %s %s/%s: %s",
 				errorStyle.Render("!"),
 				g.TrackerKind, g.Project,
-				subtleStyle.Render("fetch failed"))
+				subtleStyle.Render("fetch failed")))
 			continue
 		}
 		if len(g.Issues) == 0 {
@@ -2079,15 +2110,15 @@ func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor in
 		}
 
 		if !first {
-			b.WriteByte('\n')
+			lines = append(lines, "")
 		}
 		first = false
 
 		pipelineLabel := pipelineName(g.TrackerKind, g.TrackerRole)
-		_, _ = fmt.Fprintf(&b, "    %s %s %s\n",
+		lines = append(lines, fmt.Sprintf("    %s %s %s",
 			subtleStyle.Render("▸"),
 			pipelineLabel,
-			subtleStyle.Render(g.Project))
+			subtleStyle.Render(g.Project)))
 
 		for _, issue := range g.Issues {
 			title := truncate(issue.Title, w-38)
@@ -2098,6 +2129,7 @@ func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor in
 			if flatIdx == cursor {
 				keyStyle = selectedStyle
 				prefix = "    ▸ "
+				cursorLine = len(lines)
 			}
 			// (B) marks defect tickets so the eye can spot bugs without
 			// reading types; (R) marks engineering tickets currently flagged
@@ -2107,18 +2139,64 @@ func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor in
 			if issue.IsBug() {
 				bugMarker = errorStyle.Render("(B)")
 			}
-			_, _ = fmt.Fprintf(&b, "%s%-12s %s %s %-14s %s\n",
+			lines = append(lines, fmt.Sprintf("%s%-12s %s %s %-14s %s",
 				prefix,
 				keyStyle.Render(issue.Key),
 				bugMarker,
 				reviewMarker(g.ReadyForReview[issue.Key], g.ReadyForReviewPRs[issue.Key]),
 				stageStyled,
-				title)
+				title))
 			flatIdx++
 		}
 	}
 
+	// The header always occupies one line; the rest of the budget is for
+	// the body. A non-positive maxRows disables the cap entirely.
+	if maxRows > 0 {
+		lines = windowIssueLines(lines, cursorLine, maxRows-1)
+	}
+
+	var b strings.Builder
+	b.WriteString(header)
+	b.WriteByte('\n')
+	for _, ln := range lines {
+		b.WriteString(ln)
+		b.WriteByte('\n')
+	}
 	return b.String()
+}
+
+// windowIssueLines returns at most budget lines centered on cursorLine,
+// replacing the clipped top/bottom rows with "N more" indicators so the
+// user can tell the list extends beyond the visible window.
+func windowIssueLines(lines []string, cursorLine, budget int) []string {
+	if budget < 1 {
+		budget = 1
+	}
+	if len(lines) <= budget {
+		return lines
+	}
+	if cursorLine < 0 {
+		cursorLine = 0
+	}
+
+	start := cursorLine - budget/2
+	if start < 0 {
+		start = 0
+	}
+	if start+budget > len(lines) {
+		start = len(lines) - budget
+	}
+	end := start + budget
+
+	out := append([]string(nil), lines[start:end]...)
+	if start > 0 {
+		out[0] = subtleStyle.Render(fmt.Sprintf("    ↑ %d more", start))
+	}
+	if end < len(lines) {
+		out[len(out)-1] = subtleStyle.Render(fmt.Sprintf("    ↓ %d more", len(lines)-end))
+	}
+	return out
 }
 
 // renderDomainsPanel renders the ambient network activity panel at the
