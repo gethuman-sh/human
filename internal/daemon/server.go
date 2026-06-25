@@ -54,6 +54,9 @@ type Server struct {
 	StatsStore       *stats.StatsStore                        // for query-time aggregation; nil disables tool-stats route
 	AgentCleaner     AgentCleaner                             // async agent cleanup; nil disables agent-stop-async route
 	VaultResolver    *vault.Resolver                          // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
+	// BoardTransitioner applies a board-transition request (advancing a card
+	// one pipeline stage). nil disables the board-transition route.
+	BoardTransitioner func(req BoardTransitionRequest) error
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
 
@@ -259,39 +262,7 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 	if len(args) == 0 {
 		return false
 	}
-	switch args[0] {
-	case "log-mode":
-		s.handleLogMode(conn, args[1:])
-		return true
-	case "hook-event":
-		s.handleHookEvent(conn, args[1:])
-		return true
-	case "hook-snapshot":
-		s.handleHookSnapshot(conn)
-		return true
-	case "network-events":
-		s.handleNetworkEvents(conn)
-		return true
-	case "tracker-diagnose":
-		s.handleTrackerDiagnose(conn, projectDir)
-		return true
-	case "tracker-issues":
-		s.handleTrackerIssues(conn)
-		return true
-	case "pending-confirms":
-		s.handlePendingConfirms(conn)
-		return true
-	case "confirm-op":
-		s.handleConfirmOp(conn, args[1:], clientPID)
-		return true
-	case "tool-stats":
-		s.handleToolStats(conn)
-		return true
-	case "agent-stop-async":
-		s.handleAgentStopAsync(conn, args[1:])
-		return true
-	case "subscribe":
-		s.handleSubscribe(conn)
+	if s.routeSimpleCommand(conn, args, projectDir, clientPID) {
 		return true
 	}
 
@@ -307,6 +278,41 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 	}
 
 	return false
+}
+
+// routeSimpleCommand dispatches the fixed-name daemon commands that map 1:1 to
+// a handler. Kept separate from routeIntercept so the latter's branchier
+// browser-relay path stays readable and within complexity bounds.
+func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir string, clientPID int) bool {
+	switch args[0] {
+	case "log-mode":
+		s.handleLogMode(conn, args[1:])
+	case "hook-event":
+		s.handleHookEvent(conn, args[1:])
+	case "hook-snapshot":
+		s.handleHookSnapshot(conn)
+	case "network-events":
+		s.handleNetworkEvents(conn)
+	case "tracker-diagnose":
+		s.handleTrackerDiagnose(conn, projectDir)
+	case "tracker-issues":
+		s.handleTrackerIssues(conn)
+	case "pending-confirms":
+		s.handlePendingConfirms(conn)
+	case "confirm-op":
+		s.handleConfirmOp(conn, args[1:], clientPID)
+	case "tool-stats":
+		s.handleToolStats(conn)
+	case "agent-stop-async":
+		s.handleAgentStopAsync(conn, args[1:])
+	case "subscribe":
+		s.handleSubscribe(conn)
+	case "board-transition":
+		s.handleBoardTransition(conn, args[1:])
+	default:
+		return false
+	}
+	return true
 }
 
 // handleHookEvent appends a Claude Code hook event to the in-memory store.
@@ -401,6 +407,33 @@ func (s *Server) handleTrackerIssues(conn net.Conn) {
 		return
 	}
 	resp := Response{Stdout: string(data) + "\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleBoardTransition applies a board-transition request. The request is a
+// single JSON arg so multi-word PM titles survive arg splitting. This route is
+// non-destructive (detectDestructive does not match "board-transition"), so it
+// bypasses the pending-confirm gate — the drag is the user's consent.
+func (s *Server) handleBoardTransition(conn net.Conn, args []string) {
+	if s.BoardTransitioner == nil {
+		s.writeError(conn, "board transitions not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "board-transition requires one JSON arg", 1)
+		return
+	}
+	var req BoardTransitionRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid board-transition request: "+err.Error(), 1)
+		return
+	}
+	if err := s.BoardTransitioner(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: "ok\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
 }

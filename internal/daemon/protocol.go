@@ -19,7 +19,11 @@ type TrackerIssuesResult struct {
 	// ReadyForReviewPRs maps an engineering ticket key to the pull-request URL
 	// carried on its handoff comment's optional `pr:` line, when present.
 	ReadyForReviewPRs map[string]string `json:"ready_for_review_prs,omitempty"`
-	Err               string            `json:"error,omitempty"`
+	// BoardCards is the derived pipeline placement per PM issue key, for the
+	// drag-board GUI. It is PM-role-only (maps a PM issue key → its derived
+	// BoardCard) and is left nil on engineering-tracker results.
+	BoardCards map[string]BoardCard `json:"board_cards,omitempty"`
+	Err        string               `json:"error,omitempty"`
 }
 
 // Request is sent from the client to the daemon (one JSON line per connection).

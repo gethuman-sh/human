@@ -234,6 +234,18 @@ func GetTrackerIssues(addr, token string) ([]TrackerIssuesResult, error) {
 	return results, nil
 }
 
+// BoardTransition asks the daemon to advance a card one pipeline stage. The
+// request is sent as a single JSON arg so multi-word PM titles survive arg
+// splitting on the daemon side.
+func BoardTransition(addr, token string, req BoardTransitionRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling board transition request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"board-transition", string(data)})
+	return err
+}
+
 // GetPendingConfirms fetches pending destructive operation confirmations from the daemon.
 func GetPendingConfirms(addr, token string) ([]PendingConfirm, error) {
 	out, err := RunRemoteCapture(addr, token, []string{"pending-confirms"})
