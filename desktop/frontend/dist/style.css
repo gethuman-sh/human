@@ -1,0 +1,196 @@
+:root {
+  --bg: #14161a;
+  --col-bg: #1c1f26;
+  --col-border: #2a2e37;
+  --card-bg: #242832;
+  --card-border: #333845;
+  --text: #e6e9ef;
+  --muted: #8a90a0;
+  --accent: #4f8cff;
+  --running: #d6a13a;
+  --done: #3ec07a;
+  --failed: #e0544e;
+  --drop-ok: #2f4a2f;
+  --drop-reject: #4a2f2f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.banner {
+  padding: 8px 14px;
+  background: var(--failed);
+  color: #fff;
+  font-weight: 600;
+}
+
+.banner.hidden {
+  display: none;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  padding: 12px;
+  height: 100%;
+  align-items: start;
+}
+
+.column {
+  background: var(--col-bg);
+  border: 1px solid var(--col-border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+  max-height: calc(100vh - 24px);
+}
+
+.column-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--col-border);
+}
+
+.column-count {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.column-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.column-body.drop-ok {
+  background: var(--drop-ok);
+}
+
+.column-body.drop-reject {
+  background: var(--drop-reject);
+}
+
+/* The Done column hosts a guarded inner drop zone rather than accepting drops
+   on the whole column, so a stray drop cannot push a PR. */
+.done-zone {
+  margin: 6px;
+  padding: 14px;
+  border: 2px dashed var(--col-border);
+  border-radius: 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.done-zone.drop-ok {
+  border-color: var(--done);
+  background: var(--drop-ok);
+}
+
+.done-zone.drop-reject {
+  border-color: var(--failed);
+  background: var(--drop-reject);
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 10px;
+  cursor: grab;
+}
+
+.card[draggable="false"] {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.card.dragging {
+  opacity: 0.5;
+}
+
+.card-key {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.card-title {
+  margin-top: 4px;
+  line-height: 1.3;
+}
+
+.card-meta {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+
+.badge.done {
+  color: var(--done);
+}
+
+.badge.running {
+  color: var(--running);
+}
+
+.badge.failed {
+  color: var(--failed);
+}
+
+.spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--running);
+  border-top-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.card-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--failed);
+}
+
+.disabled-target {
+  opacity: 0.5;
+}
