@@ -23,7 +23,7 @@ re-derives a stage.
 - `main.go` — Wails bootstrap and the daemon subscription bridge.
 - `frontend/` — the HTML/TS board. `src/board.ts` is the typed source; `dist/` is the checked-in built output that `//go:embed all:frontend/dist` ships, so the app runs without a separate npm build. `npm run build` regenerates `dist/`.
 
-The whole Go package is behind the `desktop` build tag (cgo webview backend), so
+The whole Go package is behind the `wailsapp` build tag (cgo webview backend), so
 `make build` / `make check` on a plain toolchain never touch it.
 
 ## Build
