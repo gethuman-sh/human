@@ -5,7 +5,7 @@ name: Desktop
 # macOS uses the Obj-C toolchain. So it is built on a 3-runner matrix, each with
 # its own native toolchain. This is intentionally a SEPARATE workflow from ci.yml
 # — the main lint/test/build jobs run on a plain Linux runner with no webview
-# headers, and the `desktop` build tag keeps the cgo path out of `go vet ./...`,
+# headers, and the `wailsapp` build tag keeps the cgo path out of `go vet ./...`,
 # `go list ./...` and `go build .` so those jobs stay green without GTK installed.
 
 on:
