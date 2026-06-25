@@ -28,6 +28,8 @@ import (
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/dispatch"
+	"github.com/gethuman-sh/human/internal/forge"
+	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/messaging/slack"
 	"github.com/gethuman-sh/human/internal/messaging/telegram"
 	"github.com/gethuman-sh/human/internal/proxy"
@@ -216,24 +218,25 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	go runMaintenanceLoop(ctx, logger, confirmStore, statsStore, auditStore)
 
 	srv := &daemon.Server{
-		Addr:             addr,
-		Token:            token,
-		SafeMode:         safe,
-		CmdFactory:       cmdFactory,
-		Logger:           logger,
-		ConnectedPIDs:    connTracker,
-		HookEvents:       hookStore,
-		NetworkEvents:    networkStore,
-		IssueFetcher:     fetchTrackerIssuesFunc(projectRegistry, vaultResolver),
-		TrackerDiagnoser: trackerDiagnoserFunc(projectRegistry, vaultResolver),
-		Projects:         projectRegistry,
-		PendingConfirms:  confirmStore,
-		StatsWriter:      statsWriter,
-		StatsStore:       statsStore,
-		AuditSink:        auditWriter,
-		AuditStore:       auditStore,
-		AgentCleaner:     &dockerAgentCleaner{},
-		VaultResolver:    vaultResolver,
+		Addr:              addr,
+		Token:             token,
+		SafeMode:          safe,
+		CmdFactory:        cmdFactory,
+		Logger:            logger,
+		ConnectedPIDs:     connTracker,
+		HookEvents:        hookStore,
+		NetworkEvents:     networkStore,
+		IssueFetcher:      fetchTrackerIssuesFunc(projectRegistry, vaultResolver),
+		TrackerDiagnoser:  trackerDiagnoserFunc(projectRegistry, vaultResolver),
+		Projects:          projectRegistry,
+		PendingConfirms:   confirmStore,
+		StatsWriter:       statsWriter,
+		StatsStore:        statsStore,
+		AuditSink:         auditWriter,
+		AuditStore:        auditStore,
+		AgentCleaner:      &dockerAgentCleaner{},
+		VaultResolver:     vaultResolver,
+		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver),
 	}
 
 	return &daemonState{
@@ -329,6 +332,8 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	go daemon.RunAgentCleanup(ctx, ds.srv.HookEvents, &dockerAgentCleaner{}, logger)
 	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, logger)
+	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
+		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver), logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }
@@ -1005,27 +1010,46 @@ func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		wg.Wait()
 
 		// Scan PM-tracker comments for [human:ready-for-review] handoffs and
-		// propagate the flagged engineering keys to engineering-tracker
-		// results. See cli/CLAUDE.md "Review handoff".
-		readyKeys, readyPRs := scanReadyForReview(jobs, results)
-		for i := range results {
-			if results[i].TrackerRole != "engineering" {
-				continue
-			}
+		// per-PM board state, then propagate them onto the results. See
+		// cli/CLAUDE.md "Review handoff".
+		readyKeys, readyPRs, boardCards := scanReadyForReview(jobs, results)
+		applyScanResults(results, readyKeys, readyPRs, boardCards)
+		return results, nil
+	}
+}
+
+// applyScanResults projects the comment-scan output back onto the fetched
+// results: board cards land on PM-role results (keyed by PM issue key) while
+// ready-for-review keys and PR URLs land on engineering-role results. Extracted
+// from fetchTrackerIssuesFunc to keep that closure within complexity bounds.
+func applyScanResults(results []daemon.TrackerIssuesResult, readyKeys map[string]bool, readyPRs map[string]string, boardCards map[string]daemon.BoardCard) {
+	for i := range results {
+		switch results[i].TrackerRole {
+		case "pm":
 			for _, iss := range results[i].Issues {
-				if readyKeys[iss.Key] {
-					results[i].ReadyForReview = append(results[i].ReadyForReview, iss.Key)
-					if pr := readyPRs[iss.Key]; pr != "" {
-						if results[i].ReadyForReviewPRs == nil {
-							results[i].ReadyForReviewPRs = make(map[string]string)
-						}
-						results[i].ReadyForReviewPRs[iss.Key] = pr
+				card, ok := boardCards[iss.Key]
+				if !ok {
+					continue
+				}
+				if results[i].BoardCards == nil {
+					results[i].BoardCards = make(map[string]daemon.BoardCard)
+				}
+				results[i].BoardCards[iss.Key] = card
+			}
+		case "engineering":
+			for _, iss := range results[i].Issues {
+				if !readyKeys[iss.Key] {
+					continue
+				}
+				results[i].ReadyForReview = append(results[i].ReadyForReview, iss.Key)
+				if pr := readyPRs[iss.Key]; pr != "" {
+					if results[i].ReadyForReviewPRs == nil {
+						results[i].ReadyForReviewPRs = make(map[string]string)
 					}
+					results[i].ReadyForReviewPRs[iss.Key] = pr
 				}
 			}
 		}
-
-		return results, nil
 	}
 }
 
@@ -1036,9 +1060,12 @@ func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 //
 // jobs and results are aligned 1:1 so we can recover the tracker.Provider for
 // a given result without re-loading instances from disk.
-func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (map[string]bool, map[string]string) {
+// cards maps each PM issue key to its derived BoardCard. It is built from the
+// same fetched comments, so no additional tracker round-trip is needed.
+func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (map[string]bool, map[string]string, map[string]daemon.BoardCard) {
 	ready := make(map[string]bool)
 	prs := make(map[string]string)
+	cards := make(map[string]daemon.BoardCard)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for i := range results {
@@ -1051,7 +1078,9 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (
 		}
 		for _, issue := range results[i].Issues {
 			wg.Add(1)
-			go func(c tracker.Commenter, key string) {
+			// Capture StatusType alongside Key so DeriveBoardCard can decide
+			// the empty-Backlog-vs-Hidden case for a marker-less ticket.
+			go func(c tracker.Commenter, key string, statusType tracker.Category) {
 				defer wg.Done()
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
@@ -1059,11 +1088,10 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (
 				if err != nil {
 					return
 				}
+				card := daemon.DeriveBoardCard(comments, statusType)
 				keys, pr := latestReadyKeys(comments)
-				if len(keys) == 0 {
-					return
-				}
 				mu.Lock()
+				cards[key] = card
 				for _, k := range keys {
 					ready[k] = true
 					if pr != "" {
@@ -1071,11 +1099,11 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (
 					}
 				}
 				mu.Unlock()
-			}(commenter, issue.Key)
+			}(commenter, issue.Key, issue.StatusType)
 		}
 	}
 	wg.Wait()
-	return ready, prs
+	return ready, prs, cards
 }
 
 // latestReadyKeys walks a comment thread and returns the engineering keys
@@ -1148,6 +1176,152 @@ func (c *dockerAgentCleaner) StopContainer(ctx context.Context, containerID stri
 	timeout := 2
 	_ = docker.ContainerStop(ctx, containerID, &timeout)
 	return docker.ContainerRemove(ctx, containerID, devcontainer.ContainerRemoveOptions{Force: true})
+}
+
+// dockerAgentLauncher implements daemon.AgentLauncher by starting a
+// devcontainer-based agent. It mirrors cmdagent.newManager and the existing
+// dockerAgentCleaner. Board launches set SkipPerms:true so the agent runs with
+// --dangerously-skip-permissions (required for unattended pipeline work).
+type dockerAgentLauncher struct{}
+
+func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace, configDir string) error {
+	docker, err := devcontainer.NewDockerClient()
+	if err != nil {
+		return errors.WrapWithDetails(err, "connecting to Docker for board agent", "agent", name)
+	}
+	defer func() { _ = docker.Close() }()
+
+	mgr := &agent.Manager{Docker: docker}
+	_, err = mgr.Start(ctx, agent.StartOpts{
+		Name:      name,
+		Prompt:    prompt,
+		SkipPerms: true,
+		Workspace: workspace,
+		ConfigDir: configDir,
+	})
+	return err
+}
+
+// forgePRPublisher implements daemon.PRPublisher: it pushes the recorded branch
+// and opens a pull request on the workspace's forge. It resolves the forge by
+// role/kind from the configured instances rather than by key prefix.
+type forgePRPublisher struct {
+	resolver *vault.Resolver
+	lookup   config.EnvLookup
+}
+
+func (p forgePRPublisher) PushAndCreatePR(ctx context.Context, req daemon.PRRequest) (string, error) {
+	// Push first: a failed push must surface as pr-failed BEFORE any PR is
+	// opened, so we never leave a half-created PR pointing at an unpushed branch.
+	if err := gitrepo.Push(ctx, req.WorkspaceDir, req.Branch); err != nil {
+		return "", err
+	}
+
+	creator, repo, err := resolveForge(req.WorkspaceDir, p.lookup, p.resolver)
+	if err != nil {
+		return "", err
+	}
+
+	base := gitrepo.DefaultBranch(ctx, req.WorkspaceDir)
+	pr, err := creator.CreatePullRequest(ctx, &forge.PullRequest{
+		Repo:  repo,
+		Base:  base,
+		Head:  req.Branch,
+		Title: req.Title,
+		Body:  req.Body,
+	})
+	if err != nil {
+		return "", errors.WrapWithDetails(err, "creating pull request", "repo", repo, "head", req.Branch)
+	}
+	return pr.URL, nil
+}
+
+// resolveForge finds the configured instance that carries a forge capability
+// for the workspace and resolves the "owner/repo" from origin.
+func resolveForge(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (forge.Creator, string, error) {
+	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	if err != nil {
+		return nil, "", err
+	}
+	var creator forge.Creator
+	for _, inst := range instances {
+		if inst.Forge != nil || forge.IsForgeKind(inst.Kind) {
+			if inst.Forge != nil {
+				creator = inst.Forge
+				break
+			}
+		}
+	}
+	if creator == nil {
+		return nil, "", errors.WithDetails("no forge configured for workspace", "dir", dir)
+	}
+
+	raw, err := gitrepo.OriginURL(context.Background(), dir)
+	if err != nil {
+		return nil, "", err
+	}
+	_, repo, ok := forge.ParseRemoteURL(raw)
+	if !ok {
+		return nil, "", errors.WithDetails("could not parse git origin remote", "remote", raw)
+	}
+	return creator, repo, nil
+}
+
+// resolvePMCommenter resolves the PM-role tracker.Commenter for a workspace.
+// It selects by ROLE (InferRole()=="pm"), never by key prefix: both trackers
+// can be configured with the same name, so key auto-detect mis-routes.
+func resolvePMCommenter(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.Commenter, error) {
+	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		if inst.InferRole() != "pm" {
+			continue
+		}
+		if c, ok := inst.Provider.(tracker.Commenter); ok {
+			return c, nil
+		}
+	}
+	return nil, errors.WithDetails("no PM-role tracker with comment support configured", "dir", dir)
+}
+
+// boardTransitionerFunc builds the daemon's BoardTransitioner closure: it
+// resolves the PM commenter by role per request and applies the transition with
+// the Docker launcher and forge publisher against the resolved project dir.
+func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.BoardTransitionRequest) error {
+	return func(req daemon.BoardTransitionRequest) error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for board transition")
+		}
+		entry := entries[0]
+		lookup := entry.EnvLookup()
+		commenter, err := resolvePMCommenter(entry.Dir, lookup, resolver)
+		if err != nil {
+			return err
+		}
+		deps := daemon.BoardTransitionDeps{
+			Commenter:    commenter,
+			Launcher:     dockerAgentLauncher{},
+			Publisher:    forgePRPublisher{resolver: resolver, lookup: lookup},
+			WorkspaceDir: entry.Dir,
+			ConfigDir:    entry.Dir,
+		}
+		return deps.ApplyTransition(context.Background(), req)
+	}
+}
+
+// boardPMCommenterFunc resolves the PM commenter for the board failure watcher.
+func boardPMCommenterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() (tracker.Commenter, error) {
+	return func() (tracker.Commenter, error) {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return nil, errors.WithDetails("no project registered for board failure watch")
+		}
+		entry := entries[0]
+		return resolvePMCommenter(entry.Dir, entry.EnvLookup(), resolver)
+	}
 }
 
 // dockerAgentSweeper implements daemon.AgentZombieSweeper using real Docker and agent metadata.
