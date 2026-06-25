@@ -10,3 +10,4 @@ A long-running background service that holds your tracker credentials once and a
 - Surfaces ready-for-review handoffs to the TUI
 - Pauses for confirmation on destructive operations
 - Records tool activity for later statistics
+- Derives each PM ticket's workflow-board placement and applies drag-to-trigger pipeline transitions for the desktop board
