@@ -76,6 +76,17 @@ After creating the ticket, capture the returned engineering ticket key and updat
 
 Then fetch the ticket back and verify the description matches the updated plan content byte-for-byte. If it does not match, update the ticket until it does.
 
+## Phase 6: Post the plan-ready marker on the PM ticket
+
+After the engineering ticket exists, post a structured marker comment on the **PM ticket** so the workflow board can advance the card from Planning into Implementation (the board resolves the Implementation input from this `engineering:` line). The format is fixed so it can be parsed unambiguously across trackers:
+
+```
+[human:plan-ready]
+engineering: <ENG_KEY>
+```
+
+Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`, where `<pm-tracker>` is the PM tracker resolved from `human tracker list` (the one with `"role": "pm"`), `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header, and `<ENG_KEY>` is the engineering ticket key just created. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
+
 ## After completion
 
 Tell the user:
