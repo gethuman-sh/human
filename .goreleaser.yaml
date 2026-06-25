@@ -1,5 +1,13 @@
 version: 2
 
+# Never add a desktop (Wails) build entry here, e.g. `main: ./desktop` — that
+# is a plain `go build` which links but fails at startup (Wails requires the
+# `desktop` build tag that only `wails build` injects). The desktop artifact is
+# cgo and cannot be cross-compiled, so it is built per-OS by `make desktop`
+# (wraps `wails build`) on the 3-runner matrix in .github/workflows/desktop.yml.
+# When it ships, attach the per-OS bundles via release.extra_files. See
+# docs/desktop-app.md.
+
 builds:
   - main: .
     binary: human
