@@ -264,10 +264,27 @@ func TestAwaitCallback_LogsParamKeysNotValues(t *testing.T) {
 		}
 	}()
 
-	// Wait briefly for the inner HTTP server to be ready, then fire a callback.
-	time.Sleep(50 * time.Millisecond)
-	secret := "supersecret_code_value_12345"
+	// awaitCallback starts srv.Serve(ln) in its own goroutine, so the inner
+	// HTTP server may not be accepting yet when we fire the request. On a loaded
+	// runner a fixed sleep races that startup and the connection is closed before
+	// a response (EOF). Retry the callback until the server answers.
+	// awaitCallback starts srv.Serve(ln) in its own goroutine, so the inner HTTP
+	// server may not be accepting yet. Probe an unregistered path first — the mux
+	// answers 404 without touching the single-use callback handler — so we only
+	// fire the real callback once the server is confirmed serving. A fixed sleep
+	// here races startup on a loaded runner and the connection is closed before a
+	// response (EOF).
 	client := &http.Client{Timeout: 2 * time.Second}
+	require.Eventually(t, func() bool {
+		r, getErr := client.Get(fmt.Sprintf("http://127.0.0.1:%d/readyz", port))
+		if getErr != nil {
+			return false
+		}
+		_ = r.Body.Close()
+		return true
+	}, 2*time.Second, 10*time.Millisecond, "callback server never became ready")
+
+	secret := "supersecret_code_value_12345"
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?code=%s&state=abc", port, secret))
 	require.NoError(t, err)
 	if resp != nil {

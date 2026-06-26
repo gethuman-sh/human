@@ -24,6 +24,23 @@
 #     "AuthZ plugin bypass when provided oversized request bodies"
 #     Server-side: dockerd AuthZ plugin enforcement. We don't run AuthZ plugins.
 #
+#   GO-2026-5746
+#     "PUT /containers/{id}/archive executes container binary on the host"
+#     Server-side: dockerd extracts the uploaded archive on the host. We only
+#     ever call CopyToContainer against containers we build and control — never
+#     an attacker-supplied image — so the malicious-archive vector is not reachable.
+#
+#   GO-2026-5668
+#     "Race condition in docker cp allows creation of arbitrary empty files on
+#     the host via symlink swap"
+#     Server-side: the race is in dockerd's copy extraction. Exploiting it needs
+#     a malicious container racing the copy; our containers are ones we create.
+#
+#   GO-2026-5617
+#     "Race condition in docker cp allows bind mount redirection to host path"
+#     Server-side: same dockerd copy-extraction race as GO-2026-5668, against a
+#     malicious container. Not reachable for the trusted containers we operate on.
+#
 # Review reminder:
 #   Re-evaluate this allow-list every time `make upgrade-deps` is run, or at
 #   the next quarterly review (next: 2026-07-01). If Moby ships a fixed
@@ -43,6 +60,9 @@ set -uo pipefail
 SUPPRESSED=(
   "GO-2026-4883"
   "GO-2026-4887"
+  "GO-2026-5746"
+  "GO-2026-5668"
+  "GO-2026-5617"
 )
 
 # Build a jq array literal like ["GO-2026-4883","GO-2026-4887"]

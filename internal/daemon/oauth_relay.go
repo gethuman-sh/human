@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -14,6 +15,10 @@ import (
 )
 
 const oauthAcceptTimeout = 5 * time.Minute
+
+// oauthShutdownTimeout bounds the graceful drain of the callback server so a
+// stuck connection can never wedge awaitCallback's return.
+const oauthShutdownTimeout = 5 * time.Second
 
 // BrowserOpener opens a URL in the browser. Extracted for testability.
 type BrowserOpener interface {
@@ -167,7 +172,16 @@ func (s *Server) awaitCallback(ln net.Listener, info *oauth.RedirectInfo) (strin
 			s.Logger.Warn().Err(serveErr).Msg("OAuth callback server error")
 		}
 	}()
-	defer func() { _ = srv.Close() }()
+	// Drain gracefully rather than Close: the handler sends the callback URL
+	// before it finishes writing the "Authorization successful" page, so the
+	// select below can return while that response is still in flight. A hard
+	// Close would reset the connection and the browser would see an error
+	// instead of the success page; Shutdown lets the in-flight response finish.
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), oauthShutdownTimeout)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
 
 	select {
 	case u := <-callbackURL:
