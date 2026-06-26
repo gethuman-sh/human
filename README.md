@@ -109,6 +109,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 
 - [Audit Trail](internal/audit/README.md) — structured, queryable record of every agent action against trackers
 - [Background Daemon](internal/daemon/README.md) — holds credentials, answers commands fast
+- [Monarch Console](internal/monarch/README.md) — team-level, identity-free observability for a swarm of daemons
 - [Dev Containers](internal/devcontainer/README.md) — reproducible sandbox for agents
 - [HTTPS Proxy](internal/proxy/README.md) — filter outbound agent traffic by domain
 - [Chrome Bridge](internal/chrome/README.md) — drive host Chrome from a container
