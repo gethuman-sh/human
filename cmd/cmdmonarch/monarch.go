@@ -1,7 +1,7 @@
 // Package cmdmonarch implements the standalone "monarch" binary: the team-level
 // observability console. It runs a TCP ingest server that daemons stream
-// identity-free events to, persists them to SQLite, and renders a live
-// work-board + burn TUI.
+// identity-free events to, persists them to SQLite, and serves a read-only web
+// dashboard (work board + burn + capacity) that auto-refreshes in a browser.
 package cmdmonarch
 
 import (
@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
@@ -22,23 +21,30 @@ import (
 // chrome/proxy siblings so a monarch console and a daemon can coexist on a host.
 const defaultAddr = "0.0.0.0:19290"
 
+// defaultWebAddr serves the dashboard on a second port, distinct from the ingest
+// port (19290) and the daemon (19285), so both servers share one process and one
+// store without colliding.
+const defaultWebAddr = "0.0.0.0:19291"
+
 // BuildMonarchCmd creates the "monarch" command.
 func BuildMonarchCmd() *cobra.Command {
 	var addr string
+	var webAddr string
 	var headless bool
 	cmd := &cobra.Command{
 		Use:   "monarch",
 		Short: "Team-level operations console for a swarm of human daemons",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runMonarch(addr, headless)
+			return runMonarch(addr, webAddr, headless)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", defaultAddr, "Listen address for daemon telemetry (host:port)")
-	cmd.Flags().BoolVar(&headless, "headless", false, "Run the ingest server only (no TUI), hardened for systemd: readiness + watchdog + auto-restart on binary change")
+	cmd.Flags().StringVar(&webAddr, "web-addr", defaultWebAddr, "Listen address for the web dashboard (host:port)")
+	cmd.Flags().BoolVar(&headless, "headless", false, "Run the ingest server only (no web UI), hardened for systemd: readiness + watchdog + auto-restart on binary change")
 	return cmd
 }
 
-func runMonarch(addr string, headless bool) error {
+func runMonarch(addr, webAddr string, headless bool) error {
 	store, err := monarch.NewStore(monarch.DefaultDBPath())
 	if err != nil {
 		return errors.WrapWithDetails(err, "open monarch store")
@@ -54,23 +60,23 @@ func runMonarch(addr string, headless bool) error {
 	if headless {
 		return runHeadless(ctx, addr, store)
 	}
-	return runConsole(ctx, addr, store, stop)
+	return runConsole(ctx, addr, webAddr, store)
 }
 
-// runConsole runs the ingest server alongside an interactive TUI. The TUI owns
-// the terminal, so logs are silenced to keep the alt-screen clean.
-func runConsole(ctx context.Context, addr string, store *monarch.Store, stop context.CancelFunc) error {
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger().Level(zerolog.Disabled)
+// runConsole runs the ingest server alongside the read-only web dashboard,
+// sharing one store. Both servers run in the background and ingest/serve errors
+// are non-fatal, so the console stays up; it blocks until a signal cancels ctx.
+func runConsole(ctx context.Context, addr, webAddr string, store *monarch.Store) error {
+	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	startIngest(ctx, addr, store, logger)
+	startWeb(ctx, webAddr, store, logger)
+	logger.Info().Str("ingest", addr).Str("web", webAddr).Msg("monarch console ready")
 
-	m := newModel(store)
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	_, err := p.Run()
-	stop()
-	return err
+	<-ctx.Done()
+	return nil
 }
 
-// runHeadless runs the ingest server with no TUI, hardened for systemd: it
+// runHeadless runs the ingest server with no web UI, hardened for systemd: it
 // announces readiness, answers the watchdog, and exits when its own binary is
 // replaced so systemd restarts it on the new release. Blocks until ctx is done.
 func runHeadless(ctx context.Context, addr string, store *monarch.Store) error {
@@ -93,6 +99,17 @@ func startIngest(ctx context.Context, addr string, store *monarch.Store, logger 
 	go func() {
 		if serveErr := srv.ListenAndServe(ctx); serveErr != nil {
 			logger.Error().Err(serveErr).Msg("monarch ingest server failed")
+		}
+	}()
+}
+
+// startWeb launches the read-only web dashboard in the background. A web failure
+// is non-fatal — telemetry ingest continues even if the dashboard cannot bind.
+func startWeb(ctx context.Context, addr string, store *monarch.Store, logger zerolog.Logger) {
+	web := &monarch.WebServer{Addr: addr, Store: store, Logger: logger}
+	go func() {
+		if serveErr := web.ListenAndServe(ctx); serveErr != nil {
+			logger.Error().Err(serveErr).Msg("monarch web server failed")
 		}
 	}()
 }

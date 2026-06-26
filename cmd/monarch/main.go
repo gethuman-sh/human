@@ -1,9 +1,9 @@
 // Command monarch is the standalone team-level observability console for a
 // swarm of human daemons. Daemons opt in (via the daemon's --monarch flag) and
 // stream identity-free telemetry to it over TCP; monarch persists the events to
-// SQLite and renders a live work-board + burn TUI. It is a separate binary from
-// `human` on purpose: a team runs one monarch (e.g. for a lead/CTO) while each
-// developer runs their own daemon.
+// SQLite and serves a live work-board + burn + capacity web dashboard. It is a
+// separate binary from `human` on purpose: a team runs one monarch (e.g. for a
+// lead/CTO) while each developer runs their own daemon.
 package main
 
 import (
