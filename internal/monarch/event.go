@@ -19,6 +19,10 @@ const (
 	EventAgentStart EventType = "agent.start"
 	EventAgentStop  EventType = "agent.stop"
 	EventTokensUsed EventType = "tokens.used"
+	// EventHeartbeat is sent periodically by an otherwise-idle daemon so monarch
+	// can show it is connected even when no agent is running. It carries no
+	// agent/work fields — only the daemon id and timestamp.
+	EventHeartbeat EventType = "daemon.heartbeat"
 )
 
 // State is the work-board state a daemon reports for an agent.

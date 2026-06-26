@@ -72,6 +72,25 @@ func TestStore_Insert_WorkBoard(t *testing.T) {
 	assert.Equal(t, "cli", board[0].Repo)
 }
 
+// A heartbeat keeps an idle daemon visible in capacity without ever appearing as
+// a (blank) row on the work board.
+func TestStore_Heartbeat_presenceNotWork(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+
+	insert(t, s, Event{Type: EventHeartbeat, DaemonID: "daemon-idle", State: StateIdle, TS: now.Add(-5 * time.Second)})
+
+	board, err := s.WorkBoard(context.Background(), now.Add(-time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, board, "heartbeats must not show on the work board")
+
+	cap, err := s.Capacity(context.Background(), now.Add(-time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, 1, cap.Daemons, "heartbeating daemon counts as connected")
+	assert.Equal(t, 1, cap.Idle)
+	assert.Equal(t, 0, cap.Busy)
+}
+
 func TestStore_WorkBoard_excludesStopped(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Now().UTC()

@@ -148,12 +148,12 @@ func (s *Store) WorkBoard(ctx context.Context, since time.Time) ([]WorkItem, err
 		FROM monarch_events
 		WHERE id IN (
 			SELECT MAX(id) FROM monarch_events
-			WHERE timestamp >= ?
+			WHERE timestamp >= ? AND type != ?
 			GROUP BY daemon_id, agent_id
 		)
 		AND type != ?
 		ORDER BY timestamp DESC
-	`, since.UTC().Format(dbTimeFormat), string(EventAgentStop))
+	`, since.UTC().Format(dbTimeFormat), string(EventHeartbeat), string(EventAgentStop))
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "query monarch work board")
 	}

@@ -18,6 +18,11 @@ const (
 	defaultWidth   = 80
 	refreshEvery   = 2 * time.Second
 	workBoardSince = 24 * time.Hour
+	// presenceWindow is the live-capacity window: a daemon counts as connected
+	// only if monarch saw an event (a heartbeat or real work) within it. It is a
+	// few heartbeat intervals so a single dropped heartbeat does not drop the
+	// daemon, while a daemon that actually stops disappears within seconds.
+	presenceWindow = 3 * monarch.DefaultHeartbeatInterval
 	storeReadLimit = 3 * time.Second
 )
 
@@ -73,7 +78,7 @@ func fetchCmd(store *monarch.Store) tea.Cmd {
 		board, _ := store.WorkBoard(ctx, now.Add(-workBoardSince))
 		burnT, _ := store.BurnByTicket(ctx, dayStart)
 		burnR, _ := store.BurnByRepo(ctx, dayStart)
-		cap, _ := store.Capacity(ctx, now.Add(-workBoardSince))
+		cap, _ := store.Capacity(ctx, now.Add(-presenceWindow))
 		return dataMsg{board: board, burnT: burnT, burnR: burnR, cap: cap}
 	}
 }

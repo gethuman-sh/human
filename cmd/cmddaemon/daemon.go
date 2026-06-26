@@ -267,6 +267,11 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr, monarchAddr str
 	auditStore, auditWriter := initAuditStore(ctx, logger)
 
 	monarchSender, daemonID := initMonarchSender(ctx, logger, monarchAddr, ".")
+	// A periodic heartbeat keeps the daemon visible on the monarch console even
+	// when it is idle and emitting no agent lifecycle events.
+	if monarchSender != nil {
+		monarch.StartHeartbeat(ctx, monarchSender, daemonID, "", monarch.DefaultHeartbeatInterval)
+	}
 
 	go runMaintenanceLoop(ctx, logger, confirmStore, statsStore, auditStore)
 
