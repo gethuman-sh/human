@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -567,5 +569,36 @@ func TestModelUsageTotal(t *testing.T) {
 	want := 380
 	if got != want {
 		t.Errorf("ModelUsage.Total() = %d, want %d", got, want)
+	}
+}
+
+func TestSumTranscriptTokens(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":40,"cache_creation_input_tokens":10,"cache_read_input_tokens":2000}}}`,
+		`{"type":"user","message":{}}`,
+		`{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":50,"output_tokens":20,"cache_read_input_tokens":500}}}`,
+		`not json`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := SumTranscriptTokens(path)
+	if got.InputTokens != 150 || got.OutputTokens != 60 || got.CacheCreate != 10 || got.CacheRead != 2500 {
+		t.Fatalf("unexpected totals: %+v", got)
+	}
+	if got.Total() != 2720 {
+		t.Fatalf("Total() = %d, want 2720", got.Total())
+	}
+}
+
+func TestSumTranscriptTokens_missingFile(t *testing.T) {
+	if got := SumTranscriptTokens(""); got.Total() != 0 {
+		t.Fatalf("empty path should yield zero, got %+v", got)
+	}
+	if got := SumTranscriptTokens(filepath.Join(t.TempDir(), "nope.jsonl")); got.Total() != 0 {
+		t.Fatalf("missing file should yield zero, got %+v", got)
 	}
 }

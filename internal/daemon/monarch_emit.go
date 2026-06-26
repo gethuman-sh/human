@@ -28,6 +28,10 @@ func (s *Server) emitMonarch(evt hookevents.Event) {
 	if s.MonarchSink == nil || s.DaemonID == "" {
 		return
 	}
+	// Burn is independent of the work-state mapping: token counts arrive on
+	// Stop/SessionEnd, which are not all work-board states, so emit them first.
+	s.emitTokens(evt)
+
 	et, state, ok := monarchTypeForHook(evt.EventName, evt.NotificationType)
 	if !ok {
 		return
@@ -41,16 +45,30 @@ func (s *Server) emitMonarch(evt hookevents.Event) {
 	}
 	s.enrichFromAgentMeta(&e, evt.AgentName, evt.Cwd)
 	s.MonarchSink.Send(e)
+}
 
-	// Burn telemetry is wired here but carries zero counts for now: the host
-	// daemon cannot read container token usage from the hook stream yet, so the
-	// burn pane shows "—" until that source is threaded through (Decision D).
-	if state == monarch.StateCoding || state == monarch.StateStopped {
-		tok := e
-		tok.Type = monarch.EventTokensUsed
-		tok.Payload = &monarch.TokenPayload{}
-		s.MonarchSink.Send(tok)
+// emitTokens streams a tokens.used event carrying the session's cumulative token
+// counts (parsed client-side from the transcript). It is a no-op when no counts
+// are present, so events without burn data never create empty burn rows.
+func (s *Server) emitTokens(evt hookevents.Event) {
+	total := evt.InputTokens + evt.OutputTokens + evt.CacheCreate + evt.CacheRead
+	if total == 0 {
+		return
 	}
+	e := monarch.Event{
+		Type:     monarch.EventTokensUsed,
+		DaemonID: s.DaemonID,
+		AgentID:  hashAgentID(evt.AgentName, evt.SessionID),
+		TS:       time.Now().UTC(),
+		Payload: &monarch.TokenPayload{
+			InputTokens:  evt.InputTokens,
+			OutputTokens: evt.OutputTokens,
+			CacheCreate:  evt.CacheCreate,
+			CacheRead:    evt.CacheRead,
+		},
+	}
+	s.enrichFromAgentMeta(&e, evt.AgentName, evt.Cwd)
+	s.MonarchSink.Send(e)
 }
 
 // emitMonarchStop streams an agent.stop when an agent is decommissioned, so the

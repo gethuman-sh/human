@@ -96,19 +96,37 @@ func TestEmitMonarch_emitsStart(t *testing.T) {
 	assert.NotEmpty(t, events[0].AgentID)
 }
 
-func TestEmitMonarch_codingEmitsTokenEvent(t *testing.T) {
+func TestEmitMonarch_codingEmitsOnlyStart(t *testing.T) {
 	sink := &fakeSink{}
 	s := &Server{MonarchSink: sink, DaemonID: "daemon-1"}
 
 	s.emitMonarch(hookevents.Event{EventName: "PreToolUse", SessionID: "s1", Cwd: "/x/cli"})
 
 	events := sink.all()
-	require.Len(t, events, 2, "coding emits agent.start plus a wired-but-zero tokens.used")
+	require.Len(t, events, 1, "coding with no token counts emits only agent.start")
 	assert.Equal(t, monarch.EventAgentStart, events[0].Type)
 	assert.Equal(t, monarch.StateCoding, events[0].State)
-	assert.Equal(t, monarch.EventTokensUsed, events[1].Type)
-	require.NotNil(t, events[1].Payload)
-	assert.Equal(t, 0, events[1].Payload.InputTokens, "burn is wired but zero for this cut")
+}
+
+func TestEmitMonarch_emitsRealTokensFromTranscript(t *testing.T) {
+	sink := &fakeSink{}
+	s := &Server{MonarchSink: sink, DaemonID: "daemon-1"}
+
+	// SessionEnd carrying transcript-parsed counts maps to agent.stop and also
+	// emits a populated tokens.used.
+	s.emitMonarch(hookevents.Event{
+		EventName: "SessionEnd", SessionID: "s1", Cwd: "/x/cli",
+		InputTokens: 1200, OutputTokens: 300, CacheRead: 5000,
+	})
+
+	events := sink.all()
+	require.Len(t, events, 2, "tokens.used (burn) plus the agent.stop lifecycle event")
+	assert.Equal(t, monarch.EventTokensUsed, events[0].Type)
+	require.NotNil(t, events[0].Payload)
+	assert.Equal(t, 1200, events[0].Payload.InputTokens)
+	assert.Equal(t, 300, events[0].Payload.OutputTokens)
+	assert.Equal(t, 5000, events[0].Payload.CacheRead)
+	assert.Equal(t, monarch.EventAgentStop, events[1].Type)
 }
 
 func TestEmitMonarch_enrichesFromAgentMeta(t *testing.T) {

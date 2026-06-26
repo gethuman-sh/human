@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -209,5 +210,29 @@ func ParseHookEventArgs(args []string) hookevents.Event {
 	if len(args) > 6 {
 		evt.AgentName = clampField(args[6])
 	}
+	// Optional cumulative token counts (positions 7-10), present only on
+	// turn/session-boundary events. Unparseable values clamp to zero.
+	if len(args) > 7 {
+		evt.InputTokens = parseTokenArg(args[7])
+	}
+	if len(args) > 8 {
+		evt.OutputTokens = parseTokenArg(args[8])
+	}
+	if len(args) > 9 {
+		evt.CacheCreate = parseTokenArg(args[9])
+	}
+	if len(args) > 10 {
+		evt.CacheRead = parseTokenArg(args[10])
+	}
 	return evt
+}
+
+// parseTokenArg parses a non-negative token count from a forwarded arg, clamping
+// anything malformed or negative to zero so a bad client cannot skew burn.
+func parseTokenArg(s string) int {
+	n, err := strconv.Atoi(clampField(s))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog"
@@ -380,6 +381,31 @@ type hookInput struct {
 	NotificationType string `json:"notification_type"`
 	ToolName         string `json:"tool_name"`
 	ErrorType        string `json:"error"`
+	TranscriptPath   string `json:"transcript_path"`
+}
+
+// hookTokenArgs returns the four cumulative token counts (input, output,
+// cache-create, cache-read) parsed from the session transcript, appended to the
+// hook-event args so the daemon can emit real burn telemetry. It only reads the
+// transcript at turn/session boundaries (Stop, SessionEnd) — where re-reading is
+// cheap next to the work just done — and returns nil otherwise, keeping the
+// arg contract unchanged for the frequent per-tool hooks.
+func hookTokenArgs(input hookInput) []string {
+	switch input.EventName {
+	case "Stop", "SessionEnd":
+	default:
+		return nil
+	}
+	t := claude.SumTranscriptTokens(input.TranscriptPath)
+	if t.Total() == 0 {
+		return nil
+	}
+	return []string{
+		strconv.Itoa(t.InputTokens),
+		strconv.Itoa(t.OutputTokens),
+		strconv.Itoa(t.CacheCreate),
+		strconv.Itoa(t.CacheRead),
+	}
 }
 
 // buildHookRunE returns the RunE for the "hook" command. It reads Claude Code
@@ -410,6 +436,7 @@ func buildHookRunE() func(*cobra.Command, []string) error {
 
 		agentName := os.Getenv("HUMAN_AGENT_NAME")
 		args := []string{"hook-event", input.EventName, input.SessionID, input.Cwd, input.NotificationType, input.ToolName, input.ErrorType, agentName}
+		args = append(args, hookTokenArgs(input)...)
 		_, _ = daemon.RunRemote(addr, token, args, version)
 		return nil
 	}

@@ -16,6 +16,12 @@ type Event struct {
 	ToolName         string    `json:"tool_name,omitempty"`
 	ErrorType        string    `json:"error_type,omitempty"`
 	AgentName        string    `json:"agent_name,omitempty"`
+	// Cumulative session token counts, present only on turn/session-boundary
+	// events (Stop, SessionEnd) where the client parsed the transcript.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+	CacheCreate  int `json:"cache_create,omitempty"`
+	CacheRead    int `json:"cache_read,omitempty"`
 }
 
 // SessionSnapshot holds the derived working/idle state for one session.

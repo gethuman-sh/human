@@ -1,15 +1,67 @@
 package claude
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
 )
+
+// TranscriptTokens is the cumulative token usage parsed from a single session
+// transcript file.
+type TranscriptTokens struct {
+	InputTokens  int
+	OutputTokens int
+	CacheCreate  int
+	CacheRead    int
+}
+
+// Total is the sum across all token classes — the burn figure monarch reports.
+func (t TranscriptTokens) Total() int {
+	return t.InputTokens + t.OutputTokens + t.CacheCreate + t.CacheRead
+}
+
+// SumTranscriptTokens reads a Claude Code transcript JSONL file and sums token
+// usage across all assistant messages. It is best-effort: an unreadable file or
+// malformed lines yield whatever was parsed so far and never an error, so it is
+// safe to call on the hook hot path without ever blocking the agent.
+func SumTranscriptTokens(path string) TranscriptTokens {
+	var t TranscriptTokens
+	if path == "" {
+		return t
+	}
+	f, err := os.Open(path) // #nosec G304 -- path is the hook-provided transcript for this session
+	if err != nil {
+		return t
+	}
+	defer func() { _ = f.Close() }()
+
+	sc := bufio.NewScanner(f)
+	// Transcript lines can be large (tool results); raise the scanner cap to the
+	// 1 MiB convention used elsewhere for JSONL reads.
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for sc.Scan() {
+		var entry jsonlLine
+		if err := json.Unmarshal(sc.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry.Type != "assistant" || entry.Message.Usage == nil {
+			continue
+		}
+		u := entry.Message.Usage
+		t.InputTokens += u.InputTokens
+		t.OutputTokens += u.OutputTokens
+		t.CacheCreate += u.CacheCreationInputTokens
+		t.CacheRead += u.CacheReadInputTokens
+	}
+	return t
+}
 
 // WindowStart returns the start of the current 5-hour usage window in UTC.
 func WindowStart(now time.Time) time.Time {
