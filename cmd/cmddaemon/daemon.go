@@ -30,6 +30,7 @@ import (
 	"github.com/gethuman-sh/human/internal/dispatch"
 	"github.com/gethuman-sh/human/internal/messaging/slack"
 	"github.com/gethuman-sh/human/internal/messaging/telegram"
+	"github.com/gethuman-sh/human/internal/monarch"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/stats"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -61,6 +62,7 @@ func buildDaemonStartCmd(cmdFactory func() *cobra.Command, version string) *cobr
 	var debug bool
 	var foreground bool
 	var projectDirs []string
+	var monarchAddr string
 
 	cmd := &cobra.Command{
 		Use:   "start",
@@ -72,9 +74,9 @@ func buildDaemonStartCmd(cmdFactory func() *cobra.Command, version string) *cobr
 			}
 
 			if foreground || os.Getenv(daemonChildEnv) != "" {
-				return runDaemonForeground(cmd, addr, chromeAddr, proxyAddr, interactive, safe, debug, projectDirs, cmdFactory, version)
+				return runDaemonForeground(cmd, addr, chromeAddr, proxyAddr, monarchAddr, interactive, safe, debug, projectDirs, cmdFactory, version)
 			}
-			return runDaemonBackground(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs)
+			return runDaemonBackground(cmd, addr, chromeAddr, proxyAddr, monarchAddr, safe, debug, projectDirs)
 		},
 	}
 
@@ -86,7 +88,25 @@ func buildDaemonStartCmd(cmdFactory func() *cobra.Command, version string) *cobr
 	cmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "Run in foreground (don't daemonize)")
 	cmd.Flags().StringArrayVar(&projectDirs, "project", nil, "Project directory to register (repeatable; defaults to cwd)")
+	cmd.Flags().StringVar(&monarchAddr, "monarch", "", "Stream identity-free swarm telemetry to a monarch console at host:port (opt-in; default off)")
 	return cmd
+}
+
+// resolveMonarchAddr returns the monarch console address and team label. The
+// --monarch flag wins; otherwise the optional "monarch:" config section is read
+// from dir. An empty address means monarch telemetry is disabled.
+func resolveMonarchAddr(flag, dir string) (addr, team string) {
+	if flag != "" {
+		return flag, ""
+	}
+	var cfg struct {
+		Addr string `mapstructure:"addr"`
+		Team string `mapstructure:"team"`
+	}
+	if err := config.UnmarshalSection(dir, "monarch", &cfg); err != nil {
+		return "", ""
+	}
+	return cfg.Addr, cfg.Team
 }
 
 // daemonState holds initialized daemon components before the main event loop.
@@ -102,6 +122,7 @@ type daemonState struct {
 	statsWriter   *stats.Writer
 	auditStore    *audit.Store
 	auditWriter   *audit.Writer
+	monarchSender *monarch.Sender
 }
 
 // runMaintenanceLoop periodically cleans up stale pending confirmations and
@@ -147,9 +168,37 @@ func initAuditStore(ctx context.Context, logger zerolog.Logger) (*audit.Store, *
 	return store, audit.NewWriter(ctx, store, logger)
 }
 
+// initMonarchSender builds the monarch telemetry sender and opaque daemon id
+// when monarch is enabled (flag or config). It keeps the wiring out of
+// initDaemon so that function stays under the lint complexity gate. A disabled
+// or failed-id monarch returns (nil, "") and never aborts daemon startup.
+func initMonarchSender(ctx context.Context, logger zerolog.Logger, monarchAddr, dir string) (*monarch.Sender, string) {
+	addr, _ := resolveMonarchAddr(monarchAddr, dir)
+	if addr == "" {
+		return nil, ""
+	}
+	id, idErr := monarch.LoadOrCreateDaemonID()
+	if idErr != nil {
+		logger.Warn().Err(idErr).Msg("monarch disabled: cannot create daemon id")
+		return nil, ""
+	}
+	logger.Info().Str("monarch", addr).Str("daemon_id", id).Msg("monarch telemetry enabled")
+	return monarch.NewSender(ctx, addr, logger), id
+}
+
+// readAgentMeta adapts agent.ReadMeta to the daemon's injected metadata-reader
+// signature, keeping internal/daemon free of an agent import cycle.
+func readAgentMeta(name string) (cwd, prompt string, ok bool) {
+	meta, err := agent.ReadMeta(name)
+	if err != nil {
+		return "", "", false
+	}
+	return meta.Cwd, meta.Prompt, true
+}
+
 // initDaemon performs the early initialization steps for the daemon: token,
 // PID file, project registry, daemon info, and signal context.
-func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) (*daemonState, error) {
+func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr, monarchAddr string, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) (*daemonState, error) {
 	token, err := daemon.LoadOrCreateToken()
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "failed to load/create token")
@@ -183,7 +232,11 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		return nil, errors.WrapWithDetails(err, "failed to write daemon info")
 	}
 
-	printStartBanner(out, token, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr, projectInfos)
+	monarchStatus := "off"
+	if mAddr, _ := resolveMonarchAddr(monarchAddr, "."); mAddr != "" {
+		monarchStatus = "enabled (" + mAddr + ")"
+	}
+	printStartBanner(out, token, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr, monarchStatus, projectInfos)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	logger := newDaemonLogger(debug)
@@ -213,6 +266,8 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 
 	auditStore, auditWriter := initAuditStore(ctx, logger)
 
+	monarchSender, daemonID := initMonarchSender(ctx, logger, monarchAddr, ".")
+
 	go runMaintenanceLoop(ctx, logger, confirmStore, statsStore, auditStore)
 
 	srv := &daemon.Server{
@@ -234,6 +289,13 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AuditStore:       auditStore,
 		AgentCleaner:     &dockerAgentCleaner{},
 		VaultResolver:    vaultResolver,
+		DaemonID:         daemonID,
+		AgentMetaReader:  readAgentMeta,
+	}
+	// Assign the sink only when present so the interface field never wraps a
+	// nil *monarch.Sender (which would defeat the nil-guard in emitMonarch).
+	if monarchSender != nil {
+		srv.MonarchSink = monarchSender
 	}
 
 	return &daemonState{
@@ -248,13 +310,14 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		statsWriter:   statsWriter,
 		auditStore:    auditStore,
 		auditWriter:   auditWriter,
+		monarchSender: monarchSender,
 	}, nil
 }
 
 // runDaemonForeground runs the daemon in the current process (blocking).
 // It writes a PID file on start and removes it on shutdown.
-func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
-	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs, cmdFactory, version)
+func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr, monarchAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
+	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, monarchAddr, safe, debug, projectDirs, cmdFactory, version)
 	if err != nil {
 		return err
 	}
@@ -272,6 +335,9 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	if ds.auditStore != nil {
 		defer func() { _ = ds.auditStore.Close() }()
+	}
+	if ds.monarchSender != nil {
+		defer ds.monarchSender.Close()
 	}
 
 	out := cmd.OutOrStdout()
@@ -371,7 +437,7 @@ func startChromeServices(ctx context.Context, chromeAddr, token string, logger z
 }
 
 // runDaemonBackground re-execs the current binary as a detached child process.
-func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string) error {
+func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr, monarchAddr string, safe, debug bool, projectDirs []string) error {
 	out := cmd.OutOrStdout()
 
 	// Check if already running.
@@ -402,6 +468,9 @@ func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	if debug {
 		args = append(args, "--debug")
+	}
+	if monarchAddr != "" {
+		args = append(args, "--monarch", monarchAddr)
 	}
 	for _, dir := range projectDirs {
 		args = append(args, "--project", dir)
@@ -826,12 +895,13 @@ func newDaemonLogger(debug bool) zerolog.Logger {
 }
 
 // printStartBanner prints the daemon startup information.
-func printStartBanner(out io.Writer, token, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr string, projects []daemon.ProjectInfo) {
+func printStartBanner(out io.Writer, token, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr, monarchStatus string, projects []daemon.ProjectInfo) {
 	_, _ = fmt.Fprintln(out, "Token:", token)
 	_, _ = fmt.Fprintln(out, "Token file:", daemon.TokenPath())
 	_, _ = fmt.Fprintln(out, "Listening on:", addr)
 	_, _ = fmt.Fprintln(out, "Chrome proxy on:", chromeAddr)
 	_, _ = fmt.Fprintln(out, "HTTPS proxy on:", proxyAddr)
+	_, _ = fmt.Fprintln(out, "Monarch:", monarchStatus)
 	if len(projects) > 0 {
 		_, _ = fmt.Fprintf(out, "Projects: %d\n", len(projects))
 		for _, p := range projects {
