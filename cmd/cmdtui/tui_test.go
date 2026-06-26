@@ -469,7 +469,7 @@ func TestRenderIssuesPanel_WithIssues(t *testing.T) {
 			},
 		},
 	}
-	out := renderIssuesPanel(groups, time.Now(), 80, -1)
+	out := renderIssuesPanel(groups, time.Now(), 80, -1, 0)
 	assert.Contains(t, out, "Pipeline")
 	assert.Contains(t, out, "Eng")
 	assert.Contains(t, out, "HUM")
@@ -481,8 +481,49 @@ func TestRenderIssuesPanel_WithIssues(t *testing.T) {
 }
 
 func TestRenderIssuesPanel_Empty(t *testing.T) {
-	out := renderIssuesPanel(nil, time.Time{}, 80, -1)
+	out := renderIssuesPanel(nil, time.Time{}, 80, -1, 0)
 	assert.Equal(t, "", out)
+}
+
+// A ticket list taller than the budget must not exceed it; the clipped
+// tail is replaced with a "more" indicator so the footer stays on screen.
+func TestRenderIssuesPanel_CapsToBudget(t *testing.T) {
+	var issues []tracker.Issue
+	for i := 0; i < 50; i++ {
+		issues = append(issues, tracker.Issue{
+			Key:        fmt.Sprintf("HUM-%d", i),
+			Status:     "Todo",
+			StatusType: "unstarted",
+			Title:      fmt.Sprintf("Issue %d", i),
+		})
+	}
+	groups := []trackerIssues{{TrackerKind: "linear", Project: "HUM", Issues: issues}}
+
+	const maxRows = 10
+	out := renderIssuesPanel(groups, time.Now(), 80, 0, maxRows)
+	lines := strings.Count(out, "\n")
+	assert.LessOrEqual(t, lines, maxRows, "panel must not exceed its row budget")
+	assert.Contains(t, out, "more", "clipped tail should show a more indicator")
+	assert.Contains(t, out, "HUM-0", "cursor row must stay visible")
+}
+
+// The window follows the cursor so the selected ticket is always shown,
+// even when it sits deep in a list that overflows the budget.
+func TestRenderIssuesPanel_WindowFollowsCursor(t *testing.T) {
+	var issues []tracker.Issue
+	for i := 0; i < 50; i++ {
+		issues = append(issues, tracker.Issue{
+			Key:        fmt.Sprintf("HUM-%d", i),
+			Status:     "Todo",
+			StatusType: "unstarted",
+			Title:      fmt.Sprintf("Issue %d", i),
+		})
+	}
+	groups := []trackerIssues{{TrackerKind: "linear", Project: "HUM", Issues: issues}}
+
+	out := renderIssuesPanel(groups, time.Now(), 80, 45, 10)
+	assert.Contains(t, out, "HUM-45", "cursor row must stay visible when deep in the list")
+	assert.NotContains(t, out, "HUM-0 ", "rows far from the cursor are windowed out")
 }
 
 func TestRenderIssuesPanel_TrackerError(t *testing.T) {
@@ -493,7 +534,7 @@ func TestRenderIssuesPanel_TrackerError(t *testing.T) {
 			Err:         fmt.Errorf("unauthorized"),
 		},
 	}
-	out := renderIssuesPanel(groups, time.Now(), 80, -1)
+	out := renderIssuesPanel(groups, time.Now(), 80, -1, 0)
 	assert.Contains(t, out, "Pipeline")
 	assert.Contains(t, out, "jira/KAN")
 	assert.Contains(t, out, "fetch failed")
@@ -514,7 +555,7 @@ func TestRenderIssuesPanel_MixedSuccess(t *testing.T) {
 			},
 		},
 	}
-	out := renderIssuesPanel(groups, time.Now(), 80, -1)
+	out := renderIssuesPanel(groups, time.Now(), 80, -1, 0)
 	assert.Contains(t, out, "Pipeline")
 	assert.Contains(t, out, "fetch failed")
 	assert.Contains(t, out, "HUM-1")
@@ -832,7 +873,7 @@ func TestRenderIssuesPanelCursor(t *testing.T) {
 			{Key: "HUM-2", Status: "Todo", StatusType: "unstarted", Title: "Second"},
 		}},
 	}
-	out := renderIssuesPanel(groups, time.Now(), 80, 1)
+	out := renderIssuesPanel(groups, time.Now(), 80, 1, 0)
 	// Second issue should have the selection indicator.
 	assert.Contains(t, out, "▸")
 }
