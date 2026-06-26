@@ -33,6 +33,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdslack"
 	"github.com/gethuman-sh/human/cmd/cmdtelegram"
 	"github.com/gethuman-sh/human/cmd/cmdtracker"
+	"github.com/gethuman-sh/human/cmd/cmdmonarch"
 	"github.com/gethuman-sh/human/cmd/cmdtui"
 	"github.com/gethuman-sh/human/cmd/cmdusage"
 	"github.com/gethuman-sh/human/cmd/cmdutil"
@@ -316,6 +317,8 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	agentContextCmd.GroupID = "utility"
 	rootCmd.AddCommand(agentContextCmd)
 
+	rootCmd.AddCommand(cmdmonarch.BuildMonarchCmd())
+
 	// hook reads Claude Code hook JSON from stdin, extracts event fields,
 	// and forwards them to the daemon as hook-event args. Runs locally
 	// (listed in isLocalSubcommand) so stdin is available.
@@ -427,6 +430,7 @@ var localSubcommands = map[string]bool{
 	"codenav":       true,
 	"agent-context": true,
 	"tui":           true,
+	"monarch":       true,
 	"ping":          true,
 	"proxy":         true,
 	"hook":          true,
