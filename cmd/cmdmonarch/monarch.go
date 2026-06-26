@@ -57,6 +57,12 @@ func runMonarch(addr, webAddr string, headless bool) error {
 	// Pruning is best-effort housekeeping; a failure must not block the console.
 	_, _ = store.Prune(ctx)
 
+	// Loudly flag the absence of auth on startup: monarch binds its ingest and
+	// web ports with no authentication, so anyone who can reach them sees the
+	// swarm telemetry. Run only on a trusted/private network.
+	warnLogger := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	warnLogger.Warn().Msg("⚠️  THERE IS NO AUTH — monarch is unauthenticated; run only on a trusted/private network")
+
 	if headless {
 		return runHeadless(ctx, addr, store)
 	}
