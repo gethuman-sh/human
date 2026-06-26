@@ -58,6 +58,9 @@ type Server struct {
 	AuditStore       *audit.Store                             // serves audit-query reads; nil disables audit-query route
 	AgentCleaner     AgentCleaner                             // async agent cleanup; nil disables agent-stop-async route
 	VaultResolver    *vault.Resolver                          // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
+	MonarchSink      MonarchSink                              // streams identity-free swarm telemetry to a monarch console; nil disables
+	DaemonID         string                                   // opaque stable instance id for monarch; empty disables emission
+	AgentMetaReader  func(name string) (cwd, prompt string, ok bool) // reads persisted agent metadata for monarch enrichment; injected to avoid an agent->daemon import cycle; nil disables enrichment
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
 
@@ -358,13 +361,16 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 
 // handleHookEvent appends a Claude Code hook event to the in-memory store.
 func (s *Server) handleHookEvent(conn net.Conn, args []string) {
+	evt := ParseHookEventArgs(args)
 	if s.HookEvents != nil {
-		evt := ParseHookEventArgs(args)
 		s.HookEvents.Append(evt)
 		if s.StatsWriter != nil {
 			s.StatsWriter.Send(evt)
 		}
 	}
+	// Emit monarch telemetry from the same parsed event regardless of whether
+	// the in-memory hook buffer is enabled; emitMonarch guards on the sink/id.
+	s.emitMonarch(evt)
 	resp := Response{Stdout: "ok\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
@@ -597,6 +603,9 @@ func (s *Server) handleAgentStopAsync(conn net.Conn, args []string) {
 			Timestamp: time.Now().UTC(),
 		})
 	}
+
+	// Drop the agent from the monarch work board promptly.
+	s.emitMonarchStop(name)
 
 	// Tear down the container in the background.
 	if containerID != "" {
