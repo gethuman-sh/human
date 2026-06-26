@@ -24,8 +24,16 @@ swarm. Monarch shows *what* is being worked on, never *who*.
 - **SQLite storage** — events are stored with decomposed, indexed columns and a
   short 14-day retention window (a live console, not an accountability trail),
   pruned automatically.
-- **`human monarch`** — runs the TCP ingest server and a Bubble Tea TUI (work
-  board + burn panes, capacity header) against the local monarch store.
+- **Standalone `monarch` binary** — a separate binary from `human` (a team runs
+  one monarch; each developer runs a daemon). Default mode runs the TCP ingest
+  server plus a Bubble Tea TUI (work board + burn panes, capacity header)
+  against the local monarch store. `monarch --headless` runs the ingest server
+  only, with no TUI, for running as a systemd service.
+- **Systemd-hardened headless mode** — under `--headless` the server sends
+  `sd_notify` readiness, answers the systemd watchdog, and watches its own
+  executable on disk: when the binary is replaced (a new release is deployed) it
+  exits cleanly so systemd restarts it on the new binary. `sd_notify` is a no-op
+  when not run under systemd, so the mode is safe to run anywhere.
 
 ## Privacy
 
