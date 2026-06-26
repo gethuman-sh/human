@@ -45,21 +45,21 @@ type Server struct {
 	CmdFactory       func() *cobra.Command
 	Opener           BrowserOpener // used for OAuth relay; defaults to browser.DefaultOpener
 	Logger           zerolog.Logger
-	ConnectedPIDs    *ConnectedTracker                        // tracks client PIDs that have pinged; nil disables tracking
-	HookEvents       *HookEventStore                          // in-memory hook event buffer; nil disables hook event tracking
-	NetworkEvents    *NetworkEventStore                       // in-memory ambient network activity buffer; nil disables
-	IssueFetcher     func() ([]TrackerIssuesResult, error)    // injected; fetches issues from configured trackers
-	TrackerDiagnoser func(dir string) []tracker.TrackerStatus // injected; diagnoses tracker status with vault resolution
-	Projects         *ProjectRegistry                         // multi-project routing; nil means single-project mode
-	PendingConfirms  *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
-	StatsWriter      *stats.Writer                            // async SQLite writer for tool event persistence; nil disables
-	StatsStore       *stats.StatsStore                        // for query-time aggregation; nil disables tool-stats route
-	AuditSink        *audit.Writer                            // records mutating tracker actions for the audit trail; nil disables
-	AuditStore       *audit.Store                             // serves audit-query reads; nil disables audit-query route
-	AgentCleaner     AgentCleaner                             // async agent cleanup; nil disables agent-stop-async route
-	VaultResolver    *vault.Resolver                          // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
-	MonarchSink      MonarchSink                              // streams identity-free swarm telemetry to a monarch console; nil disables
-	DaemonID         string                                   // opaque stable instance id for monarch; empty disables emission
+	ConnectedPIDs    *ConnectedTracker                               // tracks client PIDs that have pinged; nil disables tracking
+	HookEvents       *HookEventStore                                 // in-memory hook event buffer; nil disables hook event tracking
+	NetworkEvents    *NetworkEventStore                              // in-memory ambient network activity buffer; nil disables
+	IssueFetcher     func() ([]TrackerIssuesResult, error)           // injected; fetches issues from configured trackers
+	TrackerDiagnoser func(dir string) []tracker.TrackerStatus        // injected; diagnoses tracker status with vault resolution
+	Projects         *ProjectRegistry                                // multi-project routing; nil means single-project mode
+	PendingConfirms  *PendingConfirmStore                            // pending destructive operation confirmations; nil disables
+	StatsWriter      *stats.Writer                                   // async SQLite writer for tool event persistence; nil disables
+	StatsStore       *stats.StatsStore                               // for query-time aggregation; nil disables tool-stats route
+	AuditSink        *audit.Writer                                   // records mutating tracker actions for the audit trail; nil disables
+	AuditStore       *audit.Store                                    // serves audit-query reads; nil disables audit-query route
+	AgentCleaner     AgentCleaner                                    // async agent cleanup; nil disables agent-stop-async route
+	VaultResolver    *vault.Resolver                                 // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
+	MonarchSink      MonarchSink                                     // streams identity-free swarm telemetry to a monarch console; nil disables
+	DaemonID         string                                          // opaque stable instance id for monarch; empty disables emission
 	AgentMetaReader  func(name string) (cwd, prompt string, ok bool) // reads persisted agent metadata for monarch enrichment; injected to avoid an agent->daemon import cycle; nil disables enrichment
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
