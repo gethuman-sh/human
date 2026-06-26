@@ -9,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/monarch"
 )
@@ -134,21 +133,20 @@ func (m model) capacityLine() string {
 
 // boardColWidths fixes the work-board column layout. Manual lipgloss composition
 // keeps the dependency surface identical to cmd/cmdtui (no lipgloss/table).
-var boardColWidths = []int{12, 12, 16, 10, 9}
+var boardColWidths = []int{16, 16, 24}
 
 func (m model) renderBoard() string {
 	if len(m.board) == 0 {
-		return dimStyle.Render("  (no agents in flight)")
+		return dimStyle.Render("  (no tickets in flight)")
 	}
 	var b strings.Builder
-	b.WriteString(boardRow([]string{"DAEMON", "TICKET", "REPO", "STATE", "UPDATED"}, true))
+	b.WriteString(boardRow([]string{"DAEMON", "TICKET", "REPO"}, true))
 	for _, w := range m.board {
 		ticket := w.TicketKey
 		if ticket == "" {
 			ticket = "—"
 		}
-		updated := agent.FormatDuration(time.Since(w.UpdatedAt))
-		b.WriteString(boardRow([]string{w.DaemonID, ticket, w.Repo, w.State, updated}, false))
+		b.WriteString(boardRow([]string{w.DaemonID, ticket, w.Repo}, false))
 	}
 	return b.String()
 }

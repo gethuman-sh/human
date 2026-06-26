@@ -25,7 +25,7 @@ func TestView_emptyState(t *testing.T) {
 	out := m.View()
 	assert.Contains(t, out, "monarch — swarm console")
 	assert.Contains(t, out, "Capacity: 0 daemons")
-	assert.Contains(t, out, "(no agents in flight)")
+	assert.Contains(t, out, "(no tickets in flight)")
 	assert.Contains(t, out, "(no burn recorded today)")
 }
 
