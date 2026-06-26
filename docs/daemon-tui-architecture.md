@@ -193,3 +193,42 @@ Claude instances
 │        → trackers → issues → stats → net    │
 └─────────────────────────────────────────────┘
 ```
+
+## Daemon wire contract: the public `human-daemon-client` module
+
+The daemon's TCP+JSON wire surface (the client functions and the shared protocol
+types) lives in a standalone public module,
+[`human-daemon-client`](https://github.com/gethuman-sh/human-daemon-client),
+imported as `client`. The core repo imports it and **aliases** its own daemon
+identifiers to the contract types (`type TrackerIssuesResult =
+client.TrackerIssuesResult`, etc.), so the daemon serializes literally the same
+structs the GUI and TUI deserialize — one source of truth for the wire format.
+The contract has zero dependency on `internal/tracker`/`internal/forge`: it
+defines its own `Issue`/`Category` wire DTOs, and the daemon maps
+`[]tracker.Issue → []client.Issue` at the fetch seam (`cmd/cmddaemon/daemon.go`,
+`toContractIssues`) while the in-repo TUI maps the reverse at the
+daemon→TUI boundary (`cmd/cmdtui/tui.go`, `toTrackerIssues`).
+
+### TUI sufficiency (the contract covers every daemon symbol the TUI uses)
+
+The in-repo TUI today imports `internal/daemon`, but every type/func it uses
+aliases to a `client` identifier, so the contract is already sufficient for the
+eventual TUI extraction — no contract change will be needed. Because core aliases
+each symbol, the in-repo TUI continuing to compile under `make check` **is** the
+compile-check that the contract is complete: a missing symbol would fail to
+alias.
+
+| TUI symbol (`daemon.X`) | Contract origin (`client.X`) |
+| -- | -- |
+| `ReadInfo` (returns `DaemonInfo`), `ProjectInfo` | `ReadInfo` / `DaemonInfo` / `ProjectInfo` |
+| `GetTrackerIssues`, `TrackerIssuesResult` | `GetTrackerIssues` / `TrackerIssuesResult` |
+| `Subscribe`, `SubscribeEvent` | `Subscribe` / `SubscribeEvent` |
+| `GetPendingConfirms`, `PendingConfirm`, `SendConfirmDecision` | same names |
+| `GetLogMode`, `SetLogMode`, `RunRemoteCapture` | same names |
+| `NetworkEvent` (type, rendered) | `NetworkEvent` |
+| `ReadAlivePid` | `ReadAlivePid` (independent read-from-disk copy in the contract) |
+
+`ReadAlivePid`/`PidPath`/`IsProcessAlive` are the one exception: the contract
+carries its own independent copies (read-from-disk, no shared in-memory state)
+rather than aliasing core's, so they are validated by the contract module's own
+build/tests, not by the core alias compile-check.

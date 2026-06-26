@@ -109,6 +109,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 
 - [Audit Trail](internal/audit/README.md) — structured, queryable record of every agent action against trackers
 - [Background Daemon](internal/daemon/README.md) — holds credentials, answers commands fast
+- [Daemon Client Contract](https://github.com/gethuman-sh/human-daemon-client) — standalone public module: the daemon's TCP+JSON client surface and wire types, consumed by the external desktop board and the source of truth the daemon serializes
 - [Dev Containers](internal/devcontainer/README.md) — reproducible sandbox for agents
 - [HTTPS Proxy](internal/proxy/README.md) — filter outbound agent traffic by domain
 - [Chrome Bridge](internal/chrome/README.md) — drive host Chrome from a container
@@ -382,6 +383,19 @@ See [documentation.md](docs/documentation.md) for full configuration details.
 ```bash
 make build
 ```
+
+The daemon and its clients talk through the standalone [`human-daemon-client`](https://github.com/gethuman-sh/human-daemon-client) contract module, pinned by pseudo-version in `go.mod`. To build against an un-pushed local checkout of that module, clone it as a sibling of this repo and create a git-ignored `go.work` override:
+
+```bash
+# layout: ./human (this repo) and ./human-daemon-client side by side
+make dev-workspace   # idempotently: go work init . ../human-daemon-client
+```
+
+`go.work` is git-ignored, so CI resolves the pinned pseudo-version from the proxy untouched. After changing the contract, push it and re-pin: `go get github.com/gethuman-sh/human-daemon-client@<sha>` (the daemon, GUI and TUI ship as a matched set, so commit the pin bump with the contract change).
+
+## Desktop app
+
+The native cross-platform workflow-board desktop app (Wails) lives in its own repository: **[gethuman-sh/human-desktop](https://github.com/gethuman-sh/human-desktop)**. It depends only on the `human-daemon-client` contract and talks to this daemon at runtime — it is not built from this repo.
 
 ## Star History
 

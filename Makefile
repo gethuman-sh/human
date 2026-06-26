@@ -1,4 +1,4 @@
-.PHONY: all build install test check-test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks
+.PHONY: all build install test check-test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks dev-workspace
 
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
@@ -50,6 +50,15 @@ test-integration: build
 	go run ./cmd/integrationtest
 
 check: check-test lint sec secrets
+
+# dev-workspace creates a git-ignored go.work that overrides the pinned
+# human-daemon-client contract with the sibling working tree at
+# ../human-daemon-client, so the daemon builds against un-pushed contract edits
+# (the desktop GUI in its own repo has the equivalent target). Idempotent: a
+# no-op once go.work exists. CI never runs this (go.work is git-ignored) and
+# resolves the pinned pseudo-version from the module proxy.
+dev-workspace:
+	test -f go.work || go work init . ../human-daemon-client
 
 clean:
 	go clean -cache -i

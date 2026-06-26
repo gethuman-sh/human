@@ -2,6 +2,10 @@ bin/
 dist/
 /human
 local/
+# Local-only override for the human-daemon-client contract (make dev-workspace).
+# CI resolves the pinned pseudo-version from the proxy and must never see go.work.
+/go.work
+/go.work.sum
 *.out
 *.cov
 /logo/
