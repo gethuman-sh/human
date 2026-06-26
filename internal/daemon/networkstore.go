@@ -3,6 +3,8 @@ package daemon
 import (
 	"sync"
 	"time"
+
+	client "github.com/gethuman-sh/human-daemon-client"
 )
 
 // maxNetworkEvents bounds the total number of deduplicated network
@@ -14,14 +16,10 @@ const maxNetworkEvents = 200
 // NetworkEvent is a single ambient network activity row as rendered by
 // the TUI activity panel. Consecutive events with the same Host and
 // Source are collapsed into one row with an incrementing Count and a
-// refreshed LastSeen timestamp.
-type NetworkEvent struct {
-	Source   string    `json:"source"` // "proxy" | "oauth" | "fail"
-	Status   string    `json:"status"` // "forward" | "intercept" | "block" | "no-sni" | "parse-fail" | "dial-fail" | "callback"
-	Host     string    `json:"host"`   // may be empty for pre-SNI failures
-	Count    int       `json:"count"`  // >=1
-	LastSeen time.Time `json:"last_seen"`
-}
+// refreshed LastSeen timestamp. The struct is defined by the public
+// human-daemon-client contract so the TUI can render it through that module;
+// the daemon aliases it and the store constructs it.
+type NetworkEvent = client.NetworkEvent
 
 // NetworkEventStore is a thread-safe ring buffer of recent network
 // events with consecutive-host deduplication. It models

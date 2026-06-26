@@ -11,6 +11,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/docker/cli v29.6.1+incompatible
 	github.com/docker/docker v28.5.2+incompatible
+	github.com/gethuman-sh/human-daemon-client v0.0.0-20260626203021-a0d4bd70763e
 	github.com/google/go-containerregistry v0.21.7
 	github.com/hanwen/go-fuse/v2 v2.10.1
 	github.com/odvcencio/gotreesitter v0.20.5

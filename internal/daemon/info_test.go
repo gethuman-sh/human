@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"net"
 	"os"
 	"testing"
@@ -10,7 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWriteAndReadInfo(t *testing.T) {
+// TestWriteInfo_RoundTrips verifies the bytes WriteInfo lays down on the core
+// (swappable) filesystem unmarshal back to the same DaemonInfo. ReadInfo itself
+// now lives in the human-daemon-client contract and reads the real OS fs, so it
+// is covered by that module's own TestReadInfo_success rather than here.
+func TestWriteInfo_RoundTrips(t *testing.T) {
 	withMemFs(t)
 
 	info := DaemonInfo{
@@ -21,11 +26,12 @@ func TestWriteAndReadInfo(t *testing.T) {
 		PID:        12345,
 	}
 
-	err := WriteInfo(info)
-	require.NoError(t, err)
+	require.NoError(t, WriteInfo(info))
 
-	got, err := ReadInfo()
+	data, err := afero.ReadFile(fs, InfoPath())
 	require.NoError(t, err)
+	var got DaemonInfo
+	require.NoError(t, json.Unmarshal(data, &got))
 	assert.Equal(t, info, got)
 }
 
@@ -50,13 +56,6 @@ func TestWriteInfo_RestrictedPermissions(t *testing.T) {
 	fi, err := fs.Stat(InfoPath())
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm())
-}
-
-func TestReadInfo_NotExists(t *testing.T) {
-	withMemFs(t)
-
-	_, err := ReadInfo()
-	assert.Error(t, err)
 }
 
 func TestRemoveInfo(t *testing.T) {

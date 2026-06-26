@@ -1,32 +1,36 @@
 package daemon
 
-import "strings"
+import (
+	"strings"
+
+	client "github.com/gethuman-sh/human-daemon-client"
+)
 
 // BoardStage is one of the five pipeline columns (plus a synthetic "hidden"
 // stage for closed PM tickets that never entered the pipeline). The drag-board
 // GUI renders cards into these columns; the daemon derives the stage from the
-// [human:…] comment markers a PM ticket carries.
-type BoardStage string
-
-const (
-	BoardBacklog        BoardStage = "backlog"
-	BoardPlanning       BoardStage = "planning"
-	BoardImplementation BoardStage = "implementation"
-	BoardVerification   BoardStage = "verification"
-	BoardDoneStage      BoardStage = "done"
-	BoardHidden         BoardStage = "hidden"
-)
+// [human:…] comment markers a PM ticket carries. The type and its values are
+// defined by the public human-daemon-client contract; the daemon aliases them
+// so the wire format has a single source of truth.
+type BoardStage = client.BoardStage
 
 // BoardState is the within-stage status of a card: empty for an idle card
 // sitting at the head of a stage, running while an agent works the stage,
 // done once the stage's success marker lands, failed on an error marker.
-type BoardState string
+type BoardState = client.BoardState
 
 const (
-	BoardIdle    BoardState = ""
-	BoardRunning BoardState = "running"
-	BoardDone    BoardState = "done"
-	BoardFailed  BoardState = "failed"
+	BoardBacklog        = client.BoardBacklog
+	BoardPlanning       = client.BoardPlanning
+	BoardImplementation = client.BoardImplementation
+	BoardVerification   = client.BoardVerification
+	BoardDoneStage      = client.BoardDoneStage
+	BoardHidden         = client.BoardHidden
+
+	BoardIdle    = client.BoardIdle
+	BoardRunning = client.BoardRunning
+	BoardDone    = client.BoardDone
+	BoardFailed  = client.BoardFailed
 )
 
 // Board marker headers. These mirror the existing review-handoff headers in

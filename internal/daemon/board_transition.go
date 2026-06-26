@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	client "github.com/gethuman-sh/human-daemon-client"
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -32,13 +33,9 @@ type PRRequest struct {
 
 // BoardTransitionRequest is the wire request for advancing a card one stage.
 // PMTitle is carried from the card so the Done stage can title the PR without a
-// second tracker fetch.
-type BoardTransitionRequest struct {
-	PMKey   string     `json:"pm_key"`
-	PMTitle string     `json:"pm_title"`
-	From    BoardStage `json:"from"`
-	To      BoardStage `json:"to"`
-}
+// second tracker fetch. The struct is defined by the public human-daemon-client
+// contract; the daemon aliases it.
+type BoardTransitionRequest = client.BoardTransitionRequest
 
 // BoardTransitionDeps wires the transition engine's collaborators.
 type BoardTransitionDeps struct {

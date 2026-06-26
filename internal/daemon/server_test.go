@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	client "github.com/gethuman-sh/human-daemon-client"
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/stats"
@@ -1300,7 +1301,7 @@ func TestServer_HandleTrackerIssues_WithResults(t *testing.T) {
 					TrackerName: "work",
 					TrackerKind: "linear",
 					Project:     "HUM",
-					Issues: []tracker.Issue{
+					Issues: []client.Issue{
 						{Key: "HUM-1", Title: "First issue", Status: "In Progress"},
 						{Key: "HUM-2", Title: "Second issue", Status: "Todo"},
 					},

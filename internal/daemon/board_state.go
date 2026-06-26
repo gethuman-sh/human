@@ -3,20 +3,16 @@ package daemon
 import (
 	"strings"
 
+	client "github.com/gethuman-sh/human-daemon-client"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // BoardCard is the derived per-PM placement on the pipeline board. It is the
 // single source of truth shared on the wire with the GUI and TUI, so neither
-// re-derives from raw comments.
-type BoardCard struct {
-	Stage          BoardStage `json:"stage"`
-	State          BoardState `json:"state"`
-	EngineeringKey string     `json:"engineering_key,omitempty"`
-	Branch         string     `json:"branch,omitempty"`
-	PRURL          string     `json:"pr_url,omitempty"`
-	Error          string     `json:"error,omitempty"`
-}
+// re-derives from raw comments. The struct is defined by the public
+// human-daemon-client contract; the daemon aliases it and DeriveBoardCard
+// produces it.
+type BoardCard = client.BoardCard
 
 // DeriveBoardCard computes a PM ticket's board placement from its comment
 // thread and tracker status. The rule: the furthest stage carrying ANY marker

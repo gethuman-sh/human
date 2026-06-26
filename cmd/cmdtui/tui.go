@@ -20,6 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	client "github.com/gethuman-sh/human-daemon-client"
 	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/browser"
 	"github.com/gethuman-sh/human/internal/claude"
@@ -1958,6 +1959,37 @@ func fetchIssuesCmd() tea.Cmd {
 	}
 }
 
+// toTrackerIssues maps the contract wire DTO back to the core tracker.Issue
+// domain type at the daemon→TUI boundary, so the rest of the TUI keeps using
+// tracker.Issue/tracker.Category unchanged. It is the reverse of the daemon's
+// toContractIssues; migrating the TUI's internal types to client.Issue is
+// deferred with the eventual TUI extraction.
+func toTrackerIssues(in []client.Issue) []tracker.Issue {
+	if in == nil {
+		return nil
+	}
+	out := make([]tracker.Issue, len(in))
+	for i, iss := range in {
+		out[i] = tracker.Issue{
+			Key:         iss.Key,
+			Project:     iss.Project,
+			Type:        iss.Type,
+			Title:       iss.Title,
+			Status:      iss.Status,
+			StatusType:  tracker.Category(iss.StatusType),
+			Priority:    iss.Priority,
+			Assignee:    iss.Assignee,
+			Reporter:    iss.Reporter,
+			Description: iss.Description,
+			URL:         iss.URL,
+			UpdatedAt:   iss.UpdatedAt,
+			ParentKey:   iss.ParentKey,
+			Labels:      iss.Labels,
+		}
+	}
+	return out
+}
+
 func fromDaemonResults(results []daemon.TrackerIssuesResult) []trackerIssues {
 	out := make([]trackerIssues, len(results))
 	for i, r := range results {
@@ -1966,7 +1998,7 @@ func fromDaemonResults(results []daemon.TrackerIssuesResult) []trackerIssues {
 			TrackerKind: r.TrackerKind,
 			TrackerRole: r.TrackerRole,
 			Project:     r.Project,
-			Issues:      r.Issues,
+			Issues:      toTrackerIssues(r.Issues),
 		}
 		if len(r.ReadyForReview) > 0 {
 			set := make(map[string]bool, len(r.ReadyForReview))

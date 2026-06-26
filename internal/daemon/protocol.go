@@ -1,6 +1,6 @@
 package daemon
 
-import "github.com/gethuman-sh/human/internal/tracker"
+import client "github.com/gethuman-sh/human-daemon-client"
 
 // TrackerIssuesResult is the wire type for a single tracker/project's issues.
 //
@@ -9,61 +9,21 @@ import "github.com/gethuman-sh/human/internal/tracker"
 // populated on engineering-tracker results (where the keys actually live) so
 // the TUI can join it against Issues without a separate lookup. See
 // cli/CLAUDE.md "Review handoff" for the comment convention.
-type TrackerIssuesResult struct {
-	TrackerName    string          `json:"tracker_name"`
-	TrackerKind    string          `json:"tracker_kind"`
-	TrackerRole    string          `json:"tracker_role,omitempty"`
-	Project        string          `json:"project"`
-	Issues         []tracker.Issue `json:"issues"`
-	ReadyForReview []string        `json:"ready_for_review,omitempty"`
-	// ReadyForReviewPRs maps an engineering ticket key to the pull-request URL
-	// carried on its handoff comment's optional `pr:` line, when present.
-	ReadyForReviewPRs map[string]string `json:"ready_for_review_prs,omitempty"`
-	// BoardCards is the derived pipeline placement per PM issue key, for the
-	// drag-board GUI. It is PM-role-only (maps a PM issue key → its derived
-	// BoardCard) and is left nil on engineering-tracker results.
-	BoardCards map[string]BoardCard `json:"board_cards,omitempty"`
-	Err        string               `json:"error,omitempty"`
-}
+//
+// The wire types live in the public human-daemon-client contract module so the
+// daemon and every client serialize literally the same structs; the daemon
+// aliases them here so existing core callers compile unchanged.
+type TrackerIssuesResult = client.TrackerIssuesResult
 
 // Request is sent from the client to the daemon (one JSON line per connection).
-type Request struct {
-	Version   string            `json:"version"`
-	Token     string            `json:"token"`
-	Args      []string          `json:"args"`
-	Env       map[string]string `json:"env,omitempty"`
-	ClientPID int               `json:"client_pid,omitempty"` // parent PID (Claude process) for connection tracking
-	Cwd       string            `json:"cwd,omitempty"`        // client working directory for project routing
-}
+type Request = client.Request
 
 // Response is sent from the daemon back to the client (one or more JSON lines per connection).
-type Response struct {
-	Stdout        string `json:"stdout"`
-	Stderr        string `json:"stderr"`
-	ExitCode      int    `json:"exit_code"`
-	AwaitCallback bool   `json:"await_callback,omitempty"`
-	Callback      string `json:"callback,omitempty"`
-	AwaitConfirm  bool   `json:"await_confirm,omitempty"`  // line 1: daemon paused, awaiting TUI confirmation
-	ConfirmID     string `json:"confirm_id,omitempty"`     // unique identifier for the pending operation
-	ConfirmPrompt string `json:"confirm_prompt,omitempty"` // human-readable prompt, e.g. "Delete JIRA-123?"
-}
+type Response = client.Response
 
 // SubscribeEvent is a notification sent over a persistent subscribe connection.
-// For "agent-stopped" events, AgentName identifies the agent to remove
-// immediately without waiting for the next discovery cycle.
-type SubscribeEvent struct {
-	Type      string `json:"type"`            // "change", "agent-stopped"
-	AgentName string `json:"agent,omitempty"` // set for agent lifecycle events
-}
+type SubscribeEvent = client.SubscribeEvent
 
 // PendingConfirm is the wire type for a single pending destructive operation
 // awaiting user confirmation via the TUI.
-type PendingConfirm struct {
-	ID        string `json:"id"`
-	Operation string `json:"operation"` // "DeleteIssue", "EditIssue"
-	Tracker   string `json:"tracker"`   // tracker kind, e.g. "jira", "linear"
-	Key       string `json:"key"`       // issue key, e.g. "KAN-1"
-	Prompt    string `json:"prompt"`
-	CreatedAt string `json:"created_at"`
-	ClientPID int    `json:"client_pid"` // PID of the Claude instance that triggered the operation
-}
+type PendingConfirm = client.PendingConfirm

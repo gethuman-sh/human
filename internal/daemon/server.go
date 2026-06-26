@@ -61,6 +61,10 @@ type Server struct {
 	// BoardTransitioner applies a board-transition request (advancing a card
 	// one pipeline stage). nil disables the board-transition route.
 	BoardTransitioner func(req BoardTransitionRequest) error
+	// DockerProbe reports whether a Docker engine is reachable. The GUI resolves
+	// its agent-launch gate through this daemon route instead of constructing a
+	// Docker client itself; nil reports Docker as unavailable.
+	DockerProbe func() bool
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
 
@@ -325,6 +329,8 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		s.handleHookSnapshot(conn)
 	case "network-events":
 		s.handleNetworkEvents(conn)
+	case "docker-available":
+		s.handleDockerAvailable(conn)
 	case "tracker-diagnose":
 		s.handleTrackerDiagnose(conn, projectDir)
 	case "tracker-issues":
@@ -400,6 +406,20 @@ func (s *Server) handleNetworkEvents(conn net.Conn) {
 		out = "[]\n"
 	}
 	resp := Response{Stdout: out}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleDockerAvailable reports whether a Docker engine is reachable, using the
+// injected DockerProbe. A nil probe reports false so the GUI's agent-launch gate
+// fails safe (drop targets disabled) when the daemon has no Docker capability.
+func (s *Server) handleDockerAvailable(conn net.Conn) {
+	available := false
+	if s.DockerProbe != nil {
+		available = s.DockerProbe()
+	}
+	data, _ := json.Marshal(available)
+	resp := Response{Stdout: string(data) + "\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
 }

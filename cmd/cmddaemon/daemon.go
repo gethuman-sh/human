@@ -17,6 +17,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
+	client "github.com/gethuman-sh/human-daemon-client"
+
 	"github.com/gethuman-sh/human/errors"
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
@@ -237,6 +239,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AgentCleaner:      &dockerAgentCleaner{},
 		VaultResolver:     vaultResolver,
 		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver),
+		DockerProbe:       dockerProbeFunc(),
 	}
 
 	return &daemonState{
@@ -957,6 +960,57 @@ type fetchJob struct {
 	project string
 }
 
+// dockerProbeFunc builds the daemon's Docker-availability probe. The GUI used
+// to construct a Docker client itself; under the contract boundary the daemon
+// owns devcontainer access and answers the docker-available route with this
+// predicate. A failed client construction or image-list round-trip reports
+// false (Docker down) rather than erroring.
+func dockerProbeFunc() func() bool {
+	return func() bool {
+		dc, err := devcontainer.NewDockerClient()
+		if err != nil {
+			return false
+		}
+		defer func() { _ = dc.Close() }()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if _, err := dc.ImageList(ctx, devcontainer.ImageListOptions{}); err != nil {
+			return false
+		}
+		return true
+	}
+}
+
+// toContractIssues maps the core tracker.Issue domain type to the public
+// human-daemon-client wire DTO. tracker.Issue is forge-coupled (it has methods
+// like IsBug) so it cannot itself be the wire type; this seam converts at the
+// daemon's fetch boundary so the contract stays free of any tracker dependency.
+func toContractIssues(in []tracker.Issue) []client.Issue {
+	if in == nil {
+		return nil
+	}
+	out := make([]client.Issue, len(in))
+	for i, iss := range in {
+		out[i] = client.Issue{
+			Key:         iss.Key,
+			Project:     iss.Project,
+			Type:        iss.Type,
+			Title:       iss.Title,
+			Status:      iss.Status,
+			StatusType:  client.Category(iss.StatusType),
+			Priority:    iss.Priority,
+			Assignee:    iss.Assignee,
+			Reporter:    iss.Reporter,
+			Description: iss.Description,
+			URL:         iss.URL,
+			UpdatedAt:   iss.UpdatedAt,
+			ParentKey:   iss.ParentKey,
+			Labels:      iss.Labels,
+		}
+	}
+	return out
+}
+
 func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() ([]daemon.TrackerIssuesResult, error) {
 	return func() ([]daemon.TrackerIssuesResult, error) {
 		// Collect all (instance, project) pairs first.
@@ -1000,7 +1054,7 @@ func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 					TrackerKind: job.inst.Kind,
 					TrackerRole: job.inst.InferRole(),
 					Project:     label,
-					Issues:      issues,
+					Issues:      toContractIssues(issues),
 				}
 				if fetchErr != nil {
 					results[i].Err = fetchErr.Error()
@@ -1099,7 +1153,10 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (
 					}
 				}
 				mu.Unlock()
-			}(commenter, issue.Key, issue.StatusType)
+				// issue.StatusType is the contract's client.Category wire type;
+				// DeriveBoardCard takes the core tracker.Category, so convert at
+				// this seam (the values are identical).
+			}(commenter, issue.Key, tracker.Category(issue.StatusType))
 		}
 	}
 	wg.Wait()

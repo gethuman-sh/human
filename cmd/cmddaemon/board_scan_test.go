@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	client "github.com/gethuman-sh/human-daemon-client"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -50,7 +51,7 @@ func TestScanReadyForReview_BoardCards(t *testing.T) {
 	jobs := []fetchJob{{inst: tracker.Instance{Name: "work", Kind: "shortcut", Provider: prov}}}
 	results := []daemon.TrackerIssuesResult{{
 		TrackerRole: "pm",
-		Issues:      []tracker.Issue{{Key: "SC-1", StatusType: tracker.CategoryUnstarted}},
+		Issues:      []client.Issue{{Key: "SC-1", StatusType: client.CategoryUnstarted}},
 	}}
 
 	_, _, cards := scanReadyForReview(jobs, results)
