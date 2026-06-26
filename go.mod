@@ -15,6 +15,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/google/go-containerregistry v0.21.6
 	github.com/hanwen/go-fuse/v2 v2.10.1
+	github.com/labstack/echo/v5 v5.2.1
 	github.com/odvcencio/gotreesitter v0.20.2
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/afero v1.15.0

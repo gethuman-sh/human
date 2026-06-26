@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>monarch — swarm console</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>monarch <span class="dim">— swarm console</span></h1>
+    <div id="status" class="dim">connecting…</div>
+  </header>
+
+  <!-- Capacity: daemons connected, busy / blocked / idle. -->
+  <section id="capacity-section">
+    <div id="capacity" class="capacity">Capacity: — daemons</div>
+  </section>
+
+  <!-- Work board: tickets in flight, each with repo + anonymous daemon. -->
+  <section>
+    <h2>Work board</h2>
+    <table id="board">
+      <thead>
+        <tr><th>DAEMON</th><th>TICKET</th><th>REPO</th><th>BRANCH</th><th>STATE</th></tr>
+      </thead>
+      <tbody id="board-body"></tbody>
+    </table>
+    <p id="board-empty" class="dim empty">(no tickets in flight)</p>
+  </section>
+
+  <!-- Burn (today): tokens by ticket and by repo. -->
+  <section>
+    <h2>Burn <span class="dim">(today)</span></h2>
+    <div class="burn-grid">
+      <div>
+        <h3 class="dim">By ticket</h3>
+        <table class="burn">
+          <tbody id="burn-ticket-body"></tbody>
+        </table>
+      </div>
+      <div>
+        <h3 class="dim">By repo</h3>
+        <table class="burn">
+          <tbody id="burn-repo-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <p id="burn-empty" class="dim empty">(no burn recorded today)</p>
+  </section>
+
+  <footer class="dim">read-only · refreshes every 2s · identity-free</footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

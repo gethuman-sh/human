@@ -1,0 +1,90 @@
+/* A deliberately terminal-flavoured layout: monospace, dark, dense — so the web
+   console reads the same as the TUI it replaces. No framework, no web fonts. */
+:root {
+  --bg: #0b0e14;
+  --fg: #c5c8c6;
+  --dim: #6b7280;
+  --accent: #7aa2f7;
+  --line: #1c2230;
+  --busy: #9ece6a;
+  --blocked: #f7768e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+h1 { font-size: 1.1rem; margin: 0; font-weight: 700; }
+h2 { font-size: 1rem; margin: 1.5rem 0 0.5rem; font-weight: 700; }
+h3 { font-size: 0.9rem; margin: 0 0 0.25rem; font-weight: 600; }
+
+.dim { color: var(--dim); font-weight: 400; }
+.empty { font-style: italic; }
+
+.capacity {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.capacity .busy { color: var(--busy); }
+.capacity .blocked { color: var(--blocked); }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+}
+
+th {
+  text-align: left;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 0.2rem 1rem 0.2rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+td {
+  padding: 0.15rem 1rem 0.15rem 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22rem;
+}
+
+tbody tr:hover { background: rgba(122, 162, 247, 0.06); }
+
+.state-coding, .state-planning { color: var(--busy); }
+.state-blocked { color: var(--blocked); }
+
+.burn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1.5rem;
+}
+.burn td:last-child { text-align: right; color: var(--accent); }
+
+footer {
+  margin-top: 2rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+  font-size: 0.85rem;
+}
+
+#status.live { color: var(--busy); }
+#status.stale { color: var(--blocked); }
