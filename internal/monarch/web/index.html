@@ -12,9 +12,9 @@
     <div id="status" class="dim">connecting…</div>
   </header>
 
-  <!-- Capacity: daemons connected, busy / blocked / idle. -->
+  <!-- Capacity: number of connected daemons. -->
   <section id="capacity-section">
-    <div id="capacity" class="capacity">Capacity: — daemons</div>
+    <div id="capacity" class="capacity">— connected daemons</div>
   </section>
 
   <!-- Work board: tickets in flight, each with repo + anonymous daemon. -->
@@ -22,7 +22,7 @@
     <h2>Work board</h2>
     <table id="board">
       <thead>
-        <tr><th>DAEMON</th><th>TICKET</th><th>REPO</th><th>BRANCH</th><th>STATE</th></tr>
+        <tr><th>DAEMON</th><th>TICKET</th><th>REPO</th></tr>
       </thead>
       <tbody id="board-body"></tbody>
     </table>

@@ -17,11 +17,9 @@ function setStatus(text, cls) {
 }
 
 function renderCapacity(cap) {
+  const n = cap.daemons;
   el("capacity").innerHTML =
-    `Capacity: <strong>${cap.daemons}</strong> daemons · ` +
-    `<span class="busy">${cap.busy} busy</span> · ` +
-    `<span class="blocked">${cap.blocked} blocked</span> · ` +
-    `${cap.idle} idle`;
+    `<strong>${n}</strong> connected daemon${n === 1 ? "" : "s"}`;
 }
 
 function renderBoard(board) {
@@ -38,8 +36,6 @@ function renderBoard(board) {
     tr.appendChild(cell(w.daemon));
     tr.appendChild(cell(w.ticket));
     tr.appendChild(cell(w.repo || DASH));
-    tr.appendChild(cell(w.branch || DASH));
-    tr.appendChild(cell(w.state || DASH, w.state ? `state-${w.state}` : null));
     body.appendChild(tr);
   }
 }

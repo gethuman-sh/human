@@ -44,13 +44,11 @@ type WebServer struct {
 	Logger zerolog.Logger
 }
 
-// capView is the capacity headcount with stable lowercase JSON keys, decoupling
-// the wire shape from the internal Capacity domain type.
+// capView is the capacity headcount with a stable lowercase JSON key. Only the
+// count of connected daemons is reported; the internal Capacity type still
+// tracks busy/blocked/idle, but the console shows just the connected total.
 type capView struct {
 	Daemons int `json:"daemons"`
-	Busy    int `json:"busy"`
-	Blocked int `json:"blocked"`
-	Idle    int `json:"idle"`
 }
 
 // workView is one work-board row. An absent ticket is rendered as an em dash so
@@ -59,8 +57,6 @@ type workView struct {
 	Daemon string `json:"daemon"`
 	Ticket string `json:"ticket"`
 	Repo   string `json:"repo"`
-	Branch string `json:"branch"`
-	State  string `json:"state"`
 }
 
 // burnView is one burn row with a pre-formatted token Display (e.g. "1.5K", or
@@ -148,7 +144,7 @@ func (w *WebServer) snapshot(ctx context.Context) Snapshot {
 func buildSnapshot(now time.Time, board []WorkItem, burnTicket, burnRepo []BurnRow, capacity Capacity) Snapshot {
 	return Snapshot{
 		GeneratedAt:  now,
-		Capacity:     capView(capacity),
+		Capacity:     capView{Daemons: capacity.Daemons},
 		Board:        toWorkViews(board),
 		BurnByTicket: toBurnViews(burnTicket),
 		BurnByRepo:   toBurnViews(burnRepo),
@@ -166,8 +162,6 @@ func toWorkViews(board []WorkItem) []workView {
 			Daemon: w.DaemonID,
 			Ticket: ticket,
 			Repo:   w.Repo,
-			Branch: w.Branch,
-			State:  w.State,
 		})
 	}
 	return views

@@ -42,8 +42,6 @@ h3 { font-size: 0.9rem; margin: 0 0 0.25rem; font-weight: 600; }
   font-weight: 600;
   letter-spacing: 0.02em;
 }
-.capacity .busy { color: var(--busy); }
-.capacity .blocked { color: var(--blocked); }
 
 table {
   width: 100%;
@@ -68,9 +66,6 @@ td {
 }
 
 tbody tr:hover { background: rgba(122, 162, 247, 0.06); }
-
-.state-coding, .state-planning { color: var(--busy); }
-.state-blocked { color: var(--blocked); }
 
 .burn-grid {
   display: grid;

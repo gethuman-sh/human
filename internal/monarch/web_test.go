@@ -38,11 +38,11 @@ func TestBuildSnapshot_mapsFieldsAndFallbacks(t *testing.T) {
 	snap := buildSnapshot(now, board, burnTicket, burnRepo, cap)
 
 	assert.Equal(t, now, snap.GeneratedAt)
-	assert.Equal(t, capView{Daemons: 2, Busy: 1, Idle: 1}, snap.Capacity)
+	assert.Equal(t, capView{Daemons: 2}, snap.Capacity)
 	require.Len(t, snap.Board, 2)
 	assert.Equal(t, "daemon-1", snap.Board[0].Daemon)
 	assert.Equal(t, "HUM-143", snap.Board[0].Ticket)
-	assert.Equal(t, "main", snap.Board[0].Branch)
+	assert.Equal(t, "cli", snap.Board[0].Repo)
 	// An absent ticket falls back to the em dash, matching the old TUI.
 	assert.Equal(t, emDash, snap.Board[1].Ticket)
 
@@ -97,7 +97,7 @@ func TestSnapshotEndpoint_returnsLiveData(t *testing.T) {
 	require.Len(t, snap.Board, 1)
 	assert.Equal(t, "daemon-1", snap.Board[0].Daemon)
 	assert.Equal(t, "HUM-143", snap.Board[0].Ticket)
-	assert.Equal(t, 1, snap.Capacity.Busy)
+	assert.Equal(t, 1, snap.Capacity.Daemons)
 }
 
 func TestSnapshotEndpoint_emptyStore(t *testing.T) {
