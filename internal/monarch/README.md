@@ -26,9 +26,14 @@ swarm. Monarch shows *what* is being worked on, never *who*.
   pruned automatically.
 - **Standalone `monarch` binary** — a separate binary from `human` (a team runs
   one monarch; each developer runs a daemon). Default mode runs the TCP ingest
-  server plus a Bubble Tea TUI (work board + burn panes, capacity header)
-  against the local monarch store. `monarch --headless` runs the ingest server
-  only, with no TUI, for running as a systemd service.
+  server (`19290`) plus a read-only web dashboard (`19291`, override with
+  `--web-addr`): the work board, burn-by-ticket/repo, and a capacity header, all
+  served from the local monarch store and auto-refreshing in the browser every
+  2s. The dashboard is a self-contained single page (embedded HTML/CSS/JS, no
+  build step) backed by a single JSON snapshot endpoint (`/api/snapshot`), served
+  on Echo. No auth (MVP) — run it on a trusted/private network only.
+  `monarch --headless` runs the ingest server only, with no web UI, for running
+  as a systemd service.
 - **Systemd-hardened headless mode** — under `--headless` the server sends
   `sd_notify` readiness, answers the systemd watchdog, and watches its own
   executable on disk: when the binary is replaced (a new release is deployed) it
