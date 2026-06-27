@@ -1,13 +1,50 @@
 package errors
 
 import (
+	stderrors "errors"
+	"strings"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	goerrors "gitlab.com/tozd/go/errors"
 )
 
 func LogError(err error) *zerolog.Event {
-	return log.Error().Err(err).Fields(goerrors.AllDetails(err)).Err(err)
+	// tozd's Error() and %+v only expose the outermost wrap message, so the root
+	// cause (e.g. a Docker connection failure) is invisible to users unless we
+	// render the full chain ourselves.
+	return log.Error().Str("error", CauseChain(err)).Fields(goerrors.AllDetails(err))
+}
+
+// CauseChain renders the full unwrapped error chain as "outer: inner: root".
+// Wrappers like WrapWithDetails report the same message at multiple chain
+// levels; those consecutive duplicates are collapsed so the output stays
+// readable. Returns "" for a nil error.
+func CauseChain(err error) string {
+	if err == nil {
+		return ""
+	}
+	var b strings.Builder
+	var last string
+	for e := err; e != nil; e = stderrors.Unwrap(e) {
+		msg := e.Error()
+		if msg == "" || msg == last {
+			continue
+		}
+		last = msg
+		if b.Len() == 0 {
+			b.WriteString(msg)
+			continue
+		}
+		// A leaf error built with fmt.Errorf("%w") already embeds its cause as a
+		// suffix; don't append it twice.
+		if strings.HasSuffix(b.String(), msg) {
+			continue
+		}
+		b.WriteString(": ")
+		b.WriteString(msg)
+	}
+	return b.String()
 }
 
 func WithDetails(message string, details ...interface{}) error {
