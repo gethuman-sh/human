@@ -105,6 +105,10 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 - [Claude Code Integration](internal/claude/README.md) — skills, agents, and live monitoring
 - [Activity Statistics](internal/stats/README.md) — rolling record of agent tool usage
 
+**User interfaces**
+
+- [Workflow Board (desktop)](desktop/README.md) — drag-to-trigger 5-stage pipeline board (Wails)
+
 **Infrastructure & security**
 
 - [Audit Trail](internal/audit/README.md) — structured, queryable record of every agent action against trackers
@@ -382,6 +386,29 @@ See [documentation.md](docs/documentation.md) for full configuration details.
 ```bash
 make build
 ```
+
+### Desktop app (workflow board)
+
+The desktop GUI is the interactive 5-stage workflow board (Backlog → Product planning → Implementation → Verification → Done): each card is a PM ticket and dragging a card forward one column triggers that stage's `human` action via the daemon. It runs on macOS, Windows and Linux.
+
+It must be built via the Wails CLI, **never** plain `go build ./desktop/` — Wails v2 requires build tags that only `wails build` (or `wails dev`) injects, and the whole `desktop/` package is behind a `wailsapp` build tag so the default `make build`/`make check` stay green on a plain toolchain.
+
+Prerequisites (per-OS webview toolchain — see [docs/desktop-app.md](docs/desktop-app.md)):
+
+```bash
+make desktop-deps   # installs the pinned Wails CLI
+# macOS:   xcode-select --install
+# Linux:   sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+# Windows: WebView2 runtime (preinstalled on current images)
+```
+
+Then build (current OS only — cgo backends cannot be cross-compiled):
+
+```bash
+make desktop
+```
+
+CI builds all three OSes on a native-runner matrix (`.github/workflows/desktop.yml`). See [docs/desktop-app.md](docs/desktop-app.md) for details, the regression guard, and why `go build` is not a valid smoke test.
 
 ## Star History
 

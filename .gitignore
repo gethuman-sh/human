@@ -12,3 +12,16 @@ local/
 .humanconfig.yaml
 humanconfig.bak
 tools/
+
+# Desktop (Wails) frontend build artifacts. The embedded dist/ is checked in so
+# `//go:embed all:frontend/dist` resolves without a separate npm build, so it is
+# force-un-ignored against the global dist/ rule above.
+desktop/frontend/node_modules/
+desktop/frontend/build/
+desktop/build/bin/
+# Wails regenerates these on every `wails build`; the frontend talks to the
+# bindings via window.go directly, so the generated copies are not source.
+desktop/frontend/wailsjs/
+desktop/frontend/package.json.md5
+!desktop/frontend/dist/
+!desktop/frontend/dist/**
