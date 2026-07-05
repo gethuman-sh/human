@@ -3,6 +3,7 @@ package cmdtui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -193,6 +194,18 @@ func TestModelView_WithData(t *testing.T) {
 	}
 	if !strings.Contains(view, "Host") {
 		t.Errorf("expected 'Host' in view, got:\n%s", view)
+	}
+}
+
+func TestModelView_TmuxBannerShown(t *testing.T) {
+	m := testModel()
+	// Past the loading state (snap set) with a not-ok tmux preflight.
+	m.snap = testSnapshot()
+	m.tmux = detectTmux(stubLooker{err: exec.ErrNotFound}, "", "darwin")
+
+	view := m.View()
+	if !strings.Contains(view, "brew install tmux") {
+		t.Errorf("expected tmux guidance command in view, got:\n%s", view)
 	}
 }
 
@@ -450,7 +463,7 @@ func TestModelUpdate_LogModeMsg(t *testing.T) {
 }
 
 func TestRenderFooter_ShowsLogMode(t *testing.T) {
-	footer := renderFooter(80, "meta", "", false)
+	footer := renderFooter(80, "meta", "", false, true)
 	assert.Contains(t, footer, "log:meta")
 	assert.Contains(t, footer, "l log")
 	assert.Contains(t, footer, "q quit")
@@ -760,23 +773,25 @@ func TestDispatch_NoIssues(t *testing.T) {
 	assert.Nil(t, cmd)
 }
 
-func TestDispatch_NotInTmux(t *testing.T) {
-	t.Setenv("TMUX", "")
+func TestHandleDispatch_notOk_guidance(t *testing.T) {
 	m := testModel()
+	// Installed but no session: guidance should point at the relaunch command.
+	m.tmux = detectTmux(stubLooker{}, "", "darwin")
 	m.issues = []trackerIssues{
 		{TrackerKind: "linear", Project: "HUM", Issues: []tracker.Issue{{Key: "HUM-1"}}},
 	}
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	um := updated.(model)
-	assert.Equal(t, "Not in tmux", um.dispatchStatus)
+	assert.Contains(t, um.dispatchStatus, "relaunch")
 	assert.Nil(t, cmd)
 }
 
 func TestDispatch_LinearIssue(t *testing.T) {
-	t.Setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
 	t.Setenv("HOME", t.TempDir())
 	m := testModel()
+	// Guard reads cached m.tmux, not $TMUX directly — inject an ok state.
+	m.tmux = detectTmux(stubLooker{}, "/tmp/tmux-1000/default,12345,0", "darwin")
 	m.issues = []trackerIssues{
 		{TrackerKind: "linear", Project: "HUM", Issues: []tracker.Issue{{Key: "HUM-42"}}},
 	}
@@ -790,9 +805,10 @@ func TestDispatch_LinearIssue(t *testing.T) {
 }
 
 func TestDispatch_ShortcutIssue(t *testing.T) {
-	t.Setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
 	t.Setenv("HOME", t.TempDir())
 	m := testModel()
+	// Guard reads cached m.tmux, not $TMUX directly — inject an ok state.
+	m.tmux = detectTmux(stubLooker{}, "/tmp/tmux-1000/default,12345,0", "darwin")
 	m.issues = []trackerIssues{
 		{TrackerKind: "shortcut", Project: "PM", Issues: []tracker.Issue{{Key: "99"}}},
 	}
@@ -879,13 +895,13 @@ func TestRenderIssuesPanelCursor(t *testing.T) {
 }
 
 func TestRenderFooter_ShowsDispatchStatus(t *testing.T) {
-	footer := renderFooter(120, "off", "Spawned agent-3 for HUM-42", false)
+	footer := renderFooter(120, "off", "Spawned agent-3 for HUM-42", false, true)
 	assert.Contains(t, footer, "Spawned agent-3 for HUM-42")
 	assert.Contains(t, footer, "⏎ send")
 }
 
 func TestRenderFooter_ShowsNavKeys(t *testing.T) {
-	footer := renderFooter(120, "", "", false)
+	footer := renderFooter(120, "", "", false, true)
 	assert.Contains(t, footer, "j/k nav")
 	assert.Contains(t, footer, "⏎ send")
 }
@@ -943,17 +959,17 @@ func TestOpenBrowserMsg_Error(t *testing.T) {
 }
 
 func TestRenderFooter_ShowsOpenKey(t *testing.T) {
-	footer := renderFooter(120, "", "", false)
+	footer := renderFooter(120, "", "", false, true)
 	assert.Contains(t, footer, "o open")
 }
 
 func TestRenderFooter_ShowsTabHint(t *testing.T) {
-	footer := renderFooter(120, "", "", true)
+	footer := renderFooter(120, "", "", true, true)
 	assert.Contains(t, footer, "Tab switch")
 }
 
 func TestRenderFooter_NoTabHint(t *testing.T) {
-	footer := renderFooter(120, "", "", false)
+	footer := renderFooter(120, "", "", false, true)
 	assert.NotContains(t, footer, "Tab switch")
 }
 
@@ -1246,15 +1262,16 @@ func TestNextAgentName(t *testing.T) {
 	assert.Equal(t, "agent-1", name)
 }
 
-func TestHandleSpawnAgent_NotInTmux(t *testing.T) {
-	t.Setenv("TMUX", "")
-
+func TestHandleSpawnAgent_notOk_guidance(t *testing.T) {
 	m := testModel()
+	// tmux not installed: guidance should name the missing dependency.
+	m.tmux = detectTmux(stubLooker{err: exec.ErrNotFound}, "", "darwin")
+
 	result, cmd := m.handleSpawnAgent()
 	resultModel := result.(model)
 
 	assert.Nil(t, cmd)
-	assert.Contains(t, resultModel.dispatchStatus, "Not in tmux")
+	assert.Contains(t, resultModel.dispatchStatus, "tmux not installed")
 }
 
 func TestHandleSpawnAgentResult_Success(t *testing.T) {
@@ -1274,7 +1291,7 @@ func TestHandleSpawnAgentResult_Error(t *testing.T) {
 }
 
 func TestFooterContainsAgentHint(t *testing.T) {
-	footer := renderFooter(80, "", "", false)
+	footer := renderFooter(80, "", "", false, true)
 	assert.Contains(t, footer, "a agent")
 }
 

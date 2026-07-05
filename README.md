@@ -144,6 +144,14 @@ human tui
 
 The TUI shows running Claude Code instances, token usage per 5-hour window, daemon status, and connected containers — all in one view. It auto-starts the daemon if needed.
 
+Agent spawn (`a`) and dispatch (`⏎`) require **tmux** on the host and that the TUI itself runs inside a tmux session. Browsing issues and every other view work without it. If tmux is missing, install it (`brew install tmux` on macOS, `sudo apt-get install tmux` on Debian/Ubuntu, or your distro's package). To run the TUI inside a session, launch it as:
+
+```bash
+tmux new -s human "human tui"
+```
+
+The TUI runs a launch-time preflight and shows a banner with the exact command to run if either check fails.
+
 ## CLI usage
 
 Quick commands auto-detect the tracker from the key format. Use `--table` for human-readable output.

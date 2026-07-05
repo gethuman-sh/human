@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -164,6 +165,7 @@ type model struct {
 	fetching     bool                         // true while a fetch command is in flight
 	showSplash   bool                         // true during the initial logo display period
 	logMode      string                       // traffic log mode: "off", "meta", "full"
+	tmux         tmuxState                    // cached launch-time tmux preflight (SC-124)
 	daemonEvents <-chan daemon.SubscribeEvent // push notifications from daemon
 	daemonUnsub  func()                       // closes daemon subscription
 
@@ -203,7 +205,7 @@ type model struct {
 func newModel(mon *monitor.Monitor) model {
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	sp.Style = lipgloss.NewStyle().Foreground(humanRed)
-	m := model{mon: mon, spinner: sp, width: defaultWidth, fetchGen: 1, fetching: true, showSplash: true, logMode: "off", prevStatuses: make(map[string]logparser.SessionStatus)}
+	m := model{mon: mon, spinner: sp, width: defaultWidth, fetchGen: 1, fetching: true, showSplash: true, logMode: "off", prevStatuses: make(map[string]logparser.SessionStatus), tmux: detectTmux(osPathLooker{}, os.Getenv("TMUX"), runtime.GOOS)}
 	// Subscribe to daemon push notifications (best-effort; falls back to polling).
 	if info, err := daemon.ReadInfo(); err == nil && info.Addr != "" {
 		if ch, unsub, subErr := daemon.Subscribe(info.Addr, info.Token); subErr == nil {
@@ -503,8 +505,8 @@ func (m model) handleDispatch() (tea.Model, tea.Cmd) {
 	if m.issueCursor >= len(flat) {
 		return m, nil
 	}
-	if os.Getenv("TMUX") == "" {
-		m.dispatchStatus = "Not in tmux"
+	if !m.tmux.ok() {
+		m.dispatchStatus = m.tmux.guidance()
 		m.dispatchAt = time.Now()
 		return m, nil
 	}
@@ -663,8 +665,8 @@ type spawnAgentMsg struct {
 }
 
 func (m model) handleSpawnAgent() (tea.Model, tea.Cmd) {
-	if os.Getenv("TMUX") == "" {
-		m.dispatchStatus = "Not in tmux"
+	if !m.tmux.ok() {
+		m.dispatchStatus = m.tmux.guidance()
 		m.dispatchAt = time.Now()
 		return m, nil
 	}
@@ -1003,7 +1005,7 @@ func (m model) handleCreateResult(msg createResultMsg) (tea.Model, tea.Cmd) {
 	m.issuesLoading = true
 
 	// Auto-dispatch /human-ready via a new agent.
-	if !m.dispatching && os.Getenv("TMUX") != "" {
+	if !m.dispatching && m.tmux.ok() {
 		name := nextAgentName()
 		projectDir := m.activeProjectDir()
 		var tmuxTarget string
@@ -1102,6 +1104,12 @@ func (m model) View() string {
 		return b.String()
 	}
 
+	// tmux preflight banner: persistent, non-blocking guidance (SC-124).
+	if banner := renderTmuxBanner(m.tmux); banner != "" {
+		b.WriteString(banner)
+		b.WriteByte('\n')
+	}
+
 	// Status line: daemon left, telegram right.
 	b.WriteString(renderStatusLine(m.snap, w))
 	b.WriteByte('\n')
@@ -1146,7 +1154,7 @@ func (m model) View() string {
 // budgeting the issues panel; the domains panel then fills whatever space is
 // left above the footer.
 func (m model) renderBottomPanels(b *strings.Builder, w int) {
-	footer := renderFooter(w, m.logMode, m.dispatchStatus, len(m.tabs()) > 0)
+	footer := renderFooter(w, m.logMode, m.dispatchStatus, len(m.tabs()) > 0, m.tmux.ok())
 	const footerLines = 2 // one blank separator + the footer line itself
 
 	toolStats := renderToolStatsPanel(m.snap.ToolStats, w)
@@ -1601,7 +1609,7 @@ func renderConfirmDialog(prompt string, width, height int) string {
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
-func renderFooter(w int, logMode, dispatchStatus string, showTabs bool) string {
+func renderFooter(w int, logMode, dispatchStatus string, showTabs, tmuxOK bool) string {
 	left := subtleStyle.Render("  ↻ live")
 	if logMode != "" {
 		left += "  " + subtleStyle.Render("log:"+logMode)
@@ -1610,6 +1618,10 @@ func renderFooter(w int, logMode, dispatchStatus string, showTabs bool) string {
 		left += "  " + specialStyle.Render(dispatchStatus)
 	}
 	keys := "j/k nav  ⏎ send  o open  n new  a agent  l log  q quit"
+	if !tmuxOK {
+		// Keep the spawn/dispatch affordances visible but flag that they need tmux.
+		keys += "  " + warningStyle.Render("(⏎/a need tmux)")
+	}
 	if showTabs {
 		keys = "Tab switch  " + keys
 	}
@@ -1619,6 +1631,26 @@ func renderFooter(w int, logMode, dispatchStatus string, showTabs bool) string {
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+// renderTmuxBanner produces the persistent, non-blocking tmux guidance banner.
+// Returns "" when the preflight is satisfied so a healthy setup shows no chrome.
+// The two failure states get distinct, copy-pasteable remedies (SC-124).
+func renderTmuxBanner(st tmuxState) string {
+	if st.ok() {
+		return ""
+	}
+	var headline, cmd string
+	if !st.installed {
+		headline = "⚠ tmux is required for agent spawn (a) and dispatch (⏎), but is not installed."
+		cmd = st.installCmd
+	} else {
+		headline = "⚠ Agent spawn (a) and dispatch (⏎) need a tmux session; you're not in one."
+		cmd = st.relaunchCmd
+	}
+	line1 := warningStyle.Render("  " + headline)
+	line2 := subtleStyle.Render("    ") + specialStyle.Render(cmd)
+	return line1 + "\n" + line2
 }
 
 // --- render: icon ---
