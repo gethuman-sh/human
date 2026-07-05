@@ -34,12 +34,12 @@ func BuildAuditCmd() *cobra.Command {
 
 func buildAuditListCmd() *cobra.Command {
 	var (
-		since    string
-		until    string
-		subject  string
-		tracker  string
-		limit    int
-		asJSON   bool
+		since   string
+		until   string
+		subject string
+		tracker string
+		limit   int
+		asJSON  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "list",
