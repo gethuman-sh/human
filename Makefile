@@ -112,4 +112,6 @@ release:
 	@echo "Tagging $(VERSION)..."
 	git tag -a $(VERSION) -m "Release $(VERSION)"
 	git push origin $(VERSION)
-	go tool goreleaser release --clean
+	# goreleaser needs a token to publish the release and push the Homebrew tap;
+	# fall back to the logged-in gh CLI so a plain `make release` works locally.
+	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go tool goreleaser release --clean
