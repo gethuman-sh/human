@@ -62,6 +62,12 @@ check: check-test lint sec secrets
 desktop-deps:
 	go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
+# Wails v2 defaults to the EOL webkit2gtk-4.0 ABI on Linux; modern Debian/Ubuntu
+# ship only webkit2gtk-4.1, which requires the `webkit2_41` tag. Auto-append it
+# when 4.0 is absent but 4.1 is present so the build works out of the box; macOS
+# and Windows are untouched. Override the whole set with `make desktop DESKTOP_TAGS=...`.
+DESKTOP_TAGS ?= wailsapp$(shell pkg-config --exists webkit2gtk-4.0 2>/dev/null || { pkg-config --exists webkit2gtk-4.1 2>/dev/null && echo ,webkit2_41; })
+
 # desktop produces a runnable app for the CURRENT OS only. wails build invokes
 # the frontend build (tsc + bundle) and compiles the cgo backend; Wails adds its
 # own `desktop` output tag, and `-tags wailsapp` makes our gated files visible to
@@ -69,18 +75,18 @@ desktop-deps:
 # `go build ./desktop/` links but panics at startup, so it is never the build
 # path (see docs/desktop-app.md).
 desktop:
-	cd desktop && wails build -tags wailsapp
+	cd desktop && wails build -tags $(DESKTOP_TAGS)
 
 # desktop-dev runs the live-reload dev loop.
 desktop-dev:
-	cd desktop && wails dev -tags wailsapp
+	cd desktop && wails dev -tags $(DESKTOP_TAGS)
 
 # desktop-package produces a clean distributable bundle (.app/.exe/AppImage) for
 # the current OS. Note: macOS code-signing/notarization is NOT performed here —
 # wails delegates to Apple codesign/notarytool with operator-provided
 # identities; that remains a release-gating follow-up.
 desktop-package:
-	cd desktop && wails build -tags wailsapp -clean
+	cd desktop && wails build -tags $(DESKTOP_TAGS) -clean
 
 clean:
 	go clean -cache -i
