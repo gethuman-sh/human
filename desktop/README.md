@@ -15,7 +15,8 @@ re-derives a stage.
 - The Done column uses a guarded inner drop zone (not the whole column) so a stray drop cannot push a pull request.
 - Optimistic move on drop, then reconcile from the daemon (which is authoritative: it re-derives the card from live comments and enforces forward-only/gated rules server-side).
 - When Docker is unavailable the planning/implementation/verification drop targets are disabled (Done stays enabled, since it only pushes a branch and opens a PR).
-- Live updates: subscribes to the daemon and refetches on every change event — no independent polling loop, mirroring the TUI.
+- Live updates: subscribes to the daemon and refetches board cards on every change event. A small independent poll (every 3s) drives only the header daemon-reachability dot, since there is no daemon-pushed event to subscribe to when the daemon itself is down — this mirrors how the TUI itself layers periodic ticks on top of its daemon subscribe channel.
+- Header daemon indicator: a two-state dot (reachable/unreachable) in the header, sourced from `daemon.ReadInfo()` / `IsReachable()` / `ReadAlivePid()` — display-only, no daemon version, proxy stats, agent count, or start/stop action.
 
 ## Architecture
 

@@ -115,6 +115,23 @@ func (a *App) Cards() (BoardData, error) {
 	return data, nil
 }
 
+// DaemonStatus reports whether the human daemon is currently reachable. The
+// frontend polls this independently of Cards() because Cards() returns an
+// error the instant the daemon is unreachable and stops there — the one case
+// this indicator exists to show would otherwise never populate a "reachable"
+// field. Combines IsReachable() (authoritative TCP dial, works across process
+// namespaces e.g. host <-> devcontainer) with ReadAlivePid() (same-host
+// PID-file liveness) so a daemon that is alive but momentarily not yet
+// listening still reads as reachable, matching the TUI's dual-source check.
+func (a *App) DaemonStatus() bool {
+	info, err := daemon.ReadInfo()
+	if err == nil && info.IsReachable() {
+		return true
+	}
+	_, alive := daemon.ReadAlivePid()
+	return alive
+}
+
 // Transition advances a card one stage by delegating to the daemon's
 // board-transition route. The daemon is authoritative: it re-derives the card
 // from live comments and enforces forward-only/gated rules, so an out-of-date

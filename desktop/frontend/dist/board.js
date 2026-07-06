@@ -17,6 +17,10 @@ const STAGE_LABELS = {
 const AGENT_STAGES = new Set(["planning", "implementation", "verification"]);
 let current = { cards: [], dockerAvailable: true, error: "" };
 let dragging = null;
+// Matches the daemon subscribe-retry backoff (desktop/main.go backoff(), 2s)
+// rounded up slightly so the poll never races the retry loop.
+const DAEMON_POLL_MS = 3000;
+let daemonReachable = false;
 function go() {
     const app = window.go?.main?.App;
     if (!app)
@@ -164,6 +168,22 @@ function showError(msg) {
     current.error = msg;
     render();
 }
+function renderDaemonStatus() {
+    const dot = document.getElementById("daemon-status");
+    dot.classList.toggle("reachable", daemonReachable);
+    dot.classList.toggle("unreachable", !daemonReachable);
+    dot.title = daemonReachable ? "Daemon reachable" : "Daemon unreachable";
+}
+async function pollDaemonStatus() {
+    try {
+        daemonReachable = await go().DaemonStatus();
+    }
+    catch {
+        // Wails bindings not ready yet or call failed — treat as unreachable.
+        daemonReachable = false;
+    }
+    renderDaemonStatus();
+}
 async function refresh() {
     try {
         const data = await go().Cards();
@@ -199,6 +219,8 @@ function init() {
         });
     }
     void refresh();
+    void pollDaemonStatus();
+    setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
 }
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
