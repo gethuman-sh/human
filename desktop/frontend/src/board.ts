@@ -28,6 +28,7 @@ interface BoardData {
 interface AppBindings {
   Cards(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
+  DaemonStatus(): Promise<boolean>;
 }
 
 // This file is a module (see the trailing `export {}`) so the global
@@ -55,6 +56,12 @@ const AGENT_STAGES = new Set(["planning", "implementation", "verification"]);
 
 let current: BoardData = { cards: [], dockerAvailable: true, error: "" };
 let dragging: { key: string; title: string; stage: string } | null = null;
+
+// Matches the daemon subscribe-retry backoff (desktop/main.go backoff(), 2s)
+// rounded up slightly so the poll never races the retry loop.
+const DAEMON_POLL_MS = 3000;
+
+let daemonReachable = false;
 
 function go(): AppBindings {
   const app = window.go?.main?.App;
@@ -205,6 +212,23 @@ function showError(msg: string): void {
   render();
 }
 
+function renderDaemonStatus(): void {
+  const dot = document.getElementById("daemon-status")!;
+  dot.classList.toggle("reachable", daemonReachable);
+  dot.classList.toggle("unreachable", !daemonReachable);
+  dot.title = daemonReachable ? "Daemon reachable" : "Daemon unreachable";
+}
+
+async function pollDaemonStatus(): Promise<void> {
+  try {
+    daemonReachable = await go().DaemonStatus();
+  } catch {
+    // Wails bindings not ready yet or call failed — treat as unreachable.
+    daemonReachable = false;
+  }
+  renderDaemonStatus();
+}
+
 async function refresh(): Promise<void> {
   try {
     const data = await go().Cards();
@@ -242,6 +266,8 @@ function init(): void {
     });
   }
   void refresh();
+  void pollDaemonStatus();
+  setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
 }
 
 if (document.readyState === "loading") {

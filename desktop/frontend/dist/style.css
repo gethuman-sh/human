@@ -194,3 +194,34 @@ body {
 .disabled-target {
   opacity: 0.5;
 }
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--col-bg);
+  border-bottom: 1px solid var(--col-border);
+  font-weight: 600;
+}
+
+.app-title {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.daemon-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--muted);
+}
+
+.daemon-dot.reachable {
+  background: var(--done);
+}
+
+.daemon-dot.unreachable {
+  background: var(--failed);
+}
