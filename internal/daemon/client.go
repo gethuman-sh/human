@@ -262,6 +262,47 @@ func BoardTransition(addr, token string, req BoardTransitionRequest) error {
 	return err
 }
 
+// IdeationStart starts (or re-attaches to) the board ideation session.
+func IdeationStart(addr, token string, req IdeationStartRequest) (IdeationStatus, error) {
+	return ideationCall(addr, token, "ideation-start", req)
+}
+
+// IdeationReply sends the user's answer into the running ideation session.
+func IdeationReply(addr, token string, req IdeationReplyRequest) (IdeationStatus, error) {
+	return ideationCall(addr, token, "ideation-reply", req)
+}
+
+// GetIdeationStatus fetches the current ideation session snapshot.
+func GetIdeationStatus(addr, token string) (IdeationStatus, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"ideation-status"})
+	if err != nil {
+		return IdeationStatus{}, err
+	}
+	var st IdeationStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return IdeationStatus{}, errors.WrapWithDetails(err, "invalid ideation status JSON")
+	}
+	return st, nil
+}
+
+// ideationCall marshals payload as the single JSON arg and decodes the returned
+// snapshot — the same wire shape as BoardTransition, with a JSON reply.
+func ideationCall(addr, token, route string, payload any) (IdeationStatus, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return IdeationStatus{}, errors.WrapWithDetails(err, "marshaling "+route+" request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{route, string(data)})
+	if err != nil {
+		return IdeationStatus{}, err
+	}
+	var st IdeationStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return IdeationStatus{}, errors.WrapWithDetails(err, "invalid ideation status JSON")
+	}
+	return st, nil
+}
+
 // GetPendingConfirms fetches pending destructive operation confirmations from the daemon.
 func GetPendingConfirms(addr, token string) ([]PendingConfirm, error) {
 	out, err := RunRemoteCapture(addr, token, []string{"pending-confirms"})

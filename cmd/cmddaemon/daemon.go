@@ -2,6 +2,8 @@ package cmddaemon
 
 import (
 	"context"
+	"encoding/json"
+	goerrors "errors"
 	"fmt"
 	"io"
 	"net"
@@ -24,6 +26,7 @@ import (
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/chrome"
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
@@ -237,6 +240,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AgentCleaner:      &dockerAgentCleaner{},
 		VaultResolver:     vaultResolver,
 		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver),
+		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, logger),
 	}
 
 	return &daemonState{
@@ -1309,6 +1313,111 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 			ConfigDir:    entry.Dir,
 		}
 		return deps.ApplyTransition(context.Background(), req)
+	}
+}
+
+// hostClaudeIdeationRunner implements daemon.IdeationRunner by running one
+// headless `claude -p` turn on the daemon host in the registered project dir.
+// Session continuity across turns rides on claude's own --resume store, so the
+// daemon holds no conversation state beyond the resume id.
+type hostClaudeIdeationRunner struct {
+	reg *daemon.ProjectRegistry
+}
+
+// claudeTurnOutput is the subset of `claude -p --output-format json` we need.
+type claudeTurnOutput struct {
+	Result    string `json:"result"`
+	SessionID string `json:"session_id"`
+	IsError   bool   `json:"is_error"`
+}
+
+func (r hostClaudeIdeationRunner) Run(ctx context.Context, resumeID, prompt string) (daemon.IdeationTurn, error) {
+	entries := r.reg.Entries()
+	if len(entries) == 0 {
+		return daemon.IdeationTurn{}, errors.WithDetails("no project registered for ideation")
+	}
+	// Read-only tool allowlist: the agent may inspect the repo but nothing
+	// else; the daemon, not the agent, writes the ticket. Single argv element
+	// so the variadic flag cannot swallow the positional prompt.
+	args := []string{"-p", prompt, "--output-format", "json", "--allowedTools", "Read Grep Glob"}
+	if resumeID != "" {
+		args = append(args, "--resume", resumeID)
+	}
+	cmd := exec.CommandContext(ctx, "claude", args...) // #nosec G204 -- fixed binary, prompt is a discrete argv element
+	cmd.Dir = entries[0].Dir
+	out, err := cmd.Output()
+	// Live-verified (CLI 2.1.193): on turn failure claude exits non-zero,
+	// writes the result JSON with is_error:true and the cause in `result` to
+	// STDOUT, and leaves stderr empty. So the JSON parse below must run on
+	// both the success and the ExitError path; stderr is only meaningful for
+	// true exec failures (binary missing, process killed).
+	var parsed claudeTurnOutput
+	parseErr := json.Unmarshal(out, &parsed)
+	if parseErr == nil && parsed.IsError {
+		return daemon.IdeationTurn{}, errors.WithDetails("ideation agent turn failed", "result", parsed.Result)
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return daemon.IdeationTurn{}, errors.WrapWithDetails(ctx.Err(), "ideation agent turn timed out")
+		}
+		var ee *exec.ExitError
+		detail := ""
+		if goerrors.As(err, &ee) {
+			detail = strings.TrimSpace(string(ee.Stderr))
+		}
+		return daemon.IdeationTurn{}, errors.WrapWithDetails(err, "running ideation agent turn", "stderr", detail)
+	}
+	if parseErr != nil {
+		return daemon.IdeationTurn{}, errors.WrapWithDetails(parseErr, "parsing ideation agent output")
+	}
+	return daemon.IdeationTurn{Reply: parsed.Result, ResumeID: parsed.SessionID}, nil
+}
+
+// resolvePMCreator resolves the PM-role tracker.Creator and its first
+// configured project. Role-based, never key-prefix — mirrors resolvePMCommenter.
+func resolvePMCreator(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.Creator, string, error) {
+	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, inst := range instances {
+		if inst.InferRole() != "pm" {
+			continue
+		}
+		// tracker.Provider embeds Creator, so this assertion cannot fail
+		// today; kept for symmetry with resolvePMCommenter and as a guard
+		// should the Provider interface ever be split.
+		c, ok := inst.Provider.(tracker.Creator)
+		if !ok {
+			continue
+		}
+		project := ""
+		if len(inst.Projects) > 0 {
+			project = inst.Projects[0]
+		}
+		return c, project, nil
+	}
+	return nil, "", errors.WithDetails("no PM-role tracker configured", "dir", dir)
+}
+
+// ideationEngine wires the board ideation engine: host claude runner, role-
+// resolved PM creator, and a hook-store poke so the created card reaches the
+// board through the existing subscribe/refetch loop.
+func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, logger zerolog.Logger) *daemon.IdeationEngine {
+	return &daemon.IdeationEngine{
+		Runner: hostClaudeIdeationRunner{reg: reg},
+		ResolveCreator: func() (tracker.Creator, string, error) {
+			entries := reg.Entries()
+			if len(entries) == 0 {
+				return nil, "", errors.WithDetails("no project registered for ideation")
+			}
+			entry := entries[0]
+			return resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
+		},
+		Notify: func() {
+			hookStore.Append(hookevents.Event{EventName: "IdeationCreated", Timestamp: time.Now().UTC()})
+		},
+		Logger: logger,
 	}
 }
 

@@ -225,3 +225,144 @@ body {
 .daemon-dot.unreachable {
   background: var(--failed);
 }
+
+.add-card {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--col-border);
+  background: var(--card-bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.add-card:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ideation-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 380px;
+  background: var(--col-bg);
+  border-left: 1px solid var(--col-border);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+.ideation-panel.hidden {
+  display: none;
+}
+
+.ideation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--col-border);
+}
+
+.ideation-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.ideation-close:hover {
+  color: var(--text);
+}
+
+.ideation-transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg {
+  max-width: 85%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  line-height: 1.35;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.msg.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+}
+
+.msg.agent {
+  align-self: flex-start;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+}
+
+.ideation-status {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ideation-status.hidden {
+  display: none;
+}
+
+.ideation-status.error {
+  color: var(--failed);
+}
+
+.ideation-form {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--col-border);
+}
+
+.ideation-form input {
+  flex: 1;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ideation-form input:disabled {
+  opacity: 0.5;
+}
+
+.ideation-form button {
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  padding: 8px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ideation-form button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

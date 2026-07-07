@@ -149,6 +149,78 @@ func (a *App) Transition(pmKey, pmTitle, from, to string) error {
 	})
 }
 
+// IdeationMsg is the frontend-facing transcript entry.
+type IdeationMsg struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
+// IdeationView is the frontend-facing session snapshot.
+type IdeationView struct {
+	SessionID  string        `json:"sessionId,omitempty"`
+	State      string        `json:"state"`
+	Messages   []IdeationMsg `json:"messages"`
+	CreatedKey string        `json:"createdKey,omitempty"`
+	Error      string        `json:"error,omitempty"`
+}
+
+// StartIdeation begins (or re-attaches to) the board ideation session.
+func (a *App) StartIdeation(seed string, restart bool) (IdeationView, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return IdeationView{}, err
+	}
+	st, err := daemon.IdeationStart(info.Addr, info.Token, daemon.IdeationStartRequest{Seed: seed, Restart: restart})
+	if err != nil {
+		return IdeationView{}, err
+	}
+	return ideationView(st), nil
+}
+
+// ReplyIdeation sends the user's answer into the running session.
+func (a *App) ReplyIdeation(sessionID, message string) (IdeationView, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return IdeationView{}, err
+	}
+	st, err := daemon.IdeationReply(info.Addr, info.Token, daemon.IdeationReplyRequest{SessionID: sessionID, Message: message})
+	if err != nil {
+		return IdeationView{}, err
+	}
+	return ideationView(st), nil
+}
+
+// IdeationStatus returns the current session snapshot for panel polling and
+// re-attach on panel reopen. Re-attach (rather than treating panel close as
+// abandonment) is the deliberate AD-4 lifecycle: closing the panel does not
+// stop the daemon-side session, so reopening must recover the live transcript.
+func (a *App) IdeationStatus() (IdeationView, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return IdeationView{}, err
+	}
+	st, err := daemon.GetIdeationStatus(info.Addr, info.Token)
+	if err != nil {
+		return IdeationView{}, err
+	}
+	return ideationView(st), nil
+}
+
+// ideationView maps the daemon wire snapshot to the frontend-facing shape.
+func ideationView(st daemon.IdeationStatus) IdeationView {
+	view := IdeationView{
+		SessionID:  st.SessionID,
+		State:      string(st.State),
+		Messages:   []IdeationMsg{},
+		CreatedKey: st.CreatedKey,
+		Error:      st.Error,
+	}
+	for _, m := range st.Transcript {
+		view.Messages = append(view.Messages, IdeationMsg{Role: m.Role, Text: m.Text})
+	}
+	return view
+}
+
 // firstPMResult returns the first PM-role tracker result. v1 supports a single
 // PM project; selecting by role (not key prefix) mirrors the daemon's own
 // role-based resolution and avoids the name-collision mis-routing described in

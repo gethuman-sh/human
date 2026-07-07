@@ -88,7 +88,16 @@ function renderColumn(stage) {
     const cards = current.cards.filter((c) => c.stage === stage);
     const header = document.createElement("div");
     header.className = "column-header";
-    header.innerHTML = `<span>${STAGE_LABELS[stage]}</span><span class="column-count">${cards.length}</span>`;
+    if (stage === "backlog") {
+        header.innerHTML =
+            `<span>${STAGE_LABELS[stage]}</span>` +
+                `<button class="add-card" title="New ticket via ideation">+</button>` +
+                `<span class="column-count">${cards.length}</span>`;
+        header.querySelector(".add-card").addEventListener("click", () => void openIdeation());
+    }
+    else {
+        header.innerHTML = `<span>${STAGE_LABELS[stage]}</span><span class="column-count">${cards.length}</span>`;
+    }
     col.appendChild(header);
     const body = document.createElement("div");
     body.className = "column-body";
@@ -212,6 +221,146 @@ function escapeHtml(s) {
 function escapeAttr(s) {
     return escapeHtml(s).replace(/"/g, "&quot;");
 }
+// --- Ideation chat panel -----------------------------------------------
+//
+// The panel is a thin client over the daemon's ideation-start/reply/status
+// routes: it never derives session state itself, it only renders whatever
+// the daemon last reported. Closing the panel does NOT abandon the
+// daemon-side session (AD-4) — reopening re-attaches via IdeationStatus().
+let ideation = { state: "none", messages: [] };
+let ideationOpen = false;
+let ideationTimer = null;
+const IDEATION_POLL_MS = 1000;
+function stopIdeationPoll() {
+    if (ideationTimer !== null) {
+        clearInterval(ideationTimer);
+        ideationTimer = null;
+    }
+}
+// startIdeationPoll only runs while the panel is visible: the daemon-side
+// session keeps making progress on its own regardless (AD-4), so there is no
+// need to poll for a panel the user cannot see.
+function startIdeationPoll() {
+    if (!ideationOpen || ideationTimer !== null)
+        return;
+    ideationTimer = window.setInterval(() => void pollIdeation(), IDEATION_POLL_MS);
+}
+function renderIdeation() {
+    const transcript = document.getElementById("ideation-transcript");
+    if (!transcript)
+        return;
+    transcript.innerHTML = ideation.messages
+        .map((m) => `<div class="msg ${m.role === "user" ? "user" : "agent"}">${escapeHtml(m.text)}</div>`)
+        .join("");
+    transcript.scrollTop = transcript.scrollHeight;
+    const statusLine = document.getElementById("ideation-status-line");
+    if (statusLine) {
+        statusLine.classList.remove("hidden", "error");
+        if (ideation.state === "thinking") {
+            statusLine.textContent = "Agent is thinking…";
+        }
+        else if (ideation.state === "error") {
+            statusLine.textContent = ideation.error || "Ideation session failed";
+            statusLine.classList.add("error");
+        }
+        else if (ideation.state === "done") {
+            statusLine.textContent = "Created " + (ideation.createdKey || "");
+        }
+        else {
+            statusLine.classList.add("hidden");
+        }
+    }
+    const input = document.getElementById("ideation-input");
+    const send = document.getElementById("ideation-send");
+    const inputEnabled = ideation.state === "awaiting_reply" ||
+        ideation.state === "none" ||
+        ideation.state === "done" ||
+        ideation.state === "error";
+    if (input) {
+        input.disabled = !inputEnabled;
+        input.placeholder = ideation.state === "awaiting_reply" ? "Your answer…" : "Describe the idea…";
+    }
+    if (send)
+        send.disabled = !inputEnabled;
+}
+function renderIdeationError(msg) {
+    ideation = { ...ideation, state: "error", error: msg };
+    renderIdeation();
+}
+async function openIdeation() {
+    const panel = document.getElementById("ideation-panel");
+    if (panel)
+        panel.classList.remove("hidden");
+    ideationOpen = true;
+    try {
+        ideation = await go().IdeationStatus();
+    }
+    catch (err) {
+        renderIdeationError(errMessage(err));
+        return;
+    }
+    renderIdeation();
+    if (ideation.state === "thinking")
+        startIdeationPoll();
+}
+function closeIdeation() {
+    const panel = document.getElementById("ideation-panel");
+    if (panel)
+        panel.classList.add("hidden");
+    ideationOpen = false;
+    stopIdeationPoll();
+}
+async function pollIdeation() {
+    try {
+        ideation = await go().IdeationStatus();
+    }
+    catch (err) {
+        renderIdeationError(errMessage(err));
+        stopIdeationPoll();
+        return;
+    }
+    renderIdeation();
+    if (ideation.state !== "thinking") {
+        stopIdeationPoll();
+    }
+}
+async function submitIdeation() {
+    const input = document.getElementById("ideation-input");
+    if (!input)
+        return;
+    const text = input.value.trim();
+    if (!text)
+        return;
+    const isFresh = ideation.state === "none" || ideation.state === "done" || ideation.state === "error";
+    const restart = ideation.state === "done" || ideation.state === "error";
+    // Optimistic update: show the user's message immediately and disable the
+    // input while the turn is in flight.
+    ideation = {
+        ...ideation,
+        state: "thinking",
+        messages: [...ideation.messages, { role: "user", text }],
+    };
+    input.value = "";
+    renderIdeation();
+    startIdeationPoll();
+    try {
+        if (isFresh) {
+            ideation = await go().StartIdeation(text, restart);
+        }
+        else {
+            ideation = await go().ReplyIdeation(ideation.sessionId, text);
+        }
+    }
+    catch (err) {
+        renderIdeationError(errMessage(err));
+        stopIdeationPoll();
+        return;
+    }
+    renderIdeation();
+    if (ideation.state !== "thinking") {
+        stopIdeationPoll();
+    }
+}
 function init() {
     if (window.runtime?.EventsOn) {
         window.runtime.EventsOn("board:changed", () => {
@@ -221,6 +370,11 @@ function init() {
     void refresh();
     void pollDaemonStatus();
     setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
+    document.getElementById("ideation-close")?.addEventListener("click", () => closeIdeation());
+    document.getElementById("ideation-form")?.addEventListener("submit", (e) => {
+        e.preventDefault();
+        void submitIdeation();
+    });
 }
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);

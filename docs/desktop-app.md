@@ -96,6 +96,39 @@ So a future change that breaks `wails build` is caught automatically rather than
 
 The desktop artifact must never be published through a goreleaser `builds:` entry (e.g. `main: ./desktop`) — that is a plain `go build` and produces the non-runnable binary described above. The artifact is cgo and cannot be cross-compiled, so each OS bundle is produced by `make desktop` (wraps `wails build`) on its native CI runner and, when the artifact ships, attached with goreleaser's `release.extra_files`. See the guard comment in `.goreleaser.yaml`.
 
+## Creating tickets — ideation chat
+
+The Backlog column header shows a '+' button. Clicking it opens a chat-style
+panel docked to the right side of the board. Typing a seed idea starts a
+daemon-side ideation agent: the daemon runs headless `claude -p` turns on the
+daemon host (`--resume`d per reply, so multi-turn context comes from Claude
+Code's own session store), asking one challenge question per turn until it is
+confident, then emits a structured `[human:ideation-ticket]` block that the
+daemon parses and uses to create the PM ticket via the tracker `Creator`
+abstraction, on the single PM-role tracker (resolved by role, the same way the
+board's `Cards()` resolves `firstPMResult`). The new card then appears in the
+Backlog column through the existing subscribe/refetch loop — no bespoke
+refresh path is added for ideation.
+
+The panel talks to three dedicated daemon routes — `ideation-start`,
+`ideation-reply`, `ideation-status` — each taking a single JSON argument and
+returning the same `IdeationStatus` JSON snapshot, following the
+`board-transition` route pattern rather than generic command forwarding.
+
+Lifecycle contract (decided for v1, see HUM-152 AD-4):
+
+* One concurrent session, held in daemon memory.
+* Closing the panel does **not** abandon the session — reopening calls
+  `ideation-status` and re-attaches to the live transcript.
+* Starting a new session while one is already active (not yet `done`/`error`)
+  re-attaches to it, idempotently, unless the request sets `restart: true`,
+  which abandons the old session and starts a fresh one.
+* Sessions do **not** survive a daemon restart (in-memory only).
+
+Requires the `claude` CLI installed and authenticated on the daemon host — if
+the binary is missing or the agent turn fails (e.g. not logged in), the panel
+surfaces a visible session error rather than hanging.
+
 ## macOS code-signing / notarization (release-gating follow-up)
 
 `wails build` does NOT sign or notarize the macOS `.app` — it delegates to Apple's `codesign` / `notarytool` with operator-provided signing identities and secrets. Shipping a notarized macOS build is therefore a release-gating follow-up, not covered by the CI matrix above.

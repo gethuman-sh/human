@@ -13,6 +13,19 @@
     </header>
     <div id="banner" class="banner hidden"></div>
     <main id="board" class="board" aria-label="Workflow pipeline board"></main>
+    <aside id="ideation-panel" class="ideation-panel hidden" aria-label="New ticket ideation chat">
+      <div class="ideation-header">
+        <span>New ticket — ideation</span>
+        <button id="ideation-close" class="ideation-close" title="Close (session keeps running)">×</button>
+      </div>
+      <div id="ideation-transcript" class="ideation-transcript"></div>
+      <div id="ideation-status-line" class="ideation-status hidden"></div>
+      <form id="ideation-form" class="ideation-form">
+        <input id="ideation-input" type="text" autocomplete="off"
+               placeholder="Describe the idea…" />
+        <button id="ideation-send" type="submit">Send</button>
+      </form>
+    </aside>
     <script type="module" src="/board.js"></script>
   </body>
 </html>

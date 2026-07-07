@@ -61,6 +61,9 @@ type Server struct {
 	// BoardTransitioner applies a board-transition request (advancing a card
 	// one pipeline stage). nil disables the board-transition route.
 	BoardTransitioner func(req BoardTransitionRequest) error
+	// Ideation owns the board's single agent-driven ideation session. nil
+	// disables the ideation-start/reply/status routes.
+	Ideation *IdeationEngine
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
 
@@ -343,6 +346,23 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		s.handleSubscribe(conn)
 	case "board-transition":
 		s.handleBoardTransition(conn, args[1:])
+	default:
+		return s.routeIdeationCommand(conn, args)
+	}
+	return true
+}
+
+// routeIdeationCommand dispatches the three ideation routes. Split out of
+// routeSimpleCommand to keep that switch's cyclomatic complexity within the
+// project's gocyclo threshold.
+func (s *Server) routeIdeationCommand(conn net.Conn, args []string) bool {
+	switch args[0] {
+	case "ideation-start":
+		s.handleIdeationStart(conn, args[1:])
+	case "ideation-reply":
+		s.handleIdeationReply(conn, args[1:])
+	case "ideation-status":
+		s.handleIdeationStatus(conn)
 	default:
 		return false
 	}
