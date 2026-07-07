@@ -34,8 +34,16 @@ curl -sSfL gethuman.sh/install.sh | bash
 Or with Homebrew:
 
 ```bash
-brew install gethuman-sh/tap/human
+brew install --cask gethuman-sh/tap/human
 ```
+
+> Since v0.20.0 `human` ships as a Homebrew **cask** (previously a formula). If you
+> installed an earlier version, `brew upgrade` will not cross the formula→cask
+> boundary — reinstall once to migrate:
+>
+> ```bash
+> brew uninstall human && brew install --cask gethuman-sh/tap/human
+> ```
 
 Or with [mise](https://mise.jdx.dev):
 
