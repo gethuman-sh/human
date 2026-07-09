@@ -334,6 +334,24 @@ body {
   opacity: 0.5;
 }
 
+/* Floating clone that follows the cursor during a pointer-drag. pointer-events
+   must stay none so it never occludes elementFromPoint's drop-target hit-test.
+   Positioned by JS at the cursor; translate centres it under the pointer. */
+.drag-ghost {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  width: 200px;
+  max-width: 60vw;
+  background: var(--card-bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px;
+  opacity: 0.9;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
 .card-key {
   color: var(--accent);
   font-weight: 600;

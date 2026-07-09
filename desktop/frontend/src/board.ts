@@ -110,9 +110,12 @@ function badge(state: string): string {
 function renderCard(card: Card): HTMLElement {
   const el = document.createElement("div");
   el.className = "card";
-  const next = STAGES[stageIndex(card.stage) + 1];
-  const draggable = !!next && targetEnabled(next);
-  el.setAttribute("draggable", draggable ? "true" : "false");
+  // Native draggable is intentionally OFF. WebKitGTK (the Linux webview) does
+  // not fire native HTML5 drag events, so the board drives dragging with
+  // pointer events instead (beginPointerDrag), which works in every webview.
+  // Disabling native drag also stops it competing with the pointer handler on
+  // macOS/Windows.
+  el.setAttribute("draggable", "false");
   el.dataset.key = card.key;
   el.dataset.stage = card.stage;
 
@@ -129,15 +132,7 @@ function renderCard(card: Card): HTMLElement {
     ${card.error ? `<div class="card-error">${escapeHtml(card.error)}</div>` : ""}
   `;
 
-  el.addEventListener("dragstart", (e: DragEvent) => {
-    dragging = { key: card.key, title: card.title, stage: card.stage };
-    el.classList.add("dragging");
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-  });
-  el.addEventListener("dragend", () => {
-    dragging = null;
-    el.classList.remove("dragging");
-  });
+  beginPointerDrag(el, card);
   return el;
 }
 
@@ -169,47 +164,162 @@ function renderColumn(stage: string): HTMLElement {
     const zone = document.createElement("div");
     zone.className = "done-zone";
     zone.textContent = "Drop here to open a pull request";
-    wireDropTarget(zone, stage);
+    markStageTarget(zone, stage);
     body.appendChild(zone);
 
     // A card from ANY column can be dropped here to close its ticket — closing
-    // is not an adjacency-gated stage move, so it has its own drop wiring.
+    // is not an adjacency-gated stage move, so it is its own kind of target.
     const closeZone = document.createElement("div");
     closeZone.className = "close-zone";
     closeZone.textContent = "Close Ticket";
-    wireCloseTarget(closeZone);
+    markCloseTarget(closeZone);
     body.appendChild(closeZone);
   } else if (stage !== "backlog") {
-    wireDropTarget(body, stage);
+    markStageTarget(body, stage);
   }
 
   col.appendChild(body);
   return col;
 }
 
-function wireDropTarget(el: HTMLElement, to: string): void {
-  el.addEventListener("dragover", (e: DragEvent) => {
-    if (!dragging) return;
-    const ok = isAdjacentForward(dragging.stage, to) && targetEnabled(to);
-    el.classList.toggle("drop-ok", ok);
-    el.classList.toggle("drop-reject", !ok);
-    if (ok) {
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+// --- Pointer-based drag ------------------------------------------------
+//
+// The board does NOT use native HTML5 drag-and-drop: WebKitGTK (the Linux
+// webview backend) does not fire native drag events, so the board would be
+// completely undraggable there. Instead the card tracks pointer events itself
+// and hit-tests drop targets with elementFromPoint. Drop targets are plain
+// elements tagged with data-drop ("stage" | "close") via the mark* helpers; a
+// floating ghost (pointer-events:none) follows the cursor.
+
+const DRAG_THRESHOLD_PX = 5;
+let dragGhost: HTMLElement | null = null;
+let hoverTarget: HTMLElement | null = null;
+
+function markStageTarget(el: HTMLElement, to: string): void {
+  el.dataset.drop = "stage";
+  el.dataset.dropStage = to;
+}
+
+function markCloseTarget(el: HTMLElement): void {
+  el.dataset.drop = "close";
+}
+
+// dropTargetAt returns the drop-target element under a viewport point, if any.
+// The ghost has pointer-events:none, so it never occludes the hit-test.
+function dropTargetAt(x: number, y: number): HTMLElement | null {
+  const el = document.elementFromPoint(x, y) as HTMLElement | null;
+  return el ? (el.closest("[data-drop]") as HTMLElement | null) : null;
+}
+
+// dropAllowed reports whether the dragged card may drop on target. Any card can
+// be closed; stage targets keep the forward-adjacency + docker-enabled rules.
+function dropAllowed(target: HTMLElement): boolean {
+  if (!dragging) return false;
+  if (target.dataset.drop === "close") return true;
+  const to = target.dataset.dropStage || "";
+  return isAdjacentForward(dragging.stage, to) && targetEnabled(to);
+}
+
+// setHoverTarget moves the highlight to a new target (clearing the previous),
+// so exactly one drop zone is lit at a time.
+function setHoverTarget(target: HTMLElement | null): void {
+  if (target !== hoverTarget && hoverTarget) {
+    hoverTarget.classList.remove("drop-ok", "drop-reject");
+  }
+  hoverTarget = target;
+  if (!target) return;
+  const ok = dropAllowed(target);
+  // The close zone only shows its own accept state; stage zones also show
+  // drop-reject to signal an invalid move.
+  target.classList.toggle("drop-ok", ok);
+  if (target.dataset.drop !== "close") target.classList.toggle("drop-reject", !ok);
+}
+
+function makeDragGhost(card: { key: string; title: string }): HTMLElement {
+  const ghost = document.createElement("div");
+  ghost.className = "drag-ghost";
+  ghost.innerHTML =
+    `<div class="card-key">${escapeHtml(card.key)}</div>` +
+    `<div class="card-title">${escapeHtml(card.title)}</div>`;
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+// beginPointerDrag wires one card's pointer-drag lifecycle. Movement past a
+// small threshold starts the drag (so a plain click still activates links);
+// releasing over a valid target performs the stage move or close.
+function beginPointerDrag(el: HTMLElement, card: Card): void {
+  el.addEventListener("pointerdown", (down: PointerEvent) => {
+    if (down.button !== 0) return;
+    // Let clicks on interactive children (e.g. the PR link) behave normally.
+    if ((down.target as HTMLElement).closest("a, button")) return;
+
+    const info = { key: card.key, title: card.title, stage: card.stage };
+    let started = false;
+
+    const onMove = (ev: PointerEvent): void => {
+      if (!started) {
+        if (Math.hypot(ev.clientX - down.clientX, ev.clientY - down.clientY) < DRAG_THRESHOLD_PX) return;
+        started = true;
+        dragging = info;
+        el.classList.add("dragging");
+        dragGhost = makeDragGhost(info);
+      }
+      if (dragGhost) {
+        dragGhost.style.left = `${ev.clientX}px`;
+        dragGhost.style.top = `${ev.clientY}px`;
+      }
+      setHoverTarget(dropTargetAt(ev.clientX, ev.clientY));
+    };
+
+    const teardown = (): void => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onCancel);
+      try {
+        el.releasePointerCapture(down.pointerId);
+      } catch {
+        // Capture may already be gone; ignore.
+      }
+      el.classList.remove("dragging");
+      if (dragGhost) {
+        dragGhost.remove();
+        dragGhost = null;
+      }
+      setHoverTarget(null);
+    };
+
+    const onUp = (ev: PointerEvent): void => {
+      const target = started ? dropTargetAt(ev.clientX, ev.clientY) : null;
+      const allowed = !!target && dropAllowed(target);
+      teardown();
+      dragging = null;
+      if (target && allowed) performDrop(target, info);
+    };
+
+    const onCancel = (): void => {
+      teardown();
+      dragging = null;
+    };
+
+    try {
+      el.setPointerCapture(down.pointerId);
+    } catch {
+      // Best-effort; drag still works via bubbling if capture is unavailable.
     }
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onCancel);
   });
-  el.addEventListener("dragleave", () => {
-    el.classList.remove("drop-ok", "drop-reject");
-  });
-  el.addEventListener("drop", (e: DragEvent) => {
-    e.preventDefault();
-    el.classList.remove("drop-ok", "drop-reject");
-    if (!dragging) return;
-    const from = dragging.stage;
-    if (!isAdjacentForward(from, to) || !targetEnabled(to)) return;
-    void transition(dragging.key, dragging.title, from, to);
-    dragging = null;
-  });
+}
+
+// performDrop runs the action for a completed drop on an allowed target.
+function performDrop(target: HTMLElement, info: { key: string; title: string; stage: string }): void {
+  if (target.dataset.drop === "close") {
+    void requestClose(info.key, info.title);
+    return;
+  }
+  void transition(info.key, info.title, info.stage, target.dataset.dropStage || "");
 }
 
 async function transition(key: string, title: string, from: string, to: string): Promise<void> {
@@ -225,28 +335,6 @@ async function transition(key: string, title: string, from: string, to: string):
     showError(errMessage(err));
   }
   await refresh();
-}
-
-// wireCloseTarget makes an element accept ANY dragged card (no forward-adjacency
-// rule) and, on drop, ask for confirmation before closing the ticket.
-function wireCloseTarget(el: HTMLElement): void {
-  el.addEventListener("dragover", (e: DragEvent) => {
-    if (!dragging) return;
-    el.classList.add("drop-ok");
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-  });
-  el.addEventListener("dragleave", () => {
-    el.classList.remove("drop-ok");
-  });
-  el.addEventListener("drop", (e: DragEvent) => {
-    e.preventDefault();
-    el.classList.remove("drop-ok");
-    if (!dragging) return;
-    const { key, title } = dragging;
-    dragging = null;
-    void requestClose(key, title);
-  });
 }
 
 // requestClose confirms in-app (never the OS dialog) before closing, so a stray
