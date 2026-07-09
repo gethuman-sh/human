@@ -54,46 +54,72 @@ body {
 }
 
 .rail {
-  width: 48px;
+  width: 60px;
   flex: none;
   background: var(--bg);
   border-right: 1px solid var(--col-border);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 8px 0;
+  gap: 8px;
+  padding: 10px 0;
 }
 
+/* Discord-style icon tiles: dark rounded squares that morph toward the accent
+   squircle on hover/active. The centred flex keeps glyph and svg icons aligned. */
 .rail-item {
-  width: 36px;
-  height: 36px;
+  position: relative;
+  width: 44px;
+  height: 44px;
   border: none;
-  background: transparent;
+  background: var(--col-bg);
   color: var(--muted);
-  border-radius: 8px;
-  font-size: 18px;
+  border-radius: 15px;
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
+  transition: background 0.15s ease, color 0.15s ease, border-radius 0.15s ease;
+}
+
+/* The signature left pill indicator: grows from nothing on hover to a taller bar
+   when active. Anchored to the rail's left edge (items sit 8px in from it). */
+.rail-item::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  width: 4px;
+  height: 0;
+  border-radius: 0 4px 4px 0;
+  background: var(--text);
+  transition: height 0.15s ease;
 }
 
 .rail-item:hover {
-  color: var(--text);
-  background: var(--col-bg);
+  color: #fff;
+  background: var(--accent);
+  border-radius: 12px;
 }
 
-/* Standard activity-bar affordance: accent glyph plus a left indicator bar. */
+.rail-item:hover::before {
+  height: 18px;
+}
+
+/* Active view: filled accent squircle with a tall left pill. */
 .rail-item.active {
-  color: var(--accent);
-  background: var(--col-bg);
-  box-shadow: inset 3px 0 0 var(--accent);
+  color: #fff;
+  background: var(--accent);
+  border-radius: 12px;
 }
 
-/* Placeholder items for not-yet-built views: visible but inert. */
+.rail-item.active::before {
+  height: 28px;
+}
+
+/* Placeholder items for not-yet-built views: visible but inert, no pill. */
 .rail-item.ghost,
 .rail-item:disabled {
   opacity: 0.4;
@@ -103,18 +129,19 @@ body {
 .rail-item.ghost:hover,
 .rail-item:disabled:hover {
   color: var(--muted);
-  background: transparent;
+  background: var(--col-bg);
+  border-radius: 15px;
 }
 
-/* Action items (e.g. new-ticket '+') trigger a command rather than switch view;
-   they echo the Backlog '+' accent-on-hover affordance. */
+.rail-item.ghost:hover::before,
+.rail-item:disabled:hover::before {
+  height: 0;
+}
+
+/* Action items (e.g. new-ticket '+') trigger a command rather than switch view. */
 .rail-action {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 300;
-}
-
-.rail-action:hover {
-  color: var(--accent);
 }
 
 /* Pins the last rail item (Settings) to the bottom of the rail. */
@@ -203,6 +230,91 @@ body {
 .done-zone.drop-reject {
   border-color: var(--failed);
   background: var(--drop-reject);
+}
+
+/* Terminal action: a card dropped here closes its ticket. The --failed accent
+   signals it is destructive, distinguishing it from the PR done-zone above. */
+.close-zone {
+  margin: 6px;
+  padding: 14px;
+  border: 2px dashed var(--col-border);
+  border-radius: 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.close-zone.drop-ok {
+  border-color: var(--failed);
+  color: var(--failed);
+  background: var(--drop-reject);
+}
+
+/* In-app confirmation modal (used before closing a ticket). Sits above the
+   ideation panel (z-index:10). */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background: var(--col-bg);
+  border: 1px solid var(--col-border);
+  border-radius: 10px;
+  padding: 18px;
+}
+
+.modal-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.modal-body {
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.4;
+  font-size: 13px;
+}
+
+.modal-actions {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-actions button {
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.modal-cancel {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border) !important;
+  color: var(--text);
+}
+
+.modal-cancel:hover {
+  border-color: var(--muted) !important;
+}
+
+.modal-confirm {
+  background: var(--failed);
+  color: #fff;
+}
+
+.modal-confirm:hover {
+  filter: brightness(1.1);
 }
 
 .card {

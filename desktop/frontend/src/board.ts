@@ -41,6 +41,7 @@ interface IdeationView {
 interface AppBindings {
   Cards(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
+  CloseTicket(pmKey: string): Promise<void>;
   DaemonStatus(): Promise<boolean>;
   StartIdeation(seed: string, restart: boolean): Promise<IdeationView>;
   ReplyIdeation(sessionId: string, message: string): Promise<IdeationView>;
@@ -170,6 +171,14 @@ function renderColumn(stage: string): HTMLElement {
     zone.textContent = "Drop here to open a pull request";
     wireDropTarget(zone, stage);
     body.appendChild(zone);
+
+    // A card from ANY column can be dropped here to close its ticket — closing
+    // is not an adjacency-gated stage move, so it has its own drop wiring.
+    const closeZone = document.createElement("div");
+    closeZone.className = "close-zone";
+    closeZone.textContent = "Close Ticket";
+    wireCloseTarget(closeZone);
+    body.appendChild(closeZone);
   } else if (stage !== "backlog") {
     wireDropTarget(body, stage);
   }
@@ -216,6 +225,89 @@ async function transition(key: string, title: string, from: string, to: string):
     showError(errMessage(err));
   }
   await refresh();
+}
+
+// wireCloseTarget makes an element accept ANY dragged card (no forward-adjacency
+// rule) and, on drop, ask for confirmation before closing the ticket.
+function wireCloseTarget(el: HTMLElement): void {
+  el.addEventListener("dragover", (e: DragEvent) => {
+    if (!dragging) return;
+    el.classList.add("drop-ok");
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  });
+  el.addEventListener("dragleave", () => {
+    el.classList.remove("drop-ok");
+  });
+  el.addEventListener("drop", (e: DragEvent) => {
+    e.preventDefault();
+    el.classList.remove("drop-ok");
+    if (!dragging) return;
+    const { key, title } = dragging;
+    dragging = null;
+    void requestClose(key, title);
+  });
+}
+
+// requestClose confirms in-app (never the OS dialog) before closing, so a stray
+// drop cannot silently close a ticket.
+async function requestClose(key: string, title: string): Promise<void> {
+  const ok = await confirmDialog(
+    `Close ticket ${key}?`,
+    `“${title}” will be marked Done and removed from the board.`,
+    "Close ticket",
+  );
+  if (ok) await closeTicket(key);
+}
+
+async function closeTicket(key: string): Promise<void> {
+  try {
+    await go().CloseTicket(key);
+  } catch (err) {
+    showError(errMessage(err));
+  }
+  // The closed ticket is no longer "open", so refresh drops it from the board.
+  await refresh();
+}
+
+// confirmDialog renders a small modal overlay and resolves true/false on the
+// user's choice. Overlay-click and Escape count as cancel. Built with the same
+// imperative-DOM approach as the rest of the app (no framework).
+function confirmDialog(title: string, body: string, confirmLabel: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <div class="modal-title">${escapeHtml(title)}</div>
+      <div class="modal-body">${escapeHtml(body)}</div>
+      <div class="modal-actions">
+        <button class="modal-cancel" type="button">Cancel</button>
+        <button class="modal-confirm" type="button">${escapeHtml(confirmLabel)}</button>
+      </div>
+    `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const cleanup = (result: boolean): void => {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve(result);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") cleanup(false);
+    };
+
+    overlay.addEventListener("click", (e: MouseEvent) => {
+      if (e.target === overlay) cleanup(false);
+    });
+    modal.querySelector(".modal-cancel")!.addEventListener("click", () => cleanup(false));
+    modal.querySelector(".modal-confirm")!.addEventListener("click", () => cleanup(true));
+    document.addEventListener("keydown", onKey);
+    (modal.querySelector(".modal-confirm") as HTMLButtonElement).focus();
+  });
 }
 
 function render(): void {

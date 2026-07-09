@@ -262,6 +262,18 @@ func BoardTransition(addr, token string, req BoardTransitionRequest) error {
 	return err
 }
 
+// CloseTicket asks the daemon to close a PM ticket (transition it to Done). The
+// request is a single JSON arg, matching BoardTransition. This is a dedicated
+// route, so it never hits the interactive `issue status` confirmation.
+func CloseTicket(addr, token string, req CloseTicketRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling close ticket request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"close-ticket", string(data)})
+	return err
+}
+
 // IdeationStart starts (or re-attaches to) the board ideation session.
 func IdeationStart(addr, token string, req IdeationStartRequest) (IdeationStatus, error) {
 	return ideationCall(addr, token, "ideation-start", req)

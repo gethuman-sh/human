@@ -240,6 +240,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AgentCleaner:      &dockerAgentCleaner{},
 		VaultResolver:     vaultResolver,
 		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver),
+		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, logger),
 	}
 
@@ -1288,6 +1289,47 @@ func resolvePMCommenter(dir string, lookup config.EnvLookup, resolver *vault.Res
 		}
 	}
 	return nil, errors.WithDetails("no PM-role tracker with comment support configured", "dir", dir)
+}
+
+// resolvePMTransitioner resolves the PM-role tracker.Transitioner for a
+// workspace. Role-based selection (InferRole()=="pm"), never key prefix —
+// mirrors resolvePMCommenter. tracker.Provider embeds Transitioner, so the PM
+// instance satisfies it.
+func resolvePMTransitioner(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.Transitioner, error) {
+	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		if inst.InferRole() != "pm" {
+			continue
+		}
+		if t, ok := inst.Provider.(tracker.Transitioner); ok {
+			return t, nil
+		}
+	}
+	return nil, errors.WithDetails("no PM-role tracker with transition support configured", "dir", dir)
+}
+
+// closeTicketerFunc builds the daemon's CloseTicketer closure: it resolves the
+// PM transitioner by role per request and moves the ticket to its Done status.
+// "done" is the status CATEGORY, not a literal label — the tracker resolves it
+// to the workflow's done state, the same convention `issue start` uses with
+// "started", so no team-specific status name is hardcoded.
+func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.CloseTicketRequest) error {
+	return func(req daemon.CloseTicketRequest) error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for close ticket")
+		}
+		entry := entries[0]
+		lookup := entry.EnvLookup()
+		transitioner, err := resolvePMTransitioner(entry.Dir, lookup, resolver)
+		if err != nil {
+			return err
+		}
+		return transitioner.TransitionIssue(context.Background(), req.PMKey, "done")
+	}
 }
 
 // boardTransitionerFunc builds the daemon's BoardTransitioner closure: it

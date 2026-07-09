@@ -149,6 +149,18 @@ func (a *App) Transition(pmKey, pmTitle, from, to string) error {
 	})
 }
 
+// CloseTicket closes a PM ticket (transitions it to Done) via the daemon's
+// dedicated close-ticket route. Like Transition it goes through the daemon, so
+// the close is prompt-free — it never hits the interactive `issue status`
+// confirmation. The board's own drag-and-confirm dialog is the user's consent.
+func (a *App) CloseTicket(pmKey string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemon.CloseTicket(info.Addr, info.Token, daemon.CloseTicketRequest{PMKey: pmKey})
+}
+
 // IdeationMsg is the frontend-facing transcript entry.
 type IdeationMsg struct {
 	Role string `json:"role"`

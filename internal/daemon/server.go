@@ -61,6 +61,9 @@ type Server struct {
 	// BoardTransitioner applies a board-transition request (advancing a card
 	// one pipeline stage). nil disables the board-transition route.
 	BoardTransitioner func(req BoardTransitionRequest) error
+	// CloseTicketer closes a PM ticket (transitions it to Done) for the
+	// board's Close-Ticket drop zone. nil disables the close-ticket route.
+	CloseTicketer func(req CloseTicketRequest) error
 	// Ideation owns the board's single agent-driven ideation session. nil
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
@@ -346,6 +349,8 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		s.handleSubscribe(conn)
 	case "board-transition":
 		s.handleBoardTransition(conn, args[1:])
+	case "close-ticket":
+		s.handleCloseTicket(conn, args[1:])
 	default:
 		return s.routeIdeationCommand(conn, args)
 	}
@@ -484,6 +489,33 @@ func (s *Server) handleBoardTransition(conn net.Conn, args []string) {
 		return
 	}
 	if err := s.BoardTransitioner(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleCloseTicket closes a PM ticket via the injected CloseTicketer. Like
+// board-transition this is a dedicated route (detectDestructive does not match
+// "close-ticket"), so it bypasses the pending-confirm gate — the board's
+// drag-and-confirm dialog is the user's consent, not a TUI approval.
+func (s *Server) handleCloseTicket(conn net.Conn, args []string) {
+	if s.CloseTicketer == nil {
+		s.writeError(conn, "closing tickets not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "close-ticket requires one JSON arg", 1)
+		return
+	}
+	var req CloseTicketRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid close-ticket request: "+err.Error(), 1)
+		return
+	}
+	if err := s.CloseTicketer(req); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
