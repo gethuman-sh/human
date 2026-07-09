@@ -106,6 +106,17 @@ body {
   background: transparent;
 }
 
+/* Action items (e.g. new-ticket '+') trigger a command rather than switch view;
+   they echo the Backlog '+' accent-on-hover affordance. */
+.rail-action {
+  font-size: 22px;
+  font-weight: 300;
+}
+
+.rail-action:hover {
+  color: var(--accent);
+}
+
 /* Pins the last rail item (Settings) to the bottom of the rail. */
 .rail-bottom {
   margin-top: auto;

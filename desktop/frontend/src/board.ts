@@ -453,6 +453,12 @@ function wireRail(): void {
     // Disabled placeholders are inert via the native `disabled` attribute.
     if (item.disabled) return;
     item.addEventListener("click", () => {
+      // Action items trigger a command (e.g. the ideation chat) rather than
+      // switching the active view.
+      if (item.dataset.action === "ideation") {
+        void openIdeation();
+        return;
+      }
       const view = item.dataset.view;
       if (view) selectView(view);
     });
