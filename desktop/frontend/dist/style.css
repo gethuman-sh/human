@@ -646,3 +646,176 @@ body {
   opacity: 0.5;
   cursor: default;
 }
+
+/* --- Running agents view --------------------------------------------------
+   A full-width main-area view swapped in by the "agents" rail icon. The board
+   and this view are mutually exclusive; selectView() toggles `.hidden` on both,
+   so the board needs its own display:none rule (only .banner/.ideation-panel
+   had one before). */
+.board.hidden {
+  display: none;
+}
+
+.agents-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.agents-view.hidden {
+  display: none;
+}
+
+.agents-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 14px;
+}
+
+.agents-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.agent-row {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+
+/* A blocked agent (waiting on a permission/AskUserQuestion) is called out with a
+   solid red row and white text so it stands out as needing attention. The child
+   colour overrides beat the per-chip/dot colours that would otherwise be
+   unreadable on red. */
+.agent-row.blocked {
+  background: var(--failed);
+  border-color: var(--failed);
+}
+.agent-row.blocked,
+.agent-row.blocked .agent-label,
+.agent-row.blocked .agent-chip,
+.agent-row.blocked .agent-chip.proxy,
+.agent-row.blocked .agent-chip.slug,
+.agent-row.blocked .agent-chip.ctx,
+.agent-row.blocked .agent-dot,
+.agent-row.blocked .agent-tasks,
+.agent-row.blocked .subagent-meta,
+.agent-row.blocked .token-model,
+.agent-row.blocked .token-stats {
+  color: #fff;
+}
+
+.agent-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  font-size: 12px;
+  line-height: 1;
+}
+.agent-dot.active {
+  color: var(--accent);
+}
+.agent-dot.idle {
+  color: var(--muted);
+}
+.agent-dot.blocked {
+  color: var(--running);
+}
+.agent-dot.waiting {
+  color: var(--accent);
+}
+.agent-dot.error {
+  color: var(--failed);
+}
+
+.agent-label {
+  font-weight: 600;
+}
+
+.agent-chip {
+  font-size: 12px;
+  color: var(--muted);
+}
+.agent-chip.proxy {
+  color: var(--accent);
+}
+.agent-chip.slug {
+  color: var(--text);
+  opacity: 0.75;
+}
+.agent-chip.ctx {
+  color: var(--running);
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.token-model {
+  width: 96px;
+  flex: none;
+  color: var(--text);
+}
+
+.token-bar {
+  flex: 1;
+  min-width: 60px;
+  max-width: 320px;
+  height: 8px;
+  background: var(--col-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.token-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.token-stats {
+  flex: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.agent-tasks {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.agent-subagent {
+  margin-top: 6px;
+  margin-left: 14px;
+  font-size: 12px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.agent-subagent.done {
+  color: var(--muted);
+}
+
+.subagent-meta {
+  color: var(--muted);
+}

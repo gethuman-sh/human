@@ -10,6 +10,7 @@
     <div class="app-shell">
       <nav class="rail" aria-label="Primary">
         <button class="rail-item active" data-view="board" title="Board" aria-current="page">▥</button>
+        <button class="rail-item" data-view="agents" title="Running agents">⦿</button>
         <button class="rail-item rail-action" data-action="ideation" title="New ticket — ideation">+</button>
         <button class="rail-item ghost rail-bottom" data-view="settings"
                 title="Settings — coming soon" disabled aria-disabled="true">⚙</button>
@@ -20,6 +21,7 @@
         </header>
         <div id="banner" class="banner hidden"></div>
         <main id="board" class="board" aria-label="Workflow pipeline board"></main>
+        <section id="agents" class="agents-view hidden" aria-label="Running agents"></section>
         <footer id="statusbar" class="statusbar" aria-label="Status bar">
           <span id="daemon-indicator" class="status-dot"></span>
           <span id="daemon-text" class="status-text">Daemon…</span>

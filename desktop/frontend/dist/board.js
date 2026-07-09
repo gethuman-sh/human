@@ -604,12 +604,171 @@ async function submitIdeation() {
         stopIdeationPoll();
     }
 }
+// --- Running agents view -----------------------------------------------
+//
+// The desktop equivalent of the TUI's instances panel. Data comes from the Go
+// App.Instances() binding, which runs the monitor in-process (not via the
+// daemon). The view only polls while it is the active view — the discovery scan
+// is cheap but pointless for a hidden panel, mirroring the ideation poll.
+let agentsData = { agents: [] };
+let agentsTimer = null;
+const AGENTS_POLL_MS = 2000;
+function stopAgentsPoll() {
+    if (agentsTimer !== null) {
+        clearInterval(agentsTimer);
+        agentsTimer = null;
+    }
+}
+function startAgentsPoll() {
+    if (agentsTimer !== null)
+        return;
+    agentsTimer = window.setInterval(() => void pollAgents(), AGENTS_POLL_MS);
+}
+async function pollAgents() {
+    try {
+        agentsData = await go().Instances();
+    }
+    catch (err) {
+        agentsData = { agents: [], error: errMessage(err) };
+    }
+    renderAgents();
+}
+function formatTokens(n) {
+    if (n >= 1000000)
+        return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1000)
+        return (n / 1e3).toFixed(1) + "K";
+    return String(n);
+}
+// formatElapsedUnix mirrors the TUI's formatElapsed: seconds under a minute,
+// "Nm Ns" under an hour, "Nh Nm" beyond. startedAtUnix of 0 means "unknown".
+function formatElapsedUnix(startedAtUnix) {
+    if (!startedAtUnix)
+        return "";
+    const secs = Math.max(0, Math.floor(Date.now() / 1000) - startedAtUnix);
+    if (secs < 60)
+        return `${secs}s`;
+    if (secs < 3600)
+        return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+    return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+}
+function formatDurationMs(ms) {
+    const secs = Math.round(ms / 1000);
+    if (secs < 60)
+        return `${secs}s`;
+    return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+function agentStatusDot(a) {
+    // Mirrors the TUI sessionIcon: a spinner while working, ⚠ on error, and a
+    // coloured ● otherwise — with idle splitting on whether the session has seen
+    // any activity (● active vs ○ never-active).
+    if (a.status === "working")
+        return `<span class="agent-dot working"><span class="spinner"></span></span>`;
+    if (a.status === "error")
+        return `<span class="agent-dot error">⚠</span>`;
+    if (a.status === "blocked")
+        return `<span class="agent-dot blocked">●</span>`;
+    if (a.status === "waiting")
+        return `<span class="agent-dot waiting">●</span>`;
+    if (a.hasActivity)
+        return `<span class="agent-dot active">●</span>`;
+    return `<span class="agent-dot idle">○</span>`;
+}
+function tokenBars(models) {
+    const total = models.reduce((sum, m) => sum + m.inputTokens + m.outputTokens, 0);
+    if (total === 0)
+        return "";
+    return [...models]
+        .sort((x, y) => x.name.localeCompare(y.name))
+        .map((m) => {
+        const pct = ((m.inputTokens + m.outputTokens) / total) * 100;
+        return `<div class="token-row">
+        <span class="token-model">${escapeHtml(m.name)}</span>
+        <span class="token-bar"><span class="token-bar-fill" style="width:${pct.toFixed(0)}%"></span></span>
+        <span class="token-stats">${pct.toFixed(0)}%  ${formatTokens(m.inputTokens)} in  ${formatTokens(m.outputTokens)} out</span>
+      </div>`;
+    })
+        .join("");
+}
+function taskLine(a) {
+    const parts = [];
+    if (a.tasksPending > 0)
+        parts.push(`${a.tasksPending} pending`);
+    if (a.tasksInProgress > 0)
+        parts.push(`${a.tasksInProgress} in progress`);
+    if (a.tasksDone > 0)
+        parts.push(`${a.tasksDone} done`);
+    if (parts.length === 0)
+        return "";
+    return `<div class="agent-tasks">Tasks: ${escapeHtml(parts.join(" · "))}</div>`;
+}
+// subagentLines mirrors the TUI renderSubagents: drop agents completed >5s ago,
+// show at most the last 5, spinner for running and ✓ for done.
+function subagentLines(subs) {
+    const now = Date.now();
+    const visible = subs.filter((s) => !s.done || now - (s.startedAtUnix * 1000 + s.durationMs) <= 5000);
+    const shown = visible.slice(Math.max(0, visible.length - 5));
+    return shown
+        .map((s) => {
+        const type = s.type || "agent";
+        const desc = escapeHtml(s.description);
+        if (s.done) {
+            const dur = s.durationMs > 0 ? formatDurationMs(s.durationMs) : "";
+            return `<div class="agent-subagent done">✓ ${desc} <span class="subagent-meta">(${escapeHtml(type)}${dur ? ", " + dur : ""})</span></div>`;
+        }
+        const elapsed = formatElapsedUnix(s.startedAtUnix);
+        return `<div class="agent-subagent"><span class="spinner"></span> ${desc} <span class="subagent-meta">(${escapeHtml(type)}${elapsed ? ", " + elapsed : ""})</span></div>`;
+    })
+        .join("");
+}
+function renderAgentRow(a) {
+    const chips = [];
+    if (a.daemonConnected)
+        chips.push(`<span class="agent-chip proxy">${a.proxyConfigured ? "⚡+proxy" : "⚡"}</span>`);
+    else if (a.proxyConfigured)
+        chips.push(`<span class="agent-chip proxy">proxy</span>`);
+    if (a.memory)
+        chips.push(`<span class="agent-chip">${escapeHtml(a.memory)}</span>`);
+    const elapsed = formatElapsedUnix(a.startedAtUnix);
+    if (elapsed)
+        chips.push(`<span class="agent-chip">${elapsed}</span>`);
+    if (a.slug)
+        chips.push(`<span class="agent-chip slug">${escapeHtml(a.slug)}</span>`);
+    const ctx = a.errorType || a.blockedTool || a.currentTool;
+    if (ctx)
+        chips.push(`<span class="agent-chip ctx">${escapeHtml(a.errorType ? a.errorType : a.blockedTool ? "⚠ " + a.blockedTool : "[" + a.currentTool + "]")}</span>`);
+    const rowClass = a.status === "blocked" ? "agent-row blocked" : "agent-row";
+    return `<div class="${rowClass}">
+    <div class="agent-head">
+      ${agentStatusDot(a)}
+      <span class="agent-label">${escapeHtml(a.label)}</span>
+      ${chips.join("")}
+    </div>
+    ${tokenBars(a.models)}
+    ${taskLine(a)}
+    ${subagentLines(a.subagents)}
+  </div>`;
+}
+function renderAgents() {
+    const host = document.getElementById("agents");
+    if (!host)
+        return;
+    if (agentsData.error) {
+        host.innerHTML = `<div class="agents-header">Running agents</div><div class="banner">${escapeHtml(agentsData.error)}</div>`;
+        return;
+    }
+    if (agentsData.agents.length === 0) {
+        host.innerHTML = `<div class="agents-header">Running agents</div><div class="agents-empty">No active instances</div>`;
+        return;
+    }
+    host.innerHTML =
+        `<div class="agents-header">Running agents</div>` + agentsData.agents.map(renderAgentRow).join("");
+}
 // --- Left activity rail ------------------------------------------------
 //
-// A scaffold for future top-level views. Today "board" is the only real view
-// (it is always mounted); other rail items are disabled placeholders. Adding a
-// view later means an enabled `.rail-item` in index.html plus a `case` below —
-// no change to the board render/refresh path.
+// "board" and "agents" are real views swapped in the main area; other rail
+// items are disabled placeholders. Adding a view means an enabled `.rail-item`
+// in index.html plus a `case` in selectView — the agents view is the reference.
 function selectView(view) {
     document.querySelectorAll(".rail-item").forEach((item) => {
         const active = item.dataset.view === view;
@@ -619,11 +778,17 @@ function selectView(view) {
         else
             item.removeAttribute("aria-current");
     });
-    switch (view) {
-        case "board":
-            // The board is always mounted; nothing to swap in yet.
-            break;
-        // Future views mount/unmount their containers here.
+    // Toggle main-area containers: exactly one top-level view is visible.
+    const board = document.getElementById("board");
+    const agents = document.getElementById("agents");
+    board?.classList.toggle("hidden", view !== "board");
+    agents?.classList.toggle("hidden", view !== "agents");
+    if (view === "agents") {
+        void pollAgents(); // immediate fetch so the view isn't blank until the first tick
+        startAgentsPoll();
+    }
+    else {
+        stopAgentsPoll();
     }
 }
 function wireRail() {

@@ -29,6 +29,12 @@ import (
 // daemon.Subscribe) — never directly to a tracker or forge — so all credential
 // handling, role resolution and the destructive-confirm bypass stay in the
 // daemon, exactly as the TUI does it.
+//
+// The one exception is Instances() (instances.go), which discovers running
+// Claude Code processes in-process via the monitor package. That path needs no
+// credentials and the TUI runs the same monitor alongside its daemon calls, so
+// it is consistent with the credential-only rationale above — and it cannot be
+// a daemon route regardless, since monitor imports daemon (an import cycle).
 type App struct {
 	ctx context.Context
 }
