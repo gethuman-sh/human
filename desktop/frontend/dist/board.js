@@ -361,6 +361,40 @@ async function submitIdeation() {
         stopIdeationPoll();
     }
 }
+// --- Left activity rail ------------------------------------------------
+//
+// A scaffold for future top-level views. Today "board" is the only real view
+// (it is always mounted); other rail items are disabled placeholders. Adding a
+// view later means an enabled `.rail-item` in index.html plus a `case` below —
+// no change to the board render/refresh path.
+function selectView(view) {
+    document.querySelectorAll(".rail-item").forEach((item) => {
+        const active = item.dataset.view === view;
+        item.classList.toggle("active", active);
+        if (active)
+            item.setAttribute("aria-current", "page");
+        else
+            item.removeAttribute("aria-current");
+    });
+    switch (view) {
+        case "board":
+            // The board is always mounted; nothing to swap in yet.
+            break;
+        // Future views mount/unmount their containers here.
+    }
+}
+function wireRail() {
+    document.querySelectorAll(".rail-item").forEach((item) => {
+        // Disabled placeholders are inert via the native `disabled` attribute.
+        if (item.disabled)
+            return;
+        item.addEventListener("click", () => {
+            const view = item.dataset.view;
+            if (view)
+                selectView(view);
+        });
+    });
+}
 function init() {
     if (window.runtime?.EventsOn) {
         window.runtime.EventsOn("board:changed", () => {
@@ -370,6 +404,7 @@ function init() {
     void refresh();
     void pollDaemonStatus();
     setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
+    wireRail();
     document.getElementById("ideation-close")?.addEventListener("click", () => closeIdeation());
     document.getElementById("ideation-form")?.addEventListener("submit", (e) => {
         e.preventDefault();

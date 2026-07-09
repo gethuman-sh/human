@@ -7,12 +7,21 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header id="app-header" class="app-header">
-      <span class="app-title">human — workflow board</span>
-      <span id="daemon-status" class="daemon-dot" title="Daemon status"></span>
-    </header>
-    <div id="banner" class="banner hidden"></div>
-    <main id="board" class="board" aria-label="Workflow pipeline board"></main>
+    <div class="app-shell">
+      <nav class="rail" aria-label="Primary">
+        <button class="rail-item active" data-view="board" title="Board" aria-current="page">▥</button>
+        <button class="rail-item ghost rail-bottom" data-view="settings"
+                title="Settings — coming soon" disabled aria-disabled="true">⚙</button>
+      </nav>
+      <div class="app-main">
+        <header id="app-header" class="app-header">
+          <span class="app-title">human — workflow board</span>
+          <span id="daemon-status" class="daemon-dot" title="Daemon status"></span>
+        </header>
+        <div id="banner" class="banner hidden"></div>
+        <main id="board" class="board" aria-label="Workflow pipeline board"></main>
+      </div>
+    </div>
     <aside id="ideation-panel" class="ideation-panel hidden" aria-label="New ticket ideation chat">
       <div class="ideation-header">
         <span>New ticket — ideation</span>
