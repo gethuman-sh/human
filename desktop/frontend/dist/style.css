@@ -474,19 +474,35 @@ body {
   color: var(--muted);
 }
 
-.daemon-dot {
-  width: 10px;
-  height: 10px;
+/* Bottom status bar, mirroring the TUI's "● Daemon running" status line. Sits
+   below the board as a fixed-height footer in the app-main flex column. */
+.statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: var(--col-bg);
+  border-top: 1px solid var(--col-border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  display: inline-block;
+  flex: none;
   background: var(--muted);
 }
 
-.daemon-dot.reachable {
+/* Green when the daemon is reachable, red when not — matching the header dot's
+   old semantics and the TUI's running/stopped colors. */
+.status-dot.reachable {
   background: var(--done);
 }
 
-.daemon-dot.unreachable {
+.status-dot.unreachable {
   background: var(--failed);
 }
 

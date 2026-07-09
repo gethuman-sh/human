@@ -465,10 +465,12 @@ function showError(msg: string): void {
 }
 
 function renderDaemonStatus(): void {
-  const dot = document.getElementById("daemon-status")!;
+  // Mirrors the TUI's bottom status line ("● Daemon running"/"stopped").
+  const dot = document.getElementById("daemon-indicator")!;
   dot.classList.toggle("reachable", daemonReachable);
   dot.classList.toggle("unreachable", !daemonReachable);
-  dot.title = daemonReachable ? "Daemon reachable" : "Daemon unreachable";
+  const text = document.getElementById("daemon-text")!;
+  text.textContent = daemonReachable ? "Daemon running" : "Daemon stopped";
 }
 
 async function pollDaemonStatus(): Promise<void> {

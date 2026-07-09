@@ -17,10 +17,13 @@
       <div class="app-main">
         <header id="app-header" class="app-header">
           <span class="app-title">human — workflow board</span>
-          <span id="daemon-status" class="daemon-dot" title="Daemon status"></span>
         </header>
         <div id="banner" class="banner hidden"></div>
         <main id="board" class="board" aria-label="Workflow pipeline board"></main>
+        <footer id="statusbar" class="statusbar" aria-label="Status bar">
+          <span id="daemon-indicator" class="status-dot"></span>
+          <span id="daemon-text" class="status-text">Daemon…</span>
+        </footer>
       </div>
     </div>
     <aside id="ideation-panel" class="ideation-panel hidden" aria-label="New ticket ideation chat">
