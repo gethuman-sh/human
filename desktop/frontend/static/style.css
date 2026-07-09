@@ -147,6 +147,13 @@ body {
   font-weight: 300;
 }
 
+/* Inline SVG rail glyphs inherit the item's color via stroke="currentColor", so
+   they tint white on the accent square like the text glyphs. display:block drops
+   the inline baseline gap that would offset them from center. */
+.rail-icon {
+  display: block;
+}
+
 /* Pins the last rail item (Settings) to the bottom of the rail. */
 .rail-bottom {
   margin-top: auto;

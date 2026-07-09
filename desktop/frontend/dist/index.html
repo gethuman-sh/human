@@ -9,11 +9,28 @@
   <body>
     <div class="app-shell">
       <nav class="rail" aria-label="Primary">
-        <button class="rail-item active" data-view="board" title="Board" aria-current="page">▥</button>
-        <button class="rail-item" data-view="agents" title="Running agents">⦿</button>
+        <button class="rail-item active" data-view="board" title="Board" aria-current="page">
+          <svg class="rail-icon" width="22" height="22" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/>
+          </svg>
+        </button>
+        <button class="rail-item" data-view="agents" title="Running agents">
+          <svg class="rail-icon" width="22" height="22" viewBox="0 0 15 15" fill="none"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M7.5 2.5C10.2614 2.5 12.5 4.73858 12.5 7.5V13.5C12.5 14.0523 12.0523 14.5 11.5 14.5H3.5C2.94772 14.5 2.5 14.0523 2.5 13.5V7.5C2.5 4.73858 4.73858 2.5 7.5 2.5ZM7.5 2.5V0M4 11.5H11M0.5 8V12M14.5 8V12M5.5 9.5C4.94772 9.5 4.5 9.05228 4.5 8.5C4.5 7.94772 4.94772 7.5 5.5 7.5C6.05228 7.5 6.5 7.94772 6.5 8.5C6.5 9.05228 6.05228 9.5 5.5 9.5ZM9.5 9.5C8.94772 9.5 8.5 9.05228 8.5 8.5C8.5 7.94772 8.94772 7.5 9.5 7.5C10.0523 7.5 10.5 7.94772 10.5 8.5C10.5 9.05228 10.0523 9.5 9.5 9.5Z" stroke="currentColor"/>
+          </svg>
+        </button>
         <button class="rail-item rail-action" data-action="ideation" title="New ticket — ideation">+</button>
         <button class="rail-item ghost rail-bottom" data-view="settings"
-                title="Settings — coming soon" disabled aria-disabled="true">⚙</button>
+                title="Settings — coming soon" disabled aria-disabled="true">
+          <svg class="rail-icon" width="22" height="22" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
       </nav>
       <div class="app-main">
         <header id="app-header" class="app-header">
