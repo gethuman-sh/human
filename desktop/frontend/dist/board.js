@@ -333,8 +333,32 @@ function confirmDialog(title, body, confirmLabel) {
         modal.querySelector(".modal-confirm").focus();
     });
 }
+// captureColumnScroll records each column's current scrollTop keyed by stage, so
+// it can be restored after render() rebuilds the DOM from scratch.
+function captureColumnScroll(board) {
+    const scroll = {};
+    board.querySelectorAll(".column").forEach((col) => {
+        const body = col.querySelector(".column-body");
+        if (body && col.dataset.stage)
+            scroll[col.dataset.stage] = body.scrollTop;
+    });
+    return scroll;
+}
+// restoreColumnScroll re-applies scroll positions captured before a rebuild.
+function restoreColumnScroll(board, scroll) {
+    board.querySelectorAll(".column").forEach((col) => {
+        const stage = col.dataset.stage;
+        const body = col.querySelector(".column-body");
+        if (body && stage && scroll[stage])
+            body.scrollTop = scroll[stage];
+    });
+}
 function render() {
     const board = document.getElementById("board");
+    // Capture each column's scroll position before the full rebuild below wipes
+    // it. A reconcile (board:changed / post-transition) must not snap a column the
+    // user scrolled down back to the top.
+    const scrollByStage = captureColumnScroll(board);
     board.innerHTML = "";
     if (boardLoading && current.cards.length === 0) {
         // First fetch in flight with nothing to show yet: a centered spinner gives
@@ -347,6 +371,7 @@ function render() {
     else {
         for (const stage of STAGES)
             board.appendChild(renderColumn(stage));
+        restoreColumnScroll(board, scrollByStage);
     }
     const banner = document.getElementById("banner");
     if (current.error) {

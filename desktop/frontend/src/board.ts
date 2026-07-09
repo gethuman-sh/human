@@ -412,8 +412,32 @@ function confirmDialog(title: string, body: string, confirmLabel: string): Promi
   });
 }
 
+// captureColumnScroll records each column's current scrollTop keyed by stage, so
+// it can be restored after render() rebuilds the DOM from scratch.
+function captureColumnScroll(board: HTMLElement): Record<string, number> {
+  const scroll: Record<string, number> = {};
+  board.querySelectorAll<HTMLElement>(".column").forEach((col) => {
+    const body = col.querySelector<HTMLElement>(".column-body");
+    if (body && col.dataset.stage) scroll[col.dataset.stage] = body.scrollTop;
+  });
+  return scroll;
+}
+
+// restoreColumnScroll re-applies scroll positions captured before a rebuild.
+function restoreColumnScroll(board: HTMLElement, scroll: Record<string, number>): void {
+  board.querySelectorAll<HTMLElement>(".column").forEach((col) => {
+    const stage = col.dataset.stage;
+    const body = col.querySelector<HTMLElement>(".column-body");
+    if (body && stage && scroll[stage]) body.scrollTop = scroll[stage];
+  });
+}
+
 function render(): void {
   const board = document.getElementById("board")!;
+  // Capture each column's scroll position before the full rebuild below wipes
+  // it. A reconcile (board:changed / post-transition) must not snap a column the
+  // user scrolled down back to the top.
+  const scrollByStage = captureColumnScroll(board);
   board.innerHTML = "";
   if (boardLoading && current.cards.length === 0) {
     // First fetch in flight with nothing to show yet: a centered spinner gives
@@ -424,6 +448,7 @@ function render(): void {
     board.appendChild(loading);
   } else {
     for (const stage of STAGES) board.appendChild(renderColumn(stage));
+    restoreColumnScroll(board, scrollByStage);
   }
   const banner = document.getElementById("banner")!;
   if (current.error) {

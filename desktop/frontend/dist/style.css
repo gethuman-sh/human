@@ -43,6 +43,9 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* Hard stop: the header + board must never spill past the viewport and turn
+     the document itself into a scroll container. Only .column-body scrolls. */
+  overflow: hidden;
 }
 
 /* The board keeps its 5-column grid but now fills the remaining height of the
@@ -163,10 +166,13 @@ body {
 .board {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
+  /* Bound the single row to the board's own height so columns can never grow
+     past the space below the header (the old 100vh-based column max-height did,
+     which pushed the document 20px taller than the viewport). */
+  grid-template-rows: minmax(0, 1fr);
   gap: 10px;
   padding: 12px;
   height: 100%;
-  align-items: start;
 }
 
 .column {
@@ -175,8 +181,9 @@ body {
   border-radius: 8px;
   display: flex;
   flex-direction: column;
-  min-height: 200px;
-  max-height: calc(100vh - 24px);
+  /* Columns stretch to the bounded grid row; their card list scrolls inside
+     .column-body rather than the column (or the page) growing. */
+  min-height: 0;
 }
 
 .column-header {
@@ -200,6 +207,11 @@ body {
   gap: 8px;
   overflow-y: auto;
   flex: 1;
+  /* min-height:0 lets the flex child shrink so overflow-y actually scrolls;
+     overscroll-behavior:contain stops a bottomed-out scroll from chaining to
+     any ancestor and moving the whole layout. */
+  min-height: 0;
+  overscroll-behavior: contain;
 }
 
 .column-body.drop-ok {
