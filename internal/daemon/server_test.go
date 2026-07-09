@@ -1348,6 +1348,84 @@ func TestServer_HandleTrackerIssues_EmptyResults(t *testing.T) {
 	assert.Equal(t, "[]\n", resp.Stdout)
 }
 
+// --- handleTrackerIssuesLite tests ---
+
+func TestServer_HandleTrackerIssuesLite_NilFetcher(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.LiteIssueFetcher = nil
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues-lite"}})
+	assert.Equal(t, 0, resp.ExitCode)
+	assert.Equal(t, "[]\n", resp.Stdout)
+}
+
+func TestServer_HandleTrackerIssuesLite_WithResults(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.LiteIssueFetcher = func() ([]TrackerIssuesResult, error) {
+			return []TrackerIssuesResult{
+				{
+					TrackerName: "work",
+					TrackerKind: "linear",
+					Project:     "HUM",
+					Issues: []tracker.Issue{
+						{Key: "HUM-1", Title: "First issue", Status: "In Progress"},
+					},
+				},
+			}, nil
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues-lite"}})
+	assert.Equal(t, 0, resp.ExitCode)
+
+	var results []TrackerIssuesResult
+	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &results)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Issues, 1)
+	assert.Equal(t, "HUM-1", results[0].Issues[0].Key)
+}
+
+func TestServer_HandleTrackerIssuesLite_FetcherError(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.LiteIssueFetcher = func() ([]TrackerIssuesResult, error) {
+			return nil, fmt.Errorf("network timeout")
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues-lite"}})
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "network timeout")
+}
+
+// The lite route must dispatch to LiteIssueFetcher, not the full IssueFetcher —
+// otherwise the board's fast path would pay the comment-scan cost it exists to
+// avoid. Distinct fetchers let us assert the routing rather than trust it.
+func TestServer_HandleTrackerIssuesLite_RoutesToLiteFetcher(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.IssueFetcher = func() ([]TrackerIssuesResult, error) {
+			return []TrackerIssuesResult{{TrackerName: "full"}}, nil
+		}
+		s.LiteIssueFetcher = func() ([]TrackerIssuesResult, error) {
+			return []TrackerIssuesResult{{TrackerName: "lite"}}, nil
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues-lite"}})
+	assert.Equal(t, 0, resp.ExitCode)
+
+	var results []TrackerIssuesResult
+	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &results)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "lite", results[0].TrackerName)
+}
+
 // --- handleToolStats tests ---
 
 func TestServer_HandleToolStats_NilStore(t *testing.T) {

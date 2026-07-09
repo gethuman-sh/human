@@ -49,6 +49,7 @@ type Server struct {
 	HookEvents       *HookEventStore                          // in-memory hook event buffer; nil disables hook event tracking
 	NetworkEvents    *NetworkEventStore                       // in-memory ambient network activity buffer; nil disables
 	IssueFetcher     func() ([]TrackerIssuesResult, error)    // injected; fetches issues from configured trackers
+	LiteIssueFetcher func() ([]TrackerIssuesResult, error)    // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
 	TrackerDiagnoser func(dir string) []tracker.TrackerStatus // injected; diagnoses tracker status with vault resolution
 	Projects         *ProjectRegistry                         // multi-project routing; nil means single-project mode
 	PendingConfirms  *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
@@ -335,6 +336,8 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		s.handleTrackerDiagnose(conn, projectDir)
 	case "tracker-issues":
 		s.handleTrackerIssues(conn)
+	case "tracker-issues-lite":
+		s.handleTrackerIssuesLite(conn)
 	case "pending-confirms":
 		s.handlePendingConfirms(conn)
 	case "confirm-op":
@@ -447,15 +450,30 @@ func (s *Server) handleTrackerDiagnose(conn net.Conn, projectDir string) {
 	_ = enc.Encode(resp)
 }
 
-// handleTrackerIssues returns open issues from all configured tracker projects.
+// handleTrackerIssues returns open issues from all configured tracker projects,
+// including each PM ticket's derived board stage (the comment-scan phase).
 func (s *Server) handleTrackerIssues(conn net.Conn) {
-	if s.IssueFetcher == nil {
+	s.writeIssueResults(conn, s.IssueFetcher)
+}
+
+// handleTrackerIssuesLite returns issue titles only, skipping the per-ticket
+// comment scan that derives board stages. The board uses this to render titles
+// quickly, then reconciles them into their real columns via handleTrackerIssues.
+func (s *Server) handleTrackerIssuesLite(conn net.Conn) {
+	s.writeIssueResults(conn, s.LiteIssueFetcher)
+}
+
+// writeIssueResults runs an injected issue fetcher and streams the JSON result.
+// A nil fetcher yields an empty list rather than an error so a not-yet-configured
+// tracker renders an empty board instead of a failure banner.
+func (s *Server) writeIssueResults(conn net.Conn, fetcher func() ([]TrackerIssuesResult, error)) {
+	if fetcher == nil {
 		resp := Response{Stdout: "[]\n"}
 		enc := json.NewEncoder(conn)
 		_ = enc.Encode(resp)
 		return
 	}
-	results, err := s.IssueFetcher()
+	results, err := fetcher()
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return

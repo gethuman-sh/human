@@ -230,6 +230,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		HookEvents:        hookStore,
 		NetworkEvents:     networkStore,
 		IssueFetcher:      fetchTrackerIssuesFunc(projectRegistry, vaultResolver),
+		LiteIssueFetcher:  fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
 		TrackerDiagnoser:  trackerDiagnoserFunc(projectRegistry, vaultResolver),
 		Projects:          projectRegistry,
 		PendingConfirms:   confirmStore,
@@ -964,55 +965,10 @@ type fetchJob struct {
 
 func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() ([]daemon.TrackerIssuesResult, error) {
 	return func() ([]daemon.TrackerIssuesResult, error) {
-		// Collect all (instance, project) pairs first.
-		var jobs []fetchJob
-		for _, entry := range reg.Entries() {
-			instances, err := cmdutil.LoadAllInstancesWithResolver(entry.Dir, entry.EnvLookup(), resolver)
-			if err != nil {
-				return nil, err
-			}
-			for _, inst := range instances {
-				projects := inst.Projects
-				if len(projects) == 0 {
-					projects = []string{""}
-				}
-				for _, p := range projects {
-					jobs = append(jobs, fetchJob{inst: inst, project: p})
-				}
-			}
+		jobs, results, err := listTrackerIssues(reg, resolver)
+		if err != nil {
+			return nil, err
 		}
-
-		// Fetch all tracker/project combinations in parallel.
-		results := make([]daemon.TrackerIssuesResult, len(jobs))
-		var wg sync.WaitGroup
-		for i, job := range jobs {
-			wg.Add(1)
-			go func(i int, job fetchJob) {
-				defer wg.Done()
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				issues, fetchErr := job.inst.Provider.ListIssues(ctx, tracker.ListOptions{
-					Project:    job.project,
-					MaxResults: 20,
-					IncludeAll: false,
-				})
-				label := job.project
-				if label == "" {
-					label = job.inst.Name
-				}
-				results[i] = daemon.TrackerIssuesResult{
-					TrackerName: job.inst.Name,
-					TrackerKind: job.inst.Kind,
-					TrackerRole: job.inst.InferRole(),
-					Project:     label,
-					Issues:      issues,
-				}
-				if fetchErr != nil {
-					results[i].Err = fetchErr.Error()
-				}
-			}(i, job)
-		}
-		wg.Wait()
 
 		// Scan PM-tracker comments for [human:ready-for-review] handoffs and
 		// per-PM board state, then propagate them onto the results. See
@@ -1021,6 +977,74 @@ func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		applyScanResults(results, readyKeys, readyPRs, boardCards)
 		return results, nil
 	}
+}
+
+// fetchTrackerIssuesLiteFunc returns a fetcher that lists issue titles only,
+// skipping the per-ticket comment scan (scanReadyForReview) that dominates board
+// latency. Results carry Issues but no BoardCards, so the desktop board can show
+// titles immediately and reconcile stages once the full fetcher completes.
+func fetchTrackerIssuesLiteFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() ([]daemon.TrackerIssuesResult, error) {
+	return func() ([]daemon.TrackerIssuesResult, error) {
+		_, results, err := listTrackerIssues(reg, resolver)
+		return results, err
+	}
+}
+
+// listTrackerIssues collects every (instance, project) pair from the registry and
+// fetches their open issues in parallel (Phase 1). It returns the jobs aligned 1:1
+// with the results so a later comment scan can recover each result's provider
+// without re-loading instances from disk.
+func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([]fetchJob, []daemon.TrackerIssuesResult, error) {
+	// Collect all (instance, project) pairs first.
+	var jobs []fetchJob
+	for _, entry := range reg.Entries() {
+		instances, err := cmdutil.LoadAllInstancesWithResolver(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, inst := range instances {
+			projects := inst.Projects
+			if len(projects) == 0 {
+				projects = []string{""}
+			}
+			for _, p := range projects {
+				jobs = append(jobs, fetchJob{inst: inst, project: p})
+			}
+		}
+	}
+
+	// Fetch all tracker/project combinations in parallel.
+	results := make([]daemon.TrackerIssuesResult, len(jobs))
+	var wg sync.WaitGroup
+	for i, job := range jobs {
+		wg.Add(1)
+		go func(i int, job fetchJob) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			issues, fetchErr := job.inst.Provider.ListIssues(ctx, tracker.ListOptions{
+				Project:    job.project,
+				MaxResults: 20,
+				IncludeAll: false,
+			})
+			label := job.project
+			if label == "" {
+				label = job.inst.Name
+			}
+			results[i] = daemon.TrackerIssuesResult{
+				TrackerName: job.inst.Name,
+				TrackerKind: job.inst.Kind,
+				TrackerRole: job.inst.InferRole(),
+				Project:     label,
+				Issues:      issues,
+			}
+			if fetchErr != nil {
+				results[i].Err = fetchErr.Error()
+			}
+		}(i, job)
+	}
+	wg.Wait()
+	return jobs, results, nil
 }
 
 // applyScanResults projects the comment-scan output back onto the fetched

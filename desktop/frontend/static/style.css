@@ -413,6 +413,36 @@ body {
   color: var(--failed);
 }
 
+/* First-load indicator: spans the whole 5-column grid and centers a larger
+   spinner, so the initial fetch shows progress instead of five empty columns
+   that read as "no work". Replaced by the real columns once titles arrive. */
+.board-loading {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: calc(100vh - 120px);
+  color: var(--muted);
+}
+
+.board-loading .spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+  border-color: var(--accent);
+  border-top-color: transparent;
+}
+
+/* Shown on each card while its real stage is still being derived from comments
+   (quick titles land in Backlog first). Muted so it reads as "pending
+   placement", distinct from the amber "agent running" badge. */
+.badge.resolving .spinner {
+  border-color: var(--muted);
+  border-top-color: transparent;
+}
+
 .disabled-target {
   opacity: 0.5;
 }

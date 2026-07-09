@@ -268,6 +268,20 @@ func TestGetTrackerIssues_Success(t *testing.T) {
 	assert.Equal(t, "jira", results[0].TrackerName)
 }
 
+func TestGetTrackerIssuesLite_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		// The lite path must hit its own command so the daemon skips the
+		// per-ticket comment scan.
+		assert.Equal(t, []string{"tracker-issues-lite"}, req.Args)
+		return Response{Stdout: `[{"tracker_name":"jira","tracker_kind":"jira","project":"PROJ","issues":[]}]` + "\n"}
+	})
+
+	results, err := GetTrackerIssuesLite(addr, "tok")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "jira", results[0].TrackerName)
+}
+
 func TestGetPendingConfirms_Success(t *testing.T) {
 	addr := startMockDaemon(t, func(req Request) Response {
 		assert.Equal(t, []string{"pending-confirms"}, req.Args)

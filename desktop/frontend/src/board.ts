@@ -40,6 +40,7 @@ interface IdeationView {
 
 interface AppBindings {
   Cards(): Promise<BoardData>;
+  CardsQuick(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   CloseTicket(pmKey: string): Promise<void>;
   DaemonStatus(): Promise<boolean>;
@@ -73,6 +74,14 @@ const AGENT_STAGES = new Set(["planning", "implementation", "verification"]);
 
 let current: BoardData = { cards: [], dockerAvailable: true, error: "" };
 let dragging: { key: string; title: string; stage: string } | null = null;
+
+// Two-phase load state. boardLoading covers the first fetch before any titles
+// exist (the board shows a centered spinner). stagesLoading covers the window
+// after titles render but before the comment scan resolves each card's real
+// stage (every card shows a small resolving spinner). Both are false in steady
+// state and during board:changed reconciles, so those never flash a spinner.
+let boardLoading = false;
+let stagesLoading = false;
 
 // Matches the daemon subscribe-retry backoff (desktop/main.go backoff(), 2s)
 // rounded up slightly so the poll never races the retry loop.
@@ -120,6 +129,11 @@ function renderCard(card: Card): HTMLElement {
   el.dataset.stage = card.stage;
 
   const meta: string[] = [];
+  if (stagesLoading) {
+    // Titles are shown but this card's real stage is still being derived from
+    // comments; a resolving spinner signals it may still move columns.
+    meta.push(`<span class="badge resolving" title="Resolving stage…"><span class="spinner"></span></span>`);
+  }
   const b = badge(card.state);
   if (b) meta.push(b);
   if (card.engineeringKey) meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
@@ -334,7 +348,7 @@ async function transition(key: string, title: string, from: string, to: string):
   } catch (err) {
     showError(errMessage(err));
   }
-  await refresh();
+  await reconcile();
 }
 
 // requestClose confirms in-app (never the OS dialog) before closing, so a stray
@@ -354,8 +368,8 @@ async function closeTicket(key: string): Promise<void> {
   } catch (err) {
     showError(errMessage(err));
   }
-  // The closed ticket is no longer "open", so refresh drops it from the board.
-  await refresh();
+  // The closed ticket is no longer "open", so reconcile drops it from the board.
+  await reconcile();
 }
 
 // confirmDialog renders a small modal overlay and resolves true/false on the
@@ -401,7 +415,16 @@ function confirmDialog(title: string, body: string, confirmLabel: string): Promi
 function render(): void {
   const board = document.getElementById("board")!;
   board.innerHTML = "";
-  for (const stage of STAGES) board.appendChild(renderColumn(stage));
+  if (boardLoading && current.cards.length === 0) {
+    // First fetch in flight with nothing to show yet: a centered spinner gives
+    // immediate feedback instead of five empty columns that read as "no work".
+    const loading = document.createElement("div");
+    loading.className = "board-loading";
+    loading.innerHTML = `<span class="spinner"></span><span>Loading board…</span>`;
+    board.appendChild(loading);
+  } else {
+    for (const stage of STAGES) board.appendChild(renderColumn(stage));
+  }
   const banner = document.getElementById("banner")!;
   if (current.error) {
     banner.textContent = current.error;
@@ -433,7 +456,37 @@ async function pollDaemonStatus(): Promise<void> {
   renderDaemonStatus();
 }
 
-async function refresh(): Promise<void> {
+// initialLoad renders the board progressively on startup: a spinner first, then
+// ticket titles (Backlog) from the fast comment-scan-free fetch, then the full
+// reconcile that moves each card into its real stage. Steady-state updates use
+// reconcile() directly so they never flash the spinner or re-place cards.
+async function initialLoad(): Promise<void> {
+  boardLoading = true;
+  render();
+  try {
+    const quick = await go().CardsQuick();
+    current = {
+      cards: quick.cards || [],
+      dockerAvailable: !!quick.dockerAvailable,
+      // Suppress the quick-phase error: the full reconcile surfaces it, and
+      // clearing it here avoids a banner that flickers away a moment later.
+      error: "",
+    };
+    boardLoading = false;
+    stagesLoading = true;
+    render();
+  } catch {
+    // Quick phase failed (e.g. daemon not up yet): fall through to the full
+    // fetch, which surfaces the error via reconcile().
+    boardLoading = false;
+  }
+  await reconcile();
+}
+
+// reconcile fetches the full board (including derived stages) and renders it. It
+// is the single source of truth after the initial load: board:changed events and
+// post-transition refreshes call it directly.
+async function reconcile(): Promise<void> {
   try {
     const data = await go().Cards();
     current = {
@@ -444,6 +497,8 @@ async function refresh(): Promise<void> {
   } catch (err) {
     current = { cards: [], dockerAvailable: false, error: errMessage(err) };
   }
+  boardLoading = false;
+  stagesLoading = false;
   render();
 }
 
@@ -648,10 +703,10 @@ function wireRail(): void {
 function init(): void {
   if (window.runtime?.EventsOn) {
     window.runtime.EventsOn("board:changed", () => {
-      void refresh();
+      void reconcile();
     });
   }
-  void refresh();
+  void initialLoad();
   void pollDaemonStatus();
   setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
 

@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // App is the Go backend bound into the webview via options.App.Bind. Every
@@ -77,13 +78,41 @@ func (a *App) Cards() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, err
 	}
+	return boardFromResults(results, dockerAvailable()), nil
+}
 
-	data := BoardData{DockerAvailable: dockerAvailable()}
+// CardsQuick fetches issue titles only — skipping the per-ticket comment scan
+// that derives board stages — and places every open PM issue in the Backlog. It
+// returns far faster than Cards(), so the board can render titles immediately;
+// the subsequent Cards() call reconciles each card into its real stage. Docker
+// availability is assumed here (the real value arrives with Cards()) so the quick
+// path never blocks on a Docker round-trip.
+func (a *App) CardsQuick() (BoardData, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return BoardData{}, err
+	}
+
+	results, err := daemon.GetTrackerIssuesLite(info.Addr, info.Token)
+	if err != nil {
+		return BoardData{}, err
+	}
+	return boardFromResults(results, true), nil
+}
+
+// boardFromResults flattens the single PM-role result into the frontend card
+// list. It is shared by Cards() (results carry derived BoardCards) and
+// CardsQuick() (results carry titles only, so every non-hidden issue lands in
+// Backlog). A PM issue with no derived card is hidden when its status is
+// done/closed and placed in Backlog otherwise, mirroring daemon.DeriveBoardCard's
+// marker-less decision so the quick pass and full pass agree on what to show.
+func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool) BoardData {
+	data := BoardData{DockerAvailable: dockerAvailable}
 	pm, ok := firstPMResult(results)
 	if !ok {
 		// No PM-role tracker configured yet: render five empty columns rather
 		// than erroring, matching the "zero PM issues" requirement.
-		return data, nil
+		return data
 	}
 	if pm.Err != "" {
 		data.Error = pm.Err
@@ -91,14 +120,19 @@ func (a *App) Cards() (BoardData, error) {
 
 	for _, issue := range pm.Issues {
 		card := pm.BoardCards[issue.Key]
-		if card.Stage == daemon.BoardHidden {
-			// Closed PM ticket that never entered the pipeline — not shown.
-			continue
-		}
 		stage := card.Stage
 		if stage == "" {
-			// Defensive: a PM issue with no derived card sits in Backlog.
+			// No derived card (quick fetch, or a marker-less ticket): a
+			// done/closed ticket that never entered the pipeline is hidden;
+			// everything else sits in Backlog.
+			if issue.StatusType == tracker.CategoryDone || issue.StatusType == tracker.CategoryClosed {
+				continue
+			}
 			stage = daemon.BoardBacklog
+		}
+		if stage == daemon.BoardHidden {
+			// Closed PM ticket that never entered the pipeline — not shown.
+			continue
 		}
 		data.Cards = append(data.Cards, Card{
 			Key:            issue.Key,
@@ -112,7 +146,7 @@ func (a *App) Cards() (BoardData, error) {
 			Error:          card.Error,
 		})
 	}
-	return data, nil
+	return data
 }
 
 // DaemonStatus reports whether the human daemon is currently reachable. The

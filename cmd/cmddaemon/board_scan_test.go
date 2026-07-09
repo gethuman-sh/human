@@ -10,6 +10,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/vault"
 )
 
 // stubProvider implements tracker.Provider; only ListComments returns data, the
@@ -58,4 +59,16 @@ func TestScanReadyForReview_BoardCards(t *testing.T) {
 	assert.Equal(t, daemon.BoardPlanning, cards["SC-1"].Stage)
 	assert.Equal(t, daemon.BoardDone, cards["SC-1"].State)
 	assert.Equal(t, "HUM-7", cards["SC-1"].EngineeringKey)
+}
+
+// The lite fetcher must return without error (and without running the comment
+// scan) even when there is nothing to fetch, so the board's fast path degrades
+// to an empty board rather than a failure.
+func TestFetchTrackerIssuesLiteFunc_EmptyRegistry(t *testing.T) {
+	reg, err := daemon.NewProjectRegistry(nil)
+	require.NoError(t, err)
+
+	results, err := fetchTrackerIssuesLiteFunc(reg, vault.NewResolver())()
+	require.NoError(t, err)
+	assert.Empty(t, results)
 }

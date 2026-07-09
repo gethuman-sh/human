@@ -239,7 +239,18 @@ func GetTrackerDiagnose(addr, token string) ([]tracker.TrackerStatus, error) {
 
 // GetTrackerIssues fetches open issues from all configured tracker projects via the daemon.
 func GetTrackerIssues(addr, token string) ([]TrackerIssuesResult, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"tracker-issues"})
+	return getTrackerIssues(addr, token, "tracker-issues")
+}
+
+// GetTrackerIssuesLite fetches issue titles only, skipping the per-ticket comment
+// scan that derives board stages. It returns quickly so the board can render
+// titles before the full GetTrackerIssues reconcile completes.
+func GetTrackerIssuesLite(addr, token string) ([]TrackerIssuesResult, error) {
+	return getTrackerIssues(addr, token, "tracker-issues-lite")
+}
+
+func getTrackerIssues(addr, token, command string) ([]TrackerIssuesResult, error) {
+	out, err := RunRemoteCapture(addr, token, []string{command})
 	if err != nil {
 		return nil, err
 	}
