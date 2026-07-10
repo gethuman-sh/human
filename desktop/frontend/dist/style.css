@@ -342,6 +342,11 @@ body {
   border-radius: 6px;
   padding: 10px;
   cursor: grab;
+  /* Cards are flex items in the column-body flex column. Keep them from
+     shrinking below their content when a column overflows — otherwise the
+     fancy theme's `overflow: hidden` (needed for the sheen) flips their
+     automatic min-height to 0 and they squish. The column-body scrolls instead. */
+  flex-shrink: 0;
 }
 
 .card[draggable="false"] {
