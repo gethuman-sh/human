@@ -160,6 +160,15 @@ var bugVerifyAgentContent []byte
 //go:embed embed/codenav-skill.md
 var codenavSkillContent []byte
 
+//go:embed embed/human-features-skill.md
+var featuresSkillContent []byte
+
+//go:embed embed/features-recon-agent.md
+var featuresReconAgentContent []byte
+
+//go:embed embed/features-synthesis-agent.md
+var featuresSynthesisAgentContent []byte
+
 var userHomeDir = os.UserHomeDir
 
 // FileWriter abstracts filesystem operations for testability.
@@ -252,6 +261,9 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: bugFixerAgentContent, relPath: filepath.Join("agents", "human-bug-fixer.md")},
 		{content: bugVerifyAgentContent, relPath: filepath.Join("agents", "human-bug-verify.md")},
 		{content: codenavSkillContent, relPath: filepath.Join("skills", "codenav", "SKILL.md")},
+		{content: featuresSkillContent, relPath: filepath.Join("skills", "human-features", "SKILL.md")},
+		{content: featuresReconAgentContent, relPath: filepath.Join("agents", "features-recon.md")},
+		{content: featuresSynthesisAgentContent, relPath: filepath.Join("agents", "features-synthesis.md")},
 	}
 
 	for _, f := range files {

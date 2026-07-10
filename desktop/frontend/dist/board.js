@@ -6,6 +6,9 @@
 //
 // The shipped runtime is desktop/frontend/dist/board.js; `npm run build`
 // (tsc + bundle.mjs) regenerates dist/ from this source for `wails build`.
+// The fancy hooks no-op while the classic theme is active, so they are safe to
+// call unconditionally on the hot paths below.
+import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
 const STAGES = ["backlog", "planning", "implementation", "verification", "done"];
 const STAGE_LABELS = {
     backlog: "Backlog",
@@ -200,6 +203,7 @@ function beginPointerDrag(el, card) {
             return;
         const info = { key: card.key, title: card.title, stage: card.stage };
         let started = false;
+        let lastX = down.clientX;
         const onMove = (ev) => {
             if (!started) {
                 if (Math.hypot(ev.clientX - down.clientX, ev.clientY - down.clientY) < DRAG_THRESHOLD_PX)
@@ -212,7 +216,10 @@ function beginPointerDrag(el, card) {
             if (dragGhost) {
                 dragGhost.style.left = `${ev.clientX}px`;
                 dragGhost.style.top = `${ev.clientY}px`;
+                ghostTilt(dragGhost, ev.clientX - lastX);
+                trail({ x: ev.clientX, y: ev.clientY });
             }
+            lastX = ev.clientX;
             setHoverTarget(dropTargetAt(ev.clientX, ev.clientY));
         };
         const teardown = () => {
@@ -236,13 +243,15 @@ function beginPointerDrag(el, card) {
             const target = started ? dropTargetAt(ev.clientX, ev.clientY) : null;
             const allowed = !!target && dropAllowed(target);
             teardown();
-            dragging = null;
+            endDrag();
+            // `target` may have been replaced by the flushed render, but performDrop
+            // only reads its dataset, which a detached node still carries.
             if (target && allowed)
-                performDrop(target, info);
+                performDrop(target, info, { x: ev.clientX, y: ev.clientY });
         };
         const onCancel = () => {
             teardown();
-            dragging = null;
+            endDrag();
         };
         try {
             el.setPointerCapture(down.pointerId);
@@ -255,13 +264,26 @@ function beginPointerDrag(el, card) {
         el.addEventListener("pointercancel", onCancel);
     });
 }
+// endDrag closes the drag lifecycle and flushes any board rebuild that was
+// deferred while the drag was in flight.
+function endDrag() {
+    dragging = null;
+    if (pendingRender) {
+        pendingRender = false;
+        render();
+    }
+}
 // performDrop runs the action for a completed drop on an allowed target.
-function performDrop(target, info) {
+function performDrop(target, info, pt) {
     if (target.dataset.drop === "close") {
+        // Closing is destructive and still awaits a confirm dialog — never a
+        // moment to celebrate, so the fancy theme stays silent here.
         void requestClose(info.key, info.title);
         return;
     }
-    void transition(info.key, info.title, info.stage, target.dataset.dropStage || "");
+    const to = target.dataset.dropStage || "";
+    celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: to === "done" });
+    void transition(info.key, info.title, info.stage, to);
 }
 async function transition(key, title, from, to) {
     const card = current.cards.find((c) => c.key === key);
@@ -353,7 +375,15 @@ function restoreColumnScroll(board, scroll) {
             body.scrollTop = scroll[stage];
     });
 }
+// A render mid-drag would replace the dragged card's DOM element, silently
+// killing its pointer listeners (frozen ghost, drop never lands). Rebuilds
+// requested during a drag are deferred and flushed by endDrag().
+let pendingRender = false;
 function render() {
+    if (dragging) {
+        pendingRender = true;
+        return;
+    }
     const board = document.getElementById("board");
     // Capture each column's scroll position before the full rebuild below wipes
     // it. A reconcile (board:changed / post-transition) must not snap a column the
@@ -764,6 +794,174 @@ function renderAgents() {
     host.innerHTML =
         `<div class="agents-header">Running agents</div>` + agentsData.agents.map(renderAgentRow).join("");
 }
+// --- Features view -----------------------------------------------------
+//
+// Renders the project's FEATURE.json (grouped product features) from the Go
+// App.Features() binding — a plain file read, no daemon. Unlike the agents view
+// this is a static document, so it loads once on activation with no poll.
+let featuresLoaded = false;
+// Generation runs as a detached agent (like a kanban stage), so the button
+// can't block on completion. We capture the currently-shown doc's signature
+// when generation starts, then poll Features() until it changes — the file
+// appearing (Generate) or its content shifting (Refresh) both flip the button
+// back and re-render. currentFeatureDoc is the last doc rendered; featuresNote
+// carries a transient status/error line without wiping the rendered map.
+let featuresGenerating = false;
+let featuresBaselineSig = "";
+let featuresNote = "";
+let currentFeatureDoc = {};
+let featuresPollTimer;
+async function loadFeatures() {
+    let doc;
+    try {
+        doc = await go().Features();
+    }
+    catch (err) {
+        doc = { error: errMessage(err) };
+    }
+    renderFeatures(doc);
+}
+// featureSig is a stable fingerprint of the rendered doc: presence plus product,
+// tagline, and the recursive group/feature names+descriptions. Two runs that
+// produce the same map yield the same signature, so polling only reacts to a
+// real change.
+function featureSig(doc) {
+    if (!doc.exists)
+        return "«sent»";
+    const walk = (gs = []) => gs
+        .map((g) => g.group +
+        "|" +
+        (g.features ?? []).map((f) => f.name + ":" + f.description + (f.recent ? "*" : "")).join(",") +
+        "|" +
+        walk(g.groups))
+        .join(";");
+    return (doc.product ?? "") + "¦" + (doc.tagline ?? "") + "¦" + walk(doc.groups);
+}
+function stopFeaturesPoll() {
+    if (featuresPollTimer !== undefined) {
+        clearInterval(featuresPollTimer);
+        featuresPollTimer = undefined;
+    }
+}
+// startFeaturesPoll watches for the generation agent's output. It re-reads
+// FEATURE.json every 4s and, when the doc's signature differs from the baseline
+// captured at click time, stops and re-renders. A 10-minute cap avoids polling
+// forever if the agent is slow or fails silently.
+function startFeaturesPoll() {
+    stopFeaturesPoll();
+    const started = Date.now();
+    const timeoutMs = 10 * 60 * 1000;
+    featuresPollTimer = window.setInterval(() => {
+        void (async () => {
+            let doc;
+            try {
+                doc = await go().Features();
+            }
+            catch {
+                return; // transient; keep polling
+            }
+            if (featureSig(doc) !== featuresBaselineSig) {
+                stopFeaturesPoll();
+                featuresGenerating = false;
+                featuresNote = "";
+                renderFeatures(doc);
+                return;
+            }
+            if (Date.now() - started > timeoutMs) {
+                stopFeaturesPoll();
+                featuresGenerating = false;
+                featuresNote = "Agent still running — click Refresh when it finishes.";
+                renderFeatures(currentFeatureDoc);
+            }
+        })();
+    }, 4000);
+}
+// onGenerateFeatures drives both Generate and Refresh: it launches the
+// human-features skill through the daemon (the same containerized agent path as
+// a kanban drag-and-drop), flips the button to a disabled "Generating…" state,
+// and starts polling for the result.
+async function onGenerateFeatures() {
+    if (featuresGenerating)
+        return;
+    featuresBaselineSig = featureSig(currentFeatureDoc);
+    featuresGenerating = true;
+    // Generation runs a coding agent in a container (survey → synthesis), so it
+    // is not instant — set expectations up front and keep the note up while the
+    // poll waits for FEATURE.json.
+    featuresNote = "Running the generation agent — this can take several minutes…";
+    renderFeatures(currentFeatureDoc);
+    try {
+        await go().GenerateFeatures();
+    }
+    catch (err) {
+        featuresGenerating = false;
+        featuresNote = "Couldn't start generation: " + errMessage(err);
+        renderFeatures(currentFeatureDoc);
+        return;
+    }
+    startFeaturesPoll();
+}
+function renderFeatureRow(f) {
+    // A "recent" badge flags a capability changed since the last release. Ticket
+    // keys in FEATURE.json are deliberately not surfaced here — the desktop pane
+    // presents features from a user's point of view, not their engineering trail.
+    const badge = f.recent ? `<span class="feature-badge">recent</span>` : "";
+    return `<div class="feature-row">
+    <span class="feature-name">${escapeHtml(f.name)}${badge}</span>
+    <span class="feature-desc">${escapeHtml(f.description)}</span>
+  </div>`;
+}
+// Recursive: a group renders its own features, then any nested sub-groups. depth
+// drives indentation so a deeper tree (larger projects) reads as a shallow
+// hierarchy rather than a flat wall.
+function renderFeatureGroup(g, depth = 0) {
+    const rows = (g.features ?? []).map(renderFeatureRow).join("");
+    const subgroups = (g.groups ?? []).map((sg) => renderFeatureGroup(sg, depth + 1)).join("");
+    return `<div class="feature-group" data-depth="${depth}">
+    <div class="feature-group-title">${escapeHtml(g.group)}</div>
+    ${rows}
+    ${subgroups}
+  </div>`;
+}
+function renderFeatures(doc) {
+    currentFeatureDoc = doc;
+    const host = document.getElementById("features");
+    if (!host)
+        return;
+    // The action button reads "Generate" when FEATURE.json is absent and "Refresh"
+    // when present; while an agent runs it is a disabled "Generating…" spinner.
+    const label = featuresGenerating ? "Generating…" : doc.exists ? "Refresh" : "Generate";
+    const spinner = featuresGenerating ? `<span class="spinner"></span> ` : "";
+    const btn = `<button class="features-btn" ${featuresGenerating ? "disabled" : ""}>${spinner}${escapeHtml(label)}</button>`;
+    const header = `<div class="agents-header features-header"><span>Features</span>${btn}</div>`;
+    const note = featuresNote ? `<div class="features-note">${escapeHtml(featuresNote)}</div>` : "";
+    const attach = () => host.querySelector(".features-btn")?.addEventListener("click", () => void onGenerateFeatures());
+    if (doc.error) {
+        host.innerHTML = header + note + `<div class="banner">${escapeHtml(doc.error)}</div>`;
+        attach();
+        return;
+    }
+    if (!doc.exists) {
+        host.innerHTML =
+            header + note + `<div class="features-empty">No FEATURE.json yet — click Generate to build it.</div>`;
+        attach();
+        return;
+    }
+    const groups = doc.groups ?? [];
+    if (groups.length === 0) {
+        host.innerHTML = header + note + `<div class="features-empty">No features to show</div>`;
+        attach();
+        return;
+    }
+    const intro = doc.product || doc.tagline
+        ? `<div class="features-intro">
+          ${doc.product ? `<div class="features-product">${escapeHtml(doc.product)}</div>` : ""}
+          ${doc.tagline ? `<div class="features-tagline">${escapeHtml(doc.tagline)}</div>` : ""}
+        </div>`
+        : "";
+    host.innerHTML = header + note + intro + groups.map(renderFeatureGroup).join("");
+    attach();
+}
 // --- Left activity rail ------------------------------------------------
 //
 // "board" and "agents" are real views swapped in the main area; other rail
@@ -781,14 +979,22 @@ function selectView(view) {
     // Toggle main-area containers: exactly one top-level view is visible.
     const board = document.getElementById("board");
     const agents = document.getElementById("agents");
+    const features = document.getElementById("features");
     board?.classList.toggle("hidden", view !== "board");
     agents?.classList.toggle("hidden", view !== "agents");
+    features?.classList.toggle("hidden", view !== "features");
     if (view === "agents") {
         void pollAgents(); // immediate fetch so the view isn't blank until the first tick
         startAgentsPoll();
     }
     else {
         stopAgentsPoll();
+    }
+    // The features doc is static — load it once on first activation, then leave
+    // the rendered pane in place (no poll, unlike agents).
+    if (view === "features" && !featuresLoaded) {
+        featuresLoaded = true;
+        void loadFeatures();
     }
 }
 function wireRail() {
@@ -819,6 +1025,13 @@ function init() {
     void pollDaemonStatus();
     setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
     wireRail();
+    initFancy();
+    document.addEventListener("keydown", (e) => {
+        if (isThemeToggleChord(e)) {
+            e.preventDefault();
+            toggleTheme();
+        }
+    });
     document.getElementById("ideation-close")?.addEventListener("click", () => closeIdeation());
     document.getElementById("ideation-form")?.addEventListener("submit", (e) => {
         e.preventDefault();
@@ -831,4 +1044,3 @@ if (document.readyState === "loading") {
 else {
     init();
 }
-export {};

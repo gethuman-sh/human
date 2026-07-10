@@ -273,6 +273,15 @@ func BoardTransition(addr, token string, req BoardTransitionRequest) error {
 	return err
 }
 
+// GenerateFeatures asks the daemon to launch the human-features skill, which
+// regenerates FEATURE.json for the registered project. It takes no arguments —
+// the daemon resolves the project directory itself — and returns once the agent
+// is launched, not when generation finishes.
+func GenerateFeatures(addr, token string) error {
+	_, err := RunRemoteCapture(addr, token, []string{"features-generate"})
+	return err
+}
+
 // CloseTicket asks the daemon to close a PM ticket (transition it to Done). The
 // request is a single JSON arg, matching BoardTransition. This is a dedicated
 // route, so it never hits the interactive `issue status` confirmation.

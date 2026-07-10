@@ -688,6 +688,142 @@ body {
   font-size: 13px;
 }
 
+/* Features view — renders FEATURE.json. Shares the agents-view scroll container
+   and header; the group/row treatment reuses the card look via --card-* vars. */
+.features-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.features-view.hidden {
+  display: none;
+}
+
+.features-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.features-intro {
+  margin-bottom: 18px;
+}
+
+.features-product {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.features-tagline {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 70ch;
+}
+
+.feature-group {
+  margin-bottom: 20px;
+}
+
+.feature-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.feature-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+}
+
+.feature-name {
+  flex: 0 0 auto;
+  min-width: 180px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.feature-desc {
+  flex: 1;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Features header carries the Generate/Refresh action button on the right. */
+.features-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Primary action button, mirroring the ideation send button. */
+.features-btn {
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.features-btn:hover {
+  opacity: 0.9;
+}
+
+.features-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Transient status/error line under the header (launch failure, slow agent). */
+.features-note {
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Nested sub-groups (larger projects) indent under their parent so the tree
+   reads as a shallow hierarchy; the top level (depth 0) stays flush. */
+.feature-group .feature-group {
+  margin-left: 14px;
+  margin-top: 8px;
+  margin-bottom: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--card-border);
+}
+
+/* "recent" badge on features changed since the last release. */
+.feature-badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  vertical-align: middle;
+}
+
 .agent-row {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -825,4 +961,371 @@ body {
 
 .subagent-meta {
   color: var(--muted);
+}
+
+/* =========================================================================
+   FANCY THEME — the demo "wow" style, toggled with F8 (see src/fancy.ts).
+   Everything below is scoped to [data-theme="fancy"] (or to fx-* elements
+   that only fancy.ts creates), so the classic theme above stays untouched.
+   Each effect is one delimited block: delete a block to drop that effect.
+   Continuous animations live behind prefers-reduced-motion so the fancy
+   look degrades to a static (but still colorful) style.
+   ========================================================================= */
+
+/* [FANCY:palette] Per-stage pastel rainbow hue, inherited by everything inside
+   a column (drop zones, glows, card shadows) via var(--fancy-hue). */
+[data-theme="fancy"] .column[data-stage="backlog"] {
+  --fancy-hue: 330;
+}
+[data-theme="fancy"] .column[data-stage="planning"] {
+  --fancy-hue: 45;
+}
+[data-theme="fancy"] .column[data-stage="implementation"] {
+  --fancy-hue: 165;
+}
+[data-theme="fancy"] .column[data-stage="verification"] {
+  --fancy-hue: 210;
+}
+[data-theme="fancy"] .column[data-stage="done"] {
+  --fancy-hue: 280;
+}
+
+/* [FANCY:gradient-bg] Aurora gradient background. The static gradient always
+   applies; only the slow drift is motion-gated. */
+[data-theme="fancy"] body {
+  background: linear-gradient(130deg, #241a3d, #12294a, #3d1a3d, #123a3a, #241a3d);
+  background-size: 400% 400%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-theme="fancy"] body {
+    animation: fancy-bg 26s ease infinite;
+  }
+}
+@keyframes fancy-bg {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* [FANCY:glass] Frosted-glass chrome over the gradient. The translucent
+   backgrounds alone keep everything readable where WebKitGTK lacks
+   backdrop-filter; the blur is progressive enhancement. */
+[data-theme="fancy"] .column {
+  background: hsl(var(--fancy-hue, 220) 35% 16% / 0.62);
+  border-color: hsl(var(--fancy-hue, 220) 60% 65% / 0.35);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
+}
+[data-theme="fancy"] .rail,
+[data-theme="fancy"] .app-header,
+[data-theme="fancy"] .statusbar {
+  background: rgba(16, 14, 30, 0.55);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
+}
+[data-theme="fancy"] .column-header {
+  border-bottom-color: hsl(var(--fancy-hue, 220) 60% 70% / 0.3);
+}
+[data-theme="fancy"] .column-header > span:first-child {
+  color: hsl(var(--fancy-hue, 220) 80% 82%);
+}
+
+/* [FANCY:rainbow-drop] Pastel drop zones: accepting targets glow in their
+   column's hue instead of the classic flat green/red. */
+[data-theme="fancy"] .column-body.drop-ok,
+[data-theme="fancy"] .done-zone.drop-ok {
+  background: hsl(var(--fancy-hue, 220) 75% 80% / 0.32);
+}
+[data-theme="fancy"] .done-zone {
+  border-color: hsl(var(--fancy-hue, 220) 60% 70% / 0.5);
+}
+[data-theme="fancy"] .done-zone.drop-ok {
+  border-color: hsl(var(--fancy-hue, 220) 85% 75%);
+}
+
+/* [FANCY:breathe] Drop-zone breathing glow while a drag hovers a valid target. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-theme="fancy"] .column-body.drop-ok,
+  [data-theme="fancy"] .done-zone.drop-ok {
+    animation: fancy-breathe 1.1s ease-in-out infinite;
+  }
+}
+@keyframes fancy-breathe {
+  0%,
+  100% {
+    box-shadow: inset 0 0 18px hsl(var(--fancy-hue, 220) 90% 75% / 0.25);
+  }
+  50% {
+    box-shadow: inset 0 0 34px hsl(var(--fancy-hue, 220) 90% 75% / 0.55);
+  }
+}
+
+/* [FANCY:cards] Stacked pastel depth shadows + hover lift. The transform
+   transition doubles as the squish-spring return. */
+[data-theme="fancy"] .card {
+  position: relative;
+  overflow: hidden;
+  background: hsl(var(--fancy-hue, 220) 30% 22% / 0.85);
+  border-color: hsl(var(--fancy-hue, 220) 60% 60% / 0.45);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.35),
+    0 6px 18px hsl(var(--fancy-hue, 220) 70% 30% / 0.35);
+  transition: transform 0.25s cubic-bezier(0.34, 1.8, 0.5, 1), box-shadow 0.25s ease;
+}
+[data-theme="fancy"] .card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.4),
+    0 12px 28px hsl(var(--fancy-hue, 220) 70% 35% / 0.5);
+}
+
+/* [FANCY:squish] Press squish on cards, rail icons and buttons; the bouncy
+   cubic-bezier above (and on .rail-item) springs them back. */
+[data-theme="fancy"] .card:active {
+  transform: scale(0.96);
+}
+[data-theme="fancy"] .rail-item {
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-radius 0.15s ease,
+    transform 0.25s cubic-bezier(0.34, 1.8, 0.5, 1);
+}
+[data-theme="fancy"] .rail-item:active:not(:disabled) {
+  transform: scale(0.88);
+}
+[data-theme="fancy"] .modal-actions button:active,
+[data-theme="fancy"] .add-card:active {
+  transform: scale(0.92);
+}
+
+/* [FANCY:sheen] Holographic foil sweep following the pointer across a card
+   (fancy.ts feeds --mx/--my from the shared pointermove handler). */
+[data-theme="fancy"] .card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  background: radial-gradient(
+    140px circle at var(--mx, 50%) var(--my, 50%),
+    hsl(var(--fancy-hue, 220) 100% 85% / 0.22),
+    transparent 60%
+  );
+}
+[data-theme="fancy"] .card:hover::after {
+  opacity: 1;
+}
+
+/* [FANCY:tilt] Drag ghost leans into pointer velocity (fancy.ts sets --tilt);
+   the transition springs it upright when the pointer slows. */
+[data-theme="fancy"] .drag-ghost {
+  transform: translate(-50%, -50%) rotate(var(--tilt, 0deg));
+  transition: transform 0.15s ease-out;
+  border-color: hsl(var(--fancy-hue, 220) 80% 70%);
+  box-shadow: 0 10px 30px hsl(var(--fancy-hue, 220) 70% 30% / 0.6);
+}
+
+/* [FANCY:beam] A slow rainbow beam circles the hovered column. Implemented as
+   an animated border-box gradient so it needs no mask support. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-theme="fancy"] .column:hover {
+    border-color: transparent;
+    background:
+      linear-gradient(hsl(var(--fancy-hue, 220) 35% 16% / 0.92), hsl(var(--fancy-hue, 220) 35% 16% / 0.92))
+        padding-box,
+      linear-gradient(
+          120deg,
+          hsl(330 90% 75%),
+          hsl(45 90% 75%),
+          hsl(165 90% 75%),
+          hsl(210 90% 75%),
+          hsl(280 90% 75%),
+          hsl(330 90% 75%)
+        )
+        border-box;
+    background-size: 100% 100%, 300% 300%;
+    animation: fancy-beam 4s linear infinite;
+  }
+}
+@keyframes fancy-beam {
+  0% {
+    background-position: 0 0, 0% 0%;
+  }
+  50% {
+    background-position: 0 0, 100% 100%;
+  }
+  100% {
+    background-position: 0 0, 0% 0%;
+  }
+}
+
+/* [FANCY:rail-glow] Active rail icon gets a soft pastel halo. */
+[data-theme="fancy"] .rail-item.active {
+  box-shadow: 0 0 18px hsl(265 85% 70% / 0.7);
+  background: linear-gradient(135deg, hsl(265 80% 62%), hsl(210 85% 60%));
+}
+[data-theme="fancy"] .rail-item:hover:not(:disabled) {
+  background: linear-gradient(135deg, hsl(265 80% 62%), hsl(210 85% 60%));
+}
+
+/* [FANCY:eq] Daemon status dot becomes a tiny pastel equalizer while the
+   daemon is reachable. Bars are the dot's pseudo-elements. */
+[data-theme="fancy"] .status-dot.reachable {
+  background: hsl(150 80% 65%);
+  position: relative;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-theme="fancy"] .status-dot.reachable {
+    border-radius: 2px;
+    width: 4px;
+    height: 10px;
+    animation: fancy-eq 0.9s ease-in-out infinite;
+  }
+  [data-theme="fancy"] .status-dot.reachable::before,
+  [data-theme="fancy"] .status-dot.reachable::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: 4px;
+    border-radius: 2px;
+  }
+  [data-theme="fancy"] .status-dot.reachable::before {
+    left: -6px;
+    height: 7px;
+    background: hsl(280 80% 72%);
+    animation: fancy-eq 0.9s ease-in-out infinite 0.2s;
+  }
+  [data-theme="fancy"] .status-dot.reachable::after {
+    left: 6px;
+    height: 5px;
+    background: hsl(45 90% 70%);
+    animation: fancy-eq 0.9s ease-in-out infinite 0.4s;
+  }
+}
+@keyframes fancy-eq {
+  0%,
+  100% {
+    transform: scaleY(0.5);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* [FANCY:canvas] Shared particle canvas (fireworks, confetti, comet trail,
+   dust motes). pointer-events:none keeps drag hit-testing intact; it sits
+   above the modal because celebrations are transient and non-interactive. */
+.fx-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* [FANCY:spotlight] Soft cursor-following light over the board. */
+.fx-spotlight {
+  position: fixed;
+  left: -300px;
+  top: -300px;
+  width: 600px;
+  height: 600px;
+  pointer-events: none;
+  z-index: 5;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.06), transparent 60%);
+  transition: opacity 0.3s ease;
+}
+
+/* [FANCY:ripple] Shockwave ring expanding from the drop point. */
+.fx-ripple {
+  position: fixed;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  pointer-events: none;
+  z-index: 9998;
+  border-radius: 50%;
+  border: 2px solid hsl(200 100% 80% / 0.9);
+  animation: fancy-ripple 0.6s ease-out forwards;
+}
+@keyframes fancy-ripple {
+  to {
+    transform: scale(14);
+    opacity: 0;
+  }
+}
+
+/* [FANCY:gold] Golden crown glow on the card that just landed in Done. */
+[data-theme="fancy"] .card.fx-gold {
+  border-color: hsl(48 95% 65%);
+  box-shadow:
+    0 0 22px hsl(48 95% 60% / 0.8),
+    0 6px 18px hsl(var(--fancy-hue, 220) 70% 30% / 0.35);
+}
+
+/* [FANCY:toast] Streak combo toast ("3×!") floating up from the bottom. */
+.fx-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18%;
+  pointer-events: none;
+  z-index: 9998;
+  font-size: 44px;
+  font-weight: 800;
+  background: linear-gradient(90deg, hsl(330 90% 75%), hsl(45 90% 70%), hsl(165 85% 70%), hsl(210 90% 75%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: fancy-toast 1.4s ease-out forwards;
+}
+@keyframes fancy-toast {
+  0% {
+    transform: translate(-50%, 20px) scale(0.6);
+    opacity: 0;
+  }
+  20% {
+    transform: translate(-50%, 0) scale(1.15);
+    opacity: 1;
+  }
+  35% {
+    transform: translate(-50%, 0) scale(1);
+  }
+  100% {
+    transform: translate(-50%, -60px) scale(1);
+    opacity: 0;
+  }
+}
+
+/* [FANCY:sweep] One-time aurora wave when a column is emptied. */
+.fx-sweep {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9997;
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    hsl(280 90% 75% / 0.18) 40%,
+    hsl(180 90% 75% / 0.22) 50%,
+    hsl(45 90% 75% / 0.18) 60%,
+    transparent 80%
+  );
+  background-size: 300% 100%;
+  animation: fancy-sweep 1.2s ease-in-out forwards;
+}
+@keyframes fancy-sweep {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -20% 0;
+  }
 }
