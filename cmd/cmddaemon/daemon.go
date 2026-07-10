@@ -242,6 +242,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		VaultResolver:     vaultResolver,
 		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
+		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
 		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, logger),
 	}
 
@@ -263,6 +264,18 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 // runDaemonForeground runs the daemon in the current process (blocking).
 // It writes a PID file on start and removes it on shutdown.
 func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
+	// Bind the daemon, chrome bridge, and HTTPS proxy on the interface
+	// containers can reach without exposing them to the LAN (never 0.0.0.0): the
+	// docker bridge gateway on native Linux Docker, loopback on Docker Desktop
+	// (host.docker.internal forwards to loopback) and when Docker is down. An
+	// explicit non-loopback override is respected. Doing this at startup means an
+	// agent launch never has to restart the daemon mid-request for container
+	// access — the sharp edge that used to abort the first containerized launch.
+	reachHost := devcontainer.ContainerReachableHost()
+	addr = swapLoopbackHost(addr, reachHost)
+	chromeAddr = swapLoopbackHost(chromeAddr, reachHost)
+	proxyAddr = swapLoopbackHost(proxyAddr, reachHost)
+
 	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs, cmdFactory, version)
 	if err != nil {
 		return err
@@ -435,6 +448,10 @@ func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// Detach so we don't wait for the child.
 	_ = child.Process.Release()
 
+	// The child (runDaemonForeground → initDaemon) binds the container-reachable
+	// host, so poll and advertise that same address rather than a bare loopback.
+	bindAddr := swapLoopbackHost(addr, devcontainer.ContainerReachableHost())
+
 	// Poll for TCP readiness (up to 3s).
 	const (
 		pollInterval = 50 * time.Millisecond
@@ -443,7 +460,7 @@ func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	deadline := time.Now().Add(pollTimeout)
 	ready := false
 	for time.Now().Before(deadline) {
-		conn, dialErr := net.DialTimeout("tcp", "localhost"+addr, 200*time.Millisecond)
+		conn, dialErr := net.DialTimeout("tcp", bindAddr, 200*time.Millisecond)
 		if dialErr == nil {
 			_ = conn.Close()
 			ready = true
@@ -453,7 +470,7 @@ func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 
 	hostIP := resolveHostIP()
-	daemonAddr := replaceHost(addr, hostIP)
+	daemonAddr := replaceHost(bindAddr, hostIP)
 
 	if !ready {
 		_, _ = fmt.Fprintf(out, "Daemon started (PID %d) but not yet reachable\n", pid)
@@ -898,6 +915,21 @@ func buildVaultResolver(reg *daemon.ProjectRegistry, logger zerolog.Logger) *vau
 		}
 	}
 	return nil
+}
+
+// swapLoopbackHost replaces a loopback or empty host in addr with reachHost —
+// the interface containers can reach the daemon on. An explicit non-loopback
+// host (an operator's --addr override, or a bridge gateway carried over from a
+// restart) is left untouched, so it never silently widens a deliberate bind.
+func swapLoopbackHost(addr, reachHost string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "127.0.0.1" || host == "localhost" {
+		return net.JoinHostPort(reachHost, port)
+	}
+	return addr
 }
 
 // replaceHost replaces an empty or wildcard host in addr with the given host.
@@ -1379,6 +1411,28 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 			ConfigDir:    entry.Dir,
 		}
 		return deps.ApplyTransition(context.Background(), req)
+	}
+}
+
+// featuresGeneratorFunc builds the daemon's FeaturesGenerator closure: it
+// launches the human-features skill in the registered project's devcontainer,
+// exactly like a board stage transition, so the desktop Features pane's
+// Generate/Refresh button reuses the same containerized agent path.
+func featuresGeneratorFunc(reg *daemon.ProjectRegistry) func() error {
+	return func() error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for feature generation")
+		}
+		entry := entries[0]
+		// Tear down any prior "features" agent first so Generate/Refresh is
+		// idempotent — Manager.Start refuses to start over a still-running agent,
+		// so without this a second click fails with "agent already running".
+		if docker, err := devcontainer.NewDockerClient(); err == nil {
+			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), "features")
+			_ = docker.Close()
+		}
+		return dockerAgentLauncher{}.Launch(context.Background(), "features", "/human-features", entry.Dir, entry.Dir)
 	}
 }
 

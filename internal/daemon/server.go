@@ -65,6 +65,10 @@ type Server struct {
 	// CloseTicketer closes a PM ticket (transitions it to Done) for the
 	// board's Close-Ticket drop zone. nil disables the close-ticket route.
 	CloseTicketer func(req CloseTicketRequest) error
+	// FeaturesGenerator launches the human-features skill (regenerating
+	// FEATURE.json) for the registered project. nil disables the
+	// features-generate route.
+	FeaturesGenerator func() error
 	// Ideation owns the board's single agent-driven ideation session. nil
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
@@ -371,6 +375,8 @@ func (s *Server) routeIdeationCommand(conn net.Conn, args []string) bool {
 		s.handleIdeationReply(conn, args[1:])
 	case "ideation-status":
 		s.handleIdeationStatus(conn)
+	case "features-generate":
+		s.handleFeaturesGenerate(conn)
 	default:
 		return false
 	}
@@ -507,6 +513,24 @@ func (s *Server) handleBoardTransition(conn net.Conn, args []string) {
 		return
 	}
 	if err := s.BoardTransitioner(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleFeaturesGenerate launches the human-features skill via the injected
+// FeaturesGenerator. Like board-transition it is a dedicated route (the button
+// press is the user's consent), and it takes no argument — the daemon resolves
+// the project directory itself. It returns as soon as the agent is launched.
+func (s *Server) handleFeaturesGenerate(conn net.Conn) {
+	if s.FeaturesGenerator == nil {
+		s.writeError(conn, "feature generation not available", 1)
+		return
+	}
+	if err := s.FeaturesGenerator(); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}

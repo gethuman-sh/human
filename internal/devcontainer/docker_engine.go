@@ -12,8 +12,6 @@ import (
 	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
-
-	"github.com/gethuman-sh/human/internal/dockerhost"
 )
 
 // NewDockerClient creates a DockerClient backed by the Docker Engine API.
@@ -24,14 +22,9 @@ import (
 // DOCKER_HOST / DOCKER_CONTEXT always win. The resolution is shared with
 // claude.NewEngineDockerClient via internal/dockerhost so the two never diverge.
 func NewDockerClient() (DockerClient, error) {
-	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
-	// A non-empty host means the active context resolved to a concrete
-	// endpoint; layer it on top of FromEnv. Empty means "use env/platform
-	// default", so we leave FromEnv to do its job.
-	if host := dockerhost.Resolve().Host; host != "" {
-		opts = append(opts, client.WithHost(host))
-	}
-	cli, err := client.NewClientWithOpts(opts...)
+	// newRawDockerClient (host.go) applies the shared dockerhost.Resolve()
+	// endpoint resolution; explicit DOCKER_HOST / DOCKER_CONTEXT still win.
+	cli, err := newRawDockerClient()
 	if err != nil {
 		return nil, err
 	}

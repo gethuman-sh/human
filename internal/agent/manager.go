@@ -289,24 +289,32 @@ func (m *Manager) BuildClaudeArgs(opts StartOpts) []string {
 // ensureDaemonForContainers makes sure the daemon is running and accessible
 // from Docker containers (listening on 0.0.0.0, not just 127.0.0.1).
 func (m *Manager) ensureDaemonForContainers(projectDir string) *daemon.DaemonInfo {
+	// The host containers can reach the daemon on, without exposing it to the
+	// LAN (never 0.0.0.0): the docker bridge gateway on native Linux Docker,
+	// loopback on Docker Desktop (host.docker.internal forwards to loopback).
+	want := devcontainer.ContainerReachableHost()
+
 	info, err := daemon.ReadInfo()
 	if err == nil && info.IsReachable() {
-		// Daemon is running. Check if it's on localhost only.
 		host, _, _ := strings.Cut(info.Addr, ":")
-		if host == "127.0.0.1" || host == "localhost" {
-			// Restart on 0.0.0.0 so containers can reach it.
-			_, _ = fmt.Fprintln(os.Stderr, "Restarting daemon on 0.0.0.0 for container access...")
-			m.restartDaemon(projectDir, "0.0.0.0")
-			if newInfo, readErr := daemon.ReadInfo(); readErr == nil {
-				return &newInfo
-			}
+		if host == want {
+			// Already container-reachable — no restart. On Docker Desktop the
+			// daemon starts on loopback and stays there, so this is a no-op.
+			return &info
+		}
+		// Bound to a different interface (e.g. loopback while Docker started
+		// after the daemon on Linux) — rebind so containers can reach it.
+		_, _ = fmt.Fprintf(os.Stderr, "Restarting daemon on %s for container access...\n", want)
+		m.restartDaemon(projectDir, want)
+		if newInfo, readErr := daemon.ReadInfo(); readErr == nil {
+			return &newInfo
 		}
 		return &info
 	}
 
-	// Daemon not running. Start it on 0.0.0.0.
-	_, _ = fmt.Fprintln(os.Stderr, "Starting daemon for container access...")
-	m.restartDaemon(projectDir, "0.0.0.0")
+	// Daemon not running. Start it on the container-reachable host.
+	_, _ = fmt.Fprintf(os.Stderr, "Starting daemon for container access on %s...\n", want)
+	m.restartDaemon(projectDir, want)
 	if newInfo, readErr := daemon.ReadInfo(); readErr == nil {
 		return &newInfo
 	}

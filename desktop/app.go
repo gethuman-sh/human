@@ -189,6 +189,19 @@ func (a *App) Transition(pmKey, pmTitle, from, to string) error {
 	})
 }
 
+// GenerateFeatures asks the daemon to launch the human-features skill, which
+// regenerates FEATURE.json. Like Transition it goes through the daemon so it
+// runs the skill in the project's devcontainer — the same containerized agent
+// path a kanban stage transition uses. It returns once the agent is launched,
+// not when generation finishes; the pane polls Features() for the new file.
+func (a *App) GenerateFeatures() error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemon.GenerateFeatures(info.Addr, info.Token)
+}
+
 // CloseTicket closes a PM ticket (transitions it to Done) via the daemon's
 // dedicated close-ticket route. Like Transition it goes through the daemon, so
 // the close is prompt-free — it never hits the interactive `issue status`
