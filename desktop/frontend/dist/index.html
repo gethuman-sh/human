@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>human — workflow board</title>
+    <!-- Apply the persisted theme before first paint so a fancy user never sees a classic flash. -->
+    <script>try{if(localStorage.getItem("human.theme")==="fancy")document.documentElement.dataset.theme="fancy"}catch(e){}</script>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>

@@ -6,6 +6,9 @@
 //
 // The shipped runtime is desktop/frontend/dist/board.js; `npm run build`
 // (tsc + bundle.mjs) regenerates dist/ from this source for `wails build`.
+// The fancy hooks no-op while the classic theme is active, so they are safe to
+// call unconditionally on the hot paths below.
+import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
 const STAGES = ["backlog", "planning", "implementation", "verification", "done"];
 const STAGE_LABELS = {
     backlog: "Backlog",
@@ -200,6 +203,7 @@ function beginPointerDrag(el, card) {
             return;
         const info = { key: card.key, title: card.title, stage: card.stage };
         let started = false;
+        let lastX = down.clientX;
         const onMove = (ev) => {
             if (!started) {
                 if (Math.hypot(ev.clientX - down.clientX, ev.clientY - down.clientY) < DRAG_THRESHOLD_PX)
@@ -212,7 +216,10 @@ function beginPointerDrag(el, card) {
             if (dragGhost) {
                 dragGhost.style.left = `${ev.clientX}px`;
                 dragGhost.style.top = `${ev.clientY}px`;
+                ghostTilt(dragGhost, ev.clientX - lastX);
+                trail({ x: ev.clientX, y: ev.clientY });
             }
+            lastX = ev.clientX;
             setHoverTarget(dropTargetAt(ev.clientX, ev.clientY));
         };
         const teardown = () => {
@@ -236,13 +243,15 @@ function beginPointerDrag(el, card) {
             const target = started ? dropTargetAt(ev.clientX, ev.clientY) : null;
             const allowed = !!target && dropAllowed(target);
             teardown();
-            dragging = null;
+            endDrag();
+            // `target` may have been replaced by the flushed render, but performDrop
+            // only reads its dataset, which a detached node still carries.
             if (target && allowed)
-                performDrop(target, info);
+                performDrop(target, info, { x: ev.clientX, y: ev.clientY });
         };
         const onCancel = () => {
             teardown();
-            dragging = null;
+            endDrag();
         };
         try {
             el.setPointerCapture(down.pointerId);
@@ -255,13 +264,26 @@ function beginPointerDrag(el, card) {
         el.addEventListener("pointercancel", onCancel);
     });
 }
+// endDrag closes the drag lifecycle and flushes any board rebuild that was
+// deferred while the drag was in flight.
+function endDrag() {
+    dragging = null;
+    if (pendingRender) {
+        pendingRender = false;
+        render();
+    }
+}
 // performDrop runs the action for a completed drop on an allowed target.
-function performDrop(target, info) {
+function performDrop(target, info, pt) {
     if (target.dataset.drop === "close") {
+        // Closing is destructive and still awaits a confirm dialog — never a
+        // moment to celebrate, so the fancy theme stays silent here.
         void requestClose(info.key, info.title);
         return;
     }
-    void transition(info.key, info.title, info.stage, target.dataset.dropStage || "");
+    const to = target.dataset.dropStage || "";
+    celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: to === "done" });
+    void transition(info.key, info.title, info.stage, to);
 }
 async function transition(key, title, from, to) {
     const card = current.cards.find((c) => c.key === key);
@@ -353,7 +375,15 @@ function restoreColumnScroll(board, scroll) {
             body.scrollTop = scroll[stage];
     });
 }
+// A render mid-drag would replace the dragged card's DOM element, silently
+// killing its pointer listeners (frozen ghost, drop never lands). Rebuilds
+// requested during a drag are deferred and flushed by endDrag().
+let pendingRender = false;
 function render() {
+    if (dragging) {
+        pendingRender = true;
+        return;
+    }
     const board = document.getElementById("board");
     // Capture each column's scroll position before the full rebuild below wipes
     // it. A reconcile (board:changed / post-transition) must not snap a column the
@@ -995,6 +1025,13 @@ function init() {
     void pollDaemonStatus();
     setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
     wireRail();
+    initFancy();
+    document.addEventListener("keydown", (e) => {
+        if (isThemeToggleChord(e)) {
+            e.preventDefault();
+            toggleTheme();
+        }
+    });
     document.getElementById("ideation-close")?.addEventListener("click", () => closeIdeation());
     document.getElementById("ideation-form")?.addEventListener("submit", (e) => {
         e.preventDefault();
@@ -1007,4 +1044,3 @@ if (document.readyState === "loading") {
 else {
     init();
 }
-export {};

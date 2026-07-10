@@ -7,6 +7,17 @@
 // The shipped runtime is desktop/frontend/dist/board.js; `npm run build`
 // (tsc + bundle.mjs) regenerates dist/ from this source for `wails build`.
 
+// The fancy hooks no-op while the classic theme is active, so they are safe to
+// call unconditionally on the hot paths below.
+import {
+  celebrateDrop,
+  ghostTilt,
+  initFancy,
+  isThemeToggleChord,
+  toggleTheme,
+  trail,
+} from "./fancy.js";
+
 interface Card {
   key: string;
   title: string;
@@ -335,6 +346,7 @@ function beginPointerDrag(el: HTMLElement, card: Card): void {
 
     const info = { key: card.key, title: card.title, stage: card.stage };
     let started = false;
+    let lastX = down.clientX;
 
     const onMove = (ev: PointerEvent): void => {
       if (!started) {
@@ -347,7 +359,10 @@ function beginPointerDrag(el: HTMLElement, card: Card): void {
       if (dragGhost) {
         dragGhost.style.left = `${ev.clientX}px`;
         dragGhost.style.top = `${ev.clientY}px`;
+        ghostTilt(dragGhost, ev.clientX - lastX);
+        trail({ x: ev.clientX, y: ev.clientY });
       }
+      lastX = ev.clientX;
       setHoverTarget(dropTargetAt(ev.clientX, ev.clientY));
     };
 
@@ -372,13 +387,15 @@ function beginPointerDrag(el: HTMLElement, card: Card): void {
       const target = started ? dropTargetAt(ev.clientX, ev.clientY) : null;
       const allowed = !!target && dropAllowed(target);
       teardown();
-      dragging = null;
-      if (target && allowed) performDrop(target, info);
+      endDrag();
+      // `target` may have been replaced by the flushed render, but performDrop
+      // only reads its dataset, which a detached node still carries.
+      if (target && allowed) performDrop(target, info, { x: ev.clientX, y: ev.clientY });
     };
 
     const onCancel = (): void => {
       teardown();
-      dragging = null;
+      endDrag();
     };
 
     try {
@@ -392,13 +409,31 @@ function beginPointerDrag(el: HTMLElement, card: Card): void {
   });
 }
 
+// endDrag closes the drag lifecycle and flushes any board rebuild that was
+// deferred while the drag was in flight.
+function endDrag(): void {
+  dragging = null;
+  if (pendingRender) {
+    pendingRender = false;
+    render();
+  }
+}
+
 // performDrop runs the action for a completed drop on an allowed target.
-function performDrop(target: HTMLElement, info: { key: string; title: string; stage: string }): void {
+function performDrop(
+  target: HTMLElement,
+  info: { key: string; title: string; stage: string },
+  pt: { x: number; y: number },
+): void {
   if (target.dataset.drop === "close") {
+    // Closing is destructive and still awaits a confirm dialog — never a
+    // moment to celebrate, so the fancy theme stays silent here.
     void requestClose(info.key, info.title);
     return;
   }
-  void transition(info.key, info.title, info.stage, target.dataset.dropStage || "");
+  const to = target.dataset.dropStage || "";
+  celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: to === "done" });
+  void transition(info.key, info.title, info.stage, to);
 }
 
 async function transition(key: string, title: string, from: string, to: string): Promise<void> {
@@ -497,7 +532,16 @@ function restoreColumnScroll(board: HTMLElement, scroll: Record<string, number>)
   });
 }
 
+// A render mid-drag would replace the dragged card's DOM element, silently
+// killing its pointer listeners (frozen ghost, drop never lands). Rebuilds
+// requested during a drag are deferred and flushed by endDrag().
+let pendingRender = false;
+
 function render(): void {
+  if (dragging) {
+    pendingRender = true;
+    return;
+  }
   const board = document.getElementById("board")!;
   // Capture each column's scroll position before the full rebuild below wipes
   // it. A reconcile (board:changed / post-transition) must not snap a column the
@@ -1150,6 +1194,13 @@ function init(): void {
   setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
 
   wireRail();
+  initFancy();
+  document.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (isThemeToggleChord(e)) {
+      e.preventDefault();
+      toggleTheme();
+    }
+  });
   document.getElementById("ideation-close")?.addEventListener("click", () => closeIdeation());
   document.getElementById("ideation-form")?.addEventListener("submit", (e: Event) => {
     e.preventDefault();
