@@ -325,63 +325,36 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 
 // routeSimpleCommand dispatches the fixed-name daemon commands that map 1:1 to
 // a handler. Kept separate from routeIntercept so the latter's branchier
-// browser-relay path stays readable and within complexity bounds.
+// browser-relay path stays readable. Routing is table-driven so adding a route
+// never grows cyclomatic complexity (a switch arm per command did).
 func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir string, clientPID int) bool {
-	switch args[0] {
-	case "log-mode":
-		s.handleLogMode(conn, args[1:])
-	case "hook-event":
-		s.handleHookEvent(conn, args[1:])
-	case "hook-snapshot":
-		s.handleHookSnapshot(conn)
-	case "network-events":
-		s.handleNetworkEvents(conn)
-	case "tracker-diagnose":
-		s.handleTrackerDiagnose(conn, projectDir)
-	case "tracker-issues":
-		s.handleTrackerIssues(conn)
-	case "tracker-issues-lite":
-		s.handleTrackerIssuesLite(conn)
-	case "pending-confirms":
-		s.handlePendingConfirms(conn)
-	case "confirm-op":
-		s.handleConfirmOp(conn, args[1:], clientPID)
-	case "tool-stats":
-		s.handleToolStats(conn)
-	case "audit-query":
-		s.handleAuditQuery(conn, args[1:])
-	case "agent-stop-async":
-		s.handleAgentStopAsync(conn, args[1:])
-	case "subscribe":
-		s.handleSubscribe(conn)
-	case "board-transition":
-		s.handleBoardTransition(conn, args[1:])
-	case "close-ticket":
-		s.handleCloseTicket(conn, args[1:])
-	default:
-		return s.routeIdeationCommand(conn, args)
+	routes := map[string]func(){
+		"log-mode":            func() { s.handleLogMode(conn, args[1:]) },
+		"hook-event":          func() { s.handleHookEvent(conn, args[1:]) },
+		"hook-snapshot":       func() { s.handleHookSnapshot(conn) },
+		"network-events":      func() { s.handleNetworkEvents(conn) },
+		"tracker-diagnose":    func() { s.handleTrackerDiagnose(conn, projectDir) },
+		"tracker-issues":      func() { s.handleTrackerIssues(conn) },
+		"tracker-issues-lite": func() { s.handleTrackerIssuesLite(conn) },
+		"pending-confirms":    func() { s.handlePendingConfirms(conn) },
+		"confirm-op":          func() { s.handleConfirmOp(conn, args[1:], clientPID) },
+		"tool-stats":          func() { s.handleToolStats(conn) },
+		"audit-query":         func() { s.handleAuditQuery(conn, args[1:]) },
+		"agent-stop-async":    func() { s.handleAgentStopAsync(conn, args[1:]) },
+		"subscribe":           func() { s.handleSubscribe(conn) },
+		"board-transition":    func() { s.handleBoardTransition(conn, args[1:]) },
+		"close-ticket":        func() { s.handleCloseTicket(conn, args[1:]) },
+		"ideation-start":      func() { s.handleIdeationStart(conn, args[1:]) },
+		"ideation-reply":      func() { s.handleIdeationReply(conn, args[1:]) },
+		"ideation-approve":    func() { s.handleIdeationApprove(conn, args[1:]) },
+		"ideation-status":     func() { s.handleIdeationStatus(conn) },
+		"features-generate":   func() { s.handleFeaturesGenerate(conn) },
 	}
-	return true
-}
-
-// routeIdeationCommand dispatches the ideation routes. Split out of
-// routeSimpleCommand to keep that switch's cyclomatic complexity within the
-// project's gocyclo threshold.
-func (s *Server) routeIdeationCommand(conn net.Conn, args []string) bool {
-	switch args[0] {
-	case "ideation-start":
-		s.handleIdeationStart(conn, args[1:])
-	case "ideation-reply":
-		s.handleIdeationReply(conn, args[1:])
-	case "ideation-approve":
-		s.handleIdeationApprove(conn, args[1:])
-	case "ideation-status":
-		s.handleIdeationStatus(conn)
-	case "features-generate":
-		s.handleFeaturesGenerate(conn)
-	default:
+	handler, ok := routes[args[0]]
+	if !ok {
 		return false
 	}
+	handler()
 	return true
 }
 
