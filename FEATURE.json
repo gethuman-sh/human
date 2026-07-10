@@ -1,0 +1,198 @@
+{
+  "product": "human",
+  "tagline": "Your team's AI dev rig — trackers, docs, designs, analytics, a secure sandbox, and the full dev lifecycle, already wired around the coding agent you run.",
+  "generated": "2026-07-10",
+  "groups": [
+    {
+      "group": "Connected to your whole stack",
+      "groups": [
+        {
+          "group": "Issue trackers",
+          "features": [
+            {
+              "name": "Cross-tracker issue operations",
+              "description": "List, read, create, comment, edit, assign, and move issues across Jira, Linear, GitHub, GitLab, Shortcut, Azure DevOps, and ClickUp through one interface",
+              "tickets": ["SC-90", "SC-86", "SC-78", "SC-76", "HUM-90"]
+            },
+            {
+              "name": "Zero-config tracker routing",
+              "description": "Commands land on the right tracker automatically from an issue key or a pasted issue URL",
+              "tickets": ["SC-86", "HUM-90"]
+            },
+            {
+              "name": "Open pull requests",
+              "description": "Open a PR from one branch to another on GitHub and get back its number and URL",
+              "tickets": ["SC-86", "HUM-105", "HUM-104"]
+            }
+          ]
+        },
+        {
+          "group": "Knowledge & insights",
+          "features": [
+            {
+              "name": "Notion docs",
+              "description": "Search and read Notion pages as markdown and browse database rows and properties",
+              "tickets": ["SC-89"]
+            },
+            {
+              "name": "Figma designs",
+              "description": "Inspect files, screens, and components, read comments, and export images",
+              "tickets": ["HUM-99"]
+            },
+            {
+              "name": "Amplitude analytics",
+              "description": "Explore events, funnels, retention, and cohorts and look up individual users",
+              "tickets": ["HUM-99"]
+            }
+          ]
+        },
+        {
+          "group": "Team messaging",
+          "features": [
+            {
+              "name": "Slack and Telegram",
+              "description": "Post and read Slack channels and take in tasks from a Telegram bot inbox, with a default-deny allowlist and approval prompts on destructive actions",
+              "tickets": ["SC-77", "#41"]
+            },
+            {
+              "name": "Chat-driven task dispatch",
+              "description": "Route tasks from a Telegram chat to idle agents and notify results back over Telegram or Slack",
+              "tickets": ["SC-77", "SC-71", "SC-40"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Token-efficient context",
+      "features": [
+        {
+          "name": "Code navigation index",
+          "description": "One local index across many repos powering go-to-definition, find-references, call graphs, blast-radius impact, route listing, and full-text code search — structural answers instead of raw file dumps",
+          "tickets": ["HUM-133", "HUM-131"]
+        },
+        {
+          "name": "Cross-source search",
+          "description": "One relevance-ranked, filterable search over every tracker plus Notion, kept current with incremental refresh",
+          "tickets": ["HUM-130"]
+        }
+      ]
+    },
+    {
+      "group": "Secure, sandboxed autonomy",
+      "features": [
+        {
+          "name": "Outbound domain firewall",
+          "description": "Block-all-by-default egress filtered by allow/blocklist over TLS SNI, with a per-host record of what each agent tried to reach",
+          "tickets": ["SC-71", "HUM-63"]
+        },
+        {
+          "name": "Secret-redacting filesystem",
+          "description": "A filesystem view that blanks secrets in env, JSON, YAML, keys, and certs and blocks writes to sensitive files, so the agent works on your code but never sees your tokens",
+          "tickets": ["HUM-63"]
+        },
+        {
+          "name": "Vault-resolved credentials",
+          "description": "Resolve 1Password references to real secrets only at startup, never cached to disk",
+          "tickets": ["HUM-85"]
+        },
+        {
+          "name": "Devcontainer sandbox",
+          "description": "Run agents in an isolated container built from devcontainer.json, with source mounted and the daemon wired in",
+          "tickets": ["HUM-125", "HUM-122", "HUM-121"]
+        },
+        {
+          "name": "Containerized Chrome bridge",
+          "description": "Give sandboxed agents token-gated control of host Chrome for screenshots and page snapshots",
+          "tickets": ["HUM-96"]
+        }
+      ]
+    },
+    {
+      "group": "Your AI development lifecycle",
+      "groups": [
+        {
+          "group": "Lifecycle skills",
+          "features": [
+            {
+              "name": "Ideate to review workflow",
+              "description": "Guided skills that carry work from idea to shipped: ideate, ready check, brainstorm, plan, execute, and review, or run the whole pipeline with one sprint command",
+              "tickets": ["HUM-66", "HUM-61", "HUM-60"]
+            },
+            {
+              "name": "Autonomous bug fixing",
+              "description": "Triage, root-cause, fix, verify, and open a PR for a bug end to end, plus a bug-planning skill for supervised fixes",
+              "tickets": ["HUM-103", "SC-86"]
+            },
+            {
+              "name": "Code-health scans",
+              "description": "Multi-agent pipelines for logic and race-condition bugs, an OWASP-style security audit, and refactoring-triage gardening"
+            }
+          ]
+        },
+        {
+          "group": "Agents & Claude Code",
+          "features": [
+            {
+              "name": "Run agents on tickets",
+              "description": "Launch a named Claude Code agent on a task or straight from a tracker ticket, pick the model, and run it unattended or interactively",
+              "tickets": ["HUM-84", "HUM-74", "HUM-71", "SC-63"]
+            },
+            {
+              "name": "Manage running agents",
+              "description": "List agents with status and runtime, attach to a live one, and stop or delete it with its container",
+              "tickets": ["HUM-84", "HUM-74"]
+            },
+            {
+              "name": "Claude Code setup & priming",
+              "description": "Install human's skills and agents into Claude Code and prime each session with the right task context",
+              "tickets": ["HUM-134", "HUM-133", "HUM-60"]
+            },
+            {
+              "name": "Live session monitoring",
+              "description": "Discover running Claude sessions across host and containers and see status, current tool, subagents, and token usage",
+              "tickets": ["HUM-92", "HUM-88", "HUM-86"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "group": "You in control",
+      "features": [
+        {
+          "name": "Desktop workflow board",
+          "description": "A five-stage board — Backlog, Product planning, Implementation, Verification, Done — where dragging a card triggers the next pipeline stage, with per-card status badges, a guarded Done drop, a running-agents view, and an agent-driven ideation chat to open new tickets",
+          "tickets": ["SC-148", "SC-146", "SC-143", "SC-141", "SC-137"],
+          "recent": true
+        },
+        {
+          "name": "Credential-holding daemon",
+          "description": "Hold tracker tokens once on the host and route every command instantly with no per-call auth, pausing for confirmation on destructive operations and driving the board pipeline backend",
+          "tickets": ["SC-137", "SC-117", "HUM-154", "HUM-152", "HUM-88"],
+          "recent": true
+        },
+        {
+          "name": "Audit trail",
+          "description": "Record every mutating tracker action as CloudEvents — actor, resource, operation, outcome, rationale, model — retained 90 days and readable as a table, raw JSON, or single envelope",
+          "tickets": ["SC-102", "HUM-137"]
+        },
+        {
+          "name": "Agent usage stats",
+          "description": "Track every agent tool call in a rolling 30-day history to answer usage and trend questions",
+          "tickets": ["SC-81", "HUM-69"]
+        }
+      ]
+    },
+    {
+      "group": "One install, kept current",
+      "features": [
+        {
+          "name": "Guided onboarding",
+          "description": "human init checks your tools, connects trackers, generates config, builds the devcontainer, sets up the vault, installs language servers, and carries over Claude sessions",
+          "tickets": ["HUM-83", "HUM-82", "HUM-75", "SC-71"]
+        }
+      ]
+    }
+  ]
+}
