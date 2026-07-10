@@ -479,6 +479,9 @@ async function reconcile() {
     boardLoading = false;
     stagesLoading = false;
     render();
+    // Offered at most once per session, and only off a confirmed-empty board —
+    // see the Start Project wizard section for the guards.
+    void maybeOfferStartProject();
 }
 function errMessage(err) {
     if (err instanceof Error)
@@ -757,6 +760,193 @@ async function approveIdeation() {
     renderIdeation();
     if (ideation.state !== "thinking")
         stopIdeationPoll();
+}
+// wizardChecked is the re-trigger guard: set before any await in
+// maybeOfferStartProject so overlapping reconciles (board:changed storms)
+// cannot probe or open twice. Dismissal therefore lasts for the session.
+let wizardChecked = false;
+let wizardOverlay = null;
+let wizardTemplates = [];
+let wizardStep = "type";
+let wizardType = "";
+let wizardError = "";
+let wizardCreated = 0;
+async function maybeOfferStartProject() {
+    if (wizardChecked || current.error)
+        return;
+    // Cards on the board mean a project exists — settle without the FS probe,
+    // but leave wizardChecked set: a non-empty board can only gain cards.
+    wizardChecked = true;
+    if (current.cards.length > 0)
+        return;
+    let info;
+    try {
+        info = await go().StartProjectStatus();
+    }
+    catch {
+        return;
+    }
+    // A failed probe (info.error) means "don't offer", never a broken app.
+    if (info.error || !info.emptyProject)
+        return;
+    wizardTemplates = info.templates || [];
+    if (wizardTemplates.length === 0)
+        return;
+    openStartWizard();
+}
+function wizardTypeChoices() {
+    const seen = new Set();
+    const choices = [];
+    wizardTemplates.forEach((t) => {
+        if (seen.has(t.type))
+            return;
+        seen.add(t.type);
+        choices.push({ type: t.type, label: t.typeLabel });
+    });
+    return choices;
+}
+function wizardLanguageChoices(type) {
+    return wizardTemplates.filter((t) => t.type === type);
+}
+function openStartWizard() {
+    if (wizardOverlay)
+        return;
+    wizardStep = "type";
+    wizardType = "";
+    wizardError = "";
+    wizardCreated = 0;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const modal = document.createElement("div");
+    modal.className = "modal wizard";
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    wizardOverlay = overlay;
+    const onKey = (e) => {
+        // No escape while the download runs: the state is not cancellable from
+        // here and a hidden in-flight scaffold would be surprising.
+        if (e.key === "Escape" && wizardStep !== "creating")
+            closeStartWizard();
+    };
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay && wizardStep !== "creating")
+            closeStartWizard();
+    });
+    document.addEventListener("keydown", onKey);
+    overlay.dataset.bound = "true";
+    // Store the handler so closeStartWizard can unbind it.
+    overlay._onKey = onKey;
+    renderStartWizard();
+}
+function closeStartWizard() {
+    if (!wizardOverlay)
+        return;
+    const onKey = wizardOverlay._onKey;
+    if (onKey)
+        document.removeEventListener("keydown", onKey);
+    wizardOverlay.remove();
+    wizardOverlay = null;
+}
+function renderStartWizard() {
+    if (!wizardOverlay)
+        return;
+    const modal = wizardOverlay.querySelector(".wizard");
+    if (!modal)
+        return;
+    if (wizardStep === "type") {
+        modal.innerHTML = `
+      <div class="modal-title">Start a new project</div>
+      <div class="modal-body">This folder has no project yet. What do you want to build?</div>
+      <div class="wizard-options"></div>
+    `;
+        const options = modal.querySelector(".wizard-options");
+        wizardTypeChoices().forEach((choice) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "wizard-option";
+            btn.textContent = choice.label;
+            btn.addEventListener("click", () => {
+                wizardType = choice.type;
+                wizardStep = "language";
+                renderStartWizard();
+            });
+            options.appendChild(btn);
+        });
+        return;
+    }
+    if (wizardStep === "language") {
+        modal.innerHTML = `
+      <div class="modal-title">Choose a language</div>
+      <div class="modal-body">The project is set up ready to run.</div>
+      <div class="wizard-options"></div>
+      <div class="wizard-nav"><button class="wizard-back" type="button">Back</button></div>
+    `;
+        const options = modal.querySelector(".wizard-options");
+        wizardLanguageChoices(wizardType).forEach((tpl) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "wizard-option";
+            btn.textContent = tpl.languageLabel;
+            btn.addEventListener("click", () => void createStartProject(tpl));
+            options.appendChild(btn);
+        });
+        modal.querySelector(".wizard-back").addEventListener("click", () => {
+            wizardStep = "type";
+            renderStartWizard();
+        });
+        return;
+    }
+    if (wizardStep === "creating") {
+        modal.innerHTML = `
+      <div class="modal-title">Creating project…</div>
+      <div class="wizard-status"><span class="spinner"></span><span>Downloading starter template</span></div>
+    `;
+        return;
+    }
+    if (wizardStep === "done") {
+        modal.innerHTML = `
+      <div class="modal-title">Project created</div>
+      <div class="modal-body">${escapeHtml(`${wizardCreated} files added. Create a first ticket to start working on it.`)}</div>
+      <div class="modal-actions">
+        <button class="modal-cancel" type="button">Close</button>
+        <button class="modal-confirm" type="button">Create first ticket</button>
+      </div>
+    `;
+        modal.querySelector(".modal-cancel").addEventListener("click", () => closeStartWizard());
+        modal.querySelector(".modal-confirm").addEventListener("click", () => {
+            closeStartWizard();
+            void openIdeation();
+        });
+        return;
+    }
+    // error
+    modal.innerHTML = `
+    <div class="modal-title">Could not create project</div>
+    <div class="modal-body wizard-error">${escapeHtml(wizardError)}</div>
+    <div class="modal-actions">
+      <button class="modal-cancel" type="button">Close</button>
+      <button class="modal-confirm" type="button">Try again</button>
+    </div>
+  `;
+    modal.querySelector(".modal-cancel").addEventListener("click", () => closeStartWizard());
+    modal.querySelector(".modal-confirm").addEventListener("click", () => {
+        wizardStep = "language";
+        renderStartWizard();
+    });
+}
+async function createStartProject(tpl) {
+    wizardStep = "creating";
+    renderStartWizard();
+    try {
+        const res = await go().StartProject(tpl.type, tpl.language);
+        wizardCreated = res.filesCreated;
+        wizardStep = "done";
+    }
+    catch (err) {
+        wizardError = errMessage(err);
+        wizardStep = "error";
+    }
+    renderStartWizard();
 }
 // --- Running agents view -----------------------------------------------
 //

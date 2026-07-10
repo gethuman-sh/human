@@ -336,6 +336,72 @@ body {
   filter: brightness(1.1);
 }
 
+/* Start Project wizard: a .modal variant. Its confirm action is constructive
+   (create/scaffold), so it uses the accent color instead of the destructive
+   red the shared .modal-confirm carries for close-ticket confirmation. */
+.wizard {
+  width: 380px;
+}
+
+.wizard .modal-confirm {
+  background: var(--accent);
+}
+
+.wizard-options {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wizard-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wizard-option:hover {
+  border-color: var(--accent);
+}
+
+.wizard-nav {
+  margin-top: 14px;
+}
+
+.wizard-back {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wizard-back:hover {
+  color: var(--text);
+}
+
+.wizard-status {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.wizard-error {
+  color: var(--failed);
+}
+
 .card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
