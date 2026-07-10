@@ -13,6 +13,18 @@ import (
 	"github.com/gethuman-sh/human/internal/daemon"
 )
 
+// must returns v unchanged, failing the test when it is nil. Centralizing the
+// guard keeps call sites free of check-then-dereference sequences, which
+// golangci-lint's embedded staticcheck misreads as SA5011 (it loses t.Fatal's
+// no-return fact).
+func must[T any](t *testing.T, v *T, msg string) *T {
+	t.Helper()
+	if v == nil {
+		t.Fatal(msg)
+	}
+	return v
+}
+
 // setupTestProject creates a temp project dir with a devcontainer.json.
 func setupTestProject(t *testing.T, configJSON string) (string, *mockDockerClient, *pullThenInspectMock) {
 	t.Helper()
@@ -56,9 +68,7 @@ func TestManager_Up_NewContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta == nil {
-		t.Fatal("expected non-nil meta")
-	}
+	meta = must(t, meta, "expected non-nil meta")
 	if meta.Status != StatusRunning {
 		t.Errorf("status = %q, want %q", meta.Status, StatusRunning)
 	}
