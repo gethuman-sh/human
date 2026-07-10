@@ -654,6 +654,96 @@ body {
   cursor: default;
 }
 
+.ideation-form input.hidden {
+  display: none;
+}
+
+.ideation-mode-picker {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--col-border);
+}
+
+.ideation-mode-picker.hidden {
+  display: none;
+}
+
+.ideation-mode-btn {
+  flex: 1;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  padding: 8px 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ideation-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.ideation-options.hidden {
+  display: none;
+}
+
+.ideation-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ideation-option:hover {
+  border-color: var(--accent);
+}
+
+.ideation-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.ideation-draft.hidden {
+  display: none;
+}
+
+.ideation-draft-title,
+.ideation-draft-description {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ideation-draft-description {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.ideation-draft-submit {
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  padding: 8px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 /* --- Running agents view --------------------------------------------------
    A full-width main-area view swapped in by the "agents" rail icon. The board
    and this view are mutually exclusive; selectView() toggles `.hidden` on both,

@@ -364,7 +364,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 	return true
 }
 
-// routeIdeationCommand dispatches the three ideation routes. Split out of
+// routeIdeationCommand dispatches the ideation routes. Split out of
 // routeSimpleCommand to keep that switch's cyclomatic complexity within the
 // project's gocyclo threshold.
 func (s *Server) routeIdeationCommand(conn net.Conn, args []string) bool {
@@ -373,6 +373,8 @@ func (s *Server) routeIdeationCommand(conn net.Conn, args []string) bool {
 		s.handleIdeationStart(conn, args[1:])
 	case "ideation-reply":
 		s.handleIdeationReply(conn, args[1:])
+	case "ideation-approve":
+		s.handleIdeationApprove(conn, args[1:])
 	case "ideation-status":
 		s.handleIdeationStatus(conn)
 	case "features-generate":

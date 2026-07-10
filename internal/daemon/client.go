@@ -304,6 +304,12 @@ func IdeationReply(addr, token string, req IdeationReplyRequest) (IdeationStatus
 	return ideationCall(addr, token, "ideation-reply", req)
 }
 
+// IdeationApprove submits the user's (possibly edited) guided-mode draft for
+// ticket creation.
+func IdeationApprove(addr, token string, req IdeationApproveRequest) (IdeationStatus, error) {
+	return ideationCall(addr, token, "ideation-approve", req)
+}
+
 // GetIdeationStatus fetches the current ideation session snapshot.
 func GetIdeationStatus(addr, token string) (IdeationStatus, error) {
 	out, err := RunRemoteCapture(addr, token, []string{"ideation-status"})

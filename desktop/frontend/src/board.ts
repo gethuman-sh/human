@@ -41,10 +41,24 @@ interface IdeationMsg {
   text: string;
 }
 
+interface IdeationQuestion {
+  text: string;
+  options: string[];
+  kind: string; // "structural" | "content"
+}
+
+interface IdeationDraft {
+  title: string;
+  description: string;
+}
+
 interface IdeationView {
   sessionId?: string;
-  state: string; // none | thinking | awaiting_reply | done | error
+  mode?: string; // "chat" | "guided"
+  state: string; // none | thinking | awaiting_reply | awaiting_approval | done | error
   messages: IdeationMsg[];
+  question?: IdeationQuestion;
+  draft?: IdeationDraft;
   createdKey?: string;
   error?: string;
 }
@@ -117,8 +131,9 @@ interface AppBindings {
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   CloseTicket(pmKey: string): Promise<void>;
   DaemonStatus(): Promise<boolean>;
-  StartIdeation(seed: string, restart: boolean): Promise<IdeationView>;
+  StartIdeation(seed: string, mode: string, restart: boolean): Promise<IdeationView>;
   ReplyIdeation(sessionId: string, message: string): Promise<IdeationView>;
+  ApproveIdeation(sessionId: string, title: string, description: string): Promise<IdeationView>;
   IdeationStatus(): Promise<IdeationView>;
   Instances(): Promise<InstancesData>;
   Features(): Promise<FeatureDoc>;
@@ -664,6 +679,10 @@ function escapeAttr(s: unknown): string {
 let ideation: IdeationView = { state: "none", messages: [] };
 let ideationOpen = false;
 let ideationTimer: number | null = null;
+// ideationMode is transient frontend-only state: null means the mode picker
+// has not been resolved yet for a fresh session. It is not sent to the
+// daemon until the user picks a mode and sends the first message/seed.
+let ideationMode: "chat" | "guided" | null = null;
 const IDEATION_POLL_MS = 1000;
 
 function stopIdeationPoll(): void {
@@ -679,6 +698,79 @@ function stopIdeationPoll(): void {
 function startIdeationPoll(): void {
   if (!ideationOpen || ideationTimer !== null) return;
   ideationTimer = window.setInterval(() => void pollIdeation(), IDEATION_POLL_MS);
+}
+
+function renderModePicker(): void {
+  const picker = document.getElementById("ideation-mode-picker");
+  if (!picker) return;
+  const show = ideation.state === "none" && ideationMode === null;
+  picker.classList.toggle("hidden", !show);
+}
+
+function renderIdeationOptions(): void {
+  const container = document.getElementById("ideation-options");
+  const input = document.getElementById("ideation-input") as HTMLInputElement | null;
+  if (!container) return;
+
+  const question = ideation.state === "awaiting_reply" ? ideation.question : undefined;
+  if (!question) {
+    container.classList.add("hidden");
+    container.innerHTML = "";
+    if (input) input.classList.remove("hidden");
+    return;
+  }
+
+  container.classList.remove("hidden");
+  container.innerHTML = "";
+  question.options.forEach((opt) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ideation-option";
+    btn.textContent = opt;
+    btn.addEventListener("click", () => void sendIdeationReply(opt));
+    container.appendChild(btn);
+  });
+  const other = document.createElement("button");
+  other.type = "button";
+  other.className = "ideation-option ideation-option-other";
+  other.textContent = "Other…";
+  other.addEventListener("click", () => {
+    if (input) {
+      input.classList.remove("hidden");
+      input.focus();
+    }
+  });
+  container.appendChild(other);
+  // The freeform escape hatch stays hidden behind "Other…" until clicked, but
+  // remains functionally enabled/usable for every question regardless of Kind.
+  if (input) input.classList.add("hidden");
+}
+
+function renderIdeationDraft(): void {
+  const draftEl = document.getElementById("ideation-draft");
+  const form = document.getElementById("ideation-form");
+  if (!draftEl) return;
+
+  if (ideation.state !== "awaiting_approval" || !ideation.draft) {
+    draftEl.classList.add("hidden");
+    return;
+  }
+
+  draftEl.classList.remove("hidden");
+  if (form) form.classList.add("hidden");
+
+  const titleInput = document.getElementById("ideation-draft-title") as HTMLInputElement | null;
+  const descInput = document.getElementById("ideation-draft-description") as HTMLTextAreaElement | null;
+  // Only pre-fill on first render of a draft (avoid clobbering in-progress
+  // user edits on every poll tick).
+  if (titleInput && titleInput.dataset.sessionId !== ideation.sessionId) {
+    titleInput.value = ideation.draft.title;
+    titleInput.dataset.sessionId = ideation.sessionId || "";
+  }
+  if (descInput && descInput.dataset.sessionId !== ideation.sessionId) {
+    descInput.value = ideation.draft.description;
+    descInput.dataset.sessionId = ideation.sessionId || "";
+  }
 }
 
 function renderIdeation(): void {
@@ -704,6 +796,11 @@ function renderIdeation(): void {
     }
   }
 
+  renderModePicker();
+  renderIdeationOptions();
+  renderIdeationDraft();
+
+  const form = document.getElementById("ideation-form");
   const input = document.getElementById("ideation-input") as HTMLInputElement | null;
   const send = document.getElementById("ideation-send") as HTMLButtonElement | null;
   const inputEnabled =
@@ -711,6 +808,9 @@ function renderIdeation(): void {
     ideation.state === "none" ||
     ideation.state === "done" ||
     ideation.state === "error";
+  // The draft-review form takes over the panel's bottom area while
+  // awaiting_approval; the free-text form must not be reachable there.
+  if (form) form.classList.toggle("hidden", ideation.state === "awaiting_approval");
   if (input) {
     input.disabled = !inputEnabled;
     input.placeholder = ideation.state === "awaiting_reply" ? "Your answer…" : "Describe the idea…";
@@ -734,6 +834,9 @@ async function openIdeation(): Promise<void> {
     renderIdeationError(errMessage(err));
     return;
   }
+  // Leave ideationMode as whatever it currently is: it starts null at module
+  // load and is only reset by closeIdeation() for terminal/none states, so a
+  // panel reopen mid-flow must not re-show a fresh mode picker.
   renderIdeation();
   if (ideation.state === "thinking") startIdeationPoll();
 }
@@ -743,6 +846,11 @@ function closeIdeation(): void {
   if (panel) panel.classList.add("hidden");
   ideationOpen = false;
   stopIdeationPoll();
+  // Closing does not abandon an active session (AD-4): only reset the mode
+  // picker when there is no live session to reattach to on reopen.
+  if (ideation.state === "done" || ideation.state === "error" || ideation.state === "none") {
+    ideationMode = null;
+  }
 }
 
 async function pollIdeation(): Promise<void> {
@@ -759,11 +867,15 @@ async function pollIdeation(): Promise<void> {
   }
 }
 
-async function submitIdeation(): Promise<void> {
-  const input = document.getElementById("ideation-input") as HTMLInputElement | null;
-  if (!input) return;
-  const text = input.value.trim();
-  if (!text) return;
+// sendIdeationReply carries either the freeform input text or a clicked
+// option's text into the running session — both are just `message: string`
+// to ReplyIdeation, and `seed: string` to StartIdeation on a fresh session.
+// awaiting_approval is never routed through here: the draft-review form
+// (see renderIdeationDraft/approveIdeation) replaces the free-text form
+// entirely while a session is in that state, so this function should not be
+// invoked with a stale awaiting_approval state during a poll/input race.
+async function sendIdeationReply(text: string): Promise<void> {
+  if (!text || ideation.state === "awaiting_approval") return;
 
   const isFresh = ideation.state === "none" || ideation.state === "done" || ideation.state === "error";
   const restart = ideation.state === "done" || ideation.state === "error";
@@ -775,13 +887,12 @@ async function submitIdeation(): Promise<void> {
     state: "thinking",
     messages: [...ideation.messages, { role: "user", text }],
   };
-  input.value = "";
   renderIdeation();
   startIdeationPoll();
 
   try {
     if (isFresh) {
-      ideation = await go().StartIdeation(text, restart);
+      ideation = await go().StartIdeation(text, ideationMode ?? "chat", restart);
     } else {
       ideation = await go().ReplyIdeation(ideation.sessionId!, text);
     }
@@ -794,6 +905,36 @@ async function submitIdeation(): Promise<void> {
   if (ideation.state !== "thinking") {
     stopIdeationPoll();
   }
+}
+
+async function submitIdeation(): Promise<void> {
+  const input = document.getElementById("ideation-input") as HTMLInputElement | null;
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  await sendIdeationReply(text);
+}
+
+async function approveIdeation(): Promise<void> {
+  const titleInput = document.getElementById("ideation-draft-title") as HTMLInputElement | null;
+  const descInput = document.getElementById("ideation-draft-description") as HTMLTextAreaElement | null;
+  if (!titleInput || !descInput || !ideation.sessionId) return;
+  const sessionId = ideation.sessionId;
+
+  ideation = { ...ideation, state: "thinking" };
+  renderIdeation();
+  startIdeationPoll();
+
+  try {
+    ideation = await go().ApproveIdeation(sessionId, titleInput.value.trim(), descInput.value);
+  } catch (err) {
+    renderIdeationError(errMessage(err));
+    stopIdeationPoll();
+    return;
+  }
+  renderIdeation();
+  if (ideation.state !== "thinking") stopIdeationPoll();
 }
 
 // --- Running agents view -----------------------------------------------
@@ -1206,6 +1347,14 @@ function init(): void {
     e.preventDefault();
     void submitIdeation();
   });
+  document.querySelectorAll<HTMLButtonElement>(".ideation-mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode === "guided" ? "guided" : "chat";
+      ideationMode = mode;
+      renderIdeation();
+    });
+  });
+  document.getElementById("ideation-draft-submit")?.addEventListener("click", () => void approveIdeation());
 }
 
 if (document.readyState === "loading") {

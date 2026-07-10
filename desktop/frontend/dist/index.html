@@ -61,7 +61,17 @@
         <span>New ticket — ideation</span>
         <button id="ideation-close" class="ideation-close" title="Close (session keeps running)">×</button>
       </div>
+      <div id="ideation-mode-picker" class="ideation-mode-picker hidden">
+        <button id="ideation-mode-chat" class="ideation-mode-btn" data-mode="chat">Chat</button>
+        <button id="ideation-mode-guided" class="ideation-mode-btn" data-mode="guided">Guided Q&amp;A</button>
+      </div>
       <div id="ideation-transcript" class="ideation-transcript"></div>
+      <div id="ideation-options" class="ideation-options hidden"></div>
+      <div id="ideation-draft" class="ideation-draft hidden">
+        <input id="ideation-draft-title" type="text" class="ideation-draft-title" placeholder="Title" />
+        <textarea id="ideation-draft-description" class="ideation-draft-description" placeholder="Description"></textarea>
+        <button id="ideation-draft-submit" class="ideation-draft-submit" type="button">Create ticket</button>
+      </div>
       <div id="ideation-status-line" class="ideation-status hidden"></div>
       <form id="ideation-form" class="ideation-form">
         <input id="ideation-input" type="text" autocomplete="off"

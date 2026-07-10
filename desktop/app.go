@@ -220,22 +220,43 @@ type IdeationMsg struct {
 	Text string `json:"text"`
 }
 
-// IdeationView is the frontend-facing session snapshot.
-type IdeationView struct {
-	SessionID  string        `json:"sessionId,omitempty"`
-	State      string        `json:"state"`
-	Messages   []IdeationMsg `json:"messages"`
-	CreatedKey string        `json:"createdKey,omitempty"`
-	Error      string        `json:"error,omitempty"`
+// IdeationOption is one guided-mode multiple-choice question, frontend-facing.
+type IdeationOption struct {
+	Text    string   `json:"text"`
+	Options []string `json:"options"`
+	Kind    string   `json:"kind"`
 }
 
-// StartIdeation begins (or re-attaches to) the board ideation session.
-func (a *App) StartIdeation(seed string, restart bool) (IdeationView, error) {
+// IdeationDraftView is the frontend-facing agent-drafted ticket summary.
+type IdeationDraftView struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+// IdeationView is the frontend-facing session snapshot.
+type IdeationView struct {
+	SessionID  string             `json:"sessionId,omitempty"`
+	Mode       string             `json:"mode,omitempty"`
+	State      string             `json:"state"`
+	Messages   []IdeationMsg      `json:"messages"`
+	Question   *IdeationOption    `json:"question,omitempty"`
+	Draft      *IdeationDraftView `json:"draft,omitempty"`
+	CreatedKey string             `json:"createdKey,omitempty"`
+	Error      string             `json:"error,omitempty"`
+}
+
+// StartIdeation begins (or re-attaches to) the board ideation session. mode
+// is "chat" or "guided"; empty defaults to "chat" in the daemon engine.
+func (a *App) StartIdeation(seed, mode string, restart bool) (IdeationView, error) {
 	info, err := daemon.ReadInfo()
 	if err != nil {
 		return IdeationView{}, err
 	}
-	st, err := daemon.IdeationStart(info.Addr, info.Token, daemon.IdeationStartRequest{Seed: seed, Restart: restart})
+	st, err := daemon.IdeationStart(info.Addr, info.Token, daemon.IdeationStartRequest{
+		Seed:    seed,
+		Mode:    daemon.IdeationMode(mode),
+		Restart: restart,
+	})
 	if err != nil {
 		return IdeationView{}, err
 	}
@@ -249,6 +270,24 @@ func (a *App) ReplyIdeation(sessionID, message string) (IdeationView, error) {
 		return IdeationView{}, err
 	}
 	st, err := daemon.IdeationReply(info.Addr, info.Token, daemon.IdeationReplyRequest{SessionID: sessionID, Message: message})
+	if err != nil {
+		return IdeationView{}, err
+	}
+	return ideationView(st), nil
+}
+
+// ApproveIdeation submits the user's (possibly edited) guided-mode draft for
+// ticket creation.
+func (a *App) ApproveIdeation(sessionID, title, description string) (IdeationView, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return IdeationView{}, err
+	}
+	st, err := daemon.IdeationApprove(info.Addr, info.Token, daemon.IdeationApproveRequest{
+		SessionID:   sessionID,
+		Title:       title,
+		Description: description,
+	})
 	if err != nil {
 		return IdeationView{}, err
 	}
@@ -275,10 +314,17 @@ func (a *App) IdeationStatus() (IdeationView, error) {
 func ideationView(st daemon.IdeationStatus) IdeationView {
 	view := IdeationView{
 		SessionID:  st.SessionID,
+		Mode:       string(st.Mode),
 		State:      string(st.State),
 		Messages:   []IdeationMsg{},
 		CreatedKey: st.CreatedKey,
 		Error:      st.Error,
+	}
+	if st.Question != nil {
+		view.Question = &IdeationOption{Text: st.Question.Text, Options: st.Question.Options, Kind: st.Question.Kind}
+	}
+	if st.Draft != nil {
+		view.Draft = &IdeationDraftView{Title: st.Draft.Title, Description: st.Draft.Description}
 	}
 	for _, m := range st.Transcript {
 		view.Messages = append(view.Messages, IdeationMsg{Role: m.Role, Text: m.Text})
