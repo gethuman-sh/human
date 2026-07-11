@@ -116,6 +116,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 **User interfaces**
 
 - [Workflow Board (desktop)](desktop/README.md) — drag-to-trigger 5-stage pipeline board (Wails)
+- [Project Starters](internal/starter/README.md) — scaffold empty directories from starter templates
 
 **Infrastructure & security**
 
