@@ -18,7 +18,8 @@ const ConfirmRetention = 24 * time.Hour
 //
 // pending → denied              (user rejected)
 // pending → approved            (user granted; grant is consumed one-time
-//                                when the client re-submits the operation)
+//
+//	when the client re-submits the operation)
 //
 // The daemon never executes anything on approval — an approval is a grant,
 // and acting on it is the requesting client's job. A grant nobody redeems
