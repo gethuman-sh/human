@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Permission UI mockups · human desktop</title>
+<style>
+  :root {
+    --bg: #14161a; --col-border: #2a2e37; --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --done: #3ec07a; --failed: #e0544e; --page: #0b0c0f; --note: #ffd866;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 48px 20px 80px; }
+  .eyebrow { font: 11px/1 ui-monospace, Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  h1 { margin: 10px 0 8px; font-size: 26px; font-weight: 650; }
+  .lead { color: var(--muted); max-width: 68ch; margin: 0 0 30px; }
+  .lead code { font: 12px ui-monospace, monospace; color: var(--text); background: var(--card-bg); padding: 1px 5px; border-radius: 4px; }
+  .opt { display: block; color: inherit; text-decoration: none; background: var(--card-bg);
+    border: 1px solid var(--card-border); border-radius: 10px; padding: 16px 18px; margin-bottom: 12px;
+    transition: border-color .12s ease; }
+  .opt:hover { border-color: var(--accent); }
+  .opt .row { display: flex; align-items: baseline; gap: 10px; }
+  .opt .num { font: 12px ui-monospace, monospace; color: var(--note); }
+  .opt .name { font-size: 16px; font-weight: 650; }
+  .opt .file { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--muted); }
+  .opt p { margin: 6px 0 8px; color: var(--muted); font-size: 13px; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { font: 10.5px ui-monospace, monospace; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .tag.plus { color: var(--done); border-color: #2f4a2f; }
+  .tag.minus { color: var(--failed); border-color: #4a2f2f; }
+  .hint { margin-top: 26px; font: 12px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">human desktop · HUM-160 follow-up</div>
+  <h1>Surfacing permission requests — 5 options</h1>
+  <p class="lead">Static mockups, no functionality. All five render the same three pending requests on the same
+     board so the patterns compare fairly. Underlying data everywhere: poll <code>pending-confirms</code>,
+     decide with <code>confirm-op &lt;id&gt; yes|no</code>; the requesting agent redeems the grant itself.
+     Amber sticky notes on each mockup explain the behavior.</p>
+
+  <a class="opt" href="01-modal.html">
+    <div class="row"><span class="num">01</span><span class="name">Blocking modal</span><span class="file">01-modal.html</span></div>
+    <p>Takeover dialog, one request at a time — the desktop twin of today's TUI overlay.</p>
+    <div class="tags"><span class="tag plus">impossible to miss</span><span class="tag plus">serial decisions</span><span class="tag minus">interrupts everything</span></div>
+  </a>
+
+  <a class="opt" href="02-toasts.html">
+    <div class="row"><span class="num">02</span><span class="name">Toast stack</span><span class="file">02-toasts.html</span></div>
+    <p>Persistent corner toasts with inline approve/deny; the board stays fully usable.</p>
+    <div class="tags"><span class="tag plus">non-blocking</span><span class="tag plus">familiar</span><span class="tag minus">easy to ignore</span><span class="tag minus">no history</span></div>
+  </a>
+
+  <a class="opt" href="03-inbox-panel.html">
+    <div class="row"><span class="num">03</span><span class="name">Permission inbox</span><span class="file">03-inbox-panel.html</span></div>
+    <p>Rail item with badge → push-in panel: grouped by agent, batch approval, 24h decision history.</p>
+    <div class="tags"><span class="tag plus">scales best</span><span class="tag plus">only one with history</span><span class="tag minus">one click away</span></div>
+  </a>
+
+  <a class="opt" href="04-board-inline.html">
+    <div class="row"><span class="num">04</span><span class="name">Inline on the board</span><span class="file">04-board-inline.html</span></div>
+    <p>The request docks onto the affected ticket card — decide in full work context.</p>
+    <div class="tags"><span class="tag plus">maximum context</span><span class="tag plus">no new surface</span><span class="tag minus">scatters, needs fallback</span></div>
+  </a>
+
+  <a class="opt" href="05-command-strip.html">
+    <div class="row"><span class="num">05</span><span class="name">Command strip</span><span class="file">05-command-strip.html</span></div>
+    <p>Slim amber bar under the header with the oldest request and global shortcuts; dropdown for the rest.</p>
+    <div class="tags"><span class="tag plus">always visible</span><span class="tag plus">keyboard-first</span><span class="tag minus">thin on detail</span></div>
+  </a>
+
+  <div class="hint">Options combine: e.g. 03 (inbox as the home + badge) with 05 (strip for immediacy), or 04 (context) with 03 (fallback list).</div>
+</div>
+</body>
+</html>

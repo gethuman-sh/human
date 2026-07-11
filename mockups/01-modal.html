@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option 1 — Blocking modal · permission mockups</title>
+<style>
+  :root {
+    --bg: #14161a; --col-bg: #1c1f26; --col-border: #2a2e37;
+    --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --running: #d6a13a; --done: #3ec07a; --failed: #e0544e;
+    --page: #0b0c0f; --note: #ffd866; --note-ink: #221b00;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+
+  /* ---- brief bar (not part of the app) ---- */
+  .brief { max-width: 1240px; margin: 0 auto; padding: 28px 20px 18px; }
+  .brief .eyebrow { font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  .brief h1 { margin: 8px 0 6px; font-size: 22px; font-weight: 650; }
+  .brief p { margin: 0; color: var(--muted); max-width: 70ch; }
+  .verdict { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip { font: 11px/1 ui-monospace, monospace; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .chip.plus { border-color: #2f4a2f; color: var(--done); }
+  .chip.minus { border-color: #4a2f2f; color: var(--failed); }
+  .nav { margin-top: 14px; font: 12px ui-monospace, monospace; color: var(--muted); }
+  .nav a { margin-right: 12px; }
+
+  /* ---- app frame ---- */
+  .frame {
+    position: relative; max-width: 1240px; margin: 10px auto 60px;
+    border: 1px solid var(--col-border); border-radius: 10px; overflow: hidden;
+    background: var(--bg); display: flex; height: 660px;
+    box-shadow: 0 30px 80px rgba(0,0,0,.5);
+  }
+  .rail { width: 60px; flex: none; border-right: 1px solid var(--col-border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+  .rail-item { width: 44px; height: 44px; border-radius: 15px; background: var(--col-bg); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .rail-item.active { background: var(--accent); color: #fff; border-radius: 12px; }
+  .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .hdr { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--col-border); }
+  .hdr .logo { font-weight: 700; letter-spacing: .02em; }
+  .hdr .proj { color: var(--muted); font-size: 13px; }
+  .hdr .daemon { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--done); }
+
+  .board { flex: 1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 12px; min-height: 0; }
+  .col { background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .col h3 { margin: 2px 4px 4px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 7px; padding: 8px 9px; }
+  .card .key { font: 11px ui-monospace, monospace; color: var(--accent); }
+  .card .t { font-size: 12.5px; margin-top: 3px; }
+
+  /* ---- the option: blocking modal ---- */
+  .scrim { position: absolute; inset: 0; background: rgba(10,11,14,.62); backdrop-filter: blur(2px); display: flex; align-items: center; justify-content: center; }
+  .modal { width: 460px; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 12px; box-shadow: 0 24px 70px rgba(0,0,0,.6); overflow: hidden; }
+  .modal-hd { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--col-border); }
+  .modal-hd .warn { width: 30px; height: 30px; border-radius: 8px; background: rgba(214,161,58,.15); color: var(--running); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .modal-hd .ttl { font-weight: 650; }
+  .modal-hd .queue { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--muted); }
+  .modal-bd { padding: 18px; }
+  .op { font-size: 17px; font-weight: 650; }
+  .op .key { color: var(--accent); }
+  .meta { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .meta b { color: var(--text); font-weight: 550; }
+  .ticket-peek { margin-top: 14px; background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; }
+  .ticket-peek .key { font: 11px ui-monospace, monospace; color: var(--accent); }
+  .modal-ft { display: flex; gap: 10px; padding: 14px 18px; border-top: 1px solid var(--col-border); }
+  .btn { flex: 1; padding: 10px 0; border-radius: 8px; border: 1px solid var(--card-border); background: var(--col-bg); color: var(--text); font-size: 13.5px; font-weight: 600; text-align: center; }
+  .btn.deny { border-color: #4a2f2f; color: var(--failed); }
+  .btn.approve { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .kbd { font: 10.5px ui-monospace, monospace; color: var(--muted); margin-left: 6px; }
+
+  /* ---- annotations ---- */
+  .note {
+    position: absolute; z-index: 30; max-width: 250px;
+    background: var(--note); color: var(--note-ink);
+    font: 11.5px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+    padding: 8px 10px; border-radius: 3px 10px 10px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.55);
+  }
+  .note b { display: inline-block; background: var(--note-ink); color: var(--note); border-radius: 50%; width: 16px; height: 16px; text-align: center; line-height: 16px; font-size: 10px; margin-right: 6px; }
+  .foot { max-width: 1240px; margin: -40px auto 50px; padding: 0 20px; font: 11px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="brief">
+  <div class="eyebrow">Permission UI · Option 1 of 5</div>
+  <h1>Blocking modal — one decision at a time</h1>
+  <p>The desktop equivalent of today's TUI overlay: as soon as a permission request arrives, a modal takes over.
+     Nothing else is clickable until every queued request is decided.</p>
+  <div class="verdict">
+    <span class="chip plus">+ impossible to miss</span>
+    <span class="chip plus">+ forces serial, deliberate decisions</span>
+    <span class="chip minus">− interrupts unrelated board work</span>
+    <span class="chip minus">− hostile with many agents asking</span>
+  </div>
+  <div class="nav">
+    <a href="index.html">index</a>
+    <a href="02-toasts.html">next: toast stack →</a>
+  </div>
+</div>
+
+<div class="frame">
+  <div class="rail">
+    <div class="rail-item active">▦</div>
+    <div class="rail-item">◔</div>
+    <div class="rail-item">⚙</div>
+  </div>
+  <div class="app-main">
+    <div class="hdr">
+      <span class="logo">human</span><span class="proj">cli · main</span>
+      <span class="daemon"><span class="dot"></span> daemon connected</span>
+    </div>
+    <div class="board">
+      <div class="col"><h3>Ideas</h3>
+        <div class="card"><div class="key">SC-91</div><div class="t">Weekly digest email</div></div>
+      </div>
+      <div class="col"><h3>Planned</h3>
+        <div class="card"><div class="key">KAN-1</div><div class="t">Migrate billing exports</div></div>
+        <div class="card"><div class="key">SC-79</div><div class="t">Validate coupon input</div></div>
+      </div>
+      <div class="col"><h3>In Progress</h3>
+        <div class="card"><div class="key">HUM-160</div><div class="t">Grant-based permission queue</div></div>
+      </div>
+      <div class="col"><h3>Review</h3>
+        <div class="card"><div class="key">HUM-142</div><div class="t">Flaky stats writer test</div></div>
+      </div>
+      <div class="col"><h3>Done</h3>
+        <div class="card"><div class="key">HUM-158</div><div class="t">Start Project wizard</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scrim">
+    <div class="modal">
+      <div class="modal-hd">
+        <div class="warn">⚠</div>
+        <div class="ttl">Permission needed</div>
+        <div class="queue">request 1 of 3</div>
+      </div>
+      <div class="modal-bd">
+        <div class="op">Delete <span class="key">KAN-1</span>?</div>
+        <div class="meta">
+          <span>agent <b>kitsune</b></span>
+          <span>tracker <b>jira</b></span>
+          <span>asked <b>12s ago</b></span>
+        </div>
+        <div class="ticket-peek">
+          <span class="key">KAN-1</span> · Migrate billing exports — Planned
+        </div>
+      </div>
+      <div class="modal-ft">
+        <div class="btn deny">Deny<span class="kbd">Esc</span></div>
+        <div class="btn approve">Approve<span class="kbd">↵</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="top: 84px; left: 130px;">
+    <b>1</b>Backdrop blocks the whole board. A decision is forced before any
+    other work continues — exact behavior of the TUI today.
+  </div>
+  <div class="note" style="top: 118px; right: 60px;">
+    <b>2</b>Queue position. Requests are decided one at a time; the next
+    modal appears immediately after this one. New arrivals join silently.
+  </div>
+  <div class="note" style="top: 322px; left: 96px; max-width: 230px;">
+    <b>3</b>Body shows the daemon prompt (operation + ticket) plus who asked:
+    agent name, tracker, age — everything the pending-confirms endpoint carries.
+  </div>
+  <div class="note" style="bottom: 96px; right: 84px;">
+    <b>4</b>Deny is the escape hatch (Esc). Approve sends
+    confirm-op &lt;id&gt; yes — the agent then redeems the grant on its own.
+  </div>
+</div>
+
+<div class="foot">Static mockup — no functionality. Data source in the real app: poll pending-confirms; buttons call confirm-op &lt;id&gt; yes|no.</div>
+
+</body>
+</html>
