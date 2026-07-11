@@ -9,6 +9,7 @@
 // The fancy hooks no-op while the classic theme is active, so they are safe to
 // call unconditionally on the hot paths below.
 import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
+import { initPermissions } from "./permissions.js";
 const STAGES = ["backlog", "planning", "implementation", "verification", "done"];
 const STAGE_LABELS = {
     backlog: "Backlog",
@@ -1340,6 +1341,7 @@ function init() {
     setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
     wireRail();
     initFancy();
+    initPermissions(() => go());
     document.addEventListener("keydown", (e) => {
         if (isThemeToggleChord(e)) {
             e.preventDefault();

@@ -17,6 +17,7 @@ import {
   toggleTheme,
   trail,
 } from "./fancy.js";
+import { initPermissions, PermissionRequest } from "./permissions.js";
 
 interface Card {
   key: string;
@@ -158,6 +159,8 @@ interface AppBindings {
   GenerateFeatures(): Promise<void>;
   StartProjectStatus(): Promise<StartProjectInfo>;
   StartProject(projectType: string, language: string): Promise<StartProjectResult>;
+  PendingPermissions(): Promise<PermissionRequest[]>;
+  DecidePermission(id: string, approved: boolean): Promise<void>;
 }
 
 // This file is a module (see the trailing `export {}`) so the global
@@ -1560,6 +1563,7 @@ function init(): void {
 
   wireRail();
   initFancy();
+  initPermissions(() => go());
   document.addEventListener("keydown", (e: KeyboardEvent) => {
     if (isThemeToggleChord(e)) {
       e.preventDefault();

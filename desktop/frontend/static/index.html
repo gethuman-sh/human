@@ -46,6 +46,17 @@
         <header id="app-header" class="app-header">
           <span class="app-title">human — workflow board</span>
         </header>
+        <div id="perm-strip" class="perm-strip hidden" role="region" aria-label="Permission requests">
+          <span class="perm-ico" aria-hidden="true">⚠</span>
+          <span id="perm-question" class="perm-question"></span>
+          <span id="perm-meta" class="perm-meta"></span>
+          <button id="perm-deny" class="perm-btn perm-deny" type="button">Deny</button>
+          <span class="perm-kbd" aria-hidden="true">Ctrl⇧N</span>
+          <button id="perm-approve" class="perm-btn perm-approve" type="button">Approve</button>
+          <span class="perm-kbd" aria-hidden="true">Ctrl⇧Y</span>
+          <button id="perm-more" class="perm-more hidden" type="button"></button>
+        </div>
+        <div id="perm-queue" class="perm-queue hidden" aria-label="Waiting permission requests"></div>
         <div id="banner" class="banner hidden"></div>
         <main id="board" class="board" aria-label="Workflow pipeline board"></main>
         <section id="agents" class="agents-view hidden" aria-label="Running agents"></section>
