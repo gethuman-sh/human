@@ -34,6 +34,10 @@ type Request struct {
 	Env       map[string]string `json:"env,omitempty"`
 	ClientPID int               `json:"client_pid,omitempty"` // parent PID (Claude process) for connection tracking
 	Cwd       string            `json:"cwd,omitempty"`        // client working directory for project routing
+	// ConfirmID is a client-generated unique ID for destructive operations.
+	// It keys the daemon's confirmation queue, makes resubmits idempotent,
+	// and lets the client query the decision later via confirm-status.
+	ConfirmID string `json:"confirm_id,omitempty"`
 }
 
 // Response is sent from the daemon back to the client (one or more JSON lines per connection).
@@ -54,6 +58,15 @@ type Response struct {
 type SubscribeEvent struct {
 	Type      string `json:"type"`            // "change", "agent-stopped"
 	AgentName string `json:"agent,omitempty"` // set for agent lifecycle events
+}
+
+// ConfirmStatus is the wire type returned by the confirm-status route: the
+// decision state of a queued destructive-operation permission request.
+type ConfirmStatus struct {
+	ID         string `json:"id"`
+	State      string `json:"state"` // pending, approved, denied, unknown
+	Prompt     string `json:"prompt,omitempty"`
+	ResolvedAt string `json:"resolved_at,omitempty"`
 }
 
 // PendingConfirm is the wire type for a single pending destructive operation

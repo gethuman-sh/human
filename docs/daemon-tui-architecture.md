@@ -63,7 +63,8 @@ cli/internal/daemon/client.go    RunRemoteCapture, GetHookSnapshot, Subscribe, .
 | `tracker-diagnose` | LoadAllInstancesWithResolver | Config + vault |
 | `tracker-issues` | Provider.ListIssues (parallel) | Tracker APIs |
 | `pending-confirms` | PendingConfirmStore.Snapshot() | In-memory |
-| `confirm-op` | PendingConfirmStore.Resolve() | In-memory |
+| `confirm-op` | PendingConfirmStore.Resolve() (records grant/denial) | In-memory |
+| `confirm-status` | PendingConfirmStore.Get() | In-memory |
 | `agent-stop-async` | DecommissionAgent + background StopContainer | Agent metadata + Docker |
 | `subscribe` | Long-lived connection, streams events | HookEventStore subscription |
 | `log-mode` | Get/set proxy log mode | In-memory |

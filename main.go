@@ -328,6 +328,20 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	}
 	rootCmd.AddCommand(hookCmd)
 
+	// confirm-status reports the decision state of a queued destructive
+	// operation. With a daemon running it is forwarded and answered by
+	// routeIntercept; this stub only surfaces a useful error daemonless.
+	confirmStatusCmd := &cobra.Command{
+		Use:    "confirm-status ID",
+		Short:  "Show the decision state of a pending destructive operation",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return errors.WithDetails("confirm-status requires a running daemon")
+		},
+	}
+	rootCmd.AddCommand(confirmStatusCmd)
+
 	// hook-event is kept for backwards compatibility with older hook scripts.
 	// When the daemon is running, isLocalSubcommand returns false so it is
 	// forwarded to the daemon where routeIntercept handles it.

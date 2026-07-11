@@ -120,7 +120,7 @@ func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			confirmStore.Cleanup(2 * 5 * time.Minute)
+			confirmStore.Cleanup(daemon.ConfirmRetention)
 			if statsStore != nil {
 				if _, pruneErr := statsStore.Prune(ctx); pruneErr != nil {
 					logger.Warn().Err(pruneErr).Msg("periodic stats prune failed")
