@@ -19,6 +19,7 @@ import {
 } from "./fancy.js";
 import { initPermissions, PermissionRequest } from "./permissions.js";
 import { initMockupsView, showMockups, MockupSet } from "./mockupsview.js";
+import { initSettingsView, showSettings, SettingsData } from "./settingsview.js";
 
 interface Card {
   key: string;
@@ -163,6 +164,8 @@ interface AppBindings {
   PendingPermissions(): Promise<PermissionRequest[]>;
   DecidePermission(id: string, approved: boolean): Promise<void>;
   MockupSets(): Promise<MockupSet[]>;
+  Settings(): Promise<SettingsData>;
+  SaveSetting(path: string, valueJSON: string): Promise<SettingsData>;
 }
 
 // This file is a module (see the trailing `export {}`) so the global
@@ -1518,10 +1521,12 @@ function selectView(view: string): void {
   const agents = document.getElementById("agents");
   const features = document.getElementById("features");
   const mockups = document.getElementById("mockups");
+  const settings = document.getElementById("settings");
   board?.classList.toggle("hidden", view !== "board");
   agents?.classList.toggle("hidden", view !== "agents");
   features?.classList.toggle("hidden", view !== "features");
   mockups?.classList.toggle("hidden", view !== "mockups");
+  settings?.classList.toggle("hidden", view !== "settings");
 
   if (view === "agents") {
     void pollAgents(); // immediate fetch so the view isn't blank until the first tick
@@ -1541,6 +1546,12 @@ function selectView(view: string): void {
   // open appears without a restart (no poll: disk only changes via the skill).
   if (view === "mockups") {
     void showMockups();
+  }
+
+  // Settings refresh on every activation — .humanconfig can change on disk at
+  // any time (CLI, agents, editors), so a stale form must never be shown.
+  if (view === "settings") {
+    void showSettings();
   }
 }
 
@@ -1575,6 +1586,7 @@ function init(): void {
   initFancy();
   initPermissions(() => go());
   initMockupsView(() => go());
+  initSettingsView(() => go());
   document.addEventListener("keydown", (e: KeyboardEvent) => {
     if (isThemeToggleChord(e)) {
       e.preventDefault();

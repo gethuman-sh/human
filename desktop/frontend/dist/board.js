@@ -11,6 +11,7 @@
 import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
 import { initPermissions } from "./permissions.js";
 import { initMockupsView, showMockups } from "./mockupsview.js";
+import { initSettingsView, showSettings } from "./settingsview.js";
 const STAGES = ["backlog", "planning", "implementation", "verification", "done"];
 const STAGE_LABELS = {
     backlog: "Backlog",
@@ -1297,10 +1298,12 @@ function selectView(view) {
     const agents = document.getElementById("agents");
     const features = document.getElementById("features");
     const mockups = document.getElementById("mockups");
+    const settings = document.getElementById("settings");
     board?.classList.toggle("hidden", view !== "board");
     agents?.classList.toggle("hidden", view !== "agents");
     features?.classList.toggle("hidden", view !== "features");
     mockups?.classList.toggle("hidden", view !== "mockups");
+    settings?.classList.toggle("hidden", view !== "settings");
     if (view === "agents") {
         void pollAgents(); // immediate fetch so the view isn't blank until the first tick
         startAgentsPoll();
@@ -1318,6 +1321,11 @@ function selectView(view) {
     // open appears without a restart (no poll: disk only changes via the skill).
     if (view === "mockups") {
         void showMockups();
+    }
+    // Settings refresh on every activation — .humanconfig can change on disk at
+    // any time (CLI, agents, editors), so a stale form must never be shown.
+    if (view === "settings") {
+        void showSettings();
     }
 }
 function wireRail() {
@@ -1351,6 +1359,7 @@ function init() {
     initFancy();
     initPermissions(() => go());
     initMockupsView(() => go());
+    initSettingsView(() => go());
     document.addEventListener("keydown", (e) => {
         if (isThemeToggleChord(e)) {
             e.preventDefault();
