@@ -2084,3 +2084,194 @@ input[type="checkbox"].settings-input {
 .settings-error.hidden {
   display: none;
 }
+
+/* ---- Settings command palette (HUM-163) ------------------------------------
+   Ctrl+, overlay over any view. Reuses .modal-overlay for the scrim; the
+   panel is top-anchored so the hit list can grow downward. */
+.palette-overlay {
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.palette {
+  margin-top: 72px;
+  width: 640px;
+  max-width: calc(100vw - 48px);
+  background: var(--col-bg);
+  border: 1px solid var(--col-border);
+  border-radius: 12px;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+}
+
+.palette-in {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--col-border);
+}
+
+.palette-glyph {
+  color: var(--muted);
+}
+
+.palette-in input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 15px;
+}
+
+.palette-scope {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.palette-hits {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.palette-group {
+  padding: 7px 16px 3px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.palette-hit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.palette-hit.sel {
+  background: var(--card-bg);
+  border-left: 3px solid var(--accent);
+  padding-left: 13px;
+}
+
+.palette-hit.saved .palette-path::after {
+  content: " ✓";
+  color: var(--done);
+}
+
+.palette-path {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-path mark {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.palette-cur {
+  margin-left: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: none;
+}
+
+.palette-cur.vaultref {
+  color: var(--running);
+}
+
+.palette-restart {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 9.5px;
+  color: var(--running);
+  border: 1px solid rgba(214, 161, 58, 0.4);
+  border-radius: 999px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  flex: none;
+}
+
+.palette-editor {
+  margin: 2px 16px 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.palette-editor-label {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.palette-editor input {
+  width: 100%;
+  background: var(--col-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.palette-editor input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.palette-editor-hint {
+  margin-top: 7px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.palette-empty {
+  padding: 18px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.palette-foot {
+  display: flex;
+  gap: 14px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--col-border);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.palette-foot b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.palette-count {
+  margin-left: auto;
+}

@@ -19,7 +19,15 @@ import {
 } from "./fancy.js";
 import { initPermissions, PermissionRequest } from "./permissions.js";
 import { initMockupsView, showMockups, MockupSet } from "./mockupsview.js";
-import { initSettingsView, showSettings, SettingsData } from "./settingsview.js";
+import {
+  initSettingsView,
+  showSettings,
+  settingsIndex,
+  saveSetting,
+  setPaletteOpener,
+  SettingsData,
+} from "./settingsview.js";
+import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 
 interface Card {
   key: string;
@@ -1587,7 +1595,15 @@ function init(): void {
   initPermissions(() => go());
   initMockupsView(() => go());
   initSettingsView(() => go());
+  initPalette({ index: settingsIndex, refresh: showSettings, save: saveSetting });
+  setPaletteOpener(() => openPalette());
   document.addEventListener("keydown", (e: KeyboardEvent) => {
+    // Palette chord first: Ctrl+, must win even while an input has focus.
+    if (isPaletteChord(e)) {
+      e.preventDefault();
+      openPalette();
+      return;
+    }
     if (isThemeToggleChord(e)) {
       e.preventDefault();
       toggleTheme();
