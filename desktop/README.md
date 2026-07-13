@@ -19,6 +19,13 @@ re-derives a stage.
 - Header daemon indicator: a two-state dot (reachable/unreachable) in the header, sourced from `daemon.ReadInfo()` / `IsReachable()` / `ReadAlivePid()` — display-only, no daemon version, proxy stats, agent count, or start/stop action.
 - Two visual styles, toggled with **F8** and persisted across restarts: the default calm style, and a demo-oriented "fancy" style (animated gradient, per-column pastel hues, fireworks/confetti drop celebrations — see the `FANCY THEME` section of `frontend/static/style.css` and `frontend/src/fancy.ts`). Classic rendering is untouched when fancy is off; `prefers-reduced-motion` keeps the fancy colors but disables all movement. Closing a ticket is never celebrated.
 
+## Settings
+
+- The gear rail item opens a full settings view over `.humanconfig.yaml`: a section sidebar (project, trackers, knowledge, messaging, vault, daemon) with per-field forms. Edits save on blur (✓ flash on success, inline error on rejection) through the daemon's `config-set` route, which rewrites the file with a comment- and order-preserving YAML round-trip — the file stays hand-editable and git-diffable.
+- **Ctrl+,** (or the sidebar search box) opens the settings command palette from any view: every config leaf is fuzzy-searchable by dotted path (`linears.work.projects`), current values shown inline; Enter edits the selected key in place.
+- Hot-apply vs restart: tracker/knowledge/messaging edits take effect on the next daemon request (config is re-read per request); only `vault.*` and the top-level `project` need a daemon restart, and those fields carry a `restart` badge.
+- Secrets are write-only: `1pw://` vault references display verbatim (they are pointers, not secrets), literal tokens display as a masked placeholder the daemon refuses to accept back, so a stored secret can never round-trip out of — or accidentally back into — the file. The Appearance section (theme) is client-side localStorage, not part of `.humanconfig`.
+
 ## Architecture
 
 - `app.go` — the Go backend bound into the webview. It talks ONLY to the daemon client (`daemon.GetTrackerIssues` / `daemon.BoardTransition` / `daemon.Subscribe`); credential handling, PM-role resolution and the destructive-confirm bypass all live in the daemon.
