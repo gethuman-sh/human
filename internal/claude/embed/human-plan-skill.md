@@ -6,7 +6,7 @@ argument-hint: <ticket-key>
 
 # Implementation Plan Pipeline
 
-Create an implementation plan using a 3-phase agent pipeline: draft, verify, finalize. The plan is embedded directly in the engineering ticket description — no plan files are created.
+Create an implementation plan using a 3-phase agent pipeline: draft, verify, finalize. No plan files are created — the plan lands on the tracker: as a separate engineering ticket's description (split topology: distinct PM and engineering trackers) or as a `[human:plan]` comment on the ticket itself (single-tracker topology).
 
 ## Phase 1: Draft Plan
 
@@ -57,9 +57,14 @@ After finalizing the plan, review it yourself end-to-end:
 
 Only proceed to ticket creation once you are confident the plan will work.
 
-## Phase 5: Create ticket
+## Phase 5: Attach the plan (topology decides where)
 
-Then resolve the engineering tracker: run `human tracker list` and pick the tracker with `"role": "engineering"`. Use its `type` as the tracker and its first configured project. If no tracker has role `engineering`, fall back to asking the user via `AskUserQuestion`.
+Run `human tracker list` and check the topology:
+
+- **Split topology** — a tracker with `"role": "engineering"` exists and is a DIFFERENT tracker than the PM ticket's: create a separate engineering ticket there (steps below).
+- **Single-tracker topology** — no engineering-role tracker, or it is the same tracker as the PM ticket: do NOT create a second ticket. The plan lives on the PM ticket itself as a `[human:plan]` comment (Phase 5b).
+
+### Phase 5a: Split topology — create the engineering ticket
 
 Confirm the plan has a `**PM ticket**:` line in its header referencing the original PM ticket key. If it is missing, add it before creating the engineering ticket so the executor can reference both tickets in commits.
 
@@ -76,16 +81,39 @@ After creating the ticket, capture the returned engineering ticket key and updat
 
 Then fetch the ticket back and verify the description matches the updated plan content byte-for-byte. If it does not match, update the ticket until it does.
 
+### Phase 5b: Single-tracker topology — attach the plan as a comment
+
+Post the plan verbatim as a `[human:plan]` marker comment on the PM ticket (the ticket description stays product language; the plan is a stage artifact and lives in the comment stream):
+
+```bash
+human <pm-tracker> issue comment add <PM_KEY> "$(cat <<'PLAN_EOF'
+[human:plan]
+
+<FINAL_PLAN_CONTENT>
+PLAN_EOF
+)"
+```
+
+Verify with `human plan show <PM_KEY>` — it must print the plan back. Re-planning posts a new `[human:plan]` comment; the latest wins, never edit old ones. In this topology the plan header needs no `**Engineering ticket**:` line, and commits reference only the PM key.
+
 ## Phase 6: Post the plan-ready marker on the PM ticket
 
-After the engineering ticket exists, post a structured marker comment on the **PM ticket** so the workflow board can advance the card from Planning into Implementation (the board resolves the Implementation input from this `engineering:` line). The format is fixed so it can be parsed unambiguously across trackers:
+Post a structured marker comment on the **PM ticket** so the workflow board can advance the card from Planning into Implementation. The format is fixed so it can be parsed unambiguously across trackers:
+
+- Split topology (engineering ticket created):
 
 ```
 [human:plan-ready]
 engineering: <ENG_KEY>
 ```
 
-Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`, where `<pm-tracker>` is the PM tracker resolved from `human tracker list` (the one with `"role": "pm"`), `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header, and `<ENG_KEY>` is the engineering ticket key just created. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
+- Single-tracker topology (plan attached as comment) — no `engineering:` line; the board dispatches Implementation on the PM key itself:
+
+```
+[human:plan-ready]
+```
+
+Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`, where `<pm-tracker>` is the PM tracker resolved from `human tracker list` (the one with `"role": "pm"`), and `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
 
 ## After completion
 

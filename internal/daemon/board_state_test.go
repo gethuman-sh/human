@@ -104,3 +104,58 @@ func TestDeriveBoardCard(t *testing.T) {
 		assert.Equal(t, "HUM-9", card.EngineeringKey)
 	})
 }
+
+func TestDeriveBoardCard_HasPlan(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+
+	t.Run("plan comment sets HasPlan without shifting stage", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:plan]\n\n## Steps\n1. do it", t0)}, tracker.CategoryUnstarted)
+		assert.True(t, card.HasPlan)
+		// The plan is content, not a stage signal — the card stays in Backlog.
+		assert.Equal(t, BoardBacklog, card.Stage)
+	})
+
+	t.Run("plan-ready is not a plan comment", func(t *testing.T) {
+		// Prefix isolation: [human:plan-ready] must not read as [human:plan].
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-9", t0)}, tracker.CategoryUnstarted)
+		assert.False(t, card.HasPlan)
+		assert.Equal(t, BoardPlanning, card.Stage)
+	})
+
+	t.Run("plan plus markers keeps both", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt("[human:plan]\nthe plan", t0),
+			cmt("[human:planning-started]", t1),
+		}, tracker.CategoryUnstarted)
+		assert.True(t, card.HasPlan)
+		assert.Equal(t, BoardPlanning, card.Stage)
+	})
+}
+
+func TestLatestPlanComment(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+
+	t.Run("latest plan wins", func(t *testing.T) {
+		body, ok := latestPlanComment([]tracker.Comment{
+			cmt("[human:plan]\nold plan", t0),
+			cmt("[human:plan]\nnew plan", t1),
+		})
+		assert.True(t, ok)
+		assert.Equal(t, "new plan", body)
+	})
+
+	t.Run("header stripped, quoted header mid-body ignored", func(t *testing.T) {
+		body, ok := latestPlanComment([]tracker.Comment{
+			cmt("see `[human:plan]` for details", t0),
+		})
+		assert.False(t, ok)
+		assert.Empty(t, body)
+	})
+
+	t.Run("no comments", func(t *testing.T) {
+		_, ok := latestPlanComment(nil)
+		assert.False(t, ok)
+	})
+}
