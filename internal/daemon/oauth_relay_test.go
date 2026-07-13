@@ -165,7 +165,7 @@ func TestOAuthRelayEndToEnd(t *testing.T) {
 		}
 		defer func() { _ = conn.Close() }()
 
-		req := Request{Token: token, Args: []string{"browser", oauthURL}}
+		req := Request{Version: "dev", Token: token, Args: []string{"browser", oauthURL}}
 		if encErr := json.NewEncoder(conn).Encode(req); encErr != nil {
 			resultCh <- twoLineClientResult{err: encErr}
 			return

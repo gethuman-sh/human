@@ -95,6 +95,11 @@ func startTestServer(t *testing.T, token string) (addr string, cancel context.Ca
 
 func sendRequest(t *testing.T, addr string, req Request) Response {
 	t.Helper()
+	// Tests exercise routes, not the version gate — stamp the dev version
+	// like a real same-tree client unless a test sets one explicitly.
+	if req.Version == "" {
+		req.Version = "dev"
+	}
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()

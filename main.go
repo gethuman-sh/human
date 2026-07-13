@@ -599,6 +599,10 @@ func applyDaemonInfo(info daemon.DaemonInfo, token string) (string, string) {
 func main() {
 	log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 
+	// Stamp the build version into every daemon request so the daemon's
+	// version gate can reject a protocol-stale client with a clear error.
+	daemon.ClientVersion = version
+
 	// Busybox-style dispatch: "human-browser URL" → "human browser URL".
 	args := os.Args[1:] //nolint:nilaway // os.Args is always set in main
 	if sub := subcmdFromBinary(); sub != "" {

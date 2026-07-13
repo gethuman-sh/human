@@ -168,6 +168,17 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 
+	// Version gate before ANY routing or side effect: a protocol-stale
+	// client must get one clear "upgrade" error, not a cryptic mid-handshake
+	// failure after the daemon already acted (e.g. queued a permission
+	// prompt it can never redeem).
+	if !clientVersionSupported(req.Version) {
+		s.writeError(conn, fmt.Sprintf(
+			"client version %q is older than this daemon supports (need >= %s) — upgrade the human CLI so client and daemon speak the same protocol",
+			req.Version, MinClientVersion), 1)
+		return
+	}
+
 	if req.ClientPID > 0 && s.ConnectedPIDs != nil {
 		s.ConnectedPIDs.Touch(req.ClientPID)
 	}

@@ -24,6 +24,12 @@ import (
 
 const dialTimeout = 5 * time.Second
 
+// ClientVersion is stamped into every request this process sends so the
+// daemon can reject protocol-stale clients up front (see the server's
+// version gate). The CLI overwrites it at startup with its build version;
+// the "dev" default keeps same-tree builds (tests, desktop app) passing.
+var ClientVersion = "dev"
+
 // RunRemote connects to the daemon at addr, sends the CLI args, and returns
 // the exit code. Stdout and stderr are written to os.Stdout and os.Stderr.
 //
@@ -219,6 +225,7 @@ func RunRemoteCapture(addr, token string, args []string) ([]byte, error) {
 
 	cwd, _ := os.Getwd()
 	req := Request{
+		Version:   ClientVersion,
 		Token:     token,
 		Args:      args,
 		ClientPID: os.Getpid(),
@@ -506,6 +513,7 @@ func Subscribe(addr, token string) (<-chan SubscribeEvent, func(), error) {
 
 	cwd, _ := os.Getwd()
 	req := Request{
+		Version:   ClientVersion,
 		Token:     token,
 		Args:      []string{"subscribe"},
 		ClientPID: os.Getpid(),
