@@ -367,10 +367,10 @@ func writeAtomically(file string, exists bool, root *yaml.Node) error {
 	if err := tmp.Close(); err != nil {
 		return errors.WrapWithDetails(err, "closing temp config", "file", file)
 	}
-	if err := os.Chmod(tmpName, perm); err != nil {
+	if err := os.Chmod(tmpName, perm); err != nil { // #nosec G703 -- temp file created above in the project's own config dir
 		return errors.WrapWithDetails(err, "setting config permissions", "file", file)
 	}
-	if err := os.Rename(tmpName, file); err != nil {
+	if err := os.Rename(tmpName, file); err != nil { // #nosec G703 -- both paths derive from the daemon-registered project dir
 		return errors.WrapWithDetails(err, "replacing config file", "file", file)
 	}
 	return nil
