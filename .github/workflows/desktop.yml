@@ -71,7 +71,7 @@ jobs:
         run: wails build -tags "${{ matrix.tags }}" -platform ${{ matrix.platform }}
         working-directory: desktop
 
-      - uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
           name: human-board-${{ matrix.os }}
           path: desktop/build/bin/
