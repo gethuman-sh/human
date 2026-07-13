@@ -1,7 +1,7 @@
 ---
 name: human-features
 description: Generate FEATURE.json — a grouped, human-readable map of what this codebase can do — from the code, git history, and tickets
-argument-hint: [since]
+argument-hint: "[since]"
 ---
 
 # Feature Map Generation
