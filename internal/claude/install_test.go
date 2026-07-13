@@ -120,6 +120,7 @@ func TestInstall_CreatesNewFiles(t *testing.T) {
 	featuresSkillPath := filepath.Join(".claude", "skills", "human-features", "SKILL.md")
 	featuresReconAgentPath := filepath.Join(".claude", "agents", "features-recon.md")
 	featuresSynthesisAgentPath := filepath.Join(".claude", "agents", "features-synthesis.md")
+	mockupsSkillPath := filepath.Join(".claude", "skills", "human-mockups", "SKILL.md")
 
 	assert.Equal(t, string(skillContent), string(fw.files[skillPath]))
 	assert.Equal(t, string(agentContent), string(fw.files[agentPath]))
@@ -173,6 +174,7 @@ func TestInstall_CreatesNewFiles(t *testing.T) {
 	assert.Equal(t, string(featuresSkillContent), string(fw.files[featuresSkillPath]))
 	assert.Equal(t, string(featuresReconAgentContent), string(fw.files[featuresReconAgentPath]))
 	assert.Equal(t, string(featuresSynthesisAgentContent), string(fw.files[featuresSynthesisAgentPath]))
+	assert.Equal(t, string(mockupsSkillContent), string(fw.files[mockupsSkillPath]))
 }
 
 func TestInstall_OverwritesIdenticalFiles(t *testing.T) {

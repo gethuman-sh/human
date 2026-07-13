@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings pane mockups · human desktop</title>
+<style>
+  :root {
+    --bg: #14161a; --col-border: #2a2e37; --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --done: #3ec07a; --failed: #e0544e; --page: #0b0c0f; --note: #ffd866;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 48px 20px 80px; }
+  .eyebrow { font: 11px/1 ui-monospace, Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  h1 { margin: 10px 0 8px; font-size: 26px; font-weight: 650; }
+  .lead { color: var(--muted); max-width: 68ch; margin: 0 0 30px; }
+  .lead code { font: 12px ui-monospace, monospace; color: var(--text); background: var(--card-bg); padding: 1px 5px; border-radius: 4px; }
+  .opt { display: block; color: inherit; text-decoration: none; background: var(--card-bg);
+    border: 1px solid var(--card-border); border-radius: 10px; padding: 16px 18px; margin-bottom: 12px;
+    transition: border-color .12s ease; }
+  .opt:hover { border-color: var(--accent); }
+  .opt .row { display: flex; align-items: baseline; gap: 10px; }
+  .opt .num { font: 12px ui-monospace, monospace; color: var(--note); }
+  .opt .name { font-size: 16px; font-weight: 650; }
+  .opt .file { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--muted); }
+  .opt p { margin: 6px 0 8px; color: var(--muted); font-size: 13px; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { font: 10.5px ui-monospace, monospace; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .tag.plus { color: var(--done); border-color: #2f4a2f; }
+  .tag.minus { color: var(--failed); border-color: #4a2f2f; }
+  .hint { margin-top: 26px; font: 12px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">human desktop · settings pane</div>
+  <h1>Opening settings from the gear — 5 options</h1>
+  <p class="lead">Static mockups, no functionality. All five render the same config surface —
+     trackers (shortcut <code>human</code> / linear <code>work</code>), the ticket-kinds mapping, vault, daemon,
+     appearance — read from <code>.humanconfig.yaml</code> via daemon <code>config-get</code> and written back with
+     <code>config-set</code>. They differ only in the container and navigation model.
+     Amber sticky notes on each mockup explain the behavior.</p>
+
+  <a class="opt" href="01-settings-view.html">
+    <div class="row"><span class="num">01</span><span class="name">Full settings view</span><span class="file">01-settings-view.html</span></div>
+    <p>Gear becomes a real rail view: section sidebar + generous content pane, search on top — the IDE-preferences idiom.</p>
+    <div class="tags"><span class="tag plus">most room, scales best</span><span class="tag plus">consistent with views</span><span class="tag minus">leaves the board</span></div>
+  </a>
+
+  <a class="opt" href="02-preferences-modal.html">
+    <div class="row"><span class="num">02</span><span class="name">Preferences modal</span><span class="file">02-preferences-modal.html</span></div>
+    <p>Classic centered tabbed dialog over the dimmed board; staged edits, one atomic Save.</p>
+    <div class="tags"><span class="tag plus">familiar</span><span class="tag plus">transactional save</span><span class="tag minus">blocks the board</span><span class="tag minus">cramped</span></div>
+  </a>
+
+  <a class="opt" href="03-drawer.html">
+    <div class="row"><span class="num">03</span><span class="name">Slide-over drawer</span><span class="file">03-drawer.html</span></div>
+    <p>Right-edge panel (ideation-chat idiom) with accordion sections and live filter; the board stays visible and running.</p>
+    <div class="tags"><span class="tag plus">non-blocking</span><span class="tag plus">whole-config overview</span><span class="tag minus">narrow</span></div>
+  </a>
+
+  <a class="opt" href="04-command-palette.html">
+    <div class="row"><span class="num">04</span><span class="name">Command palette</span><span class="file">04-command-palette.html</span></div>
+    <p>Search-first: every config leaf indexed as a dotted path; fuzzy-find, inline edit, done. No browsing at all.</p>
+    <div class="tags"><span class="tag plus">fastest to any key</span><span class="tag plus">keyboard-first</span><span class="tag minus">no discovery</span><span class="tag minus">bad for multi-field flows</span></div>
+  </a>
+
+  <a class="opt" href="05-yaml-lens.html">
+    <div class="row"><span class="num">05</span><span class="name">YAML lens</span><span class="file">05-yaml-lens.html</span></div>
+    <p>Form and the real .humanconfig.yaml side by side, two-way synced with field⟷line highlighting.</p>
+    <div class="tags"><span class="tag plus">transparent, git-diffable</span><span class="tag plus">teaches the config</span><span class="tag minus">sync is real work</span><span class="tag minus">YAML can intimidate</span></div>
+  </a>
+
+  <div class="hint">Options combine: 01 (browsable home) + 04 (palette as the fast path) is the classic IDE pairing;
+     05's source pane could be a toggle inside 01 instead of a separate mode.</div>
+</div>
+</body>
+</html>

@@ -18,6 +18,17 @@ import {
   trail,
 } from "./fancy.js";
 import { initPermissions, PermissionRequest } from "./permissions.js";
+import { initMockupsView, showMockups, MockupSet } from "./mockupsview.js";
+import {
+  initSettingsView,
+  showSettings,
+  settingsIndex,
+  saveSetting,
+  setPaletteOpener,
+  setActiveSection,
+  SettingsData,
+} from "./settingsview.js";
+import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 
 interface Card {
   key: string;
@@ -161,6 +172,9 @@ interface AppBindings {
   StartProject(projectType: string, language: string): Promise<StartProjectResult>;
   PendingPermissions(): Promise<PermissionRequest[]>;
   DecidePermission(id: string, approved: boolean): Promise<void>;
+  MockupSets(): Promise<MockupSet[]>;
+  Settings(): Promise<SettingsData>;
+  SaveSetting(path: string, valueJSON: string): Promise<SettingsData>;
 }
 
 // This file is a module (see the trailing `export {}`) so the global
@@ -1515,9 +1529,13 @@ function selectView(view: string): void {
   const board = document.getElementById("board");
   const agents = document.getElementById("agents");
   const features = document.getElementById("features");
+  const mockups = document.getElementById("mockups");
+  const settings = document.getElementById("settings");
   board?.classList.toggle("hidden", view !== "board");
   agents?.classList.toggle("hidden", view !== "agents");
   features?.classList.toggle("hidden", view !== "features");
+  mockups?.classList.toggle("hidden", view !== "mockups");
+  settings?.classList.toggle("hidden", view !== "settings");
 
   if (view === "agents") {
     void pollAgents(); // immediate fetch so the view isn't blank until the first tick
@@ -1531,6 +1549,18 @@ function selectView(view: string): void {
   if (view === "features" && !featuresLoaded) {
     featuresLoaded = true;
     void loadFeatures();
+  }
+
+  // Mockups rescan on every activation so a set generated while the app was
+  // open appears without a restart (no poll: disk only changes via the skill).
+  if (view === "mockups") {
+    void showMockups();
+  }
+
+  // Settings refresh on every activation — .humanconfig can change on disk at
+  // any time (CLI, agents, editors), so a stale form must never be shown.
+  if (view === "settings") {
+    void showSettings();
   }
 }
 
@@ -1564,7 +1594,23 @@ function init(): void {
   wireRail();
   initFancy();
   initPermissions(() => go());
+  initMockupsView(() => go());
+  initSettingsView(() => go());
+  initPalette({ index: settingsIndex, refresh: showSettings, save: saveSetting });
+  setPaletteOpener(() => openPalette());
+  // The daemon status line deep-links to its home: Settings → Daemon shows
+  // status, registered projects, and the daemon-related config.
+  document.getElementById("statusbar")?.addEventListener("click", () => {
+    setActiveSection("daemon");
+    selectView("settings");
+  });
   document.addEventListener("keydown", (e: KeyboardEvent) => {
+    // Palette chord first: Ctrl+, must win even while an input has focus.
+    if (isPaletteChord(e)) {
+      e.preventDefault();
+      openPalette();
+      return;
+    }
     if (isThemeToggleChord(e)) {
       e.preventDefault();
       toggleTheme();

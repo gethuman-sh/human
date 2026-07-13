@@ -32,6 +32,10 @@ func main() {
 		Height: 800,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+			// Serves /mockups/<slug>/<file> from project directories on
+			// disk so the Mockups view can iframe /human-mockups output
+			// without embedding it in the binary.
+			Middleware: mockupMiddleware,
 		},
 		OnStartup: app.startup,
 		Bind: []interface{}{

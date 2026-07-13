@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option 1 — Full settings view · settings mockups</title>
+<style>
+  :root {
+    --bg: #14161a; --col-bg: #1c1f26; --col-border: #2a2e37;
+    --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --running: #d6a13a; --done: #3ec07a; --failed: #e0544e;
+    --page: #0b0c0f; --note: #ffd866; --note-ink: #221b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+
+  .brief { max-width: 1240px; margin: 0 auto; padding: 28px 20px 18px; }
+  .brief .eyebrow { font: 11px/1 ui-monospace, Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  .brief h1 { margin: 8px 0 6px; font-size: 22px; font-weight: 650; }
+  .brief p { margin: 0; color: var(--muted); max-width: 72ch; }
+  .verdict { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip { font: 11px/1 ui-monospace, monospace; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .chip.plus { border-color: #2f4a2f; color: var(--done); }
+  .chip.minus { border-color: #4a2f2f; color: var(--failed); }
+  .nav { margin-top: 14px; font: 12px ui-monospace, monospace; color: var(--muted); }
+  .nav a { margin-right: 12px; }
+
+  .frame { position: relative; max-width: 1240px; margin: 10px auto 60px;
+    border: 1px solid var(--col-border); border-radius: 10px; overflow: hidden;
+    background: var(--bg); display: flex; height: 680px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .rail { width: 60px; flex: none; border-right: 1px solid var(--col-border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+  .rail-item { width: 44px; height: 44px; border-radius: 15px; background: var(--col-bg); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .rail-item.active { background: var(--accent); color: #fff; border-radius: 12px; }
+  .rail-bottom { margin-top: auto; }
+  .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .hdr { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--col-border); }
+  .hdr .logo { font-weight: 700; font-size: 13px; color: var(--muted); }
+  .statusbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 12px; background: var(--col-bg); border-top: 1px solid var(--col-border); font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--done); }
+
+  /* ---- the option: full main-area settings view ---- */
+  .settings { flex: 1; min-height: 0; display: flex; }
+  .side { width: 230px; flex: none; border-right: 1px solid var(--col-border); background: var(--col-bg);
+    display: flex; flex-direction: column; padding: 12px; gap: 4px; }
+  .search { display: flex; align-items: center; gap: 7px; background: var(--card-bg); border: 1px solid var(--card-border);
+    border-radius: 6px; padding: 7px 10px; margin-bottom: 10px; color: var(--muted); font-size: 13px; }
+  .search .kbd { margin-left: auto; font: 10px ui-monospace, monospace; border: 1px solid var(--card-border); border-radius: 4px; padding: 2px 5px; }
+  .sec { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 6px; color: var(--muted); font-size: 13px; font-weight: 550; }
+  .sec .ico { width: 16px; text-align: center; font-size: 13px; }
+  .sec.active { background: var(--accent); color: #fff; }
+  .sec .n { margin-left: auto; font: 10.5px ui-monospace, monospace; opacity: .8; }
+  .side .file { margin-top: auto; font: 10.5px ui-monospace, monospace; color: var(--muted); padding: 8px 10px; border-top: 1px solid var(--col-border); }
+
+  .content { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 24px; }
+  .content h2 { margin: 0 0 4px; font-size: 16px; font-weight: 650; }
+  .content .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
+  .tcard { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; max-width: 640px; }
+  .tcard .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .tcard .kind { font: 11px ui-monospace, monospace; color: var(--page); background: var(--accent); border-radius: 4px; padding: 2px 7px; font-weight: 700; }
+  .tcard .name { font-weight: 650; font-size: 14px; }
+  .rolechip { font: 10.5px ui-monospace, monospace; border: 1px solid var(--col-border); border-radius: 999px; padding: 3px 8px; color: var(--running); }
+  .tcard .test { margin-left: auto; font-size: 11.5px; font-weight: 600; color: var(--accent); border: 1px solid var(--card-border); background: var(--col-bg); border-radius: 6px; padding: 4px 10px; }
+  .frow { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .frow label { width: 90px; flex: none; font-size: 12px; color: var(--muted); }
+  .frow .val { flex: 1; background: var(--col-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 6px 9px; font: 12px ui-monospace, monospace; color: var(--text); }
+  .frow .val .vault { color: var(--running); }
+  .frow .toggle { width: 30px; height: 17px; border-radius: 999px; background: var(--done); position: relative; }
+  .frow .toggle::after { content: ""; position: absolute; right: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
+  .addbtn { font-size: 12.5px; font-weight: 600; color: var(--text); background: var(--card-bg); border: 1px dashed var(--card-border); border-radius: 8px; padding: 9px 14px; max-width: 640px; width: 100%; text-align: center; color: var(--muted); }
+  .savedbar { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; color: var(--done); }
+
+  .note { position: absolute; z-index: 30; max-width: 250px; background: var(--note); color: var(--note-ink);
+    font: 11.5px/1.45 ui-monospace, Menlo, monospace; padding: 8px 10px; border-radius: 3px 10px 10px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+  .note b { display: inline-block; background: var(--note-ink); color: var(--note); border-radius: 50%; width: 16px; height: 16px; text-align: center; line-height: 16px; font-size: 10px; margin-right: 6px; }
+  .foot { max-width: 1240px; margin: -40px auto 50px; padding: 0 20px; font: 11px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="brief">
+  <div class="eyebrow">Settings pane · Option 1 of 5</div>
+  <h1>Full settings view — settings become a first-class rail view</h1>
+  <p>The gear switches the main area to a dedicated settings view, exactly like Board / Agents / Features.
+     A section sidebar (Project, Trackers, Ticket kinds, Vault, Daemon, Appearance) with a search box on top;
+     the content pane shows one section as a generous form. The IDE-preferences idiom: room for everything,
+     nothing cramped.</p>
+  <div class="verdict">
+    <span class="chip plus">+ room for the whole config surface, scales to new sections</span>
+    <span class="chip plus">+ consistent with existing view switching (zero new chrome idioms)</span>
+    <span class="chip plus">+ search has a natural, always-visible home</span>
+    <span class="chip minus">− leaves the board entirely (can't tweak while watching agents)</span>
+    <span class="chip minus">− heaviest to build of the five</span>
+  </div>
+  <div class="nav">
+    <a href="index.html">index</a>
+    <a href="02-preferences-modal.html">preferences modal →</a>
+  </div>
+</div>
+
+<div class="frame">
+  <div class="rail">
+    <div class="rail-item">+</div>
+    <div class="rail-item">▦</div>
+    <div class="rail-item">◔</div>
+    <div class="rail-item">⧉</div>
+    <div class="rail-item">⛶</div>
+    <div class="rail-item active rail-bottom">⚙</div>
+  </div>
+  <div class="app-main">
+    <div class="hdr"><span class="logo">human — settings</span></div>
+    <div class="settings">
+      <div class="side">
+        <div class="search">⌕ Search settings… <span class="kbd">Ctrl ,</span></div>
+        <div class="sec"><span class="ico">▤</span>Project</div>
+        <div class="sec active"><span class="ico">◈</span>Trackers <span class="n">2</span></div>
+        <div class="sec"><span class="ico">❖</span>Ticket kinds <span class="n">3</span></div>
+        <div class="sec"><span class="ico">◆</span>Vault</div>
+        <div class="sec"><span class="ico">●</span>Daemon</div>
+        <div class="sec"><span class="ico">◐</span>Appearance</div>
+        <div class="file">.humanconfig.yaml · ~/Development/human/cli</div>
+      </div>
+      <div class="content">
+        <h2>Trackers</h2>
+        <div class="sub">Issue tracker backends. Tokens stay vault references — the daemon resolves them at use.</div>
+
+        <div class="tcard">
+          <div class="head"><span class="kind">shortcut</span><span class="name">human</span><span class="rolechip">role: pm</span><span class="test">Test connection</span></div>
+          <div class="frow"><label>token</label><div class="val"><span class="vault">1pw://Development/Shortcut Token/token</span></div></div>
+          <div class="frow"><label>safe mode</label><div class="toggle"></div><span style="font-size:11.5px;color:var(--muted)">deletes blocked</span></div>
+        </div>
+
+        <div class="tcard">
+          <div class="head"><span class="kind">linear</span><span class="name">work</span><span class="rolechip">role: engineering</span><span class="test">Test connection</span></div>
+          <div class="frow"><label>token</label><div class="val"><span class="vault">1pw://Development/Linear Token/token</span></div></div>
+          <div class="frow"><label>projects</label><div class="val">HUM</div></div>
+        </div>
+
+        <div class="addbtn">+ Add tracker…</div>
+        <div class="savedbar">✓ Saved to .humanconfig.yaml — trackers reloaded</div>
+      </div>
+    </div>
+    <div class="statusbar"><span class="dot"></span> Daemon running · forwarding CLI commands</div>
+  </div>
+
+  <div class="note" style="top: 66px; left: 76px; max-width: 235px;">
+    <b>1</b>Gear is a real view now: selectView("settings"), same
+    toggle as Board/Agents. Rail keeps the bottom-pinned position.
+  </div>
+  <div class="note" style="top: 210px; left: 330px; max-width: 245px;">
+    <b>2</b>Search matches ALL sections (flattened config keys +
+    labels), not just the open one — Enter jumps to the first hit
+    and highlights the field.
+  </div>
+  <div class="note" style="top: 128px; right: 40px; max-width: 250px;">
+    <b>3</b>Token fields render the 1pw:// reference, never the
+    secret. "Test connection" asks the daemon to resolve + call
+    ListProjects — result shows as ✓/✕ on the card.
+  </div>
+  <div class="note" style="top: 388px; right: 60px; max-width: 250px;">
+    <b>4</b>Edits apply per field: config-set rewrites
+    .humanconfig.yaml and hot-reloads tracker instances. The green
+    line confirms; no restart, no explicit Save.
+  </div>
+  <div class="note" style="bottom: 52px; left: 96px; max-width: 235px;">
+    <b>5</b>Footer always names the file being edited — the UI is a
+    lens over .humanconfig, not a second config store.
+  </div>
+</div>
+
+<div class="foot">Static mockup — no functionality. Data source in the real app: daemon config-get (parsed .humanconfig) renders the form; edits call config-set §section.key; "Test connection" runs a ListProjects round-trip.</div>
+
+</body>
+</html>

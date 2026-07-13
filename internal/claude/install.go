@@ -169,6 +169,9 @@ var featuresReconAgentContent []byte
 //go:embed embed/features-synthesis-agent.md
 var featuresSynthesisAgentContent []byte
 
+//go:embed embed/human-mockups-skill.md
+var mockupsSkillContent []byte
+
 var userHomeDir = os.UserHomeDir
 
 // FileWriter abstracts filesystem operations for testability.
@@ -264,6 +267,7 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: featuresSkillContent, relPath: filepath.Join("skills", "human-features", "SKILL.md")},
 		{content: featuresReconAgentContent, relPath: filepath.Join("agents", "features-recon.md")},
 		{content: featuresSynthesisAgentContent, relPath: filepath.Join("agents", "features-synthesis.md")},
+		{content: mockupsSkillContent, relPath: filepath.Join("skills", "human-mockups", "SKILL.md")},
 	}
 
 	for _, f := range files {
