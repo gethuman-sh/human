@@ -1,7 +1,7 @@
 ---
 name: human-brainstorm
 description: Discover missing features by analyzing the project's code and completed work using a multi-agent pipeline
-argument-hint: [focus-area]
+argument-hint: "[focus-area]"
 ---
 
 # Missing Feature Discovery
