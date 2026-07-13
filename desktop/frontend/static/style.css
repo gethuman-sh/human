@@ -2044,17 +2044,6 @@ input[type="checkbox"].settings-input {
   color: var(--muted);
 }
 
-.settings-btn {
-  background: var(--accent);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
 /* Save feedback: the ✓ fades in on success and back out; errors render as a
    full-width line under the row. */
 .settings-flash {

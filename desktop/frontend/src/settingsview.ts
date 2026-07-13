@@ -7,8 +7,6 @@
 // pointers, not secrets) and literal tokens arrive as a masked sentinel the
 // daemon refuses to write back — secret inputs are therefore write-only.
 
-import { toggleTheme } from "./fancy.js";
-
 export interface SettingValue {
   path: string;
   section: string;
@@ -55,10 +53,6 @@ export interface SettingsBindings {
   Settings(): Promise<SettingsData>;
   SaveSetting(path: string, valueJSON: string): Promise<SettingsData>;
 }
-
-// The Appearance section is client-side only (theme lives in localStorage,
-// toggled by fancy.ts) — it is appended after the doc-driven sections.
-const APPEARANCE_SECTION = "appearance";
 
 let bindings: (() => SettingsBindings) | null = null;
 let data: SettingsData | null = null;
@@ -115,7 +109,7 @@ function escapeHtml(s: string): string {
 }
 
 function firstSection(): string {
-  return data?.doc?.values[0]?.section ?? APPEARANCE_SECTION;
+  return data?.doc?.values[0]?.section ?? "";
 }
 
 interface SectionEntry {
@@ -128,7 +122,6 @@ function sections(): SectionEntry[] {
   for (const v of data?.doc?.values ?? []) {
     if (!out.some((s) => s.key === v.section)) out.push({ key: v.section, label: v.sectionLabel });
   }
-  out.push({ key: APPEARANCE_SECTION, label: "Appearance" });
   return out;
 }
 
@@ -173,7 +166,6 @@ function render(): void {
   h.innerHTML = renderSidebar() + renderContent();
   wireSidebar(h);
   wireRows(h);
-  wireAppearance(h);
 }
 
 function renderSidebar(): string {
@@ -202,13 +194,10 @@ function renderSidebar(): string {
 
 function renderContent(): string {
   const doc = data?.doc;
-  let body = "";
-  if (activeSection === APPEARANCE_SECTION) {
-    body = renderAppearance();
-  } else {
-    body = cardsFor(activeSection).map(renderCard).join("") || `<div class="settings-empty">Nothing configured in this section yet — edit .humanconfig.yaml to add instances (adding from the UI is a planned follow-up).</div>`;
-    if (activeSection === "daemon") body = renderDaemonHeader() + body;
-  }
+  let body =
+    cardsFor(activeSection).map(renderCard).join("") ||
+    `<div class="settings-empty">Nothing configured in this section yet — edit .humanconfig.yaml to add instances (adding from the UI is a planned follow-up).</div>`;
+  if (activeSection === "daemon") body = renderDaemonHeader() + body;
   const warnings = (doc?.warnings ?? [])
     .map((w) => `<div class="settings-banner warn">${escapeHtml(w)}</div>`)
     .join("");
@@ -229,17 +218,6 @@ function renderDaemonHeader(): string {
       ? `<div class="settings-card-meta">projects: ${escapeHtml(d.projects.join(", "))}</div>`
       : "") +
     `</div>`
-  );
-}
-
-function renderAppearance(): string {
-  return (
-    `<div class="settings-card">` +
-    `<div class="settings-card-head"><span class="settings-card-name">Theme</span></div>` +
-    `<div class="settings-row"><span class="settings-label">Fancy theme</span>` +
-    `<button id="settings-theme-toggle" class="settings-btn" type="button">Toggle theme</button>` +
-    `<span class="settings-hint">F8 toggles it anywhere — stored locally, not in .humanconfig</span>` +
-    `</div></div>`
   );
 }
 
@@ -313,10 +291,6 @@ function wireSidebar(h: HTMLElement): void {
   h.querySelector(".settings-search")?.addEventListener("click", () => {
     paletteOpener?.();
   });
-}
-
-function wireAppearance(h: HTMLElement): void {
-  h.querySelector("#settings-theme-toggle")?.addEventListener("click", () => toggleTheme());
 }
 
 function wireRows(h: HTMLElement): void {
