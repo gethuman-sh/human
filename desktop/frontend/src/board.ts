@@ -25,6 +25,7 @@ import {
   settingsIndex,
   saveSetting,
   setPaletteOpener,
+  setActiveSection,
   SettingsData,
 } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
@@ -1597,6 +1598,12 @@ function init(): void {
   initSettingsView(() => go());
   initPalette({ index: settingsIndex, refresh: showSettings, save: saveSetting });
   setPaletteOpener(() => openPalette());
+  // The daemon status line deep-links to its home: Settings → Daemon shows
+  // status, registered projects, and the daemon-related config.
+  document.getElementById("statusbar")?.addEventListener("click", () => {
+    setActiveSection("daemon");
+    selectView("settings");
+  });
   document.addEventListener("keydown", (e: KeyboardEvent) => {
     // Palette chord first: Ctrl+, must win even while an input has focus.
     if (isPaletteChord(e)) {

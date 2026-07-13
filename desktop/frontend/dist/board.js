@@ -11,7 +11,7 @@
 import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
 import { initPermissions } from "./permissions.js";
 import { initMockupsView, showMockups } from "./mockupsview.js";
-import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, } from "./settingsview.js";
+import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 const STAGES = ["backlog", "planning", "implementation", "verification", "done"];
 const STAGE_LABELS = {
@@ -1363,6 +1363,12 @@ function init() {
     initSettingsView(() => go());
     initPalette({ index: settingsIndex, refresh: showSettings, save: saveSetting });
     setPaletteOpener(() => openPalette());
+    // The daemon status line deep-links to its home: Settings → Daemon shows
+    // status, registered projects, and the daemon-related config.
+    document.getElementById("statusbar")?.addEventListener("click", () => {
+        setActiveSection("daemon");
+        selectView("settings");
+    });
     document.addEventListener("keydown", (e) => {
         // Palette chord first: Ctrl+, must win even while an input has focus.
         if (isPaletteChord(e)) {

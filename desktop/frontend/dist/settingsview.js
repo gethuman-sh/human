@@ -18,6 +18,12 @@ export function initSettingsView(getBindings) {
 export function setPaletteOpener(open) {
     paletteOpener = open;
 }
+// setActiveSection presets which section the next render shows — used by
+// deep links into settings (e.g. the statusbar's daemon indicator) before
+// the caller switches the view.
+export function setActiveSection(section) {
+    activeSection = section;
+}
 // settingsIndex exposes the cached flattened values for the palette's search
 // index. Empty until the view has loaded once (the palette refreshes first).
 export function settingsIndex() {

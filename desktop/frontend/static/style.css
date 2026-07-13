@@ -566,6 +566,12 @@ body {
   border-top: 1px solid var(--col-border);
   font-size: 12px;
   color: var(--muted);
+  /* The whole line deep-links to Settings → Daemon. */
+  cursor: pointer;
+}
+
+.statusbar:hover {
+  color: var(--text);
 }
 
 .status-dot {
