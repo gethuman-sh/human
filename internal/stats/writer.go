@@ -56,15 +56,20 @@ func (w *Writer) Send(evt hookevents.Event) {
 
 func (w *Writer) run(ctx context.Context) {
 	defer close(w.done)
+	// ctx only decides when the loop stops, never whether an accepted event
+	// is persisted: after cancellation, select still picks randomly between
+	// the ready channel case and ctx.Done(), so inserting with ctx would
+	// silently drop events that the drain contract promises to keep.
+	writeCtx := context.WithoutCancel(ctx)
 	for {
 		select {
 		case evt := <-w.ch:
-			w.insert(ctx, evt)
+			w.insert(writeCtx, evt)
 		case <-ctx.Done():
-			w.drain()
+			w.drain(writeCtx)
 			return
 		case <-w.quit:
-			w.drain()
+			w.drain(writeCtx)
 			return
 		}
 	}
@@ -73,11 +78,11 @@ func (w *Writer) run(ctx context.Context) {
 // drain inserts any buffered events without blocking. The channel is never
 // closed, so the default case (not a closed-channel receive) is what bounds
 // the loop — avoiding the busy-spin that a closed channel would cause.
-func (w *Writer) drain() {
+func (w *Writer) drain(ctx context.Context) {
 	for {
 		select {
 		case evt := <-w.ch:
-			w.insert(context.Background(), evt)
+			w.insert(ctx, evt)
 		default:
 			return
 		}

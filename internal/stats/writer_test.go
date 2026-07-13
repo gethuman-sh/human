@@ -86,9 +86,9 @@ func TestWriter_ContextCancellationDrains(t *testing.T) {
 
 	total, err := store.QueryTotal(context.Background(), now.Add(-time.Hour), now.Add(time.Hour))
 	require.NoError(t, err)
-	// All 5 events should be persisted (some via normal loop, rest via drain).
-	assert.GreaterOrEqual(t, total, 1, "at least some events should be persisted")
-	assert.LessOrEqual(t, total, 5, "at most 5 events should be persisted")
+	// All 5 events must be persisted (some via normal loop, rest via drain):
+	// cancellation stops the loop but must never lose an accepted event.
+	assert.Equal(t, 5, total, "all buffered events should be persisted")
 }
 
 func TestWriter_CloseAfterContextCancelDoesNotHang(t *testing.T) {
