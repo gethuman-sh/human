@@ -1879,12 +1879,6 @@ body {
   color: #fff;
 }
 
-.settings-sec-count {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 10.5px;
-  opacity: 0.8;
-}
-
 .settings-file {
   margin-top: auto;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;

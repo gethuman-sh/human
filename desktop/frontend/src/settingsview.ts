@@ -121,17 +121,14 @@ function firstSection(): string {
 interface SectionEntry {
   key: string;
   label: string;
-  count: number;
 }
 
 function sections(): SectionEntry[] {
   const out: SectionEntry[] = [];
   for (const v of data?.doc?.values ?? []) {
-    const existing = out.find((s) => s.key === v.section);
-    if (existing) existing.count++;
-    else out.push({ key: v.section, label: v.sectionLabel, count: 1 });
+    if (!out.some((s) => s.key === v.section)) out.push({ key: v.section, label: v.sectionLabel });
   }
-  out.push({ key: APPEARANCE_SECTION, label: "Appearance", count: 1 });
+  out.push({ key: APPEARANCE_SECTION, label: "Appearance" });
   return out;
 }
 
@@ -186,7 +183,6 @@ function renderSidebar(): string {
       (s) =>
         `<button class="settings-sec${s.key === activeSection ? " active" : ""}" data-sec="${escapeHtml(s.key)}" type="button">` +
         `<span>${escapeHtml(s.label)}</span>` +
-        (s.key === APPEARANCE_SECTION ? "" : `<span class="settings-sec-count">${s.count}</span>`) +
         `</button>`,
     )
     .join("");
