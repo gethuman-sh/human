@@ -38,34 +38,63 @@ type jsonlLine struct {
 	} `json:"message"`
 }
 
+// classifyModel derives a short display name ("opus 4.8", "fable 5") from a
+// model id. The family is parsed from the id's shape rather than matched
+// against a fixed list, so a new model family labels itself instead of
+// falling back to a wrong name; ids that don't look like Claude ids pass
+// through verbatim for the same reason.
 func classifyModel(model string) string {
-	m := strings.ToLower(model)
-
-	// Determine the family name.
-	var family string
-	switch {
-	case strings.Contains(m, "opus"):
-		family = "opus"
-	case strings.Contains(m, "haiku"):
-		family = "haiku"
-	default:
-		family = "sonnet"
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return "unknown"
 	}
-
-	// Extract version from patterns like "claude-opus-4-6" or "claude-sonnet-4-5-20250929".
-	// After the family name there should be "-major-minor" digits.
-	idx := strings.Index(m, family)
+	// "claude" may be prefixed (Bedrock: "us.anthropic.claude-…").
+	idx := strings.Index(m, "claude")
 	if idx < 0 {
+		return m
+	}
+	family, version := parseClaudeID(m[idx:])
+	if family == "" {
+		return m
+	}
+	if version == "" {
 		return family
 	}
-	rest := m[idx+len(family):]
-	// rest should start with "-<major>-<minor>..." e.g. "-4-6" or "-4-5-20250929"
-	parts := strings.Split(strings.TrimPrefix(rest, "-"), "-")
-	if len(parts) >= 2 && isVersionDigit(parts[0]) && isVersionDigit(parts[1]) {
-		return family + " " + parts[0] + "." + parts[1]
-	}
+	return family + " " + version
+}
 
-	return family
+// parseClaudeID splits "claude-<family>-<version…>" — and the legacy
+// version-first shape "claude-3-5-sonnet-…" — into family and a dotted
+// version. Date stamps and suffixes like "v1:0" end the version run
+// (isVersionDigit rejects them), so they never masquerade as versions.
+func parseClaudeID(id string) (family, version string) {
+	segments := strings.FieldsFunc(id, func(r rune) bool {
+		return r == '-' || r == '.' || r == ':'
+	})
+	var pre, post []string
+	for _, seg := range segments[1:] { // segments[0] is "claude" itself
+		if isVersionDigit(seg) {
+			if family == "" {
+				pre = append(pre, seg)
+			} else {
+				post = append(post, seg)
+			}
+			continue
+		}
+		if family == "" {
+			family = seg
+			continue
+		}
+		break
+	}
+	digits := post
+	if len(digits) == 0 {
+		digits = pre
+	}
+	if len(digits) > 2 {
+		digits = digits[:2]
+	}
+	return family, strings.Join(digits, ".")
 }
 
 // isVersionDigit returns true for short numeric strings (1-2 digits)

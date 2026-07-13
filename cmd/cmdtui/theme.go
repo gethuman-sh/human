@@ -1,6 +1,10 @@
 package cmdtui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Human brand colors.
 const (
@@ -14,11 +18,14 @@ const (
 	humanOrange = lipgloss.Color("#f0a050") // orange — confirmation pending
 )
 
-// Model-specific progress bar colors.
-var modelColors = map[string]string{
-	"opus 4.6":   "#fac86a", // gold
-	"sonnet 4.6": "#4ee8c4", // teal
-	"haiku 4.5":  "#555598", // purple
+// Model progress-bar colors, keyed by family prefix of the display name
+// ("opus 4.8" → "opus") so new versions inherit their family's color
+// without a map update.
+var modelFamilyColors = []struct{ prefix, color string }{
+	{"opus", "#fac86a"},   // gold
+	{"sonnet", "#4ee8c4"}, // teal
+	{"haiku", "#555598"},  // purple
+	{"fable", "#c86afa"},  // violet
 }
 
 // Styles used across the TUI.
@@ -43,8 +50,10 @@ var (
 )
 
 func modelColor(name string) string {
-	if c, ok := modelColors[name]; ok {
-		return c
+	for _, fc := range modelFamilyColors {
+		if strings.HasPrefix(name, fc.prefix) {
+			return fc.color
+		}
 	}
 	return "#fac86a" // default gold
 }
