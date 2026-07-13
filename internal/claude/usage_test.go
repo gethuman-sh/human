@@ -184,15 +184,29 @@ func TestClassifyModel(t *testing.T) {
 	}{
 		{"claude-opus-4-6", "opus 4.6"},
 		{"claude-opus-4-5-20251101", "opus 4.5"},
-		{"claude-opus-4-20250514", "opus"},
+		{"claude-opus-4-8", "opus 4.8"},
+		{"claude-opus-4-20250514", "opus 4"},
 		{"claude-sonnet-4-6", "sonnet 4.6"},
 		{"claude-sonnet-4-5-20250929", "sonnet 4.5"},
-		{"claude-sonnet-4-20250514", "sonnet"},
+		{"claude-sonnet-4-20250514", "sonnet 4"},
 		{"claude-haiku-4-5-20251001", "haiku 4.5"},
 		{"claude-haiku-3-5-20241022", "haiku 3.5"},
+		// New families label themselves — no enumeration, no sonnet fallback.
+		{"claude-fable-5", "fable 5"},
+		{"us.anthropic.claude-fable-5-v1:0", "fable 5"},
+		// Future point releases and siblings must keep working unchanged.
+		{"claude-fable-5-1", "fable 5.1"},
+		{"claude-fable-5-1-20260315", "fable 5.1"},
+		{"claude-fable-5-1-2", "fable 5.1"}, // patch digit beyond major.minor is dropped
+		{"claude-mythos-5", "mythos 5"},
+		// Legacy version-first shape.
+		{"claude-3-5-sonnet-20241022", "sonnet 3.5"},
+		// Non-Claude ids pass through verbatim instead of being guessed.
 		{"sonnet", "sonnet"},
 		{"haiku", "haiku"},
-		{"some-unknown-model", "sonnet"},
+		{"some-unknown-model", "some-unknown-model"},
+		{"gpt-4o", "gpt-4o"},
+		{"", "unknown"},
 	}
 	for _, tt := range tests {
 		got := classifyModel(tt.model)
