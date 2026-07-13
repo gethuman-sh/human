@@ -350,6 +350,8 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"ideation-approve":    func() { s.handleIdeationApprove(conn, args[1:]) },
 		"ideation-status":     func() { s.handleIdeationStatus(conn) },
 		"features-generate":   func() { s.handleFeaturesGenerate(conn) },
+		"config-get":          func() { s.handleConfigGet(conn, projectDir) },
+		"config-set":          func() { s.handleConfigSet(conn, args[1:], projectDir) },
 	}
 	handler, ok := routes[args[0]]
 	if !ok {

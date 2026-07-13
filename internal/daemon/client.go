@@ -17,6 +17,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/settings"
 	"github.com/gethuman-sh/human/internal/stats"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -319,6 +320,38 @@ func GetTrackerDiagnose(addr, token string) ([]tracker.TrackerStatus, error) {
 		return nil, errors.WrapWithDetails(err, "invalid tracker diagnose JSON")
 	}
 	return statuses, nil
+}
+
+// GetConfig fetches the masked settings snapshot for the caller's project.
+// Values arrive with vault references verbatim and literal secrets masked.
+func GetConfig(addr, token string) (settings.Doc, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"config-get"})
+	if err != nil {
+		return settings.Doc{}, err
+	}
+	var doc settings.Doc
+	if err := json.Unmarshal(out, &doc); err != nil {
+		return settings.Doc{}, errors.WrapWithDetails(err, "invalid config JSON")
+	}
+	return doc, nil
+}
+
+// SetConfig writes one settings key and returns the refreshed snapshot so
+// callers can re-render without a second round trip.
+func SetConfig(addr, token string, req SetConfigRequest) (settings.Doc, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return settings.Doc{}, errors.WrapWithDetails(err, "marshaling config-set request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{"config-set", string(data)})
+	if err != nil {
+		return settings.Doc{}, err
+	}
+	var doc settings.Doc
+	if err := json.Unmarshal(out, &doc); err != nil {
+		return settings.Doc{}, errors.WrapWithDetails(err, "invalid config JSON")
+	}
+	return doc, nil
 }
 
 // GetTrackerIssues fetches open issues from all configured tracker projects via the daemon.
