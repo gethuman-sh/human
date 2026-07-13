@@ -874,12 +874,26 @@ func (s *Server) handleDestructiveConfirm(conn net.Conn, req Request, op destruc
 				s.writeAwaitConfirm(conn, pc.ID, pc.Prompt)
 				return
 			case ConfirmDenied:
-				resp := Response{Stderr: "Operation aborted: the user denied permission. Do not retry; ask the user how to proceed.\n", ExitCode: 1}
-				enc := json.NewEncoder(conn)
-				_ = enc.Encode(resp)
+				s.writeDenied(conn)
 				return
 			}
 		}
+	}
+
+	// Decisions are operation-level, so a request arriving under a fresh
+	// nonce — after a client crash, restart, or from a legacy build — must
+	// resume the operation's existing decision instead of prompting again.
+	// An approved grant is redeemed (one-time) exactly as the exact-nonce
+	// path would; a denial is final for its retention window.
+	if pc, ok := s.PendingConfirms.ConsumeApprovedFor(op.Operation, op.Tracker, op.Key); ok {
+		s.Logger.Info().Str("id", pc.ID).Str("key", op.Key).Msg("permission grant redeemed by operation, executing")
+		req.Args = append(req.Args, "--yes")
+		s.executeCommand(conn, req, projectDir)
+		return
+	}
+	if _, ok := s.PendingConfirms.FindDenied(op.Operation, op.Tracker, op.Key); ok {
+		s.writeDenied(conn)
+		return
 	}
 
 	prompt := fmt.Sprintf("%s %s?", op.Operation, op.Key)
@@ -910,6 +924,19 @@ func (s *Server) handleDestructiveConfirm(conn net.Conn, req Request, op destruc
 	})
 	s.Logger.Info().Str("id", id).Str("prompt", prompt).Msg("destructive operation awaiting confirmation")
 	s.writeAwaitConfirm(conn, id, prompt)
+}
+
+// writeDenied reports a user denial. The wording is agent-facing on purpose:
+// a denial is the user's decision about the operation, not a transient
+// failure, so the requester must stop retrying and bring the question back
+// to the human instead of routing around the refusal.
+func (s *Server) writeDenied(conn net.Conn) {
+	resp := Response{
+		Stderr:   "Operation aborted: the user denied permission for this operation. Back off — do not retry it in any form; rethink the approach and ask the user how to proceed.\n",
+		ExitCode: 1,
+	}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
 }
 
 // writeAwaitConfirm tells the client its operation is queued for permission.

@@ -766,6 +766,61 @@ func TestServer_DestructiveConfirm_ResubmitIsIdempotent(t *testing.T) {
 	assert.Equal(t, 1, store.Len())
 }
 
+func TestServer_DestructiveConfirm_ApprovedGrantRedeemedByOperation(t *testing.T) {
+	token := "test-token"
+	addr, _, store := startTestServerWithConfirm(t, token)
+
+	// Queue and approve under one nonce.
+	_ = sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-op", Args: []string{"jira", "issue", "delete", "KAN-7"}})
+	_ = sendRequest(t, addr, Request{Token: token, ClientPID: 2222, Args: []string{"confirm-op", "cid-op", "yes"}})
+
+	// The same operation arriving under a FRESH nonce (client crashed and
+	// restarted) redeems the grant and executes — it must not prompt again.
+	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-fresh", Args: []string{"jira", "issue", "delete", "KAN-7"}})
+	assert.False(t, resp.AwaitConfirm, "approved operation must execute, not re-prompt")
+	assert.Equal(t, 0, store.Len(), "grant is consumed")
+
+	// One approval covers exactly one execution: the next attempt prompts.
+	again := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-later", Args: []string{"jira", "issue", "delete", "KAN-7"}})
+	assert.True(t, again.AwaitConfirm, "consumed grant must not be redeemable twice")
+}
+
+func TestServer_DestructiveConfirm_ApprovedGrantRedeemedByLegacyClient(t *testing.T) {
+	token := "test-token"
+	addr, _, store := startTestServerWithConfirm(t, token)
+
+	_ = sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-legacy", Args: []string{"jira", "issue", "delete", "KAN-8"}})
+	_ = sendRequest(t, addr, Request{Token: token, ClientPID: 2222, Args: []string{"confirm-op", "cid-legacy", "yes"}})
+
+	// A nonce-less request (legacy build) for the approved operation
+	// redeems the grant instead of piling a second prompt onto the user.
+	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, Args: []string{"jira", "issue", "delete", "KAN-8"}})
+	assert.False(t, resp.AwaitConfirm)
+	assert.Equal(t, 0, store.Len())
+}
+
+func TestServer_DestructiveConfirm_DenialBindsToOperation(t *testing.T) {
+	token := "test-token"
+	addr, _, store := startTestServerWithConfirm(t, token)
+
+	_ = sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-no", Args: []string{"jira", "issue", "delete", "KAN-6"}})
+	_ = sendRequest(t, addr, Request{Token: token, ClientPID: 2222, Args: []string{"confirm-op", "cid-no", "no"}})
+
+	// A retry under a fresh nonce gets the denial and a back-off
+	// instruction — the user's "no" is about the operation, not the nonce.
+	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-retry-no", Args: []string{"jira", "issue", "delete", "KAN-6"}})
+	assert.False(t, resp.AwaitConfirm, "denied operation must not re-prompt")
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "denied permission")
+	assert.Contains(t, resp.Stderr, "Back off")
+	assert.Equal(t, 1, store.Len(), "no new queue entry for a denied operation")
+
+	// Nonce-less retries see the same denial.
+	legacy := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, Args: []string{"jira", "issue", "delete", "KAN-6"}})
+	assert.False(t, legacy.AwaitConfirm)
+	assert.Contains(t, legacy.Stderr, "Back off")
+}
+
 func TestServer_DestructiveYes_StillRequiresConfirmation(t *testing.T) {
 	token := "test-token"
 	addr, _, store := startTestServerWithConfirm(t, token)

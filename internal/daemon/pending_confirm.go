@@ -113,6 +113,38 @@ func (s *PendingConfirmStore) FindPending(operation, trackerKind, key string) (P
 	return PendingConfirmation{}, false
 }
 
+// ConsumeApprovedFor redeems an approved grant by the operation it covers,
+// regardless of which nonce created it. The user's consent is operation-
+// level (the prompt says "TransitionIssue 158?", not which client asked),
+// so a requester that lost its original ID — crash, restart, legacy build —
+// redeems the approval instead of prompting the user a second time. Match
+// and removal are one atomic step, same as Consume.
+func (s *PendingConfirmStore) ConsumeApprovedFor(operation, trackerKind, key string) (PendingConfirmation, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, pc := range s.ops {
+		if pc.State == ConfirmApproved && pc.Operation == operation && pc.Tracker == trackerKind && pc.Key == key {
+			delete(s.ops, id)
+			return *pc, true
+		}
+	}
+	return PendingConfirmation{}, false
+}
+
+// FindDenied returns the denied entry for the given operation/tracker/key,
+// if any. A denial is the user's decision about the operation itself, so a
+// retry under a fresh nonce must see it instead of opening a new prompt.
+func (s *PendingConfirmStore) FindDenied(operation, trackerKind, key string) (PendingConfirmation, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, pc := range s.ops {
+		if pc.State == ConfirmDenied && pc.Operation == operation && pc.Tracker == trackerKind && pc.Key == key {
+			return *pc, true
+		}
+	}
+	return PendingConfirmation{}, false
+}
+
 // Consume redeems an approved grant by its unique ID: the entry is removed
 // and returned, but only if it is approved AND covers the given operation/
 // tracker/key — the grant authorizes exactly what the user saw in the
