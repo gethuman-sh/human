@@ -852,3 +852,118 @@ func TestGetIssue_withParent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Human/42", issue.ParentKey)
 }
+
+func TestGetIssue_withTags(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"id":7,"fields":{"System.Title":"Tagged","System.State":"New","System.WorkItemType":"Issue","System.TeamProject":"Human","System.Tags":"alpha; beta;gamma"}}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "myorg", "pat-test")
+	issue, err := client.GetIssue(context.Background(), "Human/7")
+
+	require.NoError(t, err)
+	// The join uses "; " but Azure occasionally omits the space, so both
+	// separator forms must parse.
+	assert.Equal(t, []string{"alpha", "beta", "gamma"}, issue.Labels)
+}
+
+func Test_splitJoinTags(t *testing.T) {
+	assert.Nil(t, splitTags(""))
+	assert.Equal(t, []string{"a", "b"}, splitTags("a; b"))
+	assert.Equal(t, []string{"a", "b"}, splitTags("a;b"))
+	assert.Equal(t, []string{"a"}, splitTags(" a ; "))
+	// Round trip: parse and re-render reproduces the canonical form.
+	assert.Equal(t, "a; b", joinTags(splitTags("a;b")))
+	assert.Equal(t, "", joinTags(nil))
+}
+
+func TestEditIssue_labelsMerged(t *testing.T) {
+	var gotOps []patchOp
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			// The live tag set read before the full-replacement tags write.
+			assert.Equal(t, "/myorg/Human/_apis/wit/workitems/5", r.URL.Path)
+			_, _ = fmt.Fprint(w, `{"id":5,"fields":{"System.Title":"Item","System.State":"New","System.WorkItemType":"Issue","System.TeamProject":"Human","System.Tags":"alpha; beta"}}`)
+		case http.MethodPatch:
+			assert.Equal(t, "/myorg/Human/_apis/wit/workitems/5", r.URL.Path)
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &gotOps))
+			_, _ = fmt.Fprint(w, `{"id":5,"fields":{"System.Title":"Item","System.State":"New","System.WorkItemType":"Issue","System.TeamProject":"Human","System.Tags":"alpha; gamma"}}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "myorg", "pat-test")
+	issue, err := client.EditIssue(context.Background(), "Human/5", tracker.EditOptions{
+		AddLabels:    []string{"gamma", "alpha"}, // "alpha" duplicate must dedupe
+		RemoveLabels: []string{"beta", "ghost"},  // "ghost" absent must be a no-op
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha", "gamma"}, issue.Labels)
+
+	// One "add" op carries the fully merged set — "add" replaces for fields.
+	require.Len(t, gotOps, 1)
+	assert.Equal(t, "add", gotOps[0].Op)
+	assert.Equal(t, "/fields/System.Tags", gotOps[0].Path)
+	assert.Equal(t, "alpha; gamma", gotOps[0].Value)
+}
+
+func TestEditIssue_noLabelChangeSkipsTagsOp(t *testing.T) {
+	title := "New title"
+	var gotOps []patchOp
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			t.Error("title-only edit must not fetch the work item for tag merging")
+			w.WriteHeader(http.StatusNotFound)
+		case http.MethodPatch:
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &gotOps))
+			_, _ = fmt.Fprint(w, `{"id":5,"fields":{"System.Title":"New title","System.State":"New","System.WorkItemType":"Issue","System.TeamProject":"Human","System.Tags":"alpha"}}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "myorg", "pat-test")
+	_, err := client.EditIssue(context.Background(), "Human/5", tracker.EditOptions{Title: &title})
+
+	require.NoError(t, err)
+	require.Len(t, gotOps, 1)
+	assert.Equal(t, "/fields/System.Title", gotOps[0].Path)
+}
+
+func TestCreateIssue_withTags(t *testing.T) {
+	var gotOps []patchOp
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotOps))
+		_, _ = fmt.Fprint(w, `{"id":101,"fields":{"System.Title":"Tagged","System.State":"New","System.WorkItemType":"Issue","System.TeamProject":"Human","System.Tags":"idea; backend"}}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "myorg", "pat-test")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "Human",
+		Title:   "Tagged",
+		Labels:  []string{"idea", "backend"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"idea", "backend"}, issue.Labels)
+
+	require.Len(t, gotOps, 2)
+	assert.Equal(t, "add", gotOps[1].Op)
+	assert.Equal(t, "/fields/System.Tags", gotOps[1].Path)
+	assert.Equal(t, "idea; backend", gotOps[1].Value)
+}

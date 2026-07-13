@@ -1631,6 +1631,289 @@ func TestCreateIssue_withParent(t *testing.T) {
 	assert.Equal(t, "ENG-2", issue.Key)
 }
 
+func TestEditIssue_addAndRemoveLabels(t *testing.T) {
+	// The issue carries "old-label" and "keep"; the edit removes "old-label"
+	// (plus an absent name, which must be ignored), adds "Bug" (exists on the
+	// team under different casing) and "human/idea" (missing — must be
+	// created). Linear's labelIds is full-replacement, so the update must send
+	// exactly: keep + resolved bug + created idea.
+	var createdLabel bool
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"team { id }": func(vars map[string]any) string {
+				assert.Equal(t, "ENG-42", vars["id"])
+				return `{"data":{"issue":{"id":"issue-uuid-1","team":{"id":"team-uuid-1"},
+					"labels":{"nodes":[{"id":"lbl-old","name":"old-label"},{"id":"lbl-keep","name":"keep"}]}}}}`
+			},
+			"team(id:": func(vars map[string]any) string {
+				assert.Equal(t, "team-uuid-1", vars["teamId"])
+				return `{"data":{"team":{"labels":{"nodes":[{"id":"lbl-bug","name":"bug"}]}}}}`
+			},
+			"issueLabelCreate(": func(vars map[string]any) string {
+				createdLabel = true
+				assert.Equal(t, "human/idea", vars["name"])
+				assert.Equal(t, "team-uuid-1", vars["teamId"])
+				return `{"data":{"issueLabelCreate":{"success":true,"issueLabel":{"id":"lbl-idea","name":"human/idea"}}}}`
+			},
+			"issueUpdate": func(vars map[string]any) string {
+				assert.Equal(t, "issue-uuid-1", vars["id"])
+				input := vars["input"].(map[string]any)
+				assert.Equal(t, []any{"lbl-keep", "lbl-bug", "lbl-idea"}, input["labelIds"])
+				_, hasTitle := input["title"]
+				assert.False(t, hasTitle, "label-only edit must not touch the title")
+				return `{"data":{"issueUpdate":{"success":true}}}`
+			},
+			"identifier": func(vars map[string]any) string {
+				assert.Equal(t, "ENG-42", vars["id"])
+				return `{"data":{"issue":{
+					"identifier":"ENG-42","title":"Labeled","description":"",
+					"state":{"name":"Todo","type":"unstarted"},"priorityLabel":"",
+					"assignee":null,"creator":null,
+					"labels":{"nodes":[{"name":"keep"},{"name":"bug"},{"name":"human/idea"}]}
+				}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	issue, err := client.EditIssue(context.Background(), "ENG-42", tracker.EditOptions{
+		AddLabels:    []string{"Bug", "human/idea"},
+		RemoveLabels: []string{"old-label", "not-present"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, createdLabel, "missing label must be created via issueLabelCreate")
+	assert.Equal(t, []string{"keep", "bug", "human/idea"}, issue.Labels)
+}
+
+func TestEditIssue_removeOnlySkipsTeamLabelLookup(t *testing.T) {
+	// With no labels to add there is nothing to resolve or create — the team
+	// label query and issueLabelCreate must not be issued (the handler fatals
+	// on unexpected queries), and the update sends the remaining set.
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"team { id }": func(_ map[string]any) string {
+				return `{"data":{"issue":{"id":"issue-uuid-1","team":{"id":"team-uuid-1"},
+					"labels":{"nodes":[{"id":"lbl-bug","name":"bug"},{"id":"lbl-keep","name":"keep"}]}}}}`
+			},
+			"issueUpdate": func(vars map[string]any) string {
+				input := vars["input"].(map[string]any)
+				assert.Equal(t, []any{"lbl-keep"}, input["labelIds"])
+				return `{"data":{"issueUpdate":{"success":true}}}`
+			},
+			"identifier": func(_ map[string]any) string {
+				return `{"data":{"issue":{
+					"identifier":"ENG-42","title":"Labeled","description":"",
+					"state":{"name":"Todo","type":"unstarted"},"priorityLabel":"",
+					"assignee":null,"creator":null,"labels":{"nodes":[{"name":"keep"}]}
+				}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	issue, err := client.EditIssue(context.Background(), "ENG-42", tracker.EditOptions{
+		RemoveLabels: []string{"Bug"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"keep"}, issue.Labels)
+}
+
+func TestEditIssue_titleOnlyOmitsLabelIDs(t *testing.T) {
+	// labelIds is full-replacement in Linear — a title-only edit including it
+	// would wipe the issue's labels, so it must be absent from the input.
+	title := "Renamed"
+	callCount := 0
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"issueUpdate": func(vars map[string]any) string {
+				input := vars["input"].(map[string]any)
+				_, hasLabelIDs := input["labelIds"]
+				assert.False(t, hasLabelIDs, "title-only edit must not include labelIds")
+				assert.Equal(t, "Renamed", input["title"])
+				return `{"data":{"issueUpdate":{"success":true}}}`
+			},
+			"issue(": func(_ map[string]any) string {
+				callCount++
+				if callCount == 1 {
+					// resolveIssueID call
+					return `{"data":{"issue":{"id":"uuid-1"}}}`
+				}
+				// GetIssue call after edit
+				return `{"data":{"issue":{
+					"identifier":"ENG-42","title":"Renamed","description":"",
+					"state":{"name":"Todo","type":"unstarted"},"priorityLabel":"",
+					"assignee":null,"creator":null,"labels":{"nodes":[{"name":"keep"}]}
+				}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	issue, err := client.EditIssue(context.Background(), "ENG-42", tracker.EditOptions{Title: &title})
+
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed", issue.Title)
+	assert.Equal(t, []string{"keep"}, issue.Labels, "existing labels must survive a title-only edit")
+}
+
+func TestEditIssue_labelCreateFailure(t *testing.T) {
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"team { id }": func(_ map[string]any) string {
+				return `{"data":{"issue":{"id":"issue-uuid-1","team":{"id":"team-uuid-1"},
+					"labels":{"nodes":[]}}}}`
+			},
+			"team(id:": func(_ map[string]any) string {
+				return `{"data":{"team":{"labels":{"nodes":[]}}}}`
+			},
+			"issueLabelCreate(": func(_ map[string]any) string {
+				return `{"data":{"issueLabelCreate":{"success":false,"issueLabel":null}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	_, err := client.EditIssue(context.Background(), "ENG-42", tracker.EditOptions{
+		AddLabels: []string{"human/idea"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "label creation failed")
+}
+
+func TestEditIssue_labelContextTeamMissing(t *testing.T) {
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"team { id }": func(_ map[string]any) string {
+				return `{"data":{"issue":{"id":"issue-uuid-1","team":null,"labels":{"nodes":[]}}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	_, err := client.EditIssue(context.Background(), "ENG-42", tracker.EditOptions{
+		AddLabels: []string{"bug"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot determine team")
+}
+
+func TestCreateIssue_withLabels(t *testing.T) {
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"teams(": func(_ map[string]any) string {
+				return `{"data":{"teams":{"nodes":[{"id":"team-uuid-1"}]}}}`
+			},
+			"projects(": func(_ map[string]any) string {
+				return `{"data":{"projects":{"nodes":[]}}}`
+			},
+			"team(id:": func(vars map[string]any) string {
+				assert.Equal(t, "team-uuid-1", vars["teamId"])
+				return `{"data":{"team":{"labels":{"nodes":[{"id":"lbl-bug","name":"Bug"}]}}}}`
+			},
+			"issueLabelCreate(": func(vars map[string]any) string {
+				assert.Equal(t, "human/idea", vars["name"])
+				return `{"data":{"issueLabelCreate":{"success":true,"issueLabel":{"id":"lbl-idea","name":"human/idea"}}}}`
+			},
+			"issueCreate(": func(vars map[string]any) string {
+				assert.Equal(t, []any{"lbl-bug", "lbl-idea"}, vars["labelIds"])
+				return `{"data":{"issueCreate":{"success":true,"issue":{
+					"identifier":"ENG-101","title":"Labeled","description":"",
+					"state":{"name":""},"priorityLabel":"","assignee":null,"creator":null,
+					"labels":{"nodes":[{"name":"Bug"},{"name":"human/idea"}]}
+				}}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "ENG",
+		Title:   "Labeled",
+		Labels:  []string{"bug", "human/idea"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ENG-101", issue.Key)
+	assert.Equal(t, []string{"Bug", "human/idea"}, issue.Labels)
+}
+
+func TestCreateIssue_withoutLabelsOmitsLabelIDs(t *testing.T) {
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"teams(": func(_ map[string]any) string {
+				return `{"data":{"teams":{"nodes":[{"id":"team-uuid-1"}]}}}`
+			},
+			"projects(": func(_ map[string]any) string {
+				return `{"data":{"projects":{"nodes":[]}}}`
+			},
+			"issueCreate(": func(vars map[string]any) string {
+				_, hasLabelIDs := vars["labelIds"]
+				assert.False(t, hasLabelIDs, "labelIds should be omitted when no labels requested")
+				return `{"data":{"issueCreate":{"success":true,"issue":{
+					"identifier":"ENG-102","title":"Plain","description":"",
+					"state":{"name":""},"priorityLabel":"","assignee":null,"creator":null,
+					"labels":{"nodes":[]}
+				}}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "ENG",
+		Title:   "Plain",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ENG-102", issue.Key)
+}
+
+func Test_mergedLabelIDs(t *testing.T) {
+	current := []idNameNode{
+		{ID: "l1", Name: "bug"},
+		{ID: "l2", Name: "keep"},
+	}
+
+	tests := []struct {
+		name        string
+		removeNames []string
+		addIDs      []string
+		want        []string
+	}{
+		{"no changes", nil, nil, []string{"l1", "l2"}},
+		{"remove by name case-insensitive", []string{"BUG"}, nil, []string{"l2"}},
+		{"remove absent is ignored", []string{"nope"}, nil, []string{"l1", "l2"}},
+		{"add new", nil, []string{"l3"}, []string{"l1", "l2", "l3"}},
+		{"add existing is deduped", nil, []string{"l1"}, []string{"l1", "l2"}},
+		{"swap", []string{"bug"}, []string{"l3"}, []string{"l2", "l3"}},
+		{"remove all", []string{"bug", "keep"}, nil, []string{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, mergedLabelIDs(current, tt.removeNames, tt.addIDs))
+		})
+	}
+}
+
 func TestGetIssue_withParent(t *testing.T) {
 	srv := httptest.NewServer(&graphQLHandler{
 		t: t,

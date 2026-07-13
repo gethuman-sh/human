@@ -489,3 +489,102 @@ func TestIssue_IsBug(t *testing.T) {
 		})
 	}
 }
+
+func TestIssue_IsIdea(t *testing.T) {
+	tests := []struct {
+		name string
+		i    Issue
+		want bool
+	}{
+		{"empty issue", Issue{}, false},
+		{"label idea lowercase", Issue{Labels: []string{"idea"}}, true},
+		{"label Idea titlecase", Issue{Labels: []string{"Idea"}}, true},
+		{"label human/idea", Issue{Labels: []string{"human/idea"}}, true},
+		{"canonical IdeaLabel constant", Issue{Labels: []string{IdeaLabel}}, true},
+		{"label kind/idea", Issue{Labels: []string{"kind/idea"}}, true},
+		{"label type:idea", Issue{Labels: []string{"type:idea"}}, true},
+		{"type idea", Issue{Type: "idea"}, true},
+		{"type Idea", Issue{Type: "Idea"}, true},
+		{"type human/idea", Issue{Type: "human/idea"}, true},
+		{"type kind/idea", Issue{Type: "kind/idea"}, true},
+		{"type type:idea", Issue{Type: "type:idea"}, true},
+		{"label ideation is not an idea", Issue{Labels: []string{"ideation"}}, false},
+		// hasToken splits on '/' and ':' only, so "no-idea" stays one segment
+		// ("no-idea" != "idea") — hyphenated non-matches must not classify.
+		{"label no-idea is not an idea", Issue{Labels: []string{"no-idea"}}, false},
+		{"label bugidea is not an idea", Issue{Labels: []string{"bugidea"}}, false},
+		{"type ideation is not an idea", Issue{Type: "ideation"}, false},
+		{"idea among other labels", Issue{Labels: []string{"priority/high", "human/idea"}}, true},
+		{"non-idea labels", Issue{Labels: []string{"bug", "kind/feature"}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.i.IsIdea())
+		})
+	}
+}
+
+// fakeLabelEditor is executable documentation of the EditOptions label
+// contract every provider must honour: labels are a set — AddLabels is
+// idempotent (adding a present label changes nothing), RemoveLabels ignores
+// absent labels (a remove-absent is a no-op, not an error), and one call may
+// combine both to swap labels atomically.
+type fakeLabelEditor struct {
+	labels []string
+}
+
+var _ Editor = (*fakeLabelEditor)(nil)
+
+func (f *fakeLabelEditor) EditIssue(_ context.Context, _ string, opts EditOptions) (*Issue, error) {
+	removed := make(map[string]bool, len(opts.RemoveLabels))
+	for _, l := range opts.RemoveLabels {
+		removed[l] = true
+	}
+
+	seen := make(map[string]bool, len(f.labels)+len(opts.AddLabels))
+	next := make([]string, 0, len(f.labels)+len(opts.AddLabels))
+	for _, l := range f.labels {
+		if removed[l] || seen[l] {
+			continue
+		}
+		seen[l] = true
+		next = append(next, l)
+	}
+	for _, l := range opts.AddLabels {
+		if seen[l] {
+			continue
+		}
+		seen[l] = true
+		next = append(next, l)
+	}
+
+	f.labels = next
+	return &Issue{Labels: next}, nil
+}
+
+func TestEditOptions_labelContract(t *testing.T) {
+	tests := []struct {
+		name    string
+		initial []string
+		opts    EditOptions
+		want    []string
+	}{
+		{"add to empty", nil, EditOptions{AddLabels: []string{IdeaLabel}}, []string{IdeaLabel}},
+		{"add is idempotent", []string{"bug"}, EditOptions{AddLabels: []string{"bug"}}, []string{"bug"}},
+		{"remove absent is a no-op", []string{"bug"}, EditOptions{RemoveLabels: []string{"nope"}}, []string{"bug"}},
+		{"remove present", []string{"bug", "keep"}, EditOptions{RemoveLabels: []string{"bug"}}, []string{"keep"}},
+		{"swap in one call", []string{IdeaLabel, "keep"},
+			EditOptions{AddLabels: []string{"human/ready"}, RemoveLabels: []string{IdeaLabel}},
+			[]string{"keep", "human/ready"}},
+		{"no label opts leaves labels untouched", []string{"bug"}, EditOptions{}, []string{"bug"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ed := &fakeLabelEditor{labels: tt.initial}
+			issue, err := ed.EditIssue(context.Background(), "KEY-1", tt.opts)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, issue.Labels)
+		})
+	}
+}

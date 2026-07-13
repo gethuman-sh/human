@@ -161,8 +161,9 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	}
 
 	payload := createRequest{
-		Title: issue.Title,
-		Body:  issue.Description,
+		Title:  issue.Title,
+		Body:   issue.Description,
+		Labels: issue.Labels,
 	}
 
 	body, err := json.Marshal(payload)
@@ -367,12 +368,40 @@ func (c *Client) GetCurrentUser(ctx context.Context) (string, error) {
 }
 
 // EditIssue implements tracker.Editor.
+// Labels go through GitHub's dedicated add/remove endpoints instead of the
+// PATCH labels array: PATCHing the full array would silently drop labels
+// another editor set between our read and our write.
 func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
 	owner, repo, number, err := parseIssueKey(key)
 	if err != nil {
 		return nil, err
 	}
 
+	var patched *tracker.Issue
+	if opts.Title != nil || opts.Description != nil {
+		patched, err = c.patchIssue(ctx, key, owner, repo, number, opts)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := c.addLabels(ctx, owner, repo, number, opts.AddLabels); err != nil {
+		return nil, err
+	}
+	if err := c.removeLabels(ctx, owner, repo, number, opts.RemoveLabels); err != nil {
+		return nil, err
+	}
+
+	// The label endpoints return bare label arrays, so any label change makes
+	// the PATCH response stale — re-fetch to hand back the issue's final state.
+	if patched == nil || len(opts.AddLabels) > 0 || len(opts.RemoveLabels) > 0 {
+		return c.GetIssue(ctx, key)
+	}
+	return patched, nil
+}
+
+// patchIssue updates title and/or body and returns the resulting issue.
+func (c *Client) patchIssue(ctx context.Context, key, owner, repo string, number int, opts tracker.EditOptions) (*tracker.Issue, error) {
 	fields := make(map[string]string)
 	if opts.Title != nil {
 		fields["title"] = *opts.Title
@@ -398,6 +427,50 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 
 	issue := toTrackerIssue(owner, repo, gi)
 	return &issue, nil
+}
+
+// addLabels attaches labels via the additive labels endpoint; one call covers
+// all labels and GitHub creates missing label entities on the fly.
+func (c *Client) addLabels(ctx context.Context, owner, repo string, number int, labels []string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+
+	payload, err := json.Marshal(map[string][]string{"labels": labels})
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshalling add-labels request",
+			"owner", owner, "repo", repo)
+	}
+
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels", url.PathEscape(owner), url.PathEscape(repo), number)
+	resp, err := c.doRequest(ctx, http.MethodPost, path, "", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+// removeLabels deletes each label individually; GitHub answers 404 for a
+// label the issue does not carry, which the EditOptions contract treats as
+// success so that label swaps stay idempotent.
+func (c *Client) removeLabels(ctx context.Context, owner, repo string, number int, labels []string) error {
+	for _, label := range labels {
+		// The label stays unescaped here: the client's URL builder treats the
+		// path as decoded and escapes it on serialization, so pre-escaping
+		// would double-encode names with spaces.
+		path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s",
+			url.PathEscape(owner), url.PathEscape(repo), number, label)
+		resp, err := c.doRequest(ctx, http.MethodDelete, path, "", nil)
+		if err != nil {
+			if statusCode, ok := errors.AllDetails(err)["statusCode"].(int); ok && statusCode == http.StatusNotFound {
+				continue
+			}
+			return err
+		}
+		_ = resp.Body.Close()
+	}
+	return nil
 }
 
 // DeleteIssue implements tracker.Deleter by closing the issue.

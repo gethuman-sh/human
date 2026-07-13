@@ -698,3 +698,166 @@ func TestGetIssue_withParent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "KAN-1", issue.ParentKey)
 }
+
+func TestEditIssue_labels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/rest/api/3/issue/KAN-1":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(body, &got))
+			update, ok := got["update"].(map[string]any)
+			require.True(t, ok, "labels must go through the update section")
+			assert.Equal(t, []any{
+				map[string]any{"add": "feature"},
+				map[string]any{"add": "ui"},
+				map[string]any{"remove": "bug"},
+			}, update["labels"])
+
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/rest/api/3/issue/KAN-1":
+			_, _ = fmt.Fprint(w, `{
+				"key": "KAN-1",
+				"fields": {
+					"summary": "The answer",
+					"status": {"name": "Open"},
+					"description": null,
+					"labels": ["feature", "ui"]
+				}
+			}`)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "user@example.com", "token")
+	issue, err := client.EditIssue(context.Background(), "KAN-1", tracker.EditOptions{
+		AddLabels:    []string{"feature", "ui"},
+		RemoveLabels: []string{"bug"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"feature", "ui"}, issue.Labels)
+}
+
+func TestEditIssue_noUpdateSectionWithoutLabelChange(t *testing.T) {
+	title := "Updated Title"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(body, &got))
+			_, hasUpdate := got["update"]
+			assert.False(t, hasUpdate, "update section should be absent without label changes")
+
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodGet:
+			_, _ = fmt.Fprint(w, `{"key":"KAN-1","fields":{"summary":"Updated Title","status":{"name":"Open"},"description":null}}`)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "user@example.com", "token")
+	_, err := client.EditIssue(context.Background(), "KAN-1", tracker.EditOptions{Title: &title})
+
+	require.NoError(t, err)
+}
+
+func TestEditIssue_labelWithSpaceRejected(t *testing.T) {
+	client := New("http://localhost", "user@example.com", "token")
+	_, err := client.EditIssue(context.Background(), "KAN-1", tracker.EditOptions{
+		AddLabels: []string{"help wanted"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot contain spaces")
+}
+
+func TestCreateIssue_withLabels(t *testing.T) {
+	var gotBody createRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"id":"10003","key":"KAN-44"}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "user@example.com", "token")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "KAN",
+		Type:    "Task",
+		Title:   "Labelled issue",
+		Labels:  []string{"bug", "urgent"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bug", "urgent"}, gotBody.Fields.Labels)
+}
+
+func TestCreateIssue_labelWithSpaceRejected(t *testing.T) {
+	client := New("http://localhost", "user@example.com", "token")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "KAN",
+		Type:    "Task",
+		Title:   "Bad label",
+		Labels:  []string{"help wanted"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot contain spaces")
+}
+
+func TestListIssues_labels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"issues":[
+			{"key":"KAN-1","fields":{"summary":"First issue","status":{"name":"To Do"},"issuetype":{"name":"Bug"},"labels":["backend","urgent"]}},
+			{"key":"KAN-2","fields":{"summary":"Second issue","status":{"name":"In Progress"},"issuetype":{"name":"Task"}}}
+		]}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "user@example.com", "token")
+	issues, err := client.ListIssues(context.Background(), tracker.ListOptions{
+		Project:    "KAN",
+		MaxResults: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, issues, 2)
+	assert.Equal(t, []string{"backend", "urgent"}, issues[0].Labels)
+	assert.Empty(t, issues[1].Labels)
+}
+
+func TestGetIssue_labels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.RawQuery, "labels", "GetIssue must request labels so they reach the caller")
+		_, _ = fmt.Fprint(w, `{
+			"key": "KAN-42",
+			"fields": {
+				"summary": "The answer",
+				"status": {"name": "Done"},
+				"description": null,
+				"issuetype": {"name": "Bug"},
+				"labels": ["backend", "urgent"]
+			}
+		}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "user@example.com", "token")
+	issue, err := client.GetIssue(context.Background(), "KAN-42")
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"backend", "urgent"}, issue.Labels)
+}

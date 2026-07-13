@@ -145,3 +145,37 @@ type projectNode struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
+
+// idNameNode holds a label's internal id and display name — the id is what
+// Linear's mutations accept, the name is what users address labels by.
+type idNameNode struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type idNameConnection struct {
+	Nodes []idNameNode `json:"nodes"`
+}
+
+type issueLabelContextData struct {
+	Issue struct {
+		ID   string `json:"id"`
+		Team struct {
+			ID string `json:"id"`
+		} `json:"team"`
+		Labels idNameConnection `json:"labels"`
+	} `json:"issue"`
+}
+
+type teamLabelsData struct {
+	Team struct {
+		Labels idNameConnection `json:"labels"`
+	} `json:"team"`
+}
+
+type issueLabelCreateData struct {
+	IssueLabelCreate struct {
+		Success    bool       `json:"success"`
+		IssueLabel idNameNode `json:"issueLabel"`
+	} `json:"issueLabelCreate"`
+}

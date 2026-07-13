@@ -2,19 +2,27 @@ package shortcut
 
 // scStory is the Shortcut API representation of a story.
 type scStory struct {
-	ID              int64    `json:"id"`
-	Name            string   `json:"name"`
-	Description     string   `json:"description"`
-	StoryType       string   `json:"story_type"`
-	WorkflowStateID int64    `json:"workflow_state_id"`
-	AppURL          string   `json:"app_url"`
-	OwnerIDs        []string `json:"owner_ids"`
-	RequestedByID   string   `json:"requested_by_id"`
-	Archived        bool     `json:"archived"`
-	ProjectID       *int64   `json:"project_id"`
-	GroupID         string   `json:"group_id"`        // UUID of the group (team)
-	ParentStoryID   *int64   `json:"parent_story_id"` // set when this story is a subtask
-	UpdatedAt       string   `json:"updated_at"`
+	ID              int64     `json:"id"`
+	Name            string    `json:"name"`
+	Description     string    `json:"description"`
+	StoryType       string    `json:"story_type"`
+	WorkflowStateID int64     `json:"workflow_state_id"`
+	AppURL          string    `json:"app_url"`
+	OwnerIDs        []string  `json:"owner_ids"`
+	RequestedByID   string    `json:"requested_by_id"`
+	Archived        bool      `json:"archived"`
+	ProjectID       *int64    `json:"project_id"`
+	GroupID         string    `json:"group_id"`        // UUID of the group (team)
+	ParentStoryID   *int64    `json:"parent_story_id"` // set when this story is a subtask
+	UpdatedAt       string    `json:"updated_at"`
+	Labels          []scLabel `json:"labels"`
+}
+
+// scLabel is a label attached to a story. The same {"name": ...} shape doubles
+// as Shortcut's CreateLabelParams on writes, where unknown labels are created
+// on the fly.
+type scLabel struct {
+	Name string `json:"name"`
 }
 
 // scSearchRequest is the request body for POST /api/v3/stories/search.

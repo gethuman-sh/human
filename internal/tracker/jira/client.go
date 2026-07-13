@@ -83,6 +83,7 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 			Title:   iss.Fields.Summary,
 			Type:    iss.Fields.IssueType.Name,
 			Status:  iss.Fields.Status.Name,
+			Labels:  iss.Fields.Labels,
 			URL:     c.baseURL + "/browse/" + iss.Key,
 		}
 		if iss.Fields.Updated != "" {
@@ -96,7 +97,7 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, error) {
 	path := fmt.Sprintf("/rest/api/3/issue/%s", url.PathEscape(key))
 	query := url.Values{
-		"fields": {"summary,status,description,assignee,reporter,priority,issuetype,parent"},
+		"fields": {"summary,status,description,assignee,reporter,priority,issuetype,parent,labels"},
 	}
 
 	resp, err := c.doRequest(ctx, http.MethodGet, path, query.Encode(), nil)
@@ -133,6 +134,7 @@ func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, erro
 		Assignee:    nameOrEmpty(f.Assignee),
 		Reporter:    nameOrEmpty(f.Reporter),
 		Description: desc,
+		Labels:      f.Labels,
 		URL:         c.baseURL + "/browse/" + detail.Key,
 		ParentKey:   parentKey,
 	}, nil
@@ -140,12 +142,17 @@ func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, erro
 
 // CreateIssue implements tracker.Creator.
 func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracker.Issue, error) {
+	if err := validateLabels(issue.Labels); err != nil {
+		return nil, err
+	}
+
 	payload := createRequest{
 		Fields: createFields{
 			Project:     keyField{Key: issue.Project},
 			Summary:     issue.Title,
 			IssueType:   nameOnly{Name: issue.Type},
 			Description: adf.FromMarkdown(issue.Description),
+			Labels:      issue.Labels,
 		},
 	}
 	// Jira models subtasks as a parent link; the issue type must be a
@@ -348,6 +355,10 @@ func (c *Client) GetCurrentUser(ctx context.Context) (string, error) {
 
 // EditIssue implements tracker.Editor.
 func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
+	if err := validateLabels(opts.AddLabels); err != nil {
+		return nil, err
+	}
+
 	fields := make(map[string]any)
 	if opts.Title != nil {
 		fields["summary"] = *opts.Title
@@ -356,7 +367,15 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 		fields["description"] = adf.FromMarkdown(*opts.Description)
 	}
 
-	payload, err := json.Marshal(map[string]any{"fields": fields})
+	body := map[string]any{"fields": fields}
+	// Labels go through the update section's atomic add/remove operations
+	// rather than a full-field set, so a label swap cannot clobber labels a
+	// concurrent editor added in between.
+	if ops := labelUpdateOps(opts.AddLabels, opts.RemoveLabels); len(ops) > 0 {
+		body["update"] = map[string]any{"labels": ops}
+	}
+
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "marshalling edit request", "issueKey", key)
 	}
@@ -384,6 +403,31 @@ func (c *Client) DeleteIssue(ctx context.Context, key string) error {
 
 func (c *Client) doRequest(ctx context.Context, method, path, rawQuery string, body io.Reader) (*http.Response, error) {
 	return c.api.Do(ctx, method, path, rawQuery, body)
+}
+
+// labelUpdateOps builds Jira's per-label add/remove operation list for the
+// PUT body's update section.
+func labelUpdateOps(add, remove []string) []map[string]string {
+	ops := make([]map[string]string, 0, len(add)+len(remove))
+	for _, l := range add {
+		ops = append(ops, map[string]string{"add": l})
+	}
+	for _, l := range remove {
+		ops = append(ops, map[string]string{"remove": l})
+	}
+	return ops
+}
+
+// validateLabels rejects labels Jira cannot store; Jira refuses the whole
+// request when a label contains whitespace, so failing early gives the caller
+// an actionable error instead of an opaque 400.
+func validateLabels(labels []string) error {
+	for _, l := range labels {
+		if strings.ContainsAny(l, " \t") {
+			return errors.WithDetails("jira labels cannot contain spaces", "label", l)
+		}
+	}
+	return nil
 }
 
 func hasDescription(raw json.RawMessage) bool {

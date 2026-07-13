@@ -262,7 +262,7 @@ func TestRunCreateIssue_Success(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "New feature", "Details here", "")
+	err := RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "New feature", "Details here", "", nil)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "KAN-10")
 	assert.Contains(t, buf.String(), "New feature")
@@ -276,7 +276,7 @@ func TestRunCreateIssue_Error(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "Title", "", "")
+	err := RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "Title", "", "", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "create failed")
 }
@@ -1021,7 +1021,7 @@ func TestCmd_IssueEdit_NoFlags(t *testing.T) {
 	root.SetArgs([]string{"jira", "issue", "edit", "KAN-1"})
 	err := root.Execute()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one of --title or --description is required")
+	assert.Contains(t, err.Error(), "at least one of --title, --description, --add-label, or --remove-label is required")
 }
 
 func TestCmd_IssueDelete_Success(t *testing.T) {

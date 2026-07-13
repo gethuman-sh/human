@@ -150,6 +150,7 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	payload := createRequest{
 		Title:       issue.Title,
 		Description: issue.Description,
+		Labels:      strings.Join(issue.Labels, ","),
 	}
 
 	body, err := json.Marshal(payload)
@@ -377,6 +378,14 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 	}
 	if opts.Description != nil {
 		fields["description"] = *opts.Description
+	}
+	// GitLab's PUT applies add/remove atomically on the server, so a label
+	// swap needs no read-modify-write round trip that could race other editors.
+	if len(opts.AddLabels) > 0 {
+		fields["add_labels"] = strings.Join(opts.AddLabels, ",")
+	}
+	if len(opts.RemoveLabels) > 0 {
+		fields["remove_labels"] = strings.Join(opts.RemoveLabels, ",")
 	}
 
 	payload, err := json.Marshal(fields)

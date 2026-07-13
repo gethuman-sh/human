@@ -150,6 +150,9 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	if issue.Description != "" {
 		ops = append(ops, patchOp{Op: "add", Path: "/fields/System.Description", Value: issue.Description})
 	}
+	if len(issue.Labels) > 0 {
+		ops = append(ops, patchOp{Op: "add", Path: "/fields/System.Tags", Value: joinTags(issue.Labels)})
+	}
 	// Azure models a subtask as a hierarchy link to the parent work item
 	// (Hierarchy-Reverse points from child to parent), added at create time.
 	if issue.ParentKey != "" {
@@ -189,6 +192,7 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		Description: wi.Fields.Description,
 		URL:         fmt.Sprintf("https://dev.azure.com/%s/%s/_workitems/edit/%d", c.org, project, wi.ID),
 		ParentKey:   issue.ParentKey,
+		Labels:      splitTags(wi.Fields.Tags),
 	}, nil
 }
 
@@ -331,6 +335,18 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 	if opts.Description != nil {
 		ops = append(ops, patchOp{Op: "replace", Path: "/fields/System.Description", Value: *opts.Description})
 	}
+	// System.Tags has no per-tag patch semantics — "add" on a field path
+	// overwrites the whole value — so the live tag set is read and merged
+	// first. Skipped entirely when the edit doesn't touch labels, keeping
+	// title/description-only edits from clobbering tags.
+	if len(opts.AddLabels) > 0 || len(opts.RemoveLabels) > 0 {
+		tags, tErr := c.currentTags(ctx, project, id)
+		if tErr != nil {
+			return nil, tErr
+		}
+		merged := mergeLabels(tags, opts.AddLabels, opts.RemoveLabels)
+		ops = append(ops, patchOp{Op: "add", Path: "/fields/System.Tags", Value: joinTags(merged)})
+	}
 
 	body, err := json.Marshal(ops)
 	if err != nil {
@@ -349,6 +365,65 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 
 	issue := c.toTrackerIssue(wi, project)
 	return &issue, nil
+}
+
+// currentTags reads the work item's live tag set so a label edit can merge
+// against it before the full-replacement System.Tags write.
+func (c *Client) currentTags(ctx context.Context, project string, id int) ([]string, error) {
+	path := fmt.Sprintf("/%s/%s/_apis/wit/workitems/%d", url.PathEscape(c.org), url.PathEscape(project), id)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, "api-version=7.1", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	var wi adoWorkItem
+	if err := apiclient.DecodeJSON(resp, &wi, "project", project, "id", id); err != nil {
+		return nil, err
+	}
+	return splitTags(wi.Fields.Tags), nil
+}
+
+// mergeLabels applies add/remove requests to an existing label set. Existing
+// order is preserved, additions are appended, duplicates are dropped, and
+// removing an absent label is a no-op so label swaps stay idempotent.
+func mergeLabels(existing, add, remove []string) []string {
+	removed := make(map[string]bool, len(remove))
+	for _, name := range remove {
+		removed[name] = true
+	}
+	seen := make(map[string]bool, len(existing)+len(add))
+	merged := make([]string, 0, len(existing)+len(add))
+	keep := func(name string) {
+		if removed[name] || seen[name] {
+			return
+		}
+		seen[name] = true
+		merged = append(merged, name)
+	}
+	for _, name := range existing {
+		keep(name)
+	}
+	for _, name := range add {
+		keep(name)
+	}
+	return merged
+}
+
+// splitTags parses Azure's "; "-joined System.Tags value into label names.
+// Splitting on the bare ";" and trimming tolerates the missing space Azure
+// sometimes omits.
+func splitTags(tags string) []string {
+	var names []string
+	for _, part := range strings.Split(tags, ";") {
+		if name := strings.TrimSpace(part); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// joinTags renders label names in the "; "-joined form System.Tags expects.
+func joinTags(names []string) string {
+	return strings.Join(names, "; ")
 }
 
 // DeleteIssue implements tracker.Deleter by transitioning the work item to "Done".
@@ -489,6 +564,7 @@ func (c *Client) toTrackerIssue(wi adoWorkItem, project string) tracker.Issue {
 		Status:      wi.Fields.State,
 		Description: wi.Fields.Description,
 		URL:         fmt.Sprintf("https://dev.azure.com/%s/%s/_workitems/edit/%d", c.org, project, wi.ID),
+		Labels:      splitTags(wi.Fields.Tags),
 	}
 
 	if wi.Fields.ChangedDate != "" {

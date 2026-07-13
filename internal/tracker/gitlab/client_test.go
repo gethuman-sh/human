@@ -788,3 +788,78 @@ func TestCreateIssue_parentUnsupported(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not support subtasks")
 }
+
+func TestEditIssue_labels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		assert.Equal(t, "/api/v4/projects/mygroup%2Fmyproject/issues/42", r.URL.RawPath)
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var got map[string]string
+		require.NoError(t, json.Unmarshal(body, &got))
+		assert.Equal(t, "feature,ui", got["add_labels"])
+		assert.Equal(t, "bug", got["remove_labels"])
+		_, hasTitle := got["title"]
+		assert.False(t, hasTitle, "title should not be present on a labels-only edit")
+
+		_, _ = fmt.Fprint(w, `{"iid":42,"title":"The answer","description":"desc","state":"opened","labels":["feature","ui"]}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "glpat-test")
+	issue, err := client.EditIssue(context.Background(), "mygroup/myproject#42", tracker.EditOptions{
+		AddLabels:    []string{"feature", "ui"},
+		RemoveLabels: []string{"bug"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"feature", "ui"}, issue.Labels)
+}
+
+func TestEditIssue_noLabelFieldsWithoutLabelChange(t *testing.T) {
+	title := "Updated Title"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var got map[string]string
+		require.NoError(t, json.Unmarshal(body, &got))
+		_, hasAdd := got["add_labels"]
+		assert.False(t, hasAdd, "add_labels should be absent when no labels are added")
+		_, hasRemove := got["remove_labels"]
+		assert.False(t, hasRemove, "remove_labels should be absent when no labels are removed")
+
+		_, _ = fmt.Fprint(w, `{"iid":42,"title":"Updated Title","description":"desc","state":"opened"}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "glpat-test")
+	_, err := client.EditIssue(context.Background(), "mygroup/myproject#42", tracker.EditOptions{Title: &title})
+
+	require.NoError(t, err)
+}
+
+func TestCreateIssue_withLabels(t *testing.T) {
+	var gotBody createRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"iid":99,"title":"Labelled issue","description":""}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "glpat-test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "mygroup/myproject",
+		Title:   "Labelled issue",
+		Labels:  []string{"bug", "urgent"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "bug,urgent", gotBody.Labels)
+}

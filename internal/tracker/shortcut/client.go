@@ -195,21 +195,31 @@ func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, erro
 		return nil, err
 	}
 
+	story, err := c.fetchStory(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	issue, err := c.toTrackerIssue(ctx, *story, "")
+	if err != nil {
+		return nil, err
+	}
+	return &issue, nil
+}
+
+// fetchStory retrieves a single story by numeric ID. Shared by GetIssue and
+// label edits, which must read the current label set before writing.
+func (c *Client) fetchStory(ctx context.Context, id int64) (*scStory, error) {
 	path := fmt.Sprintf("/api/v3/stories/%d", id)
 	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil, "")
 	if err != nil {
 		return nil, err
 	}
 	var story scStory
-	if err := apiclient.DecodeJSON(resp, &story, "key", key); err != nil {
+	if err := apiclient.DecodeJSON(resp, &story, "storyID", id); err != nil {
 		return nil, err
 	}
-
-	issue, err := c.toTrackerIssue(ctx, story, "")
-	if err != nil {
-		return nil, err
-	}
-	return &issue, nil
+	return &story, nil
 }
 
 // CreateIssue implements tracker.Creator.
@@ -219,6 +229,9 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	}
 	if issue.Description != "" {
 		body["description"] = issue.Description
+	}
+	if len(issue.Labels) > 0 {
+		body["labels"] = scLabelParams(issue.Labels)
 	}
 	if isValidStoryType(issue.Type) {
 		body["story_type"] = issue.Type
@@ -271,6 +284,7 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		Type:        story.StoryType,
 		URL:         story.AppURL,
 		ParentKey:   parentStoryKey(story.ParentStoryID),
+		Labels:      labelNames(story.Labels),
 	}, nil
 }
 
@@ -400,12 +414,23 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 		return nil, err
 	}
 
-	fields := make(map[string]string)
+	fields := make(map[string]any)
 	if opts.Title != nil {
 		fields["name"] = *opts.Title
 	}
 	if opts.Description != nil {
 		fields["description"] = *opts.Description
+	}
+	// Shortcut's story update replaces the full label set, so the current
+	// labels must be fetched and merged before writing. Labels stay out of
+	// the body entirely when the edit doesn't touch them, keeping
+	// title/description-only edits from clobbering labels.
+	if len(opts.AddLabels) > 0 || len(opts.RemoveLabels) > 0 {
+		merged, mErr := c.mergedStoryLabels(ctx, id, opts)
+		if mErr != nil {
+			return nil, mErr
+		}
+		fields["labels"] = scLabelParams(merged)
 	}
 
 	payload, err := json.Marshal(fields)
@@ -428,6 +453,67 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 		return nil, err
 	}
 	return &issue, nil
+}
+
+// mergedStoryLabels reads the story's current labels and applies the
+// requested additions/removals, producing the full-replacement set the
+// Shortcut update endpoint expects.
+func (c *Client) mergedStoryLabels(ctx context.Context, id int64, opts tracker.EditOptions) ([]string, error) {
+	story, err := c.fetchStory(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return mergeLabels(labelNames(story.Labels), opts.AddLabels, opts.RemoveLabels), nil
+}
+
+// mergeLabels applies add/remove requests to an existing label set. Existing
+// order is preserved, additions are appended, duplicates are dropped, and
+// removing an absent label is a no-op so label swaps stay idempotent.
+func mergeLabels(existing, add, remove []string) []string {
+	removed := make(map[string]bool, len(remove))
+	for _, name := range remove {
+		removed[name] = true
+	}
+	seen := make(map[string]bool, len(existing)+len(add))
+	merged := make([]string, 0, len(existing)+len(add))
+	keep := func(name string) {
+		if removed[name] || seen[name] {
+			return
+		}
+		seen[name] = true
+		merged = append(merged, name)
+	}
+	for _, name := range existing {
+		keep(name)
+	}
+	for _, name := range add {
+		keep(name)
+	}
+	return merged
+}
+
+// labelNames flattens Shortcut label objects to their plain names.
+func labelNames(labels []scLabel) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(labels))
+	for _, l := range labels {
+		names = append(names, l.Name)
+	}
+	return names
+}
+
+// scLabelParams renders label names as Shortcut CreateLabelParams objects;
+// labels unknown to the workspace are created by Shortcut on the fly. The
+// result is never nil so an emptied label set marshals as [] and actually
+// clears the story's labels.
+func scLabelParams(names []string) []scLabel {
+	params := make([]scLabel, 0, len(names))
+	for _, name := range names {
+		params = append(params, scLabel{Name: name})
+	}
+	return params
 }
 
 // DeleteIssue implements tracker.Deleter using true deletion (DELETE /api/v3/stories/{id}).
@@ -711,6 +797,7 @@ func (c *Client) toTrackerIssue(ctx context.Context, story scStory, project stri
 		Reporter:    reporter,
 		Description: story.Description,
 		URL:         story.AppURL,
+		Labels:      labelNames(story.Labels),
 	}
 	issue.ParentKey = parentStoryKey(story.ParentStoryID)
 	if story.UpdatedAt != "" {

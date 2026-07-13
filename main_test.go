@@ -531,7 +531,7 @@ func TestRunCreateIssue(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := cmdprovider.RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "New issue", "", "")
+	err := cmdprovider.RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "New issue", "", "", nil)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "KAN-42")
 	assert.Contains(t, buf.String(), "New issue")
@@ -545,7 +545,7 @@ func TestRunCreateIssue_error(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := cmdprovider.RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "X", "", "")
+	err := cmdprovider.RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "X", "", "", nil)
 	assert.EqualError(t, err, "create failed")
 }
 

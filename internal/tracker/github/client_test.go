@@ -1036,3 +1036,142 @@ func TestCreateIssue_invalidParent(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid parent key")
 }
+
+func TestEditIssue_labelsOnly(t *testing.T) {
+	var addBody map[string][]string
+	var deletePaths []string
+	patchCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch:
+			patchCalled = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/octocat/repo/issues/1/labels":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &addBody))
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `[{"name":"feature"},{"name":"help wanted"}]`)
+		case r.Method == http.MethodDelete:
+			deletePaths = append(deletePaths, r.URL.EscapedPath())
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `[]`)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/octocat/repo/issues/1":
+			_, _ = fmt.Fprint(w, `{"number":1,"title":"The answer","body":"desc","state":"open","labels":[{"name":"feature"},{"name":"help wanted"}]}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	issue, err := client.EditIssue(context.Background(), "octocat/repo#1", tracker.EditOptions{
+		AddLabels:    []string{"feature", "help wanted"},
+		RemoveLabels: []string{"bug", "wont fix"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, patchCalled, "a labels-only edit must not PATCH the issue")
+	assert.Equal(t, map[string][]string{"labels": {"feature", "help wanted"}}, addBody)
+	assert.Equal(t, []string{
+		"/repos/octocat/repo/issues/1/labels/bug",
+		"/repos/octocat/repo/issues/1/labels/wont%20fix",
+	}, deletePaths)
+	assert.Equal(t, []string{"feature", "help wanted"}, issue.Labels)
+}
+
+func TestEditIssue_removeLabelNotPresentIgnored(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			// GitHub answers 404 when the issue does not carry the label.
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"message":"Label does not exist"}`)
+		case http.MethodGet:
+			_, _ = fmt.Fprint(w, `{"number":1,"title":"The answer","body":"desc","state":"open","labels":[]}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	issue, err := client.EditIssue(context.Background(), "octocat/repo#1", tracker.EditOptions{
+		RemoveLabels: []string{"ghost"},
+	})
+
+	require.NoError(t, err, "removing an absent label must be idempotent, not an error")
+	assert.Empty(t, issue.Labels)
+}
+
+func TestEditIssue_removeLabelHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	_, err := client.EditIssue(context.Background(), "octocat/repo#1", tracker.EditOptions{
+		RemoveLabels: []string{"bug"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "returned")
+}
+
+func TestEditIssue_titleAndLabelsRefetches(t *testing.T) {
+	title := "Updated Title"
+	getCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPatch:
+			_, _ = fmt.Fprint(w, `{"number":1,"title":"Updated Title","body":"desc","state":"open","labels":[]}`)
+		case http.MethodPost:
+			_, _ = fmt.Fprint(w, `[{"name":"bug"}]`)
+		case http.MethodGet:
+			getCalled = true
+			_, _ = fmt.Fprint(w, `{"number":1,"title":"Updated Title","body":"desc","state":"open","labels":[{"name":"bug"}]}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	issue, err := client.EditIssue(context.Background(), "octocat/repo#1", tracker.EditOptions{
+		Title:     &title,
+		AddLabels: []string{"bug"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, getCalled, "label change must re-fetch so the result reflects final labels")
+	assert.Equal(t, "Updated Title", issue.Title)
+	assert.Equal(t, []string{"bug"}, issue.Labels)
+}
+
+func TestCreateIssue_withLabels(t *testing.T) {
+	var gotRaw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotRaw))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"number":101,"title":"Labelled issue","body":""}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "octocat/hello-world",
+		Title:   "Labelled issue",
+		Labels:  []string{"bug", "urgent"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []any{"bug", "urgent"}, gotRaw["labels"])
+}
