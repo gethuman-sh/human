@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option 2 — Preferences modal · settings mockups</title>
+<style>
+  :root {
+    --bg: #14161a; --col-bg: #1c1f26; --col-border: #2a2e37;
+    --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --running: #d6a13a; --done: #3ec07a; --failed: #e0544e;
+    --page: #0b0c0f; --note: #ffd866; --note-ink: #221b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+
+  .brief { max-width: 1240px; margin: 0 auto; padding: 28px 20px 18px; }
+  .brief .eyebrow { font: 11px/1 ui-monospace, Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  .brief h1 { margin: 8px 0 6px; font-size: 22px; font-weight: 650; }
+  .brief p { margin: 0; color: var(--muted); max-width: 72ch; }
+  .verdict { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip { font: 11px/1 ui-monospace, monospace; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .chip.plus { border-color: #2f4a2f; color: var(--done); }
+  .chip.minus { border-color: #4a2f2f; color: var(--failed); }
+  .nav { margin-top: 14px; font: 12px ui-monospace, monospace; color: var(--muted); }
+  .nav a { margin-right: 12px; }
+
+  .frame { position: relative; max-width: 1240px; margin: 10px auto 60px;
+    border: 1px solid var(--col-border); border-radius: 10px; overflow: hidden;
+    background: var(--bg); display: flex; height: 680px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .rail { width: 60px; flex: none; border-right: 1px solid var(--col-border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+  .rail-item { width: 44px; height: 44px; border-radius: 15px; background: var(--col-bg); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .rail-item.active { background: var(--accent); color: #fff; border-radius: 12px; }
+  .rail-bottom { margin-top: auto; }
+  .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .hdr { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--col-border); }
+  .hdr .logo { font-weight: 700; font-size: 13px; color: var(--muted); }
+  .statusbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 12px; background: var(--col-bg); border-top: 1px solid var(--col-border); font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--done); }
+
+  .board { flex: 1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 12px; min-height: 0; }
+  .col { background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .col h3 { margin: 2px 4px 4px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 7px; padding: 8px 9px; }
+  .card .key { font: 11px ui-monospace, monospace; color: var(--accent); }
+  .card .t { font-size: 12.5px; margin-top: 3px; }
+
+  /* ---- the option: centered preferences dialog over the dimmed board ---- */
+  .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.55); }
+  .prefs { position: absolute; left: 50%; top: 90px; transform: translateX(-50%); width: 720px;
+    background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 12px;
+    box-shadow: 0 30px 90px rgba(0,0,0,.65); overflow: hidden; }
+  .p-hd { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--col-border); }
+  .p-hd .title { font-weight: 650; font-size: 14px; }
+  .p-hd .search { margin-left: auto; display: flex; align-items: center; gap: 6px; background: var(--card-bg);
+    border: 1px solid var(--card-border); border-radius: 6px; padding: 5px 9px; color: var(--muted); font-size: 12px; width: 220px; }
+  .p-hd .x { color: var(--muted); font-size: 16px; padding: 0 2px; }
+  .tabs { display: flex; gap: 4px; padding: 8px 12px 0; border-bottom: 1px solid var(--col-border); }
+  .tab { font-size: 12.5px; font-weight: 600; color: var(--muted); padding: 7px 12px; border-radius: 7px 7px 0 0; }
+  .tab.active { color: var(--text); background: var(--card-bg); border: 1px solid var(--col-border); border-bottom-color: var(--card-bg); margin-bottom: -1px; }
+  .p-body { padding: 16px; max-height: 330px; }
+  .tcard { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+  .tcard .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .tcard .kind { font: 10.5px ui-monospace, monospace; color: var(--page); background: var(--accent); border-radius: 4px; padding: 2px 7px; font-weight: 700; }
+  .tcard .name { font-weight: 650; font-size: 13.5px; }
+  .rolechip { font: 10px ui-monospace, monospace; border: 1px solid var(--col-border); border-radius: 999px; padding: 3px 8px; color: var(--running); }
+  .tcard .test { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid var(--card-border); background: var(--col-bg); border-radius: 6px; padding: 3px 9px; }
+  .frow { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+  .frow label { width: 80px; flex: none; font-size: 11.5px; color: var(--muted); }
+  .frow .val { flex: 1; background: var(--col-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 5px 9px; font: 11.5px ui-monospace, monospace; color: var(--text); }
+  .frow .val .vault { color: var(--running); }
+  .p-ft { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--col-border); }
+  .p-ft .dirty { font-size: 11.5px; color: var(--running); }
+  .p-ft .spacer { flex: 1; }
+  .btn { font-size: 12.5px; font-weight: 600; border-radius: 6px; padding: 7px 14px; border: 1px solid var(--card-border); background: var(--card-bg); color: var(--text); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .note { position: absolute; z-index: 30; max-width: 250px; background: var(--note); color: var(--note-ink);
+    font: 11.5px/1.45 ui-monospace, Menlo, monospace; padding: 8px 10px; border-radius: 3px 10px 10px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+  .note b { display: inline-block; background: var(--note-ink); color: var(--note); border-radius: 50%; width: 16px; height: 16px; text-align: center; line-height: 16px; font-size: 10px; margin-right: 6px; }
+  .foot { max-width: 1240px; margin: -40px auto 50px; padding: 0 20px; font: 11px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="brief">
+  <div class="eyebrow">Settings pane · Option 2 of 5</div>
+  <h1>Preferences modal — a classic desktop dialog, transactional Save</h1>
+  <p>The gear opens a centered tabbed dialog over the dimmed board — the native-app preferences idiom
+     (VS Code before 2018, every macOS app). Changes are staged inside the dialog and written in one
+     commit on Save; Cancel discards. Search sits in the dialog header and annotates tabs with hit counts.</p>
+  <div class="verdict">
+    <span class="chip plus">+ instantly familiar; nobody needs to learn it</span>
+    <span class="chip plus">+ transactional: review staged edits, one atomic config write</span>
+    <span class="chip plus">+ cheap to build (existing .modal machinery)</span>
+    <span class="chip minus">− blocks the board while open</span>
+    <span class="chip minus">− fixed size: long tracker lists scroll inside a box in a box</span>
+  </div>
+  <div class="nav">
+    <a href="index.html">index</a>
+    <a href="01-settings-view.html">← full view</a>
+    <a href="03-drawer.html">drawer →</a>
+  </div>
+</div>
+
+<div class="frame">
+  <div class="rail">
+    <div class="rail-item">+</div>
+    <div class="rail-item active">▦</div>
+    <div class="rail-item">◔</div>
+    <div class="rail-item">⧉</div>
+    <div class="rail-item">⛶</div>
+    <div class="rail-item rail-bottom">⚙</div>
+  </div>
+  <div class="app-main">
+    <div class="hdr"><span class="logo">human — workflow board</span></div>
+    <div class="board">
+      <div class="col"><h3>Backlog</h3><div class="card"><div class="key">SC-91</div><div class="t">Weekly digest email</div></div></div>
+      <div class="col"><h3>Product planning</h3><div class="card"><div class="key">SC-84</div><div class="t">Ideas column on the board</div></div></div>
+      <div class="col"><h3>Implementation</h3><div class="card"><div class="key">HUM-160</div><div class="t">Grant-based permission queue</div></div></div>
+      <div class="col"><h3>Verification</h3><div class="card"><div class="key">HUM-142</div><div class="t">Flaky stats writer test</div></div></div>
+      <div class="col"><h3>Done</h3><div class="card"><div class="key">HUM-158</div><div class="t">Start Project wizard</div></div></div>
+    </div>
+    <div class="statusbar"><span class="dot"></span> Daemon running · forwarding CLI commands</div>
+
+    <div class="scrim"></div>
+    <div class="prefs">
+      <div class="p-hd">
+        <span class="title">Settings</span>
+        <span class="search">⌕ Search all settings…</span>
+        <span class="x">✕</span>
+      </div>
+      <div class="tabs">
+        <span class="tab">Project</span>
+        <span class="tab active">Trackers</span>
+        <span class="tab">Ticket kinds</span>
+        <span class="tab">Vault</span>
+        <span class="tab">Daemon</span>
+        <span class="tab">Appearance</span>
+      </div>
+      <div class="p-body">
+        <div class="tcard">
+          <div class="head"><span class="kind">shortcut</span><span class="name">human</span><span class="rolechip">role: pm</span><span class="test">Test connection</span></div>
+          <div class="frow"><label>token</label><div class="val"><span class="vault">1pw://Development/Shortcut Token/token</span></div></div>
+          <div class="frow"><label>safe mode</label><div class="val" style="flex:none;padding:5px 12px">on — deletes blocked</div></div>
+        </div>
+        <div class="tcard">
+          <div class="head"><span class="kind">linear</span><span class="name">work</span><span class="rolechip">role: engineering</span><span class="test">Test connection</span></div>
+          <div class="frow"><label>token</label><div class="val"><span class="vault">1pw://Development/Linear Token/token</span></div></div>
+          <div class="frow"><label>projects</label><div class="val">HUM</div></div>
+        </div>
+      </div>
+      <div class="p-ft">
+        <span class="dirty">● 2 unsaved changes</span>
+        <span class="spacer"></span>
+        <span class="btn">Cancel</span>
+        <span class="btn primary">Save</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="top: 74px; left: 84px; max-width: 230px;">
+    <b>1</b>Board dims but stays visible — you keep spatial context.
+    Esc or ✕ closes; unsaved changes prompt first.
+  </div>
+  <div class="note" style="top: 168px; right: 34px; max-width: 240px;">
+    <b>2</b>Search spans every tab: typing shows per-tab hit counts
+    as badges and filters the open tab's fields live.
+  </div>
+  <div class="note" style="top: 320px; left: 96px; max-width: 235px;">
+    <b>3</b>Same tracker cards as Option 1 — the section CONTENT is
+    identical in all five mockups; only the container changes.
+  </div>
+  <div class="note" style="bottom: 96px; right: 46px; max-width: 250px;">
+    <b>4</b>Transactional model: edits stage in memory (● counter),
+    Save issues ONE config-set writing .humanconfig.yaml and
+    reloading trackers; Cancel discards all staged edits.
+  </div>
+</div>
+
+<div class="foot">Static mockup — no functionality. Data source in the real app: config-get fills the dialog; Save calls config-set with the staged patch set; Cancel discards; "Test connection" runs a ListProjects round-trip.</div>
+
+</body>
+</html>

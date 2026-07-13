@@ -1,0 +1,37 @@
+{
+  "feature": "settings pane",
+  "slug": "settings",
+  "created": "2026-07-13",
+  "options": [
+    {
+      "n": 1,
+      "name": "Full settings view",
+      "file": "01-settings-view.html",
+      "description": "Gear becomes a real rail view: section sidebar + generous content pane, search on top — the IDE-preferences idiom."
+    },
+    {
+      "n": 2,
+      "name": "Preferences modal",
+      "file": "02-preferences-modal.html",
+      "description": "Classic centered tabbed dialog over the dimmed board; staged edits, one atomic Save."
+    },
+    {
+      "n": 3,
+      "name": "Slide-over drawer",
+      "file": "03-drawer.html",
+      "description": "Right-edge panel (ideation-chat idiom) with accordion sections and live filter; the board stays visible and running."
+    },
+    {
+      "n": 4,
+      "name": "Command palette",
+      "file": "04-command-palette.html",
+      "description": "Search-first: every config leaf indexed as a dotted path; fuzzy-find, inline edit, done. No browsing at all."
+    },
+    {
+      "n": 5,
+      "name": "YAML lens",
+      "file": "05-yaml-lens.html",
+      "description": "Form and the real .humanconfig.yaml side by side, two-way synced with field⟷line highlighting."
+    }
+  ]
+}

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option 4 — Command palette · settings mockups</title>
+<style>
+  :root {
+    --bg: #14161a; --col-bg: #1c1f26; --col-border: #2a2e37;
+    --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --running: #d6a13a; --done: #3ec07a; --failed: #e0544e;
+    --page: #0b0c0f; --note: #ffd866; --note-ink: #221b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+
+  .brief { max-width: 1240px; margin: 0 auto; padding: 28px 20px 18px; }
+  .brief .eyebrow { font: 11px/1 ui-monospace, Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  .brief h1 { margin: 8px 0 6px; font-size: 22px; font-weight: 650; }
+  .brief p { margin: 0; color: var(--muted); max-width: 72ch; }
+  .verdict { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip { font: 11px/1 ui-monospace, monospace; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .chip.plus { border-color: #2f4a2f; color: var(--done); }
+  .chip.minus { border-color: #4a2f2f; color: var(--failed); }
+  .nav { margin-top: 14px; font: 12px ui-monospace, monospace; color: var(--muted); }
+  .nav a { margin-right: 12px; }
+
+  .frame { position: relative; max-width: 1240px; margin: 10px auto 60px;
+    border: 1px solid var(--col-border); border-radius: 10px; overflow: hidden;
+    background: var(--bg); display: flex; height: 680px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .rail { width: 60px; flex: none; border-right: 1px solid var(--col-border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+  .rail-item { width: 44px; height: 44px; border-radius: 15px; background: var(--col-bg); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .rail-item.active { background: var(--accent); color: #fff; border-radius: 12px; }
+  .rail-bottom { margin-top: auto; }
+  .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .hdr { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--col-border); }
+  .hdr .logo { font-weight: 700; font-size: 13px; color: var(--muted); }
+  .statusbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 12px; background: var(--col-bg); border-top: 1px solid var(--col-border); font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--done); }
+
+  .board { flex: 1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 12px; min-height: 0; }
+  .col { background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .col h3 { margin: 2px 4px 4px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 7px; padding: 8px 9px; }
+  .card .key { font: 11px ui-monospace, monospace; color: var(--accent); }
+  .card .t { font-size: 12.5px; margin-top: 3px; }
+
+  /* ---- the option: search-first settings palette ---- */
+  .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
+  .pal { position: absolute; left: 50%; top: 72px; transform: translateX(-50%); width: 640px;
+    background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 12px;
+    box-shadow: 0 30px 90px rgba(0,0,0,.65); overflow: hidden; }
+  .pal-in { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--col-border); }
+  .pal-in .q { font: 15px ui-monospace, monospace; }
+  .pal-in .q .caret { display: inline-block; width: 2px; height: 16px; background: var(--accent); vertical-align: -3px; }
+  .pal-in .scope { margin-left: auto; font: 10.5px ui-monospace, monospace; color: var(--muted); border: 1px solid var(--card-border); border-radius: 999px; padding: 3px 9px; }
+  .grp { padding: 7px 16px 3px; font: 10px ui-monospace, monospace; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+  .hit { display: flex; align-items: center; gap: 10px; padding: 9px 16px; }
+  .hit .path { font: 12px ui-monospace, monospace; color: var(--muted); }
+  .hit .path em { font-style: normal; color: var(--text); font-weight: 600; }
+  .hit .path mark { background: transparent; color: var(--note); }
+  .hit .cur { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--running); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hit.sel { background: var(--card-bg); border-left: 3px solid var(--accent); padding-left: 13px; }
+  .editor { margin: 0 16px 12px; margin-top: 4px; background: var(--card-bg); border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; }
+  .editor .lbl { font: 10.5px ui-monospace, monospace; color: var(--muted); margin-bottom: 6px; }
+  .editor .field { display: flex; align-items: center; gap: 8px; background: var(--col-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 7px 10px; font: 12px ui-monospace, monospace; }
+  .editor .field .vault { color: var(--running); }
+  .editor .hint { margin-top: 7px; font: 10.5px ui-monospace, monospace; color: var(--muted); }
+  .editor .hint b { color: var(--done); font-weight: 600; }
+  .pal-ft { display: flex; gap: 14px; padding: 9px 16px; border-top: 1px solid var(--col-border); font: 10.5px ui-monospace, monospace; color: var(--muted); }
+  .pal-ft b { color: var(--text); font-weight: 600; }
+
+  .note { position: absolute; z-index: 30; max-width: 250px; background: var(--note); color: var(--note-ink);
+    font: 11.5px/1.45 ui-monospace, Menlo, monospace; padding: 8px 10px; border-radius: 3px 10px 10px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+  .note b { display: inline-block; background: var(--note-ink); color: var(--note); border-radius: 50%; width: 16px; height: 16px; text-align: center; line-height: 16px; font-size: 10px; margin-right: 6px; }
+  .foot { max-width: 1240px; margin: -40px auto 50px; padding: 0 20px; font: 11px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="brief">
+  <div class="eyebrow">Settings pane · Option 4 of 5</div>
+  <h1>Command palette — search is the only navigation</h1>
+  <p>The gear (or Ctrl+,) opens a Raycast-style palette. Every leaf of <code style="font-family:ui-monospace,monospace;font-size:12px">.humanconfig</code> is indexed as a
+     dotted path; typing fuzzy-matches across all sections at once and shows current values inline. Enter
+     opens a tiny editor for the selected key — edit, ↵ to save, done. There is no section browsing at all.</p>
+  <div class="verdict">
+    <span class="chip plus">+ fastest path to any single setting, fully keyboard-driven</span>
+    <span class="chip plus">+ scales to any config size — 6 sections or 60</span>
+    <span class="chip plus">+ current values visible in the result list itself</span>
+    <span class="chip minus">− no browsing: you must know (roughly) what you're looking for</span>
+    <span class="chip minus">− multi-field flows (add a whole tracker) fit badly in a palette</span>
+  </div>
+  <div class="nav">
+    <a href="index.html">index</a>
+    <a href="03-drawer.html">← drawer</a>
+    <a href="05-yaml-lens.html">yaml lens →</a>
+  </div>
+</div>
+
+<div class="frame">
+  <div class="rail">
+    <div class="rail-item">+</div>
+    <div class="rail-item active">▦</div>
+    <div class="rail-item">◔</div>
+    <div class="rail-item">⧉</div>
+    <div class="rail-item">⛶</div>
+    <div class="rail-item rail-bottom">⚙</div>
+  </div>
+  <div class="app-main">
+    <div class="hdr"><span class="logo">human — workflow board</span></div>
+    <div class="board">
+      <div class="col"><h3>Backlog</h3><div class="card"><div class="key">SC-91</div><div class="t">Weekly digest email</div></div></div>
+      <div class="col"><h3>Product planning</h3><div class="card"><div class="key">SC-84</div><div class="t">Ideas column on the board</div></div></div>
+      <div class="col"><h3>Implementation</h3><div class="card"><div class="key">HUM-160</div><div class="t">Grant-based permission queue</div></div></div>
+      <div class="col"><h3>Verification</h3><div class="card"><div class="key">HUM-142</div><div class="t">Flaky stats writer test</div></div></div>
+      <div class="col"><h3>Done</h3><div class="card"><div class="key">HUM-158</div><div class="t">Start Project wizard</div></div></div>
+    </div>
+    <div class="statusbar"><span class="dot"></span> Daemon running · forwarding CLI commands</div>
+
+    <div class="scrim"></div>
+    <div class="pal">
+      <div class="pal-in"><span style="color:var(--muted)">⌕</span><span class="q">token<span class="caret"></span></span><span class="scope">settings</span></div>
+
+      <div class="grp">Trackers</div>
+      <div class="hit sel">
+        <span class="path">trackers.shortcut.human.<em><mark>token</mark></em></span>
+        <span class="cur">1pw://Development/Shortcut Token/token</span>
+      </div>
+      <div class="editor">
+        <div class="lbl">trackers.shortcut.human.token — vault reference or literal</div>
+        <div class="field"><span class="vault">1pw://Development/Shortcut Token/token</span></div>
+        <div class="hint">↵ <b>save + reload tracker</b> · esc cancel · ⌘T test connection</div>
+      </div>
+      <div class="hit">
+        <span class="path">trackers.linear.work.<em><mark>token</mark></em></span>
+        <span class="cur">1pw://Development/Linear Token/token</span>
+      </div>
+
+      <div class="grp">Vault</div>
+      <div class="hit">
+        <span class="path">vault.provider — resolves 1pw:// <em><mark>token</mark></em> refs</span>
+        <span class="cur">1password · amazingcto</span>
+      </div>
+
+      <div class="pal-ft"><span><b>↑↓</b> select</span><span><b>↵</b> edit</span><span><b>tab</b> next section</span><span><b>esc</b> close</span><span style="margin-left:auto">3 matches · 41 settings indexed</span></div>
+    </div>
+  </div>
+
+  <div class="note" style="top: 66px; left: 84px; max-width: 235px;">
+    <b>1</b>Gear or Ctrl+, opens the palette anywhere — even on top
+    of the Agents or Features view. Board dims slightly, stays put.
+  </div>
+  <div class="note" style="top: 150px; right: 40px; max-width: 245px;">
+    <b>2</b>Index = every leaf of .humanconfig flattened to a dotted
+    path (from config-get) + descriptions, fuzzy-matched. Current
+    value shown right in the row.
+  </div>
+  <div class="note" style="top: 322px; left: 110px; max-width: 240px;">
+    <b>3</b>↵ expands the selected hit into an inline editor —
+    save writes config-set for THAT key only and hot-reloads what
+    depends on it. No page, no tabs.
+  </div>
+  <div class="note" style="bottom: 96px; right: 52px; max-width: 250px;">
+    <b>4</b>Weak spot, by design: composite tasks ("add a tracker")
+    become a guided multi-prompt sequence — or this option pairs
+    with a browsable view (1 or 5) that owns those flows.
+  </div>
+</div>
+
+<div class="foot">Static mockup — no functionality. Data source in the real app: config-get → flattened key index; per-key config-set on save; ⌘T runs ListProjects for the tracker owning the key.</div>
+
+</body>
+</html>
