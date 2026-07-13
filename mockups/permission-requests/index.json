@@ -1,0 +1,37 @@
+{
+  "feature": "permission requests",
+  "slug": "permission-requests",
+  "created": "2026-07-11",
+  "options": [
+    {
+      "n": 1,
+      "name": "Blocking modal",
+      "file": "01-modal.html",
+      "description": "Takeover dialog, one request at a time; nothing else clickable until every queued request is decided."
+    },
+    {
+      "n": 2,
+      "name": "Toast stack",
+      "file": "02-toasts.html",
+      "description": "Persistent corner toasts with inline approve/deny; the board stays fully usable."
+    },
+    {
+      "n": 3,
+      "name": "Permission inbox",
+      "file": "03-inbox-panel.html",
+      "description": "Rail item with badge opens a push-in panel: grouped by agent, batch approval, 24h decision history."
+    },
+    {
+      "n": 4,
+      "name": "Inline on the board",
+      "file": "04-board-inline.html",
+      "description": "The request docks onto the affected ticket card; decide in full work context."
+    },
+    {
+      "n": 5,
+      "name": "Command strip",
+      "file": "05-command-strip.html",
+      "description": "Slim amber bar under the header with the oldest request and global shortcuts; dropdown for the rest. Chosen for implementation (HUM-161)."
+    }
+  ]
+}

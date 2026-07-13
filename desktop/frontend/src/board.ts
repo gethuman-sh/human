@@ -18,6 +18,7 @@ import {
   trail,
 } from "./fancy.js";
 import { initPermissions, PermissionRequest } from "./permissions.js";
+import { initMockupsView, showMockups, MockupSet } from "./mockupsview.js";
 
 interface Card {
   key: string;
@@ -161,6 +162,7 @@ interface AppBindings {
   StartProject(projectType: string, language: string): Promise<StartProjectResult>;
   PendingPermissions(): Promise<PermissionRequest[]>;
   DecidePermission(id: string, approved: boolean): Promise<void>;
+  MockupSets(): Promise<MockupSet[]>;
 }
 
 // This file is a module (see the trailing `export {}`) so the global
@@ -1515,9 +1517,11 @@ function selectView(view: string): void {
   const board = document.getElementById("board");
   const agents = document.getElementById("agents");
   const features = document.getElementById("features");
+  const mockups = document.getElementById("mockups");
   board?.classList.toggle("hidden", view !== "board");
   agents?.classList.toggle("hidden", view !== "agents");
   features?.classList.toggle("hidden", view !== "features");
+  mockups?.classList.toggle("hidden", view !== "mockups");
 
   if (view === "agents") {
     void pollAgents(); // immediate fetch so the view isn't blank until the first tick
@@ -1531,6 +1535,12 @@ function selectView(view: string): void {
   if (view === "features" && !featuresLoaded) {
     featuresLoaded = true;
     void loadFeatures();
+  }
+
+  // Mockups rescan on every activation so a set generated while the app was
+  // open appears without a restart (no poll: disk only changes via the skill).
+  if (view === "mockups") {
+    void showMockups();
   }
 }
 
@@ -1564,6 +1574,7 @@ function init(): void {
   wireRail();
   initFancy();
   initPermissions(() => go());
+  initMockupsView(() => go());
   document.addEventListener("keydown", (e: KeyboardEvent) => {
     if (isThemeToggleChord(e)) {
       e.preventDefault();

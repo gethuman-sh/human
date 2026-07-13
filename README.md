@@ -306,6 +306,7 @@ This writes skill and agent files to `.claude/` in the current directory. Re-run
 | `/human-security` | Deep security audit with attack chain analysis and OWASP Top 10 coverage |
 | `/human-gardening` | Multi-agent pipeline for codebase health analysis, refactoring triage, and automated fixes |
 | `/human-features` | Generate `FEATURE.json` — a grouped, human-readable map of what the codebase can do, with per-feature tickets and recent-change markers |
+| `/human-mockups` | Create annotated static HTML mockups exploring N distinct UI options for a feature, matched to the project's real look |
 
 ```bash
 # Full pipeline in one command

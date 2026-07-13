@@ -10,6 +10,7 @@
 // call unconditionally on the hot paths below.
 import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
 import { initPermissions } from "./permissions.js";
+import { initMockupsView, showMockups } from "./mockupsview.js";
 const STAGES = ["backlog", "planning", "implementation", "verification", "done"];
 const STAGE_LABELS = {
     backlog: "Backlog",
@@ -1295,9 +1296,11 @@ function selectView(view) {
     const board = document.getElementById("board");
     const agents = document.getElementById("agents");
     const features = document.getElementById("features");
+    const mockups = document.getElementById("mockups");
     board?.classList.toggle("hidden", view !== "board");
     agents?.classList.toggle("hidden", view !== "agents");
     features?.classList.toggle("hidden", view !== "features");
+    mockups?.classList.toggle("hidden", view !== "mockups");
     if (view === "agents") {
         void pollAgents(); // immediate fetch so the view isn't blank until the first tick
         startAgentsPoll();
@@ -1310,6 +1313,11 @@ function selectView(view) {
     if (view === "features" && !featuresLoaded) {
         featuresLoaded = true;
         void loadFeatures();
+    }
+    // Mockups rescan on every activation so a set generated while the app was
+    // open appears without a restart (no poll: disk only changes via the skill).
+    if (view === "mockups") {
+        void showMockups();
     }
 }
 function wireRail() {
@@ -1342,6 +1350,7 @@ function init() {
     wireRail();
     initFancy();
     initPermissions(() => go());
+    initMockupsView(() => go());
     document.addEventListener("keydown", (e) => {
         if (isThemeToggleChord(e)) {
             e.preventDefault();
