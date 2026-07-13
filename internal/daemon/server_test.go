@@ -31,6 +31,9 @@ func echoCmd() *cobra.Command {
 		Use:          "test",
 		SilenceUsage: true,
 	}
+	// The real CLI defines --yes on destructive commands; executeConfirmed
+	// appends it, so the test root must tolerate it too.
+	root.PersistentFlags().Bool("yes", false, "assume yes")
 	root.AddCommand(&cobra.Command{
 		Use: "echo",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -651,123 +654,116 @@ func startTestServerWithConfirm(t *testing.T, token string) (addr string, cancel
 	return addr, cancel, store
 }
 
-func TestServer_DestructiveConfirm_Approved(t *testing.T) {
+func TestServer_DestructiveConfirm_GrantCycle(t *testing.T) {
 	token := "test-token"
 	addr, _, store := startTestServerWithConfirm(t, token)
 
-	// Send a destructive command in a goroutine — it will block.
-	type result struct {
-		resp1 Response
-		resp2 Response
-		err   error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		defer func() { _ = conn.Close() }()
-
-		enc := json.NewEncoder(conn)
-		_ = enc.Encode(Request{Token: token, ClientPID: 1111, Args: []string{"jira", "issue", "delete", "KAN-1"}})
-
-		reader := bufio.NewReader(conn)
-		line1, err := reader.ReadBytes('\n')
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		var r1 Response
-		_ = json.Unmarshal(line1, &r1)
-
-		line2, err := reader.ReadBytes('\n')
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		var r2 Response
-		_ = json.Unmarshal(line2, &r2)
-
-		ch <- result{resp1: r1, resp2: r2}
-	}()
-
-	// Wait for the pending confirmation to appear.
-	deadline := time.Now().Add(2 * time.Second)
-	for store.Len() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	require.Equal(t, 1, store.Len())
+	// The submit returns immediately with the queued ID — no held connection.
+	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-approve", Args: []string{"jira", "issue", "delete", "KAN-1"}})
+	assert.True(t, resp.AwaitConfirm)
+	assert.Equal(t, "cid-approve", resp.ConfirmID)
+	assert.Contains(t, resp.ConfirmPrompt, "KAN-1")
 
 	snap := store.Snapshot()
 	require.Len(t, snap, 1)
 	assert.Equal(t, "DeleteIssue", snap[0].Operation)
 	assert.Equal(t, "KAN-1", snap[0].Key)
 
-	// Approve it as a distinct client (different PID from the requester).
-	err := store.Resolve(snap[0].ID, true, 2222)
-	require.NoError(t, err)
+	// Approve as a distinct client — this only records the grant.
+	opResp := sendRequest(t, addr, Request{Token: token, ClientPID: 2222, Args: []string{"confirm-op", "cid-approve", "yes"}})
+	assert.Equal(t, "ok\n", opResp.Stdout)
 
-	r := <-ch
-	require.NoError(t, r.err)
-	assert.True(t, r.resp1.AwaitConfirm)
-	assert.Contains(t, r.resp1.ConfirmPrompt, "KAN-1")
-	// Line 2: the command executed (echo cmd handles "issue delete KAN-1 --yes" as unknown, so exit 1 is fine)
-	// The important thing is we got two lines.
-	assert.NotEmpty(t, r.resp1.ConfirmID)
+	stResp := sendRequest(t, addr, Request{Token: token, Args: []string{"confirm-status", "cid-approve"}})
+	var st ConfirmStatus
+	require.NoError(t, json.Unmarshal([]byte(stResp.Stdout), &st))
+	assert.Equal(t, string(ConfirmApproved), st.State)
+
+	// Re-submitting the command with the granted ID redeems the grant and
+	// executes in the normal path (echoCmd has no "jira" subcommand, so the
+	// execution itself exits 1 — the point is it ran instead of prompting).
+	execResp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-approve", Args: []string{"jira", "issue", "delete", "KAN-1"}})
+	assert.False(t, execResp.AwaitConfirm, "granted resubmit must execute, not prompt")
+	assert.Equal(t, 1, execResp.ExitCode)
+
+	// The grant is consumed: gone from the store, and a further resubmit
+	// starts a fresh permission request.
+	assert.Equal(t, 0, store.Len())
+	againResp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-approve", Args: []string{"jira", "issue", "delete", "KAN-1"}})
+	assert.True(t, againResp.AwaitConfirm, "consumed grant must not be redeemable twice")
+}
+
+func TestServer_DestructiveConfirm_GrantBoundToOperation(t *testing.T) {
+	token := "test-token"
+	addr, _, store := startTestServerWithConfirm(t, token)
+
+	_ = sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-bind", Args: []string{"jira", "issue", "delete", "KAN-1"}})
+	_ = sendRequest(t, addr, Request{Token: token, ClientPID: 2222, Args: []string{"confirm-op", "cid-bind", "yes"}})
+
+	// Same ID, different ticket — the grant must NOT cover it; a new
+	// permission request is queued instead (under a server-side ID).
+	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-bind", Args: []string{"jira", "issue", "delete", "KAN-2"}})
+	assert.True(t, resp.AwaitConfirm)
+	assert.NotEqual(t, "cid-bind", resp.ConfirmID, "mismatched redeem must queue a fresh request, not reuse the grant ID")
+
+	// The original grant is untouched and still redeemable for KAN-1.
+	pc, ok := store.Get("cid-bind")
+	require.True(t, ok)
+	assert.Equal(t, ConfirmApproved, pc.State)
 }
 
 func TestServer_DestructiveConfirm_Rejected(t *testing.T) {
 	token := "test-token"
 	addr, _, store := startTestServerWithConfirm(t, token)
 
-	type result struct {
-		resp1 Response
-		resp2 Response
-		err   error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		defer func() { _ = conn.Close() }()
+	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-reject", Args: []string{"jira", "issue", "delete", "KAN-2"}})
+	assert.True(t, resp.AwaitConfirm)
 
-		enc := json.NewEncoder(conn)
-		_ = enc.Encode(Request{Token: token, ClientPID: 1111, Args: []string{"jira", "issue", "delete", "KAN-2"}})
+	opResp := sendRequest(t, addr, Request{Token: token, ClientPID: 2222, Args: []string{"confirm-op", "cid-reject", "no"}})
+	assert.Equal(t, "ok\n", opResp.Stdout)
 
-		reader := bufio.NewReader(conn)
-		line1, _ := reader.ReadBytes('\n')
-		var r1 Response
-		_ = json.Unmarshal(line1, &r1)
+	pc, ok := store.Get("cid-reject")
+	require.True(t, ok)
+	assert.Equal(t, ConfirmDenied, pc.State)
 
-		line2, _ := reader.ReadBytes('\n')
-		var r2 Response
-		_ = json.Unmarshal(line2, &r2)
+	stResp := sendRequest(t, addr, Request{Token: token, Args: []string{"confirm-status", "cid-reject"}})
+	var st ConfirmStatus
+	require.NoError(t, json.Unmarshal([]byte(stResp.Stdout), &st))
+	assert.Equal(t, string(ConfirmDenied), st.State)
 
-		ch <- result{resp1: r1, resp2: r2}
-	}()
+	// A resubmit with the denied ID aborts instead of prompting again.
+	againResp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-reject", Args: []string{"jira", "issue", "delete", "KAN-2"}})
+	assert.False(t, againResp.AwaitConfirm)
+	assert.Equal(t, 1, againResp.ExitCode)
+	assert.Contains(t, againResp.Stderr, "denied permission")
+}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for store.Len() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+func TestServer_DestructiveConfirm_LegacyClientGetsGeneratedID(t *testing.T) {
+	token := "test-token"
+	addr, _, store := startTestServerWithConfirm(t, token)
 
-	snap := store.Snapshot()
-	require.Len(t, snap, 1)
+	// No ConfirmID in the request — the daemon must key the entry itself.
+	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, Args: []string{"jira", "issue", "delete", "KAN-9"}})
+	assert.True(t, resp.AwaitConfirm)
+	assert.NotEmpty(t, resp.ConfirmID)
+	_, ok := store.Get(resp.ConfirmID)
+	assert.True(t, ok)
+}
 
-	// Reject it as a distinct client.
-	err := store.Resolve(snap[0].ID, false, 2222)
-	require.NoError(t, err)
+func TestServer_DestructiveConfirm_ResubmitIsIdempotent(t *testing.T) {
+	token := "test-token"
+	addr, _, store := startTestServerWithConfirm(t, token)
 
-	r := <-ch
-	require.NoError(t, r.err)
-	assert.True(t, r.resp1.AwaitConfirm)
-	assert.Contains(t, r.resp2.Stderr, "aborted")
-	assert.Equal(t, 1, r.resp2.ExitCode)
+	req := Request{Token: token, ClientPID: 1111, ConfirmID: "cid-retry", Args: []string{"jira", "issue", "delete", "KAN-4"}}
+	resp1 := sendRequest(t, addr, req)
+	resp2 := sendRequest(t, addr, req)
+	assert.Equal(t, resp1.ConfirmID, resp2.ConfirmID)
+	assert.Equal(t, 1, store.Len(), "resubmit with the same ID must not duplicate the entry")
+
+	// A rerun with a FRESH ID for the same operation reattaches to the open
+	// prompt instead of showing the user a second dialog.
+	resp3 := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-other", Args: []string{"jira", "issue", "delete", "KAN-4"}})
+	assert.Equal(t, "cid-retry", resp3.ConfirmID)
+	assert.Equal(t, 1, store.Len())
 }
 
 func TestServer_DestructiveYes_StillRequiresConfirmation(t *testing.T) {
@@ -775,49 +771,9 @@ func TestServer_DestructiveYes_StillRequiresConfirmation(t *testing.T) {
 	addr, _, store := startTestServerWithConfirm(t, token)
 
 	// --yes does NOT bypass daemon confirmation; the daemon always asks.
-	type result struct {
-		resp1 Response
-		err   error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		defer func() { _ = conn.Close() }()
-
-		enc := json.NewEncoder(conn)
-		_ = enc.Encode(Request{Token: token, ClientPID: 1111, Args: []string{"jira", "issue", "delete", "KAN-3", "--yes"}})
-
-		reader := bufio.NewReader(conn)
-		line1, err := reader.ReadBytes('\n')
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		var r1 Response
-		_ = json.Unmarshal(line1, &r1)
-		ch <- result{resp1: r1}
-	}()
-
-	// Confirmation should still be created.
-	deadline := time.Now().Add(2 * time.Second)
-	for store.Len() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 1111, ConfirmID: "cid-yes", Args: []string{"jira", "issue", "delete", "KAN-3", "--yes"}})
+	assert.True(t, resp.AwaitConfirm)
 	assert.Equal(t, 1, store.Len())
-
-	// Clean up: resolve it so the goroutine can finish. Use a distinct PID.
-	snap := store.Snapshot()
-	if len(snap) > 0 {
-		_ = store.Resolve(snap[0].ID, false, 2222)
-	}
-
-	r := <-ch
-	require.NoError(t, r.err)
-	assert.True(t, r.resp1.AwaitConfirm)
 }
 
 func TestServer_PendingConfirmsEndpoint(t *testing.T) {
@@ -829,14 +785,13 @@ func TestServer_PendingConfirmsEndpoint(t *testing.T) {
 	assert.Equal(t, "[]\n", resp.Stdout)
 
 	// Add a pending confirmation manually.
-	store.Add(&PendingConfirmation{
+	store.Submit(&PendingConfirmation{
 		ID:        "test-1",
 		Operation: "DeleteIssue",
 		Tracker:   "jira",
 		Key:       "KAN-1",
 		Prompt:    "Delete KAN-1?",
 		CreatedAt: time.Now(),
-		Decision:  make(chan bool, 1),
 	})
 
 	resp = sendRequest(t, addr, Request{Token: token, Args: []string{"pending-confirms"}})
@@ -848,19 +803,30 @@ func TestServer_ConfirmOpEndpoint(t *testing.T) {
 	token := "test-token"
 	addr, _, store := startTestServerWithConfirm(t, token)
 
-	pc := &PendingConfirmation{
+	store.Submit(&PendingConfirmation{
 		ID:        "test-resolve",
 		ClientPID: 1111,
-		Decision:  make(chan bool, 1),
-	}
-	store.Add(pc)
+	})
 
 	// Resolver sends a distinct PID from the requester.
 	resp := sendRequest(t, addr, Request{Token: token, ClientPID: 2222, Args: []string{"confirm-op", "test-resolve", "yes"}})
 	assert.Equal(t, "ok\n", resp.Stdout)
 
-	decision := <-pc.Decision
-	assert.True(t, decision)
+	// Approval only records the grant — nothing executes until the
+	// requesting client redeems it.
+	pc, ok := store.Get("test-resolve")
+	require.True(t, ok)
+	assert.Equal(t, ConfirmApproved, pc.State)
+}
+
+func TestServer_ConfirmStatusEndpoint_Unknown(t *testing.T) {
+	token := "test-token"
+	addr, _, _ := startTestServerWithConfirm(t, token)
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"confirm-status", "nope"}})
+	var st ConfirmStatus
+	require.NoError(t, json.Unmarshal([]byte(resp.Stdout), &st))
+	assert.Equal(t, "unknown", st.State)
 }
 
 func TestServer_ConfirmOpEndpoint_NotFound(t *testing.T) {
@@ -879,12 +845,10 @@ func TestServer_ConfirmOpEndpoint_RejectsMissingPID(t *testing.T) {
 	token := "test-token"
 	addr, _, store := startTestServerWithConfirm(t, token)
 
-	pc := &PendingConfirmation{
+	store.Submit(&PendingConfirmation{
 		ID:        "no-pid",
 		ClientPID: 1111,
-		Decision:  make(chan bool, 1),
-	}
-	store.Add(pc)
+	})
 
 	// ClientPID omitted → defaults to 0 → request must be rejected.
 	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"confirm-op", "no-pid", "yes"}})
@@ -995,12 +959,10 @@ func TestServer_ConfirmOpEndpoint_SelfApprovalRejected(t *testing.T) {
 	addr, _, store := startTestServerWithConfirm(t, token)
 
 	const requesterPID = 12345
-	pc := &PendingConfirmation{
+	store.Submit(&PendingConfirmation{
 		ID:        "self-approve",
 		ClientPID: requesterPID,
-		Decision:  make(chan bool, 1),
-	}
-	store.Add(pc)
+	})
 
 	// Same PID as the requester — must be rejected via the endpoint.
 	resp := sendRequest(t, addr, Request{
@@ -1346,6 +1308,84 @@ func TestServer_HandleTrackerIssues_EmptyResults(t *testing.T) {
 	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues"}})
 	assert.Equal(t, 0, resp.ExitCode)
 	assert.Equal(t, "[]\n", resp.Stdout)
+}
+
+// --- handleTrackerIssuesLite tests ---
+
+func TestServer_HandleTrackerIssuesLite_NilFetcher(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.LiteIssueFetcher = nil
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues-lite"}})
+	assert.Equal(t, 0, resp.ExitCode)
+	assert.Equal(t, "[]\n", resp.Stdout)
+}
+
+func TestServer_HandleTrackerIssuesLite_WithResults(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.LiteIssueFetcher = func() ([]TrackerIssuesResult, error) {
+			return []TrackerIssuesResult{
+				{
+					TrackerName: "work",
+					TrackerKind: "linear",
+					Project:     "HUM",
+					Issues: []tracker.Issue{
+						{Key: "HUM-1", Title: "First issue", Status: "In Progress"},
+					},
+				},
+			}, nil
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues-lite"}})
+	assert.Equal(t, 0, resp.ExitCode)
+
+	var results []TrackerIssuesResult
+	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &results)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Issues, 1)
+	assert.Equal(t, "HUM-1", results[0].Issues[0].Key)
+}
+
+func TestServer_HandleTrackerIssuesLite_FetcherError(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.LiteIssueFetcher = func() ([]TrackerIssuesResult, error) {
+			return nil, fmt.Errorf("network timeout")
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues-lite"}})
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "network timeout")
+}
+
+// The lite route must dispatch to LiteIssueFetcher, not the full IssueFetcher —
+// otherwise the board's fast path would pay the comment-scan cost it exists to
+// avoid. Distinct fetchers let us assert the routing rather than trust it.
+func TestServer_HandleTrackerIssuesLite_RoutesToLiteFetcher(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.IssueFetcher = func() ([]TrackerIssuesResult, error) {
+			return []TrackerIssuesResult{{TrackerName: "full"}}, nil
+		}
+		s.LiteIssueFetcher = func() ([]TrackerIssuesResult, error) {
+			return []TrackerIssuesResult{{TrackerName: "lite"}}, nil
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issues-lite"}})
+	assert.Equal(t, 0, resp.ExitCode)
+
+	var results []TrackerIssuesResult
+	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &results)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "lite", results[0].TrackerName)
 }
 
 // --- handleToolStats tests ---

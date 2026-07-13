@@ -34,8 +34,16 @@ curl -sSfL gethuman.sh/install.sh | bash
 Or with Homebrew:
 
 ```bash
-brew install gethuman-sh/tap/human
+brew install --cask gethuman-sh/tap/human
 ```
+
+> Since v0.20.0 `human` ships as a Homebrew **cask** (previously a formula). If you
+> installed an earlier version, `brew upgrade` will not cross the formula→cask
+> boundary — reinstall once to migrate:
+>
+> ```bash
+> brew uninstall human && brew install --cask gethuman-sh/tap/human
+> ```
 
 Or with [mise](https://mise.jdx.dev):
 
@@ -105,6 +113,11 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 - [Claude Code Integration](internal/claude/README.md) — skills, agents, and live monitoring
 - [Activity Statistics](internal/stats/README.md) — rolling record of agent tool usage
 
+**User interfaces**
+
+- [Workflow Board (desktop)](desktop/README.md) — drag-to-trigger 5-stage pipeline board (Wails)
+- [Project Starters](internal/starter/README.md) — scaffold empty directories from starter templates
+
 **Infrastructure & security**
 
 - [Audit Trail](internal/audit/README.md) — structured, queryable record of every agent action against trackers
@@ -139,6 +152,14 @@ human tui
 <img src="human-tui.png" width="960" alt="human TUI dashboard">
 
 The TUI shows running Claude Code instances, token usage per 5-hour window, daemon status, and connected containers — all in one view. It auto-starts the daemon if needed.
+
+Agent spawn (`a`) and dispatch (`⏎`) require **tmux** on the host and that the TUI itself runs inside a tmux session. Browsing issues and every other view work without it. If tmux is missing, install it (`brew install tmux` on macOS, `sudo apt-get install tmux` on Debian/Ubuntu, or your distro's package). To run the TUI inside a session, launch it as:
+
+```bash
+tmux new -s human "human tui"
+```
+
+The TUI runs a launch-time preflight and shows a banner with the exact command to run if either check fails.
 
 ## CLI usage
 
@@ -284,6 +305,7 @@ This writes skill and agent files to `.claude/` in the current directory. Re-run
 | `/human-findbugs` | Multi-agent pipeline to find logic errors, race conditions, and security issues |
 | `/human-security` | Deep security audit with attack chain analysis and OWASP Top 10 coverage |
 | `/human-gardening` | Multi-agent pipeline for codebase health analysis, refactoring triage, and automated fixes |
+| `/human-features` | Generate `FEATURE.json` — a grouped, human-readable map of what the codebase can do, with per-feature tickets and recent-change markers |
 
 ```bash
 # Full pipeline in one command
@@ -382,6 +404,29 @@ See [documentation.md](docs/documentation.md) for full configuration details.
 ```bash
 make build
 ```
+
+### Desktop app (workflow board)
+
+The desktop GUI is the interactive 5-stage workflow board (Backlog → Product planning → Implementation → Verification → Done): each card is a PM ticket and dragging a card forward one column triggers that stage's `human` action via the daemon. It runs on macOS, Windows and Linux.
+
+It must be built via the Wails CLI, **never** plain `go build ./desktop/` — Wails v2 requires build tags that only `wails build` (or `wails dev`) injects, and the whole `desktop/` package is behind a `wailsapp` build tag so the default `make build`/`make check` stay green on a plain toolchain.
+
+Prerequisites (per-OS webview toolchain — see [docs/desktop-app.md](docs/desktop-app.md)):
+
+```bash
+make desktop-deps   # installs the pinned Wails CLI
+# macOS:   xcode-select --install
+# Linux:   sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+# Windows: WebView2 runtime (preinstalled on current images)
+```
+
+Then build (current OS only — cgo backends cannot be cross-compiled):
+
+```bash
+make desktop
+```
+
+CI builds all three OSes on a native-runner matrix (`.github/workflows/desktop.yml`). See [docs/desktop-app.md](docs/desktop-app.md) for details, the regression guard, and why `go build` is not a valid smoke test.
 
 ## Star History
 

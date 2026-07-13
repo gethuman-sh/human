@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>human — workflow board</title>
+    <!-- Apply the persisted theme before first paint so a fancy user never sees a classic flash. -->
+    <script>try{if(localStorage.getItem("human.theme")==="fancy")document.documentElement.dataset.theme="fancy"}catch(e){}</script>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <nav class="rail" aria-label="Primary">
+        <button class="rail-item rail-action" data-action="ideation" title="New ticket — ideation">+</button>
+        <button class="rail-item active" data-view="board" title="Board" aria-current="page">
+          <svg class="rail-icon" width="22" height="22" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/>
+          </svg>
+        </button>
+        <button class="rail-item" data-view="agents" title="Running agents">
+          <svg class="rail-icon" width="22" height="22" viewBox="0 0 15 15" fill="none"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M7.5 2.5C10.2614 2.5 12.5 4.73858 12.5 7.5V13.5C12.5 14.0523 12.0523 14.5 11.5 14.5H3.5C2.94772 14.5 2.5 14.0523 2.5 13.5V7.5C2.5 4.73858 4.73858 2.5 7.5 2.5ZM7.5 2.5V0M4 11.5H11M0.5 8V12M14.5 8V12M5.5 9.5C4.94772 9.5 4.5 9.05228 4.5 8.5C4.5 7.94772 4.94772 7.5 5.5 7.5C6.05228 7.5 6.5 7.94772 6.5 8.5C6.5 9.05228 6.05228 9.5 5.5 9.5ZM9.5 9.5C8.94772 9.5 8.5 9.05228 8.5 8.5C8.5 7.94772 8.94772 7.5 9.5 7.5C10.0523 7.5 10.5 7.94772 10.5 8.5C10.5 9.05228 10.0523 9.5 9.5 9.5Z" stroke="currentColor"/>
+          </svg>
+        </button>
+        <button class="rail-item" data-view="features" title="Features">
+          <svg class="rail-icon" width="22" height="22" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/>
+          </svg>
+        </button>
+        <button class="rail-item ghost rail-bottom" data-view="settings"
+                title="Settings — coming soon" disabled aria-disabled="true">
+          <svg class="rail-icon" width="22" height="22" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+               xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </nav>
+      <div class="app-main">
+        <header id="app-header" class="app-header">
+          <span class="app-title">human — workflow board</span>
+        </header>
+        <div id="perm-strip" class="perm-strip hidden" role="region" aria-label="Permission requests">
+          <span class="perm-ico" aria-hidden="true">⚠</span>
+          <span id="perm-question" class="perm-question"></span>
+          <span id="perm-meta" class="perm-meta"></span>
+          <button id="perm-deny" class="perm-btn perm-deny" type="button">Deny</button>
+          <span class="perm-kbd" aria-hidden="true">Ctrl⇧N</span>
+          <button id="perm-approve" class="perm-btn perm-approve" type="button">Approve</button>
+          <span class="perm-kbd" aria-hidden="true">Ctrl⇧Y</span>
+          <button id="perm-more" class="perm-more hidden" type="button"></button>
+        </div>
+        <div id="perm-queue" class="perm-queue hidden" aria-label="Waiting permission requests"></div>
+        <div id="banner" class="banner hidden"></div>
+        <main id="board" class="board" aria-label="Workflow pipeline board"></main>
+        <section id="agents" class="agents-view hidden" aria-label="Running agents"></section>
+        <section id="features" class="features-view hidden" aria-label="Features"></section>
+        <footer id="statusbar" class="statusbar" aria-label="Status bar">
+          <span id="daemon-indicator" class="status-dot"></span>
+          <span id="daemon-text" class="status-text">Daemon…</span>
+        </footer>
+      </div>
+    </div>
+    <aside id="ideation-panel" class="ideation-panel hidden" aria-label="New ticket ideation chat">
+      <div class="ideation-header">
+        <span>New ticket — ideation</span>
+        <button id="ideation-close" class="ideation-close" title="Close (session keeps running)">×</button>
+      </div>
+      <div id="ideation-mode-picker" class="ideation-mode-picker hidden">
+        <button id="ideation-mode-chat" class="ideation-mode-btn" data-mode="chat">Chat</button>
+        <button id="ideation-mode-guided" class="ideation-mode-btn" data-mode="guided">Guided Q&amp;A</button>
+      </div>
+      <div id="ideation-transcript" class="ideation-transcript"></div>
+      <div id="ideation-options" class="ideation-options hidden"></div>
+      <div id="ideation-draft" class="ideation-draft hidden">
+        <input id="ideation-draft-title" type="text" class="ideation-draft-title" placeholder="Title" />
+        <textarea id="ideation-draft-description" class="ideation-draft-description" placeholder="Description"></textarea>
+        <button id="ideation-draft-submit" class="ideation-draft-submit" type="button">Create ticket</button>
+      </div>
+      <div id="ideation-status-line" class="ideation-status hidden"></div>
+      <form id="ideation-form" class="ideation-form">
+        <input id="ideation-input" type="text" autocomplete="off"
+               placeholder="Describe the idea…" />
+        <button id="ideation-send" type="submit">Send</button>
+      </form>
+    </aside>
+    <script type="module" src="/board.js"></script>
+  </body>
+</html>

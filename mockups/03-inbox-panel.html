@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option 3 — Permission inbox · permission mockups</title>
+<style>
+  :root {
+    --bg: #14161a; --col-bg: #1c1f26; --col-border: #2a2e37;
+    --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --running: #d6a13a; --done: #3ec07a; --failed: #e0544e;
+    --page: #0b0c0f; --note: #ffd866; --note-ink: #221b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+
+  .brief { max-width: 1240px; margin: 0 auto; padding: 28px 20px 18px; }
+  .brief .eyebrow { font: 11px/1 ui-monospace, Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  .brief h1 { margin: 8px 0 6px; font-size: 22px; font-weight: 650; }
+  .brief p { margin: 0; color: var(--muted); max-width: 72ch; }
+  .verdict { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip { font: 11px/1 ui-monospace, monospace; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .chip.plus { border-color: #2f4a2f; color: var(--done); }
+  .chip.minus { border-color: #4a2f2f; color: var(--failed); }
+  .nav { margin-top: 14px; font: 12px ui-monospace, monospace; color: var(--muted); }
+  .nav a { margin-right: 12px; }
+
+  .frame { position: relative; max-width: 1240px; margin: 10px auto 60px;
+    border: 1px solid var(--col-border); border-radius: 10px; overflow: hidden;
+    background: var(--bg); display: flex; height: 660px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .rail { width: 60px; flex: none; border-right: 1px solid var(--col-border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+  .rail-item { position: relative; width: 44px; height: 44px; border-radius: 15px; background: var(--col-bg); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .rail-item.active { background: var(--accent); color: #fff; border-radius: 12px; }
+  .badge { position: absolute; top: -4px; right: -4px; min-width: 17px; height: 17px; border-radius: 9px; background: var(--running); color: #221b00; font: 700 10.5px/17px ui-monospace, monospace; text-align: center; padding: 0 4px; }
+  .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; opacity: .45; }
+  .hdr { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--col-border); }
+  .hdr .logo { font-weight: 700; }
+  .hdr .proj { color: var(--muted); font-size: 13px; }
+  .board { flex: 1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 12px; }
+  .col { background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .col h3 { margin: 2px 4px 4px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 7px; padding: 8px 9px; }
+  .card .key { font: 11px ui-monospace, monospace; color: var(--accent); }
+  .card .t { font-size: 12.5px; margin-top: 3px; }
+
+  /* ---- the option: inbox side panel ---- */
+  .panel { position: absolute; top: 0; right: 0; bottom: 0; width: 360px; background: var(--col-bg); border-left: 1px solid var(--col-border); display: flex; flex-direction: column; box-shadow: -20px 0 50px rgba(0,0,0,.4); }
+  .panel-hd { padding: 14px 16px; border-bottom: 1px solid var(--col-border); display: flex; align-items: baseline; gap: 8px; }
+  .panel-hd .ttl { font-weight: 650; }
+  .panel-hd .cnt { font: 11px ui-monospace, monospace; color: var(--running); }
+  .panel-hd .close { margin-left: auto; color: var(--muted); }
+  .group { padding: 10px 16px 4px; }
+  .group-hd { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .group-hd b { color: var(--text); font-weight: 600; }
+  .group-hd .all { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--accent); }
+  .req { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; padding: 9px 10px; margin-bottom: 8px; }
+  .req .row { display: flex; align-items: baseline; gap: 8px; }
+  .req .op { font-size: 13px; font-weight: 600; }
+  .req .op .key { color: var(--accent); }
+  .req .age { margin-left: auto; font: 10.5px ui-monospace, monospace; color: var(--muted); }
+  .req .sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .req .acts { display: flex; gap: 8px; margin-top: 8px; }
+  .pbtn { flex: 1; text-align: center; padding: 6px 0; border-radius: 6px; font-size: 12px; font-weight: 600; border: 1px solid var(--card-border); background: var(--col-bg); }
+  .pbtn.ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pbtn.no { color: var(--failed); border-color: #4a2f2f; }
+  .hist-hd { padding: 12px 16px 6px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; border-top: 1px solid var(--col-border); margin-top: 8px; }
+  .hist { padding: 0 16px; font-size: 12px; color: var(--muted); }
+  .hist .h { display: flex; gap: 8px; padding: 5px 0; align-items: baseline; }
+  .hist .st { font: 10.5px ui-monospace, monospace; padding: 1px 6px; border-radius: 4px; }
+  .st.ok { color: var(--done); background: rgba(62,192,122,.12); }
+  .st.no { color: var(--failed); background: rgba(224,84,78,.12); }
+  .st.exp { color: var(--muted); background: rgba(138,144,160,.12); }
+  .hist .hk { color: var(--text); }
+  .hist .ha { margin-left: auto; font: 10.5px ui-monospace, monospace; }
+
+  .note { position: absolute; z-index: 30; max-width: 250px; background: var(--note); color: var(--note-ink);
+    font: 11.5px/1.45 ui-monospace, Menlo, monospace; padding: 8px 10px; border-radius: 3px 10px 10px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+  .note b { display: inline-block; background: var(--note-ink); color: var(--note); border-radius: 50%; width: 16px; height: 16px; text-align: center; line-height: 16px; font-size: 10px; margin-right: 6px; }
+  .foot { max-width: 1240px; margin: -40px auto 50px; padding: 0 20px; font: 11px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="brief">
+  <div class="eyebrow">Permission UI · Option 3 of 5</div>
+  <h1>Permission inbox — a home for requests, with history</h1>
+  <p>A dedicated rail item with a badge opens a push-in panel: all pending requests grouped by agent, batch
+     approval per agent, and a history of recent decisions from the daemon's 24-hour retention window.</p>
+  <div class="verdict">
+    <span class="chip plus">+ scales to many agents and requests</span>
+    <span class="chip plus">+ only option with decision history / audit view</span>
+    <span class="chip plus">+ batch actions per agent</span>
+    <span class="chip minus">− one click away; needs a loud badge to not be forgotten</span>
+  </div>
+  <div class="nav">
+    <a href="index.html">index</a>
+    <a href="02-toasts.html">← toasts</a>
+    <a href="04-board-inline.html">next: inline on board →</a>
+  </div>
+</div>
+
+<div class="frame">
+  <div class="rail">
+    <div class="rail-item">▦</div>
+    <div class="rail-item">◔</div>
+    <div class="rail-item active">⛨<span class="badge">3</span></div>
+    <div class="rail-item">⚙</div>
+  </div>
+  <div class="app-main">
+    <div class="hdr"><span class="logo">human</span><span class="proj">cli · main</span></div>
+    <div class="board">
+      <div class="col"><h3>Ideas</h3><div class="card"><div class="key">SC-91</div><div class="t">Weekly digest email</div></div></div>
+      <div class="col"><h3>Planned</h3><div class="card"><div class="key">KAN-1</div><div class="t">Migrate billing exports</div></div></div>
+      <div class="col"><h3>In Progress</h3><div class="card"><div class="key">HUM-160</div><div class="t">Grant-based permission queue</div></div></div>
+      <div class="col"><h3>Review</h3><div class="card"><div class="key">HUM-142</div><div class="t">Flaky stats writer test</div></div></div>
+      <div class="col"><h3>Done</h3><div class="card"><div class="key">HUM-158</div><div class="t">Start Project wizard</div></div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hd"><span class="ttl">Permissions</span><span class="cnt">3 waiting</span><span class="close">✕</span></div>
+
+    <div class="group">
+      <div class="group-hd">agent <b>kitsune</b> · 2 requests <span class="all">approve both</span></div>
+      <div class="req">
+        <div class="row"><span class="op">Delete <span class="key">KAN-1</span>?</span><span class="age">12s</span></div>
+        <div class="sub">jira · Migrate billing exports</div>
+        <div class="acts"><div class="pbtn no">Deny</div><div class="pbtn ok">Approve</div></div>
+      </div>
+      <div class="req">
+        <div class="row"><span class="op">Edit <span class="key">SC-79</span>?</span><span class="age">5m</span></div>
+        <div class="sub">shortcut · Validate coupon input</div>
+        <div class="acts"><div class="pbtn no">Deny</div><div class="pbtn ok">Approve</div></div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-hd">agent <b>sumitos</b> · 1 request</div>
+      <div class="req">
+        <div class="row"><span class="op">Move <span class="key">HUM-142</span> to Done?</span><span class="age">2m</span></div>
+        <div class="sub">linear · Flaky stats writer test</div>
+        <div class="acts"><div class="pbtn no">Deny</div><div class="pbtn ok">Approve</div></div>
+      </div>
+    </div>
+
+    <div class="hist-hd">Last 24 hours</div>
+    <div class="hist">
+      <div class="h"><span class="st ok">approved</span><span class="hk">Delete HUM-131</span><span class="ha">1h</span></div>
+      <div class="h"><span class="st no">denied</span><span class="hk">Delete SC-88</span><span class="ha">3h</span></div>
+      <div class="h"><span class="st exp">expired</span><span class="hk">Edit KAN-7</span><span class="ha">9h</span></div>
+    </div>
+  </div>
+
+  <div class="note" style="top: 150px; left: 76px;">
+    <b>1</b>New rail item = single home for permissions. Amber badge shows
+    the pending count from anywhere in the app.
+  </div>
+  <div class="note" style="top: 96px; right: 388px; max-width: 220px;">
+    <b>2</b>Push-in panel, not a modal: the board dims but stays visible
+    and clickable. Closing it loses nothing.
+  </div>
+  <div class="note" style="top: 236px; right: 388px; max-width: 230px;">
+    <b>3</b>Requests grouped by requesting agent, with a per-agent batch
+    action — the common case when one agent needs several grants.
+  </div>
+  <div class="note" style="bottom: 118px; right: 388px; max-width: 240px;">
+    <b>4</b>History straight from the daemon's 24h retention: approved /
+    denied / expired (confirm-status states). No other option has this.
+  </div>
+  <div class="note" style="bottom: 26px; left: 96px; max-width: 260px;">
+    <b>5</b>Each row shows the ticket title looked up from board data —
+    the daemon entry itself only carries operation, tracker, key, prompt.
+  </div>
+</div>
+
+<div class="foot">Static mockup — no functionality. Data source in the real app: poll pending-confirms; buttons call confirm-op &lt;id&gt; yes|no; history via retained entries.</div>
+
+</body>
+</html>

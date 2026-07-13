@@ -1,4 +1,4 @@
-.PHONY: all build install test check-test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks
+.PHONY: all build install test check-test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package
 
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
@@ -51,6 +51,43 @@ test-integration: build
 
 check: check-test lint sec secrets
 
+# Desktop (Wails) targets. The desktop app is a cgo backend (webkit2gtk on
+# Linux, WebView2 on Windows, Obj-C on macOS) and CANNOT be cross-compiled — it
+# is built on its native runner only (see .github/workflows/desktop.yml). All
+# desktop Go files are behind the `wailsapp` build tag so the default `build`,
+# `test`, `lint` and `check` targets never touch this cgo path and stay green on
+# a plain toolchain. The tag is NOT `desktop`: Wails reserves that name and
+# strips it before binding generation, which would hide every file. Building
+# requires the Wails CLI (desktop-deps installs it).
+desktop-deps:
+	go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+# Wails v2 defaults to the EOL webkit2gtk-4.0 ABI on Linux; modern Debian/Ubuntu
+# ship only webkit2gtk-4.1, which requires the `webkit2_41` tag. Auto-append it
+# when 4.0 is absent but 4.1 is present so the build works out of the box; macOS
+# and Windows are untouched. Override the whole set with `make desktop DESKTOP_TAGS=...`.
+DESKTOP_TAGS ?= wailsapp$(shell pkg-config --exists webkit2gtk-4.0 2>/dev/null || { pkg-config --exists webkit2gtk-4.1 2>/dev/null && echo ,webkit2_41; })
+
+# desktop produces a runnable app for the CURRENT OS only. wails build invokes
+# the frontend build (tsc + bundle) and compiles the cgo backend; Wails adds its
+# own `desktop` output tag, and `-tags wailsapp` makes our gated files visible to
+# both the binding-generation pass and the final compile. A plain
+# `go build ./desktop/` links but panics at startup, so it is never the build
+# path (see docs/desktop-app.md).
+desktop:
+	cd desktop && wails build -tags $(DESKTOP_TAGS)
+
+# desktop-dev runs the live-reload dev loop.
+desktop-dev:
+	cd desktop && wails dev -tags $(DESKTOP_TAGS)
+
+# desktop-package produces a clean distributable bundle (.app/.exe/AppImage) for
+# the current OS. Note: macOS code-signing/notarization is NOT performed here —
+# wails delegates to Apple codesign/notarytool with operator-provided
+# identities; that remains a release-gating follow-up.
+desktop-package:
+	cd desktop && wails build -tags $(DESKTOP_TAGS) -clean
+
 clean:
 	go clean -cache -i
 
@@ -75,4 +112,6 @@ release:
 	@echo "Tagging $(VERSION)..."
 	git tag -a $(VERSION) -m "Release $(VERSION)"
 	git push origin $(VERSION)
-	go tool goreleaser release --clean
+	# goreleaser needs a token to publish the release and push the Homebrew tap;
+	# fall back to the logged-in gh CLI so a plain `make release` works locally.
+	GITHUB_TOKEN="$${GITHUB_TOKEN:-$$(gh auth token)}" go tool goreleaser release --clean

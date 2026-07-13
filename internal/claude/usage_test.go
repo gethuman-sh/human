@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+// must returns v unchanged, failing the test when it is nil. Centralizing the
+// guard keeps call sites free of check-then-dereference sequences, which
+// golangci-lint's embedded staticcheck misreads as SA5011 (it loses t.Fatal's
+// no-return fact).
+func must[T any](t *testing.T, v *T, msg string) *T {
+	t.Helper()
+	if v == nil {
+		t.Fatal(msg)
+	}
+	return v
+}
+
 // fakeWalker replays pre-built JSONL lines.
 type fakeWalker struct {
 	lines [][]byte
@@ -87,17 +99,11 @@ func TestCalculateUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sonnet := summary.Models["sonnet 4.5"]
-	if sonnet == nil {
-		t.Fatal("expected sonnet 4.5 model entry")
-	}
+	sonnet := must(t, summary.Models["sonnet 4.5"], "expected sonnet 4.5 model entry")
 	if sonnet.InputTokens != 1_000_000 {
 		t.Errorf("sonnet input = %d, want 1000000", sonnet.InputTokens)
 	}
-	opus := summary.Models["opus 4.6"]
-	if opus == nil {
-		t.Fatal("expected opus 4.6 model entry")
-	}
+	opus := must(t, summary.Models["opus 4.6"], "expected opus 4.6 model entry")
 	if opus.OutputTokens != 1_000_000 {
 		t.Errorf("opus output = %d, want 1000000", opus.OutputTokens)
 	}
@@ -116,10 +122,7 @@ func TestCalculateUsageCacheTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sonnet := summary.Models["sonnet 4.5"]
-	if sonnet == nil {
-		t.Fatal("expected sonnet 4.5 model entry")
-	}
+	sonnet := must(t, summary.Models["sonnet 4.5"], "expected sonnet 4.5 model entry")
 	if sonnet.CacheCreate != 1_000_000 {
 		t.Errorf("sonnet cache_create = %d, want 1000000", sonnet.CacheCreate)
 	}
@@ -224,10 +227,7 @@ func TestMergeUsage(t *testing.T) {
 
 	MergeUsage(dst, src)
 
-	opus := dst.Models["opus 4.6"]
-	if opus == nil {
-		t.Fatal("expected opus 4.6 in dst after merge")
-	}
+	opus := must(t, dst.Models["opus 4.6"], "expected opus 4.6 in dst after merge")
 	if opus.InputTokens != 300 {
 		t.Errorf("opus input = %d, want 300", opus.InputTokens)
 	}
@@ -237,10 +237,7 @@ func TestMergeUsage(t *testing.T) {
 	if opus.CacheCreate != 10 {
 		t.Errorf("opus cache_create = %d, want 10", opus.CacheCreate)
 	}
-	sonnet := dst.Models["sonnet 4.5"]
-	if sonnet == nil {
-		t.Fatal("expected sonnet 4.5 in dst after merge")
-	}
+	sonnet := must(t, dst.Models["sonnet 4.5"], "expected sonnet 4.5 in dst after merge")
 	if sonnet.InputTokens != 300 {
 		t.Errorf("sonnet input = %d, want 300", sonnet.InputTokens)
 	}
@@ -500,13 +497,8 @@ func TestCollectInstanceUsage(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
-	if results[0].Summary == nil {
-		t.Fatal("expected non-nil summary")
-	}
-	opus := results[0].Summary.Models["opus 4.6"]
-	if opus == nil {
-		t.Fatal("expected opus 4.6 model entry")
-	}
+	sum := must(t, results[0].Summary, "expected non-nil summary")
+	opus := must(t, sum.Models["opus 4.6"], "expected opus 4.6 model entry")
 	if opus.InputTokens != 500 {
 		t.Errorf("opus input = %d, want 500", opus.InputTokens)
 	}

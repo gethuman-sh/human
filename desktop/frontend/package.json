@@ -1,0 +1,14 @@
+{
+  "name": "human-board-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Workflow-board frontend for the human desktop app (Wails v2).",
+  "scripts": {
+    "build": "tsc && node scripts/bundle.mjs",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

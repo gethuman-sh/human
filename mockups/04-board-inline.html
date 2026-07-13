@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option 4 — Inline on the board · permission mockups</title>
+<style>
+  :root {
+    --bg: #14161a; --col-bg: #1c1f26; --col-border: #2a2e37;
+    --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --running: #d6a13a; --done: #3ec07a; --failed: #e0544e;
+    --page: #0b0c0f; --note: #ffd866; --note-ink: #221b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+
+  .brief { max-width: 1240px; margin: 0 auto; padding: 28px 20px 18px; }
+  .brief .eyebrow { font: 11px/1 ui-monospace, Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  .brief h1 { margin: 8px 0 6px; font-size: 22px; font-weight: 650; }
+  .brief p { margin: 0; color: var(--muted); max-width: 72ch; }
+  .verdict { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip { font: 11px/1 ui-monospace, monospace; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .chip.plus { border-color: #2f4a2f; color: var(--done); }
+  .chip.minus { border-color: #4a2f2f; color: var(--failed); }
+  .nav { margin-top: 14px; font: 12px ui-monospace, monospace; color: var(--muted); }
+  .nav a { margin-right: 12px; }
+
+  .frame { position: relative; max-width: 1240px; margin: 10px auto 60px;
+    border: 1px solid var(--col-border); border-radius: 10px; overflow: hidden;
+    background: var(--bg); display: flex; height: 660px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .rail { width: 60px; flex: none; border-right: 1px solid var(--col-border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+  .rail-item { width: 44px; height: 44px; border-radius: 15px; background: var(--col-bg); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .rail-item.active { background: var(--accent); color: #fff; border-radius: 12px; }
+  .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .hdr { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--col-border); }
+  .hdr .logo { font-weight: 700; }
+  .hdr .proj { color: var(--muted); font-size: 13px; }
+  .hdr .overflow { margin-left: auto; font-size: 12px; color: var(--running); background: rgba(214,161,58,.12); border: 1px solid rgba(214,161,58,.35); border-radius: 6px; padding: 4px 9px; }
+  .board { flex: 1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 12px; min-height: 0; }
+  .col { background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .col h3 { margin: 2px 4px 4px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 7px; padding: 8px 9px; }
+  .card .key { font: 11px ui-monospace, monospace; color: var(--accent); }
+  .card .t { font-size: 12.5px; margin-top: 3px; }
+
+  /* ---- the option: request docks onto its ticket card ---- */
+  .card.asking { border-color: var(--running); box-shadow: 0 0 0 1px var(--running), 0 8px 26px rgba(214,161,58,.15); }
+  .ask { margin: 8px -9px -8px; background: rgba(214,161,58,.10); border-top: 1px solid rgba(214,161,58,.4); padding: 7px 9px 8px; border-radius: 0 0 7px 7px; }
+  .ask .q { font-size: 12px; font-weight: 600; color: var(--running); }
+  .ask .w { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .ask .w b { color: var(--text); font-weight: 550; }
+  .ask .acts { display: flex; gap: 6px; margin-top: 7px; }
+  .abtn { flex: 1; text-align: center; padding: 5px 0; border-radius: 5px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--card-border); background: var(--card-bg); }
+  .abtn.ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .abtn.no { color: var(--failed); border-color: #4a2f2f; }
+
+  .note { position: absolute; z-index: 30; max-width: 250px; background: var(--note); color: var(--note-ink);
+    font: 11.5px/1.45 ui-monospace, Menlo, monospace; padding: 8px 10px; border-radius: 3px 10px 10px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+  .note b { display: inline-block; background: var(--note-ink); color: var(--note); border-radius: 50%; width: 16px; height: 16px; text-align: center; line-height: 16px; font-size: 10px; margin-right: 6px; }
+  .foot { max-width: 1240px; margin: -40px auto 50px; padding: 0 20px; font: 11px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="brief">
+  <div class="eyebrow">Permission UI · Option 4 of 5</div>
+  <h1>Inline on the board — decide where the work lives</h1>
+  <p>The permission request docks onto the affected ticket's card. The card lights up amber and grows an
+     Approve / Deny strip, so the decision happens in full context of the ticket and its column.</p>
+  <div class="verdict">
+    <span class="chip plus">+ maximum context: you see exactly what the agent touches</span>
+    <span class="chip plus">+ feels native to the board, no new surfaces</span>
+    <span class="chip minus">− requests scatter across the board; needs scanning</span>
+    <span class="chip minus">− needs a fallback for tickets not on the visible board</span>
+  </div>
+  <div class="nav">
+    <a href="index.html">index</a>
+    <a href="03-inbox-panel.html">← inbox panel</a>
+    <a href="05-command-strip.html">next: command strip →</a>
+  </div>
+</div>
+
+<div class="frame">
+  <div class="rail">
+    <div class="rail-item active">▦</div>
+    <div class="rail-item">◔</div>
+    <div class="rail-item">⚙</div>
+  </div>
+  <div class="app-main">
+    <div class="hdr">
+      <span class="logo">human</span><span class="proj">cli · main</span>
+      <span class="overflow">⚠ 1 request for a ticket not on this board</span>
+    </div>
+    <div class="board">
+      <div class="col"><h3>Ideas</h3>
+        <div class="card"><div class="key">SC-91</div><div class="t">Weekly digest email</div></div>
+      </div>
+      <div class="col"><h3>Planned</h3>
+        <div class="card asking">
+          <div class="key">KAN-1</div><div class="t">Migrate billing exports</div>
+          <div class="ask">
+            <div class="q">Delete this ticket?</div>
+            <div class="w">agent <b>kitsune</b> · 12s ago</div>
+            <div class="acts"><div class="abtn no">Deny</div><div class="abtn ok">Approve</div></div>
+          </div>
+        </div>
+        <div class="card"><div class="key">SC-79</div><div class="t">Validate coupon input</div></div>
+      </div>
+      <div class="col"><h3>In Progress</h3>
+        <div class="card"><div class="key">HUM-160</div><div class="t">Grant-based permission queue</div></div>
+      </div>
+      <div class="col"><h3>Review</h3>
+        <div class="card asking">
+          <div class="key">HUM-142</div><div class="t">Flaky stats writer test</div>
+          <div class="ask">
+            <div class="q">Move to Done?</div>
+            <div class="w">agent <b>sumitos</b> · 2m ago</div>
+            <div class="acts"><div class="abtn no">Deny</div><div class="abtn ok">Approve</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="col"><h3>Done</h3>
+        <div class="card"><div class="key">HUM-158</div><div class="t">Start Project wizard</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="top: 214px; left: 96px; max-width: 235px;">
+    <b>1</b>The request attaches to the ticket it concerns. Amber ring
+    marks a card waiting on permission — visible while scanning the board.
+  </div>
+  <div class="note" style="top: 400px; left: 300px; max-width: 235px;">
+    <b>2</b>Inline strip = the daemon prompt rephrased in card context
+    ("DeleteIssue KAN-1?" → "Delete this ticket?") plus agent and age.
+  </div>
+  <div class="note" style="top: 300px; right: 240px; max-width: 220px;">
+    <b>3</b>Works for every gated operation: delete, edit, status
+    transition, start — each renders on the card it targets.
+  </div>
+  <div class="note" style="top: 66px; right: 40px; max-width: 235px;">
+    <b>4</b>Fallback, unavoidable in this option: requests for tickets on
+    other projects/trackers surface as a header counter that opens a list.
+  </div>
+</div>
+
+<div class="foot">Static mockup — no functionality. Data source in the real app: poll pending-confirms, join on board card keys; buttons call confirm-op &lt;id&gt; yes|no.</div>
+
+</body>
+</html>

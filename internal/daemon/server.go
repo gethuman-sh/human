@@ -49,6 +49,7 @@ type Server struct {
 	HookEvents       *HookEventStore                          // in-memory hook event buffer; nil disables hook event tracking
 	NetworkEvents    *NetworkEventStore                       // in-memory ambient network activity buffer; nil disables
 	IssueFetcher     func() ([]TrackerIssuesResult, error)    // injected; fetches issues from configured trackers
+	LiteIssueFetcher func() ([]TrackerIssuesResult, error)    // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
 	TrackerDiagnoser func(dir string) []tracker.TrackerStatus // injected; diagnoses tracker status with vault resolution
 	Projects         *ProjectRegistry                         // multi-project routing; nil means single-project mode
 	PendingConfirms  *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
@@ -58,6 +59,19 @@ type Server struct {
 	AuditStore       *audit.Store                             // serves audit-query reads; nil disables audit-query route
 	AgentCleaner     AgentCleaner                             // async agent cleanup; nil disables agent-stop-async route
 	VaultResolver    *vault.Resolver                          // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
+	// BoardTransitioner applies a board-transition request (advancing a card
+	// one pipeline stage). nil disables the board-transition route.
+	BoardTransitioner func(req BoardTransitionRequest) error
+	// CloseTicketer closes a PM ticket (transitions it to Done) for the
+	// board's Close-Ticket drop zone. nil disables the close-ticket route.
+	CloseTicketer func(req CloseTicketRequest) error
+	// FeaturesGenerator launches the human-features skill (regenerating
+	// FEATURE.json) for the registered project. nil disables the
+	// features-generate route.
+	FeaturesGenerator func() error
+	// Ideation owns the board's single agent-driven ideation session. nil
+	// disables the ideation-start/reply/status routes.
+	Ideation *IdeationEngine
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
 
@@ -283,21 +297,6 @@ func (s *Server) handleLogMode(conn net.Conn, args []string) {
 	_ = enc.Encode(resp)
 }
 
-// routeDataStores handles read routes backed by the daemon's SQLite stores
-// (tool-stats, audit-query). Split out of routeIntercept so each switch stays
-// small and the analytics/query reads live together. Returns true if handled.
-func (s *Server) routeDataStores(conn net.Conn, args []string) bool {
-	switch args[0] {
-	case "tool-stats":
-		s.handleToolStats(conn)
-		return true
-	case "audit-query":
-		s.handleAuditQuery(conn, args[1:])
-		return true
-	}
-	return false
-}
-
 // routeIntercept handles special commands that don't need subprocess execution.
 // projectDir is the resolved project directory for this request.
 // clientPID identifies the requesting client for authorization checks.
@@ -306,39 +305,7 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 	if len(args) == 0 {
 		return false
 	}
-	if s.routeDataStores(conn, args) {
-		return true
-	}
-	switch args[0] {
-	case "log-mode":
-		s.handleLogMode(conn, args[1:])
-		return true
-	case "hook-event":
-		s.handleHookEvent(conn, args[1:])
-		return true
-	case "hook-snapshot":
-		s.handleHookSnapshot(conn)
-		return true
-	case "network-events":
-		s.handleNetworkEvents(conn)
-		return true
-	case "tracker-diagnose":
-		s.handleTrackerDiagnose(conn, projectDir)
-		return true
-	case "tracker-issues":
-		s.handleTrackerIssues(conn)
-		return true
-	case "pending-confirms":
-		s.handlePendingConfirms(conn)
-		return true
-	case "confirm-op":
-		s.handleConfirmOp(conn, args[1:], clientPID)
-		return true
-	case "agent-stop-async":
-		s.handleAgentStopAsync(conn, args[1:])
-		return true
-	case "subscribe":
-		s.handleSubscribe(conn)
+	if s.routeSimpleCommand(conn, args, projectDir, clientPID) {
 		return true
 	}
 
@@ -354,6 +321,42 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 	}
 
 	return false
+}
+
+// routeSimpleCommand dispatches the fixed-name daemon commands that map 1:1 to
+// a handler. Kept separate from routeIntercept so the latter's branchier
+// browser-relay path stays readable. Routing is table-driven so adding a route
+// never grows cyclomatic complexity (a switch arm per command did).
+func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir string, clientPID int) bool {
+	routes := map[string]func(){
+		"log-mode":            func() { s.handleLogMode(conn, args[1:]) },
+		"hook-event":          func() { s.handleHookEvent(conn, args[1:]) },
+		"hook-snapshot":       func() { s.handleHookSnapshot(conn) },
+		"network-events":      func() { s.handleNetworkEvents(conn) },
+		"tracker-diagnose":    func() { s.handleTrackerDiagnose(conn, projectDir) },
+		"tracker-issues":      func() { s.handleTrackerIssues(conn) },
+		"tracker-issues-lite": func() { s.handleTrackerIssuesLite(conn) },
+		"pending-confirms":    func() { s.handlePendingConfirms(conn) },
+		"confirm-op":          func() { s.handleConfirmOp(conn, args[1:], clientPID) },
+		"confirm-status":      func() { s.handleConfirmStatus(conn, args[1:]) },
+		"tool-stats":          func() { s.handleToolStats(conn) },
+		"audit-query":         func() { s.handleAuditQuery(conn, args[1:]) },
+		"agent-stop-async":    func() { s.handleAgentStopAsync(conn, args[1:]) },
+		"subscribe":           func() { s.handleSubscribe(conn) },
+		"board-transition":    func() { s.handleBoardTransition(conn, args[1:]) },
+		"close-ticket":        func() { s.handleCloseTicket(conn, args[1:]) },
+		"ideation-start":      func() { s.handleIdeationStart(conn, args[1:]) },
+		"ideation-reply":      func() { s.handleIdeationReply(conn, args[1:]) },
+		"ideation-approve":    func() { s.handleIdeationApprove(conn, args[1:]) },
+		"ideation-status":     func() { s.handleIdeationStatus(conn) },
+		"features-generate":   func() { s.handleFeaturesGenerate(conn) },
+	}
+	handler, ok := routes[args[0]]
+	if !ok {
+		return false
+	}
+	handler()
+	return true
 }
 
 // handleHookEvent appends a Claude Code hook event to the in-memory store.
@@ -429,15 +432,30 @@ func (s *Server) handleTrackerDiagnose(conn net.Conn, projectDir string) {
 	_ = enc.Encode(resp)
 }
 
-// handleTrackerIssues returns open issues from all configured tracker projects.
+// handleTrackerIssues returns open issues from all configured tracker projects,
+// including each PM ticket's derived board stage (the comment-scan phase).
 func (s *Server) handleTrackerIssues(conn net.Conn) {
-	if s.IssueFetcher == nil {
+	s.writeIssueResults(conn, s.IssueFetcher)
+}
+
+// handleTrackerIssuesLite returns issue titles only, skipping the per-ticket
+// comment scan that derives board stages. The board uses this to render titles
+// quickly, then reconciles them into their real columns via handleTrackerIssues.
+func (s *Server) handleTrackerIssuesLite(conn net.Conn) {
+	s.writeIssueResults(conn, s.LiteIssueFetcher)
+}
+
+// writeIssueResults runs an injected issue fetcher and streams the JSON result.
+// A nil fetcher yields an empty list rather than an error so a not-yet-configured
+// tracker renders an empty board instead of a failure banner.
+func (s *Server) writeIssueResults(conn net.Conn, fetcher func() ([]TrackerIssuesResult, error)) {
+	if fetcher == nil {
 		resp := Response{Stdout: "[]\n"}
 		enc := json.NewEncoder(conn)
 		_ = enc.Encode(resp)
 		return
 	}
-	results, err := s.IssueFetcher()
+	results, err := fetcher()
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
@@ -448,6 +466,78 @@ func (s *Server) handleTrackerIssues(conn net.Conn) {
 		return
 	}
 	resp := Response{Stdout: string(data) + "\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleBoardTransition applies a board-transition request. The request is a
+// single JSON arg so multi-word PM titles survive arg splitting. This route is
+// non-destructive (detectDestructive does not match "board-transition"), so it
+// bypasses the pending-confirm gate — the drag is the user's consent.
+func (s *Server) handleBoardTransition(conn net.Conn, args []string) {
+	if s.BoardTransitioner == nil {
+		s.writeError(conn, "board transitions not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "board-transition requires one JSON arg", 1)
+		return
+	}
+	var req BoardTransitionRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid board-transition request: "+err.Error(), 1)
+		return
+	}
+	if err := s.BoardTransitioner(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleFeaturesGenerate launches the human-features skill via the injected
+// FeaturesGenerator. Like board-transition it is a dedicated route (the button
+// press is the user's consent), and it takes no argument — the daemon resolves
+// the project directory itself. It returns as soon as the agent is launched.
+func (s *Server) handleFeaturesGenerate(conn net.Conn) {
+	if s.FeaturesGenerator == nil {
+		s.writeError(conn, "feature generation not available", 1)
+		return
+	}
+	if err := s.FeaturesGenerator(); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleCloseTicket closes a PM ticket via the injected CloseTicketer. Like
+// board-transition this is a dedicated route (detectDestructive does not match
+// "close-ticket"), so it bypasses the pending-confirm gate — the board's
+// drag-and-confirm dialog is the user's consent, not a TUI approval.
+func (s *Server) handleCloseTicket(conn net.Conn, args []string) {
+	if s.CloseTicketer == nil {
+		s.writeError(conn, "closing tickets not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "close-ticket requires one JSON arg", 1)
+		return
+	}
+	var req CloseTicketRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid close-ticket request: "+err.Error(), 1)
+		return
+	}
+	if err := s.CloseTicketer(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: "ok\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
 }
@@ -753,14 +843,61 @@ func detectDestructive(args []string) (destructiveOp, bool) {
 	}
 }
 
-// handleDestructiveConfirm implements the two-line confirmation protocol for
-// destructive operations. It pauses the connection, stores a pending
-// confirmation for the TUI, and waits for a decision or timeout.
+// handleDestructiveConfirm gates a destructive operation on a permission
+// grant. An approved grant for the same operation/tracker/key is consumed
+// (one-time) and the command executes right here, in the normal path with
+// the client's fresh env. Otherwise the request is queued and the response
+// returns immediately — the connection is NOT held open; the client polls
+// confirm-status and re-submits the command once granted. There is no
+// server-side timeout: entries live until decided or swept by Cleanup.
 func (s *Server) handleDestructiveConfirm(conn net.Conn, req Request, op destructiveOp, projectDir string) {
-	id := fmt.Sprintf("%s-%s-%d", op.Tracker, op.Key, time.Now().UnixNano())
+	// A resubmit carrying a known ID resumes that request: redeem the grant,
+	// keep waiting, or report the denial — never prompt again for it.
+	idTaken := false
+	if req.ConfirmID != "" {
+		if pc, ok := s.PendingConfirms.Get(req.ConfirmID); ok {
+			idTaken = true
+			switch pc.State {
+			case ConfirmApproved:
+				if pc, ok := s.PendingConfirms.Consume(req.ConfirmID, op.Operation, op.Tracker, op.Key); ok {
+					s.Logger.Info().Str("id", pc.ID).Str("key", op.Key).Msg("permission grant redeemed, executing")
+					// Inject --yes so the Cobra command doesn't try to prompt again.
+					req.Args = append(req.Args, "--yes")
+					s.executeCommand(conn, req, projectDir)
+					return
+				}
+				// Grant exists but covers a different operation — fall
+				// through and prompt for what is actually being asked.
+			case ConfirmPending:
+				s.writeAwaitConfirm(conn, pc.ID, pc.Prompt)
+				return
+			case ConfirmDenied:
+				resp := Response{Stderr: "Operation aborted: the user denied permission. Do not retry; ask the user how to proceed.\n", ExitCode: 1}
+				enc := json.NewEncoder(conn)
+				_ = enc.Encode(resp)
+				return
+			}
+		}
+	}
+
 	prompt := fmt.Sprintf("%s %s?", op.Operation, op.Key)
 
-	pc := &PendingConfirmation{
+	// Reattach to an open prompt for the same operation so a re-run with a
+	// fresh ID (e.g. after the client-side wait timed out) never shows the
+	// user two prompts for one operation.
+	if pc, ok := s.PendingConfirms.FindPending(op.Operation, op.Tracker, op.Key); ok {
+		s.writeAwaitConfirm(conn, pc.ID, pc.Prompt)
+		return
+	}
+
+	id := req.ConfirmID
+	if id == "" || idTaken {
+		// No client ID (legacy), or the client's ID already names a grant
+		// for a different operation — key the new entry server-side so the
+		// existing entry is not silently reused.
+		id = fmt.Sprintf("%s-%s-%d", op.Tracker, op.Key, time.Now().UnixNano())
+	}
+	s.PendingConfirms.Submit(&PendingConfirmation{
 		ID:        id,
 		Operation: op.Operation,
 		Tracker:   op.Tracker,
@@ -768,101 +905,39 @@ func (s *Server) handleDestructiveConfirm(conn net.Conn, req Request, op destruc
 		Prompt:    prompt,
 		ClientPID: req.ClientPID,
 		CreatedAt: time.Now(),
-		Decision:  make(chan bool, 1),
-	}
-
-	s.PendingConfirms.Add(pc)
+	})
 	s.Logger.Info().Str("id", id).Str("prompt", prompt).Msg("destructive operation awaiting confirmation")
+	s.writeAwaitConfirm(conn, id, prompt)
+}
 
-	// Line 1: tell the client to wait.
+// writeAwaitConfirm tells the client its operation is queued for permission.
+func (s *Server) writeAwaitConfirm(conn net.Conn, id, prompt string) {
 	enc := json.NewEncoder(conn)
-	resp1 := Response{
-		Stderr:        "", // client prints its own "Waiting for confirmation" message
+	resp := Response{
 		AwaitConfirm:  true,
 		ConfirmID:     id,
 		ConfirmPrompt: prompt,
 	}
-	if err := enc.Encode(resp1); err != nil {
-		s.Logger.Warn().Err(err).Msg("failed to write confirm line 1")
-		// Remove the entry we just added so it doesn't accumulate in the
-		// store with no client to resolve it.
-		s.PendingConfirms.ResolveTimeout(id)
-		return
+	if err := enc.Encode(resp); err != nil {
+		s.Logger.Warn().Err(err).Msg("failed to write confirm response")
 	}
+}
 
-	// Wait for TUI decision or timeout.
-	var approved bool
-	select {
-	case approved = <-pc.Decision:
-	case <-time.After(confirmTimeout):
-		s.Logger.Warn().Str("id", id).Msg("destructive confirmation timed out")
-		// Remove from store if still present (Cleanup may have already done it).
-		s.PendingConfirms.ResolveTimeout(id)
-		approved = false
+// confirmAuditArgs reconstructs a minimal argv for audit purposes from a
+// permission entry — the entry deliberately stores no command payload, but
+// the audit trail still needs the operation and key on denials.
+func confirmAuditArgs(pc PendingConfirmation) []string {
+	verbs := map[string]string{
+		"DeleteIssue":     "delete",
+		"EditIssue":       "edit",
+		"TransitionIssue": "status",
+		"StartIssue":      "start",
 	}
-
-	if !approved {
-		// Denial/timeout: no command ctx exists, so resolve the decision
-		// context straight from the request env (falling back to the process).
-		s.emitAudit(req.Args, audit.OutcomeDenied, func(k string) string {
-			if v, ok := req.Env[k]; ok {
-				return v
-			}
-			return os.Getenv(k)
-		})
-		resp2 := Response{Stderr: "Operation aborted\n", ExitCode: 1}
-		_ = enc.Encode(resp2)
-		return
+	verb, ok := verbs[pc.Operation]
+	if !ok {
+		verb = pc.Operation
 	}
-
-	s.Logger.Info().Str("id", id).Msg("destructive operation approved, executing")
-
-	// Execute the original command. Per-request env values flow via the
-	// cobra command context — see executeCommand for the rationale.
-	if s.SafeMode {
-		if req.Env == nil {
-			req.Env = make(map[string]string)
-		}
-		req.Env["HUMAN_SAFE_MODE"] = "1"
-	}
-	if projectDir != "." {
-		if req.Env == nil {
-			req.Env = make(map[string]string)
-		}
-		req.Env["HUMAN_PROJECT_DIR"] = projectDir
-	}
-
-	// Inject --yes so the Cobra command doesn't try to prompt again.
-	execArgs := append(req.Args, "--yes")
-
-	var stdoutBuf, stderrBuf bytes.Buffer
-	cmd := s.CmdFactory()
-	cmd.SetArgs(execArgs)
-	cmd.SetOut(&stdoutBuf)
-	cmd.SetErr(&stderrBuf)
-	ctx := env.WithEnv(context.Background(), req.Env)
-	ctx = vault.WithResolver(ctx, s.VaultResolver)
-	cmd.SetContext(ctx)
-
-	exitCode := 0
-	if err := cmd.Execute(); err != nil {
-		exitCode = 1
-	}
-
-	// Approved-and-executed: record the outcome like the normal path, using the
-	// command ctx so the per-request HUMAN_AUDIT_* decision context resolves.
-	outcome := audit.OutcomeSuccess
-	if exitCode != 0 {
-		outcome = audit.OutcomeFailure
-	}
-	s.emitAudit(req.Args, outcome, func(k string) string { return env.Lookup(ctx, k) })
-
-	resp2 := Response{
-		Stdout:   stdoutBuf.String(),
-		Stderr:   stderrBuf.String(),
-		ExitCode: exitCode,
-	}
-	_ = enc.Encode(resp2)
+	return []string{pc.Tracker, "issue", verb, pc.Key}
 }
 
 // handlePendingConfirms returns the current pending confirmations as JSON.
@@ -884,8 +959,11 @@ func (s *Server) handlePendingConfirms(conn net.Conn) {
 	_ = enc.Encode(resp)
 }
 
-// handleConfirmOp resolves a pending confirmation with the given decision.
-// Expected args: [ID, "yes"|"no"]. approverPID prevents self-approval.
+// handleConfirmOp resolves a pending permission request with the given
+// decision. Expected args: [ID, "yes"|"no"]. approverPID prevents
+// self-approval. Approval only records a grant — executing the operation
+// remains the requesting client's job (it re-submits and the daemon redeems
+// the grant in handleDestructiveConfirm).
 func (s *Server) handleConfirmOp(conn net.Conn, args []string, approverPID int) {
 	if len(args) < 2 {
 		s.writeError(conn, "usage: confirm-op ID yes|no", 1)
@@ -898,12 +976,47 @@ func (s *Server) handleConfirmOp(conn net.Conn, args []string, approverPID int) 
 		s.writeError(conn, "confirmation store not available", 1)
 		return
 	}
-	if err := s.PendingConfirms.Resolve(id, approved, approverPID); err != nil {
+	pc, err := s.PendingConfirms.Resolve(id, approved, approverPID)
+	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
 
+	if !approved {
+		// The executed path audits via the redeemed command; a denial is
+		// only visible here, so record it from the entry's operation triple.
+		s.emitAudit(confirmAuditArgs(pc), audit.OutcomeDenied, os.Getenv)
+	}
+
 	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleConfirmStatus returns the decision state of a queued permission
+// request. Unknown IDs — never submitted, already swept, or redeemed —
+// report state "unknown" so clients treat them as expired.
+func (s *Server) handleConfirmStatus(conn net.Conn, args []string) {
+	if len(args) < 1 {
+		s.writeError(conn, "usage: confirm-status ID", 1)
+		return
+	}
+	st := ConfirmStatus{ID: args[0], State: "unknown"}
+	if s.PendingConfirms != nil {
+		if pc, ok := s.PendingConfirms.Get(args[0]); ok {
+			st.State = string(pc.State)
+			st.Prompt = pc.Prompt
+			if !pc.ResolvedAt.IsZero() {
+				st.ResolvedAt = pc.ResolvedAt.UTC().Format(time.RFC3339)
+			}
+		}
+	}
+	data, err := json.Marshal(st)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: string(data) + "\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
 }

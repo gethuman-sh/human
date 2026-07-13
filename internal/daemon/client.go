@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,10 +25,50 @@ const dialTimeout = 5 * time.Second
 
 // RunRemote connects to the daemon at addr, sends the CLI args, and returns
 // the exit code. Stdout and stderr are written to os.Stdout and os.Stderr.
+//
+// Destructive commands run a grant cycle: the daemon queues a permission
+// request and answers await_confirm; we poll its decision and, once granted,
+// re-submit the same command with the grant's ID — the daemon redeems the
+// grant (one-time) and executes. The queue survives our disconnect, so a
+// timeout defers the operation instead of losing it.
 func RunRemote(addr, token string, args []string, version string) (int, error) {
+	confirmID := newConfirmID()
+	for attempt := 0; ; attempt++ {
+		code, resp, err := runRemoteOnce(addr, token, args, version, confirmID)
+		if err != nil || !resp.AwaitConfirm {
+			return code, err
+		}
+		if attempt > 0 {
+			// The daemon asked again after granting — a mismatched or
+			// already-redeemed grant. Bail out rather than loop.
+			return 1, errors.WithDetails("daemon requested confirmation again after approval", "id", resp.ConfirmID)
+		}
+		// Poll the grant's ID (the daemon may have reattached us to an
+		// earlier request for the same operation).
+		confirmID = resp.ConfirmID
+		switch waitForConfirmDecision(addr, token, resp.ConfirmID, resp.ConfirmPrompt) {
+		case string(ConfirmApproved):
+			continue // re-submit with the granted ID
+		case string(ConfirmDenied):
+			_, _ = fmt.Fprint(os.Stderr, "Operation aborted: the user denied permission. Do not retry; ask the user how to proceed.\n")
+			return 1, nil
+		case confirmWaitTimedOut:
+			_, _ = fmt.Fprintf(os.Stderr, "Permission request %s is still pending; no decision yet. Ask the user to approve it (human TUI or desktop app), then re-run this exact command — once granted it executes without asking again. Check the decision anytime with: human confirm-status %s\n", resp.ConfirmID, resp.ConfirmID)
+			return 1, nil
+		default:
+			// "unknown": swept or never queued — treat as expired.
+			_, _ = fmt.Fprintf(os.Stderr, "Permission request %s expired before it was decided. Re-run this command to request permission again.\n", resp.ConfirmID)
+			return 1, nil
+		}
+	}
+}
+
+// runRemoteOnce performs a single request/response round-trip. The returned
+// Response carries the await_confirm signal for RunRemote's grant cycle.
+func runRemoteOnce(addr, token string, args []string, version, confirmID string) (int, Response, error) {
 	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {
-		return 1, errors.WrapWithDetails(err, "cannot reach daemon", "addr", addr)
+		return 1, Response{}, errors.WrapWithDetails(err, "cannot reach daemon", "addr", addr)
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -40,11 +82,12 @@ func RunRemote(addr, token string, args []string, version string) (int, error) {
 		Env:       env,
 		ClientPID: findAncestorClaude(),
 		Cwd:       cwd,
+		ConfirmID: confirmID,
 	}
 
 	enc := json.NewEncoder(conn)
 	if err := enc.Encode(req); err != nil {
-		return 1, errors.WrapWithDetails(err, "failed to send request")
+		return 1, Response{}, errors.WrapWithDetails(err, "failed to send request")
 	}
 
 	// Single buffered reader for the connection — creating a new
@@ -53,12 +96,12 @@ func RunRemote(addr, token string, args []string, version string) (int, error) {
 
 	line, err := reader.ReadBytes('\n')
 	if err != nil {
-		return 1, errors.WrapWithDetails(err, "failed to read response")
+		return 1, Response{}, errors.WrapWithDetails(err, "failed to read response")
 	}
 
 	var resp Response
 	if err := json.Unmarshal(line, &resp); err != nil {
-		return 1, errors.WrapWithDetails(err, "invalid response from daemon")
+		return 1, Response{}, errors.WrapWithDetails(err, "invalid response from daemon")
 	}
 
 	if resp.Stdout != "" {
@@ -70,16 +113,11 @@ func RunRemote(addr, token string, args []string, version string) (int, error) {
 
 	// Two-line OAuth protocol: daemon signals us to wait for a callback URL.
 	if resp.AwaitCallback {
-		return handleOAuthCallback(reader)
+		code, err := handleOAuthCallback(reader)
+		return code, resp, err
 	}
 
-	// Two-line destructive confirmation protocol: daemon paused a destructive
-	// operation and is waiting for TUI confirmation.
-	if resp.AwaitConfirm {
-		return handleConfirmWait(reader, resp.ConfirmPrompt)
-	}
-
-	return resp.ExitCode, nil
+	return resp.ExitCode, resp, nil
 }
 
 // handleOAuthCallback reads line 2 of the OAuth relay protocol and delivers
@@ -102,25 +140,71 @@ func handleOAuthCallback(reader *bufio.Reader) (int, error) {
 	return 0, nil
 }
 
-// handleConfirmWait blocks until the daemon sends line 2 with the result of a
-// destructive operation confirmation.
-func handleConfirmWait(reader *bufio.Reader, prompt string) (int, error) {
-	_, _ = fmt.Fprintf(os.Stderr, "Waiting for confirmation: %s\n", prompt)
-	line2, err := reader.ReadBytes('\n')
+// confirmPollInterval paces confirm-status polling; confirmWaitTimeout bounds
+// how long the blocking CLI waits before deferring to a later status check.
+// Variables (not consts) so tests can shrink them.
+var (
+	confirmPollInterval = 2 * time.Second
+	confirmWaitTimeout  = 5 * time.Minute
+)
+
+// newConfirmID generates a client-side unique ID for a potentially
+// destructive request. Client-generated so a resubmit with the same ID is
+// idempotent on the daemon and the client knows the key to poll even if the
+// response line is lost.
+func newConfirmID() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		// Entropy failure — fall back to a time-based ID; uniqueness per
+		// client process is all that is required here, not secrecy.
+		return fmt.Sprintf("c-%d", time.Now().UnixNano())
+	}
+	return "c-" + hex.EncodeToString(buf)
+}
+
+// confirmWaitTimedOut is the pseudo-state waitForConfirmDecision returns when
+// the client-side wait expires while the request is still undecided.
+const confirmWaitTimedOut = "wait-timeout"
+
+// waitForConfirmDecision blocks until the queued permission request is
+// decided and returns the final state (or confirmWaitTimedOut). The blocking
+// is client-side sugar over the daemon's decision queue: on timeout the
+// entry stays pending on the daemon.
+func waitForConfirmDecision(addr, token, id, prompt string) string {
+	_, _ = fmt.Fprintf(os.Stderr, "Waiting for permission: %s (id %s)\n", prompt, id)
+	deadline := time.Now().Add(confirmWaitTimeout)
+	for {
+		st, err := GetConfirmStatus(addr, token, id)
+		if err != nil {
+			// Daemon unreachable mid-wait — report as expired; the entry
+			// (if any) remains decidable on the daemon.
+			return "unknown"
+		}
+		switch st.State {
+		case string(ConfirmPending):
+			// keep polling
+		default:
+			return st.State
+		}
+		if time.Now().After(deadline) {
+			return confirmWaitTimedOut
+		}
+		time.Sleep(confirmPollInterval)
+	}
+}
+
+// GetConfirmStatus fetches the decision state of a queued destructive
+// operation by ID.
+func GetConfirmStatus(addr, token, id string) (ConfirmStatus, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"confirm-status", id})
 	if err != nil {
-		return 1, errors.WrapWithDetails(err, "failed to read confirmation response")
+		return ConfirmStatus{}, err
 	}
-	var resp2 Response
-	if err := json.Unmarshal(line2, &resp2); err != nil {
-		return 1, errors.WrapWithDetails(err, "invalid confirmation response")
+	var st ConfirmStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return ConfirmStatus{}, errors.WrapWithDetails(err, "invalid confirm status JSON")
 	}
-	if resp2.Stdout != "" {
-		_, _ = fmt.Fprint(os.Stdout, resp2.Stdout)
-	}
-	if resp2.Stderr != "" {
-		_, _ = fmt.Fprint(os.Stderr, resp2.Stderr)
-	}
-	return resp2.ExitCode, nil
+	return st, nil
 }
 
 // RunRemoteCapture connects to the daemon and runs args, returning stdout
@@ -239,7 +323,18 @@ func GetTrackerDiagnose(addr, token string) ([]tracker.TrackerStatus, error) {
 
 // GetTrackerIssues fetches open issues from all configured tracker projects via the daemon.
 func GetTrackerIssues(addr, token string) ([]TrackerIssuesResult, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"tracker-issues"})
+	return getTrackerIssues(addr, token, "tracker-issues")
+}
+
+// GetTrackerIssuesLite fetches issue titles only, skipping the per-ticket comment
+// scan that derives board stages. It returns quickly so the board can render
+// titles before the full GetTrackerIssues reconcile completes.
+func GetTrackerIssuesLite(addr, token string) ([]TrackerIssuesResult, error) {
+	return getTrackerIssues(addr, token, "tracker-issues-lite")
+}
+
+func getTrackerIssues(addr, token, command string) ([]TrackerIssuesResult, error) {
+	out, err := RunRemoteCapture(addr, token, []string{command})
 	if err != nil {
 		return nil, err
 	}
@@ -248,6 +343,86 @@ func GetTrackerIssues(addr, token string) ([]TrackerIssuesResult, error) {
 		return nil, errors.WrapWithDetails(err, "invalid tracker issues JSON")
 	}
 	return results, nil
+}
+
+// BoardTransition asks the daemon to advance a card one pipeline stage. The
+// request is sent as a single JSON arg so multi-word PM titles survive arg
+// splitting on the daemon side.
+func BoardTransition(addr, token string, req BoardTransitionRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling board transition request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"board-transition", string(data)})
+	return err
+}
+
+// GenerateFeatures asks the daemon to launch the human-features skill, which
+// regenerates FEATURE.json for the registered project. It takes no arguments —
+// the daemon resolves the project directory itself — and returns once the agent
+// is launched, not when generation finishes.
+func GenerateFeatures(addr, token string) error {
+	_, err := RunRemoteCapture(addr, token, []string{"features-generate"})
+	return err
+}
+
+// CloseTicket asks the daemon to close a PM ticket (transition it to Done). The
+// request is a single JSON arg, matching BoardTransition. This is a dedicated
+// route, so it never hits the interactive `issue status` confirmation.
+func CloseTicket(addr, token string, req CloseTicketRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling close ticket request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"close-ticket", string(data)})
+	return err
+}
+
+// IdeationStart starts (or re-attaches to) the board ideation session.
+func IdeationStart(addr, token string, req IdeationStartRequest) (IdeationStatus, error) {
+	return ideationCall(addr, token, "ideation-start", req)
+}
+
+// IdeationReply sends the user's answer into the running ideation session.
+func IdeationReply(addr, token string, req IdeationReplyRequest) (IdeationStatus, error) {
+	return ideationCall(addr, token, "ideation-reply", req)
+}
+
+// IdeationApprove submits the user's (possibly edited) guided-mode draft for
+// ticket creation.
+func IdeationApprove(addr, token string, req IdeationApproveRequest) (IdeationStatus, error) {
+	return ideationCall(addr, token, "ideation-approve", req)
+}
+
+// GetIdeationStatus fetches the current ideation session snapshot.
+func GetIdeationStatus(addr, token string) (IdeationStatus, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"ideation-status"})
+	if err != nil {
+		return IdeationStatus{}, err
+	}
+	var st IdeationStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return IdeationStatus{}, errors.WrapWithDetails(err, "invalid ideation status JSON")
+	}
+	return st, nil
+}
+
+// ideationCall marshals payload as the single JSON arg and decodes the returned
+// snapshot — the same wire shape as BoardTransition, with a JSON reply.
+func ideationCall(addr, token, route string, payload any) (IdeationStatus, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return IdeationStatus{}, errors.WrapWithDetails(err, "marshaling "+route+" request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{route, string(data)})
+	if err != nil {
+		return IdeationStatus{}, err
+	}
+	var st IdeationStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return IdeationStatus{}, errors.WrapWithDetails(err, "invalid ideation status JSON")
+	}
+	return st, nil
 }
 
 // GetPendingConfirms fetches pending destructive operation confirmations from the daemon.

@@ -8,10 +8,10 @@ import (
 
 func TestDetectMutating(t *testing.T) {
 	tests := []struct {
-		name    string
-		args    []string
-		wantOK  bool
-		wantOp  MutatingOp
+		name   string
+		args   []string
+		wantOK bool
+		wantOp MutatingOp
 	}{
 		{
 			name:   "create",

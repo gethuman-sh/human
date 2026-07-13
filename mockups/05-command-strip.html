@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option 5 — Command strip · permission mockups</title>
+<style>
+  :root {
+    --bg: #14161a; --col-bg: #1c1f26; --col-border: #2a2e37;
+    --card-bg: #242832; --card-border: #333845;
+    --text: #e6e9ef; --muted: #8a90a0; --accent: #4f8cff;
+    --running: #d6a13a; --done: #3ec07a; --failed: #e0544e;
+    --page: #0b0c0f; --note: #ffd866; --note-ink: #221b00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+
+  .brief { max-width: 1240px; margin: 0 auto; padding: 28px 20px 18px; }
+  .brief .eyebrow { font: 11px/1 ui-monospace, Menlo, monospace; color: var(--note); letter-spacing: .14em; text-transform: uppercase; }
+  .brief h1 { margin: 8px 0 6px; font-size: 22px; font-weight: 650; }
+  .brief p { margin: 0; color: var(--muted); max-width: 72ch; }
+  .verdict { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip { font: 11px/1 ui-monospace, monospace; padding: 5px 9px; border-radius: 999px; border: 1px solid var(--col-border); color: var(--muted); }
+  .chip.plus { border-color: #2f4a2f; color: var(--done); }
+  .chip.minus { border-color: #4a2f2f; color: var(--failed); }
+  .nav { margin-top: 14px; font: 12px ui-monospace, monospace; color: var(--muted); }
+  .nav a { margin-right: 12px; }
+
+  .frame { position: relative; max-width: 1240px; margin: 10px auto 60px;
+    border: 1px solid var(--col-border); border-radius: 10px; overflow: hidden;
+    background: var(--bg); display: flex; height: 660px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .rail { width: 60px; flex: none; border-right: 1px solid var(--col-border); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0; }
+  .rail-item { width: 44px; height: 44px; border-radius: 15px; background: var(--col-bg); color: var(--muted); display: flex; align-items: center; justify-content: center; font-size: 19px; }
+  .rail-item.active { background: var(--accent); color: #fff; border-radius: 12px; }
+  .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .hdr { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--col-border); }
+  .hdr .logo { font-weight: 700; }
+  .hdr .proj { color: var(--muted); font-size: 13px; }
+
+  /* ---- the option: persistent command strip ---- */
+  .strip { display: flex; align-items: center; gap: 12px; padding: 9px 16px;
+    background: rgba(214,161,58,.10); border-bottom: 1px solid rgba(214,161,58,.4); }
+  .strip .ico { color: var(--running); font-size: 15px; }
+  .strip .q { font-size: 13px; font-weight: 600; }
+  .strip .q .key { color: var(--accent); }
+  .strip .who { font-size: 11.5px; color: var(--muted); }
+  .strip .who b { color: var(--text); font-weight: 550; }
+  .sbtn { padding: 5px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; border: 1px solid var(--card-border); background: var(--card-bg); }
+  .sbtn.ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sbtn.no { color: var(--failed); border-color: #4a2f2f; }
+  .strip .kbd { font: 10.5px ui-monospace, monospace; color: var(--muted); }
+  .strip .rest { margin-left: auto; font: 11.5px ui-monospace, monospace; color: var(--running); }
+
+  /* dropdown with the remaining queue */
+  .drop { position: absolute; top: 96px; right: 14px; width: 320px; background: var(--card-bg);
+    border: 1px solid var(--card-border); border-radius: 10px; box-shadow: 0 18px 50px rgba(0,0,0,.55); overflow: hidden; }
+  .drop .d-hd { padding: 9px 12px; font: 11px ui-monospace, monospace; color: var(--muted); border-bottom: 1px solid var(--col-border); text-transform: uppercase; letter-spacing: .08em; }
+  .drow { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--col-border); }
+  .drow:last-child { border-bottom: 0; }
+  .drow .op { font-size: 12.5px; font-weight: 600; }
+  .drow .op .key { color: var(--accent); }
+  .drow .who { font-size: 11px; color: var(--muted); }
+  .drow .mini { margin-left: auto; display: flex; gap: 5px; }
+  .mbtn { width: 26px; height: 24px; border-radius: 5px; border: 1px solid var(--card-border); background: var(--col-bg); font-size: 12px; display: flex; align-items: center; justify-content: center; }
+  .mbtn.ok { color: var(--done); }
+  .mbtn.no { color: var(--failed); }
+
+  .board { flex: 1; display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 12px; min-height: 0; }
+  .col { background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .col h3 { margin: 2px 4px 4px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 7px; padding: 8px 9px; }
+  .card .key { font: 11px ui-monospace, monospace; color: var(--accent); }
+  .card .t { font-size: 12.5px; margin-top: 3px; }
+
+  .note { position: absolute; z-index: 30; max-width: 250px; background: var(--note); color: var(--note-ink);
+    font: 11.5px/1.45 ui-monospace, Menlo, monospace; padding: 8px 10px; border-radius: 3px 10px 10px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+  .note b { display: inline-block; background: var(--note-ink); color: var(--note); border-radius: 50%; width: 16px; height: 16px; text-align: center; line-height: 16px; font-size: 10px; margin-right: 6px; }
+  .foot { max-width: 1240px; margin: -40px auto 50px; padding: 0 20px; font: 11px ui-monospace, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="brief">
+  <div class="eyebrow">Permission UI · Option 5 of 5</div>
+  <h1>Command strip — oldest request always one keystroke away</h1>
+  <p>A slim amber strip appears under the header only while requests are waiting. It shows the oldest request
+     with immediate Approve / Deny (and global shortcuts); the counter on the right drops down the rest of the queue.
+     At zero requests the strip vanishes — no permanent chrome.</p>
+  <div class="verdict">
+    <span class="chip plus">+ always visible, never covers content (pushes it)</span>
+    <span class="chip plus">+ keyboard-first: decide without touching the mouse</span>
+    <span class="chip plus">+ zero cost when nothing is pending</span>
+    <span class="chip minus">− one request at a time in the strip; queue is hidden behind the counter</span>
+    <span class="chip minus">− little room for context/detail</span>
+  </div>
+  <div class="nav">
+    <a href="index.html">index</a>
+    <a href="04-board-inline.html">← inline on board</a>
+  </div>
+</div>
+
+<div class="frame">
+  <div class="rail">
+    <div class="rail-item active">▦</div>
+    <div class="rail-item">◔</div>
+    <div class="rail-item">⚙</div>
+  </div>
+  <div class="app-main">
+    <div class="hdr"><span class="logo">human</span><span class="proj">cli · main</span></div>
+
+    <div class="strip">
+      <span class="ico">⚠</span>
+      <span class="q">Delete <span class="key">KAN-1</span>?</span>
+      <span class="who">agent <b>kitsune</b> · jira · 12s</span>
+      <span class="sbtn no">Deny</span><span class="kbd">⌘⇧N</span>
+      <span class="sbtn ok">Approve</span><span class="kbd">⌘⇧Y</span>
+      <span class="rest">▾ 2 more waiting</span>
+    </div>
+
+    <div class="board">
+      <div class="col"><h3>Ideas</h3><div class="card"><div class="key">SC-91</div><div class="t">Weekly digest email</div></div></div>
+      <div class="col"><h3>Planned</h3>
+        <div class="card"><div class="key">KAN-1</div><div class="t">Migrate billing exports</div></div>
+        <div class="card"><div class="key">SC-79</div><div class="t">Validate coupon input</div></div>
+      </div>
+      <div class="col"><h3>In Progress</h3><div class="card"><div class="key">HUM-160</div><div class="t">Grant-based permission queue</div></div></div>
+      <div class="col"><h3>Review</h3><div class="card"><div class="key">HUM-142</div><div class="t">Flaky stats writer test</div></div></div>
+      <div class="col"><h3>Done</h3><div class="card"><div class="key">HUM-158</div><div class="t">Start Project wizard</div></div></div>
+    </div>
+
+    <div class="drop">
+      <div class="d-hd">Waiting queue</div>
+      <div class="drow">
+        <div><div class="op">Move <span class="key">HUM-142</span> to Done?</div><div class="who">sumitos · linear · 2m</div></div>
+        <div class="mini"><div class="mbtn no">✕</div><div class="mbtn ok">✓</div></div>
+      </div>
+      <div class="drow">
+        <div><div class="op">Edit <span class="key">SC-79</span>?</div><div class="who">kitsune · shortcut · 5m</div></div>
+        <div class="mini"><div class="mbtn no">✕</div><div class="mbtn ok">✓</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" style="top: 108px; left: 130px; max-width: 250px;">
+    <b>1</b>Strip pushes the board down instead of covering it. Amber only
+    while something is pending — the app has zero extra chrome otherwise.
+  </div>
+  <div class="note" style="top: 172px; left: 420px; max-width: 240px;">
+    <b>2</b>Always the OLDEST request, so the strip drains the queue in
+    FIFO order. Global shortcuts decide without leaving the keyboard.
+  </div>
+  <div class="note" style="top: 300px; right: 348px; max-width: 220px;">
+    <b>3</b>The counter opens the rest of the queue as a dropdown with
+    compact ✓ / ✕ actions — for triaging bursts quickly.
+  </div>
+  <div class="note" style="bottom: 60px; right: 60px; max-width: 235px;">
+    <b>4</b>After a decision the strip advances to the next request and
+    briefly flashes green/red as feedback (skipped with reduced motion).
+  </div>
+</div>
+
+<div class="foot">Static mockup — no functionality. Data source in the real app: poll pending-confirms (FIFO by created_at); buttons call confirm-op &lt;id&gt; yes|no.</div>
+
+</body>
+</html>

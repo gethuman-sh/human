@@ -1,0 +1,78 @@
+name: Desktop
+
+# The workflow-board desktop app (Wails v2) is a cgo backend and CANNOT be
+# cross-compiled: Linux uses webkit2gtk+gtk3, Windows uses the WebView2 runtime,
+# macOS uses the Obj-C toolchain. So it is built on a 3-runner matrix, each with
+# its own native toolchain. This is intentionally a SEPARATE workflow from ci.yml
+# — the main lint/test/build jobs run on a plain Linux runner with no webview
+# headers, and the `wailsapp` build tag keeps the cgo path out of `go vet ./...`,
+# `go list ./...` and `go build .` so those jobs stay green without GTK installed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu 24.04 only ships WebKitGTK 4.1, so the Linux cgo build needs the
+        # `webkit2_41` Wails tag to pkg-config the 4.1 .pc instead of the absent
+        # 4.0 one. The tag is a Linux-only no-op elsewhere, but scope it per-row.
+        include:
+          - os: ubuntu-24.04
+            platform: linux/amd64
+            tags: "wailsapp,webkit2_41"
+          - os: macos-14
+            platform: darwin/universal
+            tags: "wailsapp"
+          - os: windows-2022
+            platform: windows/amd64
+            tags: "wailsapp"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      # Linux WebKitGTK headers — required for the cgo webview backend. The 4.1
+      # dev package is the current name on Ubuntu 24.04; fall back to 4.0 on
+      # older images.
+      - name: Install Linux webview deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev || \
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      # Windows ships the WebView2 runtime on supported images; nothing to
+      # install. macOS uses the system Obj-C/WebKit toolchain.
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Build desktop app
+        run: wails build -tags "${{ matrix.tags }}" -platform ${{ matrix.platform }}
+        working-directory: desktop
+
+      - uses: actions/upload-artifact@834a144ee995460fba8ed112a2fc961b36a5ec5a # v4
+        with:
+          name: human-board-${{ matrix.os }}
+          path: desktop/build/bin/
+          if-no-files-found: warn

@@ -158,3 +158,25 @@ func TestDaemonCmd_StopRegistered(t *testing.T) {
 	}
 	assert.True(t, found, "expected stop subcommand to be registered")
 }
+
+func TestSwapLoopbackHost(t *testing.T) {
+	tests := []struct {
+		name  string
+		addr  string
+		reach string
+		want  string
+	}{
+		{"loopback swapped to bridge", "127.0.0.1:19285", "172.17.0.1", "172.17.0.1:19285"},
+		{"localhost swapped", "localhost:19285", "172.17.0.1", "172.17.0.1:19285"},
+		{"empty host swapped", ":19285", "172.17.0.1", "172.17.0.1:19285"},
+		{"loopback stays loopback on desktop", "127.0.0.1:19285", "127.0.0.1", "127.0.0.1:19285"},
+		{"explicit non-loopback respected", "192.168.1.5:19285", "172.17.0.1", "192.168.1.5:19285"},
+		{"wildcard respected (operator override)", "0.0.0.0:19285", "172.17.0.1", "0.0.0.0:19285"},
+		{"malformed addr returned as-is", "not-an-addr", "172.17.0.1", "not-an-addr"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, swapLoopbackHost(tt.addr, tt.reach))
+		})
+	}
+}
