@@ -63,6 +63,104 @@ func TestCreatePullRequest_invalidRepo(t *testing.T) {
 	assert.Contains(t, err.Error(), "owner/repo")
 }
 
+// checksServer serves the three endpoints PullRequestChecks touches with
+// canned check-run and combined-status payloads.
+func checksServer(t *testing.T, checkRuns, combined string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/octocat/hello-world/pulls/7":
+			_, _ = fmt.Fprint(w, `{"head":{"sha":"abc123"}}`)
+		case "/repos/octocat/hello-world/commits/abc123/check-runs":
+			_, _ = fmt.Fprint(w, checkRuns)
+		case "/repos/octocat/hello-world/commits/abc123/status":
+			_, _ = fmt.Fprint(w, combined)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestPullRequestChecks_verdicts(t *testing.T) {
+	cases := []struct {
+		name      string
+		checkRuns string
+		combined  string
+		want      forge.ChecksState
+	}{
+		{"all green", `{"check_runs":[{"status":"completed","conclusion":"success"}]}`,
+			`{"state":"success","total_count":1}`, forge.ChecksPassing},
+		{"run failed", `{"check_runs":[{"status":"completed","conclusion":"failure"}]}`,
+			`{"state":"success","total_count":0}`, forge.ChecksFailing},
+		{"run still running", `{"check_runs":[{"status":"in_progress","conclusion":""}]}`,
+			`{"state":"success","total_count":0}`, forge.ChecksPending},
+		{"legacy status failed", `{"check_runs":[]}`,
+			`{"state":"failure","total_count":2}`, forge.ChecksFailing},
+		{"legacy status pending", `{"check_runs":[]}`,
+			`{"state":"pending","total_count":2}`, forge.ChecksPending},
+		// GitHub reports "pending" with zero statuses when only check runs
+		// exist — no signal, must not hold the gate.
+		{"no CI at all", `{"check_runs":[]}`,
+			`{"state":"pending","total_count":0}`, forge.ChecksPassing},
+		{"skipped and neutral pass", `{"check_runs":[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"neutral"}]}`,
+			`{"state":"pending","total_count":0}`, forge.ChecksPassing},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := checksServer(t, tc.checkRuns, tc.combined)
+			defer srv.Close()
+			client := New(srv.URL, "ghp_test")
+			state, err := client.PullRequestChecks(context.Background(), "octocat/hello-world", 7)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, state)
+		})
+	}
+}
+
+func TestMergePullRequest_happy(t *testing.T) {
+	var gotBody mergeRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		assert.Equal(t, "/repos/octocat/hello-world/pulls/7/merge", r.URL.Path)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		_, _ = fmt.Fprint(w, `{"merged":true,"message":"Pull Request successfully merged"}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	require.NoError(t, client.MergePullRequest(context.Background(), "octocat/hello-world", 7))
+	assert.Equal(t, "merge", gotBody.MergeMethod)
+}
+
+func TestMergePullRequest_notMerged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"merged":false,"message":"Base branch was modified"}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	err := client.MergePullRequest(context.Background(), "octocat/hello-world", 7)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Base branch was modified")
+}
+
+func TestDeleteBranch_happy(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	require.NoError(t, client.DeleteBranch(context.Background(), "octocat/hello-world", "feat/x"))
+	assert.Equal(t, "/repos/octocat/hello-world/git/refs/heads/feat%2Fx", gotPath)
+}
+
 func TestCreatePullRequest_httpError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)

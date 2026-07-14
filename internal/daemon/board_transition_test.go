@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -48,28 +50,72 @@ func (f *fakeLauncher) Launch(_ context.Context, name, prompt, _, _ string) erro
 	return f.err
 }
 
-// fakePublisher returns a canned URL or error.
-type fakePublisher struct {
-	url  string
-	err  error
-	req  PRRequest
-	call int
+// fakeDeployer scripts the deploy pipeline steps: PR creation, successive
+// checks poll results, merge, and branch deletion.
+type fakeDeployer struct {
+	prErr     error
+	res       PRResult
+	req       PRRequest
+	call      int
+	checks    []forge.ChecksState
+	checksErr error
+	checkCall int
+	mergeErr  error
+	merged    int
+	deleted   []string
 }
 
-func (f *fakePublisher) PushAndCreatePR(_ context.Context, req PRRequest) (string, error) {
+func (f *fakeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResult, error) {
 	f.call++
 	f.req = req
-	return f.url, f.err
+	if f.prErr != nil {
+		return PRResult{}, f.prErr
+	}
+	return f.res, nil
 }
 
-func newDeps(c *fakeCommenter, l *fakeLauncher, p *fakePublisher) BoardTransitionDeps {
-	return BoardTransitionDeps{Commenter: c, Launcher: l, Publisher: p, WorkspaceDir: "/ws", ConfigDir: "/ws"}
+func (f *fakeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (forge.ChecksState, error) {
+	if f.checksErr != nil {
+		return "", f.checksErr
+	}
+	i := f.checkCall
+	if i >= len(f.checks) {
+		i = len(f.checks) - 1
+	}
+	f.checkCall++
+	return f.checks[i], nil
+}
+
+func (f *fakeDeployer) MergePullRequest(_ context.Context, _ string, _ int) error {
+	f.merged++
+	return f.mergeErr
+}
+
+func (f *fakeDeployer) DeleteRemoteBranch(_ context.Context, _, branch string) error {
+	f.deleted = append(f.deleted, branch)
+	return nil
+}
+
+func newDeps(c *fakeCommenter, l *fakeLauncher, p *fakeDeployer) BoardTransitionDeps {
+	return BoardTransitionDeps{Commenter: c, Launcher: l, Deployer: p, WorkspaceDir: "/ws", ConfigDir: "/ws"}
+}
+
+// syncDeploy makes the deploy pipeline run inline (and poll without real
+// time) so tests observe its markers deterministically.
+func syncDeploy(t *testing.T) {
+	t.Helper()
+	origStart, origInterval := startDeploy, deployCheckInterval
+	startDeploy = func(d BoardTransitionDeps, req BoardTransitionRequest, card BoardCard) {
+		d.deploy(context.Background(), req, card)
+	}
+	deployCheckInterval = time.Millisecond
+	t.Cleanup(func() { startDeploy, deployCheckInterval = origStart, origInterval })
 }
 
 func TestApplyTransitionBackwardRejected(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-9", time.Unix(1, 0))}}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardBacklog})
 	require.Error(t, err)
 	assert.Empty(t, c.added)
@@ -79,7 +125,7 @@ func TestApplyTransitionBackwardRejected(t *testing.T) {
 func TestApplyTransitionSkipRejected(t *testing.T) {
 	c := &fakeCommenter{}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	// Backlog -> Implementation skips Planning.
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardImplementation})
 	require.Error(t, err)
@@ -90,7 +136,7 @@ func TestApplyTransitionGatedBlock(t *testing.T) {
 	// Planning running (not done) must block advancing to Implementation.
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:planning-started]", time.Unix(1, 0))}}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
 	require.Error(t, err)
 	assert.Zero(t, l.calls)
@@ -99,7 +145,7 @@ func TestApplyTransitionGatedBlock(t *testing.T) {
 func TestApplyTransitionBacklogToPlanning(t *testing.T) {
 	c := &fakeCommenter{}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
 	require.NoError(t, err)
 	assert.Equal(t, 1, l.calls)
@@ -112,7 +158,7 @@ func TestApplyTransitionBacklogToPlanning(t *testing.T) {
 func TestApplyTransitionPlanningToImplementation(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-9", time.Unix(1, 0))}}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
 	require.NoError(t, err)
 	assert.Equal(t, "/human-execute HUM-9", l.prompt)
@@ -124,7 +170,7 @@ func TestApplyTransitionImplementationToVerification(t *testing.T) {
 		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x", time.Unix(1, 0)),
 	}}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardVerification})
 	require.NoError(t, err)
 	assert.Equal(t, "/human-review HUM-9", l.prompt)
@@ -135,7 +181,7 @@ func TestApplyTransitionIdempotentDuplicate(t *testing.T) {
 	// An open started marker for the target stage makes the drop a no-op.
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:planning-started]", time.Unix(1, 0))}}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
 	require.NoError(t, err)
 	assert.Zero(t, l.calls)
@@ -144,43 +190,108 @@ func TestApplyTransitionIdempotentDuplicate(t *testing.T) {
 
 func TestApplyTransitionDoneNoBranch(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:review-complete]", time.Unix(1, 0))}}
-	p := &fakePublisher{}
+	p := &fakeDeployer{}
 	deps := newDeps(c, &fakeLauncher{}, p)
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.Error(t, err)
 	assert.Zero(t, p.call)
 	require.Len(t, c.added, 1)
-	assert.Contains(t, c.added[0], PRFailedHeader)
+	assert.Contains(t, c.added[0], DeployFailedHeader)
 }
 
-func TestApplyTransitionDoneSuccess(t *testing.T) {
+func TestApplyTransitionDeploySuccess(t *testing.T) {
+	syncDeploy(t)
 	c := &fakeCommenter{comments: []tracker.Comment{
 		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x", time.Unix(1, 0)),
 		cmt("[human:review-complete]", time.Unix(2, 0)),
 	}}
-	p := &fakePublisher{url: "https://example/pr/7"}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7}, checks: []forge.ChecksState{forge.ChecksPassing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
+	var closed string
+	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	assert.Equal(t, 1, p.call)
 	assert.Equal(t, "feat/x", p.req.Branch)
 	assert.Equal(t, "My feature", p.req.Title)
-	assert.Contains(t, c.added, PRStartedHeader)
-	assert.Contains(t, c.added, PRPushedHeader+"\npr: https://example/pr/7")
+	assert.Equal(t, 1, p.merged)
+	assert.Equal(t, []string{"feat/x"}, p.deleted)
+	assert.Equal(t, "SC-1", closed)
+	assert.Contains(t, c.added, DeployStartedHeader)
+	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/7")
+}
+
+func TestApplyTransitionDeployWaitsForPendingChecks(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/8", Number: 8},
+		checks: []forge.ChecksState{forge.ChecksPending, forge.ChecksPending, forge.ChecksPassing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Equal(t, 3, p.checkCall)
+	assert.Equal(t, 1, p.merged)
+}
+
+func TestApplyTransitionDeployChecksFail(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/9", Number: 9}, checks: []forge.ChecksState{forge.ChecksFailing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err) // the transition itself succeeded; the failure is a marker
+	assert.Zero(t, p.merged)
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Contains(t, failed, "CI checks failed")
+	assert.Contains(t, failed, "pr: https://example/pr/9")
+}
+
+func TestApplyTransitionDeployMergeFails(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/10", Number: 10},
+		checks: []forge.ChecksState{forge.ChecksPassing}, mergeErr: errors.New("merge conflict")}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Empty(t, p.deleted)
+	var sawFailed bool
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) && strings.Contains(b, "merge conflict") {
+			sawFailed = true
+		}
+	}
+	assert.True(t, sawFailed)
 }
 
 func TestApplyTransitionDonePushFails(t *testing.T) {
+	syncDeploy(t)
 	c := &fakeCommenter{comments: []tracker.Comment{
 		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x", time.Unix(1, 0)),
 		cmt("[human:review-complete]", time.Unix(2, 0)),
 	}}
-	p := &fakePublisher{err: errors.New("push rejected")}
+	p := &fakeDeployer{prErr: errors.New("push rejected")}
 	deps := newDeps(c, &fakeLauncher{}, p)
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
-	require.Error(t, err)
+	require.NoError(t, err) // async pipeline: the push failure lands as a marker
 	var sawFailed bool
 	for _, b := range c.added {
-		if len(b) >= len(PRFailedHeader) && b[:len(PRFailedHeader)] == PRFailedHeader {
+		if strings.HasPrefix(b, DeployFailedHeader) && strings.Contains(b, "push rejected") {
 			sawFailed = true
 		}
 	}
@@ -190,7 +301,7 @@ func TestApplyTransitionDonePushFails(t *testing.T) {
 func TestStartAgentStageLaunchFails(t *testing.T) {
 	c := &fakeCommenter{}
 	l := &fakeLauncher{err: errors.New("docker down")}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
 	require.Error(t, err)
 	// started marker posted, then failed marker posted on launch error.
@@ -229,7 +340,7 @@ func (listErrCommenter) ListComments(context.Context, string) ([]tracker.Comment
 }
 
 func TestApplyTransitionListCommentsError(t *testing.T) {
-	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, &fakePublisher{})
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, &fakeDeployer{})
 	deps.Commenter = listErrCommenter{&fakeCommenter{}}
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
 	require.Error(t, err)
@@ -239,7 +350,7 @@ func TestStartAgentStageStartedMarkerError(t *testing.T) {
 	// AddComment failing on the started marker aborts before launch.
 	c := &fakeCommenter{addErr: errors.New("comment api down")}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
 	require.Error(t, err)
 	assert.Zero(t, l.calls)
@@ -249,7 +360,7 @@ func TestFailedHeaderFor(t *testing.T) {
 	assert.Equal(t, PlanningFailedHeader, failedHeaderFor(BoardPlanning))
 	assert.Equal(t, ImplementationFailedHeader, failedHeaderFor(BoardImplementation))
 	assert.Equal(t, ReviewFailedHeader, failedHeaderFor(BoardVerification))
-	assert.Equal(t, PRFailedHeader, failedHeaderFor(BoardDoneStage))
+	assert.Equal(t, DeployFailedHeader, failedHeaderFor(BoardDoneStage))
 	assert.Equal(t, "", failedHeaderFor(BoardBacklog))
 }
 
@@ -261,7 +372,7 @@ func TestApplyTransitionImplementationWithoutEngineeringKey(t *testing.T) {
 		cmt("[human:plan-ready]", time.Unix(2, 0)),
 	}}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
 	require.NoError(t, err)
 	assert.Equal(t, "/human-execute SC-1", l.prompt)
@@ -272,7 +383,7 @@ func TestApplyTransitionVerificationWithoutEngineeringKey(t *testing.T) {
 		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
 	}}
 	l := &fakeLauncher{}
-	deps := newDeps(c, l, &fakePublisher{})
+	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardVerification})
 	require.NoError(t, err)
 	assert.Equal(t, "/human-review SC-1", l.prompt)
@@ -289,7 +400,7 @@ func TestDoneBodySingleRef(t *testing.T) {
 func TestApplyTransitionIdeasGuard(t *testing.T) {
 	// Ideas leave their column via ideation's label swap, never via a board
 	// transition — both directions are rejected before any comment fetch.
-	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, &fakePublisher{})
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardIdeas, To: BoardBacklog})
 	require.Error(t, err)
 	err = deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardIdeas})

@@ -74,11 +74,29 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
-	card.PRURL = latestPrefixedLine(comments, PRPushedHeader, "pr:")
+	card.PRURL = latestPrefixedLine(comments, DeployedHeader, "pr:")
+	if card.PRURL == "" {
+		// Threads written before the deploy pipeline carry the URL on the old
+		// pr-pushed marker.
+		card.PRURL = latestPrefixedLine(comments, PRPushedHeader, "pr:")
+	}
 	if state == BoardFailed {
-		card.Error = firstLine(latest.Body)
+		card.Error = failureReason(latest.Body)
 	}
 	return card
+}
+
+// failureReason extracts the human-readable reason from a *-failed marker: the
+// first non-empty line after the header. Falls back to the header itself for
+// markers posted without a reason, so a failed card never shows empty.
+func failureReason(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if idx := strings.IndexByte(trimmed, '\n'); idx >= 0 {
+		if reason := firstLine(trimmed[idx+1:]); reason != "" {
+			return reason
+		}
+	}
+	return firstLine(trimmed)
 }
 
 // latestStateInStage resolves the stage's state from its newest marker and

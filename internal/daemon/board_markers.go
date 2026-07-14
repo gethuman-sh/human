@@ -51,6 +51,14 @@ const (
 	PRStartedHeader             = "[human:pr-started]"
 	PRPushedHeader              = "[human:pr-pushed]"
 	PRFailedHeader              = "[human:pr-failed]"
+
+	// Deploy markers supersede the PR markers for the done stage: dropping a
+	// card on Deploy runs push → PR → CI gate → merge → close, so the stage's
+	// lifecycle is "deploying", not "opening a PR". The PR markers stay
+	// recognized so threads written before the deploy pipeline still derive.
+	DeployStartedHeader = "[human:deploy-started]"
+	DeployedHeader      = "[human:deployed]"
+	DeployFailedHeader  = "[human:deploy-failed]"
 )
 
 // PlanCommentHeader marks a comment whose body IS the engineering plan for
@@ -84,6 +92,9 @@ var orderedMarkerSpecs = []markerSpec{
 	{PRStartedHeader, BoardDoneStage, BoardRunning},
 	{PRPushedHeader, BoardDoneStage, BoardDone},
 	{PRFailedHeader, BoardDoneStage, BoardFailed},
+	{DeployStartedHeader, BoardDoneStage, BoardRunning},
+	{DeployedHeader, BoardDoneStage, BoardDone},
+	{DeployFailedHeader, BoardDoneStage, BoardFailed},
 }
 
 // stageRank orders the pipeline stages so derivation can pick the furthest

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -16,10 +18,14 @@ type AgentLauncher interface {
 	Launch(ctx context.Context, name, prompt, workspace, configDir string) error
 }
 
-// PRPublisher pushes the recorded branch and opens a pull request. Injected so
-// the Done stage is testable without git/forge access.
-type PRPublisher interface {
-	PushAndCreatePR(ctx context.Context, req PRRequest) (prURL string, err error)
+// Deployer executes the forge side of the deploy pipeline: push + PR, the CI
+// gate, the merge, and branch cleanup. Injected so the Done stage is testable
+// without git/forge access.
+type Deployer interface {
+	PushAndCreatePR(ctx context.Context, req PRRequest) (PRResult, error)
+	PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error)
+	MergePullRequest(ctx context.Context, workspaceDir string, number int) error
+	DeleteRemoteBranch(ctx context.Context, workspaceDir, branch string) error
 }
 
 // PRRequest carries everything needed to push a branch and open its PR.
@@ -29,6 +35,19 @@ type PRRequest struct {
 	Title        string
 	Body         string
 }
+
+// PRResult identifies the created pull request for the pipeline steps that
+// follow creation (checks, merge).
+type PRResult struct {
+	URL    string
+	Number int
+}
+
+// Deploy pacing. Package vars so tests can run the CI gate without real time.
+var (
+	deployCheckInterval = 30 * time.Second
+	deployTimeout       = 45 * time.Minute
+)
 
 // BoardTransitionRequest is the wire request for advancing a card one stage.
 // PMTitle is carried from the card so the Done stage can title the PR without a
@@ -42,9 +61,12 @@ type BoardTransitionRequest struct {
 
 // BoardTransitionDeps wires the transition engine's collaborators.
 type BoardTransitionDeps struct {
-	Commenter    tracker.Commenter
-	Launcher     AgentLauncher
-	Publisher    PRPublisher
+	Commenter tracker.Commenter
+	Launcher  AgentLauncher
+	Deployer  Deployer
+	// CloseTicket closes the PM ticket after a successful deploy so shipped
+	// work leaves the board. nil skips the close (the deploy still succeeds).
+	CloseTicket  func(pmKey string) error
 	WorkspaceDir string
 	ConfigDir    string
 }
@@ -167,33 +189,96 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	return nil
 }
 
-// runDoneStage pushes the recorded branch and opens a PR. A missing branch or a
-// push/PR failure posts [human:pr-failed] with the error rather than leaving a
-// partial PR; success posts [human:pr-pushed] with the PR URL.
+// startDeploy launches the deploy pipeline in the background. A package var so
+// tests can run the pipeline synchronously.
+var startDeploy = func(d BoardTransitionDeps, req BoardTransitionRequest, card BoardCard) {
+	go d.deploy(context.Background(), req, card)
+}
+
+// runDoneStage kicks off the deploy pipeline: push → PR → CI gate → merge →
+// branch cleanup → close ticket. The CI gate can take many minutes, so the
+// transition request returns as soon as [human:deploy-started] is posted and
+// the pipeline reports the outcome via markers.
 func (d BoardTransitionDeps) runDoneStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) error {
 	if card.Branch == "" {
-		body := PRFailedHeader + "\nno branch recorded on ready-for-review handoff"
+		body := DeployFailedHeader + "\nno branch recorded on ready-for-review handoff"
 		_, _ = d.Commenter.AddComment(ctx, req.PMKey, body)
-		return errors.WithDetails("no branch recorded for Done", "pm", req.PMKey)
+		return errors.WithDetails("no branch recorded for deploy", "pm", req.PMKey)
 	}
-	if _, err := d.Commenter.AddComment(ctx, req.PMKey, PRStartedHeader); err != nil {
-		return errors.WrapWithDetails(err, "posting pr-started marker", "pm", req.PMKey)
+	if _, err := d.Commenter.AddComment(ctx, req.PMKey, DeployStartedHeader); err != nil {
+		return errors.WrapWithDetails(err, "posting deploy-started marker", "pm", req.PMKey)
 	}
-	url, err := d.Publisher.PushAndCreatePR(ctx, PRRequest{
+	startDeploy(d, req, card)
+	return nil
+}
+
+// deploy walks the pipeline to its end. It runs detached from the transition
+// request (whose context dies with the connection), bounded by deployTimeout.
+func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequest, card BoardCard) {
+	ctx, cancel := context.WithTimeout(ctx, deployTimeout)
+	defer cancel()
+
+	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,
 		Branch:       card.Branch,
 		Title:        req.PMTitle,
 		Body:         doneBody(req.PMKey, card),
 	})
 	if err != nil {
-		body := PRFailedHeader + "\n" + err.Error()
-		_, _ = d.Commenter.AddComment(ctx, req.PMKey, body)
-		return errors.WrapWithDetails(err, "pushing and creating PR", "pm", req.PMKey)
+		d.deployFailed(req.PMKey, "", err.Error())
+		return
 	}
-	if _, err := d.Commenter.AddComment(ctx, req.PMKey, PRPushedHeader+"\npr: "+url); err != nil {
-		return errors.WrapWithDetails(err, "posting pr-pushed marker", "pm", req.PMKey)
+	if err := d.waitForChecks(ctx, res); err != nil {
+		d.deployFailed(req.PMKey, res.URL, err.Error())
+		return
 	}
-	return nil
+	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
+		d.deployFailed(req.PMKey, res.URL, err.Error())
+		return
+	}
+	// Past the merge the work IS shipped: branch cleanup and the ticket close
+	// are best-effort and must never turn the card red.
+	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, card.Branch)
+	_, _ = d.Commenter.AddComment(ctx, req.PMKey, DeployedHeader+"\npr: "+res.URL)
+	if d.CloseTicket != nil {
+		_ = d.CloseTicket(req.PMKey)
+	}
+}
+
+// waitForChecks blocks until the PR's CI verdict is conclusive. Passing
+// returns nil; failing and a gate timeout return an error carrying the reason.
+func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) error {
+	ticker := time.NewTicker(deployCheckInterval)
+	defer ticker.Stop()
+	for {
+		state, err := d.Deployer.PullRequestChecks(ctx, d.WorkspaceDir, res.Number)
+		if err != nil {
+			return err
+		}
+		switch state {
+		case forge.ChecksPassing:
+			return nil
+		case forge.ChecksFailing:
+			return errors.WithDetails("CI checks failed", "pr", res.URL)
+		}
+		select {
+		case <-ctx.Done():
+			return errors.WithDetails("timed out waiting for CI checks", "pr", res.URL)
+		case <-ticker.C:
+		}
+	}
+}
+
+// deployFailed posts the failure marker on its own context: the pipeline's
+// context may already be cancelled (timeout), and the marker must still land.
+func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) {
+	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	body := DeployFailedHeader + "\n" + reason
+	if prURL != "" {
+		body += "\npr: " + prURL
+	}
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
 }
 
 // doneBody builds the PR description with the PM→engineering→branch trail.
@@ -219,7 +304,7 @@ func failedHeaderFor(stage BoardStage) string {
 	case BoardVerification:
 		return ReviewFailedHeader
 	case BoardDoneStage:
-		return PRFailedHeader
+		return DeployFailedHeader
 	default:
 		return ""
 	}
