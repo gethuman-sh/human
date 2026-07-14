@@ -45,13 +45,13 @@ Run the triage agent to validate, assess compound impact, and produce the final 
 Task(subagent_type="gardening-triage", prompt="Read all reports from .human/gardening/.gardening-*.md. Validate every finding against actual code, assess compound impact, compute health scorecard grades, and write the final gardening report to .human/gardening/")
 ```
 
-## Phase 4: Create Engineering Ticket
+## Phase 4: Create Ticket
 
 After the triage report is complete:
 
 1. Read the final gardening report from `.human/gardening/gardening-*.md` (the one just written by triage).
-2. Ask the user which tracker and project to create the ticket on using `AskUserQuestion`: "Which tracker and project should the gardening ticket be created on? (e.g., 'linear --project=HUM' or 'github --project=myorg/myrepo')"
-3. Create an engineering ticket with:
+2. Resolve the destination from `human tracker list`: in split topology (a tracker with `"role": "engineering"` distinct from the PM tracker) the gardening ticket belongs on the engineering tracker; in single-tracker topology it goes on the one tracker, which carries the whole ticket lifecycle. If the tracker or project is ambiguous, ask the user via `AskUserQuestion`: "Which tracker and project should the gardening ticket be created on? (e.g., 'linear --project=HUM' or 'github --project=myorg/myrepo')"
+3. Create the ticket with:
    - **Title**: "Codebase gardening: <N> findings (<health summary>)" — e.g., "Codebase gardening: 12 findings (3 high, 5 medium, 4 low)"
    - **Description**: The full gardening report content (health scorecard, findings, fix plans, recommended order)
 
@@ -75,6 +75,6 @@ Tell the user:
 - The overall health scorecard grades (A-F per dimension)
 - How many findings were identified (by impact level)
 - The path to the final report
-- The engineering ticket key (for `/human-execute`)
+- The ticket key (for `/human-execute`)
 - Any critical structural issues that need immediate attention
 - If fixes were applied, how many succeeded and how many were reverted

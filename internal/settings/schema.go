@@ -81,7 +81,7 @@ func trackerFields(credentials []Field, extra ...Field) []Field {
 	fields = append(fields, extra...)
 	fields = append(fields,
 		Field{Key: "description", Label: "Description", Type: TypeString, Description: "What this tracker is used for"},
-		Field{Key: "role", Label: "Role", Type: TypeEnum, Enum: []string{"pm", "engineering"}, Description: "Which ticket kind lives here: pm or engineering"},
+		Field{Key: "role", Label: "Role", Type: TypeEnum, Enum: []string{"pm", "engineering"}, Description: "Topology role: pm or engineering — distinct trackers per role keep separate engineering tickets; a single tracker carries the whole ticket lifecycle"},
 		Field{Key: "safe", Label: "Safe mode", Type: TypeBool, Description: "Block destructive operations (deletes)"},
 		Field{Key: "projects", Label: "Projects", Type: TypeStringList, Description: "Project keys to index"},
 	)

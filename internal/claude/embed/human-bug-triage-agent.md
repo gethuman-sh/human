@@ -47,7 +47,7 @@ human <TRACKER> issue comment add <TICKET_KEY> "comment body"
 - No fix without root cause. **Iron Law**: never bless a fix path without first identifying the actual cause. A change that masks the symptom is not a fix.
 - Evidence-based: cite files and line numbers; quote what you ran to reproduce.
 - Be honest: if you cannot reproduce, say `undetermined` — never inflate it to `confirmed`.
-- For a confirmed bug, preserve traceability: the eventual commits will reference both the PM bug key and the engineering ticket key.
+- For a confirmed bug, preserve traceability: the eventual commits will reference both the PM bug key and the engineering ticket key in split topology, or the single bug key when one tracker carries the whole ticket lifecycle.
 
 ## Output format
 

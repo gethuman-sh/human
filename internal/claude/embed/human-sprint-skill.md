@@ -81,16 +81,14 @@ human <tracker> issue create --project=<PROJECT> "Short title derived from the i
 
 10. Store the PM ticket key as `<PM_TICKET_KEY>` and the tracker as `<PM_TRACKER>` for traceability.
 
-## Step 3.5 — Ask engineering tracker
+## Step 3.5 — Resolve topology
 
-Ask the user which tracker and project for the engineering ticket:
+Run `human tracker list` and check where the plan will live:
 
-1. Ask via `AskUserQuestion`: "Which tracker should the engineering ticket be created on? (e.g. linear, jira, github, gitlab, azuredevops, shortcut)"
-2. Ask via `AskUserQuestion`: "What project should the ticket be created in? (e.g. 'HUM' for Linear, 'myorg/myrepo' for GitHub)"
+- **Split topology** — a tracker with `"role": "engineering"` exists and is a DIFFERENT tracker than the PM ticket's: the plan becomes a separate engineering ticket there. Ask the user via `AskUserQuestion` only if the tracker or project is ambiguous: "Which tracker should the engineering ticket be created on? (e.g. linear, jira, github, gitlab, azuredevops, shortcut)" and "What project should the ticket be created in? (e.g. 'HUM' for Linear, 'myorg/myrepo' for GitHub)". Store the answers as `<ENG_TRACKER>` and `<ENG_PROJECT>`.
+- **Single-tracker topology** — no engineering-role tracker, or it is the same tracker as the PM ticket: no second ticket is created. The plan will be attached to the PM ticket itself as a `[human:plan]` comment; skip the questions.
 
-Store the answers as `<ENG_TRACKER>` and `<ENG_PROJECT>`.
-
-## Step 4 — Phase 2: Plan (creates engineering ticket)
+## Step 4 — Phase 2: Plan (attaches the plan where topology says)
 
 ### Step 4a: Draft
 
@@ -112,9 +110,11 @@ Task(subagent_type="plan-verify-code", prompt="Verify all code references in the
 Task(subagent_type="plan-verify-docs", prompt="Verify all library, framework, and API assumptions in the following implementation plan against actual documentation and source. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---")
 ```
 
-### Step 4c: Finalize and create ticket
+### Step 4c: Finalize and attach the plan
 
-If verification found issues, fix `<PLAN_CONTENT>` accordingly. Confirm the plan header contains a `**PM ticket**: <PM_TICKET_KEY>` line so the executor can reference both tickets in commits — add it if missing. Then create the engineering ticket with the plan as the description:
+If verification found issues, fix `<PLAN_CONTENT>` accordingly. Then attach the plan according to the topology from Step 3.5:
+
+**Split topology** — confirm the plan header contains a `**PM ticket**: <PM_TICKET_KEY>` line so the executor can reference both tickets in commits — add it if missing. Create the engineering ticket with the plan as the description:
 
 ```bash
 human <ENG_TRACKER> issue create --project=<ENG_PROJECT> "Short title from plan" --description "$(cat <<'PLAN_EOF'
@@ -123,16 +123,29 @@ PLAN_EOF
 )"
 ```
 
-Store the engineering ticket key as `<ENG_TICKET_KEY>`. Then update the ticket description so the `**Engineering ticket**:` line in the plan header contains `<ENG_TICKET_KEY>` (replacing `TBD`). This gives the executor both keys from a single source.
+Store the engineering ticket key as `<ENG_TICKET_KEY>`. Then update the ticket description so the `**Engineering ticket**:` line in the plan header contains `<ENG_TICKET_KEY>` (replacing `TBD`). This gives the executor both keys from a single source. Set `<WORK_KEY>` to `<ENG_TICKET_KEY>`.
+
+**Single-tracker topology** — post the plan verbatim as a `[human:plan]` marker comment on the PM ticket (no second ticket; the description stays product language):
+
+```bash
+human <PM_TRACKER> issue comment add <PM_TICKET_KEY> "$(cat <<'PLAN_EOF'
+[human:plan]
+
+<FINAL_PLAN_CONTENT>
+PLAN_EOF
+)"
+```
+
+Verify with `human plan show <PM_TICKET_KEY>` — it must print the plan back. The plan header needs no `**Engineering ticket**:` line, and commits reference only the PM key. Set `<WORK_KEY>` to `<PM_TICKET_KEY>`.
 
 **If `<pipeline_depth>` is "Tickets only":** Stop here. Tell the user:
 - PM ticket created: `<PM_TRACKER> #<PM_TICKET_KEY>`
-- Engineering ticket created: `<ENG_TRACKER> <ENG_TICKET_KEY>`
+- Split topology: engineering ticket created: `<ENG_TRACKER> <ENG_TICKET_KEY>`; single-tracker: plan attached as a `[human:plan]` comment on `<PM_TICKET_KEY>`
 - Ideation record at `.human/ideation/<slug>.md`
 
 ## Step 5 — Mechanical decision gate
 
-Before executing, fetch the engineering ticket via `human get <ENG_TICKET_KEY>` and check for architecture choices or trade-offs in the plan:
+Before executing, load the plan — `human get <WORK_KEY>` for a plan in an engineering ticket description, `human plan show <WORK_KEY>` for a plan comment — and check for architecture choices or trade-offs in the plan:
 
 - **If the plan has no taste decisions** (only mechanical implementation steps): Proceed automatically to execution. Apply the decision principles above.
 - **If the plan contains trade-offs or architecture choices**: Present them to the user via `AskUserQuestion` and let the user decide before proceeding. Example: "The plan includes the following architecture choices that need your input: <list choices>. What is your preference for each?"
@@ -142,23 +155,23 @@ Before executing, fetch the engineering ticket via `human get <ENG_TICKET_KEY>` 
 Delegate to the **human-executor** agent:
 
 ```
-Task(subagent_type="human-executor", prompt="Execute <ENG_TICKET_KEY> as a plan")
+Task(subagent_type="human-executor", prompt="Execute <WORK_KEY> as a plan")
 ```
 
-The executor fetches the engineering ticket, reads the plan from the description, and implements it.
+The executor fetches the ticket, reads the plan from the description or the `[human:plan]` comment, and implements it.
 
 **If `<pipeline_depth>` is "Plan + execute":** Stop here. Tell the user:
 - PM ticket: `<PM_TRACKER> #<PM_TICKET_KEY>`
-- Engineering ticket: `<ENG_TRACKER> <ENG_TICKET_KEY>`
+- Split topology: engineering ticket `<ENG_TRACKER> <ENG_TICKET_KEY>`
 - Implementation complete
-- Suggest running `/human-review <ENG_TICKET_KEY>` manually if desired
+- Suggest running `/human-review <WORK_KEY>` manually if desired
 
 ## Step 7 — Phase 4: Review (final quality gate)
 
 Delegate to the **human-reviewer** agent:
 
 ```
-Task(subagent_type="human-reviewer", prompt="Review changes for ticket <ENG_TICKET_KEY>")
+Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>")
 ```
 
 Present the review results to the user.
@@ -167,11 +180,13 @@ If the review finds issues, ask the user via `AskUserQuestion`: "The review foun
 
 If the user chooses to fix:
 - Address each issue found by the reviewer
-- Re-run the review: `Task(subagent_type="human-reviewer", prompt="Review changes for ticket <ENG_TICKET_KEY>")`
+- Re-run the review: `Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>")`
 
 ## Step 8 — Summary
 
 Present the full traceability chain to the user:
+
+Split topology:
 
 ```
 Sprint complete for: <original idea>
@@ -180,6 +195,20 @@ Traceability:
 - PM ticket:    <PM_TRACKER> #<PM_TICKET_KEY> — the original idea
 - Eng ticket:   <ENG_TRACKER> <ENG_TICKET_KEY> — the implementation plan
 - Commits:      reference both tickets
+
+Artifacts:
+- Ideation:     .human/ideation/<slug>.md
+- Review:       .human/reviews/<key>.md
+```
+
+Single-tracker topology:
+
+```
+Sprint complete for: <original idea>
+
+Traceability:
+- Ticket:       <PM_TRACKER> #<PM_TICKET_KEY> — the idea, its plan ([human:plan] comment), and the review trail
+- Commits:      reference the single ticket key
 
 Artifacts:
 - Ideation:     .human/ideation/<slug>.md

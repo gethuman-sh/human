@@ -1,11 +1,12 @@
 # Desktop App (Wails)
 
 The desktop GUI (`desktop/`) is a [Wails v2](https://wails.io) application: the
-interactive 5-stage workflow board (Backlog → Product planning → Implementation
-→ Verification → Done) delivered for SC-105 / HUM-141. Each card is a PM ticket;
-dragging a card forward one column triggers that stage's `human` action through
-the daemon, and placement/checkmarks/running-state derive entirely from the
-`[human:…]` comment markers the daemon ships on the wire.
+interactive six-column workflow board (Ideas → Backlog → Product planning →
+Implementation → Verification → Done) delivered for SC-105 / HUM-141. Each card
+is a ticket; dragging a card forward one column triggers that stage's `human`
+action through the daemon, and placement/checkmarks/running-state derive
+entirely from the `[human:…]` comment markers (and, for the Ideas column, the
+`human/idea` label) the daemon ships on the wire.
 
 The whole Go file set under `desktop/` is behind the `wailsapp` build tag, so the
 default `go build .` / `go vet ./...` / `go list ./...` / `make check` never
@@ -99,7 +100,12 @@ The desktop artifact must never be published through a goreleaser `builds:` entr
 ## Creating tickets — ideation chat
 
 The Backlog column header shows a '+' button. Clicking it opens a chat-style
-panel docked to the right side of the board. Typing a seed idea starts a
+panel docked to the right side of the board. (The Ideas column has its own
+lighter '+': it quick-captures a title-only ticket labeled `human/idea`, no
+chat involved; dragging that idea card onto Backlog opens this same panel in
+**evolve mode**, whose terminal action rewrites the idea ticket in place —
+title and description replaced, idea label removed, key preserved — instead of
+creating a new ticket.) Typing a seed idea starts a
 daemon-side ideation agent: the daemon runs headless `claude -p` turns on the
 daemon host (`--resume`d per reply, so multi-turn context comes from Claude
 Code's own session store), asking one challenge question per turn until it is

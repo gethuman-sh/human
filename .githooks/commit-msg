@@ -5,7 +5,7 @@
 # Accepted formats (matching all trackers supported by human):
 #   Issue #123                  — numeric (Shortcut, GitHub, etc.)
 #   Issue HUM-30                — prefixed (Jira, Linear, ClickUp)
-#   [SC-57, HUM-48]             — bracket style
+#   [SC-57] / [SC-57] [HUM-48]  — bracket style (single key, or PM + engineering keys in split topology)
 #   octocat/repo#42             — GitHub / GitLab
 #   MyProject/42                — Azure DevOps
 #
@@ -46,7 +46,7 @@ echo >&2 ""
 echo >&2 "Accepted formats:"
 echo >&2 "  Issue #123                 (numeric)"
 echo >&2 "  Issue HUM-30               (Jira, Linear, ClickUp)"
-echo >&2 "  [SC-57, HUM-48]            (bracket style)"
+echo >&2 "  [SC-57] or [SC-57] [HUM-48]  (bracket style; dual keys in split topology)"
 echo >&2 "  octocat/repo#42            (GitHub, GitLab)"
 echo >&2 "  MyProject/42               (Azure DevOps)"
 echo >&2 ""
