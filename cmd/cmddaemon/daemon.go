@@ -1055,8 +1055,12 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			issues, fetchErr := job.inst.Provider.ListIssues(ctx, tracker.ListOptions{
-				Project:    job.project,
-				MaxResults: 20,
+				Project: job.project,
+				// A ticket the board cannot fetch is a ticket silently lost —
+				// the cap must comfortably exceed any real open backlog. The
+				// per-ticket comment scan this once bounded stays cheap: idea
+				// tickets skip it entirely and the rest fan out concurrently.
+				MaxResults: 200,
 				IncludeAll: false,
 			})
 			label := job.project
