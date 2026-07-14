@@ -20,6 +20,18 @@ type BoardCard struct {
 	// here instead of on a separate engineering ticket (single-tracker
 	// topology).
 	HasPlan bool `json:"has_plan,omitempty"`
+	// Verdict is the `verdict:` line of the latest [human:review-complete]
+	// comment (pass / pass with notes / fail). A failing verdict keeps the
+	// card out of Ready to Deploy and blocks the deploy transition; an absent
+	// verdict counts as pass so threads reviewed before verdicts existed keep
+	// flowing.
+	Verdict string `json:"verdict,omitempty"`
+}
+
+// VerdictFailed reports whether a review verdict blocks the card from moving
+// forward. Only an explicit failing verdict blocks — absence is not failure.
+func VerdictFailed(verdict string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(verdict)), "fail")
 }
 
 // DeriveBoardCard computes a PM ticket's board placement from its comment
@@ -74,6 +86,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
+	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
 	card.PRURL = latestPrefixedLine(comments, DeployedHeader, "pr:")
 	if card.PRURL == "" {
 		// Threads written before the deploy pipeline carry the URL on the old

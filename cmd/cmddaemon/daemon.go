@@ -351,8 +351,18 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	go daemon.RunAgentCleanup(ctx, ds.srv.HookEvents, &dockerAgentCleaner{}, logger)
 	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, logger)
+	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver)
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
-		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver), logger)
+		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
+		func(pmKey string) error {
+			// A finished build chains straight into its review — the board's
+			// auto-review; the transition engine re-derives and validates.
+			return boardTransition(daemon.BoardTransitionRequest{
+				PMKey: pmKey,
+				From:  daemon.BoardImplementation,
+				To:    daemon.BoardVerification,
+			})
+		}, logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }

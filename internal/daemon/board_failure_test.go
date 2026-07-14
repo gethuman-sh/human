@@ -51,7 +51,7 @@ func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -82,7 +82,7 @@ func TestRunBoardFailureWatch_NoPostWhenStageDone(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -105,7 +105,7 @@ func TestHandleBoardAgentExit_MalformedName(t *testing.T) {
 		return &syncCommenter{}, nil
 	}
 	// A name that does not parse must short-circuit before resolving a commenter.
-	handleBoardAgentExit(context.Background(), "board-", commenterFor, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-", commenterFor, nil, zerolog.Nop())
 	assert.False(t, called)
 }
 
@@ -114,12 +114,60 @@ func TestHandleBoardAgentExit_CommenterError(t *testing.T) {
 		return nil, assertErr{}
 	}
 	// Must not panic when the commenter cannot be resolved.
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", commenterFor, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", commenterFor, nil, zerolog.Nop())
 }
 
 type assertErr struct{}
 
 func (assertErr) Error() string { return "no commenter" }
+
+func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	chained := make(chan string, 1)
+	chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+
+	select {
+	case pmKey := <-chained:
+		assert.Equal(t, "SC-1", pmKey)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the finished build to chain into a review")
+	}
+}
+
+func TestRunBoardFailureWatch_NoChainForOtherStages(t *testing.T) {
+	// A cleanly finished PLANNING stage must not chain a review — only builds do.
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt("[human:plan-ready]", time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	chained := make(chan string, 1)
+	chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+
+	select {
+	case <-chained:
+		t.Fatal("planning completion must not chain a review")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
 
 func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 	store := NewHookEventStore()
@@ -128,7 +176,7 @@ func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "some-other-agent", Timestamp: time.Now()})

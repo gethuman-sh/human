@@ -1,21 +1,22 @@
 # Workflow Board (desktop)
 
 A native cross-platform desktop app ([Wails v2](https://wails.io)) presenting the
-delivery pipeline as six columns. Each card is a ticket;
-dragging a card forward one column triggers that stage's `human` action through
-the running daemon. Placement, checkmarks and running/error state all derive from
+delivery pipeline as five columns plus a terminal Deploy drop zone. Each card
+is a ticket; dragging a card forward triggers that stage's `human` action through
+the running daemon. Placement, badges and running/error state all derive from
 the `[human:…]` comment markers (and, for ideas, the `human/idea` label) the
 daemon ships on the wire — the frontend never re-derives a stage.
 
 ## What it does
 
-- Renders six columns — Ideas → Product backlog → Engineering backlog → Code → Ready for review → Ready to deploy — whose names are true of every card in them. Code is the one activity lane: dropping an engineering-backlog card onto it launches the executor, the card lives in Code while the build runs (failures stay there, red), and it moves to Ready for review by itself when the handoff posts — Ready for review accepts no drops, cards can only earn their way in. Other agent stages (planning, reviewing) keep the card in its origin queue with a live badge until they complete. Verbs live on the drop targets (Define it / Plan it / Build it / Review it); opening the pull request is a button on reviewed cards.
+- Renders five columns — Ideas → Product backlog → Engineering backlog → Code → Ready to Deploy — whose names are true of every card in them, plus the slim **Deploy** drop zone at the right edge. Code holds the whole build-and-review cycle: dropping an engineering-backlog card onto it launches the executor, and when the handoff posts the daemon chains straight into the reviewer — no gesture. A passing review releases the card into Ready to Deploy by itself; a failing verdict pins it in Code with a `⚠ review found problems` badge and the findings as a ticket comment. Re-dropping the flagged card onto Code rebuilds it against those findings. Verbs live on the drop targets (Define it / Plan it / Build it).
+- Dropping a reviewed card on **Deploy** ships it: the daemon pushes the branch, opens the PR, waits for CI to go green, merges, deletes the branch, and closes the ticket — the card leaves the board, which shows only work in flight. On merge-deploy platforms (Scalingo, Heroku, Vercel, …) the drop puts the change in production. Failures (CI red, merge conflict) leave the card in Ready to Deploy with the reason.
+- Right-click on any card opens a context menu: *Open in tracker* and *Close ticket* (the rare escape hatch for abandoned work — shipped tickets close themselves).
 - The Ideas column's `+` quick-captures a title-only ticket carrying the `human/idea` label. Dragging an idea onto Backlog opens guided ideation in evolve mode: the finished draft rewrites the same ticket in place — title and description replaced, idea label removed, key preserved — instead of creating a new one.
-- Card badges: a checkmark when a stage is done, a spinner while an agent runs it, an error badge on failure.
-- Drag a card to its single next column to advance it — earlier or non-adjacent targets reject and snap back; no backward target is offered. The drag is the consent; there is no secondary confirmation.
-- The Done column uses a guarded inner drop zone (not the whole column) so a stray drop cannot push a pull request.
-- Optimistic move on drop, then reconcile from the daemon (which is authoritative: it re-derives the card from live comments and enforces forward-only/gated rules server-side).
-- When Docker is unavailable the planning/implementation/verification drop targets are disabled (Done stays enabled, since it only pushes a branch and opens a PR).
+- Card badges: a spinner while an agent runs (planning… / building… / reviewing… / deploying…), an error badge on failure, a warning on a failing review verdict.
+- Drag a card to its single next column to advance it — earlier or non-adjacent targets reject and snap back; no backward target is offered (except the rework re-drop onto Code). The drag is the consent; there is no secondary confirmation.
+- Optimistic move on drop, then reconcile from the daemon (which is authoritative: it re-derives the card from live comments and enforces forward-only/gated rules server-side — including blocking a deploy on a failing review verdict).
+- When Docker is unavailable the agent-launching drop targets are disabled (Deploy stays enabled, since it launches no agent).
 - Live updates: subscribes to the daemon and refetches board cards on every change event. A small independent poll (every 3s) drives only the header daemon-reachability dot, since there is no daemon-pushed event to subscribe to when the daemon itself is down — this mirrors how the TUI itself layers periodic ticks on top of its daemon subscribe channel.
 - Header daemon indicator: a two-state dot (reachable/unreachable) in the header, sourced from `daemon.ReadInfo()` / `IsReachable()` / `ReadAlivePid()` — display-only, no daemon version, proxy stats, agent count, or start/stop action.
 - Two visual styles, toggled with **F8** and persisted across restarts: the default calm style, and a demo-oriented "fancy" style (animated gradient, per-column pastel hues, fireworks/confetti drop celebrations — see the `FANCY THEME` section of `frontend/static/style.css` and `frontend/src/fancy.ts`). Classic rendering is untouched when fancy is off; `prefers-reduced-motion` keeps the fancy colors but disables all movement. Closing a ticket is never celebrated.

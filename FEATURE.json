@@ -162,7 +162,7 @@
       "features": [
         {
           "name": "Desktop workflow board",
-          "description": "A six-column board — Ideas, Product backlog, Engineering backlog, Code, Ready for review, Ready to deploy — where dragging a card forward launches that transition, in-flight builds live in the Code lane and move on by themselves when done, and an agent-driven ideation chat opens new tickets",
+          "description": "A five-column board — Ideas, Product backlog, Engineering backlog, Code, Ready to Deploy — with a terminal Deploy drop zone: builds chain into automatic reviews in the Code lane, reviewed cards earn their way forward, and dropping a card on Deploy merges the work once CI passes and closes the ticket",
           "tickets": ["SC-148", "SC-146", "SC-143", "SC-141", "SC-137"],
           "recent": true
         },

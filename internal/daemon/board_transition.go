@@ -131,6 +131,15 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 		return nil
 	}
 
+	// Rework loop: a build whose review failed may be rebuilt. This is the ONE
+	// sanctioned backward move — the executor is re-dispatched with the review
+	// findings, and the resulting handoff chains into a fresh review.
+	if isReworkTransition(req.To, card) {
+		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+			"/human-execute "+dispatchKey(req.PMKey, card)+
+				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first")
+	}
+
 	// Forward-only, single-next-stage: the target must be exactly one rank
 	// above the current derived stage.
 	if stageRank[req.To] != stageRank[card.Stage]+1 {
@@ -145,27 +154,23 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 			"pm", req.PMKey, "stage", string(card.Stage), "state", string(card.State))
 	}
 
+	// A failing review verdict blocks the deploy: the card must be rebuilt
+	// (rework loop) and re-reviewed before it can ship.
+	if req.To == BoardDoneStage && VerdictFailed(card.Verdict) {
+		return errors.WithDetails("review verdict blocks deploy",
+			"pm", req.PMKey, "verdict", card.Verdict)
+	}
+
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
 			"/human-plan "+req.PMKey)
 	case BoardImplementation:
-		// Single-tracker topology has no separate engineering ticket — the
-		// plan lives in a [human:plan] comment on the PM ticket, so the agent
-		// is dispatched on the PM key itself.
-		key := card.EngineeringKey
-		if key == "" {
-			key = req.PMKey
-		}
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			"/human-execute "+key)
+			"/human-execute "+dispatchKey(req.PMKey, card))
 	case BoardVerification:
-		key := card.EngineeringKey
-		if key == "" {
-			key = req.PMKey
-		}
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			"/human-review "+key)
+			"/human-review "+dispatchKey(req.PMKey, card))
 	case BoardDoneStage:
 		return d.runDoneStage(ctx, req, card)
 	default:
@@ -279,6 +284,25 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) {
 		body += "\npr: " + prURL
 	}
 	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
+}
+
+// dispatchKey resolves the key an agent is dispatched on: the engineering
+// ticket where one exists, else the PM ticket itself (single-tracker topology,
+// where the plan lives in a [human:plan] comment).
+func dispatchKey(pmKey string, card BoardCard) string {
+	if card.EngineeringKey != "" {
+		return card.EngineeringKey
+	}
+	return pmKey
+}
+
+// isReworkTransition reports the one allowed backward move: re-running the
+// build on a card whose review returned a failing verdict.
+func isReworkTransition(to BoardStage, card BoardCard) bool {
+	return to == BoardImplementation &&
+		card.Stage == BoardVerification &&
+		card.State == BoardDone &&
+		VerdictFailed(card.Verdict)
 }
 
 // doneBody builds the PR description with the PM→engineering→branch trail.
