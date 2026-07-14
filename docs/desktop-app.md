@@ -9,9 +9,9 @@ merges the work after CI passes and closes the ticket), and placement/badges/run
 entirely from the `[human:…]` comment markers (and, for the Ideas queue, the
 `human/idea` label) the daemon ships on the wire.
 
-The Ideas queue renders as an **idea space** five sub-columns wide (Spark ·
-Loose · Forming · Shaped · Ready): dragging an idea between sub-columns sorts
-it along the loose→concrete axis. That placement is the one piece of board
+The Ideas queue renders as an **idea space**: one rounded rectangle holding
+five invisible, unlabeled lanes. Dragging an idea between lanes sorts it
+along the loose→concrete axis (looser left, more concrete right). That placement is the one piece of board
 state that is NOT tracker-derived — it is a local workspace preference the
 app's Go backend persists to `~/.human/ideaspace.json` (`internal/ideaspace`),
 never a label, comment, or status on the ticket. Ideas without a saved

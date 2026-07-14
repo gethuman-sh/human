@@ -189,10 +189,10 @@ body {
   overflow-x: auto;
 }
 
-/* The idea space: the Ideas queue widened into five sub-columns spanning a
-   loose→concrete gradient. It reads as ONE column-styled rounded rectangle —
-   a shared header (title, quick-add, total count) above five borderless
-   lanes; only the gradient lane labels hint at the internal columns. */
+/* The idea space: the Ideas queue widened into five lanes spanning a
+   loose→concrete axis. It reads as ONE column-styled rounded rectangle —
+   a shared header (title, quick-add, total count) above five invisible,
+   unlabeled lanes; card position alone expresses how concrete an idea is. */
 .idea-space {
   display: flex;
   flex-direction: column;
@@ -227,30 +227,6 @@ body {
   background: transparent;
   border: none;
   border-radius: 0;
-}
-
-.idea-subcol .column-header {
-  padding: 8px 10px;
-  font-size: 12px;
-  border-bottom: none;
-}
-
-/* Gradient lane labels make the loose→concrete axis legible at a glance:
-   the ramp runs muted (Spark) to accent (Ready). */
-.idea-col-0 {
-  color: #8a90a0;
-}
-.idea-col-1 {
-  color: #7b8fb8;
-}
-.idea-col-2 {
-  color: #6c8ecf;
-}
-.idea-col-3 {
-  color: #5d8de7;
-}
-.idea-col-4 {
-  color: #4f8cff;
 }
 
 /* Inline quick-add input at the top of an idea-space sub-column. */

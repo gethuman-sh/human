@@ -220,18 +220,20 @@ const QUEUE_LABELS: Record<string, string> = {
   deploy: "Ready to Deploy",
 };
 
-// The Ideas queue renders as an "idea space": five sub-columns spanning a
-// loose→concrete gradient the PM sorts ideas along by dragging. Placement is
-// a locally persisted preference (SetIdeaColumn), never ticket state, so the
-// labels are pure display and the wire stage stays "ideas" throughout.
-const IDEA_COLS = ["Spark", "Loose", "Forming", "Shaped", "Ready"] as const;
+// The Ideas queue renders as an "idea space": five unlabeled lanes spanning a
+// loose→concrete axis the PM sorts ideas along by dragging (looser left,
+// more concrete right). Placement is a locally persisted preference
+// (SetIdeaColumn), never ticket state — the wire stage stays "ideas"
+// throughout. The lanes carry no headers: labels would visually compete with
+// the real queue headers beside the space.
+const IDEA_COL_COUNT = 5;
 
-// ideaColOf resolves a card's idea-space sub-column: absent means leftmost
-// (a fresh idea is loose by definition), out-of-range is clamped so a stale
+// ideaColOf resolves a card's idea-space lane: absent means leftmost (a
+// fresh idea is loose by definition), out-of-range is clamped so a stale
 // file entry can never render a card outside the space.
 function ideaColOf(card: Card): number {
   const col = card.ideaColumn ?? 0;
-  return Math.min(Math.max(col, 0), IDEA_COLS.length - 1);
+  return Math.min(Math.max(col, 0), IDEA_COL_COUNT - 1);
 }
 
 // Wire stage launched by dropping onto a queue from its predecessor. Queues
@@ -494,7 +496,7 @@ function renderIdeaSpace(): HTMLElement {
   const grid = document.createElement("div");
   grid.className = "idea-space-grid";
   const subcols: HTMLElement[] = [];
-  for (let i = 0; i < IDEA_COLS.length; i++) {
+  for (let i = 0; i < IDEA_COL_COUNT; i++) {
     const col = document.createElement("section");
     col.className = "column idea-subcol";
     // Distinct per-sub-column stage keys let scroll capture/restore treat each
@@ -502,11 +504,6 @@ function renderIdeaSpace(): HTMLElement {
     col.dataset.stage = `ideas:${i}`;
 
     const colCards = ideas.filter((c) => ideaColOf(c) === i);
-    const header = document.createElement("div");
-    header.className = `column-header idea-col-${i}`;
-    header.innerHTML = `<span>${IDEA_COLS[i]}</span><span class="column-count">${colCards.length}</span>`;
-    col.appendChild(header);
-
     const body = document.createElement("div");
     body.className = "column-body";
     body.dataset.drop = "idea";
