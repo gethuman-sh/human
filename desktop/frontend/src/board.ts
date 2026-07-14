@@ -255,25 +255,6 @@ const QUEUE_VERB: Record<string, string> = {
   building: "Build it",
 };
 
-// A small always-visible caption under each column header explaining what the
-// transition INTO that column actually does — the skill launched, the ticket
-// artifacts written, branches/PRs/reviews involved. The board's drags are
-// consents to real work; the notes say what work. HTML is trusted here: the
-// strings are static literals, never ticket data.
-const QUEUE_NOTES: Record<string, string> = {
-  ideas: "Sort ideas loose → concrete; placement is saved locally, never on the ticket",
-  product:
-    "Drop an idea: guided ideation (evolve) rewrites the same ticket — product language, idea label removed",
-  engineering:
-    "Drop: <code>human-plan</code> drafts the engineering plan onto the ticket as a <code>[human:plan]</code> comment",
-  building:
-    "Drop: <code>human-execute</code> works the plan on a branch — commits, self-check, then <code>human-review</code> chains automatically",
-  deploy: "No drop — a passing review releases cards here; a failing verdict pins them in Code with the findings",
-};
-
-// The Deploy zone is too slim for a caption; the note rides its tooltip.
-const DEPLOY_ZONE_NOTE = "Drop a reviewed card: push branch → open PR → CI green → merge → ticket closed";
-
 // Live badge text while a stage runs; builds and their chained reviews both
 // live in the Code lane, deploys in Ready to Deploy.
 const RUNNING_LABELS: Record<string, string> = {
@@ -516,7 +497,6 @@ function renderColumn(queue: string): HTMLElement {
     header.innerHTML = `<span>${QUEUE_LABELS[queue]}</span><span class="column-count">${cards.length}</span>`;
   }
   col.appendChild(header);
-  appendQueueNote(col, queue);
 
   const body = document.createElement("div");
   body.className = "column-body";
@@ -584,7 +564,6 @@ function renderIdeaSpace(): HTMLElement {
   header.querySelector(".add-card")!.addEventListener("click", () => showIdeaQuickAdd(subcols[0]));
 
   space.appendChild(header);
-  appendQueueNote(space, "ideas");
   space.appendChild(grid);
   return space;
 }
@@ -597,19 +576,8 @@ function renderDeployZone(): HTMLElement {
   const zone = document.createElement("section");
   zone.className = "deploy-zone";
   zone.dataset.drop = "deploy";
-  zone.title = DEPLOY_ZONE_NOTE;
   zone.innerHTML = `<span class="deploy-zone-label">Deploy</span>`;
   return zone;
-}
-
-// appendQueueNote attaches the transition caption below a column header.
-function appendQueueNote(col: HTMLElement, queue: string): void {
-  const note = QUEUE_NOTES[queue];
-  if (!note) return;
-  const el = document.createElement("div");
-  el.className = "column-note";
-  el.innerHTML = note;
-  col.appendChild(el);
 }
 
 // showIdeaQuickAdd swaps an inline title input into an idea-space sub-column.
