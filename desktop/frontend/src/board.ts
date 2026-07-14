@@ -197,19 +197,27 @@ export {};
 // being worked stays in its ORIGIN queue with a live badge and only arrives in
 // the next queue when the stage completes. State on the column, verb on the
 // affordance — the wire stages/markers are untouched; this is pure display.
-const QUEUES = ["ideas", "product", "engineering", "review", "deploy"] as const;
+// Building is the one ACTIVITY column among the queues — deliberately special
+// because building is the board's longest and weightiest phase: the column
+// holds exactly the cards the executor is working on (the machine verifies
+// membership, so the name stays true), and its count is the live build gauge.
+// Cards leave it on their own when the handoff posts; Ready for review is
+// never a drop target — cards can only earn their way in.
+const QUEUES = ["ideas", "product", "engineering", "building", "review", "deploy"] as const;
 const QUEUE_LABELS: Record<string, string> = {
   ideas: "Ideas",
   product: "Product backlog",
   engineering: "Engineering backlog",
+  building: "Building",
   review: "Ready for review",
   deploy: "Ready to deploy",
 };
 
-// Wire stage launched by dropping onto a queue from its predecessor.
+// Wire stage launched by dropping onto a queue from its predecessor. Queues
+// missing here (ideas, review) accept no transition drop at all.
 const QUEUE_TRANSITION_TO: Record<string, string> = {
   engineering: "planning",
-  review: "implementation",
+  building: "implementation",
   deploy: "verification",
 };
 
@@ -218,11 +226,12 @@ const QUEUE_TRANSITION_TO: Record<string, string> = {
 const QUEUE_VERB: Record<string, string> = {
   product: "Define it",
   engineering: "Plan it",
-  review: "Build it",
+  building: "Build it",
   deploy: "Review it",
 };
 
-// Live badge text while a stage runs; the card sits in its origin queue.
+// Live badge text while a stage runs; the card sits in its origin queue —
+// except implementation, which has its own Building lane.
 const RUNNING_LABELS: Record<string, string> = {
   planning: "planning…",
   implementation: "building…",
@@ -230,9 +239,9 @@ const RUNNING_LABELS: Record<string, string> = {
   done: "opening PR…",
 };
 
-// queueOf maps the wire (stage, state) onto the resting queue: an incomplete
-// stage keeps the card in the queue it was pulled from, so no column ever
-// claims something that is not yet true.
+// queueOf maps the wire (stage, state) onto the column whose name is true of
+// the card: incomplete stages keep the card where it was pulled from, apart
+// from an in-flight (or failed) build, which lives in the Building lane.
 function queueOf(card: Card): string {
   switch (card.stage) {
     case "ideas":
@@ -242,7 +251,7 @@ function queueOf(card: Card): string {
     case "planning":
       return card.state === "done" ? "engineering" : "product";
     case "implementation":
-      return card.state === "done" ? "review" : "engineering";
+      return card.state === "done" ? "review" : "building";
     case "verification":
       return card.state === "done" ? "deploy" : "review";
     case "done":
@@ -380,9 +389,10 @@ function renderColumn(queue: string): HTMLElement {
   body.className = "column-body";
   for (const card of cards) body.appendChild(renderCard(card));
 
-  if (queue !== "ideas") {
-    // Every queue but Ideas is a drop target for its predecessor; the verb on
-    // the target names the action the drop launches.
+  if (queue === "product" || QUEUE_TRANSITION_TO[queue] !== undefined) {
+    // Drop targets are the queues a drag can act on: product (idea promotion)
+    // and the transition-launching queues. Ready for review is deliberately
+    // NOT a target — cards arrive there only by finishing a build.
     markQueueTarget(body, queue);
   }
   if (queue === "deploy") {

@@ -115,7 +115,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 
 **User interfaces**
 
-- [Workflow Board (desktop)](desktop/README.md) — drag-to-trigger five-queue pipeline board (Wails)
+- [Workflow Board (desktop)](desktop/README.md) — drag-to-trigger six-column pipeline board (Wails)
 - [Project Starters](internal/starter/README.md) — scaffold empty directories from starter templates
 
 **Infrastructure & security**
@@ -408,7 +408,7 @@ make build
 
 ### Desktop app (workflow board)
 
-The desktop GUI is the interactive workflow board with five queue columns (Ideas → Product backlog → Engineering backlog → Ready for review → Ready to deploy): every column names a state that is true of each card in it, dragging a card to the next queue launches that transition's `human` agent, and a card being worked stays in its origin queue with a live badge until the stage completes. The Ideas column's `+` quick-captures a title-only ticket labeled `human/idea`; dragging an idea onto the Product backlog opens guided ideation that evolves the same ticket in place (same key, idea label removed). It runs on macOS, Windows and Linux.
+The desktop GUI is the interactive workflow board with six columns (Ideas → Product backlog → Engineering backlog → Building → Ready for review → Ready to deploy): every column names a state that is true of each card in it, and dragging a card to the next column launches that transition's `human` agent. Building is the live activity lane — dropping an engineering-backlog card there launches the executor, the card sits in Building while the build runs, and it moves to Ready for review on its own when the agent posts the handoff (Ready for review is never a drop target — cards can only earn their way in). Other agent stages (planning, reviewing) keep the card in its origin queue with a live badge until they complete. The Ideas column's `+` quick-captures a title-only ticket labeled `human/idea`; dragging an idea onto the Product backlog opens guided ideation that evolves the same ticket in place (same key, idea label removed). It runs on macOS, Windows and Linux.
 
 It must be built via the Wails CLI, **never** plain `go build ./desktop/` — Wails v2 requires build tags that only `wails build` (or `wails dev`) injects, and the whole `desktop/` package is behind a `wailsapp` build tag so the default `make build`/`make check` stay green on a plain toolchain.
 

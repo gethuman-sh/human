@@ -1160,21 +1160,25 @@ body {
    look degrades to a static (but still colorful) style.
    ========================================================================= */
 
-/* [FANCY:palette] Per-stage pastel rainbow hue, inherited by everything inside
-   a column (drop zones, glows, card shadows) via var(--fancy-hue). */
-[data-theme="fancy"] .column[data-stage="backlog"] {
+/* [FANCY:palette] Per-queue pastel rainbow hue, inherited by everything inside
+   a column (drop zones, glows, card shadows) via var(--fancy-hue). Keys are
+   the QUEUE ids the board stamps as data-stage. */
+[data-theme="fancy"] .column[data-stage="ideas"] {
+  --fancy-hue: 300;
+}
+[data-theme="fancy"] .column[data-stage="product"] {
   --fancy-hue: 330;
 }
-[data-theme="fancy"] .column[data-stage="planning"] {
+[data-theme="fancy"] .column[data-stage="engineering"] {
   --fancy-hue: 45;
 }
-[data-theme="fancy"] .column[data-stage="implementation"] {
-  --fancy-hue: 165;
+[data-theme="fancy"] .column[data-stage="building"] {
+  --fancy-hue: 120;
 }
-[data-theme="fancy"] .column[data-stage="verification"] {
+[data-theme="fancy"] .column[data-stage="review"] {
   --fancy-hue: 210;
 }
-[data-theme="fancy"] .column[data-stage="done"] {
+[data-theme="fancy"] .column[data-stage="deploy"] {
   --fancy-hue: 280;
 }
 
