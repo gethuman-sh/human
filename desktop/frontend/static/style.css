@@ -2283,3 +2283,36 @@ input[type="checkbox"].settings-input {
 .palette-count {
   margin-left: auto;
 }
+
+/* ---- Queue-column model (SC-187) -------------------------------------------
+   Columns are resting states; the action verb appears on the drop target
+   while a drag hovers it, and terminal actions are buttons on the card. */
+.column-body.drop-ok::after {
+  content: attr(data-verb);
+  display: block;
+  text-align: center;
+  padding: 10px;
+  margin: 6px;
+  border: 2px dashed var(--done);
+  border-radius: 6px;
+  color: var(--done);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.card-action {
+  margin-top: 8px;
+  width: 100%;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.card-action:hover {
+  opacity: 0.9;
+}

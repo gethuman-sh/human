@@ -1,7 +1,7 @@
 # Workflow Board (desktop)
 
 A native cross-platform desktop app ([Wails v2](https://wails.io)) presenting the
-delivery pipeline as an interactive six-column board. Each card is a ticket;
+delivery pipeline as five queue columns. Each card is a ticket;
 dragging a card forward one column triggers that stage's `human` action through
 the running daemon. Placement, checkmarks and running/error state all derive from
 the `[human:…]` comment markers (and, for ideas, the `human/idea` label) the
@@ -9,7 +9,7 @@ daemon ships on the wire — the frontend never re-derives a stage.
 
 ## What it does
 
-- Renders six forward-order columns: Ideas → Backlog → Product planning → Implementation → Verification → Done, with per-column counts.
+- Renders five queue columns — Ideas → Product backlog → Engineering backlog → Ready for review → Ready to deploy — whose names are true of every card in them: a card being worked by an agent stays in its origin queue with a live badge (planning… / building… / reviewing…) and arrives in the next queue when the stage completes. Verbs live on the drop targets (Define it / Plan it / Build it / Review it); opening the pull request is a button on reviewed cards.
 - The Ideas column's `+` quick-captures a title-only ticket carrying the `human/idea` label. Dragging an idea onto Backlog opens guided ideation in evolve mode: the finished draft rewrites the same ticket in place — title and description replaced, idea label removed, key preserved — instead of creating a new one.
 - Card badges: a checkmark when a stage is done, a spinner while an agent runs it, an error badge on failure.
 - Drag a card to its single next column to advance it — earlier or non-adjacent targets reject and snap back; no backward target is offered. The drag is the consent; there is no secondary confirmation.
