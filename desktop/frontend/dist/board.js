@@ -704,9 +704,20 @@ async function closeTicket(key) {
         await go().CloseTicket(key);
     }
     catch (err) {
+        // Leave the board untouched so the banner survives — a reconcile here
+        // would overwrite current.error with the (empty) fetch error and the
+        // failure would flash away unseen.
         showError(errMessage(err));
+        return;
     }
-    // The closed ticket is no longer "open", so reconcile drops it from the board.
+    // The daemon confirmed the transition, so the card leaves the board
+    // immediately — the full refetch below takes seconds (per-ticket comment
+    // scan) and waiting for it reads as "close did nothing". Bumping the epoch
+    // invalidates any fetch already in flight, whose pre-close snapshot would
+    // resurrect the card.
+    reconcileEpoch++;
+    current.cards = current.cards.filter((c) => c.key !== key);
+    render();
     await reconcile();
 }
 // createMocks launches mockup generation for one ticket. No confirm dialog —
@@ -868,12 +879,21 @@ async function initialLoad() {
     }
     await reconcile();
 }
+// reconcile fetches can overlap: a board:changed event may land while a
+// post-close refresh is still scanning comments. Only the newest fetch may
+// write `current` — a slower stale response would otherwise overwrite fresh
+// state and resurrect cards that already left the board. closeTicket also
+// bumps the epoch when it mutates `current` directly, for the same reason.
+let reconcileEpoch = 0;
 // reconcile fetches the full board (including derived stages) and renders it. It
 // is the single source of truth after the initial load: board:changed events and
 // post-transition refreshes call it directly.
 async function reconcile() {
+    const epoch = ++reconcileEpoch;
     try {
         const data = await go().Cards();
+        if (epoch !== reconcileEpoch)
+            return;
         current = {
             cards: data.cards || [],
             dockerAvailable: !!data.dockerAvailable,
@@ -881,6 +901,8 @@ async function reconcile() {
         };
     }
     catch (err) {
+        if (epoch !== reconcileEpoch)
+            return;
         current = { cards: [], dockerAvailable: false, error: errMessage(err) };
     }
     boardLoading = false;

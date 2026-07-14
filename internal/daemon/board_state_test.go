@@ -34,6 +34,24 @@ func TestDeriveBoardCard(t *testing.T) {
 		assert.Equal(t, BoardHidden, card.Stage)
 	})
 
+	t.Run("done with markers is hidden", func(t *testing.T) {
+		// A ticket closed mid-pipeline (board Close action, or directly on the
+		// tracker) has left the board — its marker history must not keep it
+		// rendered in a column.
+		comments := []tracker.Comment{
+			cmt("[human:plan-ready]\nengineering: HUM-7", t0),
+			cmt("[human:implementation-started]", t1),
+		}
+		card := DeriveBoardCard(comments, tracker.CategoryDone, false)
+		assert.Equal(t, BoardHidden, card.Stage)
+	})
+
+	t.Run("closed with markers is hidden", func(t *testing.T) {
+		comments := []tracker.Comment{cmt("[human:planning-started]", t0)}
+		card := DeriveBoardCard(comments, tracker.CategoryClosed, false)
+		assert.Equal(t, BoardHidden, card.Stage)
+	})
+
 	t.Run("planning-started is planning running", func(t *testing.T) {
 		card := DeriveBoardCard([]tracker.Comment{cmt("[human:planning-started]", t0)}, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardPlanning, card.Stage)
