@@ -359,6 +359,20 @@ func CloseTicket(addr, token string, req CloseTicketRequest) error {
 	return err
 }
 
+// CreateMocks asks the daemon to launch the human-mockups skill for one PM
+// ticket. The request is a single JSON arg, matching BoardTransition. It
+// returns once the agent is launched, not when generation finishes — the
+// board learns about the finished set from the mockup link file on the next
+// card refresh.
+func CreateMocks(addr, token string, req CreateMocksRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling create mocks request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"create-mocks", string(data)})
+	return err
+}
+
 // IdeationStart starts (or re-attaches to) the board ideation session.
 func IdeationStart(addr, token string, req IdeationStartRequest) (IdeationStatus, error) {
 	return ideationCall(addr, token, "ideation-start", req)
