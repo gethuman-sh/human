@@ -35,20 +35,25 @@ func VerdictFailed(verdict string) bool {
 }
 
 // DeriveBoardCard computes a PM ticket's board placement from its comment
-// thread and tracker status. The rule: the furthest stage carrying ANY marker
-// wins; within that stage the latest marker (by Created) decides
-// running/done/failed. A ticket with no markers sits in Backlog while open and
-// is Hidden once closed/done (those never entered the pipeline). Pure: no I/O.
+// thread and tracker status. A closed/done ticket is always Hidden — closing
+// is how work leaves the board, whatever its pipeline history. For open
+// tickets the rule: the furthest stage carrying ANY marker wins; within that
+// stage the latest marker (by Created) decides running/done/failed. A ticket
+// with no markers sits in Backlog. Pure: no I/O.
 //
 // isIdea (the ticket carries an idea label, tracker.Issue.IsIdea) takes
 // precedence over everything while the ticket is open: an idea sits in the
 // Ideas column even if it somehow carries pipeline markers — deliberately, so
 // the label is the single source of truth until promotion removes it.
 func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, isIdea bool) BoardCard {
+	// The lister normally filters closed tickets, but one closed mid-session
+	// (the board's own Close action, or a teammate on the tracker) can still
+	// arrive here via an in-flight fetch — it must never render as open work.
+	if statusType == tracker.CategoryDone || statusType == tracker.CategoryClosed {
+		return BoardCard{Stage: BoardHidden}
+	}
+
 	if isIdea {
-		if statusType == tracker.CategoryDone || statusType == tracker.CategoryClosed {
-			return BoardCard{Stage: BoardHidden}
-		}
 		return BoardCard{Stage: BoardIdeas}
 	}
 
@@ -72,11 +77,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	_, hasPlan := latestPlanComment(comments)
 
 	if !anyMarker {
-		// No pipeline activity: a closed/done PM ticket never entered the
-		// board and is hidden; an open one waits in Backlog.
-		if statusType == tracker.CategoryDone || statusType == tracker.CategoryClosed {
-			return BoardCard{Stage: BoardHidden, HasPlan: hasPlan}
-		}
+		// No pipeline activity yet: the open ticket waits in Backlog.
 		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
 	}
 
