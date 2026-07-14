@@ -14,7 +14,12 @@ import (
 	"github.com/gethuman-sh/human/internal/forge"
 )
 
-var _ forge.Forge = (*Client)(nil)
+var (
+	_ forge.Forge         = (*Client)(nil)
+	_ forge.ChecksReader  = (*Client)(nil)
+	_ forge.Merger        = (*Client)(nil)
+	_ forge.BranchDeleter = (*Client)(nil)
+)
 
 // Client is a GitHub REST API client scoped to code-forge (pull request)
 // operations. It is deliberately separate from the issue-tracker client so the
@@ -79,6 +84,136 @@ func (c *Client) CreatePullRequest(ctx context.Context, pr *forge.PullRequest) (
 		Number: result.Number,
 		URL:    result.HTMLURL,
 	}, nil
+}
+
+// PullRequestChecks implements forge.ChecksReader. GitHub reports CI through
+// two parallel systems — check runs (GitHub Actions and modern apps) and
+// commit statuses (legacy integrations) — so both are consulted: any failure
+// in either fails the whole verdict, anything still running keeps it pending,
+// and a repository reporting through neither passes (no CI configured is not a
+// blocker).
+func (c *Client) PullRequestChecks(ctx context.Context, repoName string, number int) (forge.ChecksState, error) {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return "", err
+	}
+
+	sha, err := c.pullHeadSHA(ctx, owner, repo, number)
+	if err != nil {
+		return "", err
+	}
+
+	runsPath := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	resp, err := c.api.Do(ctx, http.MethodGet, runsPath, "", nil)
+	if err != nil {
+		return "", err
+	}
+	var runs checkRunsResponse
+	if err := apiclient.DecodeJSON(resp, &runs, "repo", repoName); err != nil {
+		return "", err
+	}
+
+	statusPath := fmt.Sprintf("/repos/%s/%s/commits/%s/status",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	resp, err = c.api.Do(ctx, http.MethodGet, statusPath, "", nil)
+	if err != nil {
+		return "", err
+	}
+	var combined combinedStatusResponse
+	if err := apiclient.DecodeJSON(resp, &combined, "repo", repoName); err != nil {
+		return "", err
+	}
+
+	return combineChecks(runs, combined), nil
+}
+
+// combineChecks folds check runs and the combined commit status into one
+// verdict. Failure anywhere wins over pending, pending wins over passing.
+func combineChecks(runs checkRunsResponse, combined combinedStatusResponse) forge.ChecksState {
+	state := forge.ChecksPassing
+	for _, run := range runs.CheckRuns {
+		switch run.Conclusion {
+		case "failure", "timed_out", "cancelled", "action_required":
+			return forge.ChecksFailing
+		}
+		if run.Status != "completed" {
+			state = forge.ChecksPending
+		}
+	}
+	switch combined.State {
+	case "failure", "error":
+		return forge.ChecksFailing
+	case "pending":
+		// GitHub reports state "pending" with zero statuses when only check
+		// runs exist — that carries no signal, so it must not hold the gate.
+		if combined.TotalCount > 0 {
+			state = forge.ChecksPending
+		}
+	}
+	return state
+}
+
+// pullHeadSHA fetches the head commit of a pull request, the ref both CI
+// reporting systems key their results on.
+func (c *Client) pullHeadSHA(ctx context.Context, owner, repo string, number int) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	resp, err := c.api.Do(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return "", err
+	}
+	var pull pullGetResponse
+	if err := apiclient.DecodeJSON(resp, &pull, "number", number); err != nil {
+		return "", err
+	}
+	if pull.Head.SHA == "" {
+		return "", errors.WithDetails("pull request has no head SHA", "number", number)
+	}
+	return pull.Head.SHA, nil
+}
+
+// MergePullRequest implements forge.Merger with a merge commit, preserving the
+// branch's individual commits (and their ticket references) on the mainline.
+func (c *Client) MergePullRequest(ctx context.Context, repoName string, number int) error {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(mergeRequest{MergeMethod: "merge"})
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshalling merge request", "repo", repoName)
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", url.PathEscape(owner), url.PathEscape(repo), number)
+	resp, err := c.api.Do(ctx, http.MethodPut, path, "", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	var result mergeResponse
+	if err := apiclient.DecodeJSON(resp, &result, "repo", repoName); err != nil {
+		return err
+	}
+	if !result.Merged {
+		// The forge's reason goes into the message itself: the deploy pipeline
+		// surfaces err.Error() on the board card, where details are invisible.
+		return errors.WithDetails("pull request was not merged: "+result.Message, "repo", repoName, "number", number)
+	}
+	return nil
+}
+
+// DeleteBranch implements forge.BranchDeleter via the git refs API.
+func (c *Client) DeleteBranch(ctx context.Context, repoName, branch string) error {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(branch))
+	resp, err := c.api.Do(ctx, http.MethodDelete, path, "", nil)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
 }
 
 // splitProject parses an "owner/repo" string. Duplicated from the tracker-side

@@ -5,6 +5,9 @@ Lets `human` open pull requests on code-hosting platforms, keeping that work sep
 - Opens a pull request from one branch to another
 - Sets the title and description of a PR
 - Returns the new pull request number and URL
+- Reads a pull request's combined CI verdict (check runs and legacy statuses)
+- Merges a pull request into its base branch
+- Deletes the source branch after a merge
 - Knows which backends can host pull requests
 - Matches your git remote to the right forge
 - Parses HTTPS, SSH, and scp-style remote URLs

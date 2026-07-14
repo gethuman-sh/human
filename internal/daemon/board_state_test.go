@@ -86,7 +86,8 @@ func TestDeriveBoardCard(t *testing.T) {
 		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardImplementation, card.Stage)
 		assert.Equal(t, BoardFailed, card.State)
-		assert.Equal(t, "[human:implementation-failed]", card.Error)
+		// The human-readable reason, not the marker header line.
+		assert.Equal(t, "compile error in foo.go", card.Error)
 	})
 
 	t.Run("full chain ending pr-pushed", func(t *testing.T) {

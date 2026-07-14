@@ -31,8 +31,39 @@ type Creator interface {
 	CreatePullRequest(ctx context.Context, pr *PullRequest) (*PullRequest, error)
 }
 
-// Forge aggregates code-forge operations. Today that is only pull-request
-// creation; future operations (list, merge, status) extend this interface.
+// ChecksState summarizes the CI verdict on a pull request head. It collapses
+// each provider's status/check-run vocabulary into the three states a deploy
+// gate needs: still waiting, safe to merge, or must not merge.
+type ChecksState string
+
+const (
+	ChecksPending ChecksState = "pending"
+	ChecksPassing ChecksState = "passing"
+	ChecksFailing ChecksState = "failing"
+)
+
+// ChecksReader reports the combined CI state of a pull request. A repository
+// with no CI configured reports ChecksPassing — the deploy gate only blocks on
+// evidence of failure or of checks still running, never on absence of CI.
+type ChecksReader interface {
+	PullRequestChecks(ctx context.Context, repo string, number int) (ChecksState, error)
+}
+
+// Merger merges a pull request into its base branch.
+type Merger interface {
+	MergePullRequest(ctx context.Context, repo string, number int) error
+}
+
+// BranchDeleter deletes a remote branch, used to clean up a pull request's
+// source branch after merging.
+type BranchDeleter interface {
+	DeleteBranch(ctx context.Context, repo, branch string) error
+}
+
+// Forge aggregates the code-forge operations every provider must support. The
+// deploy-oriented capabilities (ChecksReader, Merger, BranchDeleter) stay
+// separate so a provider can be a Forge without the full deploy pipeline —
+// callers type-assert for them.
 type Forge interface {
 	Creator
 }

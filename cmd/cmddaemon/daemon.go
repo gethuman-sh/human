@@ -1275,24 +1275,25 @@ func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace
 	return err
 }
 
-// forgePRPublisher implements daemon.PRPublisher: it pushes the recorded branch
-// and opens a pull request on the workspace's forge. It resolves the forge by
-// role/kind from the configured instances rather than by key prefix.
-type forgePRPublisher struct {
+// forgeDeployer implements daemon.Deployer: push + PR, the CI gate, the merge
+// and branch cleanup, all on the workspace's forge. It resolves the forge by
+// role/kind from the configured instances rather than by key prefix, per call,
+// so a config change takes effect without a daemon restart.
+type forgeDeployer struct {
 	resolver *vault.Resolver
 	lookup   config.EnvLookup
 }
 
-func (p forgePRPublisher) PushAndCreatePR(ctx context.Context, req daemon.PRRequest) (string, error) {
-	// Push first: a failed push must surface as pr-failed BEFORE any PR is
+func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest) (daemon.PRResult, error) {
+	// Push first: a failed push must surface as deploy-failed BEFORE any PR is
 	// opened, so we never leave a half-created PR pointing at an unpushed branch.
 	if err := gitrepo.Push(ctx, req.WorkspaceDir, req.Branch); err != nil {
-		return "", err
+		return daemon.PRResult{}, err
 	}
 
 	creator, repo, err := resolveForge(req.WorkspaceDir, p.lookup, p.resolver)
 	if err != nil {
-		return "", err
+		return daemon.PRResult{}, err
 	}
 
 	base := gitrepo.DefaultBranch(ctx, req.WorkspaceDir)
@@ -1304,9 +1305,45 @@ func (p forgePRPublisher) PushAndCreatePR(ctx context.Context, req daemon.PRRequ
 		Body:  req.Body,
 	})
 	if err != nil {
-		return "", errors.WrapWithDetails(err, "creating pull request", "repo", repo, "head", req.Branch)
+		return daemon.PRResult{}, errors.WrapWithDetails(err, "creating pull request", "repo", repo, "head", req.Branch)
 	}
-	return pr.URL, nil
+	return daemon.PRResult{URL: pr.URL, Number: pr.Number}, nil
+}
+
+func (p forgeDeployer) PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error) {
+	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
+	if err != nil {
+		return "", err
+	}
+	checker, ok := creator.(forge.ChecksReader)
+	if !ok {
+		return "", errors.WithDetails("forge does not support reading CI checks", "repo", repo)
+	}
+	return checker.PullRequestChecks(ctx, repo, number)
+}
+
+func (p forgeDeployer) MergePullRequest(ctx context.Context, workspaceDir string, number int) error {
+	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
+	if err != nil {
+		return err
+	}
+	merger, ok := creator.(forge.Merger)
+	if !ok {
+		return errors.WithDetails("forge does not support merging pull requests", "repo", repo)
+	}
+	return merger.MergePullRequest(ctx, repo, number)
+}
+
+func (p forgeDeployer) DeleteRemoteBranch(ctx context.Context, workspaceDir, branch string) error {
+	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
+	if err != nil {
+		return err
+	}
+	deleter, ok := creator.(forge.BranchDeleter)
+	if !ok {
+		return errors.WithDetails("forge does not support deleting branches", "repo", repo)
+	}
+	return deleter.DeleteBranch(ctx, repo, branch)
 }
 
 // resolveForge finds the configured instance that carries a forge capability
@@ -1416,9 +1453,16 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 			return err
 		}
 		deps := daemon.BoardTransitionDeps{
-			Commenter:    commenter,
-			Launcher:     dockerAgentLauncher{},
-			Publisher:    forgePRPublisher{resolver: resolver, lookup: lookup},
+			Commenter: commenter,
+			Launcher:  dockerAgentLauncher{},
+			Deployer:  forgeDeployer{resolver: resolver, lookup: lookup},
+			CloseTicket: func(pmKey string) error {
+				transitioner, err := resolvePMTransitioner(entry.Dir, lookup, resolver)
+				if err != nil {
+					return err
+				}
+				return transitioner.TransitionIssue(context.Background(), pmKey, "done")
+			},
 			WorkspaceDir: entry.Dir,
 			ConfigDir:    entry.Dir,
 		}
