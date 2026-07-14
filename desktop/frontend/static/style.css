@@ -2393,9 +2393,19 @@ input[type="checkbox"].settings-input {
 /* ---- Queue-column model (SC-187) -------------------------------------------
    Columns are resting states; the action verb appears on the drop target
    while a drag hovers it, and terminal actions are buttons on the card. */
-.column-body.drop-ok::after {
+/* ::before, not ::after: the verb box must sit at the TOP of the card list
+   (pushing cards down) — a full column would scroll an ::after box out of
+   view exactly when the user is mid-drag and needs it. */
+.column-body.drop-ok::before {
   content: attr(data-verb);
   display: block;
+  flex-shrink: 0;
+  /* Sticky keeps the verb in view even when the body was scrolled down
+     before the drag began; the solid tint hides cards sliding beneath. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--drop-ok);
   text-align: center;
   padding: 10px;
   margin: 6px;
