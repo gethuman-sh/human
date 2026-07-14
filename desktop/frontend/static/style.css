@@ -220,8 +220,10 @@ body {
 }
 
 /* The lanes are invisible: the surrounding .idea-space carries the one box,
-   so sub-columns drop the .column chrome entirely. */
-.idea-subcol {
+   so sub-columns drop the .column chrome entirely. The compound selector
+   outweighs the later .column rule, which would otherwise win the tie and
+   paint each lane its own border. */
+.column.idea-subcol {
   background: transparent;
   border: none;
   border-radius: 0;
