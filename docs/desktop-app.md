@@ -6,8 +6,17 @@ is a ticket; dragging a card forward triggers that stage's `human`
 action through the daemon (Code holds the build-and-review cycle — review
 chains automatically after the build — and dropping a reviewed card on Deploy
 merges the work after CI passes and closes the ticket), and placement/badges/running-state derive
-entirely from the `[human:…]` comment markers (and, for the Ideas column, the
+entirely from the `[human:…]` comment markers (and, for the Ideas queue, the
 `human/idea` label) the daemon ships on the wire.
+
+The Ideas queue renders as an **idea space**: one rounded rectangle holding
+five invisible, unlabeled lanes. Dragging an idea between lanes sorts it
+along the loose→concrete axis (looser left, more concrete right). That placement is the one piece of board
+state that is NOT tracker-derived — it is a local workspace preference the
+app's Go backend persists to `~/.human/ideaspace.json` (`internal/ideaspace`),
+never a label, comment, or status on the ticket. Ideas without a saved
+placement sit leftmost, and entries for promoted or closed ideas are pruned
+after each successful full fetch.
 
 The whole Go file set under `desktop/` is behind the `wailsapp` build tag, so the
 default `go build .` / `go vet ./...` / `go list ./...` / `make check` never
@@ -101,8 +110,9 @@ The desktop artifact must never be published through a goreleaser `builds:` entr
 ## Creating tickets — ideation chat
 
 The Backlog column header shows a '+' button. Clicking it opens a chat-style
-panel docked to the right side of the board. (The Ideas column has its own
-lighter '+': it quick-captures a title-only ticket labeled `human/idea`, no
+panel docked to the right side of the board. (The idea space has its own
+lighter '+': it quick-captures a title-only ticket labeled `human/idea` into
+its leftmost sub-column, no
 chat involved; dragging that idea card onto Backlog opens this same panel in
 **evolve mode**, whose terminal action rewrites the idea ticket in place —
 title and description replaced, idea label removed, key preserved — instead of

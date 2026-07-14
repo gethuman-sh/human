@@ -43,6 +43,9 @@ interface Card {
   description?: string;
   error?: string;
   verdict?: string;
+  // Idea-space sub-column (0 loosest … 4 most concrete) for Ideas-stage cards.
+  // Locally persisted preference; absent means leftmost.
+  ideaColumn?: number;
   mockupSlug?: string;
   mockupState?: string; // "ready" | "creating"
 }
@@ -165,6 +168,7 @@ interface AppBindings {
   CardsQuick(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   CloseTicket(pmKey: string): Promise<void>;
+  SetIdeaColumn(pmKey: string, col: number): Promise<void>;
   DaemonStatus(): Promise<boolean>;
   StartIdeation(seed: string, mode: string, restart: boolean, evolveKey: string, evolveLabels: string[]): Promise<IdeationView>;
   CreateIdea(title: string): Promise<void>;
@@ -219,6 +223,22 @@ const QUEUE_LABELS: Record<string, string> = {
   deploy: "Ready to Deploy",
 };
 
+// The Ideas queue renders as an "idea space": five unlabeled lanes spanning a
+// loose→concrete axis the PM sorts ideas along by dragging (looser left,
+// more concrete right). Placement is a locally persisted preference
+// (SetIdeaColumn), never ticket state — the wire stage stays "ideas"
+// throughout. The lanes carry no headers: labels would visually compete with
+// the real queue headers beside the space.
+const IDEA_COL_COUNT = 5;
+
+// ideaColOf resolves a card's idea-space lane: absent means leftmost (a
+// fresh idea is loose by definition), out-of-range is clamped so a stale
+// file entry can never render a card outside the space.
+function ideaColOf(card: Card): number {
+  const col = card.ideaColumn ?? 0;
+  return Math.min(Math.max(col, 0), IDEA_COL_COUNT - 1);
+}
+
 // Wire stage launched by dropping onto a queue from its predecessor. Queues
 // missing here (ideas, deploy) accept no queue-transition drop at all — cards
 // reach Ready to Deploy only by passing review.
@@ -234,6 +254,25 @@ const QUEUE_VERB: Record<string, string> = {
   engineering: "Plan it",
   building: "Build it",
 };
+
+// A small always-visible caption under each column header explaining what the
+// transition INTO that column actually does — the skill launched, the ticket
+// artifacts written, branches/PRs/reviews involved. The board's drags are
+// consents to real work; the notes say what work. HTML is trusted here: the
+// strings are static literals, never ticket data.
+const QUEUE_NOTES: Record<string, string> = {
+  ideas: "Sort ideas loose → concrete; placement is saved locally, never on the ticket",
+  product:
+    "Drop an idea: guided ideation (evolve) rewrites the same ticket — product language, idea label removed",
+  engineering:
+    "Drop: <code>human-plan</code> drafts the engineering plan onto the ticket as a <code>[human:plan]</code> comment",
+  building:
+    "Drop: <code>human-execute</code> works the plan on a branch — commits, self-check, then <code>human-review</code> chains automatically",
+  deploy: "No drop — a passing review releases cards here; a failing verdict pins them in Code with the findings",
+};
+
+// The Deploy zone is too slim for a caption; the note rides its tooltip.
+const DEPLOY_ZONE_NOTE = "Drop a reviewed card: push branch → open PR → CI green → merge → ticket closed";
 
 // Live badge text while a stage runs; builds and their chained reviews both
 // live in the Code lane, deploys in Ready to Deploy.
@@ -473,18 +512,11 @@ function renderColumn(queue: string): HTMLElement {
       `<button class="add-card" title="New ticket via ideation">+</button>` +
       `<span class="column-count">${cards.length}</span>`;
     header.querySelector(".add-card")!.addEventListener("click", () => void openIdeation());
-  } else if (queue === "ideas") {
-    // Ideas capture is deliberately dumb: a title becomes a labeled ticket in
-    // one keystroke — the thinking happens later, at promotion.
-    header.innerHTML =
-      `<span>${QUEUE_LABELS[queue]}</span>` +
-      `<button class="add-card" title="Capture an idea">+</button>` +
-      `<span class="column-count">${cards.length}</span>`;
-    header.querySelector(".add-card")!.addEventListener("click", () => showIdeaQuickAdd(col));
   } else {
     header.innerHTML = `<span>${QUEUE_LABELS[queue]}</span><span class="column-count">${cards.length}</span>`;
   }
   col.appendChild(header);
+  appendQueueNote(col, queue);
 
   const body = document.createElement("div");
   body.className = "column-body";
@@ -501,6 +533,62 @@ function renderColumn(queue: string): HTMLElement {
   return col;
 }
 
+// renderIdeaSpace builds the Ideas queue as five gradient sub-columns (the
+// idea space). It replaces renderColumn("ideas"): one shared header keeps the
+// familiar Ideas title, `+` quick-add and total count, while each sub-column
+// is a local-reorder drop target (data-drop="idea") — dropping there saves a
+// placement, it never launches an agent, so no Docker gate applies.
+function renderIdeaSpace(): HTMLElement {
+  const space = document.createElement("section");
+  // data-stage="ideas" keeps the theme hooks that key off the Ideas column
+  // (fancy tint, clear sweep) anchored to the space as a whole.
+  space.className = "idea-space";
+  space.dataset.stage = "ideas";
+
+  const ideas = current.cards.filter((c) => queueOf(c) === "ideas");
+
+  const grid = document.createElement("div");
+  grid.className = "idea-space-grid";
+  const subcols: HTMLElement[] = [];
+  for (let i = 0; i < IDEA_COL_COUNT; i++) {
+    const col = document.createElement("section");
+    col.className = "column idea-subcol";
+    // Distinct per-sub-column stage keys let scroll capture/restore treat each
+    // sub-column independently across rebuilds.
+    col.dataset.stage = `ideas:${i}`;
+
+    const colCards = ideas.filter((c) => ideaColOf(c) === i);
+    const body = document.createElement("div");
+    body.className = "column-body";
+    body.dataset.drop = "idea";
+    body.dataset.ideaCol = String(i);
+    // The drop-ok overlay renders data-verb; without one it would show an
+    // empty dashed box. Sorting is the verb of this space.
+    body.dataset.verb = "Sort here";
+    for (const card of colCards) body.appendChild(renderCard(card));
+    col.appendChild(body);
+
+    subcols.push(col);
+    grid.appendChild(col);
+  }
+
+  const header = document.createElement("div");
+  header.className = "column-header idea-space-header";
+  // Ideas capture is deliberately dumb: a title becomes a labeled ticket in
+  // one keystroke — the thinking happens later, at promotion. New ideas are
+  // loose by definition, so quick-add writes into the leftmost sub-column.
+  header.innerHTML =
+    `<span>${QUEUE_LABELS["ideas"]}</span>` +
+    `<button class="add-card" title="Capture an idea">+</button>` +
+    `<span class="column-count">${ideas.length}</span>`;
+  header.querySelector(".add-card")!.addEventListener("click", () => showIdeaQuickAdd(subcols[0]));
+
+  space.appendChild(header);
+  appendQueueNote(space, "ideas");
+  space.appendChild(grid);
+  return space;
+}
+
 // renderDeployZone builds the terminal drop target at the board's right edge.
 // It is deliberately NOT a column — no card ever rests "in Deploy"; dropping
 // a reviewed card here ships it (merge after CI, ticket closed) and the card
@@ -509,12 +597,24 @@ function renderDeployZone(): HTMLElement {
   const zone = document.createElement("section");
   zone.className = "deploy-zone";
   zone.dataset.drop = "deploy";
+  zone.title = DEPLOY_ZONE_NOTE;
   zone.innerHTML = `<span class="deploy-zone-label">Deploy</span>`;
   return zone;
 }
 
-// showIdeaQuickAdd swaps an inline title input into the Ideas column. Enter
-// creates the idea-labeled ticket via CreateIdea; Escape or blur dismisses.
+// appendQueueNote attaches the transition caption below a column header.
+function appendQueueNote(col: HTMLElement, queue: string): void {
+  const note = QUEUE_NOTES[queue];
+  if (!note) return;
+  const el = document.createElement("div");
+  el.className = "column-note";
+  el.innerHTML = note;
+  col.appendChild(el);
+}
+
+// showIdeaQuickAdd swaps an inline title input into an idea-space sub-column.
+// Enter creates the idea-labeled ticket via CreateIdea; Escape or blur
+// dismisses.
 function showIdeaQuickAdd(col: HTMLElement): void {
   const body = col.querySelector(".column-body");
   if (!body || body.querySelector(".idea-quick-add")) return;
@@ -556,7 +656,7 @@ function showIdeaQuickAdd(col: HTMLElement): void {
 // webview backend) does not fire native drag events, so the board would be
 // completely undraggable there. Instead the card tracks pointer events itself
 // and hit-tests drop targets with elementFromPoint. Drop targets are plain
-// elements tagged with data-drop ("stage" | "close") via the mark* helpers; a
+// elements tagged with data-drop ("queue" | "idea" | "close" | "deploy"); a
 // floating ghost (pointer-events:none) follows the cursor.
 
 const DRAG_THRESHOLD_PX = 5;
@@ -599,6 +699,12 @@ function dropAllowed(target: HTMLElement): boolean {
   if (!dragging) return false;
   const card = current.cards.find((c) => c.key === dragging!.key);
   if (!card || card.state === "running") return false;
+  if (target.dataset.drop === "idea") {
+    // Idea-space sub-columns accept only idea cards, and only into a DIFFERENT
+    // sub-column — a same-column drop would be a no-op gesture. Local reorder
+    // launches nothing, so the Docker gate does not apply.
+    return queueOf(card) === "ideas" && Number(target.dataset.ideaCol) !== ideaColOf(card);
+  }
   if (target.dataset.drop === "deploy") return isReadyToDeploy(card);
   const toQueue = target.dataset.dropQueue || "";
   if (toQueue === "building" && isReworkable(card)) return targetEnabled(toQueue);
@@ -718,6 +824,24 @@ function performDrop(
   info: { key: string; title: string; stage: string },
   pt: { x: number; y: number },
 ): void {
+  if (target.dataset.drop === "idea") {
+    // A local reorder, not a stage transition: move the card optimistically so
+    // the drop feels instant, then persist. On a write failure the reconcile
+    // snaps the card back to its saved column rather than lying about it.
+    const col = Number(target.dataset.ideaCol);
+    const card = current.cards.find((c) => c.key === info.key);
+    if (card) {
+      card.ideaColumn = col;
+      render();
+    }
+    void go()
+      .SetIdeaColumn(info.key, col)
+      .catch((err) => {
+        showError(errMessage(err));
+        void reconcile();
+      });
+    return;
+  }
   if (target.dataset.drop === "deploy") {
     // The drag is the consent: review passed, CI still gates the merge
     // server-side, so no extra dialog stands between the drop and the ship.
@@ -914,7 +1038,9 @@ function render(): void {
     loading.innerHTML = `<span class="spinner"></span><span>Loading board…</span>`;
     board.appendChild(loading);
   } else {
-    for (const queue of QUEUES) board.appendChild(renderColumn(queue));
+    for (const queue of QUEUES) {
+      board.appendChild(queue === "ideas" ? renderIdeaSpace() : renderColumn(queue));
+    }
     board.appendChild(renderDeployZone());
     restoreColumnScroll(board, scrollByStage);
   }

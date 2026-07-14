@@ -174,10 +174,11 @@ body {
 
 .board {
   display: grid;
-  /* Five queue columns plus the slim terminal Deploy drop zone; min-width
-     keeps each readable and the board scrolls horizontally on narrow windows
-     instead of squishing cards into slivers. */
-  grid-template-columns: repeat(5, minmax(170px, 1fr)) minmax(80px, 110px);
+  /* The wide idea-space track (five loose→concrete sub-columns), four queue
+     columns, and the slim terminal Deploy drop zone; min-widths keep each
+     readable and the board scrolls horizontally on narrow windows instead of
+     squishing cards into slivers. */
+  grid-template-columns: minmax(540px, 2.4fr) repeat(4, minmax(170px, 1fr)) minmax(80px, 110px);
   /* Bound the single row to the board's own height so columns can never grow
      past the space below the header (the old 100vh-based column max-height did,
      which pushed the document 20px taller than the viewport). */
@@ -188,7 +189,64 @@ body {
   overflow-x: auto;
 }
 
-/* Inline quick-add input at the top of the Ideas column. */
+/* Transition captions: what dropping INTO a column actually runs — skill,
+   ticket artifacts, branch/PR/review. Muted so the notes read as marginalia,
+   never competing with the cards. */
+.column-note {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+  border-bottom: 1px solid var(--col-border);
+}
+
+.column-note code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+}
+
+/* The idea space: the Ideas queue widened into five lanes spanning a
+   loose→concrete axis. It reads as ONE column-styled rounded rectangle —
+   a shared header (title, quick-add, total count) above five invisible,
+   unlabeled lanes; card position alone expresses how concrete an idea is. */
+.idea-space {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--col-bg);
+  border: 1px solid var(--col-border);
+  border-radius: 8px;
+}
+
+.idea-space-header {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--col-border);
+}
+
+.idea-space-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* Sub-columns run narrower than regular queues: idea cards are title-only
+     captures, and five of them must share one board track. */
+  grid-template-columns: repeat(5, minmax(100px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 0;
+}
+
+/* The lanes are invisible: the surrounding .idea-space carries the one box,
+   so sub-columns drop the .column chrome entirely. The compound selector
+   outweighs the later .column rule, which would otherwise win the tie and
+   paint each lane its own border. */
+.column.idea-subcol {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+/* Inline quick-add input at the top of an idea-space sub-column. */
 .idea-quick-add {
   background: var(--card-bg);
   border: 1px solid var(--accent);
@@ -1206,7 +1264,8 @@ body {
 /* [FANCY:palette] Per-queue pastel rainbow hue, inherited by everything inside
    a column (drop zones, glows, card shadows) via var(--fancy-hue). Keys are
    the QUEUE ids the board stamps as data-stage. */
-[data-theme="fancy"] .column[data-stage="ideas"] {
+[data-theme="fancy"] .idea-space,
+[data-theme="fancy"] .column[data-stage^="ideas"] {
   --fancy-hue: 300;
 }
 [data-theme="fancy"] .column[data-stage="product"] {
@@ -2334,9 +2393,19 @@ input[type="checkbox"].settings-input {
 /* ---- Queue-column model (SC-187) -------------------------------------------
    Columns are resting states; the action verb appears on the drop target
    while a drag hovers it, and terminal actions are buttons on the card. */
-.column-body.drop-ok::after {
+/* ::before, not ::after: the verb box must sit at the TOP of the card list
+   (pushing cards down) — a full column would scroll an ::after box out of
+   view exactly when the user is mid-drag and needs it. */
+.column-body.drop-ok::before {
   content: attr(data-verb);
   display: block;
+  flex-shrink: 0;
+  /* Sticky keeps the verb in view even when the body was scrolled down
+     before the drag began; the solid tint hides cards sliding beneath. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--drop-ok);
   text-align: center;
   padding: 10px;
   margin: 6px;
