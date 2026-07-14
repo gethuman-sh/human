@@ -18,18 +18,19 @@ import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 // being worked stays in its ORIGIN queue with a live badge and only arrives in
 // the next queue when the stage completes. State on the column, verb on the
 // affordance — the wire stages/markers are untouched; this is pure display.
-// Building is the one ACTIVITY column among the queues — deliberately special
-// because building is the board's longest and weightiest phase: the column
+// Code is the one ACTIVITY column among the queues — deliberately special
+// because coding is the board's longest and weightiest phase: the column
 // holds exactly the cards the executor is working on (the machine verifies
 // membership, so the name stays true), and its count is the live build gauge.
 // Cards leave it on their own when the handoff posts; Ready for review is
-// never a drop target — cards can only earn their way in.
+// never a drop target — cards can only earn their way in. ("building" stays
+// the internal queue id so theme hooks and tests don't churn on a label.)
 const QUEUES = ["ideas", "product", "engineering", "building", "review", "deploy"];
 const QUEUE_LABELS = {
     ideas: "Ideas",
     product: "Product backlog",
     engineering: "Engineering backlog",
-    building: "Building",
+    building: "Code",
     review: "Ready for review",
     deploy: "Ready to deploy",
 };
@@ -49,7 +50,7 @@ const QUEUE_VERB = {
     deploy: "Review it",
 };
 // Live badge text while a stage runs; the card sits in its origin queue —
-// except implementation, which has its own Building lane.
+// except implementation, which has its own Code lane.
 const RUNNING_LABELS = {
     planning: "planning…",
     implementation: "building…",
@@ -58,7 +59,7 @@ const RUNNING_LABELS = {
 };
 // queueOf maps the wire (stage, state) onto the column whose name is true of
 // the card: incomplete stages keep the card where it was pulled from, apart
-// from an in-flight (or failed) build, which lives in the Building lane.
+// from an in-flight (or failed) build, which lives in the Code lane.
 function queueOf(card) {
     switch (card.stage) {
         case "ideas":

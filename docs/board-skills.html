@@ -68,7 +68,7 @@
   <h1>Queues, and the skills on each transition</h1>
   <p>Columns are resting states — the name is true of every card in them, always. Agents run on the transitions:
      a drag is the launch, the card stays in its origin queue with a live badge, and it arrives in the next queue
-     only when the stage completes. The one exception is deliberate: <strong>Building</strong> is a live activity lane —
+     only when the stage completes. The one exception is deliberate: <strong>Code</strong> is a live activity lane —
      the meat of the pipeline gets its own column, and cards leave it on their own when the build lands.
      State on the column, verb on the drop target.</p>
 </div>
@@ -93,7 +93,7 @@
       </div>
     </div>
     <div class="col">
-      <div class="col-h">Building <span class="count">1</span></div>
+      <div class="col-h">Code <span class="count">1</span></div>
       <div class="col-b">
         <div class="card"><div class="key">188</div><div class="t">Building gets its own live column</div><div class="badge running">◐ building…</div></div>
         <div class="verbzone">Build it</div>
@@ -144,16 +144,16 @@
   </div>
 
   <div class="note" style="left: 37.5%; top: 515px; max-width: 220px;">
-    <b>ENGINEERING ➜ BUILDING</b><br>
+    <b>ENGINEERING ➜ CODE</b><br>
     Launches <code>/human-execute &lt;KEY&gt;</code>: the executor works the plan
     and runs the <code>human-done</code> self-check. The card moves <em>into
-    Building</em> for the whole build — the live activity lane. Failures stay
+    Code</em> for the whole build — the live activity lane. Failures stay
     here, red.
     <span class="m">[human:implementation-started]</span>
   </div>
 
   <div class="note" style="left: 54.5%; top: 640px; max-width: 225px;">
-    <b>BUILDING ➜ READY FOR REVIEW — AUTOMATIC</b><br>
+    <b>CODE ➜ READY FOR REVIEW — AUTOMATIC</b><br>
     No drag, no drop target: when the executor posts the handoff, the card
     releases itself into Ready for review. Cards can only <em>earn</em> their
     way in.
@@ -184,7 +184,7 @@
   <div class="note" style="left: 20%; top: 415px; max-width: 190px;">
     <b>◐ RUNNING = STAYS PUT</b><br>
     Planning and reviewing keep the card in its origin queue — a column never
-    claims what isn't true yet. Building is the deliberate exception: the
+    claims what isn't true yet. Code is the deliberate exception: the
     meat of the pipeline gets its own lane.
   </div>
 
