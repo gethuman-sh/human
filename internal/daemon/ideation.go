@@ -76,10 +76,18 @@ type IdeationStatus struct {
 
 // IdeationStartRequest is the wire request for ideation-start. Seed is the
 // user's initial idea text. Restart abandons an active session first.
+//
+// EvolveKey switches the session's terminal action from creating a ticket to
+// rewriting the existing ticket in place (idea promotion): EditIssue with the
+// refined title/description plus removal of the idea labels. EvolveLabels
+// lists the card's idea-matching labels to remove; when empty the canonical
+// idea labels are removed.
 type IdeationStartRequest struct {
-	Seed    string       `json:"seed"`
-	Mode    IdeationMode `json:"mode,omitempty"` // defaults to IdeationModeChat when empty
-	Restart bool         `json:"restart,omitempty"`
+	Seed         string       `json:"seed"`
+	Mode         IdeationMode `json:"mode,omitempty"` // defaults to IdeationModeChat when empty
+	Restart      bool         `json:"restart,omitempty"`
+	EvolveKey    string       `json:"evolve_key,omitempty"`
+	EvolveLabels []string     `json:"evolve_labels,omitempty"`
 }
 
 // IdeationReplyRequest is the wire request for ideation-reply.
@@ -113,6 +121,10 @@ type IdeationRunner interface {
 // configured project, mirroring the role-based resolution of resolvePMCommenter.
 type PMCreatorResolver func() (creator tracker.Creator, project string, err error)
 
+// PMEditorResolver resolves the PM-role tracker's Editor for evolve-mode
+// promotion (rewriting an existing idea ticket in place).
+type PMEditorResolver func() (tracker.Editor, error)
+
 // ideationSession is the engine's internal mutable state (guarded by engine mu).
 type ideationSession struct {
 	id              string
@@ -126,6 +138,8 @@ type ideationSession struct {
 	createdURL      string
 	errMsg          string
 	repairAttempted bool // one corrective turn allowed per malformed ticket OR question block
+	evolveKey       string
+	evolveLabels    []string
 }
 
 // IdeationEngine owns the single board ideation session. All exported methods
@@ -133,8 +147,9 @@ type ideationSession struct {
 type IdeationEngine struct {
 	Runner         IdeationRunner
 	ResolveCreator PMCreatorResolver
-	Notify         func()        // pokes the subscribe loop after ticket creation; nil ok
-	TurnTimeout    time.Duration // defaults to 5 * time.Minute when zero
+	ResolveEditor  PMEditorResolver // evolve-mode promotion; nil disables it
+	Notify         func()           // pokes the subscribe loop after ticket creation; nil ok
+	TurnTimeout    time.Duration    // defaults to 5 * time.Minute when zero
 	Logger         zerolog.Logger
 
 	mu   sync.Mutex
@@ -200,17 +215,34 @@ func (e *IdeationEngine) Start(req IdeationStartRequest) (IdeationStatus, error)
 		transcript: []IdeationMessage{
 			{Role: "user", Text: req.Seed, Time: now},
 		},
+		evolveKey:    req.EvolveKey,
+		evolveLabels: req.EvolveLabels,
 	}
 	e.sess = sess
 	snap := e.snapshot()
 	e.mu.Unlock()
 
+	// Evolve mode refines an existing idea ticket; the agent must know the
+	// outcome updates that ticket in place rather than creating a new one.
+	seed := req.Seed
+	if req.EvolveKey != "" {
+		seed = evolveSeed(req.EvolveKey, req.Seed)
+	}
 	if mode == IdeationModeGuided {
-		go e.runTurn(sess.id, "", guidedIdeationPrompt(req.Seed))
+		go e.runTurn(sess.id, "", guidedIdeationPrompt(seed))
 	} else {
-		go e.runTurn(sess.id, "", ideationPrompt(req.Seed))
+		go e.runTurn(sess.id, "", ideationPrompt(seed))
 	}
 	return snap, nil
+}
+
+// evolveSeed frames an existing idea ticket's content for the ideation agent:
+// the conversation's outcome rewrites ticket key in place (same key, refined
+// title/description, idea label removed) — creation language would mislead it.
+func evolveSeed(key, seed string) string {
+	return "You are refining an EXISTING captured idea ticket (" + key + ") that will be UPDATED IN PLACE — " +
+		"the refined title and description replace the ticket's current content under the same key; no new ticket is created.\n\n" +
+		"Current idea content:\n" + seed
 }
 
 // Reply feeds the user's answer into the running session.
@@ -384,9 +416,23 @@ func (e *IdeationEngine) applyRepairOrError(sessID, reply, repairPrompt, errMsg 
 	e.mu.Unlock()
 }
 
-// createTicket calls the tracker Creator to materialize the PM ticket. Run
+// createTicket materializes the session's outcome: evolve mode rewrites the
+// existing idea ticket in place, otherwise a new PM ticket is created. Run
 // without holding mu so the network call cannot block Status()/Reply().
 func (e *IdeationEngine) createTicket(sessID, title, description string) {
+	e.mu.Lock()
+	var evolveKey string
+	var evolveLabels []string
+	if e.sess != nil && e.sess.id == sessID {
+		evolveKey = e.sess.evolveKey
+		evolveLabels = e.sess.evolveLabels
+	}
+	e.mu.Unlock()
+	if evolveKey != "" {
+		e.evolveTicket(sessID, evolveKey, title, description, evolveLabels)
+		return
+	}
+
 	if e.ResolveCreator == nil {
 		e.mu.Lock()
 		if e.sess != nil && e.sess.id == sessID {
@@ -433,6 +479,108 @@ func (e *IdeationEngine) createTicket(sessID, title, description string) {
 	if e.Notify != nil {
 		e.Notify()
 	}
+}
+
+// evolveTicket promotes an idea: the refined content replaces the ticket's
+// title/description under the same key and the idea labels come off, moving
+// the card from Ideas into Backlog on the next board derivation.
+func (e *IdeationEngine) evolveTicket(sessID, key, title, description string, removeLabels []string) {
+	fail := func(msg string) {
+		e.mu.Lock()
+		if e.sess != nil && e.sess.id == sessID {
+			e.sess.state = IdeationError
+			e.sess.errMsg = msg
+		}
+		e.mu.Unlock()
+	}
+	if e.ResolveEditor == nil {
+		fail("no PM ticket editor configured")
+		return
+	}
+	editor, err := e.ResolveEditor()
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	// Only idea-classifying labels come off — the caller passes the card's
+	// full label set and promotion must not strip unrelated labels. Falls
+	// back to the canonical pair (absent-removal is a no-op) so promotion
+	// works even when the client sent nothing.
+	var ideaLabels []string
+	for _, l := range removeLabels {
+		if (tracker.Issue{Labels: []string{l}}).IsIdea() {
+			ideaLabels = append(ideaLabels, l)
+		}
+	}
+	if len(ideaLabels) == 0 {
+		ideaLabels = []string{tracker.IdeaLabel, "idea"}
+	}
+	removeLabels = ideaLabels
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	updated, err := editor.EditIssue(ctx, key, tracker.EditOptions{
+		Title:        &title,
+		Description:  &description,
+		RemoveLabels: removeLabels,
+	})
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sess == nil || e.sess.id != sessID {
+		return
+	}
+	if err != nil {
+		e.sess.state = IdeationError
+		e.sess.errMsg = errors.WrapWithDetails(err, "promoting idea ticket", "key", key).Error()
+		return
+	}
+	if updated == nil {
+		e.sess.state = IdeationError
+		e.sess.errMsg = "edit returned no issue for " + key
+		return
+	}
+	e.sess.state = IdeationDone
+	e.sess.createdKey = updated.Key
+	e.sess.createdURL = updated.URL
+	e.sess.transcript = append(e.sess.transcript, IdeationMessage{
+		Role: "agent",
+		Text: "Updated ticket " + updated.Key,
+		Time: time.Now(),
+	})
+	if e.Notify != nil {
+		e.Notify()
+	}
+}
+
+// CreateIdea quick-captures a title-only ticket carrying the idea label — the
+// Ideas column's `+` button. No agent involved; the ideation conversation
+// happens later, at promotion time.
+func (e *IdeationEngine) CreateIdea(title string) (key, url string, err error) {
+	if strings.TrimSpace(title) == "" {
+		return "", "", errors.WithDetails("idea title must not be empty")
+	}
+	if e.ResolveCreator == nil {
+		return "", "", errors.WithDetails("no PM ticket creator configured")
+	}
+	creator, project, err := e.ResolveCreator()
+	if err != nil {
+		return "", "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	created, err := creator.CreateIssue(ctx, &tracker.Issue{
+		Project: project,
+		Title:   title,
+		Labels:  []string{tracker.IdeaLabel},
+	})
+	if err != nil {
+		return "", "", errors.WrapWithDetails(err, "creating idea ticket", "project", project)
+	}
+	if e.Notify != nil {
+		e.Notify()
+	}
+	return created.Key, created.URL, nil
 }
 
 // ideationTicketMarker is the line the agent emits when confident; the JSON

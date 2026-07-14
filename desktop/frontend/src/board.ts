@@ -39,6 +39,8 @@ interface Card {
   engineeringKey?: string;
   branch?: string;
   prURL?: string;
+  labels?: string[];
+  description?: string;
   error?: string;
 }
 
@@ -161,7 +163,8 @@ interface AppBindings {
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   CloseTicket(pmKey: string): Promise<void>;
   DaemonStatus(): Promise<boolean>;
-  StartIdeation(seed: string, mode: string, restart: boolean): Promise<IdeationView>;
+  StartIdeation(seed: string, mode: string, restart: boolean, evolveKey: string, evolveLabels: string[]): Promise<IdeationView>;
+  CreateIdea(title: string): Promise<void>;
   ReplyIdeation(sessionId: string, message: string): Promise<IdeationView>;
   ApproveIdeation(sessionId: string, title: string, description: string): Promise<IdeationView>;
   IdeationStatus(): Promise<IdeationView>;
@@ -189,8 +192,9 @@ declare global {
 
 export {};
 
-const STAGES = ["backlog", "planning", "implementation", "verification", "done"] as const;
+const STAGES = ["ideas", "backlog", "planning", "implementation", "verification", "done"] as const;
 const STAGE_LABELS: Record<string, string> = {
+  ideas: "Ideas",
   backlog: "Backlog",
   planning: "Product planning",
   implementation: "Implementation",
@@ -293,6 +297,14 @@ function renderColumn(stage: string): HTMLElement {
       `<button class="add-card" title="New ticket via ideation">+</button>` +
       `<span class="column-count">${cards.length}</span>`;
     header.querySelector(".add-card")!.addEventListener("click", () => void openIdeation());
+  } else if (stage === "ideas") {
+    // Ideas capture is deliberately dumb: a title becomes a labeled ticket in
+    // one keystroke — the thinking happens later, at promotion.
+    header.innerHTML =
+      `<span>${STAGE_LABELS[stage]}</span>` +
+      `<button class="add-card" title="Capture an idea">+</button>` +
+      `<span class="column-count">${cards.length}</span>`;
+    header.querySelector(".add-card")!.addEventListener("click", () => showIdeaQuickAdd(col));
   } else {
     header.innerHTML = `<span>${STAGE_LABELS[stage]}</span><span class="column-count">${cards.length}</span>`;
   }
@@ -316,12 +328,53 @@ function renderColumn(stage: string): HTMLElement {
     closeZone.textContent = "Close Ticket";
     markCloseTarget(closeZone);
     body.appendChild(closeZone);
-  } else if (stage !== "backlog") {
+  } else if (stage === "backlog") {
+    // Backlog accepts drops only from Ideas (adjacency gates the rest): the
+    // drop opens the evolve-mode ideation chat, it never calls Transition.
+    markStageTarget(body, stage);
+  } else if (stage !== "ideas") {
     markStageTarget(body, stage);
   }
 
   col.appendChild(body);
   return col;
+}
+
+// showIdeaQuickAdd swaps an inline title input into the Ideas column. Enter
+// creates the idea-labeled ticket via CreateIdea; Escape or blur dismisses.
+function showIdeaQuickAdd(col: HTMLElement): void {
+  const body = col.querySelector(".column-body");
+  if (!body || body.querySelector(".idea-quick-add")) return;
+  const input = document.createElement("input");
+  input.className = "idea-quick-add";
+  input.type = "text";
+  input.placeholder = "Idea title — Enter to capture";
+  body.prepend(input);
+  input.focus();
+
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      input.remove();
+      return;
+    }
+    if (e.key !== "Enter") return;
+    const title = input.value.trim();
+    if (!title) return;
+    input.disabled = true;
+    void (async () => {
+      try {
+        await go().CreateIdea(title);
+        input.remove();
+        await reconcile();
+      } catch (err) {
+        input.disabled = false;
+        showError(errMessage(err));
+      }
+    })();
+  });
+  input.addEventListener("blur", () => {
+    if (!input.disabled && input.value.trim() === "") input.remove();
+  });
 }
 
 // --- Pointer-based drag ------------------------------------------------
@@ -484,8 +537,57 @@ function performDrop(
     return;
   }
   const to = target.dataset.dropStage || "";
+  if (info.stage === "ideas" && to === "backlog") {
+    // Promotion is a conversation, not a stage transition: the evolve-mode
+    // ideation session rewrites the ticket in place and removes the idea
+    // label; the card moves columns when the board refetches.
+    void promoteIdea(info.key);
+    return;
+  }
   celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: to === "done" });
   void transition(info.key, info.title, info.stage, to);
+}
+
+// promoteIdea opens the ideation panel in evolve mode, seeded with the idea
+// card's content. An active session must be explicitly replaced — the daemon
+// holds a single ideation session, so a silent restart would discard it.
+async function promoteIdea(key: string): Promise<void> {
+  const card = current.cards.find((c) => c.key === key);
+  if (!card) return;
+
+  const active =
+    ideation.state === "thinking" || ideation.state === "awaiting_reply" || ideation.state === "awaiting_approval";
+  if (active) {
+    const ok = await confirmDialog(
+      "Replace the active ideation session?",
+      "Promoting this idea abandons the conversation currently in the ideation panel.",
+      "Replace",
+    );
+    if (!ok) return;
+  }
+
+  let seed = card.title;
+  if (card.description) seed += "\n\n" + card.description;
+
+  const panel = document.getElementById("ideation-panel");
+  if (panel) panel.classList.remove("hidden");
+  ideationOpen = true;
+  // Guided mode by default: a parked idea was parked precisely because it
+  // wasn't thought through — structured questions fit that moment.
+  ideationMode = "guided";
+  ideation = { state: "thinking", messages: [{ role: "user", text: seed }] };
+  renderIdeation();
+  startIdeationPoll();
+
+  try {
+    ideation = await go().StartIdeation(seed, "guided", true, card.key, card.labels ?? []);
+  } catch (err) {
+    renderIdeationError(errMessage(err));
+    stopIdeationPoll();
+    return;
+  }
+  renderIdeation();
+  if (ideation.state !== "thinking") stopIdeationPoll();
 }
 
 async function transition(key: string, title: string, from: string, to: string): Promise<void> {
@@ -932,7 +1034,7 @@ async function sendIdeationReply(text: string): Promise<void> {
 
   try {
     if (isFresh) {
-      ideation = await go().StartIdeation(text, ideationMode ?? "chat", restart);
+      ideation = await go().StartIdeation(text, ideationMode ?? "chat", restart, "", []);
     } else {
       ideation = await go().ReplyIdeation(ideation.sessionId!, text);
     }

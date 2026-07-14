@@ -9,6 +9,10 @@ import "strings"
 type BoardStage string
 
 const (
+	// BoardIdeas holds idea-labeled tickets (see tracker.Issue.IsIdea) —
+	// membership comes from the label, never from markers, and the only way
+	// out is promotion via ideation (label swap), not a board transition.
+	BoardIdeas          BoardStage = "ideas"
 	BoardBacklog        BoardStage = "backlog"
 	BoardPlanning       BoardStage = "planning"
 	BoardImplementation BoardStage = "implementation"
@@ -85,11 +89,12 @@ var orderedMarkerSpecs = []markerSpec{
 // stageRank orders the pipeline stages so derivation can pick the furthest
 // stage a ticket has reached. Hidden is not ranked (handled separately).
 var stageRank = map[BoardStage]int{
-	BoardBacklog:        0,
-	BoardPlanning:       1,
-	BoardImplementation: 2,
-	BoardVerification:   3,
-	BoardDoneStage:      4,
+	BoardIdeas:          0,
+	BoardBacklog:        1,
+	BoardPlanning:       2,
+	BoardImplementation: 3,
+	BoardVerification:   4,
+	BoardDoneStage:      5,
 }
 
 // ClassifyMarker reports the stage and state a comment body represents and

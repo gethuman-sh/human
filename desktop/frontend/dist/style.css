@@ -174,7 +174,10 @@ body {
 
 .board {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* Six columns since the Ideas column landed; min-width keeps each readable
+     and the board scrolls horizontally on narrow windows instead of
+     squishing cards into slivers. */
+  grid-template-columns: repeat(6, minmax(170px, 1fr));
   /* Bound the single row to the board's own height so columns can never grow
      past the space below the header (the old 100vh-based column max-height did,
      which pushed the document 20px taller than the viewport). */
@@ -182,6 +185,22 @@ body {
   gap: 10px;
   padding: 12px;
   height: 100%;
+  overflow-x: auto;
+}
+
+/* Inline quick-add input at the top of the Ideas column. */
+.idea-quick-add {
+  background: var(--card-bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.idea-quick-add:disabled {
+  opacity: 0.5;
 }
 
 .column {

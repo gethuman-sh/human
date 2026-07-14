@@ -585,3 +585,110 @@ func TestIdeationChatMode_Unchanged(t *testing.T) {
 	assert.Equal(t, "SC-999", st.CreatedKey)
 	assert.NotNil(t, creator.capturedIssue())
 }
+
+// fakeEditor is a function-backed tracker.Editor capturing the edit.
+type fakeEditor struct {
+	mu       sync.Mutex
+	key      string
+	opts     tracker.EditOptions
+	returned *tracker.Issue
+	err      error
+}
+
+func (f *fakeEditor) EditIssue(_ context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.key = key
+	f.opts = opts
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.returned, nil
+}
+
+func (f *fakeEditor) captured() (string, tracker.EditOptions) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.key, f.opts
+}
+
+func TestIdeationEvolveMode(t *testing.T) {
+	runner := &fakeRunner{turns: []IdeationTurn{{Reply: markerBlock("Refined title", "Refined body"), ResumeID: "cs-1"}}}
+	editor := &fakeEditor{returned: &tracker.Issue{Key: "SC-42", URL: "https://app.shortcut.com/x/story/42"}}
+	creator := newFakeCreator()
+	e := newTestEngine(runner, creator, "proj", nil)
+	e.ResolveEditor = func() (tracker.Editor, error) { return editor, nil }
+
+	_, err := e.Start(IdeationStartRequest{
+		Seed:         "My idea\n\nrough notes",
+		EvolveKey:    "SC-42",
+		EvolveLabels: []string{"human/idea", "urgent"},
+	})
+	require.NoError(t, err)
+	st := waitForState(t, e, IdeationDone)
+
+	// The evolve terminal action edits in place — never creates.
+	assert.Nil(t, creator.capturedIssue())
+	key, opts := editor.captured()
+	assert.Equal(t, "SC-42", key)
+	require.NotNil(t, opts.Title)
+	assert.Equal(t, "Refined title", *opts.Title)
+	require.NotNil(t, opts.Description)
+	assert.Equal(t, "Refined body", *opts.Description)
+	// Only idea-classifying labels come off; "urgent" survives promotion.
+	assert.Equal(t, []string{"human/idea"}, opts.RemoveLabels)
+	assert.Equal(t, "SC-42", st.CreatedKey)
+
+	// The agent was told it is refining in place.
+	call := runner.callAt(0)
+	assert.Contains(t, call.prompt, "UPDATED IN PLACE")
+	assert.Contains(t, call.prompt, "SC-42")
+}
+
+func TestIdeationEvolveNoEditorConfigured(t *testing.T) {
+	runner := &fakeRunner{turns: []IdeationTurn{{Reply: markerBlock("T", "D"), ResumeID: "cs-1"}}}
+	e := newTestEngine(runner, newFakeCreator(), "proj", nil)
+
+	_, err := e.Start(IdeationStartRequest{Seed: "idea", EvolveKey: "SC-1"})
+	require.NoError(t, err)
+	st := waitForState(t, e, IdeationError)
+	assert.Contains(t, st.Error, "no PM ticket editor configured")
+}
+
+func TestIdeationEvolveDefaultLabels(t *testing.T) {
+	runner := &fakeRunner{turns: []IdeationTurn{{Reply: markerBlock("T", "D"), ResumeID: "cs-1"}}}
+	editor := &fakeEditor{returned: &tracker.Issue{Key: "SC-7"}}
+	e := newTestEngine(runner, newFakeCreator(), "proj", nil)
+	e.ResolveEditor = func() (tracker.Editor, error) { return editor, nil }
+
+	_, err := e.Start(IdeationStartRequest{Seed: "idea", EvolveKey: "SC-7"})
+	require.NoError(t, err)
+	waitForState(t, e, IdeationDone)
+
+	// No labels supplied: the canonical pair comes off (absent-removal is a
+	// no-op provider-side, so listing both is safe).
+	_, opts := editor.captured()
+	assert.Equal(t, []string{tracker.IdeaLabel, "idea"}, opts.RemoveLabels)
+}
+
+func TestCreateIdea(t *testing.T) {
+	creator := newFakeCreator()
+	e := newTestEngine(&fakeRunner{}, creator, "proj", nil)
+
+	key, url, err := e.CreateIdea("Weekly digest email")
+	require.NoError(t, err)
+	assert.Equal(t, "SC-999", key)
+	assert.NotEmpty(t, url)
+
+	captured := creator.capturedIssue()
+	require.NotNil(t, captured)
+	assert.Equal(t, "proj", captured.Project)
+	assert.Equal(t, "Weekly digest email", captured.Title)
+	assert.Equal(t, []string{tracker.IdeaLabel}, captured.Labels)
+}
+
+func TestCreateIdeaEmptyTitle(t *testing.T) {
+	e := newTestEngine(&fakeRunner{}, newFakeCreator(), "proj", nil)
+	_, _, err := e.CreateIdea("   ")
+	require.Error(t, err)
+}

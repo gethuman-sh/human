@@ -98,3 +98,47 @@ func (s *Server) handleIdeationStatus(conn net.Conn) {
 	}
 	s.writeIdeationStatus(conn, s.Ideation.Status())
 }
+
+// IdeaCreateRequest is the idea-create wire payload: a title-only quick
+// capture from the board's Ideas column.
+type IdeaCreateRequest struct {
+	Title string `json:"title"`
+}
+
+// IdeaCreateResponse reports the created idea ticket.
+type IdeaCreateResponse struct {
+	Key string `json:"key"`
+	URL string `json:"url,omitempty"`
+}
+
+// handleIdeaCreate quick-captures an idea-labeled ticket on the PM tracker.
+// One JSON arg, mirroring ideation-start, so free-text titles survive arg
+// splitting.
+func (s *Server) handleIdeaCreate(conn net.Conn, args []string) {
+	if s.Ideation == nil {
+		s.writeError(conn, "ideation not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "idea-create requires one JSON arg", 1)
+		return
+	}
+	var req IdeaCreateRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid idea-create request: "+err.Error(), 1)
+		return
+	}
+	key, url, err := s.Ideation.CreateIdea(req.Title)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	data, err := json.Marshal(IdeaCreateResponse{Key: key, URL: url})
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: string(data) + "\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
