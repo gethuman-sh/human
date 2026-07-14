@@ -546,6 +546,11 @@ function renderIdeaSpace(): HTMLElement {
     // empty dashed box. Sorting is the verb of this space.
     body.dataset.verb = "Sort here";
     for (const card of colCards) body.appendChild(renderCard(card));
+    if (i === 0) {
+      // Quick-add writes into the leftmost sub-column, so captures awaiting
+      // their ticket number sit on top of it — where the input just was.
+      for (const title of pendingIdeas) body.prepend(renderPendingIdea(title));
+    }
     col.appendChild(body);
 
     subcols.push(col);
@@ -560,7 +565,7 @@ function renderIdeaSpace(): HTMLElement {
   header.innerHTML =
     `<span>${QUEUE_LABELS["ideas"]}</span>` +
     `<button class="add-card" title="Capture an idea">+</button>` +
-    `<span class="column-count">${ideas.length}</span>`;
+    `<span class="column-count">${ideas.length + pendingIdeas.length}</span>`;
   header.querySelector(".add-card")!.addEventListener("click", () => showIdeaQuickAdd(subcols[0]));
 
   space.appendChild(header);
@@ -580,16 +585,25 @@ function renderDeployZone(): HTMLElement {
   return zone;
 }
 
+// Ideas captured but not yet confirmed by a board fetch, by title. Each
+// renders as a placeholder card the moment Enter is pressed — waiting for the
+// full refetch (seconds of comment scanning) would make the capture look
+// lost. An entry clears when a fetched Ideas card carries its title, so even
+// a stale in-flight fetch cannot blink the capture away.
+let pendingIdeas: string[] = [];
+
 // showIdeaQuickAdd swaps an inline title input into an idea-space sub-column.
 // Enter creates the idea-labeled ticket via CreateIdea; Escape or blur
-// dismisses.
-function showIdeaQuickAdd(col: HTMLElement): void {
+// dismisses. prefill restores the title after a failed create so the text is
+// not lost with the error.
+function showIdeaQuickAdd(col: HTMLElement, prefill = ""): void {
   const body = col.querySelector(".column-body");
   if (!body || body.querySelector(".idea-quick-add")) return;
   const input = document.createElement("input");
   input.className = "idea-quick-add";
   input.type = "text";
   input.placeholder = "Idea title — Enter to capture";
+  input.value = prefill;
   body.prepend(input);
   input.focus();
 
@@ -601,21 +615,47 @@ function showIdeaQuickAdd(col: HTMLElement): void {
     if (e.key !== "Enter") return;
     const title = input.value.trim();
     if (!title) return;
-    input.disabled = true;
+    // The capture is visible immediately as a placeholder card; the ticket
+    // number arrives with the next fetch. render() rebuilds the board, which
+    // also disposes of the input.
+    pendingIdeas.push(title);
+    render();
     void (async () => {
       try {
         await go().CreateIdea(title);
-        input.remove();
-        await reconcile();
       } catch (err) {
-        input.disabled = false;
+        // The ticket does not exist, so the placeholder must not pretend it
+        // does — put the title back into a fresh input instead.
+        pendingIdeas = pendingIdeas.filter((t) => t !== title);
         showError(errMessage(err));
+        const retryCol = document.querySelector<HTMLElement>(".idea-subcol");
+        if (retryCol) showIdeaQuickAdd(retryCol, title);
+        return;
       }
+      // Invalidate fetches already in flight — their pre-create snapshot
+      // would miss the new ticket (same guard as closeTicket).
+      reconcileEpoch++;
+      await reconcile();
     })();
   });
   input.addEventListener("blur", () => {
     if (!input.disabled && input.value.trim() === "") input.remove();
   });
+}
+
+// renderPendingIdea builds the placeholder card for an idea whose ticket is
+// still being created: a spinner sits where the ticket number will land. No
+// drag, no menu — there is no ticket to act on yet.
+function renderPendingIdea(title: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "card pending-idea";
+  el.setAttribute("draggable", "false");
+  el.innerHTML = `
+    <div class="card-key"><span class="spinner"></span></div>
+    <div class="card-title">${escapeHtml(title)}</div>
+    <div class="card-meta"></div>
+  `;
+  return el;
 }
 
 // --- Pointer-based drag ------------------------------------------------
@@ -1106,6 +1146,13 @@ async function reconcile(): Promise<void> {
   } catch (err) {
     if (epoch !== reconcileEpoch) return;
     current = { cards: [], dockerAvailable: false, error: errMessage(err) };
+  }
+  if (pendingIdeas.length) {
+    // A fetched Ideas card carrying a pending title IS that capture — the
+    // placeholder hands over to the real card. Unconfirmed captures stay,
+    // whatever this fetch contained.
+    const fetched = new Set(current.cards.filter((c) => queueOf(c) === "ideas").map((c) => c.title));
+    pendingIdeas = pendingIdeas.filter((t) => !fetched.has(t));
   }
   boardLoading = false;
   stagesLoading = false;
