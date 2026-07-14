@@ -13,16 +13,61 @@ import { initPermissions } from "./permissions.js";
 import { initMockupsView, showMockups } from "./mockupsview.js";
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
-const STAGES = ["ideas", "backlog", "planning", "implementation", "verification", "done"];
-const STAGE_LABELS = {
+// Queue columns: each names a state that is TRUE of every card in it, always.
+// The agent work happens on the transitions (a drag is the launch), so a card
+// being worked stays in its ORIGIN queue with a live badge and only arrives in
+// the next queue when the stage completes. State on the column, verb on the
+// affordance — the wire stages/markers are untouched; this is pure display.
+const QUEUES = ["ideas", "product", "engineering", "review", "deploy"];
+const QUEUE_LABELS = {
     ideas: "Ideas",
-    backlog: "Backlog",
-    planning: "Product planning",
-    implementation: "Implementation",
-    verification: "Verification",
-    done: "Done",
+    product: "Product backlog",
+    engineering: "Engineering backlog",
+    review: "Ready for review",
+    deploy: "Ready to deploy",
 };
-const AGENT_STAGES = new Set(["planning", "implementation", "verification"]);
+// Wire stage launched by dropping onto a queue from its predecessor.
+const QUEUE_TRANSITION_TO = {
+    engineering: "planning",
+    review: "implementation",
+    deploy: "verification",
+};
+// The verb shown on a drop target while a drag hovers it — the action lives
+// on the thing being touched, never in the column title.
+const QUEUE_VERB = {
+    product: "Define it",
+    engineering: "Plan it",
+    review: "Build it",
+    deploy: "Review it",
+};
+// Live badge text while a stage runs; the card sits in its origin queue.
+const RUNNING_LABELS = {
+    planning: "planning…",
+    implementation: "building…",
+    verification: "reviewing…",
+    done: "opening PR…",
+};
+// queueOf maps the wire (stage, state) onto the resting queue: an incomplete
+// stage keeps the card in the queue it was pulled from, so no column ever
+// claims something that is not yet true.
+function queueOf(card) {
+    switch (card.stage) {
+        case "ideas":
+            return "ideas";
+        case "backlog":
+            return "product";
+        case "planning":
+            return card.state === "done" ? "engineering" : "product";
+        case "implementation":
+            return card.state === "done" ? "review" : "engineering";
+        case "verification":
+            return card.state === "done" ? "deploy" : "review";
+        case "done":
+            return "deploy";
+        default:
+            return "product";
+    }
+}
 let current = { cards: [], dockerAvailable: true, error: "" };
 let dragging = null;
 // Two-phase load state. boardLoading covers the first fetch before any titles
@@ -42,24 +87,32 @@ function go() {
         throw new Error("Wails bindings not available");
     return app;
 }
-function stageIndex(stage) {
-    return STAGES.indexOf(stage);
+function queueIndex(queue) {
+    return QUEUES.indexOf(queue);
 }
-function isAdjacentForward(from, to) {
-    return stageIndex(to) === stageIndex(from) + 1;
+function isNextQueue(fromQueue, toQueue) {
+    return queueIndex(toQueue) === queueIndex(fromQueue) + 1;
 }
-function targetEnabled(to) {
-    if (AGENT_STAGES.has(to) && !current.dockerAvailable)
+// targetEnabled gates agent-launching drops on Docker availability; every
+// queue transition except idea promotion launches a containerized agent.
+function targetEnabled(toQueue) {
+    if (QUEUE_TRANSITION_TO[toQueue] !== undefined && !current.dockerAvailable)
         return false;
     return true;
 }
-function badge(state) {
-    if (state === "done")
-        return `<span class="badge done" title="Stage complete">✓</span>`;
-    if (state === "running")
-        return `<span class="badge running" title="Agent running"><span class="spinner"></span></span>`;
-    if (state === "failed")
+// badge renders the card's live state. A resting card needs no checkmark —
+// its queue position IS the statement of completion — so "done" is only
+// badged for the terminal PR stage, as a link when the URL is known.
+function badge(card) {
+    if (card.state === "running") {
+        const label = RUNNING_LABELS[card.stage] ?? "working…";
+        return `<span class="badge running" title="Agent running"><span class="spinner"></span> ${escapeHtml(label)}</span>`;
+    }
+    if (card.state === "failed")
         return `<span class="badge failed" title="Stage failed">✕</span>`;
+    if (card.stage === "done" && card.state === "done" && !card.prURL) {
+        return `<span class="badge done" title="Pull request opened">PR open</span>`;
+    }
     return "";
 }
 function renderCard(card) {
@@ -79,74 +132,74 @@ function renderCard(card) {
         // comments; a resolving spinner signals it may still move columns.
         meta.push(`<span class="badge resolving" title="Resolving stage…"><span class="spinner"></span></span>`);
     }
-    const b = badge(card.state);
+    const b = badge(card);
     if (b)
         meta.push(b);
     if (card.engineeringKey)
         meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
     if (card.prURL)
         meta.push(`<a href="${escapeAttr(card.prURL)}" target="_blank">PR</a>`);
+    // The terminal action is a button on the card, not a drop zone: a reviewed
+    // card already rests in Ready to deploy, so there is nowhere to drag it.
+    const showPR = card.stage === "verification" && card.state === "done";
     el.innerHTML = `
     <div class="card-key">${escapeHtml(card.key)}</div>
     <div class="card-title">${escapeHtml(card.title)}</div>
     <div class="card-meta">${meta.join("")}</div>
     ${card.error ? `<div class="card-error">${escapeHtml(card.error)}</div>` : ""}
+    ${showPR ? `<button class="card-action" type="button">Open pull request</button>` : ""}
   `;
+    el.querySelector(".card-action")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void transition(card.key, card.title, card.stage, "done");
+    });
     beginPointerDrag(el, card);
     return el;
 }
-function renderColumn(stage) {
+function renderColumn(queue) {
     const col = document.createElement("section");
     col.className = "column";
-    col.dataset.stage = stage;
-    const cards = current.cards.filter((c) => c.stage === stage);
+    col.dataset.stage = queue;
+    const cards = current.cards.filter((c) => queueOf(c) === queue);
     const header = document.createElement("div");
     header.className = "column-header";
-    if (stage === "backlog") {
+    if (queue === "product") {
         header.innerHTML =
-            `<span>${STAGE_LABELS[stage]}</span>` +
+            `<span>${QUEUE_LABELS[queue]}</span>` +
                 `<button class="add-card" title="New ticket via ideation">+</button>` +
                 `<span class="column-count">${cards.length}</span>`;
         header.querySelector(".add-card").addEventListener("click", () => void openIdeation());
     }
-    else if (stage === "ideas") {
+    else if (queue === "ideas") {
         // Ideas capture is deliberately dumb: a title becomes a labeled ticket in
         // one keystroke — the thinking happens later, at promotion.
         header.innerHTML =
-            `<span>${STAGE_LABELS[stage]}</span>` +
+            `<span>${QUEUE_LABELS[queue]}</span>` +
                 `<button class="add-card" title="Capture an idea">+</button>` +
                 `<span class="column-count">${cards.length}</span>`;
         header.querySelector(".add-card").addEventListener("click", () => showIdeaQuickAdd(col));
     }
     else {
-        header.innerHTML = `<span>${STAGE_LABELS[stage]}</span><span class="column-count">${cards.length}</span>`;
+        header.innerHTML = `<span>${QUEUE_LABELS[queue]}</span><span class="column-count">${cards.length}</span>`;
     }
     col.appendChild(header);
     const body = document.createElement("div");
     body.className = "column-body";
     for (const card of cards)
         body.appendChild(renderCard(card));
-    if (stage === "done") {
-        const zone = document.createElement("div");
-        zone.className = "done-zone";
-        zone.textContent = "Drop here to open a pull request";
-        markStageTarget(zone, stage);
-        body.appendChild(zone);
+    if (queue !== "ideas") {
+        // Every queue but Ideas is a drop target for its predecessor; the verb on
+        // the target names the action the drop launches.
+        markQueueTarget(body, queue);
+    }
+    if (queue === "deploy") {
         // A card from ANY column can be dropped here to close its ticket — closing
-        // is not an adjacency-gated stage move, so it is its own kind of target.
+        // is not an adjacency-gated queue move, so it is its own kind of target.
         const closeZone = document.createElement("div");
         closeZone.className = "close-zone";
         closeZone.textContent = "Close Ticket";
         markCloseTarget(closeZone);
         body.appendChild(closeZone);
-    }
-    else if (stage === "backlog") {
-        // Backlog accepts drops only from Ideas (adjacency gates the rest): the
-        // drop opens the evolve-mode ideation chat, it never calls Transition.
-        markStageTarget(body, stage);
-    }
-    else if (stage !== "ideas") {
-        markStageTarget(body, stage);
     }
     col.appendChild(body);
     return col;
@@ -202,9 +255,12 @@ function showIdeaQuickAdd(col) {
 const DRAG_THRESHOLD_PX = 5;
 let dragGhost = null;
 let hoverTarget = null;
-function markStageTarget(el, to) {
-    el.dataset.drop = "stage";
-    el.dataset.dropStage = to;
+function markQueueTarget(el, queue) {
+    el.dataset.drop = "queue";
+    el.dataset.dropQueue = queue;
+    const verb = QUEUE_VERB[queue];
+    if (verb)
+        el.dataset.verb = verb;
 }
 function markCloseTarget(el) {
     el.dataset.drop = "close";
@@ -216,14 +272,18 @@ function dropTargetAt(x, y) {
     return el ? el.closest("[data-drop]") : null;
 }
 // dropAllowed reports whether the dragged card may drop on target. Any card can
-// be closed; stage targets keep the forward-adjacency + docker-enabled rules.
+// be closed; queue targets keep the forward-adjacency + docker-enabled rules,
+// evaluated on the card's RESTING queue so a running card cannot double-launch.
 function dropAllowed(target) {
     if (!dragging)
         return false;
     if (target.dataset.drop === "close")
         return true;
-    const to = target.dataset.dropStage || "";
-    return isAdjacentForward(dragging.stage, to) && targetEnabled(to);
+    const toQueue = target.dataset.dropQueue || "";
+    const card = current.cards.find((c) => c.key === dragging.key);
+    if (!card || card.state === "running")
+        return false;
+    return isNextQueue(queueOf(card), toQueue) && targetEnabled(toQueue);
 }
 // setHoverTarget moves the highlight to a new target (clearing the previous),
 // so exactly one drop zone is lit at a time.
@@ -340,15 +400,18 @@ function performDrop(target, info, pt) {
         void requestClose(info.key, info.title);
         return;
     }
-    const to = target.dataset.dropStage || "";
-    if (info.stage === "ideas" && to === "backlog") {
+    const toQueue = target.dataset.dropQueue || "";
+    if (toQueue === "product" && info.stage === "ideas") {
         // Promotion is a conversation, not a stage transition: the evolve-mode
         // ideation session rewrites the ticket in place and removes the idea
         // label; the card moves columns when the board refetches.
         void promoteIdea(info.key);
         return;
     }
-    celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: to === "done" });
+    const to = QUEUE_TRANSITION_TO[toQueue] || "";
+    if (!to)
+        return;
+    celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: false });
     void transition(info.key, info.title, info.stage, to);
 }
 // promoteIdea opens the ideation panel in evolve mode, seeded with the idea
@@ -503,8 +566,8 @@ function render() {
         board.appendChild(loading);
     }
     else {
-        for (const stage of STAGES)
-            board.appendChild(renderColumn(stage));
+        for (const queue of QUEUES)
+            board.appendChild(renderColumn(queue));
         restoreColumnScroll(board, scrollByStage);
     }
     const banner = document.getElementById("banner");
