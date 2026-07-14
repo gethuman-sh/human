@@ -18,7 +18,7 @@ import {
   trail,
 } from "./fancy.js";
 import { initPermissions, PermissionRequest } from "./permissions.js";
-import { initMockupsView, showMockups, MockupSet } from "./mockupsview.js";
+import { initMockupsView, showMockups, setPendingMockupSlug, MockupSet } from "./mockupsview.js";
 import {
   initSettingsView,
   showSettings,
@@ -43,6 +43,8 @@ interface Card {
   description?: string;
   error?: string;
   verdict?: string;
+  mockupSlug?: string;
+  mockupState?: string; // "ready" | "creating"
 }
 
 interface BoardData {
@@ -172,6 +174,7 @@ interface AppBindings {
   Instances(): Promise<InstancesData>;
   Features(): Promise<FeatureDoc>;
   GenerateFeatures(): Promise<void>;
+  CreateMocks(pmKey: string, pmTitle: string, description: string): Promise<void>;
   StartProjectStatus(): Promise<StartProjectInfo>;
   StartProject(projectType: string, language: string): Promise<StartProjectResult>;
   PendingPermissions(): Promise<PermissionRequest[]>;
@@ -390,6 +393,37 @@ function showCardMenu(card: Card, x: number, y: number): void {
     a.click();
   });
   menu.appendChild(openItem);
+
+  // Mockups belong to the product conversation: the item appears only in the
+  // Product backlog column, toggling create → creating → view as the local
+  // mockup set for this ticket comes into existence.
+  if (queueOf(card) === "product") {
+    const mockItem = document.createElement("button");
+    mockItem.type = "button";
+    mockItem.className = "context-menu-item";
+    if (card.mockupState === "ready") {
+      mockItem.textContent = "View mocks";
+      mockItem.addEventListener("click", () => {
+        menu.remove();
+        setPendingMockupSlug(card.mockupSlug ?? "");
+        selectView("mockups");
+      });
+    } else if (card.mockupState === "creating") {
+      mockItem.textContent = "Creating mocks…";
+      mockItem.disabled = true;
+    } else {
+      mockItem.textContent = "Create mocks";
+      // Generation launches a containerized agent — same Docker gate as the
+      // pipeline drop targets.
+      mockItem.disabled = !current.dockerAvailable;
+      if (mockItem.disabled) mockItem.title = "Docker required";
+      mockItem.addEventListener("click", () => {
+        menu.remove();
+        void createMocks(card);
+      });
+    }
+    menu.appendChild(mockItem);
+  }
 
   const closeItem = document.createElement("button");
   closeItem.type = "button";
@@ -780,6 +814,19 @@ async function closeTicket(key: string): Promise<void> {
     showError(errMessage(err));
   }
   // The closed ticket is no longer "open", so reconcile drops it from the board.
+  await reconcile();
+}
+
+// createMocks launches mockup generation for one ticket. No confirm dialog —
+// the action is additive (files in mockups/, nothing on the tracker). The
+// immediate reconcile picks up the daemon-written link so the menu reads
+// "Creating mocks…" on the next right-click.
+async function createMocks(card: Card): Promise<void> {
+  try {
+    await go().CreateMocks(card.key, card.title, card.description ?? "");
+  } catch (err) {
+    showError(errMessage(err));
+  }
   await reconcile();
 }
 

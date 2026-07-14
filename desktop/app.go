@@ -66,6 +66,13 @@ type Card struct {
 	// the ideation conversation alongside the title.
 	Labels      []string `json:"labels,omitempty"`
 	Description string   `json:"description,omitempty"`
+	// MockupSlug/MockupState link the card to a locally generated mockup set:
+	// "ready" once mockups/<slug>/index.json is valid, "creating" while a
+	// launched generation has not produced it yet. Local file state — never
+	// tracker state — so browsing or generating mocks leaves no trace on the
+	// ticket.
+	MockupSlug  string `json:"mockupSlug,omitempty"`
+	MockupState string `json:"mockupState,omitempty"`
 }
 
 // BoardData is the full payload the frontend renders: the flat card list plus an
@@ -92,7 +99,7 @@ func (a *App) Cards() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, err
 	}
-	return boardFromResults(results, dockerAvailable()), nil
+	return boardFromResults(results, dockerAvailable(), cardMockups()), nil
 }
 
 // CardsQuick fetches issue titles only — skipping the per-ticket comment scan
@@ -111,7 +118,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, err
 	}
-	return boardFromResults(results, true), nil
+	return boardFromResults(results, true, cardMockups()), nil
 }
 
 // boardFromResults flattens the single PM-role result into the frontend card
@@ -120,7 +127,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 // Backlog). A PM issue with no derived card is hidden when its status is
 // done/closed and placed in Backlog otherwise, mirroring daemon.DeriveBoardCard's
 // marker-less decision so the quick pass and full pass agree on what to show.
-func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool) BoardData {
+func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, mocks map[string]cardMockupInfo) BoardData {
 	data := BoardData{DockerAvailable: dockerAvailable}
 	pm, ok := firstPMResult(results)
 	if !ok {
@@ -154,6 +161,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			// Closed PM ticket that never entered the pipeline — not shown.
 			continue
 		}
+		mock := mocks[issue.Key]
 		data.Cards = append(data.Cards, Card{
 			Key:            issue.Key,
 			Title:          issue.Title,
@@ -167,6 +175,8 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Verdict:        card.Verdict,
 			Labels:         issue.Labels,
 			Description:    issue.Description,
+			MockupSlug:     mock.Slug,
+			MockupState:    mock.State,
 		})
 	}
 	return data
@@ -217,6 +227,22 @@ func (a *App) GenerateFeatures() error {
 		return err
 	}
 	return daemon.GenerateFeatures(info.Addr, info.Token)
+}
+
+// CreateMocks asks the daemon to launch the human-mockups skill for one PM
+// ticket — the same containerized agent path as GenerateFeatures. It returns
+// once the agent is launched; the card's mockupState reflects progress on the
+// next Cards() reconcile.
+func (a *App) CreateMocks(pmKey, pmTitle, description string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemon.CreateMocks(info.Addr, info.Token, daemon.CreateMocksRequest{
+		PMKey:       pmKey,
+		PMTitle:     pmTitle,
+		Description: description,
+	})
 }
 
 // CloseTicket closes a PM ticket (transitions it to Done) via the daemon's

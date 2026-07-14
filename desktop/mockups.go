@@ -10,8 +10,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/mockups"
 )
 
 // MockupOption and MockupSet mirror mockups/<slug>/index.json, the manifest
@@ -24,10 +26,14 @@ type MockupOption struct {
 }
 
 type MockupSet struct {
-	Feature string         `json:"feature"`
-	Slug    string         `json:"slug"`
-	Created string         `json:"created"`
-	Project string         `json:"project"`
+	Feature string `json:"feature"`
+	Slug    string `json:"slug"`
+	Created string `json:"created"`
+	Project string `json:"project"`
+	// Ticket is the PM key a ticket-linked invocation recorded in the
+	// manifest — recovery metadata; the authoritative ticket→set link is the
+	// project's .human/mockups.json.
+	Ticket  string         `json:"ticket,omitempty"`
 	Options []MockupOption `json:"options"`
 }
 
@@ -97,6 +103,53 @@ func (a *App) MockupSets() ([]MockupSet, error) {
 	mockupDirs = dirs
 	mockupMu.Unlock()
 	return sets, nil
+}
+
+// cardMockupInfo is one card's link to a local mockup set: the set slug plus
+// whether the set is ready to view or still being generated.
+type cardMockupInfo struct {
+	Slug  string
+	State string // "ready" | "creating"
+}
+
+// creatingWindow bounds how long a mockup link without a finished set counts
+// as "creating". Past it the link is treated as stale (a crashed or abandoned
+// agent) so the card offers creation again instead of blocking forever.
+const creatingWindow = 30 * time.Minute
+
+// cardMockups returns the ticket→mockup link for every registered project,
+// read from each project's .human/mockups.json. A linked set only counts as
+// ready when its index.json passes the same validity rule MockupSets applies
+// (parses, has options) — so "View mocks" never points at a set the viewer
+// will not list. First project wins per key, matching MockupSets' slug
+// collision rule.
+func cardMockups() map[string]cardMockupInfo {
+	links := map[string]cardMockupInfo{}
+	for _, p := range mockupRoots() {
+		for key, entry := range mockups.NewStore(mockups.PathIn(p.Dir)).All() {
+			if _, dup := links[key]; dup || entry.Slug == "" {
+				continue
+			}
+			switch {
+			case validMockupSet(filepath.Join(p.Dir, "mockups", entry.Slug)):
+				links[key] = cardMockupInfo{Slug: entry.Slug, State: "ready"}
+			case time.Since(entry.Created) < creatingWindow:
+				links[key] = cardMockupInfo{Slug: entry.Slug, State: "creating"}
+			}
+		}
+	}
+	return links
+}
+
+// validMockupSet reports whether setDir holds a manifest the mockup viewer
+// would accept — MockupSets' validity rule, factored for the card link check.
+func validMockupSet(setDir string) bool {
+	data, err := os.ReadFile(filepath.Join(setDir, "index.json")) // #nosec G304 — path derived from registered project dirs
+	if err != nil {
+		return false
+	}
+	var set MockupSet
+	return json.Unmarshal(data, &set) == nil && len(set.Options) > 0
 }
 
 // mockupMiddleware serves /mockups/<slug>/<file> straight from the set

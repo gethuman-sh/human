@@ -7,6 +7,14 @@ let bindings = null;
 let sets = [];
 let active = null;
 let activeOption = 0;
+// pendingSlug deep-links the next view activation to one set (the board's
+// "View mocks"). Consumed by showMockups so selectView("mockups") stays the
+// single fetch+render path instead of racing a second navigation call.
+let pendingSlug = null;
+// setPendingMockupSlug asks the next showMockups() to open this set directly.
+export function setPendingMockupSlug(slug) {
+    pendingSlug = slug;
+}
 function host() {
     return document.getElementById("mockups");
 }
@@ -87,9 +95,14 @@ export async function showMockups() {
     catch {
         sets = [];
     }
-    // Keep the open set if it still exists (refresh in place), else fall back
-    // to the list so a deleted set cannot leave a dead iframe.
-    if (active) {
+    // A deep-link wins over whatever was open; falling back to the list when
+    // the requested set vanished beats showing an unrelated set.
+    if (pendingSlug) {
+        active = sets.find((s) => s.slug === pendingSlug) ?? null;
+        activeOption = 0;
+        pendingSlug = null;
+    }
+    else if (active) {
         const slug = active.slug;
         active = sets.find((s) => s.slug === slug) ?? null;
     }
