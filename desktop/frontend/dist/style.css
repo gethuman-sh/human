@@ -190,18 +190,22 @@ body {
 }
 
 /* The idea space: the Ideas queue widened into five sub-columns spanning a
-   loose→concrete gradient. One shared header (title, quick-add, total count)
-   sits above the sub-column grid. */
+   loose→concrete gradient. It reads as ONE column-styled rounded rectangle —
+   a shared header (title, quick-add, total count) above five borderless
+   lanes; only the gradient lane labels hint at the internal columns. */
 .idea-space {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  background: var(--col-bg);
+  border: 1px solid var(--col-border);
+  border-radius: 8px;
 }
 
 .idea-space-header {
   flex-shrink: 0;
   padding: 10px 12px;
-  border-bottom: none;
+  border-bottom: 1px solid var(--col-border);
 }
 
 .idea-space-grid {
@@ -212,34 +216,38 @@ body {
      captures, and five of them must share one board track. */
   grid-template-columns: repeat(5, minmax(100px, 1fr));
   grid-auto-rows: minmax(0, 1fr);
-  gap: 8px;
+  gap: 0;
+}
+
+/* The lanes are invisible: the surrounding .idea-space carries the one box,
+   so sub-columns drop the .column chrome entirely. */
+.idea-subcol {
+  background: transparent;
+  border: none;
+  border-radius: 0;
 }
 
 .idea-subcol .column-header {
   padding: 8px 10px;
   font-size: 12px;
+  border-bottom: none;
 }
 
-/* Gradient headers make the loose→concrete axis legible at a glance: the
-   ramp runs muted (Spark) to accent (Ready), on the top border and label. */
+/* Gradient lane labels make the loose→concrete axis legible at a glance:
+   the ramp runs muted (Spark) to accent (Ready). */
 .idea-col-0 {
-  border-top: 2px solid #8a90a0;
   color: #8a90a0;
 }
 .idea-col-1 {
-  border-top: 2px solid #7b8fb8;
   color: #7b8fb8;
 }
 .idea-col-2 {
-  border-top: 2px solid #6c8ecf;
   color: #6c8ecf;
 }
 .idea-col-3 {
-  border-top: 2px solid #5d8de7;
   color: #5d8de7;
 }
 .idea-col-4 {
-  border-top: 2px solid #4f8cff;
   color: #4f8cff;
 }
 
