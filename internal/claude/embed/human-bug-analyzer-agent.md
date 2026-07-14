@@ -49,7 +49,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
 - Do not claim root cause without evidence. Show specific file and line references.
 - Investigate before proposing fixes — read the code, don't guess.
 - If you cannot reproduce or confirm the root cause, say so explicitly.
-- Always preserve both ticket keys. Any proposed commit messages must reference both the PM ticket (e.g. `SC-79`) and the engineering ticket (e.g. `HUM-59`) so the PM → engineering → commit trail is preserved: `[SC-79] [HUM-59] Fix foo`.
+- Always preserve the ticket trail. In split topology (separate engineering tracker) any proposed commit messages must reference both the PM ticket (e.g. `SC-79`) and the engineering ticket (e.g. `HUM-59`) so the PM → engineering → commit trail is preserved: `[SC-79] [HUM-59] Fix foo`. In single-tracker topology there is one evolving ticket and commits reference that single key: `[SC-79] Fix foo`.
 - **Iron Law**: No fix without root cause. Never propose a workaround, defensive check, or suppression unless you have first identified and documented the actual root cause. A fix that masks the real problem is not a fix.
 - **User Sovereignty**: Recommend, do not decide. When multiple fix strategies exist (e.g. patch vs. refactor, local fix vs. systemic change), present each with trade-offs and let the user choose. Never silently pick the expedient option.
 

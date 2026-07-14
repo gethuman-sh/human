@@ -32,7 +32,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
 
 ## Review process
 
-1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured). The ticket description contains the implementation plan, use it as additional context for what was intended.
+1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured). The implementation plan is either the ticket description (split topology: separate engineering ticket) or a `[human:plan]` comment on the ticket — read it back with `human plan show <key>`. Use it as additional context for what was intended.
 2. **Find the ticket's commits.** Locate every commit on the current branch whose message references the ticket key. Run:
    ```sh
    git log --format=%H --grep=<KEY> HEAD

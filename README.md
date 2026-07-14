@@ -115,7 +115,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 
 **User interfaces**
 
-- [Workflow Board (desktop)](desktop/README.md) — drag-to-trigger 5-stage pipeline board (Wails)
+- [Workflow Board (desktop)](desktop/README.md) — drag-to-trigger six-column pipeline board (Wails)
 - [Project Starters](internal/starter/README.md) — scaffold empty directories from starter templates
 
 **Infrastructure & security**
@@ -293,11 +293,11 @@ This writes skill and agent files to `.claude/` in the current directory. Re-run
 
 | Skill | Description |
 |-------|-------------|
-| `/human-ideate` | Challenge an idea with forcing questions and create a ready PM ticket |
+| `/human-ideate` | Challenge an idea with forcing questions and create a ready PM ticket — or evolve a captured idea ticket in place (same key, idea label removed) |
 | `/human-sprint` | Run the full pipeline in one command: ideate → plan → execute → review |
 | `/human-ready` | Evaluates a ticket against a Definition of Ready checklist |
 | `/human-brainstorm` | Explores the codebase and generates 2-3 implementation approaches |
-| `/human-plan` | Fetches a ticket and produces a structured implementation plan |
+| `/human-plan` | Fetches a ticket and produces a structured implementation plan — attached as a separate engineering ticket (split topology) or as a `[human:plan]` comment on the ticket itself (`human plan show <KEY>` prints it) |
 | `/human-bug-plan` | Analyzes a bug ticket for root cause and writes a fix plan |
 | `/human-autofix` | Autonomously triages, fixes, verifies, and opens a PR for a bug end to end — the whole trail recorded on the tracker |
 | `/human-execute` | Loads a plan, executes step by step, runs a review checkpoint |
@@ -314,7 +314,7 @@ This writes skill and agent files to `.claude/` in the current directory. Re-run
 
 # Or step by step
 /human-ideate "add rate limiting"  # challenge idea, create PM ticket
-/human-plan 42                     # create engineering plan
+/human-plan 42                     # attach an engineering plan (separate ticket or plan comment, per topology)
 /human-execute HUM-43              # implement the plan
 /human-review HUM-43               # review changes
 ```
@@ -329,7 +329,7 @@ All outputs are saved to `.human/` (plans, reviews, done reports, bug analyses, 
 /human-autofix SC-86               # triage, fix, verify, and open a PR for a bug
 ```
 
-It moves through six phases: triage and reproduce the bug, gate on the verdict, plan a regression-test-first fix and create a linked engineering ticket, write the failing regression test then fix the root cause and push, verify the fix is "done done", and finally open a PR and hand off.
+It moves through six phases: triage and reproduce the bug, gate on the verdict, plan a regression-test-first fix (attached as a linked engineering ticket in split topology, or as a `[human:plan]` comment on the bug ticket itself with a single tracker), write the failing regression test then fix the root cause and push, verify the fix is "done done", and finally open a PR and hand off.
 
 Triage returns one of three verdicts, posted as a `[human:bug-verdict]` comment on the ticket:
 
@@ -337,9 +337,9 @@ Triage returns one of three verdicts, posted as a `[human:bug-verdict]` comment 
 - **`not-a-bug`** — the ticket is closed or reclassified, with no code changes.
 - **`undetermined`** — the ticket is left open, with no code changes.
 
-Only a `confirmed` bug that passes the verification gate (regression test fails before the fix, passes after, and the full suite is green) gets a PR. The fix lands on an `autofix/<eng-key>` branch with commits referencing both the PM and engineering keys, then `human pr create` opens the PR (forge and repo derived from the git origin remote). A `[human:ready-for-review]` handoff comment is posted on the PM ticket carrying the `engineering:`, `branch:`, `commits:`, and `pr:` lines, and the TUI's `(R)` marker links straight to the PR.
+Only a `confirmed` bug that passes the verification gate (regression test fails before the fix, passes after, and the full suite is green) gets a PR. The fix lands on an `autofix/` branch with commits referencing the ticket trail (both the PM and engineering keys in split topology, the single bug key otherwise), then `human pr create` opens the PR (forge and repo derived from the git origin remote). A `[human:ready-for-review]` handoff comment is posted on the PM ticket carrying the `branch:`, `commits:`, and `pr:` lines — plus an `engineering:` line in split topology; when that line is absent, reviewers review the PM ticket itself — and the TUI's `(R)` marker links straight to the PR.
 
-The whole trail lives on the trackers — bug comment, engineering ticket, and PR — so no `.human/` working files are produced. If the build or tests aren't green, or `human pr create` fails, the pipeline stops and reports honestly rather than claiming success.
+The whole trail lives on the trackers — bug comment, plan (engineering ticket or plan comment), and PR — so no `.human/` working files are produced. If the build or tests aren't green, or `human pr create` fails, the pipeline stops and reports honestly rather than claiming success.
 
 ## Configuration
 
@@ -408,7 +408,7 @@ make build
 
 ### Desktop app (workflow board)
 
-The desktop GUI is the interactive 5-stage workflow board (Backlog → Product planning → Implementation → Verification → Done): each card is a PM ticket and dragging a card forward one column triggers that stage's `human` action via the daemon. It runs on macOS, Windows and Linux.
+The desktop GUI is the interactive six-column workflow board (Ideas → Backlog → Product planning → Implementation → Verification → Done): each card is a ticket and dragging a card forward one column triggers that stage's `human` action via the daemon. The Ideas column's `+` quick-captures a title-only ticket labeled `human/idea`; dragging an idea onto Backlog opens guided ideation that evolves the same ticket in place (same key, idea label removed). It runs on macOS, Windows and Linux.
 
 It must be built via the Wails CLI, **never** plain `go build ./desktop/` — Wails v2 requires build tags that only `wails build` (or `wails dev`) injects, and the whole `desktop/` package is behind a `wailsapp` build tag so the default `make build`/`make check` stay green on a plain toolchain.
 

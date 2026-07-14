@@ -32,7 +32,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
 
 ## Done process
 
-1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured). The ticket description contains the implementation plan — use it for plan task completion checks.
+1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured). The implementation plan is either the ticket description (split topology: separate engineering ticket) or a `[human:plan]` comment on the ticket — read it back with `human plan show <key>`. Use it for plan task completion checks.
 2. **Load readiness** from `.human/ready/<key>.md` if it exists — use it to cross-check that gaps identified during readiness were addressed
 3. **Run tests** — detect and run the project's test suite (e.g. `make test`, `npm test`, `go test ./...`, `pytest`). If no test runner is found, note it in the report.
 4. **Check** each acceptance criterion against the actual implementation using Grep, Glob, and Read
@@ -46,7 +46,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
 - [ ] No unrelated changes (scope check)
 - [ ] Edge cases from the ticket handled
 - [ ] Plan tasks completed (if plan exists)
-- [ ] Every commit message references **both** the PM ticket key and the engineering ticket key (e.g. `[SC-79] [HUM-59] ...`), preserving the PM → engineering → commit trail
+- [ ] Every commit message references the ticket trail: in split topology **both** the PM ticket key and the engineering ticket key (e.g. `[SC-79] [HUM-59] ...`), preserving the PM → engineering → commit trail; in single-tracker topology the single evolving ticket's key (e.g. `[SC-79] ...`)
 
 ## Principles
 

@@ -35,7 +35,7 @@ Wait for both agents to finish before proceeding.
 Read both verification reports from the agent outputs.
 
 If the verification reports found **no issues** (all OK, zero mismatches, zero missing):
-- Proceed directly to creating the engineering ticket.
+- Proceed directly to attaching the plan (Phase 5).
 
 If the verification reports found **issues** (mismatches, missing references, unaccounted callers, deprecations, or unverifiable claims):
 - Update `<PLAN_CONTENT>` to fix all verified issues:
@@ -120,4 +120,4 @@ Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`, w
 Tell the user:
 - A short summary of the plan (3-5 bullet points: what will change, key files, risks)
 - Whether verification found issues and what was corrected
-- The engineering ticket key
+- Where the plan landed: the engineering ticket key (split topology) or the `[human:plan]` comment on the ticket (single-tracker topology)

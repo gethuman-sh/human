@@ -12,8 +12,9 @@ You are the done gate for an autonomous bug fix. You confirm the fix is complete
 ## Available commands
 
 ```bash
-human get <ENG_KEY>
-human <TRACKER> issue get <ENG_KEY>
+human get <WORK_KEY>
+human <TRACKER> issue get <WORK_KEY>
+human plan show <WORK_KEY>
 human <TRACKER> issue comment add <BUG_KEY> "comment body"
 ```
 
@@ -21,7 +22,7 @@ Use `human tracker list` first when multiple trackers are configured.
 
 ## Verify process
 
-1. **Read the plan** — fetch the engineering ticket (`human get <ENG_KEY>`) for the intended fix and its test plan.
+1. **Read the plan** — fetch the ticket that carries it (`human get <WORK_KEY>`): the description of the engineering ticket in split topology, or the `[human:plan]` comment on the bug ticket itself (`human plan show <WORK_KEY>`) in single-tracker topology. It states the intended fix and its test plan.
 2. **Confirm the regression test** — locate the test added for this bug. Verify it genuinely covers the bug: it must **fail without the fix and pass with it**. Prove the "fails before" direction (e.g. temporarily revert the fix hunk, or `git stash` the product change, run the test, see it fail, then restore) rather than assuming it.
 3. **Run the full suite** — `make check` (or the project's `make test` / `go test ./...` / `npm test`). It must be green. If tests fail, the fix is NOT DONE.
 4. **Check the root cause** — confirm the change addresses the documented cause, not just the symptom, and is scoped to the bug (no unrelated changes).
@@ -33,7 +34,7 @@ Use `human tracker list` first when multiple trackers are configured.
 - [ ] Full test suite passes
 - [ ] The fix addresses the root cause, not the symptom
 - [ ] No unrelated changes (scope check)
-- [ ] Commits reference **both** the PM bug key and the engineering ticket key
+- [ ] Commits reference the ticket trail: **both** the PM bug key and the engineering ticket key in split topology, the single bug key otherwise
 
 ## Principles
 

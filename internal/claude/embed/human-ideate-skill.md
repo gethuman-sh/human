@@ -8,6 +8,7 @@ Follow these steps in order:
 
 1. **Parse** `$ARGUMENTS`:
    - Set `<topic>` to a slugified version (lowercase, spaces to hyphens, strip special chars).
+   - If `$ARGUMENTS` is an existing ticket key whose ticket carries the `human/idea` label (bare `idea` also classifies), this run **evolves** that idea ticket in place instead of creating a new one: fetch it, note the key as `<IDEA_KEY>`, and use its title/description as the rough idea. Quick-captured ideas (e.g. from the board's Ideas column) are exactly such tickets. Otherwise the run creates a ticket from scratch as below.
 
 2. **Create** the output directory: `mkdir -p .human/ideations`
 
@@ -39,8 +40,10 @@ Follow these steps in order:
     Task(subagent_type="human-ideator", prompt="Phase 3: Create the PM ticket. Tracker: <tracker>. Project: <project>. Scope decision: <user's scope choice>. Problem statement, user story, and acceptance criteria from Phase 2: <paste Phase 2 output>. Create the ticket and add the challenge record as a comment.")
     ```
 
-11. **Present** the created ticket key to the user.
+    When evolving an idea ticket, instruct the agent instead: "Phase 3: Evolve idea ticket <IDEA_KEY> in place — rewrite its title and description, remove the idea label, and add the challenge record as a comment." The key stays the same; no new ticket is created.
+
+11. **Present** the created (or evolved) ticket key to the user.
 
 12. **Write** the complete ideation record to `.human/ideations/<topic>.md`.
 
-13. **Tell** the user: `Ideation written to .human/ideations/<topic>.md -- ticket created as <KEY>.`
+13. **Tell** the user: `Ideation written to .human/ideations/<topic>.md -- ticket created (or evolved) as <KEY>.`

@@ -2032,7 +2032,10 @@ func inferRole(trackerKind string) string {
 }
 
 // pipelineStage maps a tracker role and status type to a human-readable
-// pipeline stage label. The pipeline model is:
+// pipeline stage label. The two role-specific pipelines reflect split
+// topology, where config maps pm and engineering to different trackers and
+// planning spawns a separate engineering ticket; a single-tracker setup
+// carries the whole ticket lifecycle under one role. The pipeline model is:
 //
 //	PM:   Ready for Plan -> Planning -> Planned
 //	Eng:  Backlog -> In Dev -> Done -> Closed
@@ -2165,8 +2168,9 @@ func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor, m
 			}
 			// (B) marks defect tickets so the eye can spot bugs without
 			// reading types; (R) marks engineering tickets currently flagged
-			// ready for review on their PM ticket. The two markers are
-			// independent — a ticket may carry both.
+			// ready for review on their PM ticket — those keys come from the
+			// handoff's engineering: line, which split topology populates.
+			// The two markers are independent — a ticket may carry both.
 			bugMarker := "   "
 			if issue.IsBug() {
 				bugMarker = errorStyle.Render("(B)")

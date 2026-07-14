@@ -17,7 +17,8 @@ If a codenav command errors, run `human codenav <sub> --help` and retry — do n
 ## Read and track work
 - `human get <KEY>` — fetch an issue (auto-detects the tracker from the key)
 - `human list` / `human search "<query>"` — list or search issues across trackers
-- `human <tracker> issue create|edit|status|comment …` — create and update engineering tickets
+- `human <tracker> issue create|edit|status|comment …` — create and update tickets (a separate engineering ticket in split topology; otherwise the one evolving ticket carries idea, plan, and review)
+- `human plan show <KEY>` — print the ticket's engineering plan from its `[human:plan]` comment
 
 ## Pull product context
 - `human notion search "<query>"` — docs, specs, notes

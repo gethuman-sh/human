@@ -162,7 +162,7 @@
       "features": [
         {
           "name": "Desktop workflow board",
-          "description": "A five-stage board — Backlog, Product planning, Implementation, Verification, Done — where dragging a card triggers the next pipeline stage, with per-card status badges, a guarded Done drop, a running-agents view, and an agent-driven ideation chat to open new tickets",
+          "description": "A six-column board — Ideas, Backlog, Product planning, Implementation, Verification, Done — where dragging a card triggers the next pipeline stage, with per-card status badges, a guarded Done drop, a running-agents view, and an agent-driven ideation chat to open new tickets",
           "tickets": ["SC-148", "SC-146", "SC-143", "SC-141", "SC-137"],
           "recent": true
         },
