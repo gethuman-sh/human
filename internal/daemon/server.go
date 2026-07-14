@@ -69,6 +69,9 @@ type Server struct {
 	// FEATURE.json) for the registered project. nil disables the
 	// features-generate route.
 	FeaturesGenerator func() error
+	// MockupsCreator launches the human-mockups skill for one PM ticket and
+	// records the ticket→mockup-set link. nil disables the create-mocks route.
+	MockupsCreator func(req CreateMocksRequest) error
 	// Ideation owns the board's single agent-driven ideation session. nil
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
@@ -362,6 +365,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"ideation-status":     func() { s.handleIdeationStatus(conn) },
 		"idea-create":         func() { s.handleIdeaCreate(conn, args[1:]) },
 		"features-generate":   func() { s.handleFeaturesGenerate(conn) },
+		"create-mocks":        func() { s.handleCreateMocks(conn, args[1:]) },
 		"config-get":          func() { s.handleConfigGet(conn, projectDir) },
 		"config-set":          func() { s.handleConfigSet(conn, args[1:], projectDir) },
 	}
@@ -548,6 +552,34 @@ func (s *Server) handleCloseTicket(conn net.Conn, args []string) {
 		return
 	}
 	if err := s.CloseTicketer(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleCreateMocks launches the human-mockups skill for one PM ticket via the
+// injected MockupsCreator. Like features-generate it is a dedicated
+// non-destructive route — the context-menu click is the user's consent — and
+// it returns as soon as the agent is launched, not when generation finishes.
+// The request is a single JSON arg so multi-word titles survive arg splitting.
+func (s *Server) handleCreateMocks(conn net.Conn, args []string) {
+	if s.MockupsCreator == nil {
+		s.writeError(conn, "mock creation not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "create-mocks requires one JSON arg", 1)
+		return
+	}
+	var req CreateMocksRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid create-mocks request: "+err.Error(), 1)
+		return
+	}
+	if err := s.MockupsCreator(req); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
