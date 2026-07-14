@@ -374,134 +374,41 @@ func TestNewConfirmID_Unique(t *testing.T) {
 	}
 }
 
-// confirmStatusSequence answers each confirm-status request with the next
-// status in the sequence, sticking on the last one.
-func confirmStatusSequence(t *testing.T, statuses []ConfirmStatus) string {
-	t.Helper()
+// TestRunRemote_AwaitConfirmReturnsImmediately pins the no-waiting contract:
+// an await_confirm answer produces exactly one request (no confirm-status
+// polling, no re-submit) and exit code 1 with instructions — the user
+// approves on their own time and re-runs.
+func TestRunRemote_AwaitConfirmReturnsImmediately(t *testing.T) {
 	var mu sync.Mutex
-	call := 0
-	return startMockDaemon(t, func(req Request) Response {
-		require.GreaterOrEqual(t, len(req.Args), 2)
-		assert.Equal(t, "confirm-status", req.Args[0])
-		mu.Lock()
-		st := statuses[call]
-		if call < len(statuses)-1 {
-			call++
-		}
-		mu.Unlock()
-		data, _ := json.Marshal(st)
-		return Response{Stdout: string(data) + "\n"}
-	})
-}
-
-func TestWaitForConfirmDecision_Denied(t *testing.T) {
-	addr := confirmStatusSequence(t, []ConfirmStatus{
-		{ID: "c-1", State: string(ConfirmDenied)},
-	})
-	state := waitForConfirmDecision(addr, "tok", "c-1", "Delete KAN-1?")
-	assert.Equal(t, string(ConfirmDenied), state)
-}
-
-func TestWaitForConfirmDecision_PendingThenApproved(t *testing.T) {
-	orig := confirmPollInterval
-	confirmPollInterval = 5 * time.Millisecond
-	t.Cleanup(func() { confirmPollInterval = orig })
-
-	addr := confirmStatusSequence(t, []ConfirmStatus{
-		{ID: "c-2", State: string(ConfirmPending)},
-		{ID: "c-2", State: string(ConfirmPending)},
-		{ID: "c-2", State: string(ConfirmApproved)},
-	})
-	state := waitForConfirmDecision(addr, "tok", "c-2", "Delete KAN-1?")
-	assert.Equal(t, string(ConfirmApproved), state)
-}
-
-func TestWaitForConfirmDecision_UnknownIsExpired(t *testing.T) {
-	addr := confirmStatusSequence(t, []ConfirmStatus{
-		{ID: "c-3", State: "unknown"},
-	})
-	state := waitForConfirmDecision(addr, "tok", "c-3", "Delete KAN-1?")
-	assert.Equal(t, "unknown", state)
-}
-
-func TestWaitForConfirmDecision_TimeoutLeavesPending(t *testing.T) {
-	origInterval, origTimeout := confirmPollInterval, confirmWaitTimeout
-	confirmPollInterval = 5 * time.Millisecond
-	confirmWaitTimeout = 20 * time.Millisecond
-	t.Cleanup(func() {
-		confirmPollInterval = origInterval
-		confirmWaitTimeout = origTimeout
-	})
-
-	addr := confirmStatusSequence(t, []ConfirmStatus{
-		{ID: "c-4", State: string(ConfirmPending)},
-	})
-	state := waitForConfirmDecision(addr, "tok", "c-4", "Delete KAN-1?")
-	assert.Equal(t, confirmWaitTimedOut, state, "client gives up but the entry stays pending on the daemon")
-}
-
-// TestRunRemote_GrantCycle drives the full client-side grant cycle against a
-// mock daemon: submit → await_confirm → poll approved → re-submit with the
-// grant ID → the daemon executes and returns the result.
-func TestRunRemote_GrantCycle(t *testing.T) {
-	orig := confirmPollInterval
-	confirmPollInterval = 5 * time.Millisecond
-	t.Cleanup(func() { confirmPollInterval = orig })
-
-	var mu sync.Mutex
-	grantID := ""
-	resubmitSeen := false
-
+	requests := 0
 	addr := startMockDaemon(t, func(req Request) Response {
 		mu.Lock()
 		defer mu.Unlock()
-		if len(req.Args) > 0 && req.Args[0] == "confirm-status" {
-			st := ConfirmStatus{ID: req.Args[1], State: string(ConfirmApproved)}
-			data, _ := json.Marshal(st)
-			return Response{Stdout: string(data) + "\n"}
-		}
-		if grantID == "" {
-			// First submit: queue the permission request.
-			grantID = req.ConfirmID
-			return Response{AwaitConfirm: true, ConfirmID: grantID, ConfirmPrompt: "Delete KAN-1?"}
-		}
-		// Re-submit must carry the granted ID so the daemon can redeem it.
-		if req.ConfirmID == grantID {
-			resubmitSeen = true
-			return Response{Stdout: "deleted KAN-1\n", ExitCode: 0}
-		}
-		return Response{Stderr: "unexpected confirm id\n", ExitCode: 1}
-	})
-
-	code, err := RunRemote(addr, "tok", []string{"jira", "issue", "delete", "KAN-1"}, "dev")
-	require.NoError(t, err)
-	assert.Equal(t, 0, code)
-	mu.Lock()
-	defer mu.Unlock()
-	assert.True(t, resubmitSeen, "client must re-submit the command after the grant")
-}
-
-func TestRunRemote_DeniedAborts(t *testing.T) {
-	var mu sync.Mutex
-	submitted := false
-	addr := startMockDaemon(t, func(req Request) Response {
-		mu.Lock()
-		defer mu.Unlock()
-		if len(req.Args) > 0 && req.Args[0] == "confirm-status" {
-			st := ConfirmStatus{ID: req.Args[1], State: string(ConfirmDenied)}
-			data, _ := json.Marshal(st)
-			return Response{Stdout: string(data) + "\n"}
-		}
-		submitted = true
+		requests++
+		require.NotEqual(t, "confirm-status", req.Args[0], "no-wait client must not poll")
 		return Response{AwaitConfirm: true, ConfirmID: req.ConfirmID, ConfirmPrompt: "Delete KAN-1?"}
 	})
 
+	start := time.Now()
 	code, err := RunRemote(addr, "tok", []string{"jira", "issue", "delete", "KAN-1"}, "dev")
 	require.NoError(t, err)
 	assert.Equal(t, 1, code)
+	assert.Less(t, time.Since(start), time.Second, "there is no countdown")
 	mu.Lock()
 	defer mu.Unlock()
-	assert.True(t, submitted)
+	assert.Equal(t, 1, requests, "queue once, return immediately")
+}
+
+func TestGetConfirmStatus_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		require.GreaterOrEqual(t, len(req.Args), 2)
+		assert.Equal(t, "confirm-status", req.Args[0])
+		data, _ := json.Marshal(ConfirmStatus{ID: req.Args[1], State: string(ConfirmApproved)})
+		return Response{Stdout: string(data) + "\n"}
+	})
+	st, err := GetConfirmStatus(addr, "tok", "c-9")
+	require.NoError(t, err)
+	assert.Equal(t, string(ConfirmApproved), st.State)
 }
 
 func TestRunRemote_DaemonClosesImmediately(t *testing.T) {

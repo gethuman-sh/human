@@ -33,41 +33,21 @@ var ClientVersion = "dev"
 // RunRemote connects to the daemon at addr, sends the CLI args, and returns
 // the exit code. Stdout and stderr are written to os.Stdout and os.Stderr.
 //
-// Destructive commands run a grant cycle: the daemon queues a permission
-// request and answers await_confirm; we poll its decision and, once granted,
-// re-submit the same command with the grant's ID — the daemon redeems the
-// grant (one-time) and executes. The queue survives our disconnect, so a
-// timeout defers the operation instead of losing it.
+// Destructive commands run a grant cycle with NO waiting: the daemon queues a
+// permission request and answers await_confirm; we print instructions and
+// return immediately. There is deliberately no countdown — the user approves
+// whenever, and re-running the command redeems the grant (matched by
+// operation, so a fresh process needs no remembered ID). Denials are answered
+// on the re-run with a back-off instruction.
 func RunRemote(addr, token string, args []string, version string) (int, error) {
-	confirmID := newConfirmID()
-	for attempt := 0; ; attempt++ {
-		code, resp, err := runRemoteOnce(addr, token, args, version, confirmID)
-		if err != nil || !resp.AwaitConfirm {
-			return code, err
-		}
-		if attempt > 0 {
-			// The daemon asked again after granting — a mismatched or
-			// already-redeemed grant. Bail out rather than loop.
-			return 1, errors.WithDetails("daemon requested confirmation again after approval", "id", resp.ConfirmID)
-		}
-		// Poll the grant's ID (the daemon may have reattached us to an
-		// earlier request for the same operation).
-		confirmID = resp.ConfirmID
-		switch waitForConfirmDecision(addr, token, resp.ConfirmID, resp.ConfirmPrompt) {
-		case string(ConfirmApproved):
-			continue // re-submit with the granted ID
-		case string(ConfirmDenied):
-			_, _ = fmt.Fprint(os.Stderr, "Operation aborted: the user denied permission. Do not retry; ask the user how to proceed.\n")
-			return 1, nil
-		case confirmWaitTimedOut:
-			_, _ = fmt.Fprintf(os.Stderr, "Permission request %s is still pending; no decision yet. Ask the user to approve it (human TUI or desktop app), then re-run this exact command — once granted it executes without asking again. Check the decision anytime with: human confirm-status %s\n", resp.ConfirmID, resp.ConfirmID)
-			return 1, nil
-		default:
-			// "unknown": swept or never queued — treat as expired.
-			_, _ = fmt.Fprintf(os.Stderr, "Permission request %s expired before it was decided. Re-run this command to request permission again.\n", resp.ConfirmID)
-			return 1, nil
-		}
+	code, resp, err := runRemoteOnce(addr, token, args, version, newConfirmID())
+	if err != nil || !resp.AwaitConfirm {
+		return code, err
 	}
+	_, _ = fmt.Fprintf(os.Stderr,
+		"Permission required: %s (id %s)\nApprove or deny it in the human desktop app or TUI — there is no time limit. Once approved, re-run this exact command to execute it (it will not ask again). Check the decision anytime with: human confirm-status %s\n",
+		resp.ConfirmPrompt, resp.ConfirmID, resp.ConfirmID)
+	return 1, nil
 }
 
 // runRemoteOnce performs a single request/response round-trip. The returned
@@ -147,14 +127,6 @@ func handleOAuthCallback(reader *bufio.Reader) (int, error) {
 	return 0, nil
 }
 
-// confirmPollInterval paces confirm-status polling; confirmWaitTimeout bounds
-// how long the blocking CLI waits before deferring to a later status check.
-// Variables (not consts) so tests can shrink them.
-var (
-	confirmPollInterval = 2 * time.Second
-	confirmWaitTimeout  = 5 * time.Minute
-)
-
 // newConfirmID generates a client-side unique ID for a potentially
 // destructive request. Client-generated so a resubmit with the same ID is
 // idempotent on the daemon and the client knows the key to poll even if the
@@ -167,37 +139,6 @@ func newConfirmID() string {
 		return fmt.Sprintf("c-%d", time.Now().UnixNano())
 	}
 	return "c-" + hex.EncodeToString(buf)
-}
-
-// confirmWaitTimedOut is the pseudo-state waitForConfirmDecision returns when
-// the client-side wait expires while the request is still undecided.
-const confirmWaitTimedOut = "wait-timeout"
-
-// waitForConfirmDecision blocks until the queued permission request is
-// decided and returns the final state (or confirmWaitTimedOut). The blocking
-// is client-side sugar over the daemon's decision queue: on timeout the
-// entry stays pending on the daemon.
-func waitForConfirmDecision(addr, token, id, prompt string) string {
-	_, _ = fmt.Fprintf(os.Stderr, "Waiting for permission: %s (id %s)\n", prompt, id)
-	deadline := time.Now().Add(confirmWaitTimeout)
-	for {
-		st, err := GetConfirmStatus(addr, token, id)
-		if err != nil {
-			// Daemon unreachable mid-wait — report as expired; the entry
-			// (if any) remains decidable on the daemon.
-			return "unknown"
-		}
-		switch st.State {
-		case string(ConfirmPending):
-			// keep polling
-		default:
-			return st.State
-		}
-		if time.Now().After(deadline) {
-			return confirmWaitTimedOut
-		}
-		time.Sleep(confirmPollInterval)
-	}
 }
 
 // GetConfirmStatus fetches the decision state of a queued destructive
