@@ -25,7 +25,10 @@
     border: 1px solid var(--col-border); border-radius: 10px; overflow: hidden;
     background: var(--bg); height: 930px; box-shadow: 0 30px 80px rgba(0,0,0,.5); padding: 12px; }
 
-  .board { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; height: 350px; }
+  .board { display: grid; grid-template-columns: repeat(5, 1fr) 90px; gap: 10px; height: 350px; }
+  .dzone { border: 2px dashed var(--done); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--done); }
+  .dzone-label { writing-mode: vertical-rl; font-weight: 700; font-size: 13px; letter-spacing: .14em; text-transform: uppercase; }
+  .badge.warn { color: var(--running); }
   .col { background: var(--col-bg); border: 1px solid var(--col-border); border-radius: 8px; display: flex; flex-direction: column; }
   .col-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-weight: 600; font-size: 13px; border-bottom: 1px solid var(--col-border); }
   .addbtn { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--col-border); background: var(--card-bg);
@@ -67,9 +70,10 @@
   <div class="eyebrow">human — workflow board</div>
   <h1>Queues, and the skills on each transition</h1>
   <p>Columns are resting states — the name is true of every card in them, always. Agents run on the transitions:
-     a drag is the launch, the card stays in its origin queue with a live badge, and it arrives in the next queue
-     only when the stage completes. The one exception is deliberate: <strong>Code</strong> is a live activity lane —
-     the meat of the pipeline gets its own column, and cards leave it on their own when the build lands.
+     a drag is the launch. <strong>Code</strong> is the live activity lane holding the whole build-and-review
+     cycle — the review chains automatically after the build, and a card can only <em>earn</em> its way out.
+     <strong>Deploy</strong> is not a column at all: it is a terminal drop zone — dropping a reviewed card merges
+     the work into main once CI passes and closes the ticket, so shipped work simply leaves the board.
      State on the column, verb on the drop target.</p>
 </div>
 
@@ -93,39 +97,39 @@
       </div>
     </div>
     <div class="col">
-      <div class="col-h">Code <span class="count">1</span></div>
+      <div class="col-h">Code <span class="count">3</span></div>
       <div class="col-b">
         <div class="card"><div class="key">188</div><div class="t">Building gets its own live column</div><div class="badge running">◐ building…</div></div>
+        <div class="card"><div class="key">63</div><div class="t">Agent orchestration via tmux</div><div class="badge running">◐ reviewing…</div></div>
+        <div class="card"><div class="key">97</div><div class="t">Settings command palette v2</div><div class="badge warn">⚠ review found problems</div></div>
         <div class="verbzone">Build it</div>
       </div>
     </div>
     <div class="col">
-      <div class="col-h">Ready for review <span class="count">1</span></div>
-      <div class="col-b"><div class="card"><div class="key">63</div><div class="t">Agent orchestration via tmux</div><div class="badge running">◐ reviewing…</div></div></div>
-    </div>
-    <div class="col">
-      <div class="col-h">Ready to deploy <span class="count">1</span></div>
+      <div class="col-h">Ready to Deploy <span class="count">1</span></div>
       <div class="col-b">
-        <div class="card"><div class="key">110</div><div class="t">Monarch observability console</div><div class="prbtn">Open pull request</div></div>
-        <div class="zone">Close Ticket</div>
+        <div class="card"><div class="key">110</div><div class="t">Monarch observability console</div></div>
       </div>
+    </div>
+    <div class="dzone">
+      <span class="dzone-label">Deploy</span>
     </div>
   </div>
 
   <div class="arrows">
-    <div class="arrow" style="left: 15.4%">➜</div>
-    <div class="arrow" style="left: 32.1%">➜</div>
-    <div class="arrow" style="left: 48.8%">➜</div>
-    <div class="arrow" style="left: 65.5%">➜</div>
-    <div class="arrow" style="left: 82.2%">➜</div>
+    <div class="arrow" style="left: 17.2%">➜</div>
+    <div class="arrow" style="left: 35.6%">➜</div>
+    <div class="arrow" style="left: 54.0%">➜</div>
+    <div class="arrow" style="left: 72.4%">➜</div>
+    <div class="arrow" style="left: 90.4%">➜</div>
   </div>
 
   <!-- ticks: notes to their transition -->
-  <div class="tick" style="left: 16.2%; top: 90px;  height: 425px;"></div>
-  <div class="tick" style="left: 32.9%; top: 90px;  height: 550px;"></div>
-  <div class="tick" style="left: 49.6%; top: 90px;  height: 425px;"></div>
-  <div class="tick" style="left: 66.3%; top: 90px;  height: 550px;"></div>
-  <div class="tick" style="left: 83.0%; top: 90px;  height: 425px;"></div>
+  <div class="tick" style="left: 18.0%; top: 90px;  height: 425px;"></div>
+  <div class="tick" style="left: 36.4%; top: 90px;  height: 550px;"></div>
+  <div class="tick" style="left: 54.8%; top: 90px;  height: 425px;"></div>
+  <div class="tick" style="left: 73.2%; top: 90px;  height: 550px;"></div>
+  <div class="tick" style="left: 91.2%; top: 90px;  height: 425px;"></div>
 
   <div class="note" style="left: 3%; top: 515px; max-width: 215px;">
     <b>IDEAS ➜ PRODUCT BACKLOG</b><br>
@@ -143,36 +147,30 @@
     <span class="m">[human:planning-started] → [human:plan-ready]</span>
   </div>
 
-  <div class="note" style="left: 37.5%; top: 515px; max-width: 220px;">
-    <b>ENGINEERING ➜ CODE</b><br>
+  <div class="note" style="left: 39%; top: 515px; max-width: 225px;">
+    <b>ENGINEERING ➜ CODE — BUILD, THEN AUTO-REVIEW</b><br>
     Launches <code>/human-execute &lt;KEY&gt;</code>: the executor works the plan
-    and runs the <code>human-done</code> self-check. The card moves <em>into
-    Code</em> for the whole build — the live activity lane. Failures stay
-    here, red.
-    <span class="m">[human:implementation-started]</span>
+    and runs the <code>human-done</code> self-check. When the handoff posts,
+    the daemon chains <code>/human-review</code> automatically — the whole
+    build-and-review cycle lives in Code.
+    <span class="m">[human:implementation-started] → [human:ready-for-review] → [human:review-started]</span>
   </div>
 
-  <div class="note" style="left: 54.5%; top: 640px; max-width: 225px;">
-    <b>CODE ➜ READY FOR REVIEW — AUTOMATIC</b><br>
-    No drag, no drop target: when the executor posts the handoff, the card
-    releases itself into Ready for review. Cards can only <em>earn</em> their
-    way in.
-    <span class="m">[human:ready-for-review]</span>
+  <div class="note" style="left: 57%; top: 640px; max-width: 235px;">
+    <b>CODE ➜ READY TO DEPLOY — EARNED, NOT DRAGGED</b><br>
+    A <em>passing</em> verdict releases the card by itself. A failing verdict
+    pins it in Code with <code>⚠</code> — the findings land as a ticket
+    comment, and re-dropping the card onto Code rebuilds against them.
+    <span class="m">[human:review-complete] verdict: pass | fail</span>
   </div>
 
-  <div class="note" style="left: 71.5%; top: 515px; max-width: 215px;">
-    <b>REVIEW ➜ READY TO DEPLOY</b><br>
-    Launches <code>/human-review &lt;KEY&gt;</code>: the reviewer checks the branch
-    against acceptance criteria and records the verdict. Card shows
-    <code>◐ reviewing…</code> in place.
-    <span class="m">[human:review-started] → [human:review-complete]</span>
-  </div>
-
-  <div class="note" style="left: 86%; top: 300px; max-width: 185px;">
-    <b>OPEN PULL REQUEST</b><br>
-    Terminal action is a <em>button on the card</em> — no agent; the daemon
-    pushes the branch and opens the PR.
-    <span class="m">[human:pr-started] → [human:pr-pushed]</span>
+  <div class="note" style="left: 76%; top: 515px; max-width: 225px;">
+    <b>DEPLOY — A DROP ZONE, NOT A COLUMN</b><br>
+    Dropping a reviewed card ships it: push → PR → <em>CI green</em> → merge →
+    branch deleted → ticket closed. The card leaves the board. On
+    merge-deploy platforms (Scalingo, Heroku, Vercel) this IS the production
+    deploy.
+    <span class="m">[human:deploy-started] → [human:deployed]</span>
   </div>
 
   <div class="note" style="left: 3%; top: 300px; max-width: 175px;">
@@ -183,22 +181,22 @@
 
   <div class="note" style="left: 20%; top: 415px; max-width: 190px;">
     <b>◐ RUNNING = STAYS PUT</b><br>
-    Planning and reviewing keep the card in its origin queue — a column never
-    claims what isn't true yet. Code is the deliberate exception: the
-    meat of the pipeline gets its own lane.
+    Planning keeps the card in its origin queue — a column never claims what
+    isn't true yet. Code is the deliberate exception: the meat of the
+    pipeline gets its own lane.
   </div>
 
-  <div class="note" style="left: 54.5%; top: 300px; max-width: 190px;">
-    <b>VERB ON THE TARGET</b><br>
-    While dragging, the drop zone shows the action it launches
-    (<code>Define it · Plan it · Build it · Review it</code>). State on the
-    column, verb on the affordance.
+  <div class="note" style="left: 76%; top: 300px; max-width: 195px;">
+    <b>RIGHT-CLICK = ADMIN</b><br>
+    <code>Open in tracker · Close ticket</code> live in the card's context
+    menu — closing is the rare escape hatch; shipped tickets close
+    themselves.
   </div>
 
   <div class="legend">
-    <span><b>drag</b> = consent; targets accept only the next step</span>
+    <span><b>drag</b> = consent; targets accept only the next step (plus the ⚠ rework re-drop)</span>
     <span><b>agents</b> run via the daemon; markers land as ticket comments</span>
-    <span><b>wire unchanged</b>: stages/markers keep their names — columns are how the board renders them</span>
+    <span><b>the board shows only work in flight</b> — deployed work disappears into the product</span>
   </div>
 </div>
 

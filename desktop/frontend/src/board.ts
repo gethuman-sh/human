@@ -42,6 +42,7 @@ interface Card {
   labels?: string[];
   description?: string;
   error?: string;
+  verdict?: string;
 }
 
 interface BoardData {
@@ -198,28 +199,29 @@ export {};
 // the next queue when the stage completes. State on the column, verb on the
 // affordance — the wire stages/markers are untouched; this is pure display.
 // Code is the one ACTIVITY column among the queues — deliberately special
-// because coding is the board's longest and weightiest phase: the column
-// holds exactly the cards the executor is working on (the machine verifies
-// membership, so the name stays true), and its count is the live build gauge.
-// Cards leave it on their own when the handoff posts; Ready for review is
-// never a drop target — cards can only earn their way in. ("building" stays
-// the internal queue id so theme hooks and tests don't churn on a label.)
-const QUEUES = ["ideas", "product", "engineering", "building", "review", "deploy"] as const;
+// because coding is the board's longest and weightiest phase: the column holds
+// the whole build-and-review cycle (the review chains automatically after the
+// build, no gesture), and cards can only EARN their way out — a passing review
+// releases them into Ready to Deploy, a failing verdict pins them here with a
+// warning until a re-drop rebuilds. Deploy is not a column at all: it is a
+// terminal drop zone that merges the work into main (after CI passes) and
+// closes the ticket, so shipped work simply leaves the board. ("building"
+// stays the internal queue id so theme hooks don't churn on a label.)
+const QUEUES = ["ideas", "product", "engineering", "building", "deploy"] as const;
 const QUEUE_LABELS: Record<string, string> = {
   ideas: "Ideas",
   product: "Product backlog",
   engineering: "Engineering backlog",
   building: "Code",
-  review: "Ready for review",
-  deploy: "Ready to deploy",
+  deploy: "Ready to Deploy",
 };
 
 // Wire stage launched by dropping onto a queue from its predecessor. Queues
-// missing here (ideas, review) accept no transition drop at all.
+// missing here (ideas, deploy) accept no queue-transition drop at all — cards
+// reach Ready to Deploy only by passing review.
 const QUEUE_TRANSITION_TO: Record<string, string> = {
   engineering: "planning",
   building: "implementation",
-  deploy: "verification",
 };
 
 // The verb shown on a drop target while a drag hovers it — the action lives
@@ -228,21 +230,27 @@ const QUEUE_VERB: Record<string, string> = {
   product: "Define it",
   engineering: "Plan it",
   building: "Build it",
-  deploy: "Review it",
 };
 
-// Live badge text while a stage runs; the card sits in its origin queue —
-// except implementation, which has its own Code lane.
+// Live badge text while a stage runs; builds and their chained reviews both
+// live in the Code lane, deploys in Ready to Deploy.
 const RUNNING_LABELS: Record<string, string> = {
   planning: "planning…",
   implementation: "building…",
   verification: "reviewing…",
-  done: "opening PR…",
+  done: "deploying…",
 };
 
+// verdictFailed mirrors the daemon's VerdictFailed: only an explicit failing
+// verdict blocks — absence is not failure.
+function verdictFailed(verdict?: string): boolean {
+  return (verdict ?? "").trim().toLowerCase().startsWith("fail");
+}
+
 // queueOf maps the wire (stage, state) onto the column whose name is true of
-// the card: incomplete stages keep the card where it was pulled from, apart
-// from an in-flight (or failed) build, which lives in the Code lane.
+// the card. The whole build-and-review cycle lives in the Code lane —
+// including a review that found problems, because that card is NOT ready to
+// deploy; only a passing review releases it.
 function queueOf(card: Card): string {
   switch (card.stage) {
     case "ideas":
@@ -252,9 +260,9 @@ function queueOf(card: Card): string {
     case "planning":
       return card.state === "done" ? "engineering" : "product";
     case "implementation":
-      return card.state === "done" ? "review" : "building";
+      return "building";
     case "verification":
-      return card.state === "done" ? "deploy" : "review";
+      return card.state === "done" && !verdictFailed(card.verdict) ? "deploy" : "building";
     case "done":
       return "deploy";
     default:
@@ -301,16 +309,20 @@ function targetEnabled(toQueue: string): boolean {
 }
 
 // badge renders the card's live state. A resting card needs no checkmark —
-// its queue position IS the statement of completion — so "done" is only
-// badged for the terminal PR stage, as a link when the URL is known.
+// its queue position IS the statement of completion. A review that found
+// problems is a WARNING, not a stage failure: the work exists, it just may
+// not advance until a rebuild passes.
 function badge(card: Card): string {
   if (card.state === "running") {
     const label = RUNNING_LABELS[card.stage] ?? "working…";
     return `<span class="badge running" title="Agent running"><span class="spinner"></span> ${escapeHtml(label)}</span>`;
   }
   if (card.state === "failed") return `<span class="badge failed" title="Stage failed">✕</span>`;
-  if (card.stage === "done" && card.state === "done" && !card.prURL) {
-    return `<span class="badge done" title="Pull request opened">PR open</span>`;
+  if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
+    return `<span class="badge warning" title="${escapeAttr("Review verdict: " + (card.verdict ?? ""))}">⚠ review found problems</span>`;
+  }
+  if (card.stage === "done" && card.state === "done") {
+    return `<span class="badge done" title="Merged and shipped">deployed</span>`;
   }
   return "";
 }
@@ -338,24 +350,78 @@ function renderCard(card: Card): HTMLElement {
   if (card.engineeringKey) meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
   if (card.prURL) meta.push(`<a href="${escapeAttr(card.prURL)}" target="_blank">PR</a>`);
 
-  // The terminal action is a button on the card, not a drop zone: a reviewed
-  // card already rests in Ready to deploy, so there is nowhere to drag it.
-  const showPR = card.stage === "verification" && card.state === "done";
-
   el.innerHTML = `
     <div class="card-key">${escapeHtml(card.key)}</div>
     <div class="card-title">${escapeHtml(card.title)}</div>
     <div class="card-meta">${meta.join("")}</div>
     ${card.error ? `<div class="card-error">${escapeHtml(card.error)}</div>` : ""}
-    ${showPR ? `<button class="card-action" type="button">Open pull request</button>` : ""}
   `;
-  el.querySelector(".card-action")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    void transition(card.key, card.title, card.stage, "done");
+  el.addEventListener("contextmenu", (e: MouseEvent) => {
+    e.preventDefault();
+    showCardMenu(card, e.clientX, e.clientY);
   });
 
   beginPointerDrag(el, card);
   return el;
+}
+
+// showCardMenu opens the card's right-click menu: the administrative actions
+// that are not pipeline transitions. Closing a ticket lives here (not on a
+// drop zone) — with deploy auto-closing shipped tickets, a manual close is
+// the rare escape hatch for abandoned work.
+function showCardMenu(card: Card, x: number, y: number): void {
+  document.querySelector(".context-menu")?.remove();
+
+  const menu = document.createElement("div");
+  menu.className = "context-menu";
+
+  const openItem = document.createElement("button");
+  openItem.type = "button";
+  openItem.className = "context-menu-item";
+  openItem.textContent = "Open in tracker";
+  openItem.disabled = !card.url;
+  openItem.addEventListener("click", () => {
+    menu.remove();
+    // Same anchor pattern as the PR link: the webview routes target=_blank
+    // external URLs to the system browser.
+    const a = document.createElement("a");
+    a.href = card.url;
+    a.target = "_blank";
+    a.click();
+  });
+  menu.appendChild(openItem);
+
+  const closeItem = document.createElement("button");
+  closeItem.type = "button";
+  closeItem.className = "context-menu-item danger";
+  closeItem.textContent = "Close ticket";
+  closeItem.addEventListener("click", () => {
+    menu.remove();
+    void requestClose(card.key, card.title);
+  });
+  menu.appendChild(closeItem);
+
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  document.body.appendChild(menu);
+  // Keep the menu on-screen when opened near the window edge.
+  const r = menu.getBoundingClientRect();
+  if (r.right > window.innerWidth) menu.style.left = `${x - r.width}px`;
+  if (r.bottom > window.innerHeight) menu.style.top = `${y - r.height}px`;
+
+  const dismiss = (): void => {
+    menu.remove();
+    document.removeEventListener("pointerdown", onDown, true);
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const onDown = (e: PointerEvent): void => {
+    if (!menu.contains(e.target as Node)) dismiss();
+  };
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") dismiss();
+  };
+  document.addEventListener("pointerdown", onDown, true);
+  document.addEventListener("keydown", onKey, true);
 }
 
 function renderColumn(queue: string): HTMLElement {
@@ -392,22 +458,25 @@ function renderColumn(queue: string): HTMLElement {
 
   if (queue === "product" || QUEUE_TRANSITION_TO[queue] !== undefined) {
     // Drop targets are the queues a drag can act on: product (idea promotion)
-    // and the transition-launching queues. Ready for review is deliberately
-    // NOT a target — cards arrive there only by finishing a build.
+    // and the transition-launching queues. Ready to Deploy is deliberately
+    // NOT a target — cards arrive there only by passing review.
     markQueueTarget(body, queue);
-  }
-  if (queue === "deploy") {
-    // A card from ANY column can be dropped here to close its ticket — closing
-    // is not an adjacency-gated queue move, so it is its own kind of target.
-    const closeZone = document.createElement("div");
-    closeZone.className = "close-zone";
-    closeZone.textContent = "Close Ticket";
-    markCloseTarget(closeZone);
-    body.appendChild(closeZone);
   }
 
   col.appendChild(body);
   return col;
+}
+
+// renderDeployZone builds the terminal drop target at the board's right edge.
+// It is deliberately NOT a column — no card ever rests "in Deploy"; dropping
+// a reviewed card here ships it (merge after CI, ticket closed) and the card
+// leaves the board.
+function renderDeployZone(): HTMLElement {
+  const zone = document.createElement("section");
+  zone.className = "deploy-zone";
+  zone.dataset.drop = "deploy";
+  zone.innerHTML = `<span class="deploy-zone-label">Deploy</span>`;
+  return zone;
 }
 
 // showIdeaQuickAdd swaps an inline title input into the Ideas column. Enter
@@ -467,10 +536,6 @@ function markQueueTarget(el: HTMLElement, queue: string): void {
   if (verb) el.dataset.verb = verb;
 }
 
-function markCloseTarget(el: HTMLElement): void {
-  el.dataset.drop = "close";
-}
-
 // dropTargetAt returns the drop-target element under a viewport point, if any.
 // The ghost has pointer-events:none, so it never occludes the hit-test.
 function dropTargetAt(x: number, y: number): HTMLElement | null {
@@ -478,15 +543,31 @@ function dropTargetAt(x: number, y: number): HTMLElement | null {
   return el ? (el.closest("[data-drop]") as HTMLElement | null) : null;
 }
 
-// dropAllowed reports whether the dragged card may drop on target. Any card can
-// be closed; queue targets keep the forward-adjacency + docker-enabled rules,
-// evaluated on the card's RESTING queue so a running card cannot double-launch.
+// isReadyToDeploy reports a card resting in Ready to Deploy on a passed
+// review — the only cards the Deploy zone accepts.
+function isReadyToDeploy(card: Card): boolean {
+  return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict);
+}
+
+// isReworkable reports a card pinned in Code by a failing review verdict; a
+// re-drop onto Code rebuilds it against the review findings.
+function isReworkable(card: Card): boolean {
+  return card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict);
+}
+
+// dropAllowed reports whether the dragged card may drop on target. Queue
+// targets keep the forward-adjacency + docker-enabled rules, evaluated on the
+// card's RESTING queue so a running card cannot double-launch; the one
+// exception is the rework re-drop (flagged card back onto Code). The Deploy
+// zone accepts only reviewed cards — and needs no Docker, since deploying
+// launches no agent.
 function dropAllowed(target: HTMLElement): boolean {
   if (!dragging) return false;
-  if (target.dataset.drop === "close") return true;
-  const toQueue = target.dataset.dropQueue || "";
   const card = current.cards.find((c) => c.key === dragging!.key);
   if (!card || card.state === "running") return false;
+  if (target.dataset.drop === "deploy") return isReadyToDeploy(card);
+  const toQueue = target.dataset.dropQueue || "";
+  if (toQueue === "building" && isReworkable(card)) return targetEnabled(toQueue);
   return isNextQueue(queueOf(card), toQueue) && targetEnabled(toQueue);
 }
 
@@ -499,10 +580,8 @@ function setHoverTarget(target: HTMLElement | null): void {
   hoverTarget = target;
   if (!target) return;
   const ok = dropAllowed(target);
-  // The close zone only shows its own accept state; stage zones also show
-  // drop-reject to signal an invalid move.
   target.classList.toggle("drop-ok", ok);
-  if (target.dataset.drop !== "close") target.classList.toggle("drop-reject", !ok);
+  target.classList.toggle("drop-reject", !ok);
 }
 
 function makeDragGhost(card: { key: string; title: string }): HTMLElement {
@@ -605,10 +684,11 @@ function performDrop(
   info: { key: string; title: string; stage: string },
   pt: { x: number; y: number },
 ): void {
-  if (target.dataset.drop === "close") {
-    // Closing is destructive and still awaits a confirm dialog — never a
-    // moment to celebrate, so the fancy theme stays silent here.
-    void requestClose(info.key, info.title);
+  if (target.dataset.drop === "deploy") {
+    // The drag is the consent: review passed, CI still gates the merge
+    // server-side, so no extra dialog stands between the drop and the ship.
+    celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: true });
+    void transition(info.key, info.title, info.stage, "done");
     return;
   }
   const toQueue = target.dataset.dropQueue || "";
@@ -788,6 +868,7 @@ function render(): void {
     board.appendChild(loading);
   } else {
     for (const queue of QUEUES) board.appendChild(renderColumn(queue));
+    board.appendChild(renderDeployZone());
     restoreColumnScroll(board, scrollByStage);
   }
   const banner = document.getElementById("banner")!;

@@ -1,10 +1,11 @@
 # Desktop App (Wails)
 
 The desktop GUI (`desktop/`) is a [Wails v2](https://wails.io) application: the
-interactive six-column workflow board (Ideas → Product backlog → Engineering backlog → Code → Ready for review → Ready to deploy) delivered for SC-105 / HUM-141. Each card
-is a ticket; dragging a card forward one column triggers that stage's `human`
-action through the daemon (Code holds the card while the executor runs and
-releases it to Ready for review on completion), and placement/checkmarks/running-state derive
+interactive workflow board (Ideas → Product backlog → Engineering backlog → Code → Ready to Deploy, plus a terminal Deploy drop zone) delivered for SC-105 / HUM-141. Each card
+is a ticket; dragging a card forward triggers that stage's `human`
+action through the daemon (Code holds the build-and-review cycle — review
+chains automatically after the build — and dropping a reviewed card on Deploy
+merges the work after CI passes and closes the ticket), and placement/badges/running-state derive
 entirely from the `[human:…]` comment markers (and, for the Ideas column, the
 `human/idea` label) the daemon ships on the wire.
 

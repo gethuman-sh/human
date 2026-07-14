@@ -10,6 +10,6 @@
   },
   "info": {
     "productName": "human workflow board",
-    "comments": "Interactive six-column drag-to-trigger pipeline board"
+    "comments": "Interactive drag-to-trigger pipeline board that builds, reviews, and ships"
   }
 }

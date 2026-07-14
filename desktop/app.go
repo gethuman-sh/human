@@ -58,6 +58,9 @@ type Card struct {
 	Branch         string `json:"branch,omitempty"`
 	PRURL          string `json:"prURL,omitempty"`
 	Error          string `json:"error,omitempty"`
+	// Verdict is the latest review's verdict line; a failing verdict pins the
+	// card in the Code lane with a warning instead of letting it advance.
+	Verdict string `json:"verdict,omitempty"`
 	// Labels and Description feed the Ideas→Backlog promotion: labels tell
 	// the evolve session which idea labels to remove, the description seeds
 	// the ideation conversation alongside the title.
@@ -161,6 +164,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Branch:         card.Branch,
 			PRURL:          card.PRURL,
 			Error:          card.Error,
+			Verdict:        card.Verdict,
 			Labels:         issue.Labels,
 			Description:    issue.Description,
 		})

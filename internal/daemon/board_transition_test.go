@@ -397,6 +397,69 @@ func TestDoneBodySingleRef(t *testing.T) {
 	assert.NotContains(t, body, "Engineering ticket:")
 }
 
+func TestApplyTransitionReworkAfterFailedVerdict(t *testing.T) {
+	// The one sanctioned backward move: a build whose review failed may be
+	// rebuilt, dispatched with a pointer at the review findings.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: fail\n\nmissing error handling", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardImplementation})
+	require.NoError(t, err)
+	assert.Contains(t, l.prompt, "/human-execute SC-1")
+	assert.Contains(t, l.prompt, "review found problems")
+	assert.Contains(t, c.added, ImplementationStartedHeader)
+}
+
+func TestApplyTransitionReworkRejectedWithoutFailedVerdict(t *testing.T) {
+	// Backward to implementation stays forbidden when the review passed.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: pass", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardImplementation})
+	require.Error(t, err)
+	assert.Zero(t, l.calls)
+}
+
+func TestApplyTransitionDeployBlockedByFailedVerdict(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: fail", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+	assert.Zero(t, p.call)
+}
+
+func TestApplyTransitionDeployAllowedWithPassWithNotes(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: pass with notes", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/11", Number: 11}, checks: []forge.ChecksState{forge.ChecksPassing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.merged)
+}
+
+func TestVerdictFailed(t *testing.T) {
+	assert.True(t, VerdictFailed("fail"))
+	assert.True(t, VerdictFailed("  FAILED — see findings"))
+	assert.False(t, VerdictFailed("pass"))
+	assert.False(t, VerdictFailed("pass with notes"))
+	// Absence of a verdict is not failure — pre-verdict threads keep flowing.
+	assert.False(t, VerdictFailed(""))
+}
+
 func TestApplyTransitionIdeasGuard(t *testing.T) {
 	// Ideas leave their column via ideation's label swap, never via a board
 	// transition — both directions are rejected before any comment fetch.
