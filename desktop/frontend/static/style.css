@@ -189,23 +189,6 @@ body {
   overflow-x: auto;
 }
 
-/* Transition captions: what dropping INTO a column actually runs — skill,
-   ticket artifacts, branch/PR/review. Muted so the notes read as marginalia,
-   never competing with the cards. */
-.column-note {
-  flex-shrink: 0;
-  padding: 6px 12px;
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--muted);
-  border-bottom: 1px solid var(--col-border);
-}
-
-.column-note code {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 10px;
-}
-
 /* The idea space: the Ideas queue widened into five lanes spanning a
    loose→concrete axis. It reads as ONE column-styled rounded rectangle —
    a shared header (title, quick-add, total count) above five invisible,
