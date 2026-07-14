@@ -23,8 +23,9 @@ type ghLabel struct {
 }
 
 type createRequest struct {
-	Title string `json:"title"`
-	Body  string `json:"body,omitempty"`
+	Title  string   `json:"title"`
+	Body   string   `json:"body,omitempty"`
+	Labels []string `json:"labels,omitempty"`
 }
 
 type createResponse struct {

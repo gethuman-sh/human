@@ -1195,3 +1195,142 @@ func TestGetMarkdownDescription_withCustomID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "# Custom ID markdown", md)
 }
+
+func TestEditIssue_labels(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// EscapedPath preserves the %20 so the test locks in tag-name escaping.
+		calls = append(calls, r.Method+" "+r.URL.EscapedPath())
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v2/task/abc123":
+			var gotBody map[string]string
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &gotBody))
+			assert.Equal(t, "New title", gotBody["name"])
+			_, _ = fmt.Fprint(w, `{"id":"abc123","name":"New title","status":{"status":"open","type":"open"},"list":{"id":"901"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v2/task/abc123/tag/urgent fix":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v2/task/abc123/tag/old":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v2/task/abc123":
+			_, _ = fmt.Fprint(w, `{"id":"abc123","name":"New title","status":{"status":"open","type":"open"},"list":{"id":"901"},"tags":[{"name":"urgent fix"}]}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	title := "New title"
+	client := New(srv.URL, "tok-test", "")
+	issue, err := client.EditIssue(context.Background(), "abc123", tracker.EditOptions{
+		Title:        &title,
+		AddLabels:    []string{"urgent fix"},
+		RemoveLabels: []string{"old"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"urgent fix"}, issue.Labels)
+
+	// Field PUT first, then per-tag operations, then the final re-read.
+	assert.Equal(t, []string{
+		"PUT /api/v2/task/abc123",
+		"POST /api/v2/task/abc123/tag/urgent%20fix",
+		"DELETE /api/v2/task/abc123/tag/old",
+		"GET /api/v2/task/abc123",
+	}, calls)
+}
+
+func TestEditIssue_labelsOnlySkipsFieldPut(t *testing.T) {
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPut:
+			t.Error("labels-only edit must not touch the task field PUT")
+			w.WriteHeader(http.StatusBadRequest)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v2/task/abc123/tag/backend":
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v2/task/abc123":
+			_, _ = fmt.Fprint(w, `{"id":"abc123","name":"Task","status":{"status":"open","type":"open"},"list":{"id":"901"},"tags":[{"name":"backend"}]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test", "")
+	issue, err := client.EditIssue(context.Background(), "abc123", tracker.EditOptions{
+		AddLabels: []string{"backend"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"backend"}, issue.Labels)
+	assert.Equal(t, []string{
+		"POST /api/v2/task/abc123/tag/backend",
+		"GET /api/v2/task/abc123",
+	}, calls)
+}
+
+func TestEditIssue_removeAbsentTagIgnored(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v2/task/abc123/tag/ghost":
+			// ClickUp rejects removing a tag the task doesn't carry; the
+			// client must treat that as already done.
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v2/task/abc123":
+			_, _ = fmt.Fprint(w, `{"id":"abc123","name":"Task","status":{"status":"open","type":"open"},"list":{"id":"901"}}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test", "")
+	issue, err := client.EditIssue(context.Background(), "abc123", tracker.EditOptions{
+		RemoveLabels: []string{"ghost"},
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, issue.Labels)
+}
+
+func TestEditIssue_addTagError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test", "")
+	_, err := client.EditIssue(context.Background(), "abc123", tracker.EditOptions{
+		AddLabels: []string{"backend"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "returned")
+}
+
+func TestCreateIssue_withTags(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		_, _ = fmt.Fprint(w, `{"id":"xyz1","name":"Tagged","status":{"status":"open","type":"open"},"list":{"id":"901"},"tags":[{"name":"idea"},{"name":"backend"}]}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test", "")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "901",
+		Title:   "Tagged",
+		Labels:  []string{"idea", "backend"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"idea", "backend"}, issue.Labels)
+	assert.Equal(t, []any{"idea", "backend"}, gotBody["tags"])
+}

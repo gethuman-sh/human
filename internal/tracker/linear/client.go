@@ -119,10 +119,35 @@ const deleteIssueMutation = `mutation($id: String!) {
 	issueDelete(id: $id) { success }
 }`
 
-const createIssueMutation = `mutation($teamId: String!, $title: String!, $description: String, $projectId: String, $parentId: String) {
-	issueCreate(input: { teamId: $teamId, title: $title, description: $description, projectId: $projectId, parentId: $parentId }) {
+const createIssueMutation = `mutation($teamId: String!, $title: String!, $description: String, $projectId: String, $parentId: String, $labelIds: [String!]) {
+	issueCreate(input: { teamId: $teamId, title: $title, description: $description, projectId: $projectId, parentId: $parentId, labelIds: $labelIds }) {
 		success
 		issue { identifier url title description }
+	}
+}`
+
+// getIssueLabelContextQuery fetches everything a label edit needs in one round
+// trip: the issue's internal id, its team (labels are team-scoped in Linear),
+// and the labels it currently carries. Linear's issueUpdate labelIds is
+// full-replacement, so the current set is required to compute the new one.
+const getIssueLabelContextQuery = `query($id: String!) {
+	issue(id: $id) {
+		id
+		team { id }
+		labels { nodes { id name } }
+	}
+}`
+
+const getTeamLabelsQuery = `query($teamId: String!) {
+	team(id: $teamId) {
+		labels { nodes { id name } }
+	}
+}`
+
+const createLabelMutation = `mutation($name: String!, $teamId: String!) {
+	issueLabelCreate(input: { name: $name, teamId: $teamId }) {
+		success
+		issueLabel { id name }
 	}
 }`
 
@@ -266,6 +291,15 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 			return nil, err
 		}
 		vars["parentId"] = parentID
+	}
+	// Labels are team-scoped entities in Linear, so names must be resolved to
+	// ids against the team the issue is created in (creating missing ones).
+	if len(issue.Labels) > 0 {
+		labelIDs, err := c.resolveLabelIDs(ctx, teamID, issue.Labels)
+		if err != nil {
+			return nil, err
+		}
+		vars["labelIds"] = labelIDs
 	}
 
 	data, err := c.doGraphQL(ctx, createIssueMutation, vars)
@@ -484,17 +518,9 @@ func (c *Client) GetCurrentUser(ctx context.Context) (string, error) {
 
 // EditIssue implements tracker.Editor.
 func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
-	issueID, err := c.resolveIssueID(ctx, key)
+	issueID, input, err := c.buildEditInput(ctx, key, opts)
 	if err != nil {
 		return nil, err
-	}
-
-	input := make(map[string]string)
-	if opts.Title != nil {
-		input["title"] = *opts.Title
-	}
-	if opts.Description != nil {
-		input["description"] = *opts.Description
 	}
 
 	data, err := c.doGraphQL(ctx, issueUpdateMutation, map[string]any{
@@ -514,6 +540,166 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 	}
 
 	return c.GetIssue(ctx, key)
+}
+
+// buildEditInput assembles the issueUpdate input and resolves the issue's
+// internal id. Linear's labelIds field is full-replacement, so it is only
+// included when the caller asked for label changes — otherwise a title-only
+// edit would silently wipe the issue's labels.
+func (c *Client) buildEditInput(ctx context.Context, key string, opts tracker.EditOptions) (string, map[string]any, error) {
+	input := make(map[string]any)
+	if opts.Title != nil {
+		input["title"] = *opts.Title
+	}
+	if opts.Description != nil {
+		input["description"] = *opts.Description
+	}
+
+	if len(opts.AddLabels) == 0 && len(opts.RemoveLabels) == 0 {
+		issueID, err := c.resolveIssueID(ctx, key)
+		return issueID, input, err
+	}
+
+	issueID, teamID, current, err := c.fetchIssueLabelContext(ctx, key)
+	if err != nil {
+		return "", nil, err
+	}
+	addIDs, err := c.resolveLabelIDs(ctx, teamID, opts.AddLabels)
+	if err != nil {
+		return "", nil, err
+	}
+	input["labelIds"] = mergedLabelIDs(current, opts.RemoveLabels, addIDs)
+	return issueID, input, nil
+}
+
+// fetchIssueLabelContext returns the issue's internal id, its team id, and its
+// current labels — the minimum context needed to compute a full-replacement
+// labelIds set for issueUpdate.
+func (c *Client) fetchIssueLabelContext(ctx context.Context, key string) (string, string, []idNameNode, error) {
+	data, err := c.doGraphQL(ctx, getIssueLabelContextQuery, map[string]any{"id": key})
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	var result issueLabelContextData
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", "", nil, errors.WrapWithDetails(err, "decoding issue label context response",
+			"issueKey", key)
+	}
+
+	if result.Issue.ID == "" {
+		return "", "", nil, errors.WithDetails("linear issue not found", "identifier", key)
+	}
+	if result.Issue.Team.ID == "" {
+		return "", "", nil, errors.WithDetails("cannot determine team for issue", "issueKey", key)
+	}
+
+	return result.Issue.ID, result.Issue.Team.ID, result.Issue.Labels.Nodes, nil
+}
+
+// resolveLabelIDs maps label names to label ids within a team, matching
+// existing labels case-insensitively and creating labels that do not exist yet
+// (Linear requires label entities to exist before they can be attached).
+func (c *Client) resolveLabelIDs(ctx context.Context, teamID string, names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	existing, err := c.fetchTeamLabels(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+
+	byName := make(map[string]string, len(existing))
+	for _, l := range existing {
+		byName[strings.ToLower(l.Name)] = l.ID
+	}
+
+	ids := make([]string, 0, len(names))
+	for _, name := range names {
+		if id, ok := byName[strings.ToLower(name)]; ok {
+			ids = append(ids, id)
+			continue
+		}
+		id, err := c.createLabel(ctx, teamID, name)
+		if err != nil {
+			return nil, err
+		}
+		// Remember the fresh label so a duplicate name in the same call does
+		// not trigger a second create.
+		byName[strings.ToLower(name)] = id
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// fetchTeamLabels lists a team's existing labels for name→id resolution.
+func (c *Client) fetchTeamLabels(ctx context.Context, teamID string) ([]idNameNode, error) {
+	data, err := c.doGraphQL(ctx, getTeamLabelsQuery, map[string]any{"teamId": teamID})
+	if err != nil {
+		return nil, err
+	}
+
+	var result teamLabelsData
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, errors.WrapWithDetails(err, "decoding team labels response",
+			"teamID", teamID)
+	}
+
+	return result.Team.Labels.Nodes, nil
+}
+
+// createLabel creates a team-scoped label and returns its id.
+func (c *Client) createLabel(ctx context.Context, teamID, name string) (string, error) {
+	data, err := c.doGraphQL(ctx, createLabelMutation, map[string]any{
+		"name":   name,
+		"teamId": teamID,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	var result issueLabelCreateData
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", errors.WrapWithDetails(err, "decoding label create response",
+			"label", name)
+	}
+
+	if !result.IssueLabelCreate.Success || result.IssueLabelCreate.IssueLabel.ID == "" {
+		return "", errors.WithDetails("linear label creation failed",
+			"label", name, "teamID", teamID)
+	}
+
+	return result.IssueLabelCreate.IssueLabel.ID, nil
+}
+
+// mergedLabelIDs computes the full-replacement label set: current labels minus
+// the ones removed by name (case-insensitive; absent names are ignored so a
+// label swap is idempotent), plus the resolved add ids, deduplicated while
+// preserving order.
+func mergedLabelIDs(current []idNameNode, removeNames, addIDs []string) []string {
+	removed := make(map[string]bool, len(removeNames))
+	for _, name := range removeNames {
+		removed[strings.ToLower(name)] = true
+	}
+
+	seen := make(map[string]bool, len(current)+len(addIDs))
+	merged := make([]string, 0, len(current)+len(addIDs))
+	for _, l := range current {
+		if removed[strings.ToLower(l.Name)] || seen[l.ID] {
+			continue
+		}
+		seen[l.ID] = true
+		merged = append(merged, l.ID)
+	}
+	for _, id := range addIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		merged = append(merged, id)
+	}
+	return merged
 }
 
 // DeleteIssue implements tracker.Deleter.

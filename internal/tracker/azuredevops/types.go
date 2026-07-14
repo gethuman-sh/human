@@ -26,6 +26,7 @@ type adoFields struct {
 	Priority     int             `json:"Microsoft.VSTS.Common.Priority"`
 	TeamProject  string          `json:"System.TeamProject"`
 	ChangedDate  string          `json:"System.ChangedDate"`
+	Tags         string          `json:"System.Tags"` // "; "-joined tag names
 }
 
 // adoIdentityRef is an Azure DevOps identity reference.

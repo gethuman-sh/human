@@ -38,6 +38,9 @@ type glNote struct {
 type createRequest struct {
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
+	// Labels is comma-joined because GitLab's REST create endpoint takes a
+	// single comma-separated string rather than a JSON array.
+	Labels string `json:"labels,omitempty"`
 }
 
 type createResponse struct {

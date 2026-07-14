@@ -38,6 +38,10 @@ func New(baseURL, token string, teamID string) *Client {
 			apiclient.WithAuth(apiclient.HeaderAuth("Authorization", token)),
 			apiclient.WithHeader("Accept", "application/json"),
 			apiclient.WithProviderName("clickup"),
+			// Paths are assembled from url.PathEscape'd segments; the raw
+			// builder keeps that encoding on the wire so tag names with
+			// spaces or slashes (e.g. "human/idea") stay one path segment.
+			apiclient.WithURLBuilder(apiclient.RawPathURL()),
 		),
 		teamID:        teamID,
 		statusesCache: make(map[string][]cuStatus),
@@ -127,6 +131,9 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	if issue.ParentKey != "" {
 		body["parent"] = issue.ParentKey
 	}
+	if len(issue.Labels) > 0 {
+		body["tags"] = issue.Labels
+	}
 
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -149,6 +156,7 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		Title:       task.Name,
 		Description: task.Description,
 		URL:         task.URL,
+		Labels:      tagNames(task.Tags),
 	}, nil
 }
 
@@ -267,7 +275,9 @@ func (c *Client) GetCurrentUser(ctx context.Context) (string, error) {
 	return strconv.FormatInt(cu.User.ID, 10), nil
 }
 
-// EditIssue implements tracker.Editor.
+// EditIssue implements tracker.Editor. Title/description go through the task
+// PUT; labels use ClickUp's dedicated per-tag endpoints, so a labels-only
+// edit skips the field update entirely.
 func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
 	fields := make(map[string]string)
 	if opts.Title != nil {
@@ -277,6 +287,28 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 		fields["description"] = *opts.Description
 	}
 
+	labelsChanged := len(opts.AddLabels) > 0 || len(opts.RemoveLabels) > 0
+	if len(fields) > 0 || !labelsChanged {
+		issue, err := c.putTaskFields(ctx, key, fields)
+		if err != nil {
+			return nil, err
+		}
+		if !labelsChanged {
+			return issue, nil
+		}
+	}
+
+	if err := c.applyTagChanges(ctx, key, opts.AddLabels, opts.RemoveLabels); err != nil {
+		return nil, err
+	}
+	// Any field-update response predates the tag operations, so the task is
+	// re-read to return the final label set.
+	return c.GetIssue(ctx, key)
+}
+
+// putTaskFields updates task fields via the task PUT and returns the
+// resulting issue.
+func (c *Client) putTaskFields(ctx context.Context, key string, fields map[string]string) (*tracker.Issue, error) {
 	payload, err := json.Marshal(fields)
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "marshalling edit request", "key", key)
@@ -295,6 +327,42 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 
 	issue := c.toTrackerIssue(ctx, task)
 	return &issue, nil
+}
+
+// applyTagChanges drives ClickUp's dedicated tag endpoints: one POST per
+// added tag, one DELETE per removed tag. Removing a tag the task does not
+// carry counts as already done, so label swaps stay idempotent.
+func (c *Client) applyTagChanges(ctx context.Context, key string, add, remove []string) error {
+	for _, name := range add {
+		if err := c.tagRequest(ctx, http.MethodPost, key, name); err != nil {
+			return err
+		}
+	}
+	for _, name := range remove {
+		if err := c.tagRequest(ctx, http.MethodDelete, key, name); err != nil && !isAbsentTagError(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// tagRequest issues a single tag add/remove call against a task.
+func (c *Client) tagRequest(ctx context.Context, method, key, tag string) error {
+	path := fmt.Sprintf("/api/v2/task/%s/tag/%s", url.PathEscape(key), url.PathEscape(tag))
+	resp, err := c.doRequest(ctx, method, path, c.customIDQuery(key), nil, "")
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+// isAbsentTagError reports whether the error is ClickUp rejecting an
+// operation on a tag the task does not carry (400/404), which a remove
+// treats as success.
+func isAbsentTagError(err error) bool {
+	code, ok := errors.AllDetails(err)["statusCode"].(int)
+	return ok && (code == http.StatusNotFound || code == http.StatusBadRequest)
 }
 
 // ListStatuses implements tracker.StatusLister.
@@ -431,11 +499,6 @@ func (c *Client) toTrackerIssue(ctx context.Context, task cuTask) tracker.Issue 
 		priority = task.Priority.Priority
 	}
 
-	var labels []string
-	for _, tag := range task.Tags {
-		labels = append(labels, tag.Name)
-	}
-
 	issue := tracker.Issue{
 		Key:         task.ID,
 		Title:       task.Name,
@@ -447,12 +510,21 @@ func (c *Client) toTrackerIssue(ctx context.Context, task cuTask) tracker.Issue 
 		Description: task.Description,
 		URL:         task.URL,
 		ParentKey:   task.Parent,
-		Labels:      labels,
+		Labels:      tagNames(task.Tags),
 	}
 	if task.DateUpdated != "" {
 		issue.UpdatedAt = parseUnixMs(task.DateUpdated)
 	}
 	return issue
+}
+
+// tagNames flattens ClickUp tag objects to their plain names.
+func tagNames(tags []cuTag) []string {
+	var names []string
+	for _, tag := range tags {
+		names = append(names, tag.Name)
+	}
+	return names
 }
 
 // toTrackerComment converts a ClickUp comment to a tracker.Comment.

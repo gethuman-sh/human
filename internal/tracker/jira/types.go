@@ -16,6 +16,7 @@ type issueFields struct {
 	Status    statusField `json:"status"`
 	Updated   string      `json:"updated"`
 	IssueType nameOnly    `json:"issuetype"`
+	Labels    []string    `json:"labels"`
 }
 
 type statusField struct {
@@ -36,6 +37,7 @@ type issueDetailFields struct {
 	Description json.RawMessage `json:"description"`
 	IssueType   nameOnly        `json:"issuetype"`
 	Parent      *keyField       `json:"parent"`
+	Labels      []string        `json:"labels"`
 }
 
 type nameField struct {
@@ -53,6 +55,7 @@ type createFields struct {
 	IssueType   nameOnly       `json:"issuetype"`
 	Description map[string]any `json:"description,omitempty"`
 	Parent      *keyField      `json:"parent,omitempty"`
+	Labels      []string       `json:"labels,omitempty"`
 }
 
 type keyField struct {

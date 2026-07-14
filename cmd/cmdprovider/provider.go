@@ -96,6 +96,7 @@ func buildIssueGetCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 
 func buildIssueCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 	var project, typ, description, parent string
+	var labels []string
 
 	cmd := &cobra.Command{
 		Use:     "create TITLE",
@@ -108,7 +109,7 @@ func buildIssueCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			return RunCreateIssue(cmd.Context(), p, cmd.OutOrStdout(), project, typ, args[0], description, parent)
+			return RunCreateIssue(cmd.Context(), p, cmd.OutOrStdout(), project, typ, args[0], description, parent, labels)
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Project key (Jira: KAN, GitHub: owner/repo, GitLab: group/project, Linear: ENG)")
@@ -116,6 +117,7 @@ func buildIssueCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 	cmd.Flags().StringVar(&typ, "type", "Task", "Issue type (Jira only, e.g. Task, Bug, Story)")
 	cmd.Flags().StringVar(&description, "description", "", "Issue description in markdown (separate from title)")
 	cmd.Flags().StringVar(&parent, "parent", "", "Parent issue key to create this as a subtask (Linear, Jira, Shortcut, Azure DevOps, GitHub, ClickUp; not supported on GitLab)")
+	cmd.Flags().StringArrayVar(&labels, "label", nil, "Label to attach (repeatable), e.g. --label human/idea")
 	return cmd
 }
 
@@ -154,15 +156,17 @@ func buildPRCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 
 func buildIssueEditCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 	var title, description string
+	var addLabels, removeLabels []string
 
 	cmd := &cobra.Command{
 		Use:     "edit KEY",
-		Short:   "Edit an issue's title and/or description",
-		Example: `  human jira issue edit KAN-1 --title "New title" --description "Updated description"`,
+		Short:   "Edit an issue's title, description, and/or labels",
+		Example: `  human jira issue edit KAN-1 --title "New title" --remove-label human/idea`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !cmd.Flags().Changed("title") && !cmd.Flags().Changed("description") {
-				return errors.WithDetails("at least one of --title or --description is required")
+			if !cmd.Flags().Changed("title") && !cmd.Flags().Changed("description") &&
+				len(addLabels) == 0 && len(removeLabels) == 0 {
+				return errors.WithDetails("at least one of --title, --description, --add-label, or --remove-label is required")
 			}
 			p, cleanup, err := cmdutil.ResolveProvider(cmd, kind, deps)
 			if err != nil {
@@ -170,7 +174,7 @@ func buildIssueEditCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 			}
 			defer cleanup()
 
-			var opts tracker.EditOptions
+			opts := tracker.EditOptions{AddLabels: addLabels, RemoveLabels: removeLabels}
 			if cmd.Flags().Changed("title") {
 				opts.Title = &title
 			}
@@ -183,6 +187,8 @@ func buildIssueEditCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "New issue title")
 	cmd.Flags().StringVar(&description, "description", "", "New issue description (markdown)")
+	cmd.Flags().StringArrayVar(&addLabels, "add-label", nil, "Label to add (repeatable)")
+	cmd.Flags().StringArrayVar(&removeLabels, "remove-label", nil, "Label to remove (repeatable; absent labels are ignored)")
 	return cmd
 }
 
@@ -354,13 +360,14 @@ func RunGetIssue(ctx context.Context, p tracker.Provider, out io.Writer, key str
 // RunCreateIssue creates a new issue. When parent is non-empty, the issue is
 // created as a subtask of the given parent key. Subtask support is
 // provider-specific (see the --parent flag help); GitLab rejects it.
-func RunCreateIssue(ctx context.Context, p tracker.Provider, out io.Writer, project, typ, title, description, parent string) error {
+func RunCreateIssue(ctx context.Context, p tracker.Provider, out io.Writer, project, typ, title, description, parent string, labels []string) error {
 	issue, err := p.CreateIssue(ctx, &tracker.Issue{
 		Project:     project,
 		Type:        typ,
 		Title:       title,
 		Description: description,
 		ParentKey:   parent,
+		Labels:      labels,
 	})
 	if err != nil {
 		return err

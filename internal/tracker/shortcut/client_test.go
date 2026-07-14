@@ -1186,3 +1186,156 @@ func TestGetIssue_withParent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "42", issue.ParentKey)
 }
+
+func TestListIssues_labelsMapped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/groups":
+			_, _ = fmt.Fprint(w, `[{"id":"grp-uuid-1","name":"Human"}]`)
+		case "/api/v3/groups/grp-uuid-1/stories":
+			_, _ = fmt.Fprint(w, `[
+				{"id":1,"name":"Labelled","story_type":"bug","workflow_state_id":500,"owner_ids":[],"requested_by_id":"","labels":[{"name":"bug"},{"name":"urgent"}]},
+				{"id":2,"name":"Unlabelled","story_type":"feature","workflow_state_id":500,"owner_ids":[],"requested_by_id":""}
+			]`)
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	issues, err := client.ListIssues(context.Background(), tracker.ListOptions{Project: "Human"})
+
+	require.NoError(t, err)
+	require.Len(t, issues, 2)
+	assert.Equal(t, []string{"bug", "urgent"}, issues[0].Labels)
+	assert.Empty(t, issues[1].Labels)
+}
+
+func TestEditIssue_labelsMerged(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/stories/123":
+			// Current story state read before the full-replacement label write.
+			_, _ = fmt.Fprint(w, `{"id":123,"name":"Story","workflow_state_id":500,"owner_ids":[],"requested_by_id":"","labels":[{"name":"keep"},{"name":"drop"}]}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/stories/123":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &gotBody))
+			_, _ = fmt.Fprint(w, `{"id":123,"name":"Story","workflow_state_id":500,"owner_ids":[],"requested_by_id":"","labels":[{"name":"keep"},{"name":"new"}]}`)
+		case r.URL.Path == "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	issue, err := client.EditIssue(context.Background(), "123", tracker.EditOptions{
+		// "keep" is a duplicate add and "ghost" an absent removal; both must
+		// be no-ops in the merged set.
+		AddLabels:    []string{"new", "keep"},
+		RemoveLabels: []string{"drop", "ghost"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"keep", "new"}, issue.Labels)
+
+	labels, ok := gotBody["labels"].([]any)
+	require.True(t, ok, "PUT body must carry the merged label set")
+	require.Len(t, labels, 2)
+	assert.Equal(t, map[string]any{"name": "keep"}, labels[0])
+	assert.Equal(t, map[string]any{"name": "new"}, labels[1])
+}
+
+func TestEditIssue_noLabelChangeLeavesLabelsUntouched(t *testing.T) {
+	title := "New title"
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/stories/123":
+			t.Error("title-only edit must not fetch the story for label merging")
+			w.WriteHeader(http.StatusNotFound)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/stories/123":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &gotBody))
+			_, _ = fmt.Fprint(w, `{"id":123,"name":"New title","workflow_state_id":500,"owner_ids":[],"requested_by_id":""}`)
+		case r.URL.Path == "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	_, err := client.EditIssue(context.Background(), "123", tracker.EditOptions{Title: &title})
+
+	require.NoError(t, err)
+	assert.Equal(t, "New title", gotBody["name"])
+	// Omitting labels from the body keeps Shortcut's full-replacement label
+	// semantics from wiping existing labels on unrelated edits.
+	_, hasLabels := gotBody["labels"]
+	assert.False(t, hasLabels)
+}
+
+func TestCreateIssue_withLabels(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		case "/api/v3/stories":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &gotBody))
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":77,"name":"Labelled","story_type":"feature","workflow_state_id":500,"labels":[{"name":"idea"},{"name":"backend"}]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Title:  "Labelled",
+		Labels: []string{"idea", "backend"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"idea", "backend"}, issue.Labels)
+
+	labels, ok := gotBody["labels"].([]any)
+	require.True(t, ok)
+	require.Len(t, labels, 2)
+	assert.Equal(t, map[string]any{"name": "idea"}, labels[0])
+	assert.Equal(t, map[string]any{"name": "backend"}, labels[1])
+}
+
+func Test_mergeLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing []string
+		add      []string
+		remove   []string
+		want     []string
+	}{
+		{name: "add and remove", existing: []string{"a", "b"}, add: []string{"c"}, remove: []string{"b"}, want: []string{"a", "c"}},
+		{name: "remove absent is noop", existing: []string{"a"}, remove: []string{"x"}, want: []string{"a"}},
+		{name: "duplicate add deduped", existing: []string{"a"}, add: []string{"a", "b", "b"}, want: []string{"a", "b"}},
+		{name: "remove all yields empty", existing: []string{"a"}, remove: []string{"a"}, want: []string{}},
+		{name: "order stable", existing: []string{"z", "a"}, add: []string{"m"}, want: []string{"z", "a", "m"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, mergeLabels(tt.existing, tt.add, tt.remove))
+		})
+	}
+}

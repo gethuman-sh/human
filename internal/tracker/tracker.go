@@ -211,8 +211,37 @@ func (i Issue) IsBug() bool {
 }
 
 func isBugToken(s string) bool {
+	return hasToken(s, "bug")
+}
+
+// IdeaLabel is the canonical label marking a ticket as a raw idea — the first
+// maturity stage of the evolving-ticket lifecycle. It is namespaced so it
+// cannot collide with a team's existing labels; classification additionally
+// accepts the bare token (see IsIdea) so existing "idea" conventions count.
+const IdeaLabel = "human/idea"
+
+// IsIdea reports whether this issue is a raw idea, normalised across trackers
+// exactly like IsBug: any segment equal to "idea" in Type or in any label,
+// after splitting on '/' and ':'. Covers "idea", "human/idea", "kind/idea",
+// "type:idea"; segment equality keeps "ideation" from matching.
+func (i Issue) IsIdea() bool {
+	if hasToken(i.Type, "idea") {
+		return true
+	}
+	for _, l := range i.Labels {
+		if hasToken(l, "idea") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasToken reports whether any '/'- or ':'-separated segment of s equals
+// token case-insensitively — the shared normalisation for cross-tracker
+// label/type classification.
+func hasToken(s, token string) bool {
 	for _, seg := range strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == ':' }) {
-		if strings.EqualFold(strings.TrimSpace(seg), "bug") {
+		if strings.EqualFold(strings.TrimSpace(seg), token) {
 			return true
 		}
 	}
@@ -333,9 +362,15 @@ type CurrentUserGetter interface {
 type EditOptions struct {
 	Title       *string
 	Description *string
+	// AddLabels are labels to add to the issue. Providers whose label model
+	// requires pre-existing label entities create them on the fly.
+	AddLabels []string
+	// RemoveLabels are labels to remove; labels the issue does not carry are
+	// ignored rather than treated as an error, so a label swap is idempotent.
+	RemoveLabels []string
 }
 
-// Editor updates an existing issue's title and/or description.
+// Editor updates an existing issue's title, description, and/or labels.
 type Editor interface {
 	EditIssue(ctx context.Context, key string, opts EditOptions) (*Issue, error)
 }
