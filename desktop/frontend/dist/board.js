@@ -10,7 +10,7 @@
 // call unconditionally on the hot paths below.
 import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
 import { initPermissions } from "./permissions.js";
-import { initMockupsView, showMockups } from "./mockupsview.js";
+import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsview.js";
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 // Queue columns: each names a state that is TRUE of every card in it, always.
@@ -223,6 +223,39 @@ function showCardMenu(card, x, y) {
         a.click();
     });
     menu.appendChild(openItem);
+    // Mockups belong to the product conversation: the item appears only in the
+    // Product backlog column, toggling create → creating → view as the local
+    // mockup set for this ticket comes into existence.
+    if (queueOf(card) === "product") {
+        const mockItem = document.createElement("button");
+        mockItem.type = "button";
+        mockItem.className = "context-menu-item";
+        if (card.mockupState === "ready") {
+            mockItem.textContent = "View mocks";
+            mockItem.addEventListener("click", () => {
+                menu.remove();
+                setPendingMockupSlug(card.mockupSlug ?? "");
+                selectView("mockups");
+            });
+        }
+        else if (card.mockupState === "creating") {
+            mockItem.textContent = "Creating mocks…";
+            mockItem.disabled = true;
+        }
+        else {
+            mockItem.textContent = "Create mocks";
+            // Generation launches a containerized agent — same Docker gate as the
+            // pipeline drop targets.
+            mockItem.disabled = !current.dockerAvailable;
+            if (mockItem.disabled)
+                mockItem.title = "Docker required";
+            mockItem.addEventListener("click", () => {
+                menu.remove();
+                void createMocks(card);
+            });
+        }
+        menu.appendChild(mockItem);
+    }
     const closeItem = document.createElement("button");
     closeItem.type = "button";
     closeItem.className = "context-menu-item danger";
@@ -674,6 +707,19 @@ async function closeTicket(key) {
         showError(errMessage(err));
     }
     // The closed ticket is no longer "open", so reconcile drops it from the board.
+    await reconcile();
+}
+// createMocks launches mockup generation for one ticket. No confirm dialog —
+// the action is additive (files in mockups/, nothing on the tracker). The
+// immediate reconcile picks up the daemon-written link so the menu reads
+// "Creating mocks…" on the next right-click.
+async function createMocks(card) {
+    try {
+        await go().CreateMocks(card.key, card.title, card.description ?? "");
+    }
+    catch (err) {
+        showError(errMessage(err));
+    }
     await reconcile();
 }
 // confirmDialog renders a small modal overlay and resolves true/false on the

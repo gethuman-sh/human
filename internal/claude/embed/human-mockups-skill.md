@@ -10,6 +10,10 @@ Produce N static HTML mockups (default 5), each showing a DIFFERENT interaction 
 
 All files for one invocation go into their own subdirectory `mockups/<feature-slug>/` (kebab-case, e.g. `mockups/permission-requests/`) so multiple explored features coexist. Never write mockup files into `mockups/` directly.
 
+## Ticket-linked invocation
+
+If the argument begins with an issue key followed by a colon (e.g. `SC-123: dark mode toggle`), the mockups belong to that ticket: use the lowercased key as the feature slug (`mockups/sc-123/`), use the text after the colon as the feature name, and add a top-level `"ticket": "SC-123"` field to `index.json`. An optional `Ticket context:` block after the first line is background for choosing options — never render it in the mockups. Without a leading key, behave exactly as described below.
+
 ## Ground rules
 
 1. **Match the real app.** Locate the project's actual frontend (stylesheet, design tokens, app shell markup) and reproduce its look faithfully: colors, type, chrome, layout. Every mockup renders the pattern inside the real visual context, never on a blank page. If the project has no existing UI or several, ask which surface the mockups target before starting.
@@ -45,7 +49,7 @@ Also write, inside the feature subdirectory:
 }
 ```
 
-One entry per option, in order; `description` is the option's one-line thesis from its brief bar. Keep `index.json` in sync if options are added or revised.
+One entry per option, in order; `description` is the option's one-line thesis from its brief bar. `ticket` is present only for ticket-linked invocations. Keep `index.json` in sync if options are added or revised.
 
 ## Verify before presenting
 

@@ -35,6 +35,7 @@ import (
 	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/messaging/slack"
 	"github.com/gethuman-sh/human/internal/messaging/telegram"
+	"github.com/gethuman-sh/human/internal/mockups"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/stats"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -243,6 +244,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
+		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
 		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, logger),
 	}
 
@@ -1499,6 +1501,47 @@ func featuresGeneratorFunc(reg *daemon.ProjectRegistry) func() error {
 			_ = docker.Close()
 		}
 		return dockerAgentLauncher{}.Launch(context.Background(), "features", "/human-features", entry.Dir, entry.Dir)
+	}
+}
+
+// mockupsCreatorFunc builds the daemon's MockupsCreator closure: it records
+// the ticket→mockup-set link in the project's .human/mockups.json and launches
+// the human-mockups skill in the registered project's devcontainer — the same
+// containerized agent path as feature generation. The link is written BEFORE
+// the launch (it doubles as the board's "creating…" marker) and rolled back if
+// the launch fails, so the menu never sticks on a set that was never started.
+func mockupsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateMocksRequest) error {
+	return func(req daemon.CreateMocksRequest) error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for mock creation")
+		}
+		entry := entries[0]
+		slug := mockups.SlugFor(req.PMKey)
+		if slug == "" {
+			return errors.WithDetails("cannot derive mockup slug", "pm_key", req.PMKey)
+		}
+		// Tear down any prior agent for this ticket first so a retry after a
+		// stale or crashed run is idempotent — Manager.Start refuses to start
+		// over a still-running agent.
+		agentName := "mockups-" + slug
+		if docker, err := devcontainer.NewDockerClient(); err == nil {
+			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), agentName)
+			_ = docker.Close()
+		}
+		store := mockups.NewStore(mockups.PathIn(entry.Dir))
+		if err := store.Set(req.PMKey, mockups.Entry{Slug: slug, Created: time.Now()}); err != nil {
+			return err
+		}
+		prompt := "/human-mockups " + req.PMKey + ": " + req.PMTitle
+		if req.Description != "" {
+			prompt += "\n\nTicket context:\n" + req.Description
+		}
+		if err := (dockerAgentLauncher{}).Launch(context.Background(), agentName, prompt, entry.Dir, entry.Dir); err != nil {
+			_ = store.Delete(req.PMKey)
+			return err
+		}
+		return nil
 	}
 }
 
