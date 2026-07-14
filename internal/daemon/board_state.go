@@ -27,7 +27,19 @@ type BoardCard struct {
 // wins; within that stage the latest marker (by Created) decides
 // running/done/failed. A ticket with no markers sits in Backlog while open and
 // is Hidden once closed/done (those never entered the pipeline). Pure: no I/O.
-func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category) BoardCard {
+//
+// isIdea (the ticket carries an idea label, tracker.Issue.IsIdea) takes
+// precedence over everything while the ticket is open: an idea sits in the
+// Ideas column even if it somehow carries pipeline markers — deliberately, so
+// the label is the single source of truth until promotion removes it.
+func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, isIdea bool) BoardCard {
+	if isIdea {
+		if statusType == tracker.CategoryDone || statusType == tracker.CategoryClosed {
+			return BoardCard{Stage: BoardHidden}
+		}
+		return BoardCard{Stage: BoardIdeas}
+	}
+
 	furthest := BoardBacklog
 	furthestRank := -1
 	var anyMarker bool
@@ -57,20 +69,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category) Bo
 	}
 
 	// Second pass: within the furthest stage, the latest marker decides state.
-	state := BoardIdle
-	var haveLatest bool
-	var latest tracker.Comment
-	for _, c := range comments {
-		stage, st, ok := ClassifyMarker(c.Body)
-		if !ok || stage != furthest {
-			continue
-		}
-		if !haveLatest || c.Created.After(latest.Created) {
-			latest = c
-			haveLatest = true
-			state = st
-		}
-	}
+	state, latest := latestStateInStage(comments, furthest)
 
 	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan}
 	card.EngineeringKey = firstEngineeringKey(comments)
@@ -80,6 +79,26 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category) Bo
 		card.Error = firstLine(latest.Body)
 	}
 	return card
+}
+
+// latestStateInStage resolves the stage's state from its newest marker and
+// returns that marker's comment so a failure message can be extracted.
+func latestStateInStage(comments []tracker.Comment, stage BoardStage) (BoardState, tracker.Comment) {
+	state := BoardIdle
+	var haveLatest bool
+	var latest tracker.Comment
+	for _, c := range comments {
+		s, st, ok := ClassifyMarker(c.Body)
+		if !ok || s != stage {
+			continue
+		}
+		if !haveLatest || c.Created.After(latest.Created) {
+			latest = c
+			haveLatest = true
+			state = st
+		}
+	}
+	return state, latest
 }
 
 // latestPlanComment returns the body of the newest [human:plan] comment with

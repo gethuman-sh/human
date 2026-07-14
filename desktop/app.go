@@ -58,6 +58,11 @@ type Card struct {
 	Branch         string `json:"branch,omitempty"`
 	PRURL          string `json:"prURL,omitempty"`
 	Error          string `json:"error,omitempty"`
+	// Labels and Description feed the Ideas→Backlog promotion: labels tell
+	// the evolve session which idea labels to remove, the description seeds
+	// the ideation conversation alongside the title.
+	Labels      []string `json:"labels,omitempty"`
+	Description string   `json:"description,omitempty"`
 }
 
 // BoardData is the full payload the frontend renders: the flat card list plus an
@@ -130,11 +135,17 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 		if stage == "" {
 			// No derived card (quick fetch, or a marker-less ticket): a
 			// done/closed ticket that never entered the pipeline is hidden;
-			// everything else sits in Backlog.
+			// ideas sit in the Ideas column by their label alone; everything
+			// else sits in Backlog. Mirrors daemon.DeriveBoardCard so the
+			// quick pass and full pass agree.
 			if issue.StatusType == tracker.CategoryDone || issue.StatusType == tracker.CategoryClosed {
 				continue
 			}
-			stage = daemon.BoardBacklog
+			if issue.IsIdea() {
+				stage = daemon.BoardIdeas
+			} else {
+				stage = daemon.BoardBacklog
+			}
 		}
 		if stage == daemon.BoardHidden {
 			// Closed PM ticket that never entered the pipeline — not shown.
@@ -150,6 +161,8 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Branch:         card.Branch,
 			PRURL:          card.PRURL,
 			Error:          card.Error,
+			Labels:         issue.Labels,
+			Description:    issue.Description,
 		})
 	}
 	return data
@@ -247,20 +260,35 @@ type IdeationView struct {
 
 // StartIdeation begins (or re-attaches to) the board ideation session. mode
 // is "chat" or "guided"; empty defaults to "chat" in the daemon engine.
-func (a *App) StartIdeation(seed, mode string, restart bool) (IdeationView, error) {
+// evolveKey (with the card's idea labels) switches the session to evolve
+// mode: the outcome rewrites that ticket in place instead of creating one —
+// the Ideas→Backlog promotion path.
+func (a *App) StartIdeation(seed, mode string, restart bool, evolveKey string, evolveLabels []string) (IdeationView, error) {
 	info, err := daemon.ReadInfo()
 	if err != nil {
 		return IdeationView{}, err
 	}
 	st, err := daemon.IdeationStart(info.Addr, info.Token, daemon.IdeationStartRequest{
-		Seed:    seed,
-		Mode:    daemon.IdeationMode(mode),
-		Restart: restart,
+		Seed:         seed,
+		Mode:         daemon.IdeationMode(mode),
+		Restart:      restart,
+		EvolveKey:    evolveKey,
+		EvolveLabels: evolveLabels,
 	})
 	if err != nil {
 		return IdeationView{}, err
 	}
 	return ideationView(st), nil
+}
+
+// CreateIdea quick-captures a title-only idea ticket — the Ideas column's `+`.
+func (a *App) CreateIdea(title string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	_, err = daemon.IdeaCreate(info.Addr, info.Token, daemon.IdeaCreateRequest{Title: title})
+	return err
 }
 
 // ReplyIdeation sends the user's answer into the running session.

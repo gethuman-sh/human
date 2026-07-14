@@ -360,6 +360,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"ideation-reply":      func() { s.handleIdeationReply(conn, args[1:]) },
 		"ideation-approve":    func() { s.handleIdeationApprove(conn, args[1:]) },
 		"ideation-status":     func() { s.handleIdeationStatus(conn) },
+		"idea-create":         func() { s.handleIdeaCreate(conn, args[1:]) },
 		"features-generate":   func() { s.handleFeaturesGenerate(conn) },
 		"config-get":          func() { s.handleConfigGet(conn, projectDir) },
 		"config-set":          func() { s.handleConfigSet(conn, args[1:], projectDir) },

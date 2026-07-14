@@ -86,11 +86,19 @@ func parseAgentName(name string) (pmKey string, stage BoardStage, ok bool) {
 // forward move is allowed (forward-only, single-step, gated on the prior
 // stage's completion). All errors carry details for the client.
 func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTransitionRequest) error {
+	// Ideas never move via board transitions: promotion out of the Ideas
+	// column is a label swap performed by the ideation engine's evolve mode,
+	// which the desktop opens instead of calling this route.
+	if req.From == BoardIdeas || req.To == BoardIdeas {
+		return errors.WithDetails("ideas transitions are handled via ideation",
+			"pm", req.PMKey, "from", string(req.From), "to", string(req.To))
+	}
+
 	comments, err := d.Commenter.ListComments(ctx, req.PMKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading PM comments for transition", "pm", req.PMKey)
 	}
-	card := DeriveBoardCard(comments, tracker.CategoryUnstarted)
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 
 	// Idempotency: if the target stage already has an open *-started marker, a
 	// duplicate drop (e.g. a quick re-drag before the board refetches) must not

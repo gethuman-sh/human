@@ -285,3 +285,13 @@ func TestDoneBodySingleRef(t *testing.T) {
 	assert.Contains(t, body, "PM ticket: SC-1")
 	assert.NotContains(t, body, "Engineering ticket:")
 }
+
+func TestApplyTransitionIdeasGuard(t *testing.T) {
+	// Ideas leave their column via ideation's label swap, never via a board
+	// transition — both directions are rejected before any comment fetch.
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, &fakePublisher{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardIdeas, To: BoardBacklog})
+	require.Error(t, err)
+	err = deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardIdeas})
+	require.Error(t, err)
+}

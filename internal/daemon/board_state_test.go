@@ -19,29 +19,29 @@ func TestDeriveBoardCard(t *testing.T) {
 	t2 := time.Unix(3000, 0)
 
 	t.Run("no markers open is backlog", func(t *testing.T) {
-		card := DeriveBoardCard(nil, tracker.CategoryUnstarted)
+		card := DeriveBoardCard(nil, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardBacklog, card.Stage)
 		assert.Equal(t, BoardIdle, card.State)
 	})
 
 	t.Run("no markers closed is hidden", func(t *testing.T) {
-		card := DeriveBoardCard(nil, tracker.CategoryClosed)
+		card := DeriveBoardCard(nil, tracker.CategoryClosed, false)
 		assert.Equal(t, BoardHidden, card.Stage)
 	})
 
 	t.Run("no markers done is hidden", func(t *testing.T) {
-		card := DeriveBoardCard(nil, tracker.CategoryDone)
+		card := DeriveBoardCard(nil, tracker.CategoryDone, false)
 		assert.Equal(t, BoardHidden, card.Stage)
 	})
 
 	t.Run("planning-started is planning running", func(t *testing.T) {
-		card := DeriveBoardCard([]tracker.Comment{cmt("[human:planning-started]", t0)}, tracker.CategoryUnstarted)
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:planning-started]", t0)}, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardPlanning, card.Stage)
 		assert.Equal(t, BoardRunning, card.State)
 	})
 
 	t.Run("plan-ready with eng key", func(t *testing.T) {
-		card := DeriveBoardCard([]tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-7", t0)}, tracker.CategoryUnstarted)
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-7", t0)}, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardPlanning, card.Stage)
 		assert.Equal(t, BoardDone, card.State)
 		assert.Equal(t, "HUM-7", card.EngineeringKey)
@@ -52,7 +52,7 @@ func TestDeriveBoardCard(t *testing.T) {
 			cmt("[human:plan-ready]\nengineering: HUM-7", t0),
 			cmt("[human:implementation-started]", t1),
 		}
-		card := DeriveBoardCard(comments, tracker.CategoryUnstarted)
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardImplementation, card.Stage)
 		assert.Equal(t, BoardRunning, card.State)
 		assert.Equal(t, "HUM-7", card.EngineeringKey)
@@ -63,7 +63,7 @@ func TestDeriveBoardCard(t *testing.T) {
 			cmt("[human:planning-started]", t0),
 			cmt("[human:plan-ready]\nengineering: HUM-9", t1),
 		}
-		card := DeriveBoardCard(comments, tracker.CategoryUnstarted)
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardPlanning, card.Stage)
 		assert.Equal(t, BoardDone, card.State)
 	})
@@ -72,7 +72,7 @@ func TestDeriveBoardCard(t *testing.T) {
 		comments := []tracker.Comment{
 			cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x\ncommits: abc", t0),
 		}
-		card := DeriveBoardCard(comments, tracker.CategoryUnstarted)
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardImplementation, card.Stage)
 		assert.Equal(t, BoardDone, card.State)
 		assert.Equal(t, "feat/x", card.Branch)
@@ -83,7 +83,7 @@ func TestDeriveBoardCard(t *testing.T) {
 		comments := []tracker.Comment{
 			cmt("[human:implementation-failed]\ncompile error in foo.go", t0),
 		}
-		card := DeriveBoardCard(comments, tracker.CategoryUnstarted)
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardImplementation, card.Stage)
 		assert.Equal(t, BoardFailed, card.State)
 		assert.Equal(t, "[human:implementation-failed]", card.Error)
@@ -96,7 +96,7 @@ func TestDeriveBoardCard(t *testing.T) {
 			cmt("[human:review-complete]", t2),
 			cmt("[human:pr-pushed]\npr: https://example/pr/1", t2.Add(time.Second)),
 		}
-		card := DeriveBoardCard(comments, tracker.CategoryUnstarted)
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 		assert.Equal(t, BoardDoneStage, card.Stage)
 		assert.Equal(t, BoardDone, card.State)
 		assert.Equal(t, "https://example/pr/1", card.PRURL)
@@ -110,7 +110,7 @@ func TestDeriveBoardCard_HasPlan(t *testing.T) {
 	t1 := time.Unix(2000, 0)
 
 	t.Run("plan comment sets HasPlan without shifting stage", func(t *testing.T) {
-		card := DeriveBoardCard([]tracker.Comment{cmt("[human:plan]\n\n## Steps\n1. do it", t0)}, tracker.CategoryUnstarted)
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:plan]\n\n## Steps\n1. do it", t0)}, tracker.CategoryUnstarted, false)
 		assert.True(t, card.HasPlan)
 		// The plan is content, not a stage signal — the card stays in Backlog.
 		assert.Equal(t, BoardBacklog, card.Stage)
@@ -118,7 +118,7 @@ func TestDeriveBoardCard_HasPlan(t *testing.T) {
 
 	t.Run("plan-ready is not a plan comment", func(t *testing.T) {
 		// Prefix isolation: [human:plan-ready] must not read as [human:plan].
-		card := DeriveBoardCard([]tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-9", t0)}, tracker.CategoryUnstarted)
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-9", t0)}, tracker.CategoryUnstarted, false)
 		assert.False(t, card.HasPlan)
 		assert.Equal(t, BoardPlanning, card.Stage)
 	})
@@ -127,9 +127,35 @@ func TestDeriveBoardCard_HasPlan(t *testing.T) {
 		card := DeriveBoardCard([]tracker.Comment{
 			cmt("[human:plan]\nthe plan", t0),
 			cmt("[human:planning-started]", t1),
-		}, tracker.CategoryUnstarted)
+		}, tracker.CategoryUnstarted, false)
 		assert.True(t, card.HasPlan)
 		assert.Equal(t, BoardPlanning, card.Stage)
+	})
+}
+
+func TestDeriveBoardCard_Ideas(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+
+	t.Run("open idea sits in Ideas regardless of markers", func(t *testing.T) {
+		// The label is the single source of truth until promotion removes it —
+		// even pipeline markers cannot pull an idea forward.
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:planning-started]", t0)}, tracker.CategoryUnstarted, true)
+		assert.Equal(t, BoardIdeas, card.Stage)
+		assert.Equal(t, BoardIdle, card.State)
+	})
+
+	t.Run("closed idea is hidden", func(t *testing.T) {
+		card := DeriveBoardCard(nil, tracker.CategoryClosed, true)
+		assert.Equal(t, BoardHidden, card.Stage)
+	})
+
+	t.Run("done idea is hidden", func(t *testing.T) {
+		card := DeriveBoardCard(nil, tracker.CategoryDone, true)
+		assert.Equal(t, BoardHidden, card.Stage)
+	})
+
+	t.Run("ideas rank below backlog", func(t *testing.T) {
+		assert.Less(t, stageRank[BoardIdeas], stageRank[BoardBacklog])
 	})
 }
 

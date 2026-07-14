@@ -10,6 +10,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 func startIdeationServer(t *testing.T, token string, engine *IdeationEngine) string {
@@ -229,4 +231,34 @@ func TestHandleIdeationApproveValid(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resp.Stdout), &st))
 	assert.Equal(t, IdeationDone, st.State)
 	assert.NotEmpty(t, st.CreatedKey)
+}
+
+func TestServer_ideaCreateRoute(t *testing.T) {
+	creator := newFakeCreator()
+	engine := newTestEngine(&fakeRunner{}, creator, "proj", nil)
+	srv := &Server{Logger: zerolog.Nop(), Ideation: engine}
+
+	resp := captureHandlerResponse(t, func(conn net.Conn) {
+		srv.handleIdeaCreate(conn, []string{`{"title":"Weekly digest email"}`})
+	})
+	require.Equal(t, 0, resp.ExitCode, "stderr: %s", resp.Stderr)
+	var out IdeaCreateResponse
+	require.NoError(t, json.Unmarshal([]byte(resp.Stdout), &out))
+	assert.Equal(t, "SC-999", out.Key)
+
+	captured := creator.capturedIssue()
+	require.NotNil(t, captured)
+	assert.Equal(t, []string{tracker.IdeaLabel}, captured.Labels)
+}
+
+func TestServer_ideaCreateRouteBadInput(t *testing.T) {
+	srv := &Server{Logger: zerolog.Nop(), Ideation: newTestEngine(&fakeRunner{}, newFakeCreator(), "proj", nil)}
+	for name, args := range map[string][]string{
+		"no arg":       {},
+		"invalid json": {"{broken"},
+		"empty title":  {`{"title":"  "}`},
+	} {
+		resp := captureHandlerResponse(t, func(conn net.Conn) { srv.handleIdeaCreate(conn, args) })
+		assert.Equal(t, 1, resp.ExitCode, "case %s", name)
+	}
 }

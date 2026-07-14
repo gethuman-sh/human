@@ -1138,6 +1138,14 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (
 			continue
 		}
 		for _, issue := range results[i].Issues {
+			// Idea tickets are placed by their label alone — no marker scan
+			// needed, so skip the per-issue comment round-trip entirely.
+			if issue.IsIdea() {
+				mu.Lock()
+				cards[issue.Key] = daemon.DeriveBoardCard(nil, issue.StatusType, true)
+				mu.Unlock()
+				continue
+			}
 			wg.Add(1)
 			// Capture StatusType alongside Key so DeriveBoardCard can decide
 			// the empty-Backlog-vs-Hidden case for a marker-less ticket.
@@ -1149,7 +1157,7 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (
 				if err != nil {
 					return
 				}
-				card := daemon.DeriveBoardCard(comments, statusType)
+				card := daemon.DeriveBoardCard(comments, statusType, false)
 				keys, pr := latestReadyKeys(comments)
 				mu.Lock()
 				cards[key] = card
@@ -1520,19 +1528,50 @@ func resolvePMCreator(dir string, lookup config.EnvLookup, resolver *vault.Resol
 	return nil, "", errors.WithDetails("no PM-role tracker configured", "dir", dir)
 }
 
+// resolvePMEditor resolves the PM-role tracker.Editor for evolve-mode idea
+// promotion. Role-based, never key-prefix — mirrors resolvePMCommenter.
+func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.Editor, error) {
+	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		if inst.InferRole() != "pm" {
+			continue
+		}
+		if ed, ok := inst.Provider.(tracker.Editor); ok {
+			return ed, nil
+		}
+	}
+	return nil, errors.WithDetails("no PM-role tracker with edit support configured", "dir", dir)
+}
+
 // ideationEngine wires the board ideation engine: host claude runner, role-
-// resolved PM creator, and a hook-store poke so the created card reaches the
-// board through the existing subscribe/refetch loop.
+// resolved PM creator/editor, and a hook-store poke so the created card
+// reaches the board through the existing subscribe/refetch loop.
 func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, logger zerolog.Logger) *daemon.IdeationEngine {
+	firstEntry := func() (daemon.ProjectEntry, error) {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return daemon.ProjectEntry{}, errors.WithDetails("no project registered for ideation")
+		}
+		return entries[0], nil
+	}
 	return &daemon.IdeationEngine{
 		Runner: hostClaudeIdeationRunner{reg: reg},
 		ResolveCreator: func() (tracker.Creator, string, error) {
-			entries := reg.Entries()
-			if len(entries) == 0 {
-				return nil, "", errors.WithDetails("no project registered for ideation")
+			entry, err := firstEntry()
+			if err != nil {
+				return nil, "", err
 			}
-			entry := entries[0]
 			return resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
+		},
+		ResolveEditor: func() (tracker.Editor, error) {
+			entry, err := firstEntry()
+			if err != nil {
+				return nil, err
+			}
+			return resolvePMEditor(entry.Dir, entry.EnvLookup(), resolver)
 		},
 		Notify: func() {
 			hookStore.Append(hookevents.Event{EventName: "IdeationCreated", Timestamp: time.Now().UTC()})

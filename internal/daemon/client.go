@@ -434,6 +434,24 @@ func IdeationApprove(addr, token string, req IdeationApproveRequest) (IdeationSt
 	return ideationCall(addr, token, "ideation-approve", req)
 }
 
+// IdeaCreate quick-captures a title-only, idea-labeled ticket on the PM
+// tracker — the Ideas column's `+` button.
+func IdeaCreate(addr, token string, req IdeaCreateRequest) (IdeaCreateResponse, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return IdeaCreateResponse{}, errors.WrapWithDetails(err, "marshaling idea-create request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{"idea-create", string(data)})
+	if err != nil {
+		return IdeaCreateResponse{}, err
+	}
+	var resp IdeaCreateResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return IdeaCreateResponse{}, errors.WrapWithDetails(err, "invalid idea-create JSON")
+	}
+	return resp, nil
+}
+
 // GetIdeationStatus fetches the current ideation session snapshot.
 func GetIdeationStatus(addr, token string) (IdeationStatus, error) {
 	out, err := RunRemoteCapture(addr, token, []string{"ideation-status"})
