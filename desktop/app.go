@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/ideaspace"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -37,12 +38,16 @@ import (
 // a daemon route regardless, since monitor imports daemon (an import cycle).
 type App struct {
 	ctx context.Context
+	// ideas holds the idea-space placement (ticket → sub-column). Local file
+	// I/O rather than a daemon route: this is UI preference state that must
+	// never touch the ticket, in line with the credential-only rationale above.
+	ideas *ideaspace.Store
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
 // startup, so there is nothing to wire here.
 func NewApp() *App {
-	return &App{}
+	return &App{ideas: ideaspace.NewStore(ideaspace.DefaultPath())}
 }
 
 // Card is the flat, frontend-facing shape of one board ticket: a PM issue joined
@@ -66,6 +71,11 @@ type Card struct {
 	// the ideation conversation alongside the title.
 	Labels      []string `json:"labels,omitempty"`
 	Description string   `json:"description,omitempty"`
+	// IdeaColumn is the idea-space sub-column (0 loosest … 4 most concrete)
+	// for cards in the Ideas stage. Locally persisted preference, never
+	// tracker state; the zero value is the leftmost column, so an idea with
+	// no saved placement starts loose by default.
+	IdeaColumn int `json:"ideaColumn"`
 }
 
 // BoardData is the full payload the frontend renders: the flat card list plus an
@@ -92,7 +102,33 @@ func (a *App) Cards() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, err
 	}
-	return boardFromResults(results, dockerAvailable()), nil
+	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments())
+	a.pruneIdeaSpace(data)
+	return data, nil
+}
+
+// pruneIdeaSpace drops idea-space placements for tickets that are no longer
+// idea cards (promoted or closed). Only a fully successful full fetch may
+// prune — a transient tracker error must not wipe saved placements — and a
+// prune failure is ignored: a stale entry is harmless, the board renders from
+// current idea cards regardless.
+func (a *App) pruneIdeaSpace(data BoardData) {
+	if data.Error != "" {
+		return
+	}
+	keys := make(map[string]struct{})
+	for _, card := range data.Cards {
+		if card.Stage == string(daemon.BoardIdeas) {
+			keys[card.Key] = struct{}{}
+		}
+	}
+	_ = a.ideas.PruneExcept(keys)
+}
+
+// SetIdeaColumn persists the idea-space placement for one ticket. Purely
+// local UI state — never a tracker write or a board transition.
+func (a *App) SetIdeaColumn(pmKey string, col int) error {
+	return a.ideas.Set(pmKey, col)
 }
 
 // CardsQuick fetches issue titles only — skipping the per-ticket comment scan
@@ -111,7 +147,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, err
 	}
-	return boardFromResults(results, true), nil
+	return boardFromResults(results, true, a.ideas.Assignments()), nil
 }
 
 // boardFromResults flattens the single PM-role result into the frontend card
@@ -120,7 +156,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 // Backlog). A PM issue with no derived card is hidden when its status is
 // done/closed and placed in Backlog otherwise, mirroring daemon.DeriveBoardCard's
 // marker-less decision so the quick pass and full pass agree on what to show.
-func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool) BoardData {
+func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int) BoardData {
 	data := BoardData{DockerAvailable: dockerAvailable}
 	pm, ok := firstPMResult(results)
 	if !ok {
@@ -154,6 +190,11 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			// Closed PM ticket that never entered the pipeline — not shown.
 			continue
 		}
+		ideaCol := 0
+		if stage == daemon.BoardIdeas {
+			// Missing key → zero value → leftmost column, the loose default.
+			ideaCol = ideaCols[issue.Key]
+		}
 		data.Cards = append(data.Cards, Card{
 			Key:            issue.Key,
 			Title:          issue.Title,
@@ -167,6 +208,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Verdict:        card.Verdict,
 			Labels:         issue.Labels,
 			Description:    issue.Description,
+			IdeaColumn:     ideaCol,
 		})
 	}
 	return data

@@ -174,10 +174,11 @@ body {
 
 .board {
   display: grid;
-  /* Five queue columns plus the slim terminal Deploy drop zone; min-width
-     keeps each readable and the board scrolls horizontally on narrow windows
-     instead of squishing cards into slivers. */
-  grid-template-columns: repeat(5, minmax(170px, 1fr)) minmax(80px, 110px);
+  /* The wide idea-space track (five loose→concrete sub-columns), four queue
+     columns, and the slim terminal Deploy drop zone; min-widths keep each
+     readable and the board scrolls horizontally on narrow windows instead of
+     squishing cards into slivers. */
+  grid-template-columns: minmax(540px, 2.4fr) repeat(4, minmax(170px, 1fr)) minmax(80px, 110px);
   /* Bound the single row to the board's own height so columns can never grow
      past the space below the header (the old 100vh-based column max-height did,
      which pushed the document 20px taller than the viewport). */
@@ -188,7 +189,61 @@ body {
   overflow-x: auto;
 }
 
-/* Inline quick-add input at the top of the Ideas column. */
+/* The idea space: the Ideas queue widened into five sub-columns spanning a
+   loose→concrete gradient. One shared header (title, quick-add, total count)
+   sits above the sub-column grid. */
+.idea-space {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.idea-space-header {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border-bottom: none;
+}
+
+.idea-space-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* Sub-columns run narrower than regular queues: idea cards are title-only
+     captures, and five of them must share one board track. */
+  grid-template-columns: repeat(5, minmax(100px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.idea-subcol .column-header {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+/* Gradient headers make the loose→concrete axis legible at a glance: the
+   ramp runs muted (Spark) to accent (Ready), on the top border and label. */
+.idea-col-0 {
+  border-top: 2px solid #8a90a0;
+  color: #8a90a0;
+}
+.idea-col-1 {
+  border-top: 2px solid #7b8fb8;
+  color: #7b8fb8;
+}
+.idea-col-2 {
+  border-top: 2px solid #6c8ecf;
+  color: #6c8ecf;
+}
+.idea-col-3 {
+  border-top: 2px solid #5d8de7;
+  color: #5d8de7;
+}
+.idea-col-4 {
+  border-top: 2px solid #4f8cff;
+  color: #4f8cff;
+}
+
+/* Inline quick-add input at the top of an idea-space sub-column. */
 .idea-quick-add {
   background: var(--card-bg);
   border: 1px solid var(--accent);
@@ -1206,7 +1261,8 @@ body {
 /* [FANCY:palette] Per-queue pastel rainbow hue, inherited by everything inside
    a column (drop zones, glows, card shadows) via var(--fancy-hue). Keys are
    the QUEUE ids the board stamps as data-stage. */
-[data-theme="fancy"] .column[data-stage="ideas"] {
+[data-theme="fancy"] .idea-space,
+[data-theme="fancy"] .column[data-stage^="ideas"] {
   --fancy-hue: 300;
 }
 [data-theme="fancy"] .column[data-stage="product"] {
