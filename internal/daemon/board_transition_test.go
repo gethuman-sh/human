@@ -253,24 +253,35 @@ func TestFailedHeaderFor(t *testing.T) {
 	assert.Equal(t, "", failedHeaderFor(BoardBacklog))
 }
 
-func TestApplyTransitionMissingEngineeringKey(t *testing.T) {
-	// plan-ready without an engineering: line leaves EngineeringKey empty, so
-	// advancing to Implementation must error before launching.
-	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:plan-ready]", time.Unix(1, 0))}}
+func TestApplyTransitionImplementationWithoutEngineeringKey(t *testing.T) {
+	// Single-tracker topology: no engineering: line anywhere — the plan is a
+	// [human:plan] comment, so the executor is dispatched on the PM key.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:plan]\nthe plan", time.Unix(1, 0)),
+		cmt("[human:plan-ready]", time.Unix(2, 0)),
+	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakePublisher{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
-	require.Error(t, err)
-	assert.Zero(t, l.calls)
+	require.NoError(t, err)
+	assert.Equal(t, "/human-execute SC-1", l.prompt)
 }
 
-func TestApplyTransitionVerificationMissingEngineeringKey(t *testing.T) {
-	// An implementation done-marker that carries no engineering: line blocks
-	// the Verification launch.
-	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))}}
+func TestApplyTransitionVerificationWithoutEngineeringKey(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakePublisher{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardVerification})
-	require.Error(t, err)
-	assert.Zero(t, l.calls)
+	require.NoError(t, err)
+	assert.Equal(t, "/human-review SC-1", l.prompt)
+}
+
+func TestDoneBodySingleRef(t *testing.T) {
+	// Regression: without an engineering ticket the PR body carries only the
+	// PM line — no empty "Engineering ticket:" placeholder.
+	body := doneBody("SC-1", BoardCard{Branch: "feat/x"})
+	assert.Contains(t, body, "PM ticket: SC-1")
+	assert.NotContains(t, body, "Engineering ticket:")
 }

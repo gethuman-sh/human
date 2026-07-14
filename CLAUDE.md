@@ -15,14 +15,13 @@ Whatever you do, the new state needs to be 'done done'.
 
 # Tickets
 
-There are two kinds of tickets:
+A ticket is **one artifact that evolves in place** through maturity stages (kinds):
 
-- **PM tickets** (Shortcut, project "Stephan Schmidt's Team"): Product requirements, user stories, feature requests. Read these to understand what to build.
-- **Engineering tickets** (Linear, project "HUM"): Implementation plans, technical tasks, bugs. Create these when planning and executing work.
+1. **idea** — a raw thought, captured as a real ticket carrying the `human/idea` label (bare `idea` also classifies). Title-only is fine.
+2. **pm** — promotion: the ideation agent rewrites title/description into product language and removes the idea label. Same key forever; PM ticket descriptions stay product language, no implementation detail.
+3. **planned** — the engineering plan attaches to the ticket as a `[human:plan]` marker comment (full markdown; read it back with `human plan show <KEY>`). Re-planning posts a new plan comment; the latest wins.
 
-Use 'human' to read and write tickets on both trackers.
-
-Maintain traceability from PM ticket → engineering ticket → git commits. Reference the Shortcut ticket in the Linear ticket, and reference the PM ticket (Shortcut) in commit messages.
+**Topology rule:** whether planning ALSO creates a separate engineering ticket depends on the tracker config. In THIS repo's setup — PM tickets on Shortcut (project "Stephan Schmidt's Team", `role: pm`) and engineering tickets on Linear (project "HUM", `role: engineering`) — the trackers are split, so planning creates a Linear engineering ticket whose description is the plan, and traceability runs PM ticket → engineering ticket → git commits (reference the Shortcut ticket in the Linear ticket, and both in commit messages). Teams with a single tracker get no second ticket: the plan comment on the ticket is the plan, and commits reference the one key.
 
 # Review handoff
 
@@ -37,11 +36,11 @@ branch: main
 commits: 2037e40, 64bb370
 ```
 
-- `engineering:` is comma-separated — one PM ticket can spawn multiple engineering tickets.
+- `engineering:` is comma-separated — one PM ticket can spawn multiple engineering tickets. **Single-tracker topology omits this line entirely**: the review target is the PM ticket the comment sits on.
 - `branch:` is the branch the commits live on.
-- `commits:` is the short SHAs attributed to those engineering keys via `git log --grep=<ENG_KEY>`.
+- `commits:` is the short SHAs attributed to the referenced keys via `git log --grep=<KEY>`.
 
-The `human-executor` agent posts this comment automatically as its final step. A reviewer (today: another user runs `/human-pickup-review <PM_KEY>`; future: daemon polling) parses the block, runs `human-reviewer` against each engineering key, and posts a `[human:review-complete]` follow-up comment on the same PM ticket with the verdict.
+The `human-executor` agent posts this comment automatically as its final step. A reviewer (today: another user runs `/human-pickup-review <PM_KEY>`; future: daemon polling) parses the block, runs `human-reviewer` against each engineering key (or against the PM key when the `engineering:` line is absent), and posts a `[human:review-complete]` follow-up comment on the same PM ticket with the verdict.
 
 The TUI marks engineering tickets whose PM ticket carries an unresolved `[human:ready-for-review]` comment with an `(R)` annotation in the tracker view.
 
@@ -130,7 +129,7 @@ When asked to commit, go through changes and create atomar commits that have one
 
 Every commit message **must** contain an issue reference, **unless** the commit touches only documentation (`README.md`, `CLAUDE.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, or anything under `docs/`). Any commit that touches code or config — including a mixed docs+code commit — still needs a ref. Accepted formats: `Issue #123`, `Issue HUM-30`, `[SC-57]`, `octocat/repo#42`, `MyProject/42`. A `commit-msg` hook enforces this — activate with `make hooks`.
 
-When a change was implemented from an engineering ticket that traces back to a PM ticket, the commit message **must reference both**: the PM ticket and the engineering ticket (e.g. `[SC-79] [HUM-59] Add validation`). This preserves the full PM → engineering → commit trail. The two tickets usually live on different trackers (e.g. Shortcut PM + Linear engineering) — the format is the same regardless of which trackers are used.
+When a change was implemented from an engineering ticket that traces back to a PM ticket (split topology, as in this repo), the commit message **must reference both**: the PM ticket and the engineering ticket (e.g. `[SC-79] [HUM-59] Add validation`). This preserves the full PM → engineering → commit trail; the two tickets usually live on different trackers (e.g. Shortcut PM + Linear engineering) — the format is the same regardless. In single-tracker topology there is one evolving ticket and every commit references that single key (e.g. `[SC-79] Add validation`).
 
 **WATNING** The commit log is public. Make sure to not expose bug fix or security information that could endanger existing installs.
 

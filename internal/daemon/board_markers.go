@@ -49,6 +49,14 @@ const (
 	PRFailedHeader              = "[human:pr-failed]"
 )
 
+// PlanCommentHeader marks a comment whose body IS the engineering plan for
+// this ticket — the single-tracker alternative to a separate engineering
+// ticket. It is content, not a stage signal, so it must never join
+// orderedMarkerSpecs: the [human:plan-ready] marker still carries the stage
+// transition. (ClassifyMarker's prefix matching stays safe because the
+// closing bracket keeps "[human:plan]" from matching "[human:plan-ready]".)
+const PlanCommentHeader = "[human:plan]"
+
 // markerSpec maps a marker header to the (stage, state) it represents.
 type markerSpec struct {
 	Header string

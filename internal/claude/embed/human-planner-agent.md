@@ -40,7 +40,7 @@ human <TRACKER> issues list --project=<PROJECT_KEY>
 4. **Identify** existing patterns, conventions, and related code
 5. **Produce** a structured plan following the output format below
 6. **Verify references** — every file, function, and type referenced in the plan must actually exist. Use Grep/Glob to confirm.
-7. **Return** the plan as your output. Do NOT write any files — no `.human/plans/`, no plan files. The orchestrator will embed the plan in the engineering ticket description.
+7. **Return** the plan as your output. Do NOT write any files — no `.human/plans/`, no plan files. The orchestrator attaches the plan to the tracker: as the engineering ticket's description (split topology) or as a `[human:plan]` comment on the ticket itself (single-tracker topology).
 
 ## Plan output format
 

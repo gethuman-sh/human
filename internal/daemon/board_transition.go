@@ -120,17 +120,22 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
 			"/human-plan "+req.PMKey)
 	case BoardImplementation:
-		if card.EngineeringKey == "" {
-			return errors.WithDetails("no engineering key for implementation", "pm", req.PMKey)
+		// Single-tracker topology has no separate engineering ticket — the
+		// plan lives in a [human:plan] comment on the PM ticket, so the agent
+		// is dispatched on the PM key itself.
+		key := card.EngineeringKey
+		if key == "" {
+			key = req.PMKey
 		}
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			"/human-execute "+card.EngineeringKey)
+			"/human-execute "+key)
 	case BoardVerification:
-		if card.EngineeringKey == "" {
-			return errors.WithDetails("no engineering key for verification", "pm", req.PMKey)
+		key := card.EngineeringKey
+		if key == "" {
+			key = req.PMKey
 		}
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			"/human-review "+card.EngineeringKey)
+			"/human-review "+key)
 	case BoardDoneStage:
 		return d.runDoneStage(ctx, req, card)
 	default:

@@ -28,6 +28,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdinit"
 	"github.com/gethuman-sh/human/cmd/cmdnotion"
 	"github.com/gethuman-sh/human/cmd/cmdping"
+	"github.com/gethuman-sh/human/cmd/cmdplan"
 	"github.com/gethuman-sh/human/cmd/cmdprovider"
 	"github.com/gethuman-sh/human/cmd/cmdproxy"
 	"github.com/gethuman-sh/human/cmd/cmdslack"
@@ -207,6 +208,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	autoPRCmd := cmdauto.BuildAutoPRCreateCmd(autoDeps)
 	autoPRCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoPRCmd)
+
+	planCmd := cmdplan.BuildPlanCmd(autoDeps)
+	planCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(planCmd)
 
 	// --- Provider commands (dynamic registration) ---
 	providers := []string{"jira", "github", "gitlab", "linear", "azuredevops", "shortcut", "clickup"}

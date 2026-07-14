@@ -16,6 +16,10 @@ type BoardCard struct {
 	Branch         string     `json:"branch,omitempty"`
 	PRURL          string     `json:"pr_url,omitempty"`
 	Error          string     `json:"error,omitempty"`
+	// HasPlan reports a [human:plan] comment on the ticket — the plan lives
+	// here instead of on a separate engineering ticket (single-tracker
+	// topology).
+	HasPlan bool `json:"has_plan,omitempty"`
 }
 
 // DeriveBoardCard computes a PM ticket's board placement from its comment
@@ -41,13 +45,15 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category) Bo
 		}
 	}
 
+	_, hasPlan := latestPlanComment(comments)
+
 	if !anyMarker {
 		// No pipeline activity: a closed/done PM ticket never entered the
 		// board and is hidden; an open one waits in Backlog.
 		if statusType == tracker.CategoryDone || statusType == tracker.CategoryClosed {
-			return BoardCard{Stage: BoardHidden}
+			return BoardCard{Stage: BoardHidden, HasPlan: hasPlan}
 		}
-		return BoardCard{Stage: BoardBacklog}
+		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
 	}
 
 	// Second pass: within the furthest stage, the latest marker decides state.
@@ -66,7 +72,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category) Bo
 		}
 	}
 
-	card := BoardCard{Stage: furthest, State: state}
+	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.PRURL = latestPrefixedLine(comments, PRPushedHeader, "pr:")
@@ -74,6 +80,27 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category) Bo
 		card.Error = firstLine(latest.Body)
 	}
 	return card
+}
+
+// latestPlanComment returns the body of the newest [human:plan] comment with
+// the header line stripped. The latest wins so re-planning supersedes older
+// plans without editing comment history.
+func latestPlanComment(comments []tracker.Comment) (string, bool) {
+	var body string
+	var haveLatest bool
+	var latest tracker.Comment
+	for _, c := range comments {
+		trimmed := strings.TrimSpace(c.Body)
+		if !strings.HasPrefix(trimmed, PlanCommentHeader) {
+			continue
+		}
+		if !haveLatest || c.Created.After(latest.Created) {
+			latest = c
+			haveLatest = true
+			body = strings.TrimSpace(strings.TrimPrefix(trimmed, PlanCommentHeader))
+		}
+	}
+	return body, haveLatest
 }
 
 // firstEngineeringKey resolves the engineering ticket key from the comment
