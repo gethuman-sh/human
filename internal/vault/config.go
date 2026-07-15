@@ -30,6 +30,9 @@ func ReadConfig(dir string) (*Config, error) {
 
 // NewResolverFromConfig creates a Resolver based on the vault configuration.
 // Returns nil if cfg is nil or the provider is unrecognized (graceful no-op).
+// The GitHub CLI provider needs no account or app integration, so gh://
+// references resolve under every configured provider — a 1Password setup can
+// mix 1pw:// and gh:// references freely.
 func NewResolverFromConfig(cfg *Config) *Resolver {
 	if cfg == nil {
 		return nil
@@ -38,9 +41,11 @@ func NewResolverFromConfig(cfg *Config) *Resolver {
 	switch cfg.Provider {
 	case "1password", "1pw":
 		if platform.IsWSL() {
-			return NewResolver(NewOpCLI())
+			return NewResolver(NewOpCLI(), NewGhCLI())
 		}
-		return NewResolver(NewOnePassword(cfg.Account))
+		return NewResolver(NewOnePassword(cfg.Account), NewGhCLI())
+	case "github", "gh":
+		return NewResolver(NewGhCLI())
 	default:
 		return nil
 	}

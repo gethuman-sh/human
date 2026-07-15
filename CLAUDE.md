@@ -82,6 +82,17 @@ jiras:
 
 Secrets are resolved via the 1Password desktop app integration. The 1Password app must be installed and running — it will prompt for biometric or master password authentication. Enable "Integrate with other apps" in 1Password Settings > Developer.
 
+GitHub tokens can instead come straight from the GitHub CLI's keyring with a `gh://` reference — no PAT to copy anywhere:
+
+```yaml
+githubs:
+  - name: personal
+    token: gh://token          # gh auth token
+  # token: gh://ghe.corp.com/token   # specific host (GitHub Enterprise)
+```
+
+`gh://` resolves under any configured vault provider (and with `provider: github` on its own), so 1Password and gh references mix freely.
+
 ## Alternative: Environment variables
 
 Tracker API tokens can also be injected via env vars (legacy approach):
