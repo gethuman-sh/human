@@ -36,6 +36,7 @@ func BuildProviderCommands(kind string, deps cmdutil.Deps) []*cobra.Command {
 	issueCmd.AddCommand(buildIssueEditCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueDeleteCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueCommentCmd(kind, deps))
+	issueCmd.AddCommand(buildIssueLinkCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueStartCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueStatusesCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueStatusSetCmd(kind, deps))
@@ -248,6 +249,22 @@ func buildIssueCommentCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 
 	commentCmd.AddCommand(addCmd, listCmd)
 	return commentCmd
+}
+
+func buildIssueLinkCmd(kind string, deps cmdutil.Deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "link KEY OTHER_KEY",
+		Short: `Link two related issues ("relates to"; on GitHub, a cross-reference comment)`,
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, cleanup, err := cmdutil.ResolveProvider(cmd, kind, deps)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+			return RunLinkIssues(cmd.Context(), p, cmd.OutOrStdout(), args[0], args[1])
+		},
+	}
 }
 
 func buildIssueStartCmd(kind string, deps cmdutil.Deps) *cobra.Command {
@@ -474,6 +491,15 @@ func RunAddComment(ctx context.Context, p tracker.Provider, out io.Writer, key, 
 		return errors.WithDetails("add comment returned no comment", "key", key)
 	}
 	_, _ = fmt.Fprintf(out, "%s\t%s\n", comment.ID, comment.Body)
+	return nil
+}
+
+// RunLinkIssues relates two issues in the same tracker and confirms on out.
+func RunLinkIssues(ctx context.Context, p tracker.Provider, out io.Writer, key, otherKey string) error {
+	if err := p.LinkIssues(ctx, key, otherKey); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Linked %s to %s (relates to)\n", key, otherKey)
 	return nil
 }
 

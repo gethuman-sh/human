@@ -205,6 +205,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	autoStatusCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoStatusCmd)
 
+	autoLinkCmd := cmdauto.BuildAutoLinkCmd(autoDeps)
+	autoLinkCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoLinkCmd)
+
 	autoPRCmd := cmdauto.BuildAutoPRCreateCmd(autoDeps)
 	autoPRCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoPRCmd)

@@ -3,11 +3,13 @@ package cmdauto
 import (
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/cmd/cmdprovider"
 	"github.com/gethuman-sh/human/cmd/cmdutil"
+	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -111,6 +113,39 @@ func BuildAutoStatusCmd(deps cmdutil.Deps) *cobra.Command {
 
 			project := tracker.ExtractProject(result.Key)
 			PrintAutoHints(cmd.ErrOrStderr(), result.Kind, result.Key, project, "status")
+			return nil
+		},
+	}
+}
+
+// BuildAutoLinkCmd creates the top-level "link" command that auto-detects the
+// tracker from the first key. Native relations exist only within one tracker,
+// so the second key must be shaped for the same tracker kind — a cross-tracker
+// pair is rejected up front rather than sent to an API that cannot express it.
+func BuildAutoLinkCmd(deps cmdutil.Deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "link KEY OTHER_KEY",
+		Short: `Link two related issues ("relates to", auto-detect tracker)`,
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := cmdutil.ResolveAutoProvider(cmd.Context(), cmd, args[0], true, deps)
+			if err != nil {
+				return err
+			}
+			defer result.Cleanup()
+
+			if !slices.Contains(tracker.DetectCandidateKinds(args[1]), result.Kind) {
+				return errors.WithDetails(
+					"keys resolve to different trackers; a link needs both issues in the same tracker",
+					"key", args[0], "otherKey", args[1], "tracker", result.Kind)
+			}
+
+			if err := cmdprovider.RunLinkIssues(cmd.Context(), result.Provider, cmd.OutOrStdout(), result.Key, args[1]); err != nil {
+				return err
+			}
+
+			project := tracker.ExtractProject(result.Key)
+			PrintAutoHints(cmd.ErrOrStderr(), result.Kind, result.Key, project, "link")
 			return nil
 		},
 	}
