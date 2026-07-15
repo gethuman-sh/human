@@ -460,7 +460,8 @@ func (m *mockProvider) ListComments(_ context.Context, _ string) ([]tracker.Comm
 func (m *mockProvider) AddComment(_ context.Context, _, _ string) (*tracker.Comment, error) {
 	return nil, nil
 }
-func (m *mockProvider) DeleteIssue(_ context.Context, _ string) error { return nil }
+func (m *mockProvider) LinkIssues(_ context.Context, _, _ string) error { return nil }
+func (m *mockProvider) DeleteIssue(_ context.Context, _ string) error   { return nil }
 func (m *mockProvider) TransitionIssue(_ context.Context, _, _ string) error {
 	return nil
 }

@@ -185,6 +185,7 @@ type mockProvider struct {
 	getCurrentUserFn  func(ctx context.Context) (string, error)
 	editIssueFn       func(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error)
 	listStatusesFn    func(ctx context.Context, key string) ([]tracker.Status, error)
+	linkIssuesFn      func(ctx context.Context, key string, otherKey string) error
 }
 
 func (m *mockProvider) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
@@ -209,6 +210,13 @@ func (m *mockProvider) ListComments(ctx context.Context, issueKey string) ([]tra
 
 func (m *mockProvider) AddComment(ctx context.Context, issueKey string, body string) (*tracker.Comment, error) {
 	return m.addCommentFn(ctx, issueKey, body)
+}
+
+func (m *mockProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	if m.linkIssuesFn == nil {
+		return nil
+	}
+	return m.linkIssuesFn(ctx, key, otherKey)
 }
 
 func (m *mockProvider) TransitionIssue(ctx context.Context, key string, targetStatus string) error {

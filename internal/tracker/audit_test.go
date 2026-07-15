@@ -28,6 +28,7 @@ type mockProvider struct {
 	getCurrentUserFn  func(ctx context.Context) (string, error)
 	editIssueFn       func(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error)
 	listStatusesFn    func(ctx context.Context, key string) ([]tracker.Status, error)
+	linkIssuesFn      func(ctx context.Context, key string, otherKey string) error
 }
 
 func (m *mockProvider) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
@@ -52,6 +53,13 @@ func (m *mockProvider) ListComments(ctx context.Context, issueKey string) ([]tra
 
 func (m *mockProvider) AddComment(ctx context.Context, issueKey string, body string) (*tracker.Comment, error) {
 	return m.addCommentFn(ctx, issueKey, body)
+}
+
+func (m *mockProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	if m.linkIssuesFn == nil {
+		return nil
+	}
+	return m.linkIssuesFn(ctx, key, otherKey)
 }
 
 func (m *mockProvider) TransitionIssue(ctx context.Context, key string, targetStatus string) error {
@@ -401,4 +409,19 @@ func TestNewAuditProvider_InvalidPath(t *testing.T) {
 	inner := &mockProvider{}
 	_, err := tracker.NewAuditProvider(inner, "test", "jira", "/nonexistent/dir/audit.log")
 	require.Error(t, err)
+}
+
+func TestAuditProvider_LinkIssues(t *testing.T) {
+	inner := &mockProvider{
+		linkIssuesFn: func(_ context.Context, _, _ string) error { return nil },
+	}
+	ap, logPath := newAudit(t, inner)
+
+	err := ap.LinkIssues(context.Background(), "KAN-10", "KAN-11")
+	require.NoError(t, err)
+
+	entries := readEntries(t, logPath)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "LinkIssues", entries[0].Operation)
+	assert.Equal(t, "KAN-10", entries[0].Key)
 }

@@ -288,6 +288,7 @@ type Provider interface {
 	CurrentUserGetter
 	Editor
 	StatusLister
+	Linker
 }
 
 // Instance represents a configured tracker backend ready for use.
@@ -335,6 +336,16 @@ type Creator interface {
 type Commenter interface {
 	ListComments(ctx context.Context, issueKey string) ([]Comment, error)
 	AddComment(ctx context.Context, issueKey string, body string) (*Comment, error)
+}
+
+// Linker relates two issues in the same tracker. The relation is the generic,
+// symmetric "relates to" — richer typed relations (blocks, duplicates) are
+// deliberately out of scope so every backend can honour the same call.
+// Backends without a native relation API (GitHub) record the relation as a
+// cross-reference comment on the first issue, which is that ecosystem's
+// convention for relating issues.
+type Linker interface {
+	LinkIssues(ctx context.Context, key string, otherKey string) error
 }
 
 // Deleter deletes (or closes) an issue by key.

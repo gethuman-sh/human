@@ -127,3 +127,20 @@ func TestSafeProvider_DeleteIssueErrorIncludesInstanceName(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "my-tracker")
 }
+
+func TestSafeProvider_LinkIssuesForwarded(t *testing.T) {
+	// Linking is additive like commenting — safe mode must not block it.
+	var gotKey, gotOther string
+	inner := &mockProvider{
+		linkIssuesFn: func(_ context.Context, key, otherKey string) error {
+			gotKey, gotOther = key, otherKey
+			return nil
+		},
+	}
+	sp := tracker.NewSafeProvider(inner, "test-instance")
+
+	err := sp.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	require.NoError(t, err)
+	assert.Equal(t, "KAN-1", gotKey)
+	assert.Equal(t, "KAN-2", gotOther)
+}
