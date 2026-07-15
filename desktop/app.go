@@ -71,6 +71,13 @@ type Card struct {
 	// the ideation conversation alongside the title.
 	Labels      []string `json:"labels,omitempty"`
 	Description string   `json:"description,omitempty"`
+	// Assignee is the ticket owner shown in the detail panel. Display-only:
+	// the board never assigns; empty renders as "Unassigned" in the frontend.
+	Assignee string `json:"assignee,omitempty"`
+	// Tracker is the instance name the issue was listed from. The detail
+	// panel passes it back to IssueDetail so the daemon resolves the exact
+	// instance — bare numeric keys are ambiguous across tracker kinds.
+	Tracker string `json:"tracker,omitempty"`
 	// IdeaColumn is the idea-space sub-column (0 loosest … 4 most concrete)
 	// for cards in the Ideas stage. Locally persisted preference, never
 	// tracker state; the zero value is the leftmost column, so an idea with
@@ -116,6 +123,34 @@ func (a *App) Cards() (BoardData, error) {
 	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments(), cardMockups())
 	a.pruneIdeaSpace(data)
 	return data, nil
+}
+
+// IssueDetail is the full-ticket payload for the board's detail panel — only
+// the fields the panel renders beyond what the card already carries.
+type IssueDetail struct {
+	Title       string `json:"title"`
+	Assignee    string `json:"assignee,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// GetIssueDetail fetches one full ticket from the daemon. The detail panel
+// calls it on open because list fetches on some trackers (e.g. Shortcut)
+// return slim payloads without descriptions, so the card's own description
+// can be empty even for a ticket that has one.
+func (a *App) GetIssueDetail(trackerName, key string) (IssueDetail, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	issue, err := daemon.GetTrackerIssue(info.Addr, info.Token, trackerName, key)
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	return IssueDetail{
+		Title:       issue.Title,
+		Assignee:    issue.Assignee,
+		Description: issue.Description,
+	}, nil
 }
 
 // pruneIdeaSpace drops idea-space placements for tickets that are no longer
@@ -220,6 +255,8 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Verdict:        card.Verdict,
 			Labels:         issue.Labels,
 			Description:    issue.Description,
+			Assignee:       issue.Assignee,
+			Tracker:        pm.TrackerName,
 			Bug:            issue.IsBug(),
 			IdeaColumn:     ideaCol,
 			MockupSlug:     mock.Slug,
