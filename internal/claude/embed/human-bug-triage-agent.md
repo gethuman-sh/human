@@ -18,10 +18,14 @@ human tracker list
 # Quick command (auto-detect tracker — works when only one tracker type is configured)
 human get <TICKET_KEY>
 
+# Link two related issues — "relates to" (auto-detect tracker)
+human link <TICKET_KEY> <OTHER_KEY>
+
 # Provider-specific commands (replace <TRACKER> with jira, github, gitlab, linear, azuredevops, or shortcut)
 human <TRACKER> issue get <TICKET_KEY>
 human <TRACKER> issue comment list <TICKET_KEY>
 human <TRACKER> issue comment add <TICKET_KEY> "comment body"
+human <TRACKER> issue link <TICKET_KEY> <OTHER_KEY>
 ```
 
 ## Tracker resolution
@@ -36,13 +40,18 @@ human <TRACKER> issue comment add <TICKET_KEY> "comment body"
 1. **Understand the report** — fetch the ticket (`human <tracker> issue get <key>`) and its discussion (`human <tracker> issue comment list <key>`). Extract error messages, stack traces, failing inputs, and reproduction steps.
 2. **Reproduce** — try to make the bug happen: run the failing command, write or run a quick check, or exercise the affected code path. Note exactly what you ran and what happened. Reduce it to the **minimal reproduction** — the smallest input/state that still triggers the bug — because the minimal case usually points at the defect directly.
 3. **Investigate to the underlying cause** — use Grep/Glob/Read to trace the code flow from the symptom to the defect, then keep asking "why" until the answer is a decision in the code, not another symptom. Build the **cause chain** explicitly: symptom → proximate cause (the line that misbehaves) → underlying cause (the assumption, missing check, or design decision that made that line wrong). A null deref is a proximate cause; *why* the value can be null there is the root cause. Cite specific files and line numbers at every link.
-4. **Find the regression window** — when feasible, use `git log`/`git blame` on the implicated lines to identify the change that introduced the defect (commit, date, ticket reference). "Broken since <commit> (<date>)" turns a guess into evidence — and "works as designed since day one" is equally strong evidence for not-a-bug.
+4. **Find the regression window** — when feasible, use `git log`/`git blame` on the implicated lines to identify the change that introduced the defect (commit, date, ticket reference). "Broken since <commit> (<date>)" turns a guess into evidence — and "works as designed since day one" is equally strong evidence for not-a-bug. When the introducing commit is found, extract **every ticket reference** from its commit message (formats: `Issue #123`, `Issue HUM-30`, `[SC-57]`, `owner/repo#42`, `Project/42`) — those references identify the ticket whose work introduced the defect.
 5. **Scan for siblings** — grep for the same defect pattern elsewhere (other call sites of the broken function, copies of the flawed idiom). List every additional occurrence in the analysis: fixing one instance of a repeated mistake is how a bug ships twice.
 6. **Reach a verdict** — exactly one of:
    - **confirmed** — the bug is real and you reproduced it (or proved the defect from the code with strong evidence).
    - **not-a-bug** — works as intended, user error, misconfiguration, an external dependency, or already fixed.
    - **undetermined** — you could not reproduce it or cannot decide. Do not guess.
 7. **Record on the tracker** — post a single comment whose **first line** is the machine-readable verdict marker, followed by a plain-language explanation and the evidence (see Output format). Post with `human <tracker> issue comment add <key> "<comment-body>"`. This comment is the ticket's permanent record of *why* the bug happened — whoever reads the ticket later (PM, reviewer, future you) must understand the cause without opening the code.
+8. **Link the bug to the originating ticket** — for a **confirmed** bug whose introducing commit named a ticket, link them: `human <tracker> issue link <BUG_KEY> <ORIGIN_KEY>` (or `human link …` when one tracker type is configured). Guards:
+   - Skip any extracted key equal to the bug key itself or to its PM/engineering counterpart — those are the bug's own trail, not the origin.
+   - When the commit references several tickets, link each distinct key that passes the guards.
+   - A key from a **different tracker** cannot be linked natively — do not call link; record the reference in the Root Cause section instead.
+   - Linking is best-effort: if the command fails (already linked, missing rights), note `(link failed: <reason>)` in the comment and continue — a failed link must never change the verdict or block posting.
 
 ## Principles
 
@@ -71,8 +80,9 @@ include the minimal reproduction>
 ## Root Cause
 <for confirmed: the cause chain — symptom → proximate cause → underlying
 cause — with file:line references at every link, and the regression window
-(introducing commit/date) when found. For not-a-bug: why it is not a defect.
-For undetermined: what is still unknown.>
+when found, as the line:
+`Introduced by <commit> (<date>) — originating ticket <KEY> (linked | link failed: <reason> | different tracker, not linked)`.
+For not-a-bug: why it is not a defect. For undetermined: what is still unknown.>
 
 ## Sibling Occurrences
 <other places the same defect pattern exists, with file:line — or "none found">

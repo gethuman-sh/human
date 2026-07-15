@@ -6,6 +6,7 @@
 - Read full issue details by key or pasted URL
 - Create new issues on any configured tracker
 - Read and add comments on an issue
+- Link two related issues ("relates to"; on GitHub, recorded as a cross-reference comment)
 - Move an issue to a new status
 - Assign an issue to a user
 - Edit an issue's title and description
