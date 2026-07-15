@@ -354,7 +354,18 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 
 	go daemon.RunAgentCleanup(ctx, ds.srv.HookEvents, &dockerAgentCleaner{}, logger)
-	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, logger)
+	hookEvents := ds.srv.HookEvents
+	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, func(agentName string) {
+		// A reaped agent died without firing hooks, so no exit event exists
+		// for the board failure watcher to act on; synthesizing one converges
+		// the reap path with the hook-driven exit paths — one marker-posting
+		// code path (SC-206).
+		hookEvents.Append(hookevents.Event{
+			EventName: "StopFailure",
+			AgentName: agentName,
+			Timestamp: time.Now().UTC(),
+		})
+	}, logger)
 	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver)
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
