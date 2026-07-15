@@ -211,8 +211,9 @@ function showCardMenu(card, x, y) {
     menu.appendChild(openItem);
     // Mockups belong to the product conversation: the item appears only in the
     // Product backlog column, toggling create → creating → view as the local
-    // mockup set for this ticket comes into existence.
-    if (queueOf(card) === "product") {
+    // mockup set for this ticket comes into existence. Bug tickets never get
+    // one — a defect has no product surface to mock.
+    if (queueOf(card) === "product" && !card.bug) {
         const mockItem = document.createElement("button");
         mockItem.type = "button";
         mockItem.className = "context-menu-item";
@@ -280,7 +281,8 @@ function renderColumn(queue) {
     const col = document.createElement("section");
     col.className = "column";
     col.dataset.stage = queue;
-    const cards = current.cards.filter((c) => queueOf(c) === queue);
+    // Bug tickets live in the Bugs pane, never in the workflow columns.
+    const cards = current.cards.filter((c) => queueOf(c) === queue && !c.bug);
     const header = document.createElement("div");
     header.className = "column-header";
     if (queue === "product") {
@@ -318,7 +320,7 @@ function renderIdeaSpace() {
     // (fancy tint, clear sweep) anchored to the space as a whole.
     space.className = "idea-space";
     space.dataset.stage = "ideas";
-    const ideas = current.cards.filter((c) => queueOf(c) === "ideas");
+    const ideas = current.cards.filter((c) => queueOf(c) === "ideas" && !c.bug);
     const grid = document.createElement("div");
     grid.className = "idea-space-grid";
     const subcols = [];
@@ -372,6 +374,139 @@ function renderDeployZone() {
     zone.dataset.drop = "deploy";
     zone.innerHTML = `<span class="deploy-zone-label">Deploy</span>`;
     return zone;
+}
+// --- Bugs pane ----------------------------------------------------------
+//
+// Bug tickets get their own view: a wide grid of open bugs (five rows tall,
+// cards flowing horizontally — a fill-up tray, not the idea space's sorted
+// lanes), a red-bordered Fix activity column, and a Deploy button. The stage
+// semantics are the board's own: dropping a bug on Fix launches the
+// autonomous fix (autofix triages + plans itself, so no planning gate), the
+// fix chains into its review, and Deploy ships every bug whose review passed.
+// bugAreaOf places a bug card in the pane: "fix" while the fix cycle owns it
+// (build + review, mirroring the Code column), "ready" once its review passed
+// or it is deploying, "grid" while it rests unfixed.
+function bugAreaOf(card) {
+    const q = queueOf(card);
+    if (q === "building")
+        return "fix";
+    if (q === "deploy")
+        return "ready";
+    return "grid";
+}
+// renderBugCard wraps renderCard with the pane-specific wording: the fix
+// cycle runs the board's implementation stage, but here the activity is
+// "fixing", and a review that passed reads "fixed" — in this pane the
+// statement that matters is bug-language, not queue position (the card stays
+// in the Fix column until deployed).
+function renderBugCard(card) {
+    const el = renderCard(card);
+    if (card.state === "running" && card.stage === "implementation") {
+        const running = el.querySelector(".badge.running");
+        if (running)
+            running.innerHTML = `<span class="spinner"></span> fixing…`;
+    }
+    if (isReadyToDeploy(card)) {
+        const meta = el.querySelector(".card-meta");
+        if (meta) {
+            const chip = document.createElement("span");
+            chip.className = "badge done";
+            chip.title = "Fix reviewed and ready to deploy";
+            chip.textContent = "fixed ✓";
+            meta.prepend(chip);
+        }
+    }
+    return el;
+}
+function renderBugs() {
+    const host = document.getElementById("bugs");
+    if (!host)
+        return;
+    const scrollByStage = captureColumnScroll(host);
+    host.innerHTML = "";
+    const bugs = current.cards.filter((c) => c.bug);
+    const gridBugs = bugs.filter((c) => bugAreaOf(c) === "grid");
+    const fixBugs = bugs.filter((c) => bugAreaOf(c) !== "grid");
+    const ready = bugs.filter(isReadyToDeploy);
+    const gridCol = document.createElement("section");
+    gridCol.className = "column bug-grid-col";
+    gridCol.dataset.stage = "bugs:grid";
+    gridCol.innerHTML =
+        `<div class="column-header"><span>Bugs</span><span class="column-count">${gridBugs.length}</span></div>`;
+    const gridBody = document.createElement("div");
+    gridBody.className = "column-body bug-grid";
+    if (bugs.length === 0) {
+        gridBody.innerHTML = `<div class="bug-grid-empty">No open bugs</div>`;
+    }
+    else {
+        for (const card of gridBugs)
+            gridBody.appendChild(renderBugCard(card));
+    }
+    gridCol.appendChild(gridBody);
+    const fixCol = document.createElement("section");
+    fixCol.className = "column bug-fix-col";
+    fixCol.dataset.stage = "bugs:fix";
+    fixCol.innerHTML =
+        `<div class="column-header"><span>Fix</span><span class="column-count">${fixBugs.length}</span></div>`;
+    const fixBody = document.createElement("div");
+    fixBody.className = "column-body";
+    fixBody.dataset.drop = "fix";
+    fixBody.dataset.verb = "Fix it";
+    for (const card of fixBugs)
+        fixBody.appendChild(renderBugCard(card));
+    fixCol.appendChild(fixBody);
+    const deploy = document.createElement("button");
+    deploy.type = "button";
+    deploy.className = "bug-deploy";
+    deploy.disabled = ready.length === 0;
+    deploy.title = ready.length === 0 ? "No fixed bugs to deploy yet" : "Ship every fixed bug";
+    deploy.innerHTML = `<span class="deploy-zone-label">Deploy${ready.length ? ` (${ready.length})` : ""}</span>`;
+    deploy.addEventListener("click", () => void deployFixedBugs());
+    host.appendChild(gridCol);
+    host.appendChild(fixCol);
+    host.appendChild(deploy);
+    restoreColumnScroll(host, scrollByStage);
+}
+// fixBug launches the autonomous fix pipeline on one bug. Optimistic move into
+// the Fix column, same shape as transition(): the daemon is authoritative and
+// the reconcile corrects any lie.
+async function fixBug(key, title) {
+    const card = current.cards.find((c) => c.key === key);
+    if (card) {
+        card.stage = "implementation";
+        card.state = "running";
+        render();
+    }
+    try {
+        await go().FixBug(key, title);
+    }
+    catch (err) {
+        showError(errMessage(err));
+    }
+    await reconcile();
+}
+// deployFixedBugs ships every review-passed bug. The click is the consent —
+// same rule as the board's Deploy drop — and CI still gates each merge
+// server-side. Transitions run sequentially with one reconcile at the end so a
+// multi-bug ship does not race itself.
+async function deployFixedBugs() {
+    const ready = current.cards.filter((c) => c.bug && isReadyToDeploy(c));
+    if (ready.length === 0)
+        return;
+    for (const card of ready) {
+        card.stage = "done";
+        card.state = "running";
+    }
+    render();
+    for (const card of ready) {
+        try {
+            await go().Transition(card.key, card.title, "verification", "done");
+        }
+        catch (err) {
+            showError(errMessage(err));
+        }
+    }
+    await reconcile();
 }
 // Ideas captured but not yet confirmed by a board fetch, by title. Each
 // renders as a placeholder card the moment Enter is pressed — waiting for the
@@ -502,6 +637,15 @@ function dropAllowed(target) {
     }
     if (target.dataset.drop === "deploy")
         return isReadyToDeploy(card);
+    if (target.dataset.drop === "fix") {
+        // The Fix column accepts a resting bug that is not yet being fixed, plus
+        // the rework re-drop on a failing verdict — the same two entry points the
+        // Code column has, but for bugs the planning gate does not apply
+        // (autofix triages and plans itself). Launching an agent needs Docker.
+        if (!card.bug || !current.dockerAvailable)
+            return false;
+        return bugAreaOf(card) === "grid" || isReworkable(card);
+    }
     const toQueue = target.dataset.dropQueue || "";
     if (toQueue === "building" && isReworkable(card))
         return targetEnabled(toQueue);
@@ -636,6 +780,11 @@ function performDrop(target, info, pt) {
         // server-side, so no extra dialog stands between the drop and the ship.
         celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: true });
         void transition(info.key, info.title, info.stage, "done");
+        return;
+    }
+    if (target.dataset.drop === "fix") {
+        celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: false });
+        void fixBug(info.key, info.title);
         return;
     }
     const toQueue = target.dataset.dropQueue || "";
@@ -834,6 +983,9 @@ function render() {
         board.appendChild(renderDeployZone());
         restoreColumnScroll(board, scrollByStage);
     }
+    // The Bugs pane renders from the same card list, so every reconcile keeps
+    // both views fresh regardless of which one is visible.
+    renderBugs();
     const banner = document.getElementById("banner");
     if (current.error) {
         banner.textContent = current.error;
@@ -1741,11 +1893,13 @@ function selectView(view) {
     });
     // Toggle main-area containers: exactly one top-level view is visible.
     const board = document.getElementById("board");
+    const bugs = document.getElementById("bugs");
     const agents = document.getElementById("agents");
     const features = document.getElementById("features");
     const mockups = document.getElementById("mockups");
     const settings = document.getElementById("settings");
     board?.classList.toggle("hidden", view !== "board");
+    bugs?.classList.toggle("hidden", view !== "bugs");
     agents?.classList.toggle("hidden", view !== "agents");
     features?.classList.toggle("hidden", view !== "features");
     mockups?.classList.toggle("hidden", view !== "mockups");

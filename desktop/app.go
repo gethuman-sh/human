@@ -76,6 +76,10 @@ type Card struct {
 	// tracker state; the zero value is the leftmost column, so an idea with
 	// no saved placement starts loose by default.
 	IdeaColumn int `json:"ideaColumn"`
+	// Bug marks a defect ticket (bug label or bug issue type, see
+	// tracker.Issue.IsBug). Bug cards render in the Bugs pane instead of the
+	// workflow board's columns.
+	Bug bool `json:"bug,omitempty"`
 	// MockupSlug/MockupState link the card to a locally generated mockup set:
 	// "ready" once mockups/<slug>/index.json is valid, "creating" while a
 	// launched generation has not produced it yet. Local file state — never
@@ -216,6 +220,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Verdict:        card.Verdict,
 			Labels:         issue.Labels,
 			Description:    issue.Description,
+			Bug:            issue.IsBug(),
 			IdeaColumn:     ideaCol,
 			MockupSlug:     mock.Slug,
 			MockupState:    mock.State,
@@ -255,6 +260,22 @@ func (a *App) Transition(pmKey, pmTitle, from, to string) error {
 		PMTitle: pmTitle,
 		From:    daemon.BoardStage(from),
 		To:      daemon.BoardStage(to),
+	})
+}
+
+// FixBug asks the daemon to launch the autonomous bug-fix pipeline
+// (/human-autofix) on a bug ticket — the Bugs pane's Fix drop. Like Transition
+// it goes through the daemon so the agent runs containerized with the daemon's
+// credentials; the daemon guards against double-launches, so an optimistic
+// re-drop is safe.
+func (a *App) FixBug(pmKey, pmTitle string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemon.BoardFix(info.Addr, info.Token, daemon.BoardFixRequest{
+		PMKey:   pmKey,
+		PMTitle: pmTitle,
 	})
 }
 

@@ -329,6 +329,77 @@ body {
   background: var(--drop-reject);
 }
 
+/* The Bugs pane: a wide tray of open bugs, the Fix activity column, and the
+   terminal Deploy button — same board grammar (columns, cards, drops), scoped
+   to defects. */
+.bugs-view {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px) minmax(80px, 110px);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  /* Same containment as .app-main .board: fill the space below the header,
+     never grow the document past the viewport. */
+  flex: 1;
+  min-height: 0;
+}
+
+.bugs-view.hidden {
+  display: none;
+}
+
+/* The bug grid fills up horizontally: cards flow left→right and wrap, five
+   rows tall — a tray you scan, unlike the idea space's five sorted lanes.
+   Past five rows the tray scrolls. */
+.column-body.bug-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-auto-flow: row;
+  grid-auto-rows: calc((100% - 4 * 8px) / 5);
+  align-content: start;
+}
+
+.bug-grid-empty {
+  grid-column: 1 / -1;
+  align-self: center;
+  justify-self: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Fix is the bug pane's one activity column — the red counterpart to the
+   board's green Code border: same double weight, opposite signal. */
+.column.bug-fix-col {
+  border: 2px solid #ff1744;
+}
+
+/* The terminal Deploy control: a button, not a drop zone — fixed bugs ship in
+   one click. Styled after .deploy-zone so both panes end on the same visual
+   full stop. */
+.bug-deploy {
+  border: 2px dashed var(--col-border);
+  border-radius: 8px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.bug-deploy:hover:not(:disabled) {
+  border-color: var(--done);
+  color: var(--done);
+  background: var(--drop-ok);
+}
+
+.bug-deploy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* In-app confirmation modal (used before closing a ticket). Sits above the
    ideation panel (z-index:10). */
 .modal-overlay {

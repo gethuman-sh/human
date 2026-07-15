@@ -19,9 +19,7 @@
             <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/>
           </svg>
         </button>
-        <!-- Placeholder for the upcoming Bugs view: visible so the rail already
-             shows where bug work will live, disabled until the view exists. -->
-        <button class="rail-item" disabled title="Bugs — coming soon">
+        <button class="rail-item" data-view="bugs" title="Bugs">
           <svg class="rail-icon" width="22" height="22" viewBox="0 0 512 512" fill="none"
                stroke="currentColor" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"
                xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -84,6 +82,7 @@
         <div id="perm-queue" class="perm-queue hidden" aria-label="Waiting permission requests"></div>
         <div id="banner" class="banner hidden"></div>
         <main id="board" class="board" aria-label="Workflow pipeline board"></main>
+        <section id="bugs" class="bugs-view hidden" aria-label="Bugs"></section>
         <section id="agents" class="agents-view hidden" aria-label="Running agents"></section>
         <section id="features" class="features-view hidden" aria-label="Features"></section>
         <section id="mockups" class="mockups-view hidden" aria-label="Mockups"></section>
