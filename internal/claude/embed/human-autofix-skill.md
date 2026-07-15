@@ -1,14 +1,16 @@
 ---
 name: human-autofix
-description: Autonomously verify, reproduce, root-cause, and fix a reported bug end to end, handing off for review
+description: Autonomously verify, reproduce, root-cause, fix, review, and ship a reported bug end to end — a passing review ends in a merged PR
 argument-hint: <bug-ticket-key>
 ---
 
 # Overview
 
-Point this skill at a bug ticket and it runs the full bug-fix pipeline autonomously: **triage & reproduce → root-cause explanation on the ticket → verdict → (if a real bug) plan → test-first fix on a branch → verify → hand off for review**. The whole trail is recorded on the tracker (comments + the plan — a separate engineering ticket in split topology, a `[human:plan]` comment on the bug ticket itself otherwise); **no `.human/` working files** are produced.
+Point this skill at a bug ticket and it runs the full bug-fix pipeline autonomously: **triage & reproduce → root-cause explanation on the ticket → verdict → (if a real bug) plan → test-first fix on a branch → verify → review by the reviewer agent → (on a passing review) deploy: PR → CI gate → merge**. The whole trail is recorded on the tracker (comments + the plan — a separate engineering ticket in split topology, a `[human:plan]` comment on the bug ticket itself otherwise); the only `.human/` working file is the reviewer's `.human/reviews/<key>.md`.
 
-The handoff is the same one the kanban executor posts — `[human:ready-for-review]` with the branch and commits, **no pull request**. Opening the PR, gating on CI, and merging all belong to the deploy stage (the board's Deploy drop/button, which drives push → PR → CI → merge → close), exactly as for feature work.
+The run does **not** end at the review handoff: exactly like the kanban flow — where a clean build chains straight into its review and Deploy ships it — the skill chains the fix into a review by the **human-reviewer** agent and, when the verdict is a pass, drives the same deploy pipeline the board's Deploy stage runs (push → PR → CI gate → merge → close). A failing review or a red CI gate stops the run honestly with the handoff left standing for a human.
+
+**Board-context exception**: when this skill runs *as a board stage agent* (the `HUMAN_AGENT_NAME` environment variable is set and starts with `board-`), the daemon already chains the review on agent exit and the Bugs pane's Deploy button owns shipping — end at the handoff (Step 7.1) and skip Steps 7.2–8, or the review would run twice.
 
 This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — reach a verdict and act on it (SC-86: "no further input"). Every run ends in exactly one verdict: **confirmed**, **not-a-bug**, or **undetermined**.
 
@@ -93,9 +95,13 @@ Task(subagent_type="human-bug-verify", prompt="Verify ticket <WORK_KEY> (PM bug 
 
 If the verdict is NOT DONE, re-run Step 5 once to address the gaps; if it still fails, STOP and report honestly without posting the handoff.
 
-## Step 7 — Phase 5: Hand off for review
+## Step 7 — Phase 5: Hand off and review
 
-Only after a DONE verdict. Post the review handoff comment on the bug (PM) ticket — the **same handoff the kanban executor posts**, and like there it deliberately opens NO pull request: the deploy stage (the board's Deploy drop/button) owns push → PR → CI gate → merge → close, for bug fixes exactly as for feature work. The format is fixed so it can be parsed across trackers; `<short-shas>` come from `git log --grep=<WORK_KEY> --format='%h' HEAD` (comma-separated). In single-tracker topology OMIT the `engineering:` line entirely — the reviewer works from the bug key the comment sits on:
+Only after a DONE verdict.
+
+### 7.1 Post the review handoff
+
+Post the review handoff comment on the bug (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically. The format is fixed so it can be parsed across trackers; `<short-shas>` come from `git log --grep=<WORK_KEY> --format='%h' HEAD` (comma-separated). In single-tracker topology OMIT the `engineering:` line entirely — the reviewer works from the bug key the comment sits on:
 
 ```bash
 human <tracker> issue comment add <BUG_KEY> "$(cat <<'HANDOFF_EOF'
@@ -109,17 +115,62 @@ HANDOFF_EOF
 
 Make sure the branch is pushed (Step 5 pushes it; verify with `git ls-remote --heads origin autofix/<work-key>`). If the handoff comment cannot be posted, STOP with an honest status report — **do not report success**.
 
-## Step 8 — Summary
+**Board-context exception applies here**: if `HUMAN_AGENT_NAME` starts with `board-`, STOP after this handoff (report per Step 9) — the daemon chains the review and the Deploy button ships it.
 
-Report the verdict. For a confirmed fix, present the traceability chain:
+### 7.2 Review by the reviewer agent
+
+Chain straight into the review, like the kanban flow chains a clean build. Post the started marker, then dispatch the reviewer:
+
+```bash
+human <tracker> issue comment add <BUG_KEY> "[human:review-started]"
+```
+
+```
+Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria.")
+```
+
+The reviewer writes `.human/reviews/<work-key>.md`; the first line under its `## Summary` is the verdict — `pass`, `pass with notes`, or `fail`. Post the outcome on the bug ticket (same follow-up the review pickup flow posts):
+
+```bash
+human <tracker> issue comment add <BUG_KEY> "$(cat <<'REVIEW_EOF'
+[human:review-complete]
+verdict: <verdict>
+reviews:
+  <WORK_KEY>: <verdict> — .human/reviews/<work-key>.md
+REVIEW_EOF
+)"
+```
+
+### 7.3 Review gate
+
+- **pass** or **pass with notes** — continue to Step 8.
+- **fail** — feed the reviewer's findings back once: re-dispatch the **human-bug-fixer** (Step 5) with the review findings appended to the prompt, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). If the second verdict still fails, STOP honestly: the `[human:ready-for-review]` handoff stays standing for a human, and NO pull request is merged.
+
+## Step 8 — Phase 6: Deploy — end with a merged PR
+
+Only after a passing review. This is the board's deploy pipeline (push → PR → CI gate → merge → close) driven from the skill:
+
+1. Post the started marker: `human <tracker> issue comment add <BUG_KEY> "[human:deploy-started]"`.
+2. Open the pull request with `human pr create --head autofix/<work-key> --title "[<BUG_KEY>] [<ENG_KEY>] <short summary>" --body ...` (single-tracker: only `[<BUG_KEY>]`). The body carries Summary / Verdict / Tests and the ticket key(s). If no forge is configured in `.humanconfig` and the origin remote is GitHub, fall back to `gh pr create` — never report success without a PR. Capture `<PR_URL>` and the PR number.
+3. Gate on CI: `gh pr checks <number> --watch` (or the forge's equivalent). A failing gate → post `[human:deploy-failed]` with the reason on `<BUG_KEY>` and STOP — do NOT merge red.
+4. Merge and clean up: `gh pr merge <number> --merge --delete-branch`. If the merge is blocked (required approvals, branch protection), post `[human:deploy-failed]` with the reason and STOP honestly — the PR stays open for a human.
+5. Record success: `human <tracker> issue comment add <BUG_KEY> "[human:deployed]"` with a second line `pr: <PR_URL>`, then move the ticket to its done-type status (`human <tracker> issue statuses <BUG_KEY>`, then `human <tracker> issue status <BUG_KEY> "<done-status>"`). In split topology close `<ENG_KEY>` the same way.
+
+## Step 9 — Summary
+
+Report the verdict. For a confirmed, shipped fix, present the traceability chain:
 
 ```
 Autofix complete for <BUG_KEY>
 
-Verdict: confirmed
+Verdict: confirmed — review: <verdict> — shipped
 - PM bug:     <tracker> <BUG_KEY>
 - Root cause: [human:bug-verdict] comment on <BUG_KEY> (explanation + cause chain)
 - Plan:       <ENG_TRACKER> <ENG_KEY> (split topology) — or [human:plan] comment on <BUG_KEY>
 - Branch:     autofix/<work-key>
-- Handoff:    [human:ready-for-review] comment posted on <BUG_KEY> — review + deploy ship it
+- Review:     [human:review-complete] verdict: <verdict> on <BUG_KEY>
+- PR:         <PR_URL> — merged, branch deleted
+- Ticket:     moved to <done-status>
 ```
+
+For a board-context run (exception in Step 7.1) or a failed review/deploy gate, report where the pipeline stopped, which marker records it, and what a human needs to do next.
