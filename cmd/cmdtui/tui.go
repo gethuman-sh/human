@@ -605,7 +605,7 @@ func buildPaneCmd(agentCmd, humanExe, name string, stopOnExit bool) string {
 
 // shellQuote wraps a token in single quotes so a POSIX shell treats it as one
 // literal argument, preserving spaces and metacharacters. Embedded single
-// quotes are closed, escaped, and reopened ('\'').
+// quotes are closed, escaped, and reopened — see the replacement below.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
