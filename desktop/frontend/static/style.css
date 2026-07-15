@@ -1072,6 +1072,12 @@ body {
 
 /* Escaped plain text; pre-wrap preserves the ticket's line structure without
    a markdown renderer (same approach as the ideation transcript .msg). */
+.detail-error {
+  font-size: 12px;
+  color: var(--failed);
+  margin-bottom: 12px;
+}
+
 .detail-description {
   font-size: 13px;
   line-height: 1.45;
@@ -1081,6 +1087,85 @@ body {
 .detail-description.empty {
   color: var(--muted);
   font-style: italic;
+}
+
+/* Daemon-rendered markdown: real block elements, so pre-wrap (needed only by
+   the plain-text fallback) would double every newline between them. */
+.detail-description.rendered {
+  white-space: normal;
+}
+
+.detail-description.rendered h1,
+.detail-description.rendered h2,
+.detail-description.rendered h3,
+.detail-description.rendered h4 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 14px 0 6px;
+}
+
+.detail-description.rendered h1 { font-size: 15px; }
+.detail-description.rendered h2 { font-size: 14px; }
+
+.detail-description.rendered p {
+  margin: 0 0 10px;
+}
+
+.detail-description.rendered ul,
+.detail-description.rendered ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.detail-description.rendered li {
+  margin: 2px 0;
+}
+
+.detail-description.rendered code {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
+.detail-description.rendered pre {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0 0 10px;
+  overflow-x: auto;
+}
+
+.detail-description.rendered pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.detail-description.rendered blockquote {
+  border-left: 3px solid var(--col-border);
+  margin: 0 0 10px;
+  padding: 2px 0 2px 10px;
+  color: var(--muted);
+}
+
+.detail-description.rendered table {
+  border-collapse: collapse;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.detail-description.rendered th,
+.detail-description.rendered td {
+  border: 1px solid var(--col-border);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.detail-description.rendered img {
+  max-width: 100%;
 }
 
 .detail-tracker-link {
