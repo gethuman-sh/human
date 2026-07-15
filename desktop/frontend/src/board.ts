@@ -657,6 +657,15 @@ function renderBugCard(card: Card): HTMLElement {
     const running = el.querySelector(".badge.running");
     if (running) running.innerHTML = `<span class="spinner"></span> fixing…`;
   }
+  if (card.state === "failed") {
+    // The board's bare ✕ is too quiet for this pane: a dead fix run must say
+    // so, with the recorded reason a hover away.
+    const failed = el.querySelector<HTMLElement>(".badge.failed");
+    if (failed) {
+      failed.textContent = "✕ error";
+      if (card.error) failed.title = card.error;
+    }
+  }
   if (isReadyToDeploy(card)) {
     const meta = el.querySelector(".card-meta");
     if (meta) {
