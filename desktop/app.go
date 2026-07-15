@@ -438,6 +438,18 @@ func (a *App) CreateIdea(title string) error {
 	return err
 }
 
+// CreateBug files a defect ticket from the Bugs pane's `+` dialog. The daemon
+// marks it as a bug the way the PM tracker natively understands, so the card
+// lands in the bug grid on every backend.
+func (a *App) CreateBug(title, description string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	_, err = daemon.BugCreate(info.Addr, info.Token, daemon.BugCreateRequest{Title: title, Description: description})
+	return err
+}
+
 // ReplyIdeation sends the user's answer into the running session.
 func (a *App) ReplyIdeation(sessionID, message string) (IdeationView, error) {
 	info, err := daemon.ReadInfo()
