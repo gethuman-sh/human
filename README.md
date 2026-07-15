@@ -299,7 +299,7 @@ This writes skill and agent files to `.claude/` in the current directory. Re-run
 | `/human-brainstorm` | Explores the codebase and generates 2-3 implementation approaches |
 | `/human-plan` | Fetches a ticket and produces a structured implementation plan — attached as a separate engineering ticket (split topology) or as a `[human:plan]` comment on the ticket itself (`human plan show <KEY>` prints it) |
 | `/human-bug-plan` | Analyzes a bug ticket for root cause and writes a fix plan |
-| `/human-autofix` | Autonomously triages, fixes, verifies, and opens a PR for a bug end to end — the whole trail recorded on the tracker |
+| `/human-autofix` | Autonomously triages, root-causes, fixes, and verifies a bug end to end, handing off for review — the whole trail recorded on the tracker |
 | `/human-execute` | Loads a plan, executes step by step, runs a review checkpoint |
 | `/human-review` | Diffs the current branch against acceptance criteria |
 | `/human-findbugs` | Multi-agent pipeline to find logic errors, race conditions, and security issues |
@@ -326,20 +326,20 @@ All outputs are saved to `.human/` (plans, reviews, done reports, bug analyses, 
 `/human-autofix` runs the full bug-fix pipeline autonomously — pointed at a bug ticket, it never asks the user a question:
 
 ```bash
-/human-autofix SC-86               # triage, fix, verify, and open a PR for a bug
+/human-autofix SC-86               # triage, root-cause, fix, and verify a bug, then hand off
 ```
 
-It moves through six phases: triage and reproduce the bug, gate on the verdict, plan a regression-test-first fix (attached as a linked engineering ticket in split topology, or as a `[human:plan]` comment on the bug ticket itself with a single tracker), write the failing regression test then fix the root cause and push, verify the fix is "done done", and finally open a PR and hand off.
+It moves through six phases: triage and reproduce the bug down to its root cause, gate on the verdict, plan a regression-test-first fix (attached as a linked engineering ticket in split topology, or as a `[human:plan]` comment on the bug ticket itself with a single tracker), write the failing regression test then fix the root cause and push, verify the fix is "done done", and finally hand off for review.
 
-Triage returns one of three verdicts, posted as a `[human:bug-verdict]` comment on the ticket:
+Triage returns one of three verdicts, posted as a `[human:bug-verdict]` comment on the ticket — the ticket's permanent root-cause record, opening with a plain-language explanation a non-engineer can follow, then the minimal reproduction, the cause chain (symptom → proximate cause → underlying cause, with file:line evidence), the regression window (the commit that introduced the defect, when it can be found), and any sibling occurrences of the same defect pattern elsewhere in the codebase:
 
 - **`confirmed`** — the bug is reproduced; the pipeline proceeds to fix it.
 - **`not-a-bug`** — the ticket is closed or reclassified, with no code changes.
 - **`undetermined`** — the ticket is left open, with no code changes.
 
-Only a `confirmed` bug that passes the verification gate (regression test fails before the fix, passes after, and the full suite is green) gets a PR. The fix lands on an `autofix/` branch with commits referencing the ticket trail (both the PM and engineering keys in split topology, the single bug key otherwise), then `human pr create` opens the PR (forge and repo derived from the git origin remote). A `[human:ready-for-review]` handoff comment is posted on the PM ticket carrying the `branch:`, `commits:`, and `pr:` lines — plus an `engineering:` line in split topology; when that line is absent, reviewers review the PM ticket itself — and the TUI's `(R)` marker links straight to the PR.
+Only a `confirmed` bug that passes the verification gate (regression test fails before the fix, passes after, and the full suite is green) is handed off. The fix lands on a pushed `autofix/` branch with commits referencing the ticket trail (both the PM and engineering keys in split topology, the single bug key otherwise), and a `[human:ready-for-review]` comment is posted on the PM ticket carrying the `branch:` and `commits:` lines — plus an `engineering:` line in split topology; when that line is absent, reviewers review the PM ticket itself. This is the identical handoff the kanban executor posts: **no PR is opened here** — the deploy stage (the board's Deploy drop or the Bugs pane's Deploy button) owns push → PR → CI gate → merge → close, for bug fixes exactly as for feature work.
 
-The whole trail lives on the trackers — bug comment, plan (engineering ticket or plan comment), and PR — so no `.human/` working files are produced. If the build or tests aren't green, or `human pr create` fails, the pipeline stops and reports honestly rather than claiming success.
+The whole trail lives on the trackers — root-cause comment and plan (engineering ticket or plan comment) — so no `.human/` working files are produced. If the build or tests aren't green, the pipeline stops and reports honestly rather than claiming success.
 
 ## Configuration
 
