@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/devcontainer"
 )
 
 // DevcontainerPrompter abstracts TUI interactions for the devcontainer step.
@@ -80,7 +82,16 @@ func (s *devcontainerStep) Run(w io.Writer, fw claude.FileWriter) ([]string, err
 
 	s.state.SelectedStacks = stacks
 
-	cfg := buildDevcontainerConfig(proxy, intercept, stacks)
+	// Only emit the ca.crt bind mount + NODE_EXTRA_CA_CERTS when a real,
+	// PEM-parseable CA exists on the authoring host. Otherwise Docker
+	// fabricates an empty directory at the bind source and Node's PEM parse
+	// fails inside the container.
+	caPresent := false
+	if home, homeErr := os.UserHomeDir(); homeErr == nil {
+		caPresent = devcontainer.IsValidCACertFile(filepath.Join(home, ".human", "ca.crt"))
+	}
+
+	cfg := buildDevcontainerConfig(proxy, intercept, stacks, caPresent)
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -182,7 +193,7 @@ func checkDevcontainerPrereqs() []string {
 	return hints
 }
 
-func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType) devcontainerConfig {
+func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresent bool) devcontainerConfig {
 	featureOpts := map[string]interface{}{}
 	if proxy {
 		featureOpts["proxy"] = true
@@ -205,7 +216,6 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType) devconta
 		Image:        "mcr.microsoft.com/devcontainers/base:ubuntu",
 		RemoteUser:   "vscode",
 		Features:     features,
-		Mounts:       []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"},
 		RunArgs:      []string{"--add-host=host.docker.internal:host-gateway"},
 		ForwardPorts: []int{19285, 19286},
 		RemoteEnv: map[string]string{ // #nosec G101 -- not a credential, just env var name referencing localEnv
@@ -217,11 +227,23 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType) devconta
 		},
 	}
 
+	// Only bind-mount the CA and point NODE_EXTRA_CA_CERTS at it when a real
+	// PEM certificate exists on the authoring host. Emitting the mount for a
+	// missing source makes Docker fabricate an empty directory, and Node's PEM
+	// parse then fails on every run.
+	if caPresent {
+		cfg.Mounts = []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"}
+	}
+
 	switch {
 	case proxy && intercept:
 		cfg.CapAdd = []string{"NET_ADMIN"}
-		cfg.RemoteEnv["NODE_EXTRA_CA_CERTS"] = "/home/vscode/.human/ca.crt"
-		cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
+		if caPresent {
+			cfg.RemoteEnv["NODE_EXTRA_CA_CERTS"] = "/home/vscode/.human/ca.crt"
+			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
+		} else {
+			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
+		}
 	case proxy:
 		cfg.CapAdd = []string{"NET_ADMIN"}
 		cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"

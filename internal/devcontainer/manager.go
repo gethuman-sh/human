@@ -287,7 +287,7 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 	targetHome := remoteHome(cfg)
 
 	caCert := filepath.Join(home, ".human", "ca.crt")
-	if _, err := os.Stat(caCert); err == nil {
+	if IsValidCACertFile(caCert) {
 		binds = append(binds, caCert+":"+targetHome+"/.human/ca.crt:ro")
 	}
 

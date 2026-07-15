@@ -826,6 +826,18 @@ func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emit
 		status = "Interactive proxy mode: unknown domains will prompt for approval\n"
 	}
 
+	// The agent container bind-mounts ~/.human/ca.crt and points
+	// NODE_EXTRA_CA_CERTS at it. Generate the CA up front — even when
+	// intercept is off — so the file always exists as real PEM before any
+	// container starts; otherwise Docker fabricates an empty directory at the
+	// bind source and Node's PEM parse fails on every run.
+	if home, herr := os.UserHomeDir(); herr == nil {
+		humanDir := filepath.Join(home, ".human")
+		if _, _, _, caErr := proxy.LoadOrCreateCA(humanDir); caErr != nil {
+			logger.Warn().Err(caErr).Msg("failed to pre-generate proxy CA")
+		}
+	}
+
 	interceptor, interceptStatus := buildInterceptor(proxyCfg, logger)
 	if interceptStatus != "" {
 		status += interceptStatus

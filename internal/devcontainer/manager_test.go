@@ -609,15 +609,10 @@ func TestManager_Up_WithMounts(t *testing.T) {
 func TestManager_Up_WithCACert(t *testing.T) {
 	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
 
-	// Create CA cert file in the test HOME.
+	// Create a real PEM CA cert in the test HOME; the mount is now gated on
+	// the file being a PEM-parseable certificate.
 	home := os.Getenv("HOME")
-	humanDir := filepath.Join(home, ".human")
-	if err := os.MkdirAll(humanDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(humanDir, "ca.crt"), []byte("cert-data"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeTestCA(t, filepath.Join(home, ".human"))
 
 	mgr := &Manager{Docker: docker, Logger: testLogger()}
 	_, err := mgr.Up(context.Background(), UpOptions{
@@ -641,6 +636,68 @@ func TestManager_Up_WithCACert(t *testing.T) {
 	}
 	if !foundCACert {
 		t.Errorf("expected CA cert mount in binds: %v", binds)
+	}
+}
+
+func TestManager_Up_CACertIsDirectory_NoMount(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+
+	// Reproduce the broken host state: Docker auto-creates the missing bind
+	// source as an empty directory. A directory must never be mounted as the
+	// ca.crt PEM file.
+	home := os.Getenv("HOME")
+	humanDir := filepath.Join(home, ".human")
+	if err := os.MkdirAll(filepath.Join(humanDir, "ca.crt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	if _, err := mgr.Up(context.Background(), UpOptions{
+		ProjectDir: projectDir,
+		Out:        &bytes.Buffer{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(mock.createCalls) != 1 {
+		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
+	}
+	for _, b := range mock.createCalls[0].Binds {
+		if strings.Contains(b, "/.human/ca.crt") {
+			t.Errorf("ca.crt directory must not be mounted, but found bind: %q in %v", b, mock.createCalls[0].Binds)
+		}
+	}
+}
+
+func TestManager_Up_CACertEmpty_NoMount(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+
+	home := os.Getenv("HOME")
+	humanDir := filepath.Join(home, ".human")
+	if err := os.MkdirAll(humanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A zero-byte / non-PEM file would make Node's PEM parse fail; it must not
+	// be mounted either.
+	if err := os.WriteFile(filepath.Join(humanDir, "ca.crt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	if _, err := mgr.Up(context.Background(), UpOptions{
+		ProjectDir: projectDir,
+		Out:        &bytes.Buffer{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(mock.createCalls) != 1 {
+		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
+	}
+	for _, b := range mock.createCalls[0].Binds {
+		if strings.Contains(b, "/.human/ca.crt") {
+			t.Errorf("empty ca.crt must not be mounted, but found bind: %q in %v", b, mock.createCalls[0].Binds)
+		}
 	}
 }
 

@@ -2,11 +2,19 @@ package init
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"io"
 
@@ -14,6 +22,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// stageTestCA points HOME at a temp dir and writes a real PEM CA to
+// ~/.human/ca.crt. The devcontainer step now emits the ca.crt bind + related
+// env only when a genuine PEM certificate exists on the authoring host, so
+// tests asserting those must stage one.
+func stageTestCA(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "human test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	humanDir := filepath.Join(home, ".human")
+	require.NoError(t, os.MkdirAll(humanDir, 0o755))
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	require.NoError(t, os.WriteFile(filepath.Join(humanDir, "ca.crt"), pemBytes, 0o644))
+}
 
 // mockPrompter implements Prompter for testing.
 type mockPrompter struct {
@@ -653,6 +689,7 @@ func TestDevcontainerStep_Declined(t *testing.T) {
 }
 
 func TestDevcontainerStep_BasicConfig(t *testing.T) {
+	stageTestCA(t)
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
@@ -690,6 +727,7 @@ func TestDevcontainerStep_BasicConfig(t *testing.T) {
 }
 
 func TestDevcontainerStep_WithProxy(t *testing.T) {
+	stageTestCA(t)
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
@@ -721,6 +759,7 @@ func TestDevcontainerStep_WithProxy(t *testing.T) {
 }
 
 func TestDevcontainerStep_WithProxyAndIntercept(t *testing.T) {
+	stageTestCA(t)
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
@@ -745,6 +784,38 @@ func TestDevcontainerStep_WithProxyAndIntercept(t *testing.T) {
 	assert.Contains(t, data, "sudo -E human-proxy-setup")
 	assert.Contains(t, data, "NODE_EXTRA_CA_CERTS")
 	assert.Contains(t, data, "update-ca-certificates")
+	assert.Contains(t, data, "human install --agent claude")
+}
+
+// When no valid CA exists on the authoring host, the generated config must not
+// emit the ca.crt bind mount (Docker would fabricate an empty directory at the
+// source) nor NODE_EXTRA_CA_CERTS (Node's PEM parse would fail).
+func TestDevcontainerStep_NoCA_OmitsMount(t *testing.T) {
+	// HOME points at an empty temp dir: no ~/.human/ca.crt.
+	t.Setenv("HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+	require.NoError(t, os.Chdir(tmpDir))
+
+	prompter := &mockPrompter{
+		confirmDevcontainer: true,
+		confirmProxy:        true,
+		confirmIntercept:    true,
+	}
+	step := NewDevcontainerStep(prompter, &WizardState{})
+	fw := newMockFileWriter()
+	var buf bytes.Buffer
+
+	_, err := step.Run(&buf, fw)
+	require.NoError(t, err)
+
+	data := string(fw.files[".devcontainer/devcontainer.json"])
+	assert.NotContains(t, data, "ca.crt,target=/home/vscode/.human/ca.crt,type=bind")
+	assert.NotContains(t, data, "NODE_EXTRA_CA_CERTS")
+	assert.NotContains(t, data, "update-ca-certificates")
+	// The rest of the proxy setup still applies.
+	assert.Contains(t, data, "sudo -E human-proxy-setup")
 	assert.Contains(t, data, "human install --agent claude")
 }
 
