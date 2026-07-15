@@ -338,6 +338,19 @@ func BoardTransition(addr, token string, req BoardTransitionRequest) error {
 	return err
 }
 
+// BoardFix asks the daemon to launch the autonomous bug-fix pipeline
+// (/human-autofix) on a bug ticket. The request is a single JSON arg, matching
+// BoardTransition; it returns once the agent is launched, not when the fix
+// finishes.
+func BoardFix(addr, token string, req BoardFixRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling board fix request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"board-fix", string(data)})
+	return err
+}
+
 // GenerateFeatures asks the daemon to launch the human-features skill, which
 // regenerates FEATURE.json for the registered project. It takes no arguments —
 // the daemon resolves the project directory itself — and returns once the agent

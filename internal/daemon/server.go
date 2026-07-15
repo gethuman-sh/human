@@ -62,6 +62,9 @@ type Server struct {
 	// BoardTransitioner applies a board-transition request (advancing a card
 	// one pipeline stage). nil disables the board-transition route.
 	BoardTransitioner func(req BoardTransitionRequest) error
+	// BoardFixer launches the autonomous bug-fix pipeline on a bug ticket for
+	// the Bugs pane's Fix drop. nil disables the board-fix route.
+	BoardFixer func(req BoardFixRequest) error
 	// CloseTicketer closes a PM ticket (transitions it to Done) for the
 	// board's Close-Ticket drop zone. nil disables the close-ticket route.
 	CloseTicketer func(req CloseTicketRequest) error
@@ -358,6 +361,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"agent-stop-async":    func() { s.handleAgentStopAsync(conn, args[1:]) },
 		"subscribe":           func() { s.handleSubscribe(conn) },
 		"board-transition":    func() { s.handleBoardTransition(conn, args[1:]) },
+		"board-fix":           func() { s.handleBoardFix(conn, args[1:]) },
 		"close-ticket":        func() { s.handleCloseTicket(conn, args[1:]) },
 		"ideation-start":      func() { s.handleIdeationStart(conn, args[1:]) },
 		"ideation-reply":      func() { s.handleIdeationReply(conn, args[1:]) },
@@ -507,6 +511,33 @@ func (s *Server) handleBoardTransition(conn net.Conn, args []string) {
 		return
 	}
 	if err := s.BoardTransitioner(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleBoardFix launches the autonomous bug-fix pipeline for one bug ticket
+// via the injected BoardFixer. Like board-transition it is a dedicated
+// non-destructive route — the drag onto the Fix column is the user's consent —
+// and it returns as soon as the agent is launched, not when the fix finishes.
+func (s *Server) handleBoardFix(conn net.Conn, args []string) {
+	if s.BoardFixer == nil {
+		s.writeError(conn, "bug fixing not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "board-fix requires one JSON arg", 1)
+		return
+	}
+	var req BoardFixRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid board-fix request: "+err.Error(), 1)
+		return
+	}
+	if err := s.BoardFixer(req); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}

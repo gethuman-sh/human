@@ -178,6 +178,36 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	}
 }
 
+// BoardFixRequest is the wire request for launching the autonomous bug-fix
+// pipeline on a bug ticket. PMTitle is carried like BoardTransitionRequest's so
+// downstream stages never need a second tracker fetch.
+type BoardFixRequest struct {
+	PMKey   string `json:"pm_key"`
+	PMTitle string `json:"pm_title"`
+}
+
+// ApplyFix launches the autonomous bug-fix pipeline (/human-autofix) on a bug
+// ticket. Bugs skip the board's planning gate — autofix triages, plans and
+// fixes in one run — so this is a separate entry point rather than a relaxation
+// of ApplyTransition's forward-only rule. The agent is named exactly like a
+// board implementation stage, so the failure watcher and the build→review
+// chain apply to a bug fix unchanged.
+func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) error {
+	comments, err := d.Commenter.ListComments(ctx, req.PMKey)
+	if err != nil {
+		return errors.WrapWithDetails(err, "loading PM comments for fix", "pm", req.PMKey)
+	}
+	// Idempotency: a re-drop while any stage agent (fix, review, deploy) is
+	// still running must not launch a second one — same intent as
+	// ApplyTransition's duplicate-drop guard, widened to the whole card
+	// because a bug fix chains straight into its review.
+	if card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false); card.State == BoardRunning {
+		return nil
+	}
+	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+		"/human-autofix "+req.PMKey)
+}
+
 // startAgentStage posts the stage's started marker, then launches the agent. On
 // launch failure it posts the stage's *-failed marker so the board reflects the
 // error rather than leaving a stuck spinner.
