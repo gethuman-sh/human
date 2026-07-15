@@ -264,6 +264,29 @@ func TestCreateIssue_happy(t *testing.T) {
 	assert.Equal(t, "/fields/System.Description", gotOps[1].Path)
 }
 
+func TestCreateIssue_bugTypePostsBugWorkItem(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		// Azure's defect marker is the work item type itself, so a bug-typed
+		// issue must be created as $Bug rather than a plain $Issue.
+		assert.Equal(t, "/myorg/Human/_apis/wit/workitems/$Bug", r.URL.Path)
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"id":101,"fields":{"System.Title":"Broken thing","System.State":"New","System.WorkItemType":"Bug","Microsoft.VSTS.Common.Priority":0,"System.TeamProject":"Human"}}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "myorg", "pat-test")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "Human",
+		Title:   "Broken thing",
+		Type:    "Bug",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "Human/101", issue.Key)
+}
+
 func TestCreateIssue_withoutDescription(t *testing.T) {
 	var gotOps []patchOp
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

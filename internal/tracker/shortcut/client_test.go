@@ -1097,6 +1097,111 @@ func TestCreateIssue_withStoryType(t *testing.T) {
 	assert.Equal(t, "bug", gotBody["story_type"])
 }
 
+func TestCreateIssue_bugTypeNormalizedToStoryType(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		case "/api/v3/stories":
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &gotBody)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":51,"name":"Bug","story_type":"bug","workflow_state_id":500}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	// "Bug" is the tracker-agnostic spelling; Shortcut itself only accepts
+	// lowercase story types, so the client must translate.
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Title: "Bug",
+		Type:  "Bug",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "bug", gotBody["story_type"])
+}
+
+func TestCreateIssue_storyTypeLowercased(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		case "/api/v3/stories":
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &gotBody)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":52,"name":"Chore","story_type":"chore","workflow_state_id":500}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Title: "Chore",
+		Type:  "Chore",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "chore", gotBody["story_type"])
+}
+
+func TestCreateIssue_unknownStoryTypeOmitted(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[{"id":500,"name":"To Do","type":"unstarted"}]}]`)
+		case "/api/v3/stories":
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &gotBody)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":53,"name":"Task","story_type":"feature","workflow_state_id":500}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Title: "Task",
+		Type:  "Task",
+	})
+	require.NoError(t, err)
+	// Shortcut rejects unknown story types, so anything outside its
+	// vocabulary must be omitted and left to the server default.
+	_, hasStoryType := gotBody["story_type"]
+	assert.False(t, hasStoryType, "story_type should be omitted for types Shortcut does not know")
+}
+
+func Test_normalizeStoryType(t *testing.T) {
+	tests := []struct {
+		name string
+		t    string
+		want string
+	}{
+		{"bug lowercase", "bug", "bug"},
+		{"Bug titlecase", "Bug", "bug"},
+		{"type:bug spelling", "type:bug", "bug"},
+		{"feature lowercase", "feature", "feature"},
+		{"Feature titlecase", "Feature", "feature"},
+		{"Chore titlecase", "Chore", "chore"},
+		{"unknown type omitted", "Task", ""},
+		{"empty omitted", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeStoryType(tt.t))
+		})
+	}
+}
+
 func TestListStatuses_caching(t *testing.T) {
 	fetchCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

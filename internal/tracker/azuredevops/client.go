@@ -175,7 +175,14 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		return nil, errors.WrapWithDetails(err, "marshalling create request", "project", project)
 	}
 
-	path := fmt.Sprintf("/%s/%s/_apis/wit/workitems/$Issue", url.PathEscape(c.org), url.PathEscape(project))
+	// Azure's native defect marker is the work item type itself: bug-typed
+	// issues must be created as $Bug, not as a tagged $Issue, or they lose
+	// their place in Azure's own bug tracking (queries, boards, rules).
+	witType := "Issue"
+	if tracker.IsBugType(issue.Type) {
+		witType = "Bug"
+	}
+	path := fmt.Sprintf("/%s/%s/_apis/wit/workitems/$%s", url.PathEscape(c.org), url.PathEscape(project), url.PathEscape(witType))
 	resp, err := c.doRequest(ctx, http.MethodPost, path, "api-version=7.1", bytes.NewReader(body), "application/json-patch+json")
 	if err != nil {
 		return nil, err

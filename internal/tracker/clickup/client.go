@@ -131,8 +131,10 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	if issue.ParentKey != "" {
 		body["parent"] = issue.ParentKey
 	}
-	if len(issue.Labels) > 0 {
-		body["tags"] = issue.Labels
+	// ClickUp tasks carry no issue type here — a bug-typed issue keeps its
+	// defect marking via the tag convention IsBug recognises.
+	if labels := tracker.CreateLabels(issue); len(labels) > 0 {
+		body["tags"] = labels
 	}
 
 	payload, err := json.Marshal(body)
