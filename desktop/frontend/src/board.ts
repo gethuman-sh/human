@@ -454,6 +454,24 @@ function showCardMenu(card: Card, x: number, y: number): void {
   });
   menu.appendChild(openItem);
 
+  // A dead fix run leaves a bug card failed with no pipeline gesture to try
+  // again — the Fix column only accepts grid and rework drops, and a card
+  // cannot be dropped onto the column it already sits in. Retry is therefore
+  // a menu action. Relaunching runs an agent — same Docker gate as the drops.
+  if (card.bug && card.state === "failed") {
+    const retryItem = document.createElement("button");
+    retryItem.type = "button";
+    retryItem.className = "context-menu-item";
+    retryItem.textContent = "Retry fix";
+    retryItem.disabled = !current.dockerAvailable;
+    if (retryItem.disabled) retryItem.title = "Docker required";
+    retryItem.addEventListener("click", () => {
+      menu.remove();
+      void fixBug(card.key, card.title);
+    });
+    menu.appendChild(retryItem);
+  }
+
   // Mockups belong to the product conversation: the item appears only in the
   // Product backlog column, toggling create → creating → view as the local
   // mockup set for this ticket comes into existence. Bug tickets never get
