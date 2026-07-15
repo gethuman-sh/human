@@ -1641,7 +1641,7 @@ function renderTicketDetail(): void {
     desc = `<div class="detail-description empty">No description</div>`;
   }
   const link = detailCard.url
-    ? `<a class="detail-tracker-link" href="${escapeAttr(detailCard.url)}">Open in tracker</a>`
+    ? `<button type="button" class="detail-tracker-btn">Open in tracker</button>`
     : "";
   const error = detailError
     ? `<div class="detail-error">Couldn't load the full ticket: ${escapeHtml(detailError)}</div>`
@@ -1653,13 +1653,14 @@ function renderTicketDetail(): void {
     ${desc}
     ${link}
   `;
-  // Every anchor in the panel — the tracker link and any link inside the
-  // rendered description — must leave via the system browser, never navigate
-  // the webview away from the board.
+  const url = detailCard.url;
+  body.querySelector<HTMLButtonElement>(".detail-tracker-btn")?.addEventListener("click", () => openExternal(url));
+  // Links inside the rendered description must leave via the system browser,
+  // never navigate the webview away from the board.
   body.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
     a.addEventListener("click", (e: MouseEvent) => {
       e.preventDefault();
-      openExternal(a.classList.contains("detail-tracker-link") ? (detailCard?.url ?? "") : a.href);
+      openExternal(a.href);
     });
   });
 }

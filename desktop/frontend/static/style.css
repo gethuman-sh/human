@@ -1168,10 +1168,21 @@ body {
   max-width: 100%;
 }
 
-.detail-tracker-link {
+.detail-tracker-btn {
   display: inline-block;
   margin-top: 12px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  padding: 8px 14px;
   font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.detail-tracker-btn:hover {
+  filter: brightness(1.1);
 }
 
 /* --- Running agents view --------------------------------------------------
