@@ -123,11 +123,27 @@ func (a *App) Cards() (BoardData, error) {
 
 	results, err := daemon.GetTrackerIssues(info.Addr, info.Token)
 	if err != nil {
-		return BoardData{}, err
+		return BoardData{}, daemonCause(err)
 	}
 	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments(), cardMockups())
 	a.pruneIdeaSpace(data)
 	return data, nil
+}
+
+// daemonCause rewrites a daemon-client error for the Wails boundary: only
+// err.Error() crosses to the frontend, and for daemon failures that is the
+// generic "daemon command failed" wrapper. Folding in the cause chain and the
+// daemon's stderr detail makes every board banner name what actually broke —
+// an error surface must carry actionable information or not appear at all.
+func daemonCause(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := errors.CauseChain(err)
+	if stderr, ok := errors.AllDetails(err)["stderr"].(string); ok && strings.TrimSpace(stderr) != "" {
+		msg += ": " + strings.TrimSpace(stderr)
+	}
+	return fmt.Errorf("%s", msg)
 }
 
 // IssueDetail is the full-ticket payload for the board's detail panel — only
@@ -152,14 +168,7 @@ func (a *App) GetIssueDetail(trackerKind, trackerName, key string) (IssueDetail,
 	}
 	issue, err := daemon.GetTrackerIssue(info.Addr, info.Token, trackerKind, trackerName, key)
 	if err != nil {
-		// Wails serializes only err.Error() to the frontend, which for daemon
-		// failures is a generic wrapper; fold the daemon's stderr detail in so
-		// the panel shows the actual cause instead of "daemon command failed".
-		msg := errors.CauseChain(err)
-		if stderr, ok := errors.AllDetails(err)["stderr"].(string); ok && strings.TrimSpace(stderr) != "" {
-			msg += ": " + strings.TrimSpace(stderr)
-		}
-		return IssueDetail{}, fmt.Errorf("%s", msg)
+		return IssueDetail{}, daemonCause(err)
 	}
 	return IssueDetail{
 		Title:           issue.Title,
@@ -207,7 +216,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 
 	results, err := daemon.GetTrackerIssuesLite(info.Addr, info.Token)
 	if err != nil {
-		return BoardData{}, err
+		return BoardData{}, daemonCause(err)
 	}
 	return boardFromResults(results, true, a.ideas.Assignments(), cardMockups()), nil
 }
@@ -309,12 +318,12 @@ func (a *App) Transition(pmKey, pmTitle, from, to string) error {
 	if err != nil {
 		return err
 	}
-	return daemon.BoardTransition(info.Addr, info.Token, daemon.BoardTransitionRequest{
+	return daemonCause(daemon.BoardTransition(info.Addr, info.Token, daemon.BoardTransitionRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
 		From:    daemon.BoardStage(from),
 		To:      daemon.BoardStage(to),
-	})
+	}))
 }
 
 // FixBug asks the daemon to launch the autonomous bug-fix pipeline
@@ -327,10 +336,10 @@ func (a *App) FixBug(pmKey, pmTitle string) error {
 	if err != nil {
 		return err
 	}
-	return daemon.BoardFix(info.Addr, info.Token, daemon.BoardFixRequest{
+	return daemonCause(daemon.BoardFix(info.Addr, info.Token, daemon.BoardFixRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
-	})
+	}))
 }
 
 // GenerateFeatures asks the daemon to launch the human-features skill, which
@@ -343,7 +352,7 @@ func (a *App) GenerateFeatures() error {
 	if err != nil {
 		return err
 	}
-	return daemon.GenerateFeatures(info.Addr, info.Token)
+	return daemonCause(daemon.GenerateFeatures(info.Addr, info.Token))
 }
 
 // CreateMocks asks the daemon to launch the human-mockups skill for one PM
@@ -355,11 +364,11 @@ func (a *App) CreateMocks(pmKey, pmTitle, description string) error {
 	if err != nil {
 		return err
 	}
-	return daemon.CreateMocks(info.Addr, info.Token, daemon.CreateMocksRequest{
+	return daemonCause(daemon.CreateMocks(info.Addr, info.Token, daemon.CreateMocksRequest{
 		PMKey:       pmKey,
 		PMTitle:     pmTitle,
 		Description: description,
-	})
+	}))
 }
 
 // CloseTicket closes a PM ticket (transitions it to Done) via the daemon's
@@ -371,7 +380,7 @@ func (a *App) CloseTicket(pmKey string) error {
 	if err != nil {
 		return err
 	}
-	return daemon.CloseTicket(info.Addr, info.Token, daemon.CloseTicketRequest{PMKey: pmKey})
+	return daemonCause(daemon.CloseTicket(info.Addr, info.Token, daemon.CloseTicketRequest{PMKey: pmKey}))
 }
 
 // IdeationMsg is the frontend-facing transcript entry.
@@ -423,7 +432,7 @@ func (a *App) StartIdeation(seed, mode string, restart bool, evolveKey string, e
 		EvolveLabels: evolveLabels,
 	})
 	if err != nil {
-		return IdeationView{}, err
+		return IdeationView{}, daemonCause(err)
 	}
 	return ideationView(st), nil
 }
@@ -435,7 +444,7 @@ func (a *App) CreateIdea(title string) error {
 		return err
 	}
 	_, err = daemon.IdeaCreate(info.Addr, info.Token, daemon.IdeaCreateRequest{Title: title})
-	return err
+	return daemonCause(err)
 }
 
 // CreateBug files a defect ticket from the Bugs pane's `+` dialog. The daemon
@@ -447,7 +456,7 @@ func (a *App) CreateBug(title, description string) error {
 		return err
 	}
 	_, err = daemon.BugCreate(info.Addr, info.Token, daemon.BugCreateRequest{Title: title, Description: description})
-	return err
+	return daemonCause(err)
 }
 
 // ReplyIdeation sends the user's answer into the running session.
@@ -458,7 +467,7 @@ func (a *App) ReplyIdeation(sessionID, message string) (IdeationView, error) {
 	}
 	st, err := daemon.IdeationReply(info.Addr, info.Token, daemon.IdeationReplyRequest{SessionID: sessionID, Message: message})
 	if err != nil {
-		return IdeationView{}, err
+		return IdeationView{}, daemonCause(err)
 	}
 	return ideationView(st), nil
 }
@@ -476,7 +485,7 @@ func (a *App) ApproveIdeation(sessionID, title, description string) (IdeationVie
 		Description: description,
 	})
 	if err != nil {
-		return IdeationView{}, err
+		return IdeationView{}, daemonCause(err)
 	}
 	return ideationView(st), nil
 }
@@ -492,7 +501,7 @@ func (a *App) IdeationStatus() (IdeationView, error) {
 	}
 	st, err := daemon.GetIdeationStatus(info.Addr, info.Token)
 	if err != nil {
-		return IdeationView{}, err
+		return IdeationView{}, daemonCause(err)
 	}
 	return ideationView(st), nil
 }
