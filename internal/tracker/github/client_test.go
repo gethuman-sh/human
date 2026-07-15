@@ -1176,6 +1176,54 @@ func TestCreateIssue_withLabels(t *testing.T) {
 	assert.Equal(t, []any{"bug", "urgent"}, gotRaw["labels"])
 }
 
+func TestCreateIssue_bugTypeAddsBugLabel(t *testing.T) {
+	var gotRaw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotRaw))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"number":102,"title":"Broken thing","body":""}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "octocat/hello-world",
+		Title:   "Broken thing",
+		Type:    "Bug",
+	})
+
+	require.NoError(t, err)
+	// GitHub has no issue type, so the bug typing must survive as a label.
+	assert.Equal(t, []any{"bug"}, gotRaw["labels"])
+}
+
+func TestCreateIssue_bugTypeExistingBugLabelNotDuplicated(t *testing.T) {
+	var gotRaw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotRaw))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"number":103,"title":"Broken thing","body":""}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "octocat/hello-world",
+		Title:   "Broken thing",
+		Type:    "Bug",
+		Labels:  []string{"bug"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []any{"bug"}, gotRaw["labels"])
+}
+
 func TestLinkIssues_postsCrossReferenceComment(t *testing.T) {
 	var gotBody commentRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

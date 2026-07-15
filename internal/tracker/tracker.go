@@ -214,6 +214,35 @@ func isBugToken(s string) bool {
 	return hasToken(s, "bug")
 }
 
+// BugLabel is the label that marks a defect on providers without a native bug
+// issue type, matching the classification IsBug already accepts.
+const BugLabel = "bug"
+
+// IsBugType reports whether the type string names the defect issue type,
+// normalised like IsBug ("Bug", "bug", "type:bug" all match). Providers use
+// it to map a bug-typed Issue onto their native defect marker at create time.
+func IsBugType(s string) bool {
+	return isBugToken(s)
+}
+
+// CreateLabels returns the labels a provider WITHOUT a native bug type must
+// send when creating i: i.Labels, plus BugLabel when i is bug-typed and not
+// already bug-labeled. Without this translation a bug-typed Issue would lose
+// its defect marking on label-only trackers (Linear, GitHub, GitLab, ClickUp)
+// and IsBug could never recognise the created ticket. Providers with a native
+// type (Jira, Shortcut, Azure DevOps) map i.Type directly instead.
+func CreateLabels(i *Issue) []string {
+	if !isBugToken(i.Type) {
+		return i.Labels
+	}
+	for _, l := range i.Labels {
+		if isBugToken(l) {
+			return i.Labels
+		}
+	}
+	return append(append([]string{}, i.Labels...), BugLabel)
+}
+
 // IdeaLabel is the canonical label marking a ticket as a raw idea — the first
 // maturity stage of the evolving-ticket lifecycle. It is namespaced so it
 // cannot collide with a team's existing labels; classification additionally

@@ -70,6 +70,9 @@ type Server struct {
 	// BoardFixer launches the autonomous bug-fix pipeline on a bug ticket for
 	// the Bugs pane's Fix drop. nil disables the board-fix route.
 	BoardFixer func(req BoardFixRequest) error
+	// BugCreator files a defect ticket on the PM tracker for the Bugs pane's
+	// + dialog. nil disables the bug-create route.
+	BugCreator func(req BugCreateRequest) (BugCreateResponse, error)
 	// CloseTicketer closes a PM ticket (transitions it to Done) for the
 	// board's Close-Ticket drop zone. nil disables the close-ticket route.
 	CloseTicketer func(req CloseTicketRequest) error
@@ -374,6 +377,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"ideation-approve":    func() { s.handleIdeationApprove(conn, args[1:]) },
 		"ideation-status":     func() { s.handleIdeationStatus(conn) },
 		"idea-create":         func() { s.handleIdeaCreate(conn, args[1:]) },
+		"bug-create":          func() { s.handleBugCreate(conn, args[1:]) },
 		"features-generate":   func() { s.handleFeaturesGenerate(conn) },
 		"create-mocks":        func() { s.handleCreateMocks(conn, args[1:]) },
 		"config-get":          func() { s.handleConfigGet(conn, projectDir) },

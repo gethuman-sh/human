@@ -864,6 +864,31 @@ func TestCreateIssue_withLabels(t *testing.T) {
 	assert.Equal(t, "bug,urgent", gotBody.Labels)
 }
 
+func TestCreateIssue_bugTypeAddsBugLabel(t *testing.T) {
+	var gotBody createRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"iid":100,"title":"Broken thing","description":""}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "glpat-test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "mygroup/myproject",
+		Title:   "Broken thing",
+		Type:    "Bug",
+	})
+
+	require.NoError(t, err)
+	// GitLab's REST API has no issue type, so the bug typing must survive
+	// as a label.
+	assert.Equal(t, "bug", gotBody.Labels)
+}
+
 func TestLinkIssues_happy(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)

@@ -442,6 +442,24 @@ func IdeaCreate(addr, token string, req IdeaCreateRequest) (IdeaCreateResponse, 
 	return resp, nil
 }
 
+// BugCreate files a defect ticket on the PM tracker — the Bugs pane's `+`
+// dialog (title plus free-text description).
+func BugCreate(addr, token string, req BugCreateRequest) (BugCreateResponse, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return BugCreateResponse{}, errors.WrapWithDetails(err, "marshaling bug-create request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{"bug-create", string(data)})
+	if err != nil {
+		return BugCreateResponse{}, err
+	}
+	var resp BugCreateResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return BugCreateResponse{}, errors.WrapWithDetails(err, "invalid bug-create JSON")
+	}
+	return resp, nil
+}
+
 // GetIdeationStatus fetches the current ideation session snapshot.
 func GetIdeationStatus(addr, token string) (IdeationStatus, error) {
 	out, err := RunRemoteCapture(addr, token, []string{"ideation-status"})

@@ -233,8 +233,12 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	if len(issue.Labels) > 0 {
 		body["labels"] = scLabelParams(issue.Labels)
 	}
-	if isValidStoryType(issue.Type) {
-		body["story_type"] = issue.Type
+	// Shortcut's native defect marker is story_type "bug"; accept any spelling
+	// IsBug recognises ("Bug", "type:bug") so bug creation is tracker-agnostic
+	// for callers. Other types are matched case-insensitively against the
+	// valid set — Shortcut itself rejects anything but lowercase values.
+	if st := normalizeStoryType(issue.Type); st != "" {
+		body["story_type"] = st
 	}
 	// A subtask in Shortcut is a story that points at a parent story; the
 	// key the caller passes is the numeric parent story ID.
@@ -786,6 +790,20 @@ func (c *Client) isDoneOrArchived(story scStory) bool {
 // isValidStoryType returns true if t is a Shortcut-accepted story type.
 func isValidStoryType(t string) bool {
 	return t == "feature" || t == "bug" || t == "chore"
+}
+
+// normalizeStoryType maps a provider-agnostic issue type onto Shortcut's
+// story_type vocabulary: bug-typed issues (any spelling tracker.IsBugType
+// accepts) become "bug", other types are lowercased and kept only when
+// Shortcut knows them. Empty means "omit" — Shortcut defaults to feature.
+func normalizeStoryType(t string) string {
+	if tracker.IsBugType(t) {
+		return "bug"
+	}
+	if st := strings.ToLower(t); isValidStoryType(st) {
+		return st
+	}
+	return ""
 }
 
 // parseStoryID parses a string story ID into an int64.

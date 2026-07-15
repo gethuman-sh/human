@@ -1853,6 +1853,46 @@ func TestCreateIssue_withLabels(t *testing.T) {
 	assert.Equal(t, []string{"Bug", "human/idea"}, issue.Labels)
 }
 
+func TestCreateIssue_bugTypeResolvesBugLabel(t *testing.T) {
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"teams(": func(_ map[string]any) string {
+				return `{"data":{"teams":{"nodes":[{"id":"team-uuid-1"}]}}}`
+			},
+			"projects(": func(_ map[string]any) string {
+				return `{"data":{"projects":{"nodes":[]}}}`
+			},
+			"team(id:": func(vars map[string]any) string {
+				assert.Equal(t, "team-uuid-1", vars["teamId"])
+				return `{"data":{"team":{"labels":{"nodes":[{"id":"lbl-bug","name":"bug"}]}}}}`
+			},
+			"issueCreate(": func(vars map[string]any) string {
+				// Linear has no issue type, so a bug-typed issue must arrive
+				// with the bug label resolved even though none was requested.
+				assert.Equal(t, []any{"lbl-bug"}, vars["labelIds"])
+				return `{"data":{"issueCreate":{"success":true,"issue":{
+					"identifier":"ENG-103","title":"Broken thing","description":"",
+					"state":{"name":""},"priorityLabel":"","assignee":null,"creator":null,
+					"labels":{"nodes":[{"name":"bug"}]}
+				}}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	issue, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "ENG",
+		Title:   "Broken thing",
+		Type:    "Bug",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "ENG-103", issue.Key)
+	assert.Equal(t, []string{"bug"}, issue.Labels)
+}
+
 func TestCreateIssue_withoutLabelsOmitsLabelIDs(t *testing.T) {
 	srv := httptest.NewServer(&graphQLHandler{
 		t: t,

@@ -160,10 +160,12 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		return nil, err
 	}
 
+	// GitHub issues have no type field — a bug-typed issue keeps its defect
+	// marking via the label convention IsBug recognises.
 	payload := createRequest{
 		Title:  issue.Title,
 		Body:   issue.Description,
-		Labels: issue.Labels,
+		Labels: tracker.CreateLabels(issue),
 	}
 
 	body, err := json.Marshal(payload)

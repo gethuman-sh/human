@@ -303,8 +303,10 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	}
 	// Labels are team-scoped entities in Linear, so names must be resolved to
 	// ids against the team the issue is created in (creating missing ones).
-	if len(issue.Labels) > 0 {
-		labelIDs, err := c.resolveLabelIDs(ctx, teamID, issue.Labels)
+	// Linear has no issue type either, so a bug-typed issue keeps its defect
+	// marking via the label convention IsBug recognises.
+	if labels := tracker.CreateLabels(issue); len(labels) > 0 {
+		labelIDs, err := c.resolveLabelIDs(ctx, teamID, labels)
 		if err != nil {
 			return nil, err
 		}

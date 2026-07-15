@@ -191,6 +191,7 @@ interface AppBindings {
   DaemonStatus(): Promise<boolean>;
   StartIdeation(seed: string, mode: string, restart: boolean, evolveKey: string, evolveLabels: string[]): Promise<IdeationView>;
   CreateIdea(title: string): Promise<void>;
+  CreateBug(title: string, description: string): Promise<void>;
   ReplyIdeation(sessionId: string, message: string): Promise<IdeationView>;
   ApproveIdeation(sessionId: string, title: string, description: string): Promise<IdeationView>;
   IdeationStatus(): Promise<IdeationView>;
@@ -590,7 +591,7 @@ function renderIdeaSpace(): HTMLElement {
     if (i === 0) {
       // Quick-add writes into the leftmost sub-column, so captures awaiting
       // their ticket number sit on top of it — where the input just was.
-      for (const title of pendingIdeas) body.prepend(renderPendingIdea(title));
+      for (const title of pendingIdeas) body.prepend(renderPendingCard(title));
     }
     col.appendChild(body);
 
@@ -684,12 +685,16 @@ function renderBugs(): void {
   gridCol.className = "column bug-grid-col";
   gridCol.dataset.stage = "bugs:grid";
   gridCol.innerHTML =
-    `<div class="column-header"><span>Bugs</span><span class="column-count">${gridBugs.length}</span></div>`;
+    `<div class="column-header"><span>Bugs</span>` +
+    `<button class="add-card" title="File a bug">+</button>` +
+    `<span class="column-count">${gridBugs.length + pendingBugs.length}</span></div>`;
+  gridCol.querySelector(".add-card")!.addEventListener("click", () => showBugModal());
   const gridBody = document.createElement("div");
   gridBody.className = "column-body bug-grid";
-  if (bugs.length === 0) {
+  if (bugs.length === 0 && pendingBugs.length === 0) {
     gridBody.innerHTML = `<div class="bug-grid-empty">No open bugs</div>`;
   } else {
+    for (const b of pendingBugs) gridBody.appendChild(renderPendingCard(b.title));
     for (const card of gridBugs) gridBody.appendChild(renderBugCard(card));
   }
   gridCol.appendChild(gridBody);
@@ -735,6 +740,80 @@ async function fixBug(key: string, title: string): Promise<void> {
   } catch (err) {
     showError(errMessage(err));
   }
+  await reconcile();
+}
+
+// Bugs filed from the pane but not yet confirmed by a board fetch — the bug
+// grid's counterpart to pendingIdeas, with the same handover rule: the
+// placeholder clears when a fetched bug card carries its title.
+let pendingBugs: { title: string; description: string }[] = [];
+
+// showBugModal opens the file-a-bug dialog: a title and a free-text
+// description. Filing is optimistic like the idea quick-add — the placeholder
+// card appears immediately; a failed create reopens the dialog with the text
+// intact so nothing typed is lost.
+function showBugModal(prefillTitle = "", prefillDescription = ""): void {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const modal = document.createElement("div");
+  modal.className = "modal bug-modal";
+  modal.innerHTML = `
+    <div class="modal-title">File a bug</div>
+    <input class="modal-input" type="text" placeholder="What is broken?" />
+    <textarea class="modal-textarea" rows="6" placeholder="What did you see, what did you expect?"></textarea>
+    <div class="modal-actions">
+      <button class="modal-cancel" type="button">Cancel</button>
+      <button class="modal-confirm" type="button">Create bug</button>
+    </div>
+  `;
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  const titleInput = modal.querySelector(".modal-input") as HTMLInputElement;
+  const descInput = modal.querySelector(".modal-textarea") as HTMLTextAreaElement;
+  const confirm = modal.querySelector(".modal-confirm") as HTMLButtonElement;
+  titleInput.value = prefillTitle;
+  descInput.value = prefillDescription;
+
+  const close = (): void => overlay.remove();
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  modal.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape") close();
+  });
+  modal.querySelector(".modal-cancel")!.addEventListener("click", close);
+  confirm.addEventListener("click", () => {
+    const title = titleInput.value.trim();
+    if (!title) {
+      titleInput.focus();
+      return;
+    }
+    const description = descInput.value.trim();
+    close();
+    void createBug(title, description);
+  });
+  titleInput.focus();
+}
+
+// createBug files the ticket and keeps the grid honest: placeholder first,
+// rollback + reopened dialog on failure (same contract as CreateIdea).
+async function createBug(title: string, description: string): Promise<void> {
+  pendingBugs.push({ title, description });
+  render();
+  try {
+    await go().CreateBug(title, description);
+  } catch (err) {
+    // The ticket does not exist, so the placeholder must not pretend it
+    // does — give the text back to the dialog instead.
+    pendingBugs = pendingBugs.filter((b) => b.title !== title);
+    showError(errMessage(err));
+    showBugModal(title, description);
+    return;
+  }
+  // Invalidate fetches already in flight — their pre-create snapshot would
+  // miss the new ticket (same guard as CreateIdea).
+  reconcileEpoch++;
   await reconcile();
 }
 
@@ -818,10 +897,10 @@ function showIdeaQuickAdd(col: HTMLElement, prefill = ""): void {
   });
 }
 
-// renderPendingIdea builds the placeholder card for an idea whose ticket is
+// renderPendingCard builds the placeholder card for a ticket (idea or bug)
 // still being created: a spinner sits where the ticket number will land. No
 // drag, no menu — there is no ticket to act on yet.
-function renderPendingIdea(title: string): HTMLElement {
+function renderPendingCard(title: string): HTMLElement {
   const el = document.createElement("div");
   el.className = "card pending-idea";
   el.setAttribute("draggable", "false");
@@ -1352,6 +1431,11 @@ async function reconcile(): Promise<void> {
     // whatever this fetch contained.
     const fetched = new Set(current.cards.filter((c) => queueOf(c) === "ideas").map((c) => c.title));
     pendingIdeas = pendingIdeas.filter((t) => !fetched.has(t));
+  }
+  if (pendingBugs.length) {
+    // Same handover rule for bugs filed from the pane's + dialog.
+    const fetchedBugs = new Set(current.cards.filter((c) => c.bug).map((c) => c.title));
+    pendingBugs = pendingBugs.filter((b) => !fetchedBugs.has(b.title));
   }
   boardLoading = false;
   stagesLoading = false;

@@ -491,6 +491,67 @@ func TestIssue_IsBug(t *testing.T) {
 	}
 }
 
+func TestIsBugType(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want bool
+	}{
+		{"bug lowercase", "bug", true},
+		{"Bug titlecase", "Bug", true},
+		{"type:bug", "type:bug", true},
+		{"kind/bug", "kind/bug", true},
+		{"empty", "", false},
+		{"Task", "Task", false},
+		// Token matching, not substring matching — "debug" and "bugfix"
+		// contain "bug" but must not classify as the defect type.
+		{"debug is not a bug", "debug", false},
+		{"bugfix is not a bug", "bugfix", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsBugType(tt.s))
+		})
+	}
+}
+
+func TestCreateLabels(t *testing.T) {
+	tests := []struct {
+		name string
+		i    Issue
+		want []string
+	}{
+		{"bug type without labels", Issue{Type: "bug"}, []string{"bug"}},
+		{"bug type titlecase without labels", Issue{Type: "Bug"}, []string{"bug"}},
+		{"bug type appends to existing labels", Issue{Type: "bug", Labels: []string{"urgent"}}, []string{"urgent", "bug"}},
+		// An already-present bug token means the defect marking is intact —
+		// appending again would create a duplicate label on the tracker.
+		{"bug type with bug label", Issue{Type: "bug", Labels: []string{"bug"}}, []string{"bug"}},
+		{"bug type with kind/bug label", Issue{Type: "Bug", Labels: []string{"kind/bug"}}, []string{"kind/bug"}},
+		{"non-bug type passes labels through", Issue{Type: "Feature", Labels: []string{"urgent"}}, []string{"urgent"}},
+		{"empty type passes nil through", Issue{}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, CreateLabels(&tt.i))
+		})
+	}
+}
+
+func TestCreateLabels_doesNotMutateInput(t *testing.T) {
+	// The caller's Issue is shared state (it is re-used for the tracker
+	// response) — appending the bug label in place would leak the synthetic
+	// label back into the caller's slice.
+	labels := []string{"urgent"}
+	i := Issue{Type: "bug", Labels: labels}
+
+	got := CreateLabels(&i)
+
+	assert.Equal(t, []string{"urgent", "bug"}, got)
+	assert.Equal(t, []string{"urgent"}, labels)
+	assert.Equal(t, []string{"urgent"}, i.Labels)
+}
+
 func TestIssue_IsIdea(t *testing.T) {
 	tests := []struct {
 		name string

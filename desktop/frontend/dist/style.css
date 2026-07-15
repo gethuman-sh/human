@@ -467,6 +467,41 @@ body {
   filter: brightness(1.1);
 }
 
+/* File-a-bug dialog: a .modal variant with a title input and a description
+   textarea. Creating is constructive, so the confirm uses the accent color,
+   not the destructive red of close-ticket confirmation. */
+.bug-modal {
+  width: 420px;
+}
+
+.bug-modal .modal-input,
+.bug-modal .modal-textarea {
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--card-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.bug-modal .modal-input:focus,
+.bug-modal .modal-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.bug-modal .modal-textarea {
+  resize: vertical;
+  min-height: 90px;
+}
+
+.bug-modal .modal-confirm {
+  background: var(--accent);
+}
+
 /* Start Project wizard: a .modal variant. Its confirm action is constructive
    (create/scaffold), so it uses the accent color instead of the destructive
    red the shared .modal-confirm carries for close-ticket confirmation. */

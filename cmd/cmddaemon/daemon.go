@@ -244,6 +244,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		VaultResolver:     vaultResolver,
 		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver),
 		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver),
+		BugCreator:        bugCreatorFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
 		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
@@ -1538,6 +1539,39 @@ func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(
 			return err
 		}
 		return deps.ApplyFix(context.Background(), req)
+	}
+}
+
+// bugCreatorFunc builds the daemon's BugCreator closure: it files a bug-typed
+// ticket on the role-resolved PM tracker. The provider maps the bug type onto
+// its native defect marker (issue/story type where one exists, the bug label
+// otherwise), so the Bugs pane recognises the card on every backend.
+func bugCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.BugCreateRequest) (daemon.BugCreateResponse, error) {
+	return func(req daemon.BugCreateRequest) (daemon.BugCreateResponse, error) {
+		if err := daemon.ValidateBugCreate(req); err != nil {
+			return daemon.BugCreateResponse{}, err
+		}
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return daemon.BugCreateResponse{}, errors.WithDetails("no project registered for bug creation")
+		}
+		entry := entries[0]
+		creator, project, err := resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			return daemon.BugCreateResponse{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		created, err := creator.CreateIssue(ctx, &tracker.Issue{
+			Project:     project,
+			Title:       req.Title,
+			Description: req.Description,
+			Type:        "Bug",
+		})
+		if err != nil {
+			return daemon.BugCreateResponse{}, errors.WrapWithDetails(err, "creating bug ticket", "project", project)
+		}
+		return daemon.BugCreateResponse{Key: created.Key, URL: created.URL}, nil
 	}
 }
 

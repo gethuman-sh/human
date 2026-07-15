@@ -147,10 +147,12 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		return nil, err
 	}
 
+	// GitLab's REST API has no issue type — a bug-typed issue keeps its
+	// defect marking via the label convention IsBug recognises.
 	payload := createRequest{
 		Title:       issue.Title,
 		Description: issue.Description,
-		Labels:      strings.Join(issue.Labels, ","),
+		Labels:      strings.Join(tracker.CreateLabels(issue), ","),
 	}
 
 	body, err := json.Marshal(payload)

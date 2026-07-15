@@ -115,7 +115,7 @@ func buildIssueCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Project key (Jira: KAN, GitHub: owner/repo, GitLab: group/project, Linear: ENG)")
 	_ = cmd.MarkFlagRequired("project")
-	cmd.Flags().StringVar(&typ, "type", "Task", "Issue type (Jira only, e.g. Task, Bug, Story)")
+	cmd.Flags().StringVar(&typ, "type", "Task", "Issue type (e.g. Task, Bug, Story) — Bug maps to every tracker's native defect marker: issue type on Jira/Azure DevOps, story type on Shortcut, the bug label elsewhere")
 	cmd.Flags().StringVar(&description, "description", "", "Issue description in markdown (separate from title)")
 	cmd.Flags().StringVar(&parent, "parent", "", "Parent issue key to create this as a subtask (Linear, Jira, Shortcut, Azure DevOps, GitHub, ClickUp; not supported on GitLab)")
 	cmd.Flags().StringArrayVar(&labels, "label", nil, "Label to attach (repeatable), e.g. --label human/idea")

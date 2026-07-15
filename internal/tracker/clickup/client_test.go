@@ -334,6 +334,44 @@ func TestCreateIssue_happy(t *testing.T) {
 	assert.Equal(t, "Some description", gotBody["description"])
 }
 
+func TestCreateIssue_bugTypeAddsBugTag(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/list/901/task":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &gotBody))
+
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprint(w, `{
+				"id": "bug111",
+				"name": "Broken thing",
+				"description": "",
+				"status": {"status": "open", "type": "open"},
+				"list": {"id": "901"}
+			}`)
+
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test", "")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "901",
+		Title:   "Broken thing",
+		Type:    "Bug",
+	})
+
+	require.NoError(t, err)
+	// ClickUp tasks carry no issue type here, so the bug typing must
+	// survive as a tag.
+	assert.Equal(t, []any{"bug"}, gotBody["tags"])
+}
+
 func TestDeleteIssue_happy(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodDelete, r.Method)
