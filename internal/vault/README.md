@@ -3,8 +3,9 @@
 Instead of pasting real API tokens into your config, you write a short reference like `1pw://Development/GitHub PAT/token`. `human` fetches the real secret from 1Password at startup, so credentials never sit in plaintext on disk.
 
 - Use `1pw://vault/item/field` references in any token field
+- Use `gh://token` (or `gh://<hostname>/token` for GitHub Enterprise) to resolve the GitHub CLI's keyring token — no PAT copying
 - Resolves references to real secrets at startup
-- Supports 1Password as the secret provider today
+- Supports 1Password and the GitHub CLI as secret providers today; `gh://` works alongside any configured provider
 - Unlocks via the 1Password desktop app prompt
 - Falls back to the `op.exe` CLI on WSL2
 - Passes plain non-secret values through untouched

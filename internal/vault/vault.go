@@ -56,9 +56,9 @@ func (r *Resolver) Resolve(ref string) (string, error) {
 }
 
 // IsSecretRef reports whether s looks like a vault secret reference.
-// Currently recognizes "1pw://" (1Password).
+// Currently recognizes "1pw://" (1Password) and "gh://" (GitHub CLI).
 func IsSecretRef(s string) bool {
-	return strings.HasPrefix(s, "1pw://")
+	return strings.HasPrefix(s, "1pw://") || strings.HasPrefix(s, ghRefPrefix)
 }
 
 // ResolveField resolves a single config field value through the vault.
