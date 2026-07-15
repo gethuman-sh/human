@@ -45,11 +45,16 @@ type Server struct {
 	CmdFactory       func() *cobra.Command
 	Opener           BrowserOpener // used for OAuth relay; defaults to browser.DefaultOpener
 	Logger           zerolog.Logger
-	ConnectedPIDs    *ConnectedTracker                        // tracks client PIDs that have pinged; nil disables tracking
-	HookEvents       *HookEventStore                          // in-memory hook event buffer; nil disables hook event tracking
-	NetworkEvents    *NetworkEventStore                       // in-memory ambient network activity buffer; nil disables
-	IssueFetcher     func() ([]TrackerIssuesResult, error)    // injected; fetches issues from configured trackers
-	LiteIssueFetcher func() ([]TrackerIssuesResult, error)    // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
+	ConnectedPIDs    *ConnectedTracker                     // tracks client PIDs that have pinged; nil disables tracking
+	HookEvents       *HookEventStore                       // in-memory hook event buffer; nil disables hook event tracking
+	NetworkEvents    *NetworkEventStore                    // in-memory ambient network activity buffer; nil disables
+	IssueFetcher     func() ([]TrackerIssuesResult, error) // injected; fetches issues from configured trackers
+	LiteIssueFetcher func() ([]TrackerIssuesResult, error) // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
+	// IssueGetter fetches one full issue for the board's detail panel. List
+	// endpoints on some trackers (e.g. Shortcut) return slim payloads without
+	// descriptions, so reading a ticket needs a per-key fetch. nil disables
+	// the tracker-issue route.
+	IssueGetter      func(req IssueDetailRequest) (*tracker.Issue, error)
 	TrackerDiagnoser func(dir string) []tracker.TrackerStatus // injected; diagnoses tracker status with vault resolution
 	Projects         *ProjectRegistry                         // multi-project routing; nil means single-project mode
 	PendingConfirms  *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
@@ -353,6 +358,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"tracker-diagnose":    func() { s.handleTrackerDiagnose(conn, projectDir) },
 		"tracker-issues":      func() { s.handleTrackerIssues(conn) },
 		"tracker-issues-lite": func() { s.handleTrackerIssuesLite(conn) },
+		"tracker-issue":       func() { s.handleTrackerIssue(conn, args[1:]) },
 		"pending-confirms":    func() { s.handlePendingConfirms(conn) },
 		"confirm-op":          func() { s.handleConfirmOp(conn, args[1:], clientPID) },
 		"confirm-status":      func() { s.handleConfirmStatus(conn, args[1:]) },
@@ -465,6 +471,38 @@ func (s *Server) handleTrackerIssues(conn net.Conn) {
 // quickly, then reconciles them into their real columns via handleTrackerIssues.
 func (s *Server) handleTrackerIssuesLite(conn net.Conn) {
 	s.writeIssueResults(conn, s.LiteIssueFetcher)
+}
+
+// handleTrackerIssue returns one full issue by key. Read-only: it exists
+// because list fetches on some trackers return slim payloads without
+// descriptions, so the board's detail panel re-fetches the single ticket.
+func (s *Server) handleTrackerIssue(conn net.Conn, args []string) {
+	if s.IssueGetter == nil {
+		s.writeError(conn, "issue detail not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "tracker-issue requires one JSON arg", 1)
+		return
+	}
+	var req IssueDetailRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid tracker-issue request: "+err.Error(), 1)
+		return
+	}
+	issue, err := s.IssueGetter(req)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	data, err := json.Marshal(issue)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: string(data) + "\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
 }
 
 // writeIssueResults runs an injected issue fetcher and streams the JSON result.

@@ -232,6 +232,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		NetworkEvents:     networkStore,
 		IssueFetcher:      fetchTrackerIssuesFunc(projectRegistry, vaultResolver),
 		LiteIssueFetcher:  fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
+		IssueGetter:       issueGetterFunc(projectRegistry, vaultResolver),
 		TrackerDiagnoser:  trackerDiagnoserFunc(projectRegistry, vaultResolver),
 		Projects:          projectRegistry,
 		PendingConfirms:   confirmStore,
@@ -1032,6 +1033,31 @@ func fetchTrackerIssuesLiteFunc(reg *daemon.ProjectRegistry, resolver *vault.Res
 	return func() ([]daemon.TrackerIssuesResult, error) {
 		_, results, err := listTrackerIssues(reg, resolver)
 		return results, err
+	}
+}
+
+// issueGetterFunc builds the daemon's IssueGetter closure: it resolves the
+// tracker instance named in the request and fetches the single full issue.
+// The per-key fetch exists because list endpoints on some trackers (e.g.
+// Shortcut) return slim payloads without descriptions.
+func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.IssueDetailRequest) (*tracker.Issue, error) {
+	return func(req daemon.IssueDetailRequest) (*tracker.Issue, error) {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return nil, errors.WithDetails("no project registered for issue detail")
+		}
+		entry := entries[0]
+		instances, err := cmdutil.LoadAllInstancesWithResolver(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			return nil, err
+		}
+		inst, err := tracker.Resolve(req.Tracker, instances, req.Key)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return inst.Provider.GetIssue(ctx, req.Key)
 	}
 }
 

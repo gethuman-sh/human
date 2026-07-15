@@ -724,12 +724,18 @@ function beginPointerDrag(el, card) {
         const onUp = (ev) => {
             const target = started ? dropTargetAt(ev.clientX, ev.clientY) : null;
             const allowed = !!target && dropAllowed(target);
+            const wasClick = !started;
             teardown();
             endDrag();
             // `target` may have been replaced by the flushed render, but performDrop
             // only reads its dataset, which a detached node still carries.
             if (target && allowed)
                 performDrop(target, info, { x: ev.clientX, y: ev.clientY });
+            // A press that never crossed the drag threshold is a plain click: open
+            // the ticket detail panel. Links/buttons never get here (pointerdown
+            // filters them), and right-clicks go to the contextmenu handler instead.
+            else if (wasClick)
+                openTicketDetail(card);
         };
         const onCancel = () => {
             teardown();
@@ -994,6 +1000,9 @@ function render() {
     else {
         banner.classList.add("hidden");
     }
+    // The detail panel lives outside #board, so the rebuild above never touches
+    // it — it only needs its card data refreshed from the new board state.
+    refreshTicketDetail();
 }
 function showError(msg) {
     current.error = msg;
@@ -1247,7 +1256,98 @@ function renderIdeationError(msg) {
     ideation = { ...ideation, state: "error", error: msg };
     renderIdeation();
 }
+// --- Ticket detail panel ---------------------------------------------------
+//
+// A plain click on any card (board or Bugs pane) opens a read-only slide-out
+// with the ticket's key, title, owner and description. It renders a snapshot
+// of the clicked card, re-resolved by key after each render() so the full
+// fetch backfills a description the quick titles-only pass left empty.
+let detailCard = null;
+function openTicketDetail(card) {
+    // The detail panel and the ideation panel share the fixed right edge; only
+    // one may be visible. Closing ideation keeps its session running (AD-4).
+    closeIdeation();
+    detailCard = card;
+    renderTicketDetail();
+    document.getElementById("detail-panel")?.classList.remove("hidden");
+    void fetchTicketDetail(card);
+}
+// fetchTicketDetail backfills the panel from a per-ticket fetch: the board's
+// list fetch is slim on some trackers (Shortcut returns stories without
+// descriptions), so the card's own description can be empty even for a ticket
+// that has one. The snapshot renders first; this fills in what the list missed.
+async function fetchTicketDetail(card) {
+    try {
+        const detail = await go().GetIssueDetail(card.tracker ?? "", card.key);
+        // A slow fetch for a previously clicked card must never overwrite the
+        // currently open one.
+        if (!detailCard || detailCard.key !== card.key)
+            return;
+        detailCard = {
+            ...detailCard,
+            title: detail.title || detailCard.title,
+            assignee: detail.assignee || detailCard.assignee,
+            description: detail.description || detailCard.description,
+        };
+        renderTicketDetail();
+    }
+    catch {
+        // The snapshot already renders; a failed backfill just means the panel
+        // shows what the list fetch carried.
+    }
+}
+function closeTicketDetail() {
+    detailCard = null;
+    document.getElementById("detail-panel")?.classList.add("hidden");
+}
+// refreshTicketDetail re-renders the open panel from the freshest card with
+// the same key. A card that left the board (e.g. closed elsewhere) keeps its
+// last snapshot — stale-but-readable beats a panel that vanishes mid-read.
+function refreshTicketDetail() {
+    if (!detailCard)
+        return;
+    const key = detailCard.key;
+    const fresh = current.cards.find((c) => c.key === key);
+    if (fresh) {
+        // Merge, don't replace: the fresh card comes from a slim list fetch whose
+        // empty description/assignee must not wipe what fetchTicketDetail filled in.
+        detailCard = {
+            ...fresh,
+            assignee: fresh.assignee || detailCard.assignee,
+            description: fresh.description || detailCard.description,
+        };
+    }
+    renderTicketDetail();
+}
+function renderTicketDetail() {
+    if (!detailCard)
+        return;
+    const keyEl = document.getElementById("detail-key");
+    if (keyEl)
+        keyEl.textContent = detailCard.key;
+    const body = document.getElementById("detail-body");
+    if (!body)
+        return;
+    const owner = detailCard.assignee
+        ? `<span class="detail-owner-name">${escapeHtml(detailCard.assignee)}</span>`
+        : "Unassigned";
+    const desc = detailCard.description
+        ? `<div class="detail-description">${escapeHtml(detailCard.description)}</div>`
+        : `<div class="detail-description empty">No description</div>`;
+    const link = detailCard.url
+        ? `<a class="detail-tracker-link" href="${escapeAttr(detailCard.url)}" target="_blank">Open in tracker</a>`
+        : "";
+    body.innerHTML = `
+    <div class="detail-title">${escapeHtml(detailCard.title)}</div>
+    <div class="detail-owner">Owner: ${owner}</div>
+    ${desc}
+    ${link}
+  `;
+}
 async function openIdeation() {
+    // Mirror of the exclusivity in openTicketDetail: both panels occupy the
+    // fixed right edge, so opening one always closes the other.
+    closeTicketDetail();
     const panel = document.getElementById("ideation-panel");
     if (panel)
         panel.classList.remove("hidden");
@@ -1981,6 +2081,7 @@ function init() {
         }
     });
     document.getElementById("ideation-close")?.addEventListener("click", () => closeIdeation());
+    document.getElementById("detail-close")?.addEventListener("click", () => closeTicketDetail());
     document.getElementById("ideation-form")?.addEventListener("submit", (e) => {
         e.preventDefault();
         void submitIdeation();
