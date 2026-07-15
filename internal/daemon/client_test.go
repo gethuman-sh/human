@@ -442,20 +442,23 @@ func TestGetTrackerIssue_Success(t *testing.T) {
 	addr := startMockDaemon(t, func(req Request) Response {
 		require.Len(t, req.Args, 2)
 		assert.Equal(t, "tracker-issue", req.Args[0])
-		// The request must carry the instance name so the daemon resolves the
-		// exact tracker instead of guessing from an ambiguous numeric key.
+		// The request must carry the instance name AND kind so the daemon
+		// resolves the exact tracker: numeric keys are ambiguous across kinds,
+		// and the same name can appear in several provider sections.
 		var detailReq IssueDetailRequest
 		require.NoError(t, json.Unmarshal([]byte(req.Args[1]), &detailReq))
 		assert.Equal(t, "human", detailReq.Tracker)
+		assert.Equal(t, "shortcut", detailReq.Kind)
 		assert.Equal(t, "188", detailReq.Key)
-		return Response{Stdout: `{"key":"188","title":"Building column","assignee":"Stephan","description":"Full body"}` + "\n"}
+		return Response{Stdout: `{"key":"188","title":"Building column","assignee":"Stephan","description":"Full body","description_html":"<p>Full body</p>"}` + "\n"}
 	})
 
-	issue, err := GetTrackerIssue(addr, "tok", "human", "188")
+	issue, err := GetTrackerIssue(addr, "tok", "shortcut", "human", "188")
 	require.NoError(t, err)
 	assert.Equal(t, "188", issue.Key)
 	assert.Equal(t, "Stephan", issue.Assignee)
 	assert.Equal(t, "Full body", issue.Description)
+	assert.Equal(t, "<p>Full body</p>", issue.DescriptionHTML)
 }
 
 func TestGetTrackerIssue_InvalidJSON(t *testing.T) {
@@ -463,7 +466,7 @@ func TestGetTrackerIssue_InvalidJSON(t *testing.T) {
 		return Response{Stdout: "not json\n"}
 	})
 
-	_, err := GetTrackerIssue(addr, "tok", "human", "188")
+	_, err := GetTrackerIssue(addr, "tok", "shortcut", "human", "188")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid tracker issue JSON")
 }

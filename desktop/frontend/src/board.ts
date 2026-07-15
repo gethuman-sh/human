@@ -42,9 +42,11 @@ interface Card {
   labels?: string[];
   description?: string;
   assignee?: string;
-  // Tracker instance name the issue was listed from; passed back to
-  // GetIssueDetail so the daemon resolves the exact instance.
+  // Tracker instance name + provider kind the issue was listed from; passed
+  // back to GetIssueDetail so the daemon resolves the exact instance (names
+  // can repeat across provider sections, keys across kinds).
   tracker?: string;
+  trackerKind?: string;
   error?: string;
   verdict?: string;
   // Idea-space sub-column (0 loosest … 4 most concrete) for Ideas-stage cards.
@@ -174,11 +176,13 @@ interface IssueDetailData {
   title: string;
   assignee?: string;
   description?: string;
+  // Rendered and sanitized by the daemon — safe to inject verbatim.
+  descriptionHTML?: string;
 }
 
 interface AppBindings {
   Cards(): Promise<BoardData>;
-  GetIssueDetail(trackerName: string, key: string): Promise<IssueDetailData>;
+  GetIssueDetail(trackerKind: string, trackerName: string, key: string): Promise<IssueDetailData>;
   CardsQuick(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   FixBug(pmKey: string, pmTitle: string): Promise<void>;
@@ -209,11 +213,28 @@ interface AppBindings {
 declare global {
   interface Window {
     go?: { main?: { App?: AppBindings } };
-    runtime?: { EventsOn(name: string, cb: () => void): void };
+    runtime?: {
+      EventsOn(name: string, cb: () => void): void;
+      BrowserOpenURL?(url: string): void;
+    };
   }
 }
 
 export {};
+
+// openExternal routes a URL to the system browser via the Wails runtime.
+// Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
+// webview (WebKitGTK swallows the new-window request), so every external
+// link must go through BrowserOpenURL; the anchor is only a styling shell.
+function openExternal(url: string): void {
+  if (!url) return;
+  if (window.runtime?.BrowserOpenURL) {
+    window.runtime.BrowserOpenURL(url);
+    return;
+  }
+  // Dev fallback (vite in a real browser): no Wails runtime, plain open works.
+  window.open(url, "_blank");
+}
 
 // Queue columns: each names a state that is TRUE of every card in it, always.
 // The agent work happens on the transitions (a drag is the launch), so a card
@@ -394,6 +415,14 @@ function renderCard(card: Card): HTMLElement {
     <div class="card-meta">${meta.join("")}</div>
     ${card.error ? `<div class="card-error">${escapeHtml(card.error)}</div>` : ""}
   `;
+  // External links must go through the Wails runtime (see openExternal);
+  // the pointerdown filter in beginPointerDrag already exempts anchors.
+  el.querySelectorAll<HTMLAnchorElement>(".card-meta a").forEach((a) => {
+    a.addEventListener("click", (e: MouseEvent) => {
+      e.preventDefault();
+      openExternal(a.href);
+    });
+  });
   el.addEventListener("contextmenu", (e: MouseEvent) => {
     e.preventDefault();
     showCardMenu(card, e.clientX, e.clientY);
@@ -420,12 +449,7 @@ function showCardMenu(card: Card, x: number, y: number): void {
   openItem.disabled = !card.url;
   openItem.addEventListener("click", () => {
     menu.remove();
-    // Same anchor pattern as the PR link: the webview routes target=_blank
-    // external URLs to the system browser.
-    const a = document.createElement("a");
-    a.href = card.url;
-    a.target = "_blank";
-    a.click();
+    openExternal(card.url);
   });
   menu.appendChild(openItem);
 
@@ -958,10 +982,10 @@ function beginPointerDrag(el: HTMLElement, card: Card): void {
       // `target` may have been replaced by the flushed render, but performDrop
       // only reads its dataset, which a detached node still carries.
       if (target && allowed) performDrop(target, info, { x: ev.clientX, y: ev.clientY });
-      // A press that never crossed the drag threshold is a plain click: open
+      // A press that never crossed the drag threshold is a plain click: toggle
       // the ticket detail panel. Links/buttons never get here (pointerdown
       // filters them), and right-clicks go to the contextmenu handler instead.
-      else if (wasClick) openTicketDetail(card);
+      else if (wasClick) toggleTicketDetail(card);
     };
 
     const onCancel = (): void => {
@@ -1515,12 +1539,32 @@ function renderIdeationError(msg: string): void {
 // fetch backfills a description the quick titles-only pass left empty.
 
 let detailCard: Card | null = null;
+// detailError surfaces a failed per-ticket backfill in the panel. A silent
+// failure is indistinguishable from "the ticket has no description", which
+// is exactly the confusion it must prevent.
+let detailError: string | null = null;
+// detailHTML is the daemon-rendered markdown of the open ticket's description.
+// Caching lives in the daemon (stale-while-revalidate on the tracker-issue
+// route), so the panel just shows whatever the last fetch returned.
+let detailHTML: string | null = null;
+
+// toggleTicketDetail is the card-click entry point: a second click on the
+// ticket that is already open closes the panel instead of re-opening it.
+function toggleTicketDetail(card: Card): void {
+  if (detailCard && detailCard.key === card.key) {
+    closeTicketDetail();
+    return;
+  }
+  openTicketDetail(card);
+}
 
 function openTicketDetail(card: Card): void {
   // The detail panel and the ideation panel share the fixed right edge; only
   // one may be visible. Closing ideation keeps its session running (AD-4).
   closeIdeation();
   detailCard = card;
+  detailError = null;
+  detailHTML = null;
   renderTicketDetail();
   document.getElementById("detail-panel")?.classList.remove("hidden");
   void fetchTicketDetail(card);
@@ -1532,10 +1576,12 @@ function openTicketDetail(card: Card): void {
 // that has one. The snapshot renders first; this fills in what the list missed.
 async function fetchTicketDetail(card: Card): Promise<void> {
   try {
-    const detail = await go().GetIssueDetail(card.tracker ?? "", card.key);
+    const detail = await go().GetIssueDetail(card.trackerKind ?? "", card.tracker ?? "", card.key);
     // A slow fetch for a previously clicked card must never overwrite the
     // currently open one.
     if (!detailCard || detailCard.key !== card.key) return;
+    detailError = null;
+    detailHTML = detail.descriptionHTML || null;
     detailCard = {
       ...detailCard,
       title: detail.title || detailCard.title,
@@ -1543,14 +1589,16 @@ async function fetchTicketDetail(card: Card): Promise<void> {
       description: detail.description || detailCard.description,
     };
     renderTicketDetail();
-  } catch {
-    // The snapshot already renders; a failed backfill just means the panel
-    // shows what the list fetch carried.
+  } catch (err) {
+    if (!detailCard || detailCard.key !== card.key) return;
+    detailError = errMessage(err);
+    renderTicketDetail();
   }
 }
 
 function closeTicketDetail(): void {
   detailCard = null;
+  detailHTML = null;
   document.getElementById("detail-panel")?.classList.add("hidden");
 }
 
@@ -1582,18 +1630,39 @@ function renderTicketDetail(): void {
   const owner = detailCard.assignee
     ? `<span class="detail-owner-name">${escapeHtml(detailCard.assignee)}</span>`
     : "Unassigned";
-  const desc = detailCard.description
-    ? `<div class="detail-description">${escapeHtml(detailCard.description)}</div>`
-    : `<div class="detail-description empty">No description</div>`;
+  // Prefer the daemon-rendered (and sanitized) HTML; fall back to escaped
+  // plain text while it hasn't arrived, so the panel is never empty-handed.
+  let desc: string;
+  if (detailHTML) {
+    desc = `<div class="detail-description rendered">${detailHTML}</div>`;
+  } else if (detailCard.description) {
+    desc = `<div class="detail-description">${escapeHtml(detailCard.description)}</div>`;
+  } else {
+    desc = `<div class="detail-description empty">No description</div>`;
+  }
   const link = detailCard.url
-    ? `<a class="detail-tracker-link" href="${escapeAttr(detailCard.url)}" target="_blank">Open in tracker</a>`
+    ? `<button type="button" class="detail-tracker-btn">Open in tracker</button>`
+    : "";
+  const error = detailError
+    ? `<div class="detail-error">Couldn't load the full ticket: ${escapeHtml(detailError)}</div>`
     : "";
   body.innerHTML = `
     <div class="detail-title">${escapeHtml(detailCard.title)}</div>
     <div class="detail-owner">Owner: ${owner}</div>
+    ${error}
     ${desc}
     ${link}
   `;
+  const url = detailCard.url;
+  body.querySelector<HTMLButtonElement>(".detail-tracker-btn")?.addEventListener("click", () => openExternal(url));
+  // Links inside the rendered description must leave via the system browser,
+  // never navigate the webview away from the board.
+  body.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
+    a.addEventListener("click", (e: MouseEvent) => {
+      e.preventDefault();
+      openExternal(a.href);
+    });
+  });
 }
 
 async function openIdeation(): Promise<void> {

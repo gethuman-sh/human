@@ -18,7 +18,10 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
+	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/ideaspace"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -74,10 +77,12 @@ type Card struct {
 	// Assignee is the ticket owner shown in the detail panel. Display-only:
 	// the board never assigns; empty renders as "Unassigned" in the frontend.
 	Assignee string `json:"assignee,omitempty"`
-	// Tracker is the instance name the issue was listed from. The detail
-	// panel passes it back to IssueDetail so the daemon resolves the exact
-	// instance — bare numeric keys are ambiguous across tracker kinds.
-	Tracker string `json:"tracker,omitempty"`
+	// Tracker/TrackerKind are the instance name and provider kind the issue
+	// was listed from. The detail panel passes them back to GetIssueDetail so
+	// the daemon resolves the exact instance — bare numeric keys are ambiguous
+	// across kinds, and names can repeat across provider sections.
+	Tracker     string `json:"tracker,omitempty"`
+	TrackerKind string `json:"trackerKind,omitempty"`
 	// IdeaColumn is the idea-space sub-column (0 loosest … 4 most concrete)
 	// for cards in the Ideas stage. Locally persisted preference, never
 	// tracker state; the zero value is the leftmost column, so an idea with
@@ -127,29 +132,40 @@ func (a *App) Cards() (BoardData, error) {
 
 // IssueDetail is the full-ticket payload for the board's detail panel — only
 // the fields the panel renders beyond what the card already carries.
+// DescriptionHTML is rendered and sanitized by the daemon; the frontend may
+// inject it verbatim.
 type IssueDetail struct {
-	Title       string `json:"title"`
-	Assignee    string `json:"assignee,omitempty"`
-	Description string `json:"description,omitempty"`
+	Title           string `json:"title"`
+	Assignee        string `json:"assignee,omitempty"`
+	Description     string `json:"description,omitempty"`
+	DescriptionHTML string `json:"descriptionHTML,omitempty"`
 }
 
 // GetIssueDetail fetches one full ticket from the daemon. The detail panel
 // calls it on open because list fetches on some trackers (e.g. Shortcut)
 // return slim payloads without descriptions, so the card's own description
 // can be empty even for a ticket that has one.
-func (a *App) GetIssueDetail(trackerName, key string) (IssueDetail, error) {
+func (a *App) GetIssueDetail(trackerKind, trackerName, key string) (IssueDetail, error) {
 	info, err := daemon.ReadInfo()
 	if err != nil {
 		return IssueDetail{}, err
 	}
-	issue, err := daemon.GetTrackerIssue(info.Addr, info.Token, trackerName, key)
+	issue, err := daemon.GetTrackerIssue(info.Addr, info.Token, trackerKind, trackerName, key)
 	if err != nil {
-		return IssueDetail{}, err
+		// Wails serializes only err.Error() to the frontend, which for daemon
+		// failures is a generic wrapper; fold the daemon's stderr detail in so
+		// the panel shows the actual cause instead of "daemon command failed".
+		msg := errors.CauseChain(err)
+		if stderr, ok := errors.AllDetails(err)["stderr"].(string); ok && strings.TrimSpace(stderr) != "" {
+			msg += ": " + strings.TrimSpace(stderr)
+		}
+		return IssueDetail{}, fmt.Errorf("%s", msg)
 	}
 	return IssueDetail{
-		Title:       issue.Title,
-		Assignee:    issue.Assignee,
-		Description: issue.Description,
+		Title:           issue.Title,
+		Assignee:        issue.Assignee,
+		Description:     issue.Description,
+		DescriptionHTML: issue.DescriptionHTML,
 	}, nil
 }
 
@@ -257,6 +273,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Description:    issue.Description,
 			Assignee:       issue.Assignee,
 			Tracker:        pm.TrackerName,
+			TrackerKind:    pm.TrackerKind,
 			Bug:            issue.IsBug(),
 			IdeaColumn:     ideaCol,
 			MockupSlug:     mock.Slug,

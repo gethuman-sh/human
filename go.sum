@@ -285,6 +285,8 @@ github.com/aymanbagabas/go-osc52/v2 v2.0.1 h1:HwpRHbFMcZLEVr42D4p7XBqjyuxQH5SMiE
 github.com/aymanbagabas/go-osc52/v2 v2.0.1/go.mod h1:uYgXzlJ7ZpABp8OJ+exZzJJhRNQ2ASbcXHWsFqH8hp8=
 github.com/aymanbagabas/go-udiff v0.3.1 h1:LV+qyBQ2pqe0u42ZsUEtPiCaUoqgA9gYRDs3vj1nolY=
 github.com/aymanbagabas/go-udiff v0.3.1/go.mod h1:G0fsKmG+P6ylD0r6N/KgQD/nWzgfnl8ZBcNLgcbrw8E=
+github.com/aymerick/douceur v0.2.0 h1:Mv+mAeH1Q+n9Fr+oyamOlAkUNPWPlA8PPGR0QAaYuPk=
+github.com/aymerick/douceur v0.2.0/go.mod h1:wlT5vV2O3h55X9m7iVYN0TBM0NH/MmbLnd30/FjWUq4=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
@@ -799,6 +801,8 @@ github.com/goreleaser/nfpm/v2 v2.45.0 h1:rTqqX/vqvln4x7B2HmPL57gh21iIMqyxzP8goI3
 github.com/goreleaser/nfpm/v2 v2.45.0/go.mod h1:O0h9bB68D39NTnM9rSOJhVCYxQk7sU8i04q2bzczFdk=
 github.com/goreleaser/quill v0.0.0-20251224035235-ab943733386f h1:2HQF/pifDK7XnmVhQi3OecdUcHLOaXIKVKscW8qKzCk=
 github.com/goreleaser/quill v0.0.0-20251224035235-ab943733386f/go.mod h1:Xp6aA14QqdPBg7UHToFag7mrjsV7XaKEpw1t6fDfT6M=
+github.com/gorilla/css v1.0.1 h1:ntNaBIghp6JmvWnxbZKANoLyuXTPZ4cAMlo6RyhlbO8=
+github.com/gorilla/css v1.0.1/go.mod h1:BvnYkspnSzMmwRK+b8/xgNPLiIuNZr6vbZBTPQ2A3b0=
 github.com/gorilla/mux v1.8.1 h1:TuBL49tXwgrFYWhqrNgrUNEY92u81SPhu7sTdzQEiWY=
 github.com/gorilla/mux v1.8.1/go.mod h1:AKf9I4AEqPTmMytcMc0KkNouC66V3BtZ4qD5fmWSiMQ=
 github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
@@ -1040,6 +1044,8 @@ github.com/mgechev/revive v1.14.0 h1:CC2Ulb3kV7JFYt+izwORoS3VT/+Plb8BvslI/l1yZsc
 github.com/mgechev/revive v1.14.0/go.mod h1:MvnujelCZBZCaoDv5B3foPo6WWgULSSFxvfxp7GsPfo=
 github.com/mholt/archives v0.1.2 h1:UBSe5NfYKHI1sy+S5dJsEsG9jsKKk8NJA4HCC+xTI4A=
 github.com/mholt/archives v0.1.2/go.mod h1:D7QzTHgw3ctfS6wgOO9dN+MFgdZpbksGCxprUOwZWDs=
+github.com/microcosm-cc/bluemonday v1.0.27 h1:MpEUotklkwCSLeH+Qdx1VJgNqLlpY2KXwXFM08ygZfk=
+github.com/microcosm-cc/bluemonday v1.0.27/go.mod h1:jFi9vgW+H7c3V0lb6nR74Ib/DIB5OBs92Dimizgw2cA=
 github.com/minio/minlz v1.0.0 h1:Kj7aJZ1//LlTP1DM8Jm7lNKvvJS2m74gyyXXn3+uJWQ=
 github.com/minio/minlz v1.0.0/go.mod h1:qT0aEB35q79LLornSzeDH75LBf3aH1MV+jB5w9Wasec=
 github.com/minio/sha256-simd v1.0.1 h1:6kaan5IFmwTNynnKKpDHe6FWHohJOHhCPchzK49dzMM=
