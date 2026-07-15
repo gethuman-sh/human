@@ -579,6 +579,10 @@ body {
      fancy theme's `overflow: hidden` (needed for the sheen) flips their
      automatic min-height to 0 and they squish. The column-body scrolls instead. */
   flex-shrink: 0;
+  /* Contain content so a card in a fixed-height track (the bug grid, style.css
+     .column-body.bug-grid) can never paint its last title line over the rounded
+     bottom border. Matches [data-theme="fancy"] .card, which already clips. */
+  overflow: hidden;
 }
 
 .card[draggable="false"] {
@@ -617,6 +621,18 @@ body {
 .card-title {
   margin-top: 4px;
   line-height: 1.3;
+}
+
+/* In the Bugs pane every card is pinned to one-fifth of the tray height
+   (style.css .column-body.bug-grid grid-auto-rows), so a long title cannot
+   grow the card. Clamp it to the lines that fit above the key/meta rows and
+   end in an ellipsis, keeping the last line off the rounded bottom border
+   (bug 204). Three lines is the most that fits the smallest realistic cell. */
+.column-body.bug-grid .card-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
 /* An idea captured but still waiting for its ticket number: already a card,

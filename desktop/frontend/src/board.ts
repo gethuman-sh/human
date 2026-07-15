@@ -412,7 +412,7 @@ function renderCard(card: Card): HTMLElement {
 
   el.innerHTML = `
     <div class="card-key">${escapeHtml(card.key)}</div>
-    <div class="card-title">${escapeHtml(card.title)}</div>
+    <div class="card-title" title="${escapeAttr(card.title)}">${escapeHtml(card.title)}</div>
     <div class="card-meta">${meta.join("")}</div>
     ${card.error ? `<div class="card-error">${escapeHtml(card.error)}</div>` : ""}
   `;
