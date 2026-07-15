@@ -437,3 +437,33 @@ func TestRunRemote_DaemonClosesImmediately(t *testing.T) {
 		"unexpected error: %s", errMsg,
 	)
 }
+
+func TestGetTrackerIssue_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		require.Len(t, req.Args, 2)
+		assert.Equal(t, "tracker-issue", req.Args[0])
+		// The request must carry the instance name so the daemon resolves the
+		// exact tracker instead of guessing from an ambiguous numeric key.
+		var detailReq IssueDetailRequest
+		require.NoError(t, json.Unmarshal([]byte(req.Args[1]), &detailReq))
+		assert.Equal(t, "human", detailReq.Tracker)
+		assert.Equal(t, "188", detailReq.Key)
+		return Response{Stdout: `{"key":"188","title":"Building column","assignee":"Stephan","description":"Full body"}` + "\n"}
+	})
+
+	issue, err := GetTrackerIssue(addr, "tok", "human", "188")
+	require.NoError(t, err)
+	assert.Equal(t, "188", issue.Key)
+	assert.Equal(t, "Stephan", issue.Assignee)
+	assert.Equal(t, "Full body", issue.Description)
+}
+
+func TestGetTrackerIssue_InvalidJSON(t *testing.T) {
+	addr := startMockDaemon(t, func(_ Request) Response {
+		return Response{Stdout: "not json\n"}
+	})
+
+	_, err := GetTrackerIssue(addr, "tok", "human", "188")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid tracker issue JSON")
+}

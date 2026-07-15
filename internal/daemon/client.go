@@ -314,6 +314,26 @@ func GetTrackerIssuesLite(addr, token string) ([]TrackerIssuesResult, error) {
 	return getTrackerIssues(addr, token, "tracker-issues-lite")
 }
 
+// GetTrackerIssue fetches one full issue by key via the daemon. The board's
+// detail panel uses it because list fetches on some trackers return slim
+// payloads without descriptions. trackerName pins the instance the issue was
+// listed from, avoiding key-format guessing.
+func GetTrackerIssue(addr, token, trackerName, key string) (*tracker.Issue, error) {
+	data, err := json.Marshal(IssueDetailRequest{Tracker: trackerName, Key: key})
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "marshaling issue detail request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{"tracker-issue", string(data)})
+	if err != nil {
+		return nil, err
+	}
+	var issue tracker.Issue
+	if err := json.Unmarshal(out, &issue); err != nil {
+		return nil, errors.WrapWithDetails(err, "invalid tracker issue JSON")
+	}
+	return &issue, nil
+}
+
 func getTrackerIssues(addr, token, command string) ([]TrackerIssuesResult, error) {
 	out, err := RunRemoteCapture(addr, token, []string{command})
 	if err != nil {

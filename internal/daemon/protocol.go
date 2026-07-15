@@ -26,6 +26,15 @@ type TrackerIssuesResult struct {
 	Err        string               `json:"error,omitempty"`
 }
 
+// IssueDetailRequest asks for one full ticket by key. Tracker is the instance
+// name the issue was listed from (TrackerIssuesResult.TrackerName), so the
+// daemon resolves the exact instance instead of guessing from the key format —
+// bare numeric keys (Shortcut, GitLab, Azure DevOps) are ambiguous across kinds.
+type IssueDetailRequest struct {
+	Tracker string `json:"tracker"`
+	Key     string `json:"key"`
+}
+
 // Request is sent from the client to the daemon (one JSON line per connection).
 type Request struct {
 	Version   string            `json:"version"`

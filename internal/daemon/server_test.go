@@ -1448,6 +1448,81 @@ func TestServer_HandleTrackerIssuesLite_RoutesToLiteFetcher(t *testing.T) {
 	assert.Equal(t, "lite", results[0].TrackerName)
 }
 
+// --- handleTrackerIssue tests ---
+
+func TestServer_HandleTrackerIssue_NilGetter(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.IssueGetter = nil
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue", `{"tracker":"work","key":"HUM-1"}`}})
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "issue detail not available")
+}
+
+func TestServer_HandleTrackerIssue_ReturnsIssue(t *testing.T) {
+	token := "test-token"
+	var gotReq IssueDetailRequest
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.IssueGetter = func(req IssueDetailRequest) (*tracker.Issue, error) {
+			gotReq = req
+			return &tracker.Issue{
+				Key:         "188",
+				Title:       "Building gets its own live column",
+				Assignee:    "Stephan",
+				Description: "As a product engineer I want the board to show builds.",
+			}, nil
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue", `{"tracker":"human","key":"188"}`}})
+	assert.Equal(t, 0, resp.ExitCode)
+	// The getter must see the exact instance name and key the client sent —
+	// resolution by name is the whole point of the request carrying a tracker.
+	assert.Equal(t, "human", gotReq.Tracker)
+	assert.Equal(t, "188", gotReq.Key)
+
+	var issue tracker.Issue
+	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &issue)
+	require.NoError(t, err)
+	assert.Equal(t, "188", issue.Key)
+	assert.Equal(t, "Stephan", issue.Assignee)
+	assert.Equal(t, "As a product engineer I want the board to show builds.", issue.Description)
+}
+
+func TestServer_HandleTrackerIssue_GetterError(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.IssueGetter = func(_ IssueDetailRequest) (*tracker.Issue, error) {
+			return nil, fmt.Errorf("story not found")
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue", `{"tracker":"human","key":"999"}`}})
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "story not found")
+}
+
+func TestServer_HandleTrackerIssue_BadArgs(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.IssueGetter = func(_ IssueDetailRequest) (*tracker.Issue, error) {
+			return &tracker.Issue{}, nil
+		}
+	})
+
+	// Missing JSON arg.
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue"}})
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "requires one JSON arg")
+
+	// Malformed JSON arg.
+	resp = sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue", "{not json"}})
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "invalid tracker-issue request")
+}
+
 // --- handleToolStats tests ---
 
 func TestServer_HandleToolStats_NilStore(t *testing.T) {
