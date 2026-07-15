@@ -15,6 +15,7 @@ A long-running background service that holds your tracker credentials once and a
 - Places idea-labeled tickets (`human/idea`, bare `idea`) in the board's Ideas column by label alone, without scanning their comments
 - Launches the autonomous bug-fix pipeline (`/human-autofix`) on a bug ticket via a dedicated route for the desktop Bugs pane — no planning gate, and the fix chains into its review like any build
 - Quick-captures a title-only idea ticket via a dedicated route, labeled so it lands in the Ideas column
+- Files a defect ticket (title + description) via a dedicated route, bug-typed so every tracker marks it natively and the Bugs pane recognises the card
 - Reads a ticket's engineering plan from its `[human:plan]` comment: the board derives the planned state from it and, without a separate engineering ticket, dispatches implementation and verification on the PM key itself
 - Runs the board's agent-driven ideation chat (start/reply/status) and creates the resulting PM ticket on the PM-role tracker
 - Runs a guided, one-question-at-a-time ideation mode with fixed/agent-generated option sets and an editable draft-approval step, reusing the same PM-role ticket creation as chat mode
