@@ -34,13 +34,15 @@ human <TRACKER> issue comment add <TICKET_KEY> "comment body"
 ## Triage process
 
 1. **Understand the report** — fetch the ticket (`human <tracker> issue get <key>`) and its discussion (`human <tracker> issue comment list <key>`). Extract error messages, stack traces, failing inputs, and reproduction steps.
-2. **Reproduce** — try to make the bug happen: run the failing command, write or run a quick check, or exercise the affected code path. Note exactly what you ran and what happened.
-3. **Investigate** — use Grep/Glob/Read to trace the code flow to the actual root cause. Cite specific files and line numbers.
-4. **Reach a verdict** — exactly one of:
+2. **Reproduce** — try to make the bug happen: run the failing command, write or run a quick check, or exercise the affected code path. Note exactly what you ran and what happened. Reduce it to the **minimal reproduction** — the smallest input/state that still triggers the bug — because the minimal case usually points at the defect directly.
+3. **Investigate to the underlying cause** — use Grep/Glob/Read to trace the code flow from the symptom to the defect, then keep asking "why" until the answer is a decision in the code, not another symptom. Build the **cause chain** explicitly: symptom → proximate cause (the line that misbehaves) → underlying cause (the assumption, missing check, or design decision that made that line wrong). A null deref is a proximate cause; *why* the value can be null there is the root cause. Cite specific files and line numbers at every link.
+4. **Find the regression window** — when feasible, use `git log`/`git blame` on the implicated lines to identify the change that introduced the defect (commit, date, ticket reference). "Broken since <commit> (<date>)" turns a guess into evidence — and "works as designed since day one" is equally strong evidence for not-a-bug.
+5. **Scan for siblings** — grep for the same defect pattern elsewhere (other call sites of the broken function, copies of the flawed idiom). List every additional occurrence in the analysis: fixing one instance of a repeated mistake is how a bug ships twice.
+6. **Reach a verdict** — exactly one of:
    - **confirmed** — the bug is real and you reproduced it (or proved the defect from the code with strong evidence).
    - **not-a-bug** — works as intended, user error, misconfiguration, an external dependency, or already fixed.
    - **undetermined** — you could not reproduce it or cannot decide. Do not guess.
-5. **Record on the tracker** — post a single comment whose **first line** is the machine-readable verdict marker, followed by the evidence (see Output format). Post with `human <tracker> issue comment add <key> "<comment-body>"`.
+7. **Record on the tracker** — post a single comment whose **first line** is the machine-readable verdict marker, followed by a plain-language explanation and the evidence (see Output format). Post with `human <tracker> issue comment add <key> "<comment-body>"`. This comment is the ticket's permanent record of *why* the bug happened — whoever reads the ticket later (PM, reviewer, future you) must understand the cause without opening the code.
 
 ## Principles
 
@@ -56,14 +58,28 @@ Post this comment on the ticket (and return the same content to the caller):
 ```markdown
 [human:bug-verdict] <confirmed|not-a-bug|undetermined>
 
+## Explanation
+<2–5 sentences of plain language for the humans on the ticket, no jargon, no
+file paths: what breaks for the user, why it happens, since when, and what the
+fix will do. For not-a-bug: why the behavior is correct. For undetermined:
+what was tried and what is still unknown.>
+
 ## Reproduction
-<exactly what you ran and what happened — or why it could not be reproduced>
+<exactly what you ran and what happened — or why it could not be reproduced;
+include the minimal reproduction>
 
 ## Root Cause
-<for confirmed: why the bug occurs, with file:line references. For not-a-bug: why it is not a defect. For undetermined: what is still unknown.>
+<for confirmed: the cause chain — symptom → proximate cause → underlying
+cause — with file:line references at every link, and the regression window
+(introducing commit/date) when found. For not-a-bug: why it is not a defect.
+For undetermined: what is still unknown.>
+
+## Sibling Occurrences
+<other places the same defect pattern exists, with file:line — or "none found">
 
 ## Fix Outline
-<for confirmed only: the ordered approach to fix the root cause, plus the regression test that should fail before the fix>
+<for confirmed only: the ordered approach to fix the underlying cause (not the
+symptom), plus the regression test that should fail before the fix>
 ```
 
 Return to the caller: the verdict word, and (for confirmed) the Root Cause + Fix Outline so the planner can build on it.

@@ -242,6 +242,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AgentCleaner:      &dockerAgentCleaner{},
 		VaultResolver:     vaultResolver,
 		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver),
+		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
 		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
@@ -1449,36 +1450,61 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) fu
 	}
 }
 
+// boardTransitionDepsFor resolves the transition engine's collaborators for
+// the single registered project: the PM commenter by role, the Docker launcher
+// and the forge publisher against the resolved project dir. Shared by the
+// board-transition and board-fix closures so both routes drive the exact same
+// engine.
+func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver) (daemon.BoardTransitionDeps, error) {
+	entries := reg.Entries()
+	if len(entries) == 0 {
+		return daemon.BoardTransitionDeps{}, errors.WithDetails("no project registered for board transition")
+	}
+	entry := entries[0]
+	lookup := entry.EnvLookup()
+	commenter, err := resolvePMCommenter(entry.Dir, lookup, resolver)
+	if err != nil {
+		return daemon.BoardTransitionDeps{}, err
+	}
+	return daemon.BoardTransitionDeps{
+		Commenter: commenter,
+		Launcher:  dockerAgentLauncher{},
+		Deployer:  forgeDeployer{resolver: resolver, lookup: lookup},
+		CloseTicket: func(pmKey string) error {
+			transitioner, err := resolvePMTransitioner(entry.Dir, lookup, resolver)
+			if err != nil {
+				return err
+			}
+			return transitioner.TransitionIssue(context.Background(), pmKey, "done")
+		},
+		WorkspaceDir: entry.Dir,
+		ConfigDir:    entry.Dir,
+	}, nil
+}
+
 // boardTransitionerFunc builds the daemon's BoardTransitioner closure: it
 // resolves the PM commenter by role per request and applies the transition with
 // the Docker launcher and forge publisher against the resolved project dir.
 func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.BoardTransitionRequest) error {
 	return func(req daemon.BoardTransitionRequest) error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for board transition")
-		}
-		entry := entries[0]
-		lookup := entry.EnvLookup()
-		commenter, err := resolvePMCommenter(entry.Dir, lookup, resolver)
+		deps, err := boardTransitionDepsFor(reg, resolver)
 		if err != nil {
 			return err
 		}
-		deps := daemon.BoardTransitionDeps{
-			Commenter: commenter,
-			Launcher:  dockerAgentLauncher{},
-			Deployer:  forgeDeployer{resolver: resolver, lookup: lookup},
-			CloseTicket: func(pmKey string) error {
-				transitioner, err := resolvePMTransitioner(entry.Dir, lookup, resolver)
-				if err != nil {
-					return err
-				}
-				return transitioner.TransitionIssue(context.Background(), pmKey, "done")
-			},
-			WorkspaceDir: entry.Dir,
-			ConfigDir:    entry.Dir,
-		}
 		return deps.ApplyTransition(context.Background(), req)
+	}
+}
+
+// boardFixerFunc builds the daemon's BoardFixer closure: same collaborators as
+// a board transition, but the entry point is the autonomous bug-fix pipeline
+// (planning gate skipped — autofix triages, plans and fixes in one run).
+func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.BoardFixRequest) error {
+	return func(req daemon.BoardFixRequest) error {
+		deps, err := boardTransitionDepsFor(reg, resolver)
+		if err != nil {
+			return err
+		}
+		return deps.ApplyFix(context.Background(), req)
 	}
 }
 

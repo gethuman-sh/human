@@ -469,3 +469,69 @@ func TestApplyTransitionIdeasGuard(t *testing.T) {
 	err = deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardIdeas})
 	require.Error(t, err)
 }
+
+func TestApplyFixLaunchesAutofix(t *testing.T) {
+	// A backlog bug goes straight to the fix: no planning gate, the autofix
+	// pipeline triages and plans itself.
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9", PMTitle: "Crash on save"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-autofix SC-9", l.prompt)
+	// The implementation-stage agent name keeps the failure watcher and the
+	// build→review chain working on bug fixes unchanged.
+	assert.Equal(t, "board-SC-9-implementation", l.name)
+	require.Len(t, c.added, 1)
+	assert.Equal(t, ImplementationStartedHeader, c.added[0])
+}
+
+func TestApplyFixIdempotentWhileRunning(t *testing.T) {
+	// A re-drop while the fix agent still runs must not launch a second one.
+	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:implementation-started]", time.Unix(1, 0))}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9"})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+	assert.Empty(t, c.added)
+}
+
+func TestApplyFixIdempotentWhileReviewRunning(t *testing.T) {
+	// The fix chains into its review; a drop during that review is a no-op too.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: autofix/sc-9", time.Unix(1, 0)),
+		cmt("[human:review-started]", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9"})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+}
+
+func TestApplyFixRelaunchAfterFailedReview(t *testing.T) {
+	// A bug pinned by a failing review verdict may be re-dropped onto Fix.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: autofix/sc-9", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: fail", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-autofix SC-9", l.prompt)
+}
+
+func TestApplyFixLaunchFailurePostsFailedMarker(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{err: errors.New("no docker")}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9"})
+	require.Error(t, err)
+	require.Len(t, c.added, 2)
+	assert.Equal(t, ImplementationStartedHeader, c.added[0])
+	assert.True(t, strings.HasPrefix(c.added[1], ImplementationFailedHeader))
+}
