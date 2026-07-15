@@ -31,6 +31,7 @@ func (stubProvider) GetIssue(context.Context, string) (*Issue, error)           
 func (stubProvider) CreateIssue(context.Context, *Issue) (*Issue, error)            { return nil, nil }
 func (stubProvider) ListComments(context.Context, string) ([]Comment, error)        { return nil, nil }
 func (stubProvider) AddComment(context.Context, string, string) (*Comment, error)   { return nil, nil }
+func (stubProvider) LinkIssues(context.Context, string, string) error               { return nil }
 func (stubProvider) DeleteIssue(context.Context, string) error                      { return nil }
 func (stubProvider) TransitionIssue(context.Context, string, string) error          { return nil }
 func (stubProvider) AssignIssue(context.Context, string, string) error              { return nil }

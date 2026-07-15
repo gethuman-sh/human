@@ -1175,3 +1175,32 @@ func TestCreateIssue_withLabels(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []any{"bug", "urgent"}, gotRaw["labels"])
 }
+
+func TestLinkIssues_postsCrossReferenceComment(t *testing.T) {
+	var gotBody commentRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/repos/octocat/hello-world/issues/7/comments", r.URL.Path)
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"id":1,"body":"x","created_at":"2025-01-15T10:30:00Z","user":{"login":"bot"}}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	err := client.LinkIssues(context.Background(), "octocat/hello-world#7", "octocat/other-repo#42")
+	require.NoError(t, err)
+
+	// The full owner/repo#N form keeps the mention working across repos.
+	assert.Equal(t, "Relates to octocat/other-repo#42", gotBody.Body)
+}
+
+func TestLinkIssues_badOtherKey(t *testing.T) {
+	client := New("http://unused", "ghp_test")
+	err := client.LinkIssues(context.Background(), "octocat/hello-world#7", "not-a-key")
+	require.Error(t, err)
+}

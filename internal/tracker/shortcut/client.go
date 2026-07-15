@@ -533,6 +533,36 @@ func (c *Client) DeleteIssue(ctx context.Context, key string) error {
 }
 
 // AddComment implements tracker.Commenter.
+// LinkIssues implements tracker.Linker via Shortcut's story-link API. The
+// "relates to" verb is Shortcut's symmetric story relation; subject/object
+// order therefore carries no meaning beyond display.
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	subjectID, err := parseStoryID(key)
+	if err != nil {
+		return err
+	}
+	objectID, err := parseStoryID(otherKey)
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"verb":       "relates to",
+		"subject_id": subjectID,
+		"object_id":  objectID,
+	})
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshalling story link request", "key", key, "otherKey", otherKey)
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodPost, "/api/v3/story-links", "", bytes.NewReader(payload), "application/json")
+	if err != nil {
+		return errors.WrapWithDetails(err, "linking issues", "key", key, "otherKey", otherKey)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (*tracker.Comment, error) {
 	id, err := parseStoryID(issueKey)
 	if err != nil {

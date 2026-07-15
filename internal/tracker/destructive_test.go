@@ -286,3 +286,17 @@ func TestNewDestructiveProvider_InvalidPath(t *testing.T) {
 	_, err := tracker.NewDestructiveProvider(inner, "test", "jira", "/nonexistent/dir/destructive.log", nil)
 	require.Error(t, err)
 }
+
+func TestDestructiveProvider_LinkIssuesPassthrough(t *testing.T) {
+	// Additive like AddComment: no confirm, no destructive log entry.
+	inner := &mockProvider{
+		linkIssuesFn: func(_ context.Context, _, _ string) error { return nil },
+	}
+	dp, logPath := newDestructive(t, inner, nil)
+
+	err := dp.LinkIssues(context.Background(), "KAN-5", "KAN-6")
+	require.NoError(t, err)
+
+	entries := readDestructiveEntries(t, logPath)
+	assert.Empty(t, entries)
+}

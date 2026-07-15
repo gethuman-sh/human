@@ -36,6 +36,10 @@ func (m *mockProvider) AddComment(_ context.Context, _ string, _ string) (*track
 	return nil, nil
 }
 
+func (m *mockProvider) LinkIssues(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 func (m *mockProvider) DeleteIssue(_ context.Context, _ string) error {
 	return nil
 }

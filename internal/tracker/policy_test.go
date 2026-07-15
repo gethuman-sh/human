@@ -268,3 +268,19 @@ func TestPolicyProvider_AllWriteMethodsChecked(t *testing.T) {
 	_, err = pp.EditIssue(ctx, "KAN-1", tracker.EditOptions{})
 	assert.Error(t, err)
 }
+
+func TestPolicyProvider_LinkIssues(t *testing.T) {
+	inner := &mockProvider{
+		linkIssuesFn: func(_ context.Context, _, _ string) error { return nil },
+	}
+
+	blocked := tracker.NewPolicyProvider(inner, "test",
+		tracker.NewPolicy(tracker.PolicyConfig{Block: []string{"link"}}), nil)
+	err := blocked.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	assert.Error(t, err)
+
+	allowed := tracker.NewPolicyProvider(inner, "test",
+		tracker.NewPolicy(tracker.PolicyConfig{}), nil)
+	err = allowed.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	assert.NoError(t, err)
+}

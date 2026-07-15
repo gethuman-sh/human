@@ -190,6 +190,13 @@ func (pp *PolicyProvider) AddComment(ctx context.Context, issueKey string, body 
 	return pp.inner.AddComment(ctx, issueKey, body)
 }
 
+func (pp *PolicyProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	if err := pp.checkPolicy("link", ""); err != nil {
+		return err
+	}
+	return pp.inner.LinkIssues(ctx, key, otherKey)
+}
+
 func (pp *PolicyProvider) TransitionIssue(ctx context.Context, key string, targetStatus string) error {
 	if err := pp.checkPolicy("transition", targetStatus); err != nil {
 		return err

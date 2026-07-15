@@ -1935,3 +1935,48 @@ func TestGetIssue_withParent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ENG-1", issue.ParentKey)
 }
+
+func TestLinkIssues_happy(t *testing.T) {
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"issue(": func(vars map[string]any) string {
+				// Two lookups, one per key — return a distinct id for each.
+				if vars["id"] == "ENG-1" {
+					return `{"data":{"issue":{"id":"uuid-eng-1"}}}`
+				}
+				return `{"data":{"issue":{"id":"uuid-eng-2"}}}`
+			},
+			"issueRelationCreate(": func(vars map[string]any) string {
+				assert.Equal(t, "uuid-eng-1", vars["issueId"])
+				assert.Equal(t, "uuid-eng-2", vars["relatedIssueId"])
+				return `{"data":{"issueRelationCreate":{"success":true}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "token")
+	err := client.LinkIssues(context.Background(), "ENG-1", "ENG-2")
+	require.NoError(t, err)
+}
+
+func TestLinkIssues_rejected(t *testing.T) {
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"issue(": func(map[string]any) string {
+				return `{"data":{"issue":{"id":"uuid"}}}`
+			},
+			"issueRelationCreate(": func(map[string]any) string {
+				return `{"data":{"issueRelationCreate":{"success":false}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "token")
+	err := client.LinkIssues(context.Background(), "ENG-1", "ENG-2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rejected")
+}

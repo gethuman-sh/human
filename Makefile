@@ -1,9 +1,19 @@
-.PHONY: all build install test check-test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package
+.PHONY: all build fmt fmt-check install test check-test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package
 
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
+# Formatting is NOT part of `build`: goimports needs full import resolution and
+# costs ~1 minute even on tracked files only (a bare `goimports -w .` also walks
+# node_modules and runs for several minutes). Run `make fmt` to fix imports;
+# `check` runs the non-destructive fmt-check gate so drift can't reach a push.
+# Scoped to git-tracked files to skip vendored and generated trees.
+fmt:
+	go tool goimports -w $$(git ls-files '*.go')
+
+fmt-check:
+	@unformatted=$$(go tool goimports -l $$(git ls-files '*.go')); if [ -n "$$unformatted" ]; then echo "unformatted files (run 'make fmt'):"; echo "$$unformatted"; exit 1; fi
+
 build:
-	go tool goimports -w .
 	go build -ldflags "-X main.version=dev -X main.commit=$$(git rev-parse --short HEAD) -X main.date=$$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o bin/human .
 
 install:
@@ -40,7 +50,9 @@ lint:
 	go tool gocyclo -over 15 .
 
 sec:
-	go tool gosec ./...
+	# .claude/worktrees holds agent worktrees — stale snapshots there must not
+	# be compiled against the live tree (a changed interface fails the scan).
+	go tool gosec -exclude-dir .claude ./...
 	./scripts/govulncheck.sh
 
 secrets:
@@ -49,7 +61,7 @@ secrets:
 test-integration: build
 	go run ./cmd/integrationtest
 
-check: check-test lint sec secrets
+check: fmt-check check-test lint sec secrets
 
 # Desktop (Wails) targets. The desktop app is a cgo backend (webkit2gtk on
 # Linux, WebView2 on Windows, Obj-C on macOS) and CANNOT be cross-compiled — it

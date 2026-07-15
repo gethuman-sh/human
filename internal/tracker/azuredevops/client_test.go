@@ -967,3 +967,39 @@ func TestCreateIssue_withTags(t *testing.T) {
 	assert.Equal(t, "/fields/System.Tags", gotOps[1].Path)
 	assert.Equal(t, "idea; backend", gotOps[1].Value)
 }
+
+func TestLinkIssues_happy(t *testing.T) {
+	var ops []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+		assert.Equal(t, "/myorg/Proj/_apis/wit/workitems/12", r.URL.Path)
+		assert.Equal(t, "7.1", r.URL.Query().Get("api-version"))
+		assert.Equal(t, "application/json-patch+json", r.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &ops))
+
+		_, _ = fmt.Fprint(w, `{"id":12,"rev":2,"fields":{"System.Title":"t"}}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "myorg", "token")
+	err := client.LinkIssues(context.Background(), "Proj/12", "Proj/34")
+	require.NoError(t, err)
+
+	require.Len(t, ops, 1)
+	assert.Equal(t, "add", ops[0]["op"])
+	assert.Equal(t, "/relations/-", ops[0]["path"])
+	value, ok := ops[0]["value"].(map[string]any)
+	require.True(t, ok)
+	// Related is symmetric: no direction suffix, unlike the hierarchy rels.
+	assert.Equal(t, "System.LinkTypes.Related", value["rel"])
+	assert.Contains(t, value["url"], "/34")
+}
+
+func TestLinkIssues_badKey(t *testing.T) {
+	client := New("http://unused", "myorg", "token")
+	require.Error(t, client.LinkIssues(context.Background(), "12", "Proj/34"))
+	require.Error(t, client.LinkIssues(context.Background(), "Proj/12", "34"))
+}

@@ -1697,3 +1697,11 @@ func TestServer_ResolveProjectDir_MultiProject_ErrorIntegration(t *testing.T) {
 	assert.Equal(t, 1, resp.ExitCode)
 	assert.Contains(t, resp.Stderr, "does not match any registered project")
 }
+
+func TestDetectDestructiveIgnoresIssueLink(t *testing.T) {
+	// Linking is additive like commenting: it must never queue behind the
+	// destructive-confirm gate. Pins the deny-list so a refactor to an
+	// allow-list cannot silently start gating it.
+	_, ok := detectDestructive([]string{"jira", "issue", "link", "KAN-1", "KAN-2"})
+	assert.False(t, ok)
+}

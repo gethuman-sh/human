@@ -178,6 +178,40 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	}, nil
 }
 
+// LinkIssues implements tracker.Linker via GitLab's issue-links API. The
+// link_type is omitted, so GitLab records its default symmetric "relates_to"
+// relation. The target project travels as its URL-encoded path — the links
+// endpoint accepts a path or a numeric ID interchangeably.
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	project, iid, err := parseIssueKey(key)
+	if err != nil {
+		return err
+	}
+	encodedProject, err := splitProject(project)
+	if err != nil {
+		return err
+	}
+	otherProject, otherIID, err := parseIssueKey(otherKey)
+	if err != nil {
+		return err
+	}
+
+	path := fmt.Sprintf("/api/v4/projects/%s/issues/%d/links", encodedProject, iid)
+	// The target project goes in RAW form: url.Values.Encode escapes it once,
+	// which is exactly the single encoding the API expects — pre-escaping via
+	// splitProject here would double-encode the path separator.
+	query := url.Values{
+		"target_project_id": {otherProject},
+		"target_issue_iid":  {strconv.Itoa(otherIID)},
+	}
+	resp, err := c.doRequest(ctx, http.MethodPost, path, query.Encode(), nil)
+	if err != nil {
+		return errors.WrapWithDetails(err, "linking issues", "key", key, "otherKey", otherKey)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 // AddComment implements tracker.Commenter.
 func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (*tracker.Comment, error) {
 	project, iid, err := parseIssueKey(issueKey)

@@ -861,3 +861,38 @@ func TestGetIssue_labels(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"backend", "urgent"}, issue.Labels)
 }
+
+func TestLinkIssues_happy(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/rest/api/3/issueLink", r.URL.Path)
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "user@example.com", "token")
+	err := client.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]any{"name": "Relates"}, gotBody["type"])
+	assert.Equal(t, map[string]any{"key": "KAN-1"}, gotBody["inwardIssue"])
+	assert.Equal(t, map[string]any{"key": "KAN-2"}, gotBody["outwardIssue"])
+}
+
+func TestLinkIssues_httpError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "user@example.com", "token")
+	err := client.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "linking issues")
+}

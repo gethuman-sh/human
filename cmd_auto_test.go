@@ -467,3 +467,34 @@ func TestAutoGet_loaderError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "config load error")
 }
+
+// --- BuildAutoLinkCmd tests ---
+
+func TestAutoLink_singleKind(t *testing.T) {
+	setAutoLoader(t, newMockInstances("jira"))
+
+	cmd := newRootCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"link", "KAN-1", "KAN-2"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "Linked KAN-1 to KAN-2")
+}
+
+func TestAutoLink_crossTrackerRejected(t *testing.T) {
+	setAutoLoader(t, newMockInstances("jira"))
+
+	cmd := newRootCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	// A GitHub-shaped second key cannot be linked from a Jira-shaped first key.
+	cmd.SetArgs([]string{"link", "KAN-1", "octocat/repo#42"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "same tracker")
+}

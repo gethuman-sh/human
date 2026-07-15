@@ -46,6 +46,7 @@ type mockProvider struct {
 	assignFn         func(ctx context.Context, key, userID string) error
 	getCurrentUserFn func(ctx context.Context) (string, error)
 	listStatusesFn   func(ctx context.Context, key string) ([]tracker.Status, error)
+	linkIssuesFn     func(ctx context.Context, key, otherKey string) error
 }
 
 func (m *mockProvider) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
@@ -70,6 +71,13 @@ func (m *mockProvider) DeleteIssue(ctx context.Context, key string) error {
 
 func (m *mockProvider) AddComment(ctx context.Context, key, body string) (*tracker.Comment, error) {
 	return m.addCommentFn(ctx, key, body)
+}
+
+func (m *mockProvider) LinkIssues(ctx context.Context, key, otherKey string) error {
+	if m.linkIssuesFn == nil {
+		return nil
+	}
+	return m.linkIssuesFn(ctx, key, otherKey)
 }
 
 func (m *mockProvider) ListComments(ctx context.Context, key string) ([]tracker.Comment, error) {
@@ -1194,4 +1202,32 @@ func TestCmd_LoadInstancesError(t *testing.T) {
 	err := root.Execute()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "config error")
+}
+
+func TestRunLinkIssues_Success(t *testing.T) {
+	p := &mockProvider{
+		linkIssuesFn: func(_ context.Context, key, otherKey string) error {
+			assert.Equal(t, "KAN-1", key)
+			assert.Equal(t, "KAN-2", otherKey)
+			return nil
+		},
+	}
+
+	var buf bytes.Buffer
+	err := RunLinkIssues(context.Background(), p, &buf, "KAN-1", "KAN-2")
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Linked KAN-1 to KAN-2")
+}
+
+func TestRunLinkIssues_Error(t *testing.T) {
+	p := &mockProvider{
+		linkIssuesFn: func(_ context.Context, _, _ string) error {
+			return errors.WithDetails("link failed")
+		},
+	}
+
+	var buf bytes.Buffer
+	err := RunLinkIssues(context.Background(), p, &buf, "KAN-1", "KAN-2")
+	require.Error(t, err)
+	assert.Empty(t, buf.String())
 }

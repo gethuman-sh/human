@@ -103,6 +103,15 @@ const addCommentMutation = `mutation($issueId: String!, $body: String!) {
 	}
 }`
 
+// issueRelationCreateMutation relates two issues. The type is inlined rather
+// than passed as a variable because IssueRelationType is a GraphQL enum —
+// sending the bare enum token avoids the string-vs-enum serialization trap.
+const issueRelationCreateMutation = `mutation($issueId: String!, $relatedIssueId: String!) {
+	issueRelationCreate(input: { issueId: $issueId, relatedIssueId: $relatedIssueId, type: related }) {
+		success
+	}
+}`
+
 const getTeamStatesQuery = `query($key: String!) {
 	teams(filter: { key: { eq: $key } }) {
 		nodes { id states { nodes { id name type } } }
@@ -323,6 +332,43 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 }
 
 // AddComment implements tracker.Commenter.
+// LinkIssues implements tracker.Linker via Linear's issueRelationCreate
+// mutation with the symmetric "related" relation type.
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	issueID, err := c.resolveIssueID(ctx, key)
+	if err != nil {
+		return err
+	}
+	relatedID, err := c.resolveIssueID(ctx, otherKey)
+	if err != nil {
+		return err
+	}
+
+	vars := map[string]any{
+		"issueId":        issueID,
+		"relatedIssueId": relatedID,
+	}
+	data, err := c.doGraphQL(ctx, issueRelationCreateMutation, vars)
+	if err != nil {
+		return errors.WrapWithDetails(err, "linking issues", "key", key, "otherKey", otherKey)
+	}
+
+	var result struct {
+		IssueRelationCreate struct {
+			Success bool `json:"success"`
+		} `json:"issueRelationCreate"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return errors.WrapWithDetails(err, "decoding issue relation response",
+			"key", key, "otherKey", otherKey)
+	}
+	if !result.IssueRelationCreate.Success {
+		return errors.WithDetails("linear rejected the issue relation",
+			"key", key, "otherKey", otherKey)
+	}
+	return nil
+}
+
 func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (*tracker.Comment, error) {
 	issueID, err := c.resolveIssueID(ctx, issueKey)
 	if err != nil {

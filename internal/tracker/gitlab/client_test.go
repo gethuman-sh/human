@@ -863,3 +863,40 @@ func TestCreateIssue_withLabels(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "bug,urgent", gotBody.Labels)
 }
+
+func TestLinkIssues_happy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/v4/projects/group/proj/issues/5/links", r.URL.Path)
+		q := r.URL.Query()
+		// Single-encoded path: url.Values escaped it once on the wire, the
+		// server sees the raw project path back.
+		assert.Equal(t, "group/other", q.Get("target_project_id"))
+		assert.Equal(t, "7", q.Get("target_issue_iid"))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"source_issue":{},"target_issue":{},"link_type":"relates_to"}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "token")
+	err := client.LinkIssues(context.Background(), "group/proj#5", "group/other#7")
+	require.NoError(t, err)
+}
+
+func TestLinkIssues_badKeys(t *testing.T) {
+	client := New("http://unused", "token")
+	require.Error(t, client.LinkIssues(context.Background(), "no-hash", "group/other#7"))
+	require.Error(t, client.LinkIssues(context.Background(), "group/proj#5", "no-hash"))
+}
+
+func TestLinkIssues_httpError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict) // already linked
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "token")
+	err := client.LinkIssues(context.Background(), "group/proj#5", "group/other#7")
+	require.Error(t, err)
+}

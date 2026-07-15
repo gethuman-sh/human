@@ -171,6 +171,11 @@ func (d *DestructiveProvider) AddComment(ctx context.Context, issueKey string, b
 	return d.inner.AddComment(ctx, issueKey, body)
 }
 
+func (d *DestructiveProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	// Additive like AddComment: linking never needs a destructive confirm.
+	return d.inner.LinkIssues(ctx, key, otherKey)
+}
+
 func (d *DestructiveProvider) AssignIssue(ctx context.Context, key string, userID string) error {
 	// Pair with TransitionIssue logging: RunStartIssue transitions and
 	// assigns in one operation and the audit log should capture both

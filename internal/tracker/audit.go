@@ -126,6 +126,13 @@ func (a *AuditProvider) AddComment(ctx context.Context, issueKey string, body st
 	return comment, err
 }
 
+func (a *AuditProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	start := time.Now()
+	err := a.inner.LinkIssues(ctx, key, otherKey)
+	a.log("LinkIssues", key, time.Since(start), err)
+	return err
+}
+
 func (a *AuditProvider) TransitionIssue(ctx context.Context, key string, targetStatus string) error {
 	start := time.Now()
 	err := a.inner.TransitionIssue(ctx, key, targetStatus)
