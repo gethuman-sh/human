@@ -223,6 +223,23 @@ func (c *Client) addSubIssue(ctx context.Context, parentKey string, childID int)
 	return nil
 }
 
+// LinkIssues implements tracker.Linker. GitHub has no issue-relation API, so
+// the relation is recorded as a cross-reference comment — mentioning the
+// other issue in its full owner/repo#N form, which GitHub renders as a link
+// and mirrors onto the mentioned issue's timeline. That mention IS GitHub's
+// native way of relating issues; the full form keeps it working across repos.
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	otherOwner, otherRepo, otherNumber, err := parseIssueKey(otherKey)
+	if err != nil {
+		return err
+	}
+	ref := fmt.Sprintf("%s/%s#%d", otherOwner, otherRepo, otherNumber)
+	if _, err := c.AddComment(ctx, key, "Relates to "+ref); err != nil {
+		return errors.WrapWithDetails(err, "linking issues", "key", key, "otherKey", otherKey)
+	}
+	return nil
+}
+
 // AddComment implements tracker.Commenter.
 func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (*tracker.Comment, error) {
 	owner, repo, number, err := parseIssueKey(issueKey)

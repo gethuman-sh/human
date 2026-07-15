@@ -210,6 +210,29 @@ func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (
 	return toTrackerComment(jc)
 }
 
+// LinkIssues implements tracker.Linker via Jira's issue-link API. "Relates"
+// is Jira's stock symmetric link type; instances that renamed it surface the
+// API's own error so the user sees the tracker's vocabulary, not ours.
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	payload := map[string]any{
+		"type":         map[string]string{"name": "Relates"},
+		"inwardIssue":  map[string]string{"key": key},
+		"outwardIssue": map[string]string{"key": otherKey},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshalling issue link request",
+			"key", key, "otherKey", otherKey)
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodPost, "/rest/api/3/issueLink", "", bytes.NewReader(raw))
+	if err != nil {
+		return errors.WrapWithDetails(err, "linking issues", "key", key, "otherKey", otherKey)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 // ListComments implements tracker.Commenter.
 func (c *Client) ListComments(ctx context.Context, issueKey string) ([]tracker.Comment, error) {
 	path := fmt.Sprintf("/rest/api/3/issue/%s/comment", url.PathEscape(issueKey))

@@ -181,6 +181,26 @@ func (c *Client) ListComments(ctx context.Context, issueKey string) ([]tracker.C
 	return result, nil
 }
 
+// LinkIssues implements tracker.Linker via ClickUp's task-link endpoint
+// (symmetric, untyped). The custom_task_ids query applies to BOTH ids in the
+// path, so a custom-ID pair resolves in one call; a mixed pair (one custom,
+// one canonical) is rejected early because the flag would misread the
+// canonical id as a custom one.
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	if looksLikeCustomID(key) != looksLikeCustomID(otherKey) {
+		return errors.WithDetails("cannot link a custom task ID to a canonical task ID; use the same ID form for both",
+			"key", key, "otherKey", otherKey)
+	}
+
+	path := fmt.Sprintf("/api/v2/task/%s/link/%s", url.PathEscape(key), url.PathEscape(otherKey))
+	resp, err := c.doRequest(ctx, http.MethodPost, path, c.customIDQuery(key), nil, "application/json")
+	if err != nil {
+		return errors.WrapWithDetails(err, "linking issues", "key", key, "otherKey", otherKey)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 // AddComment implements tracker.Commenter.
 func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (*tracker.Comment, error) {
 	payload, err := json.Marshal(map[string]string{"comment_text": body})

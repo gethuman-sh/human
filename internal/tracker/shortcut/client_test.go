@@ -1339,3 +1339,48 @@ func Test_mergeLabels(t *testing.T) {
 		})
 	}
 }
+
+func TestLinkIssues_happy(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/v3/story-links", r.URL.Path)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"id":9,"verb":"relates to","subject_id":42,"object_id":57}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "token")
+	err := client.LinkIssues(context.Background(), "42", "57")
+	require.NoError(t, err)
+
+	// The exact verb string is the API contract — Shortcut rejects variants.
+	assert.Equal(t, "relates to", gotBody["verb"])
+	assert.Equal(t, float64(42), gotBody["subject_id"])
+	assert.Equal(t, float64(57), gotBody["object_id"])
+}
+
+func TestLinkIssues_badKey(t *testing.T) {
+	client := New("http://unused", "token")
+	err := client.LinkIssues(context.Background(), "not-numeric", "57")
+	require.Error(t, err)
+	err = client.LinkIssues(context.Background(), "42", "not-numeric")
+	require.Error(t, err)
+}
+
+func TestLinkIssues_httpError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "token")
+	err := client.LinkIssues(context.Background(), "42", "57")
+	require.Error(t, err)
+}

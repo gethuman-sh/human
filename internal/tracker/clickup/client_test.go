@@ -1334,3 +1334,41 @@ func TestCreateIssue_withTags(t *testing.T) {
 	assert.Equal(t, []string{"idea", "backend"}, issue.Labels)
 	assert.Equal(t, []any{"idea", "backend"}, gotBody["tags"])
 }
+
+func TestLinkIssues_happy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/api/v2/task/abc123/link/def456", r.URL.Path)
+		assert.Empty(t, r.URL.Query().Get("custom_task_ids"))
+
+		_, _ = fmt.Fprint(w, `{"task":{"id":"abc123"}}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "token", "team-9")
+	err := client.LinkIssues(context.Background(), "abc123", "def456")
+	require.NoError(t, err)
+}
+
+func TestLinkIssues_customIDPair(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v2/task/PROJ-1/link/PROJ-2", r.URL.Path)
+		// One flag covers both path ids — that is why mixed pairs are rejected.
+		assert.Equal(t, "true", r.URL.Query().Get("custom_task_ids"))
+		assert.Equal(t, "team-9", r.URL.Query().Get("team_id"))
+
+		_, _ = fmt.Fprint(w, `{"task":{"id":"PROJ-1"}}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "token", "team-9")
+	err := client.LinkIssues(context.Background(), "PROJ-1", "PROJ-2")
+	require.NoError(t, err)
+}
+
+func TestLinkIssues_mixedIDFormsRejected(t *testing.T) {
+	client := New("http://unused", "token", "team-9")
+	err := client.LinkIssues(context.Background(), "PROJ-1", "def456")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom task ID")
+}

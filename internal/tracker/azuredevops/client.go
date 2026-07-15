@@ -451,6 +451,45 @@ func (c *Client) DeleteIssue(ctx context.Context, key string) error {
 	return nil
 }
 
+// relatedRel is the Azure DevOps symmetric "Related" link type. Unlike the
+// hierarchy rels it carries no direction suffix — Related is its own reverse.
+const relatedRel = "System.LinkTypes.Related"
+
+// LinkIssues implements tracker.Linker by patching a Related relation onto
+// the first work item — the same /relations/- json-patch the create-time
+// hierarchy link uses.
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+	project, id, err := parseIssueKey(key)
+	if err != nil {
+		return err
+	}
+	_, otherID, err := parseIssueKey(otherKey)
+	if err != nil {
+		return err
+	}
+
+	ops := []patchOp{{
+		Op:   "add",
+		Path: "/relations/-",
+		Value: adoRelation{
+			Rel: relatedRel,
+			URL: c.workItemURL(otherID),
+		},
+	}}
+	body, err := json.Marshal(ops)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshalling link request", "key", key, "otherKey", otherKey)
+	}
+
+	path := fmt.Sprintf("/%s/%s/_apis/wit/workitems/%d", url.PathEscape(c.org), url.PathEscape(project), id)
+	resp, err := c.doRequest(ctx, http.MethodPatch, path, "api-version=7.1", bytes.NewReader(body), "application/json-patch+json")
+	if err != nil {
+		return errors.WrapWithDetails(err, "linking issues", "key", key, "otherKey", otherKey)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 // AddComment implements tracker.Commenter.
 func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (*tracker.Comment, error) {
 	project, id, err := parseIssueKey(issueKey)
