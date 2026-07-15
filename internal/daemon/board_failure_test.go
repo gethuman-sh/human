@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -166,6 +167,35 @@ func TestRunBoardFailureWatch_NoChainForOtherStages(t *testing.T) {
 	case <-chained:
 		t.Fatal("planning completion must not chain a review")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// SC-206 contract pin: the zombie sweep reports a reap as a synthetic
+// StopFailure event, so the watcher MUST keep accepting StopFailure and
+// posting the stage's failed marker when only the started marker exists.
+// Tightening the watcher's event filter would silently reopen the bug.
+func TestRunBoardFailureWatch_SyntheticStopFailurePostsImplementationFailed(t *testing.T) {
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
+		addCh:    make(chan string, 4),
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	// The reap-synthesized event carries no SessionID — only name + time.
+	store.Append(hookevents.Event{EventName: "StopFailure", AgentName: "board-204-implementation", Timestamp: time.Now()})
+
+	select {
+	case body := <-c.addCh:
+		assert.True(t, strings.HasPrefix(body, ImplementationFailedHeader),
+			"failed marker must lead the comment body, got: %q", body)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a failed marker for the reaped implementation stage")
 	}
 }
 
