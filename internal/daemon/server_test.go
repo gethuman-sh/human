@@ -1476,19 +1476,23 @@ func TestServer_HandleTrackerIssue_ReturnsIssue(t *testing.T) {
 		}
 	})
 
-	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue", `{"tracker":"human","key":"188"}`}})
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue", `{"tracker":"human","kind":"shortcut","key":"188"}`}})
 	assert.Equal(t, 0, resp.ExitCode)
-	// The getter must see the exact instance name and key the client sent —
-	// resolution by name is the whole point of the request carrying a tracker.
+	// The getter must see the exact instance name, kind and key the client
+	// sent — kind+name resolution is the whole point of the request carrying
+	// them (names can repeat across provider sections).
 	assert.Equal(t, "human", gotReq.Tracker)
+	assert.Equal(t, "shortcut", gotReq.Kind)
 	assert.Equal(t, "188", gotReq.Key)
 
-	var issue tracker.Issue
-	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &issue)
+	var result IssueDetailResult
+	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &result)
 	require.NoError(t, err)
-	assert.Equal(t, "188", issue.Key)
-	assert.Equal(t, "Stephan", issue.Assignee)
-	assert.Equal(t, "As a product engineer I want the board to show builds.", issue.Description)
+	assert.Equal(t, "188", result.Key)
+	assert.Equal(t, "Stephan", result.Assignee)
+	assert.Equal(t, "As a product engineer I want the board to show builds.", result.Description)
+	// The daemon renders the markdown itself so clients never have to.
+	assert.Contains(t, result.DescriptionHTML, "<p>As a product engineer")
 }
 
 func TestServer_HandleTrackerIssue_GetterError(t *testing.T) {

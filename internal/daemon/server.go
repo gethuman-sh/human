@@ -495,7 +495,13 @@ func (s *Server) handleTrackerIssue(conn net.Conn, args []string) {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
-	data, err := json.Marshal(issue)
+	result := IssueDetailResult{
+		Issue: *issue,
+		// Rendered here, not in a client: the daemon is the one trusted place
+		// where untrusted tracker markdown becomes sanitized display HTML.
+		DescriptionHTML: RenderDescriptionHTML(issue.Description),
+	}
+	data, err := json.Marshal(result)
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return

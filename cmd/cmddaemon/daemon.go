@@ -232,7 +232,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		NetworkEvents:     networkStore,
 		IssueFetcher:      fetchTrackerIssuesFunc(projectRegistry, vaultResolver),
 		LiteIssueFetcher:  fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
-		IssueGetter:       issueGetterFunc(projectRegistry, vaultResolver),
+		IssueGetter:       daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
 		TrackerDiagnoser:  trackerDiagnoserFunc(projectRegistry, vaultResolver),
 		Projects:          projectRegistry,
 		PendingConfirms:   confirmStore,
@@ -1051,7 +1051,14 @@ func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func
 		if err != nil {
 			return nil, err
 		}
-		inst, err := tracker.Resolve(req.Tracker, instances, req.Key)
+		// Resolve by kind+name when the kind is known: a name alone is
+		// ambiguous when different provider sections share one instance name.
+		var inst *tracker.Instance
+		if req.Kind != "" {
+			inst, err = tracker.ResolveByKind(req.Kind, instances, req.Tracker)
+		} else {
+			inst, err = tracker.Resolve(req.Tracker, instances, req.Key)
+		}
 		if err != nil {
 			return nil, err
 		}

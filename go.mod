@@ -13,6 +13,7 @@ require (
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/google/go-containerregistry v0.21.7
 	github.com/hanwen/go-fuse/v2 v2.10.1
+	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/odvcencio/gotreesitter v0.23.1
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/afero v1.15.0
@@ -135,6 +136,7 @@ require (
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/awslabs/amazon-ecr-credential-helper/ecr-login v0.11.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
+	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
@@ -313,6 +315,7 @@ require (
 	github.com/goreleaser/goreleaser/v2 v2.14.1 // indirect
 	github.com/goreleaser/nfpm/v2 v2.45.0 // indirect
 	github.com/goreleaser/quill v0.0.0-20251224035235-ab943733386f // indirect
+	github.com/gorilla/css v1.0.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.5.0 // indirect

@@ -26,13 +26,26 @@ type TrackerIssuesResult struct {
 	Err        string               `json:"error,omitempty"`
 }
 
-// IssueDetailRequest asks for one full ticket by key. Tracker is the instance
-// name the issue was listed from (TrackerIssuesResult.TrackerName), so the
-// daemon resolves the exact instance instead of guessing from the key format —
-// bare numeric keys (Shortcut, GitLab, Azure DevOps) are ambiguous across kinds.
+// IssueDetailRequest asks for one full ticket by key. Tracker and Kind are the
+// instance name and provider kind the issue was listed from
+// (TrackerIssuesResult.TrackerName/TrackerKind), so the daemon resolves the
+// exact instance instead of guessing — bare numeric keys are ambiguous across
+// kinds, and a name alone is too: different provider sections may configure
+// the same instance name (e.g. a gitlab and a shortcut both named "human").
 type IssueDetailRequest struct {
 	Tracker string `json:"tracker"`
+	Kind    string `json:"kind,omitempty"`
 	Key     string `json:"key"`
+}
+
+// IssueDetailResult is the tracker-issue route's response: the full issue plus
+// a display-ready HTML rendering of its markdown description. The daemon owns
+// the rendering (goldmark + bluemonday sanitization) so every client renders
+// tracker content identically and none of them ever injects unsanitized HTML
+// into a webview.
+type IssueDetailResult struct {
+	tracker.Issue
+	DescriptionHTML string `json:"description_html,omitempty"`
 }
 
 // Request is sent from the client to the daemon (one JSON line per connection).

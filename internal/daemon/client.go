@@ -314,12 +314,14 @@ func GetTrackerIssuesLite(addr, token string) ([]TrackerIssuesResult, error) {
 	return getTrackerIssues(addr, token, "tracker-issues-lite")
 }
 
-// GetTrackerIssue fetches one full issue by key via the daemon. The board's
-// detail panel uses it because list fetches on some trackers return slim
-// payloads without descriptions. trackerName pins the instance the issue was
-// listed from, avoiding key-format guessing.
-func GetTrackerIssue(addr, token, trackerName, key string) (*tracker.Issue, error) {
-	data, err := json.Marshal(IssueDetailRequest{Tracker: trackerName, Key: key})
+// GetTrackerIssue fetches one full issue by key via the daemon, including the
+// daemon-rendered sanitized HTML of its description. The board's detail panel
+// uses it because list fetches on some trackers return slim payloads without
+// descriptions. trackerKind+trackerName pin the instance the issue was listed
+// from: keys are ambiguous across kinds and names can repeat across provider
+// sections.
+func GetTrackerIssue(addr, token, trackerKind, trackerName, key string) (*IssueDetailResult, error) {
+	data, err := json.Marshal(IssueDetailRequest{Tracker: trackerName, Kind: trackerKind, Key: key})
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "marshaling issue detail request")
 	}
@@ -327,11 +329,11 @@ func GetTrackerIssue(addr, token, trackerName, key string) (*tracker.Issue, erro
 	if err != nil {
 		return nil, err
 	}
-	var issue tracker.Issue
-	if err := json.Unmarshal(out, &issue); err != nil {
+	var result IssueDetailResult
+	if err := json.Unmarshal(out, &result); err != nil {
 		return nil, errors.WrapWithDetails(err, "invalid tracker issue JSON")
 	}
-	return &issue, nil
+	return &result, nil
 }
 
 func getTrackerIssues(addr, token, command string) ([]TrackerIssuesResult, error) {
