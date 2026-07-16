@@ -472,9 +472,13 @@ func TestRenderFooter_ShowsLogMode(t *testing.T) {
 // --- issues panel tests ---
 
 func TestRenderIssuesPanel_WithIssues(t *testing.T) {
+	// The engineering pipeline rendering (Eng / In Dev / Backlog labels) is now
+	// reached only via an explicit engineering role, not inferred from the
+	// Linear kind ([SC-254]).
 	groups := []trackerIssues{
 		{
 			TrackerKind: "linear",
+			TrackerRole: "engineering",
 			Project:     "HUM",
 			Issues: []tracker.Issue{
 				{Key: "HUM-42", Status: "In Progress", StatusType: "started", Title: "Add issues to TUI"},
@@ -572,7 +576,9 @@ func TestRenderIssuesPanel_MixedSuccess(t *testing.T) {
 	assert.Contains(t, out, "Pipeline")
 	assert.Contains(t, out, "fetch failed")
 	assert.Contains(t, out, "HUM-1")
-	assert.Contains(t, out, "Backlog")
+	// Role-less Linear tracker renders the raw status name now, not the eng
+	// pipeline "Backlog" label ([SC-254]).
+	assert.Contains(t, out, "Todo")
 	assert.Contains(t, out, "Working issue")
 }
 
@@ -634,10 +640,12 @@ func TestPipelineStage(t *testing.T) {
 		{"shortcut", "In Progress", tracker.CategoryStarted, "Planning"},
 		{"shortcut", "Done", tracker.CategoryDone, "Planned"},
 		{"shortcut", "Custom", tracker.CategoryUnknown, "Custom"},
+		// A role-less Linear tracker is no longer engineering ([SC-254]); the
+		// status name passes through instead of the eng pipeline label.
 		{"linear", "Backlog", tracker.CategoryUnstarted, "Backlog"},
-		{"linear", "In Progress", tracker.CategoryStarted, "In Dev"},
+		{"linear", "In Progress", tracker.CategoryStarted, "In Progress"},
 		{"linear", "Done", tracker.CategoryDone, "Done"},
-		{"linear", "Canceled", tracker.CategoryClosed, "Closed"},
+		{"linear", "Canceled", tracker.CategoryClosed, "Canceled"},
 		{"jira", "Open", tracker.CategoryUnknown, "Open"},
 	}
 	for _, tt := range tests {
@@ -658,13 +666,29 @@ func TestPipelineStageStyle(t *testing.T) {
 }
 
 func TestPipelineName(t *testing.T) {
-	// Inferred roles from kind.
+	// Inferred roles from kind: only pm is inferred; a role-less Linear tracker
+	// is no longer engineering and renders its raw kind label ([SC-254]).
 	assert.Contains(t, pipelineName("shortcut", ""), "PM")
-	assert.Contains(t, pipelineName("linear", ""), "Eng")
+	assert.Contains(t, pipelineName("linear", ""), "linear")
 	assert.Contains(t, pipelineName("jira", ""), "jira")
 	// Explicit roles override kind.
 	assert.Contains(t, pipelineName("jira", "pm"), "PM")
 	assert.Contains(t, pipelineName("github", "engineering"), "Eng")
+}
+
+// TestPipelineStage_RoleExplicit locks in the SC-254 sibling fix: the
+// engineering pipeline is reached only via an explicit engineering role, never
+// inferred from the Linear kind.
+func TestPipelineStage_RoleExplicit(t *testing.T) {
+	assert.Equal(t, "In Dev", pipelineStage("linear", "engineering", "In Progress", tracker.CategoryStarted))
+	assert.Equal(t, "In Progress", pipelineStage("linear", "", "In Progress", tracker.CategoryStarted))
+}
+
+// TestInferRole_TUI_SC254 mirrors the tracker-package regression at the TUI copy.
+func TestInferRole_TUI_SC254(t *testing.T) {
+	assert.Equal(t, "", inferRole("linear"))
+	assert.Equal(t, "pm", inferRole("shortcut"))
+	assert.Equal(t, "", inferRole("jira"))
 }
 
 // --- flattenIssues tests ---

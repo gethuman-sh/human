@@ -650,3 +650,28 @@ func TestEditOptions_labelContract(t *testing.T) {
 		})
 	}
 }
+
+// TestInferRole_SC254 locks in that engineering topology is opt-in: a Linear
+// instance with no explicit role must NOT infer "engineering" (that inference
+// silently minted unwanted engineering tickets in single-tracker setups), while
+// an explicitly configured engineering role is still honored. The pm inference
+// for Shortcut deliberately stays (read-side board scanning relies on it).
+func TestInferRole_SC254(t *testing.T) {
+	tests := []struct {
+		name string
+		inst Instance
+		want string
+	}{
+		{"linear without role no longer infers engineering", Instance{Kind: "linear"}, ""},
+		{"explicit engineering role honored", Instance{Kind: "linear", Role: "engineering"}, "engineering"},
+		{"explicit engineering role honored on any kind", Instance{Kind: "github", Role: "engineering"}, "engineering"},
+		{"shortcut still infers pm", Instance{Kind: "shortcut"}, "pm"},
+		{"explicit role overrides kind", Instance{Kind: "shortcut", Role: "engineering"}, "engineering"},
+		{"unknown kind without role is empty", Instance{Kind: "jira"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.inst.InferRole())
+		})
+	}
+}

@@ -338,20 +338,21 @@ type Instance struct {
 	Forge forge.Forge
 }
 
-// InferRole returns the instance's role, falling back to kind-based inference
-// when no explicit role is configured.
+// InferRole returns the instance's role. An explicit role always wins. With no
+// explicit role, only the pm role is inferred (for Shortcut boards) so read-side
+// board scanning keeps working out of the box; the engineering role is never
+// inferred. Engineering (split) topology is opt-in: it turns on only when a
+// tracker carries an explicit role: engineering in .humanconfig. Inferring
+// engineering from the Linear kind silently flipped single-tracker setups back
+// into split topology and minted unwanted engineering tickets ([SC-254]).
 func (inst Instance) InferRole() string {
 	if inst.Role != "" {
 		return inst.Role
 	}
-	switch inst.Kind {
-	case "shortcut":
+	if inst.Kind == "shortcut" {
 		return "pm"
-	case "linear":
-		return "engineering"
-	default:
-		return ""
 	}
+	return ""
 }
 
 // Write interfaces (future — not implemented yet).
