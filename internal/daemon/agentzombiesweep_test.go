@@ -52,7 +52,7 @@ func TestSweepZombieAgents_CleansOrphaned(t *testing.T) {
 		processUp: map[string]bool{"c1": false},
 	}
 
-	sweepZombieAgents(context.Background(), s, map[string]bool{}, nil, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Equal(t, []string{"agent-1"}, s.deleted)
 }
@@ -65,7 +65,7 @@ func TestSweepZombieAgents_SkipsHealthy(t *testing.T) {
 		processUp: map[string]bool{"c1": true},
 	}
 
-	sweepZombieAgents(context.Background(), s, map[string]bool{}, nil, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Empty(t, s.deleted)
 }
@@ -78,7 +78,7 @@ func TestSweepZombieAgents_SkipsGracePeriod(t *testing.T) {
 		processUp: map[string]bool{"c1": false},
 	}
 
-	sweepZombieAgents(context.Background(), s, map[string]bool{}, nil, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Empty(t, s.deleted)
 }
@@ -91,7 +91,7 @@ func TestSweepZombieAgents_SkipsEmptyContainerID(t *testing.T) {
 		processUp: map[string]bool{},
 	}
 
-	sweepZombieAgents(context.Background(), s, map[string]bool{}, nil, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Empty(t, s.deleted)
 }
@@ -106,7 +106,7 @@ func TestSweepZombieAgents_MixedAgents(t *testing.T) {
 		processUp: map[string]bool{"c1": true, "c2": false, "c3": false},
 	}
 
-	sweepZombieAgents(context.Background(), s, map[string]bool{}, nil, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Equal(t, []string{"zombie"}, s.deleted)
 }
@@ -127,9 +127,8 @@ func TestSweepZombieAgents_SparesIdleNeverHadClaude(t *testing.T) {
 		},
 		processUp: map[string]bool{"c1": false},
 	}
-	seen := map[string]bool{}
 
-	sweepZombieAgents(context.Background(), s, seen, nil, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Empty(t, s.deleted)
 }
@@ -145,9 +144,10 @@ func TestSweepZombieAgents_ReapsAgentThatHadClaudeThenDied(t *testing.T) {
 		processUp: map[string]bool{"c1": false},
 	}
 	// Prior observation: claude was seen running for this agent.
-	seen := map[string]bool{"crashed": true}
+	sweep := newZombieSweep()
+	sweep.seenClaude["crashed"] = true
 
-	sweepZombieAgents(context.Background(), s, seen, nil, zerolog.Nop())
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Equal(t, []string{"crashed"}, s.deleted)
 }
@@ -161,9 +161,8 @@ func TestSweepZombieAgents_ReapsNonIdleWithoutClaude(t *testing.T) {
 		},
 		processUp: map[string]bool{"c1": false},
 	}
-	seen := map[string]bool{}
 
-	sweepZombieAgents(context.Background(), s, seen, nil, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Equal(t, []string{"prompt-agent"}, s.deleted)
 }
@@ -177,28 +176,33 @@ func TestSweepZombieAgents_RecordsClaudeObservation(t *testing.T) {
 		},
 		processUp: map[string]bool{"c1": true},
 	}
-	seen := map[string]bool{}
+	sweep := newZombieSweep()
 
-	sweepZombieAgents(context.Background(), s, seen, nil, zerolog.Nop())
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Empty(t, s.deleted)
-	assert.True(t, seen["idle-then-ran"], "claude observation must be recorded")
+	assert.True(t, sweep.seenClaude["idle-then-ran"], "claude observation must be recorded")
 }
 
-// The seenClaude map must not leak entries for agents that no longer exist.
-func TestSweepZombieAgents_PrunesStaleObservations(t *testing.T) {
+// The cross-tick memory must not leak entries for agents that no longer exist.
+func TestSweepZombieAgents_PrunesStaleMemory(t *testing.T) {
 	s := &mockSweeper{
 		agents: []AgentInfo{
 			{Name: "still-here", ContainerID: "c1", CreatedAt: time.Now().Add(-2 * time.Minute), Idle: true},
 		},
 		processUp: map[string]bool{"c1": true},
 	}
-	seen := map[string]bool{"gone": true, "still-here": true}
+	sweep := newZombieSweep()
+	sweep.seenClaude["gone"] = true
+	sweep.seenClaude["still-here"] = true
+	sweep.checkFailures["gone"] = 2
 
-	sweepZombieAgents(context.Background(), s, seen, nil, zerolog.Nop())
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
-	_, staleKept := seen["gone"]
-	assert.False(t, staleKept, "observation for a vanished agent must be pruned")
+	_, staleSeen := sweep.seenClaude["gone"]
+	assert.False(t, staleSeen, "observation for a vanished agent must be pruned")
+	_, staleFailures := sweep.checkFailures["gone"]
+	assert.False(t, staleFailures, "failure streak for a vanished agent must be pruned")
 }
 
 // SC-206: a reaped board agent died without firing hook events, so the sweep
@@ -215,7 +219,7 @@ func TestSweepZombieAgents_NotifiesOnReap(t *testing.T) {
 	var reaped []string
 	onReaped := func(name string) { reaped = append(reaped, name) }
 
-	sweepZombieAgents(context.Background(), s, map[string]bool{}, onReaped, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, onReaped, zerolog.Nop())
 
 	assert.Equal(t, []string{"board-204-implementation"}, s.deleted)
 	assert.Equal(t, []string{"board-204-implementation"}, reaped)
@@ -234,7 +238,7 @@ func TestSweepZombieAgents_NoNotifyWhenDeleteFails(t *testing.T) {
 	var reaped []string
 	onReaped := func(name string) { reaped = append(reaped, name) }
 
-	sweepZombieAgents(context.Background(), s, map[string]bool{}, onReaped, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, onReaped, zerolog.Nop())
 
 	assert.Empty(t, reaped)
 }
@@ -248,7 +252,70 @@ func TestSweepZombieAgents_NilOnReaped(t *testing.T) {
 		processUp: map[string]bool{"c1": false},
 	}
 
-	sweepZombieAgents(context.Background(), s, map[string]bool{}, nil, zerolog.Nop())
+	newZombieSweep().sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Equal(t, []string{"board-204-implementation"}, s.deleted)
+}
+
+// SC-263: a persistent post-suspend Docker/exec disruption makes IsProcessRunning
+// error on every tick. Before the fix the agent is skipped forever.
+func TestSweepZombieAgents_ReapsAfterPersistentCheckError(t *testing.T) {
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "board-252-verification", ContainerID: "c1", CreatedAt: time.Now().Add(-5 * time.Minute)},
+		},
+		processUp:  map[string]bool{"c1": false},
+		processErr: map[string]error{"c1": assertErr{}},
+	}
+	var reaped []string
+	onReaped := func(name string) { reaped = append(reaped, name) }
+
+	sweep := newZombieSweep()
+	for i := 0; i < zombieMaxProcessCheckFailures; i++ {
+		sweep.sweepZombieAgents(context.Background(), s, onReaped, zerolog.Nop())
+		assert.Empty(t, s.deleted, "must not reap before threshold")
+	}
+	sweep.sweepZombieAgents(context.Background(), s, onReaped, zerolog.Nop())
+	assert.Equal(t, []string{"board-252-verification"}, s.deleted)
+	assert.Equal(t, []string{"board-252-verification"}, reaped)
+}
+
+// A one-shot race (container briefly unreachable, then live) must NOT reap.
+func TestSweepZombieAgents_ResetsCounterOnSuccess(t *testing.T) {
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "agent-1", ContainerID: "c1", CreatedAt: time.Now().Add(-5 * time.Minute)},
+		},
+		processUp:  map[string]bool{"c1": true},
+		processErr: map[string]error{"c1": assertErr{}},
+	}
+	sweep := newZombieSweep()
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+	assert.Empty(t, s.deleted)
+
+	delete(s.processErr, "c1")
+	for i := 0; i < zombieMaxProcessCheckFailures+2; i++ {
+		sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+	}
+	assert.Empty(t, s.deleted, "healthy process must never be reaped")
+}
+
+// Composition of SC-236 and SC-263: an idle-by-design agent that has never
+// been observed running claude stays spared even when its liveness check
+// fails persistently — the escalation presumes a dead *claude*, but an idle
+// agent never promised one. The spare contract is absolute.
+func TestSweepZombieAgents_SparesIdleUnderPersistentCheckError(t *testing.T) {
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "auth", ContainerID: "c1", CreatedAt: time.Now().Add(-5 * time.Minute), Idle: true},
+		},
+		processUp:  map[string]bool{"c1": false},
+		processErr: map[string]error{"c1": assertErr{}},
+	}
+	sweep := newZombieSweep()
+	for i := 0; i < zombieMaxProcessCheckFailures+3; i++ {
+		sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+	}
+	assert.Empty(t, s.deleted, "idle agent never seen with claude must survive even a broken liveness check")
 }

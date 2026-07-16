@@ -34,7 +34,32 @@ const (
 	// Grace period before a container without Claude is considered a zombie.
 	// Allows time for Claude to start after the container comes up.
 	zombieGracePeriod = 10 * time.Second
+	// A liveness check can fail transiently (a one-shot race where the container
+	// is removed between list and check). But a post-suspend Docker/exec
+	// disruption fails *persistently* every tick — left unbounded, it skips the
+	// reap forever and the board card spins at "reviewing…" (SC-263). After this
+	// many consecutive failures the agent is presumed unreachable-and-dead and
+	// reaped. At zombieSweepInterval this is ~15s, matching the wake-recovery
+	// expectation.
+	zombieMaxProcessCheckFailures = 3
 )
+
+// zombieSweep carries the sweep's cross-tick memory. checkFailures counts
+// consecutive liveness-check errors per agent so a persistent (not one-shot)
+// failure is bounded and escalated into a reap rather than skipped
+// indefinitely (SC-263). seenClaude records whether claude was ever observed
+// running per agent so an idle-by-design agent is spared until then (SC-236).
+// A daemon restart resets both, which is safe: an idle agent is spared again
+// by its Idle flag, and a crashed prompt-driven agent is reaped on the first
+// tick because its Idle flag is false.
+type zombieSweep struct {
+	checkFailures map[string]int
+	seenClaude    map[string]bool
+}
+
+func newZombieSweep() *zombieSweep {
+	return &zombieSweep{checkFailures: make(map[string]int), seenClaude: make(map[string]bool)}
+}
 
 // RunAgentZombieSweep periodically checks for agent containers that are
 // still running but have no Claude process. This catches cases where Claude
@@ -54,39 +79,31 @@ func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, onReap
 
 	logger.Info().Msg("agent zombie sweep started")
 
-	// seenClaude records, per agent name, whether the sweep has ever observed a
-	// live claude process for it. An idle-by-design agent that has never been
-	// seen with claude is spared; once claude is observed, a later absence still
-	// reaps the agent — preserving the crashed-agent contract (SC-236). Kept
-	// in memory across ticks; a daemon restart resets it, which is safe: an idle
-	// agent is spared again by its Idle flag, and a crashed prompt-driven agent
-	// is reaped on the first tick because its Idle flag is false.
-	seenClaude := map[string]bool{}
-
 	ticker := time.NewTicker(zombieSweepInterval)
 	defer ticker.Stop()
+
+	sweep := newZombieSweep()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sweepZombieAgents(ctx, sweeper, seenClaude, onReaped, logger)
+			sweep.sweepZombieAgents(ctx, sweeper, onReaped, logger)
 		}
 	}
 }
 
-func sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, seenClaude map[string]bool, onReaped func(agentName string), logger zerolog.Logger) {
+func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, onReaped func(agentName string), logger zerolog.Logger) {
 	agents, err := sweeper.RunningAgents()
 	if err != nil {
 		logger.Warn().Err(err).Msg("zombie sweep: failed to list agents")
 		return
 	}
 
-	live := make(map[string]struct{}, len(agents))
-	for _, a := range agents {
-		live[a.Name] = struct{}{}
+	z.prune(agents)
 
+	for _, a := range agents {
 		if a.ContainerID == "" {
 			continue
 		}
@@ -96,21 +113,37 @@ func sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, seenClau
 
 		running, err := sweeper.IsProcessRunning(ctx, a.ContainerID, "claude")
 		if err != nil {
-			// Container may have been removed between list and check.
-			logger.Debug().Err(err).Str("agent", a.Name).Msg("zombie sweep: process check failed")
-			continue
-		}
-		if running {
-			// Record the observation so a later absence still reaps this agent,
-			// even one flagged idle — this is what preserves the crashed-agent
-			// contract for agents that once ran claude (SC-236).
-			seenClaude[a.Name] = true
-			continue
+			// A one-shot error (container removed between list and check) is
+			// tolerated by skipping this tick. But a persistent post-suspend
+			// Docker/exec disruption recurs every tick — bounding it forces an
+			// escalation to reap instead of an indefinite skip (SC-263).
+			z.checkFailures[a.Name]++
+			if z.checkFailures[a.Name] <= zombieMaxProcessCheckFailures {
+				logger.Warn().Err(err).Str("agent", a.Name).Int("failures", z.checkFailures[a.Name]).
+					Msg("zombie sweep: process check failed, will retry")
+				continue
+			}
+			logger.Error().Err(err).Str("agent", a.Name).Int("failures", z.checkFailures[a.Name]).
+				Msg("zombie sweep: process check failing persistently, presuming agent dead and reaping")
+			// Fall through to the reap gate: the agent is unreachable and
+			// presumed dead. The idle-never-seen spare below still applies —
+			// SC-236's contract is absolute, even under a broken Docker.
+		} else {
+			// A successful check clears the transient-failure streak.
+			delete(z.checkFailures, a.Name)
+			if running {
+				// Record the observation so a later absence still reaps this
+				// agent, even one flagged idle — this is what preserves the
+				// crashed-agent contract for agents that once ran claude (SC-236).
+				z.seenClaude[a.Name] = true
+				continue
+			}
 		}
 
-		// claude is absent. Spare an idle-by-design agent that has never been
-		// observed running claude: it is idle on purpose, not a zombie (SC-236).
-		if a.Idle && !seenClaude[a.Name] {
+		// claude is absent (or the container unreachable for good). Spare an
+		// idle-by-design agent that has never been observed running claude: it
+		// is idle on purpose, not a zombie (SC-236).
+		if a.Idle && !z.seenClaude[a.Name] {
 			continue
 		}
 
@@ -118,19 +151,39 @@ func sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, seenClau
 		deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		if err := sweeper.DeleteAgent(deleteCtx, a.Name); err != nil {
 			logger.Warn().Err(err).Str("agent", a.Name).Msg("zombie sweep: cleanup failed")
-		} else if onReaped != nil {
-			// Notify only on a completed reap: a failed delete is retried on
-			// the next tick and must not mark the stage failed prematurely.
-			onReaped(a.Name)
+		} else {
+			// A completed reap clears the agent's cross-tick memory so a
+			// same-named future agent starts fresh.
+			delete(z.checkFailures, a.Name)
+			delete(z.seenClaude, a.Name)
+			if onReaped != nil {
+				// Notify only on a completed reap: a failed delete is retried on
+				// the next tick and must not mark the stage failed prematurely.
+				onReaped(a.Name)
+			}
 		}
 		cancel()
 	}
+}
 
-	// Drop observations for agents that no longer exist so the map stays bounded
-	// by the live agent set across the sweep goroutine's lifetime.
-	for name := range seenClaude {
+// prune drops cross-tick memory for agents that no longer exist, so the maps
+// stay bounded by the live agent set across the sweep goroutine's lifetime.
+func (z *zombieSweep) prune(agents []AgentInfo) {
+	if len(z.checkFailures) == 0 && len(z.seenClaude) == 0 {
+		return
+	}
+	live := make(map[string]struct{}, len(agents))
+	for _, a := range agents {
+		live[a.Name] = struct{}{}
+	}
+	for name := range z.checkFailures {
 		if _, ok := live[name]; !ok {
-			delete(seenClaude, name)
+			delete(z.checkFailures, name)
+		}
+	}
+	for name := range z.seenClaude {
+		if _, ok := live[name]; !ok {
+			delete(z.seenClaude, name)
 		}
 	}
 }
