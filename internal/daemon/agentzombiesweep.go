@@ -12,6 +12,13 @@ type AgentInfo struct {
 	Name        string
 	ContainerID string
 	CreatedAt   time.Time
+	// Idle marks an agent started without a prompt (bare `human agent start`),
+	// which by design never launches a claude process. Such an agent is
+	// indistinguishable from a crashed one by process-liveness alone, so the
+	// sweep must not reap it until claude has actually been observed running
+	// for it — otherwise a deliberately idle agent is killed within seconds
+	// of coming up (SC-236).
+	Idle bool
 }
 
 // AgentZombieSweeper checks for orphaned agent containers whose main
@@ -47,6 +54,15 @@ func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, onReap
 
 	logger.Info().Msg("agent zombie sweep started")
 
+	// seenClaude records, per agent name, whether the sweep has ever observed a
+	// live claude process for it. An idle-by-design agent that has never been
+	// seen with claude is spared; once claude is observed, a later absence still
+	// reaps the agent — preserving the crashed-agent contract (SC-236). Kept
+	// in memory across ticks; a daemon restart resets it, which is safe: an idle
+	// agent is spared again by its Idle flag, and a crashed prompt-driven agent
+	// is reaped on the first tick because its Idle flag is false.
+	seenClaude := map[string]bool{}
+
 	ticker := time.NewTicker(zombieSweepInterval)
 	defer ticker.Stop()
 
@@ -55,19 +71,22 @@ func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, onReap
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sweepZombieAgents(ctx, sweeper, onReaped, logger)
+			sweepZombieAgents(ctx, sweeper, seenClaude, onReaped, logger)
 		}
 	}
 }
 
-func sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, onReaped func(agentName string), logger zerolog.Logger) {
+func sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, seenClaude map[string]bool, onReaped func(agentName string), logger zerolog.Logger) {
 	agents, err := sweeper.RunningAgents()
 	if err != nil {
 		logger.Warn().Err(err).Msg("zombie sweep: failed to list agents")
 		return
 	}
 
+	live := make(map[string]struct{}, len(agents))
 	for _, a := range agents {
+		live[a.Name] = struct{}{}
+
 		if a.ContainerID == "" {
 			continue
 		}
@@ -82,6 +101,16 @@ func sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, onReaped
 			continue
 		}
 		if running {
+			// Record the observation so a later absence still reaps this agent,
+			// even one flagged idle — this is what preserves the crashed-agent
+			// contract for agents that once ran claude (SC-236).
+			seenClaude[a.Name] = true
+			continue
+		}
+
+		// claude is absent. Spare an idle-by-design agent that has never been
+		// observed running claude: it is idle on purpose, not a zombie (SC-236).
+		if a.Idle && !seenClaude[a.Name] {
 			continue
 		}
 
@@ -95,5 +124,13 @@ func sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, onReaped
 			onReaped(a.Name)
 		}
 		cancel()
+	}
+
+	// Drop observations for agents that no longer exist so the map stays bounded
+	// by the live agent set across the sweep goroutine's lifetime.
+	for name := range seenClaude {
+		if _, ok := live[name]; !ok {
+			delete(seenClaude, name)
+		}
 	}
 }

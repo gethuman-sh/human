@@ -1826,6 +1826,11 @@ func (s *dockerAgentSweeper) RunningAgents() ([]daemon.AgentInfo, error) {
 			Name:        m.Name,
 			ContainerID: m.ContainerID,
 			CreatedAt:   m.CreatedAt,
+			// A bare `human agent start NAME` persists an empty Prompt and never
+			// launches claude (agent.Manager.Start only execs claude when a
+			// prompt is present), so an empty Prompt marks an idle-by-design
+			// agent the sweep must not mistake for a crashed one (SC-236).
+			Idle: m.Prompt == "",
 		})
 	}
 	return result, nil
