@@ -6,7 +6,8 @@
   "description": "Workflow-board frontend for the human desktop app (Wails v2).",
   "scripts": {
     "build": "tsc && node scripts/bundle.mjs",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "node --test scripts/*.test.mjs"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
