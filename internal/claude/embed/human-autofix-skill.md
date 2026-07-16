@@ -6,7 +6,7 @@ argument-hint: <bug-ticket-key>
 
 # Overview
 
-Point this skill at a bug ticket and it runs the full bug-fix pipeline autonomously: **triage & reproduce → root-cause explanation on the ticket → verdict → (if a real bug) plan → test-first fix on a branch → verify → review by the reviewer agent → (on a passing review) deploy: PR → CI gate → merge**. The whole trail is recorded on the tracker (comments + the plan — a separate engineering ticket in split topology, a `[human:plan]` comment on the bug ticket itself otherwise); the only `.human/` working file is the reviewer's `.human/reviews/<key>.md`.
+Point this skill at a bug ticket and it runs the full bug-fix pipeline autonomously: **triage & reproduce → root-cause explanation on the ticket → verdict → (if a real bug) plan → test-first fix on a branch → verify → review by the reviewer agent → (on a passing review) deploy: PR → CI gate → merge**. The whole trail is recorded on the tracker (comments + the plan — a separate engineering ticket in split topology, a `[human:plan]` comment on the bug ticket itself otherwise), and every run that attempted a fix ends by posting a plain-language `[human:fix-summary]` comment on the ticket (Step 9); the only `.human/` working file is the reviewer's `.human/reviews/<key>.md`.
 
 The run does **not** end at the review handoff: exactly like the kanban flow — where a clean build chains straight into its review and Deploy ships it — the skill chains the fix into a review by the **human-reviewer** agent and, when the verdict is a pass, drives the same deploy pipeline the board's Deploy stage runs (push → PR → CI gate → merge → close). A failing review or a red CI gate stops the run honestly with the handoff left standing for a human.
 
@@ -156,9 +156,39 @@ Only after a passing review. This is the board's deploy pipeline (push → PR �
 4. Merge and clean up: `gh pr merge <number> --merge --delete-branch`. If the merge is blocked (required approvals, branch protection), post `[human:deploy-failed]` with the reason and STOP honestly — the PR stays open for a human.
 5. Record success: `human <tracker> issue comment add <BUG_KEY> "[human:deployed]"` with a second line `pr: <PR_URL>`, then move the ticket to its done-type status (`human <tracker> issue statuses <BUG_KEY>`, then `human <tracker> issue status <BUG_KEY> "<done-status>"`). In split topology close `<ENG_KEY>` the same way.
 
-## Step 9 — Summary
+## Step 9 — Run summary: ticket comment, then report
 
-Report the verdict. For a confirmed, shipped fix, present the traceability chain:
+Once a fix was attempted (Step 4 ran), the ticket must carry a plain-language account of the run — a person catching up later should not have to reconstruct it from markers and agent artifacts. Post it at EVERY terminal point after Step 4: the board-context stop after the handoff (7.1), a shipped fix (Step 8), and every honest STOP (fixer could not go green, verify not DONE, review failed twice, deploy gate red). Runs that end at the verdict gate (Step 3) post nothing here — the triage verdict comment already tells that story.
+
+```bash
+human <tracker> issue comment add <BUG_KEY> "$(cat <<'SUMMARY_EOF'
+[human:fix-summary]
+
+## What happened
+<2–4 sentences, plain language: what the bug turned out to be and what the fix does. Written for the reporter, not an engineer.>
+
+## Changes
+- Branch: autofix/<work-key> — <left local for Deploy | pushed | merged as <PR_URL>>
+- Commits: <short sha — one-line subject, per commit>
+- <the areas of the product touched, one line>
+
+## Proof
+- Regression test: <name/location> — failed before the fix, passes after
+- Checks: <suite/lint/coverage result>
+- Review: <verdict, or "pending — daemon chains it" in board context>
+
+## Along the way
+<the story of the run when it was not straight: a re-dispatched triage, a first verify that came back not-DONE, review findings that were addressed, infrastructure trouble. If the run went straight through, say exactly that: "Nothing notable — triage, fix, verify, and review went through on the first pass.">
+
+## Where it ended
+<board: handoff posted, the Deploy button ships it | standalone: PR merged, ticket moved to <done-status> | stopped at <step>: what a human needs to do next>
+SUMMARY_EOF
+)"
+```
+
+Fill every section from what actually happened in THIS run — never leave template placeholders in the posted comment. If posting the summary fails, still produce the final report below.
+
+Then report the verdict. For a confirmed, shipped fix, present the traceability chain:
 
 ```
 Autofix complete for <BUG_KEY>
