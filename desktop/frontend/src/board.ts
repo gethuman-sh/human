@@ -1267,6 +1267,23 @@ async function closeTicket(key: string): Promise<void> {
   await reconcile();
 }
 
+// applyPermissionDecision optimistically reflects an approved permission
+// request on the board — the same instant feedback drag-and-drop already has —
+// then reconciles so a change that did not actually land is quietly restored.
+// Only DeleteIssue maps to a deterministic board effect (the card leaves);
+// EditIssue and others have no card-level change, so they fall through to the
+// reconcile alone. A denial makes no board change at all.
+function applyPermissionDecision(req: PermissionRequest, approved: boolean): void {
+  if (approved && req.operation === "DeleteIssue") {
+    // Bump the epoch first so any in-flight pre-delete fetch cannot resurrect
+    // the card, mirroring closeTicket's optimistic removal.
+    reconcileEpoch++;
+    current.cards = current.cards.filter((c) => c.key !== req.key);
+    render();
+  }
+  void reconcile();
+}
+
 // createMocks launches mockup generation for one ticket. No confirm dialog —
 // the action is additive (files in mockups/, nothing on the tracker). The
 // immediate reconcile picks up the daemon-written link so the menu reads
@@ -2519,7 +2536,7 @@ function init(): void {
 
   wireRail();
   initFancy();
-  initPermissions(() => go());
+  initPermissions(() => go(), applyPermissionDecision);
   initMockupsView(() => go());
   initSettingsView(() => go());
   initPalette({ index: settingsIndex, refresh: showSettings, save: saveSetting });

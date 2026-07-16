@@ -20,11 +20,17 @@ export interface PermissionBindings {
   DecidePermission(id: string, approved: boolean): Promise<void>;
 }
 
+// Optional hook the board supplies so an approval can optimistically reflect
+// on the board immediately (matching drag-and-drop), while permissions.ts stays
+// decoupled from board state. Only fires for decisions that reached the daemon.
+export type PermissionDecidedHandler = (req: PermissionRequest, approved: boolean) => void;
+
 const POLL_MS = 2000;
 // How long the decision flash tints the strip before the next request shows.
 const FLASH_MS = 450;
 
 let bindings: (() => PermissionBindings) | null = null;
+let onDecided: PermissionDecidedHandler | null = null;
 let queue: PermissionRequest[] = [];
 // IDs decided locally but possibly still pending in the next poll response —
 // filtered out so a just-decided request cannot flash back for one tick.
@@ -143,6 +149,9 @@ async function poll(): Promise<void> {
 async function decide(id: string, approved: boolean): Promise<void> {
   if (!bindings || !id) return;
   const e = els();
+  // Capture the request before filtering so the optimistic handler still has
+  // its operation/key after the strip has dropped it.
+  const req = queue.find((r) => r.id === id);
   decided.add(id);
   queue = queue.filter((r) => r.id !== id);
   try {
@@ -154,6 +163,9 @@ async function decide(id: string, approved: boolean): Promise<void> {
     void poll();
     return;
   }
+  // Only after the decision landed: let the board optimistically reflect it.
+  // Skipped on the catch path above so a failed decision leaves no phantom.
+  if (req && onDecided) onDecided(req, approved);
   // Brief tint as feedback, then advance to the next request. The CSS side
   // is a no-op under prefers-reduced-motion.
   if (e.strip) {
@@ -192,8 +204,12 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 
-export function initPermissions(getBindings: () => PermissionBindings): void {
+export function initPermissions(
+  getBindings: () => PermissionBindings,
+  decidedHandler?: PermissionDecidedHandler,
+): void {
   bindings = getBindings;
+  onDecided = decidedHandler ?? null;
   const e = els();
   e.approve?.addEventListener("click", () => {
     if (queue.length > 0) void decide(queue[0].id, true);

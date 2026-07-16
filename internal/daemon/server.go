@@ -562,6 +562,7 @@ func (s *Server) handleBoardTransition(conn net.Conn, args []string) {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
+	s.pokeBoard()
 	resp := Response{Stdout: "ok\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
@@ -589,6 +590,7 @@ func (s *Server) handleBoardFix(conn net.Conn, args []string) {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
+	s.pokeBoard()
 	resp := Response{Stdout: "ok\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
@@ -607,6 +609,7 @@ func (s *Server) handleFeaturesGenerate(conn net.Conn) {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
+	s.pokeBoard()
 	resp := Response{Stdout: "ok\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
@@ -634,6 +637,7 @@ func (s *Server) handleCloseTicket(conn net.Conn, args []string) {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
+	s.pokeBoard()
 	resp := Response{Stdout: "ok\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
@@ -662,6 +666,7 @@ func (s *Server) handleCreateMocks(conn net.Conn, args []string) {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
+	s.pokeBoard()
 	resp := Response{Stdout: "ok\n"}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
@@ -869,6 +874,25 @@ func (s *Server) handleSubscribe(conn net.Conn) {
 	}
 }
 
+// pokeBoard notifies open board subscribers that a daemon-executed change
+// landed, so the board refreshes within a second or two instead of waiting for
+// an unrelated agent lifecycle event. It appends a lightweight session-less
+// event; handleSubscribe maps any non-AgentStopped event to a "change"
+// notification. Callers must invoke this only on the success path — a poke for
+// a failed mutation would trigger a needless refetch. The poke is decoupled
+// from the closure that mutates the tracker, so a future direct caller of a
+// closure (outside a handler) would not poke; today every execution path flows
+// through a route handler. nil HookEvents (tests, disabled tracking) is a no-op.
+func (s *Server) pokeBoard() {
+	if s.HookEvents == nil {
+		return
+	}
+	s.HookEvents.Append(hookevents.Event{
+		EventName: "BoardChanged",
+		Timestamp: time.Now().UTC(),
+	})
+}
+
 func (s *Server) writeError(conn net.Conn, msg string, code int) {
 	resp := Response{Stderr: msg + "\n", ExitCode: code}
 	enc := json.NewEncoder(conn)
@@ -989,6 +1013,9 @@ func (s *Server) handleDestructiveConfirm(conn net.Conn, req Request, op destruc
 					// Inject --yes so the Cobra command doesn't try to prompt again.
 					req.Args = append(req.Args, "--yes")
 					s.executeCommand(conn, req, projectDir)
+					// The grant redemption is where the tracker mutation truly
+					// lands, so poke the board to reflect it promptly.
+					s.pokeBoard()
 					return
 				}
 				// Grant exists but covers a different operation — fall
@@ -1012,6 +1039,9 @@ func (s *Server) handleDestructiveConfirm(conn net.Conn, req Request, op destruc
 		s.Logger.Info().Str("id", pc.ID).Str("key", op.Key).Msg("permission grant redeemed by operation, executing")
 		req.Args = append(req.Args, "--yes")
 		s.executeCommand(conn, req, projectDir)
+		// Operation-level redemption also lands the mutation; keep the board
+		// in step by poking here as well.
+		s.pokeBoard()
 		return
 	}
 	if _, ok := s.PendingConfirms.FindDenied(op.Operation, op.Tracker, op.Key); ok {
@@ -1138,6 +1168,13 @@ func (s *Server) handleConfirmOp(conn net.Conn, args []string, approverPID int) 
 		// The executed path audits via the redeemed command; a denial is
 		// only visible here, so record it from the entry's operation triple.
 		s.emitAudit(confirmAuditArgs(pc), audit.OutcomeDenied, os.Getenv)
+	}
+
+	if approved {
+		// Approval grants permission; the requesting client redeems and
+		// executes it moments later. Poke now so the board reflects the
+		// approved change immediately, and again on redemption if it lands.
+		s.pokeBoard()
 	}
 
 	resp := Response{Stdout: "ok\n"}

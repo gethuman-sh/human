@@ -9,6 +9,7 @@ const POLL_MS = 2000;
 // How long the decision flash tints the strip before the next request shows.
 const FLASH_MS = 450;
 let bindings = null;
+let onDecided = null;
 let queue = [];
 // IDs decided locally but possibly still pending in the next poll response —
 // filtered out so a just-decided request cannot flash back for one tick.
@@ -125,6 +126,9 @@ async function decide(id, approved) {
     if (!bindings || !id)
         return;
     const e = els();
+    // Capture the request before filtering so the optimistic handler still has
+    // its operation/key after the strip has dropped it.
+    const req = queue.find((r) => r.id === id);
     decided.add(id);
     queue = queue.filter((r) => r.id !== id);
     try {
@@ -137,6 +141,10 @@ async function decide(id, approved) {
         void poll();
         return;
     }
+    // Only after the decision landed: let the board optimistically reflect it.
+    // Skipped on the catch path above so a failed decision leaves no phantom.
+    if (req && onDecided)
+        onDecided(req, approved);
     // Brief tint as feedback, then advance to the next request. The CSS side
     // is a no-op under prefers-reduced-motion.
     if (e.strip) {
@@ -176,8 +184,9 @@ function onKeydown(e) {
         void decide(queue[0].id, false);
     }
 }
-export function initPermissions(getBindings) {
+export function initPermissions(getBindings, decidedHandler) {
     bindings = getBindings;
+    onDecided = decidedHandler ?? null;
     const e = els();
     e.approve?.addEventListener("click", () => {
         if (queue.length > 0)
