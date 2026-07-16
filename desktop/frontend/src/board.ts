@@ -309,8 +309,9 @@ function verdictFailed(verdict?: string): boolean {
 
 // queueOf maps the wire (stage, state) onto the column whose name is true of
 // the card. The whole build-and-review cycle lives in the Code lane —
-// including a review that found problems, because that card is NOT ready to
-// deploy; only a passing review releases it.
+// including a review that found problems, and a review with no recorded
+// branch (nothing to ship), because those cards are NOT ready to deploy;
+// only a passing review of a recorded branch releases one.
 function queueOf(card: Card): string {
   switch (card.stage) {
     case "ideas":
@@ -322,7 +323,7 @@ function queueOf(card: Card): string {
     case "implementation":
       return "building";
     case "verification":
-      return card.state === "done" && !verdictFailed(card.verdict) ? "deploy" : "building";
+      return card.state === "done" && !verdictFailed(card.verdict) && !!card.branch ? "deploy" : "building";
     case "done":
       return "deploy";
     default:
@@ -380,6 +381,11 @@ function badge(card: Card): string {
   if (card.state === "failed") return `<span class="badge failed" title="Stage failed">✕</span>`;
   if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
     return `<span class="badge warning" title="${escapeAttr("Review verdict: " + (card.verdict ?? ""))}">⚠ review found problems</span>`;
+  }
+  if (card.stage === "verification" && card.state === "done" && !card.branch) {
+    // A passed review with no recorded branch has nothing to ship — deploying
+    // it can only fail, so it must read as needing a rebuild, never as ready.
+    return `<span class="badge warning" title="Review passed but no branch was recorded on the handoff — drop it on the build stage to rebuild">⚠ no branch recorded</span>`;
   }
   if (card.stage === "done" && card.state === "done") {
     return `<span class="badge done" title="Merged and shipped">deployed</span>`;
@@ -967,15 +973,17 @@ function dropTargetAt(x: number, y: number): HTMLElement | null {
 }
 
 // isReadyToDeploy reports a card resting in Ready to Deploy on a passed
-// review — the only cards the Deploy zone accepts.
+// review of a recorded branch — the only cards the Deploy zone accepts.
+// Without a branch there is nothing to ship: deploying can only fail, so the
+// card must never be offered (SC-297).
 function isReadyToDeploy(card: Card): boolean {
-  return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict);
+  return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict) && !!card.branch;
 }
 
-// isReworkable reports a card pinned in Code by a failing review verdict; a
-// re-drop onto Code rebuilds it against the review findings.
+// isReworkable reports a card pinned in Code by a failing review verdict or a
+// missing branch; a re-drop onto Code (or Fix, for bugs) rebuilds it.
 function isReworkable(card: Card): boolean {
-  return card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict);
+  return card.stage === "verification" && card.state === "done" && (verdictFailed(card.verdict) || !card.branch);
 }
 
 // dropAllowed reports whether the dragged card may drop on target. Queue
