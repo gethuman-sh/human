@@ -49,6 +49,9 @@ type trackerIssues struct {
 // flatIssue is a single issue with its tracker context, used for cursor indexing.
 type flatIssue struct {
 	TrackerKind string
+	// TrackerRole carries the configured role so dispatch honors an explicit
+	// engineering role rather than inferring topology from the kind ([SC-254]).
+	TrackerRole string
 	Project     string
 	Issue       tracker.Issue
 }
@@ -61,7 +64,7 @@ func flattenIssues(groups []trackerIssues) []flatIssue {
 			continue
 		}
 		for _, issue := range g.Issues {
-			out = append(out, flatIssue{TrackerKind: g.TrackerKind, Project: g.Project, Issue: issue})
+			out = append(out, flatIssue{TrackerKind: g.TrackerKind, TrackerRole: g.TrackerRole, Project: g.Project, Issue: issue})
 		}
 	}
 	return out
@@ -513,17 +516,18 @@ func (m model) handleDispatch() (tea.Model, tea.Cmd) {
 	sel := flat[m.issueCursor]
 
 	// Bug-ness wins regardless of tracker — a Shortcut bug story still wants
-	// root-cause analysis, not the generic planner. Otherwise the PM/eng
-	// split decides: Shortcut tickets are PM and want planning; everything
-	// else is engineering and goes straight to execution.
+	// root-cause analysis, not the generic planner. Otherwise topology decides:
+	// execution (split topology) is opt-in and requires an explicit engineering
+	// role — a role-less ticket (single-tracker default) plans, it never skips
+	// planning just because its tracker kind is not Shortcut ([SC-254]).
 	var prompt string
 	switch {
 	case sel.Issue.IsBug():
 		prompt = "/human-bug-plan " + sel.Issue.Key
-	case sel.TrackerKind == "shortcut":
-		prompt = "/human-plan " + sel.Issue.Key
-	default:
+	case inferRole(sel.TrackerKind) == "engineering" || sel.TrackerRole == "engineering":
 		prompt = "/human-execute " + sel.Issue.Key
+	default:
+		prompt = "/human-plan " + sel.Issue.Key
 	}
 
 	name := nextAgentName()
@@ -2019,16 +2023,16 @@ func fromDaemonResults(results []daemon.TrackerIssuesResult) []trackerIssues {
 
 // --- render: issues ---
 
-// inferRole returns a role based on tracker kind when no explicit role is configured.
+// inferRole mirrors tracker.Instance.InferRole() for the render paths that only
+// carry the tracker kind + role as strings (pipelineStage/pipelineName). Only pm
+// is inferred; engineering is never inferred from kind, so a role-less Linear
+// tracker shows its own kind label rather than being treated as engineering
+// ([SC-254]).
 func inferRole(trackerKind string) string {
-	switch trackerKind {
-	case "shortcut":
+	if trackerKind == "shortcut" {
 		return "pm"
-	case "linear":
-		return "engineering"
-	default:
-		return ""
 	}
+	return ""
 }
 
 // pipelineStage maps a tracker role and status type to a human-readable

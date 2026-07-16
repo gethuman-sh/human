@@ -430,7 +430,8 @@ func TestBuildTrackerCmd_FindLoaderError(t *testing.T) {
 func TestRunTrackerList_InferredRole(t *testing.T) {
 	instances := []tracker.Instance{
 		{Name: "pm", Kind: "shortcut", URL: "https://shortcut.com"},
-		{Name: "eng", Kind: "linear", URL: "https://linear.app"},
+		{Name: "bare", Kind: "linear", URL: "https://linear.app"},
+		{Name: "eng", Kind: "linear", URL: "https://linear.app", Role: "engineering"},
 		{Name: "custom", Kind: "jira", URL: "https://jira.example.com", Role: "pm"},
 	}
 	var buf bytes.Buffer
@@ -438,9 +439,13 @@ func TestRunTrackerList_InferredRole(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buf.String()
-	// Shortcut infers "pm", Linear infers "engineering", Jira has explicit "pm"
+	// Shortcut still infers "pm" and Jira carries an explicit "pm"; a role-less
+	// Linear tracker no longer infers "engineering" ([SC-254]) — the engineering
+	// role appears only for the tracker that sets it explicitly.
 	assert.Contains(t, out, `"role": "pm"`)
 	assert.Contains(t, out, `"role": "engineering"`)
+	// The bare Linear tracker must not carry an inferred role.
+	assert.Regexp(t, `"name": "bare",[\s\S]*?"type": "linear",[\s\S]*?"description"`, out)
 }
 
 // --- Multiple instances mapping ---
