@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -551,4 +552,56 @@ func TestApplyFixLaunchFailurePostsFailedMarker(t *testing.T) {
 	require.Len(t, c.added, 2)
 	assert.Equal(t, ImplementationStartedHeader, c.added[0])
 	assert.True(t, strings.HasPrefix(c.added[1], ImplementationFailedHeader))
+}
+
+// gateProbeDeployer reports when a pipeline enters the forge and holds it
+// there until released, so a test can observe whether a second pipeline gets
+// in while the first is still deploying.
+type gateProbeDeployer struct {
+	started chan string
+	release chan struct{}
+}
+
+func (f *gateProbeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResult, error) {
+	f.started <- req.Branch
+	<-f.release
+	return PRResult{Number: 1, URL: "pr"}, nil
+}
+
+func (f *gateProbeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (forge.ChecksState, error) {
+	return forge.ChecksPassing, nil
+}
+
+func (f *gateProbeDeployer) MergePullRequest(_ context.Context, _ string, _ int) error { return nil }
+
+func (f *gateProbeDeployer) DeleteRemoteBranch(_ context.Context, _, _ string) error { return nil }
+
+func TestDeploysQueueOneAtATime(t *testing.T) {
+	// Regression (SC-296): the Deploy button ships every ready fix at once.
+	// Concurrent pipelines race the mainline — the first merge moves the base
+	// branch and the forge rejects the rest ("base branch was modified") — so
+	// pipelines must queue: the second may not enter the forge while the first
+	// is still deploying.
+	f := &gateProbeDeployer{started: make(chan string, 2), release: make(chan struct{})}
+	deps := BoardTransitionDeps{Commenter: &fakeCommenter{}, Deployer: f, WorkspaceDir: "/ws", ConfigDir: "/ws"}
+
+	var done sync.WaitGroup
+	done.Add(2)
+	for _, branch := range []string{"autofix/one", "autofix/two"} {
+		go func(b string) {
+			defer done.Done()
+			deps.deploy(context.Background(), BoardTransitionRequest{PMKey: "SC-9"}, BoardCard{Branch: b})
+		}(branch)
+	}
+
+	first := <-f.started
+	select {
+	case second := <-f.started:
+		t.Fatalf("deploy of %s entered the forge while %s was still deploying", second, first)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(f.release)
+	assert.NotEqual(t, first, <-f.started, "the queued deploy must run after the first lands")
+	done.Wait()
 }

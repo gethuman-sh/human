@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
@@ -254,9 +255,21 @@ func (d BoardTransitionDeps) runDoneStage(ctx context.Context, req BoardTransiti
 	return nil
 }
 
+// deployGate queues deploy pipelines: the Deploy button ships every ready fix
+// in one click, and concurrent pipelines race each other onto the mainline —
+// the first merge moves the base branch and the forge rejects the rest
+// ("base branch was modified"), redding cards whose fixes are perfectly fine.
+// One deploy at a time, each waiting for the previous one to land, is the
+// queue the button implies (SC-296).
+var deployGate sync.Mutex
+
 // deploy walks the pipeline to its end. It runs detached from the transition
-// request (whose context dies with the connection), bounded by deployTimeout.
+// request (whose context dies with the connection), bounded by deployTimeout —
+// the clock starts when the deploy leaves the queue, so a queued deploy never
+// pays for its predecessors' CI waits.
 func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequest, card BoardCard) {
+	deployGate.Lock()
+	defer deployGate.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, deployTimeout)
 	defer cancel()
 
