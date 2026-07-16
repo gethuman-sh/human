@@ -14,7 +14,7 @@ require (
 	github.com/google/go-containerregistry v0.21.7
 	github.com/hanwen/go-fuse/v2 v2.10.1
 	github.com/microcosm-cc/bluemonday v1.0.27
-	github.com/odvcencio/gotreesitter v0.23.1
+	github.com/odvcencio/gotreesitter v0.37.0
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/afero v1.15.0
 	github.com/spf13/cobra v1.10.2
