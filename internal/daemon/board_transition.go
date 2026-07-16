@@ -204,8 +204,15 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 	if card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false); card.State == BoardRunning {
 		return nil
 	}
+	// The --board marker is the mechanical gate that keeps a board run from
+	// pushing: the container holds no push/PR credentials, and the daemon's
+	// Deploy stage owns push → PR → CI → merge on the host against the
+	// bind-mounted repo. The skill and fixer branch on this flag to stop at the
+	// review handoff. Relying on the HUMAN_AGENT_NAME env var alone let a fixer
+	// push and fail — the fix completed and passed review but the card ended red
+	// (SC-252).
 	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-		"/human-autofix "+req.PMKey)
+		"/human-autofix "+req.PMKey+" --board")
 }
 
 // startAgentStage posts the stage's started marker, then launches the agent. On

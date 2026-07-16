@@ -10,7 +10,7 @@ Point this skill at a bug ticket and it runs the full bug-fix pipeline autonomou
 
 The run does **not** end at the review handoff: exactly like the kanban flow — where a clean build chains straight into its review and Deploy ships it — the skill chains the fix into a review by the **human-reviewer** agent and, when the verdict is a pass, drives the same deploy pipeline the board's Deploy stage runs (push → PR → CI gate → merge → close). A failing review or a red CI gate stops the run honestly with the handoff left standing for a human.
 
-**Board-context exception**: when this skill runs *as a board stage agent* (the `HUMAN_AGENT_NAME` environment variable is set and starts with `board-`), the daemon already chains the review on agent exit and the Bugs pane's Deploy button owns shipping — end at the handoff (Step 7.1) and skip Steps 7.2–8, or the review would run twice.
+**Board-context exception**: when `<BOARD_CONTEXT>` is true (the skill was launched with `--board`; the `HUMAN_AGENT_NAME` env var starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The daemon already chains the review on agent exit and the Bugs pane's Deploy button owns shipping, and the container holds no push/PR credentials — end at the handoff (Step 7.1) and skip the push-verification and Steps 7.2–8 entirely, or the review would run twice and the credential-less push would fail the run.
 
 This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — reach a verdict and act on it (SC-86: "no further input"). Every run ends in exactly one verdict: **confirmed**, **not-a-bug**, or **undetermined**.
 
@@ -18,7 +18,9 @@ Follow these steps in order.
 
 ## Step 1 — Parse argument
 
-`$ARGUMENTS` is the bug ticket key — the PM ticket. Call it `<BUG_KEY>`. Resolve its tracker with `human tracker list` (or just use `human get <BUG_KEY>` when only one tracker type is configured). Call the tracker `<tracker>`.
+`$ARGUMENTS` is the bug ticket key — the PM ticket — optionally followed by `--board`. Take the first non-flag token as `<BUG_KEY>`. Resolve its tracker with `human tracker list` (or just use `human get <BUG_KEY>` when only one tracker type is configured). Call the tracker `<tracker>`.
+
+If `$ARGUMENTS` contains `--board`, set `<BOARD_CONTEXT>` = true, otherwise false. `<BOARD_CONTEXT>` is the daemon's **mechanical** board signal: the container holds no push/PR credentials and a board run must stop at the review handoff — it must never push, open, or merge a PR. The daemon's Deploy stage owns push → PR → CI → merge on the host against the bind-mounted repo. Branch on `<BOARD_CONTEXT>` wherever the deploy path would push or ship (do not rely on the agent noticing the `HUMAN_AGENT_NAME` env var).
 
 ## Step 2 — Phase 1: Triage & reproduce (verdict)
 
@@ -77,13 +79,19 @@ Verify with `human plan show <BUG_KEY>` — the fixer and verify agents read the
 
 ## Step 5 — Phase 3: Test-first fix
 
-Delegate to the **human-bug-fixer** agent:
+Delegate to the **human-bug-fixer** agent. When `<BOARD_CONTEXT>` is true the fixer must NOT push — the board container has no push credentials and Deploy owns shipping — so forward the board instruction explicitly in the dispatch prompt (the fixer cannot see `$ARGUMENTS`):
+
+```
+Task(subagent_type="human-bug-fixer", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch. BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. Report the local branch name.")
+```
+
+Otherwise (standalone, `<BOARD_CONTEXT>` false) dispatch the existing push prompt:
 
 ```
 Task(subagent_type="human-bug-fixer", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch and push it.")
 ```
 
-It creates branch `autofix/<work-key>` (the key lowercased), writes a regression test that **fails** because of the bug, implements the root-cause fix, confirms the suite is green, commits referencing the ticket trail (both keys in split topology, the single bug key otherwise), pushes the branch, and returns the branch name. If it reports it could not reach a green build/test, STOP and report — do not open a PR.
+It creates branch `autofix/<work-key>` (the key lowercased), writes a regression test that **fails** because of the bug, implements the root-cause fix, confirms the suite is green, commits referencing the ticket trail (both keys in split topology, the single bug key otherwise), and returns the branch name. In a standalone run it pushes the branch; in board context it leaves the branch local (the bind-mounted host repo) and returns its name without pushing. If it reports it could not reach a green build/test, STOP and report — do not open a PR.
 
 ## Step 6 — Phase 4: Verify (done gate)
 
@@ -113,9 +121,9 @@ HANDOFF_EOF
 )"
 ```
 
-Make sure the branch is pushed (Step 5 pushes it; verify with `git ls-remote --heads origin autofix/<work-key>`). If the handoff comment cannot be posted, STOP with an honest status report — **do not report success**.
+Standalone only (`<BOARD_CONTEXT>` false): make sure the branch is pushed (Step 5 pushes it; verify with `git ls-remote --heads origin autofix/<work-key>`). When `<BOARD_CONTEXT>` is true the branch is intentionally local (the bind-mounted host repo where Deploy picks it up) — do NOT run `git ls-remote` and do NOT push. If the handoff comment cannot be posted, STOP with an honest status report — **do not report success**.
 
-**Board-context exception applies here**: if `HUMAN_AGENT_NAME` starts with `board-`, STOP after this handoff (report per Step 9) — the daemon chains the review and the Deploy button ships it.
+**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, STOP after this handoff (report per Step 9) — do NOT run push-verification, Steps 7.2–7.3 (review), or Step 8 (deploy), which require credentials the board container lacks. The daemon chains the review and the Deploy button ships it.
 
 ### 7.2 Review by the reviewer agent
 

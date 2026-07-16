@@ -479,12 +479,29 @@ func TestApplyFixLaunchesAutofix(t *testing.T) {
 	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9", PMTitle: "Crash on save"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, l.calls)
-	assert.Equal(t, "/human-autofix SC-9", l.prompt)
+	assert.Equal(t, "/human-autofix SC-9 --board", l.prompt)
 	// The implementation-stage agent name keeps the failure watcher and the
 	// build→review chain working on bug fixes unchanged.
 	assert.Equal(t, "board-SC-9-implementation", l.name)
 	require.Len(t, c.added, 1)
 	assert.Equal(t, ImplementationStartedHeader, c.added[0])
+}
+
+func TestApplyFixLaunchPromptCarriesBoardMarker(t *testing.T) {
+	// Regression (SC-252): a board-launched autofix must never push or open a
+	// PR from its credential-less container — the daemon's Deploy stage owns
+	// push+PR+merge. Board context must be a MECHANICAL signal the skill and
+	// fixer branch on, injected into the launch prompt, not left to the agent
+	// noticing HUMAN_AGENT_NAME. Assert the launch prompt carries the explicit
+	// --board marker so the skill stops at the handoff and the fixer leaves the
+	// branch local.
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9", PMTitle: "Crash on save"})
+	require.NoError(t, err)
+	assert.Contains(t, l.prompt, "--board",
+		"board-launched autofix prompt must carry an explicit board marker so push/PR are skipped")
 }
 
 func TestApplyFixIdempotentWhileRunning(t *testing.T) {
@@ -522,7 +539,7 @@ func TestApplyFixRelaunchAfterFailedReview(t *testing.T) {
 	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, l.calls)
-	assert.Equal(t, "/human-autofix SC-9", l.prompt)
+	assert.Equal(t, "/human-autofix SC-9 --board", l.prompt)
 }
 
 func TestApplyFixLaunchFailurePostsFailedMarker(t *testing.T) {
