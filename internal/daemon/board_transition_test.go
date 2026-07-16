@@ -413,6 +413,21 @@ func TestApplyTransitionReworkAfterFailedVerdict(t *testing.T) {
 	assert.Contains(t, c.added, ImplementationStartedHeader)
 }
 
+func TestApplyTransitionReworkAllowedWhenNoBranchRecorded(t *testing.T) {
+	// Regression (SC-297): a passed review whose run never recorded a branch
+	// has nothing to ship — the only repair is a rebuild, so the backward move
+	// onto the build stage must be allowed exactly like a failed verdict.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:review-complete]\nverdict: pass", time.Unix(1, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardImplementation})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Contains(t, l.prompt, "/human-execute SC-1")
+}
+
 func TestApplyTransitionReworkRejectedWithoutFailedVerdict(t *testing.T) {
 	// Backward to implementation stays forbidden when the review passed.
 	c := &fakeCommenter{comments: []tracker.Comment{

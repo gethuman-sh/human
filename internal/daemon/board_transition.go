@@ -334,12 +334,14 @@ func dispatchKey(pmKey string, card BoardCard) string {
 }
 
 // isReworkTransition reports the one allowed backward move: re-running the
-// build on a card whose review returned a failing verdict.
+// build on a card whose review returned a failing verdict — or whose review
+// passed without a recorded branch, which has nothing to ship and can only be
+// repaired by rebuilding (SC-297).
 func isReworkTransition(to BoardStage, card BoardCard) bool {
 	return to == BoardImplementation &&
 		card.Stage == BoardVerification &&
 		card.State == BoardDone &&
-		VerdictFailed(card.Verdict)
+		(VerdictFailed(card.Verdict) || card.Branch == "")
 }
 
 // doneBody builds the PR description with the PM→engineering→branch trail.
