@@ -56,6 +56,7 @@ func (s *Server) handleBugCreate(conn net.Conn, args []string) {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
+	s.pokeBoard()
 	data, err := json.Marshal(created)
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
