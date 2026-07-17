@@ -143,6 +143,37 @@ func TestApplyTransitionGatedBlock(t *testing.T) {
 	assert.Zero(t, l.calls)
 }
 
+func TestApplyTransitionRetriesFailedPlanning(t *testing.T) {
+	// The "Retry plan" gesture targets planning while the card already derives
+	// to planning/failed — the forward-only rule alone rejects that, leaving
+	// the gesture dead (SC-355). A failed planning card must relaunch planning.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:planning-started]", time.Unix(1, 0)),
+		cmt("[human:planning-failed]\nagent exited without completing the stage", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardPlanning})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-plan SC-1", l.prompt)
+	assert.Equal(t, "board-SC-1-planning", l.name)
+	require.Len(t, c.added, 1)
+	assert.Equal(t, PlanningStartedHeader, c.added[0])
+}
+
+func TestApplyTransitionRunningPlanningNotRelaunched(t *testing.T) {
+	// Contract pin: retry is for FAILED planning only — a running planning
+	// card hits the idempotency guard and must not spawn a second agent.
+	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:planning-started]", time.Unix(1, 0))}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardPlanning})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+	assert.Empty(t, c.added)
+}
+
 func TestApplyTransitionBacklogToPlanning(t *testing.T) {
 	c := &fakeCommenter{}
 	l := &fakeLauncher{}

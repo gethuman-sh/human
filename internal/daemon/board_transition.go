@@ -147,6 +147,16 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first")
 	}
 
+	// Planning retry: a failed planning run is relaunched in place. The retry
+	// gesture targets planning while the card already derives to planning, so
+	// the single-step rule below would reject it and the gesture would launch
+	// nothing (SC-355). A RUNNING planning card never reaches this path — the
+	// idempotency guard above already returned for it.
+	if isPlanningRetry(req.To, card) {
+		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
+			"/human-plan "+req.PMKey)
+	}
+
 	// Forward-only, single-next-stage: the target must be exactly one rank
 	// above the current derived stage.
 	if stageRank[req.To] != stageRank[card.Stage]+1 {
@@ -168,6 +178,13 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 			"pm", req.PMKey, "verdict", card.Verdict)
 	}
 
+	return d.launchForwardStage(ctx, req, card)
+}
+
+// launchForwardStage dispatches an already-sanctioned forward transition to
+// its stage launcher. Split from ApplyTransition so the gate chain and the
+// dispatch read (and count) as separate concerns.
+func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) error {
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
@@ -396,6 +413,15 @@ func isReworkTransition(to BoardStage, card BoardCard) bool {
 		card.Stage == BoardVerification &&
 		card.State == BoardDone &&
 		(VerdictFailed(card.Verdict) || card.Branch == "")
+}
+
+// isPlanningRetry reports the second sanctioned non-forward move: relaunching
+// planning on a card whose planning run failed. Failed-state only — a running
+// planning card is protected by ApplyTransition's idempotency guard (SC-355).
+func isPlanningRetry(to BoardStage, card BoardCard) bool {
+	return to == BoardPlanning &&
+		card.Stage == BoardPlanning &&
+		card.State == BoardFailed
 }
 
 // doneBody builds the PR description with the PM→engineering→branch trail.
