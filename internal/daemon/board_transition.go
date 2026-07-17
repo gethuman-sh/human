@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -70,6 +72,10 @@ type BoardTransitionDeps struct {
 	CloseTicket  func(pmKey string) error
 	WorkspaceDir string
 	ConfigDir    string
+	// Logger records best-effort post-merge failures (e.g. a failed automated
+	// close). The zero value is a safe no-op writer, so an un-wired path stays
+	// valid without a logger.
+	Logger zerolog.Logger
 }
 
 // sanitizeRe drops characters that are invalid in an agent name (alphanumeric,
@@ -299,12 +305,40 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 		return
 	}
 	// Past the merge the work IS shipped: branch cleanup and the ticket close
-	// are best-effort and must never turn the card red.
+	// are best-effort and must never turn the card red. Best-effort here means
+	// recorded-and-surfaced, not silent: a failed close leaves the card in the
+	// board's Fix column (the frontend only drops a card once the ticket leaves
+	// the tracker's open list), so the operator must see it and close by hand.
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, card.Branch)
 	_, _ = d.Commenter.AddComment(ctx, req.PMKey, DeployedHeader+"\npr: "+res.URL)
-	if d.CloseTicket != nil {
-		_ = d.CloseTicket(req.PMKey)
+	d.closeTicketBestEffort(req.PMKey)
+}
+
+// closeTicketBestEffort runs the automated post-merge close. It never fails the
+// deploy: on error it retries once (most close failures are transient tracker
+// blips), then — if still failing — logs at warn and posts a [human:close-failed]
+// marker so the shipped-but-open card is flagged for manual close. The marker is
+// deliberately non-stage (see CloseFailedHeader), so the card stays green.
+func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
+	if d.CloseTicket == nil {
+		return
 	}
+	err := d.CloseTicket(pmKey)
+	if err != nil {
+		// One immediate retry recovers transient tracker errors.
+		err = d.CloseTicket(pmKey)
+	}
+	if err == nil {
+		return
+	}
+	d.Logger.Warn().Err(err).Str("pm", pmKey).
+		Msg("automated post-merge ticket close failed; card flagged for manual close")
+
+	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	body := CloseFailedHeader + "\ndeployed, but the automated close of " + pmKey +
+		" failed: " + err.Error() + "\nclose this ticket manually to clear the card."
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
 }
 
 // waitForChecks blocks until the PR's CI verdict is conclusive. Passing
