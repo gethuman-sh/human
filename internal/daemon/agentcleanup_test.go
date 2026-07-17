@@ -49,7 +49,9 @@ func (c *countingCleaner) DeleteAgent(_ context.Context, name string) error {
 	return nil
 }
 
-func (c *countingCleaner) DecommissionAgent(name string) (string, error) { return "container-" + name, nil }
+func (c *countingCleaner) DecommissionAgent(name string) (string, error) {
+	return "container-" + name, nil
+}
 
 func (c *countingCleaner) StopContainer(_ context.Context, _ string) error { return nil }
 
