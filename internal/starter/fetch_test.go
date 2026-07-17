@@ -249,9 +249,16 @@ func TestFetchEntrySizeCap(t *testing.T) {
 	})
 	stubDownload(t, http.StatusOK, archive)
 
-	_, err := Fetch(context.Background(), webGoTemplate(), t.TempDir())
+	dest := t.TempDir()
+	_, err := Fetch(context.Background(), webGoTemplate(), dest)
 	if err == nil || !strings.Contains(err.Error(), "size limit") {
 		t.Fatalf("expected size-limit error, got %v", err)
+	}
+	// A rejected oversized entry must not stay on disk — the outer loop opens
+	// with O_EXCL so a leftover would jam every subsequent Fetch on the same
+	// path.
+	if _, statErr := os.Stat(filepath.Join(dest, "huge.bin")); !os.IsNotExist(statErr) {
+		t.Fatalf("oversized entry left on disk: stat err = %v", statErr)
 	}
 }
 

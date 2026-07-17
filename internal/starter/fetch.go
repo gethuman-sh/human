@@ -152,16 +152,23 @@ func writeEntry(tr io.Reader, header *tar.Header, dest string, total *int64) (bo
 	n, err := io.Copy(f, io.LimitReader(tr, maxEntryBytes+1))
 	closeErr := f.Close()
 	if err != nil {
+		_ = os.Remove(dest)
 		return false, humanerrors.WrapWithDetails(err, "writing starter file", "path", dest)
 	}
 	if closeErr != nil {
+		_ = os.Remove(dest)
 		return false, humanerrors.WrapWithDetails(closeErr, "writing starter file", "path", dest)
 	}
+	// A rejected entry must not stay on disk: the outer loop opens with
+	// O_EXCL, so a leftover would jam every subsequent Fetch on the same path
+	// until the user cleaned it up manually.
 	if n > maxEntryBytes {
+		_ = os.Remove(dest)
 		return false, humanerrors.WithDetails("starter file exceeds size limit", "entry", header.Name, "limit", maxEntryBytes)
 	}
 	*total += n
 	if *total > maxTotalBytes {
+		_ = os.Remove(dest)
 		return false, humanerrors.WithDetails("starter archive exceeds size limit", "limit", maxTotalBytes)
 	}
 	return true, nil
