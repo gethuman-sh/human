@@ -10,3 +10,5 @@
 - List all agents with status and running time
 - Attach to a live agent to watch it work
 - Stop or delete an agent and its container
+- Keep a per-run execution log on the host — the launch (prompt, argv, model), the agent's full output stream, the Claude session transcript (copied out before the container is removed), and the outcome — so even a crashed or reaped run stays analyzable
+- Review past runs with `human agent logs <name>` (`--json` for raw records)
