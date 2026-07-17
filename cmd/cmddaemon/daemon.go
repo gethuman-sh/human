@@ -111,8 +111,8 @@ type daemonState struct {
 }
 
 // runMaintenanceLoop periodically cleans up stale pending confirmations and
-// prunes the stats and audit stores past their retention windows. It runs until
-// ctx is cancelled.
+// prunes the stats, audit, and agent-execution-log stores past their retention
+// windows. It runs until ctx is cancelled.
 func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore *daemon.PendingConfirmStore, statsStore *stats.StatsStore, auditStore *audit.Store) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -131,6 +131,9 @@ func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore
 				if _, pruneErr := auditStore.Prune(ctx); pruneErr != nil {
 					logger.Warn().Err(pruneErr).Msg("periodic audit prune failed")
 				}
+			}
+			if _, pruneErr := agent.PruneExecutions(); pruneErr != nil {
+				logger.Warn().Err(pruneErr).Msg("periodic agent execution log prune failed")
 			}
 		}
 	}
@@ -196,7 +199,9 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	vaultResolver := buildVaultResolver(projectRegistry, logger)
 
 	connTracker := daemon.NewConnectedTracker()
-	hookStore := daemon.NewHookEventStore()
+	// Persist hook events to the host so they survive the in-memory ring's
+	// eviction and daemon restarts, keyed to the emitting agent's execution log.
+	hookStore := daemon.NewHookEventStore().WithPersistence(agent.HookEventSink)
 	networkStore := daemon.NewNetworkEventStore()
 	confirmStore := daemon.NewPendingConfirmStore()
 
@@ -1304,6 +1309,18 @@ func (c *dockerAgentCleaner) DecommissionAgent(name string) (string, error) {
 		return "", err
 	}
 	containerID := meta.ContainerID
+	// The async decommission path force-removes the container by id via
+	// StopContainer *after* this function has deleted the meta, bypassing
+	// stopLocked's copy-out. Copy the transcript out and record the outcome here
+	// while the meta (and thus container id + agent name) still exists (SC-216).
+	if containerID != "" {
+		if docker, dErr := devcontainer.NewDockerClient(); dErr == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			agent.PreserveExecutionArtifacts(ctx, docker, meta, "reaped")
+			cancel()
+			_ = docker.Close()
+		}
+	}
 	_ = agent.DeleteMeta(name)
 	_ = devcontainer.DeleteMeta(name)
 	return containerID, nil

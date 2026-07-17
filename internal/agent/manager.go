@@ -85,14 +85,25 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 		return Meta{}, errors.WrapWithDetails(err, "starting agent container", "name", opts.Name)
 	}
 
+	var executionID string
 	if !opts.Interactive && opts.Prompt != "" {
-		if err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, opts); err != nil {
+		exe, err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, opts)
+		if err != nil {
 			// The agent process never started; don't leave a container tracked
 			// as a running agent. Best-effort teardown, then surface the error.
+			if exe != nil {
+				_ = exe.RecordOutcome(OutcomeRecord{
+					Reason: "failed", EndedAt: time.Now(),
+					DurationMs: time.Since(exe.Launch.StartedAt).Milliseconds(),
+				})
+			}
 			timeout := 10
 			_ = m.Docker.ContainerStop(ctx, dcMeta.ContainerID, &timeout)
 			_ = m.Docker.ContainerRemove(ctx, dcMeta.ContainerID, devcontainer.ContainerRemoveOptions{Force: true})
 			return Meta{}, errors.WrapWithDetails(err, "launching agent process", "name", opts.Name)
+		}
+		if exe != nil {
+			executionID = exe.Launch.ID
 		}
 	}
 
@@ -101,7 +112,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 		Cwd: workspace, Prompt: opts.Prompt,
 		Status: StatusRunning, CreatedAt: time.Now(), SkipPerms: opts.SkipPerms,
 		Model: opts.Model, ConfigDir: configDir, ImageName: dcMeta.ImageName,
-		RemoteUser: dcMeta.RemoteUser,
+		RemoteUser: dcMeta.RemoteUser, ExecutionID: executionID,
 	}
 	if err := WriteMeta(meta); err != nil {
 		return Meta{}, err
@@ -150,7 +161,7 @@ func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDi
 // (no intermediate shell), so multi-word prompts and shell metacharacters can
 // neither be word-split nor injected. Errors are returned so a failed launch is
 // not silently reported as a running agent.
-func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser string, opts StartOpts) error {
+func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser string, opts StartOpts) (*Execution, error) {
 	claudeArgs := m.BuildClaudeArgs(opts)
 	claudeArgs = append(claudeArgs, "-p", opts.Prompt)
 	cmd := append([]string{"claude"}, claudeArgs...)
@@ -159,16 +170,47 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 		Env: []string{"HUMAN_AGENT_NAME=" + opts.Name},
 	})
 	if err != nil {
-		return errors.WrapWithDetails(err, "creating agent exec")
+		return nil, errors.WrapWithDetails(err, "creating agent exec")
 	}
+
+	// Record the exact launch before detaching. A log-store failure must not
+	// block launching the agent — degrade to no tee rather than failing Start.
+	exe, logErr := NewExecution(LaunchRecord{
+		ID: newExecID(), Agent: opts.Name, Prompt: opts.Prompt,
+		Argv: cmd, Model: opts.Model, ContainerID: containerID, StartedAt: time.Now(),
+	})
+
 	// ExecAttach starts the exec; closing the hijacked stream detaches without
 	// stopping the process, which keeps running in the container.
 	attach, err := m.Docker.ExecAttach(ctx, execID)
 	if err != nil {
-		return errors.WrapWithDetails(err, "starting agent exec")
+		return exe, errors.WrapWithDetails(err, "starting agent exec")
 	}
-	_ = attach.Close()
-	return nil
+
+	if logErr == nil && exe != nil {
+		// The tee goroutine owns the attach and closes it on stream EOF (the
+		// exec exiting), so launch returns immediately while the detached
+		// stdout/stderr is durably persisted to the host.
+		go teeExecOutput(attach, exe)
+	} else {
+		_ = attach.Close()
+	}
+	return exe, nil
+}
+
+// teeExecOutput demuxes the detached agent's multiplexed stdout/stderr into the
+// execution's host output log until the stream ends (the exec exits), then
+// closes the attach. This is the durability path the detached launch never had:
+// without it the output is unrecoverable once the container is gone.
+func teeExecOutput(attach devcontainer.ExecAttachResponse, exe *Execution) {
+	defer func() { _ = attach.Close() }()
+	w, err := exe.OutputWriter()
+	if err != nil {
+		return
+	}
+	defer func() { _ = w.Close() }()
+	// stdout and stderr both go to the one host log; StdCopy demuxes the frames.
+	_, _ = devcontainer.StdCopy(w, w, attach.Reader)
 }
 
 // agentLocks serialises lifecycle operations per agent name. Stop/Delete can be
@@ -207,6 +249,10 @@ func (m *Manager) stopLocked(ctx context.Context, name string) error {
 	}
 
 	if meta.ContainerID != "" {
+		// Persist the transcript and outcome before the container (and its
+		// ~/.claude/projects transcript) are destroyed — the whole point of
+		// SC-216.
+		PreserveExecutionArtifacts(ctx, m.Docker, meta, stopReason(meta))
 		timeout := 10
 		_ = m.Docker.ContainerStop(ctx, meta.ContainerID, &timeout)
 		_ = m.Docker.ContainerRemove(ctx, meta.ContainerID, devcontainer.ContainerRemoveOptions{Force: true})
