@@ -3,7 +3,9 @@
 package cmdagent
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"text/tabwriter"
@@ -45,7 +47,80 @@ The container image is built once (with devcontainer features) and cached.`,
 	cmd.AddCommand(buildStopCmd())
 	cmd.AddCommand(buildListCmd())
 	cmd.AddCommand(buildAttachCmd())
+	cmd.AddCommand(buildLogsCmd())
 	return cmd
+}
+
+// buildLogsCmd exposes the per-execution log store for an agent, mirroring the
+// `human audit` UX. It reads directly from the host store (no daemon
+// forwarding): the same process that runs the container writes the log, and
+// agent logs carry no tracker-mutation constraint that would require the
+// daemon.
+func buildLogsCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "logs NAME",
+		Short: "Show recorded execution logs for an agent (launch, output, transcript, outcome)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			execs, err := agent.ListExecutions(args[0])
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if asJSON {
+				return writeJSON(out, execs)
+			}
+			if len(execs) == 0 {
+				_, _ = fmt.Fprintf(out, "no execution logs for agent %q\n", args[0])
+				return nil
+			}
+			renderExecutions(out, execs)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	return cmd
+}
+
+func writeJSON(out io.Writer, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling agent logs JSON")
+	}
+	_, _ = fmt.Fprintln(out, string(data))
+	return nil
+}
+
+// renderExecutions prints a fixed-width table of an agent's runs plus a hint on
+// where to read the raw output and transcript for each run.
+func renderExecutions(out io.Writer, execs []agent.ExecutionSummary) {
+	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "STARTED\tID\tMODEL\tREASON\tDURATION\tDIR")
+	for _, e := range execs {
+		reason, duration := "running", "-"
+		if e.Outcome != nil {
+			reason = e.Outcome.Reason
+			duration = agent.FormatDuration(time.Duration(e.Outcome.DurationMs) * time.Millisecond)
+		}
+		model := e.Launch.Model
+		if model == "" {
+			model = "-"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			e.Launch.StartedAt.Format("2006-01-02 15:04:05"),
+			shortID(e.Launch.ID), model, reason, duration, e.Dir)
+	}
+	_ = tw.Flush()
+	_, _ = fmt.Fprintf(out, "\nRead a run with: cat <DIR>/output.log  and browse <DIR>/transcript/\n")
+}
+
+// shortID trims an execution id to a display-friendly prefix.
+func shortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 func newManager(cmd *cobra.Command) (*agent.Manager, func(), error) {
