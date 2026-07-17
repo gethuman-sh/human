@@ -544,6 +544,24 @@ func TestApplyFixIdempotentWhileReviewRunning(t *testing.T) {
 	assert.Zero(t, l.calls)
 }
 
+func TestApplyFixIdempotentWithStaleDeployFailure(t *testing.T) {
+	// Regression (SC-230): a stale [human:deploy-failed] (older) pins
+	// DeriveBoardCard to the done stage's failed state, masking a live
+	// [human:implementation-started] (newer). The duplicate-launch guard must
+	// scan the implementation stage itself, so a Retry click while the fix
+	// agent runs is a no-op: zero launches, zero marker spam.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:deploy-failed]\nno forge configured", time.Unix(1, 0)),
+		cmt("[human:implementation-started]", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9"})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+	assert.Empty(t, c.added)
+}
+
 func TestApplyFixRelaunchAfterFailedReview(t *testing.T) {
 	// A bug pinned by a failing review verdict may be re-dropped onto Fix.
 	c := &fakeCommenter{comments: []tracker.Comment{

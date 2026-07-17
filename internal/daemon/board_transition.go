@@ -198,11 +198,18 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading PM comments for fix", "pm", req.PMKey)
 	}
-	// Idempotency: a re-drop while any stage agent (fix, review, deploy) is
-	// still running must not launch a second one — same intent as
-	// ApplyTransition's duplicate-drop guard, widened to the whole card
-	// because a bug fix chains straight into its review.
-	if card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false); card.State == BoardRunning {
+	// Idempotency: a re-drop or a Retry click while the fix agent — or the
+	// review it chains into — is still running must not launch a second one.
+	// This is stage-scoped (implementation, then the verification it chains
+	// into) rather than a whole-card check on purpose: DeriveBoardCard reports
+	// the FURTHEST stage's state, so a stale [human:deploy-failed] marker pins
+	// the card to done/failed and structurally hides a running re-fix from a
+	// whole-card guard (SC-230). latestStageState mirrors ApplyTransition's
+	// duplicate-drop guard and is immune to that masking.
+	if _, state := latestStageState(comments, BoardImplementation); state == BoardRunning {
+		return nil
+	}
+	if _, state := latestStageState(comments, BoardVerification); state == BoardRunning {
 		return nil
 	}
 	// The --board marker is the mechanical gate that keeps a board run from
