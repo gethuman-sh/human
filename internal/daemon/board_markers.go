@@ -69,6 +69,14 @@ const (
 // closing bracket keeps "[human:plan]" from matching "[human:plan-ready]".)
 const PlanCommentHeader = "[human:plan]"
 
+// CloseFailedHeader flags a ticket whose work shipped but whose automated
+// post-merge close failed. It is a surfaced operator signal, NOT a stage
+// transition: like PlanCommentHeader it is deliberately kept OUT of
+// orderedMarkerSpecs, so ClassifyMarker never classifies it and the card
+// stays green (deployed) while still carrying a visible "close this manually"
+// flag. Best-effort close means recorded-and-surfaced, never red, never silent.
+const CloseFailedHeader = "[human:close-failed]"
+
 // markerSpec maps a marker header to the (stage, state) it represents.
 type markerSpec struct {
 	Header string

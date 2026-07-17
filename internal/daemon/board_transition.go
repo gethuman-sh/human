@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -70,6 +72,10 @@ type BoardTransitionDeps struct {
 	CloseTicket  func(pmKey string) error
 	WorkspaceDir string
 	ConfigDir    string
+	// Logger records best-effort post-merge failures (e.g. a failed automated
+	// close). The zero value is a safe no-op writer, so an un-wired path stays
+	// valid without a logger.
+	Logger zerolog.Logger
 }
 
 // sanitizeRe drops characters that are invalid in an agent name (alphanumeric,
@@ -141,6 +147,16 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first")
 	}
 
+	// Planning retry: a failed planning run is relaunched in place. The retry
+	// gesture targets planning while the card already derives to planning, so
+	// the single-step rule below would reject it and the gesture would launch
+	// nothing (SC-355). A RUNNING planning card never reaches this path — the
+	// idempotency guard above already returned for it.
+	if isPlanningRetry(req.To, card) {
+		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
+			"/human-plan "+req.PMKey)
+	}
+
 	// Forward-only, single-next-stage: the target must be exactly one rank
 	// above the current derived stage.
 	if stageRank[req.To] != stageRank[card.Stage]+1 {
@@ -162,6 +178,13 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 			"pm", req.PMKey, "verdict", card.Verdict)
 	}
 
+	return d.launchForwardStage(ctx, req, card)
+}
+
+// launchForwardStage dispatches an already-sanctioned forward transition to
+// its stage launcher. Split from ApplyTransition so the gate chain and the
+// dispatch read (and count) as separate concerns.
+func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) error {
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
@@ -299,12 +322,40 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 		return
 	}
 	// Past the merge the work IS shipped: branch cleanup and the ticket close
-	// are best-effort and must never turn the card red.
+	// are best-effort and must never turn the card red. Best-effort here means
+	// recorded-and-surfaced, not silent: a failed close leaves the card in the
+	// board's Fix column (the frontend only drops a card once the ticket leaves
+	// the tracker's open list), so the operator must see it and close by hand.
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, card.Branch)
 	_, _ = d.Commenter.AddComment(ctx, req.PMKey, DeployedHeader+"\npr: "+res.URL)
-	if d.CloseTicket != nil {
-		_ = d.CloseTicket(req.PMKey)
+	d.closeTicketBestEffort(req.PMKey)
+}
+
+// closeTicketBestEffort runs the automated post-merge close. It never fails the
+// deploy: on error it retries once (most close failures are transient tracker
+// blips), then — if still failing — logs at warn and posts a [human:close-failed]
+// marker so the shipped-but-open card is flagged for manual close. The marker is
+// deliberately non-stage (see CloseFailedHeader), so the card stays green.
+func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
+	if d.CloseTicket == nil {
+		return
 	}
+	err := d.CloseTicket(pmKey)
+	if err != nil {
+		// One immediate retry recovers transient tracker errors.
+		err = d.CloseTicket(pmKey)
+	}
+	if err == nil {
+		return
+	}
+	d.Logger.Warn().Err(err).Str("pm", pmKey).
+		Msg("automated post-merge ticket close failed; card flagged for manual close")
+
+	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	body := CloseFailedHeader + "\ndeployed, but the automated close of " + pmKey +
+		" failed: " + err.Error() + "\nclose this ticket manually to clear the card."
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
 }
 
 // waitForChecks blocks until the PR's CI verdict is conclusive. Passing
@@ -362,6 +413,15 @@ func isReworkTransition(to BoardStage, card BoardCard) bool {
 		card.Stage == BoardVerification &&
 		card.State == BoardDone &&
 		(VerdictFailed(card.Verdict) || card.Branch == "")
+}
+
+// isPlanningRetry reports the second sanctioned non-forward move: relaunching
+// planning on a card whose planning run failed. Failed-state only — a running
+// planning card is protected by ApplyTransition's idempotency guard (SC-355).
+func isPlanningRetry(to BoardStage, card BoardCard) bool {
+	return to == BoardPlanning &&
+		card.Stage == BoardPlanning &&
+		card.State == BoardFailed
 }
 
 // doneBody builds the PR description with the PM→engineering→branch trail.

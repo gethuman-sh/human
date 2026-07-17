@@ -13,6 +13,7 @@ import { initPermissions } from "./permissions.js";
 import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsview.js";
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, } from "./board-queue.js";
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
 // webview (WebKitGTK swallows the new-window request), so every external
@@ -41,7 +42,6 @@ function openExternal(url) {
 // terminal drop zone that merges the work into main (after CI passes) and
 // closes the ticket, so shipped work simply leaves the board. ("building"
 // stays the internal queue id so theme hooks don't churn on a label.)
-const QUEUES = ["ideas", "product", "engineering", "building", "deploy"];
 const QUEUE_LABELS = {
     ideas: "Ideas",
     product: "Product backlog",
@@ -63,13 +63,6 @@ function ideaColOf(card) {
     const col = card.ideaColumn ?? 0;
     return Math.min(Math.max(col, 0), IDEA_COL_COUNT - 1);
 }
-// Wire stage launched by dropping onto a queue from its predecessor. Queues
-// missing here (ideas, deploy) accept no queue-transition drop at all — cards
-// reach Ready to Deploy only by passing review.
-const QUEUE_TRANSITION_TO = {
-    engineering: "planning",
-    building: "implementation",
-};
 // The verb shown on a drop target while a drag hovers it — the action lives
 // on the thing being touched, never in the column title.
 const QUEUE_VERB = {
@@ -85,34 +78,6 @@ const RUNNING_LABELS = {
     verification: "reviewing…",
     done: "deploying…",
 };
-// verdictFailed mirrors the daemon's VerdictFailed: only an explicit failing
-// verdict blocks — absence is not failure.
-function verdictFailed(verdict) {
-    return (verdict ?? "").trim().toLowerCase().startsWith("fail");
-}
-// queueOf maps the wire (stage, state) onto the column whose name is true of
-// the card. The whole build-and-review cycle lives in the Code lane —
-// including a review that found problems, and a review with no recorded
-// branch (nothing to ship), because those cards are NOT ready to deploy;
-// only a passing review of a recorded branch releases one.
-function queueOf(card) {
-    switch (card.stage) {
-        case "ideas":
-            return "ideas";
-        case "backlog":
-            return "product";
-        case "planning":
-            return card.state === "done" ? "engineering" : "product";
-        case "implementation":
-            return "building";
-        case "verification":
-            return card.state === "done" && !verdictFailed(card.verdict) && !!card.branch ? "deploy" : "building";
-        case "done":
-            return "deploy";
-        default:
-            return "product";
-    }
-}
 let current = { cards: [], dockerAvailable: true, error: "" };
 let dragging = null;
 // Two-phase load state. boardLoading covers the first fetch before any titles
@@ -131,12 +96,6 @@ function go() {
     if (!app)
         throw new Error("Wails bindings not available");
     return app;
-}
-function queueIndex(queue) {
-    return QUEUES.indexOf(queue);
-}
-function isNextQueue(fromQueue, toQueue) {
-    return queueIndex(toQueue) === queueIndex(fromQueue) + 1;
 }
 // targetEnabled gates agent-launching drops on Docker availability; every
 // queue transition except idea promotion launches a containerized agent.
@@ -249,6 +208,26 @@ function showCardMenu(card, x, y) {
             void fixBug(card.key, card.title);
         });
         menu.appendChild(retryItem);
+    }
+    // A failed planning run leaves the card in Engineering with no pipeline gesture
+    // to try again — it cannot be dropped onto the column it already sits in
+    // (mirrors the Retry-fix rationale above). Relaunch runs an agent: same Docker
+    // gate as the drops. from="backlog" reproduces the original launch semantics;
+    // the daemon re-derives the real stage and ignores from except for ideas, so
+    // the value is inert for validation.
+    if (!card.bug && card.stage === "planning" && card.state === "failed") {
+        const retryPlan = document.createElement("button");
+        retryPlan.type = "button";
+        retryPlan.className = "context-menu-item";
+        retryPlan.textContent = "Retry plan";
+        retryPlan.disabled = !current.dockerAvailable;
+        if (retryPlan.disabled)
+            retryPlan.title = "Docker required";
+        retryPlan.addEventListener("click", () => {
+            menu.remove();
+            void transition(card.key, card.title, "backlog", "planning");
+        });
+        menu.appendChild(retryPlan);
     }
     // Mockups belong to the product conversation: the item appears only in the
     // Product backlog column, toggling create → creating → view as the local
@@ -742,11 +721,6 @@ function dropTargetAt(x, y) {
 function isReadyToDeploy(card) {
     return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict) && !!card.branch;
 }
-// isReworkable reports a card pinned in Code by a failing review verdict or a
-// missing branch; a re-drop onto Code (or Fix, for bugs) rebuilds it.
-function isReworkable(card) {
-    return card.stage === "verification" && card.state === "done" && (verdictFailed(card.verdict) || !card.branch);
-}
 // dropAllowed reports whether the dragged card may drop on target. Queue
 // targets keep the forward-adjacency + docker-enabled rules, evaluated on the
 // card's RESTING queue so a running card cannot double-launch; the one
@@ -777,9 +751,9 @@ function dropAllowed(target) {
         return bugAreaOf(card) === "grid" || isReworkable(card);
     }
     const toQueue = target.dataset.dropQueue || "";
-    if (toQueue === "building" && isReworkable(card))
-        return targetEnabled(toQueue);
-    return isNextQueue(queueOf(card), toQueue) && targetEnabled(toQueue);
+    // forwardDropAllowed owns forward-adjacency, the Code rework re-drop, and the
+    // Engineering->Code plan-ready gate; targetEnabled keeps the local Docker gate.
+    return forwardDropAllowed(card, toQueue) && targetEnabled(toQueue);
 }
 // setHoverTarget moves the highlight to a new target (clearing the previous),
 // so exactly one drop zone is lit at a time.

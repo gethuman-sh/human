@@ -143,6 +143,37 @@ func TestApplyTransitionGatedBlock(t *testing.T) {
 	assert.Zero(t, l.calls)
 }
 
+func TestApplyTransitionRetriesFailedPlanning(t *testing.T) {
+	// The "Retry plan" gesture targets planning while the card already derives
+	// to planning/failed — the forward-only rule alone rejects that, leaving
+	// the gesture dead (SC-355). A failed planning card must relaunch planning.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:planning-started]", time.Unix(1, 0)),
+		cmt("[human:planning-failed]\nagent exited without completing the stage", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardPlanning})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-plan SC-1", l.prompt)
+	assert.Equal(t, "board-SC-1-planning", l.name)
+	require.Len(t, c.added, 1)
+	assert.Equal(t, PlanningStartedHeader, c.added[0])
+}
+
+func TestApplyTransitionRunningPlanningNotRelaunched(t *testing.T) {
+	// Contract pin: retry is for FAILED planning only — a running planning
+	// card hits the idempotency guard and must not spawn a second agent.
+	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:planning-started]", time.Unix(1, 0))}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardPlanning})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+	assert.Empty(t, c.added)
+}
+
 func TestApplyTransitionBacklogToPlanning(t *testing.T) {
 	c := &fakeCommenter{}
 	l := &fakeLauncher{}
@@ -220,6 +251,50 @@ func TestApplyTransitionDeploySuccess(t *testing.T) {
 	assert.Equal(t, "SC-1", closed)
 	assert.Contains(t, c.added, DeployStartedHeader)
 	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/7")
+}
+
+func TestApplyTransitionDeployCloseFails(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/11", Number: 11},
+		checks: []forge.ChecksState{forge.ChecksPassing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	var closeCalls int
+	deps.CloseTicket = func(pmKey string) error {
+		closeCalls++
+		return errors.New("tracker unavailable")
+	}
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+
+	// The deploy itself must succeed — the card never turns red.
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.merged)
+	// The work shipped: the deployed marker is still posted.
+	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/11")
+	// The close was attempted, retried once, then surfaced.
+	assert.Equal(t, 2, closeCalls)
+	// The failure is surfaced on the ticket, flagged for manual close.
+	var surfaced string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, CloseFailedHeader) {
+			surfaced = b
+		}
+	}
+	require.NotEmpty(t, surfaced, "expected a close-failed marker on the ticket")
+	assert.Contains(t, surfaced, "tracker unavailable")
+	assert.Contains(t, surfaced, "SC-1")
+	// The close-failed marker must NOT drive a stage/state transition (never reds).
+	_, _, ok := ClassifyMarker(surfaced)
+	assert.False(t, ok, "close-failed marker must not be a registered stage marker")
+}
+
+func TestCloseFailedHeaderUnregistered(t *testing.T) {
+	_, _, ok := ClassifyMarker(CloseFailedHeader)
+	assert.False(t, ok, "close-failed marker must never drive a stage/state transition")
 }
 
 func TestApplyTransitionDeployWaitsForPendingChecks(t *testing.T) {
