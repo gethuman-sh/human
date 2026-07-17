@@ -34,9 +34,16 @@ It posts a `[human:bug-verdict] <verdict>` comment on the bug ticket — the tic
 
 ## Step 3 — Verdict gate
 
-- **not-a-bug** — the agent has already posted its reasoning. Reclassify or close the ticket: discover statuses with `human <tracker> issue statuses <BUG_KEY>`, then move it with `human <tracker> issue status <BUG_KEY> "<closed-or-wontdo-status>"`. Make **no code changes**. Report and STOP.
-- **undetermined** — the agent has posted an honest status (e.g. could not reproduce). Make **no code changes**. Leave the ticket open for a human. Report and STOP.
+- **not-a-bug** — the agent has already posted its reasoning. Reclassify or close the ticket: discover statuses with `human <tracker> issue statuses <BUG_KEY>`, then move it with `human <tracker> issue status <BUG_KEY> "<closed-or-wontdo-status>"`. Make **no code changes**. Post the terminal marker `[human:no-fix-needed]` with `verdict: not-a-bug` on `<BUG_KEY>`, then Report and STOP.
+- **undetermined** — the agent has posted an honest status (e.g. could not reproduce). Make **no code changes**. Leave the ticket open for a human. Post the terminal marker `[human:no-fix-needed]` with `verdict: undetermined` on `<BUG_KEY>`, then Report and STOP.
 - **confirmed** — continue.
+
+The `[human:no-fix-needed]` marker is **mandatory in board context**: the autofix pipeline runs under the board implementation-stage agent name, whose failure watcher treats any exit with no `[human:ready-for-review]` handoff as a crash and would loop forever re-triaging. This terminal marker signals the clean, resolved stop (ticket 405). Body format:
+
+```
+[human:no-fix-needed]
+verdict: <not-a-bug | undetermined>
+```
 
 ## Step 4 — Phase 2: Plan (topology decides where it lives)
 
