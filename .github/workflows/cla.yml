@@ -28,7 +28,9 @@ jobs:
           path-to-signatures: signatures/cla.json
           path-to-document: https://github.com/gethuman-sh/human/blob/main/CLA.md
           branch: cla-signatures
-          # StephanSchmidt and the humanbot* machine identity are the project
-          # owner's own accounts — the CLA grants rights to the owner, so
-          # asking them to sign it would be circular.
-          allowlist: StephanSchmidt,humanbot*,dependabot[bot],github-actions[bot]
+          # Owner accounts only, and only by exact login: the CLA grants
+          # rights to the owner, so their own signature would be circular.
+          # No name patterns here — entries match GitHub logins (or bare git
+          # author names for unlinked commits), so a wildcard would let any
+          # similarly named account or spoofed git identity bypass the gate.
+          allowlist: StephanSchmidt,dependabot[bot],github-actions[bot]
