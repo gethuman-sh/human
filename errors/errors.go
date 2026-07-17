@@ -13,7 +13,7 @@ func LogError(err error) *zerolog.Event {
 	// tozd's Error() and %+v only expose the outermost wrap message, so the root
 	// cause (e.g. a Docker connection failure) is invisible to users unless we
 	// render the full chain ourselves.
-	return log.Error().Str("error", CauseChain(err)).Fields(goerrors.AllDetails(err))
+	return log.Error().Str("error", CauseChain(err)).Fields(AllDetails(err))
 }
 
 // CauseChain renders the full unwrapped error chain as "outer: inner: root".
@@ -63,8 +63,25 @@ func WrapWithDetails(err error, message string, details ...interface{}) error {
 	)
 }
 
+// AllDetails collects structured details from every level of the error chain,
+// walking past causer wraps that tozd's own AllDetails halts at. First writer
+// wins so an outer wrap's value shadows an inner one on key collision, matching
+// tozd's within-scope merge semantics.
 func AllDetails(err error) map[string]interface{} {
-	return goerrors.AllDetails(err)
+	res := make(map[string]interface{})
+	type detailer interface{ Details() map[string]interface{} }
+	for e := err; e != nil; e = stderrors.Unwrap(e) {
+		d, ok := e.(detailer)
+		if !ok {
+			continue
+		}
+		for key, value := range d.Details() {
+			if _, exists := res[key]; !exists {
+				res[key] = value
+			}
+		}
+	}
+	return res
 }
 
 func isFormatVerb(c byte) bool {

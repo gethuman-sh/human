@@ -30,6 +30,29 @@ func TestLogError_EmitsCauseChainAndDetails(t *testing.T) {
 	assert.Contains(t, out, "fix-bug")
 }
 
+func TestLogError_SurfacesWrappedDetails(t *testing.T) {
+	var buf bytes.Buffer
+	orig := log.Logger
+	log.Logger = zerolog.New(&buf)
+	defer func() { log.Logger = orig }()
+
+	// Mirrors the real production chain: exec failure (hooks.go:135) wrapped as
+	// "hook failed" (hooks.go:73) then "starting agent container" (manager.go:85).
+	err := WrapWithDetails(
+		WrapWithDetails(
+			WithDetails("exec failed", "exit_code", 1, "stderr", "boom"),
+			"hook failed"),
+		"starting agent container")
+
+	LogError(err).Msg("command failed")
+
+	out := buf.String()
+	// Inner diagnostics must ride along through both wraps.
+	assert.Contains(t, out, "exit_code")
+	assert.Contains(t, out, "stderr")
+	assert.Contains(t, out, "boom")
+}
+
 func TestCauseChain(t *testing.T) {
 	t.Run("nil error", func(t *testing.T) {
 		assert.Empty(t, CauseChain(nil))
@@ -55,6 +78,28 @@ func TestCauseChain(t *testing.T) {
 		// fmt.Errorf-style wrapping embeds the cause as a suffix.
 		fmtWrapped := fmt.Errorf("outer: %w", root)
 		assert.Equal(t, "outer: inner", CauseChain(fmtWrapped))
+	})
+}
+
+func TestAllDetails(t *testing.T) {
+	t.Run("walks full chain past causer wraps", func(t *testing.T) {
+		err := WrapWithDetails(WithDetails("inner", "stderr", "boom"), "wrap")
+		assert.Equal(t, "boom", AllDetails(err)["stderr"])
+	})
+
+	t.Run("first writer wins on key collision", func(t *testing.T) {
+		err := WrapWithDetails(WithDetails("inner", "k", "inner"), "outer", "k", "outer")
+		assert.Equal(t, "outer", AllDetails(err)["k"])
+	})
+
+	t.Run("nil error yields empty non-nil map", func(t *testing.T) {
+		got := AllDetails(nil)
+		assert.NotNil(t, got)
+		assert.Empty(t, got)
+	})
+
+	t.Run("non-detailer node yields empty map without panic", func(t *testing.T) {
+		assert.Empty(t, AllDetails(stderrors.New("plain")))
 	})
 }
 
