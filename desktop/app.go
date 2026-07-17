@@ -155,6 +155,11 @@ type IssueDetail struct {
 	Assignee        string `json:"assignee,omitempty"`
 	Description     string `json:"description,omitempty"`
 	DescriptionHTML string `json:"descriptionHTML,omitempty"`
+	// Comment-sourced sections the panel shows below the description, each
+	// daemon-rendered to sanitized HTML so the frontend injects them verbatim.
+	ReviewFindingsHTML string `json:"reviewFindingsHTML,omitempty"`
+	FailureReasonHTML  string `json:"failureReasonHTML,omitempty"`
+	FixSummaryHTML     string `json:"fixSummaryHTML,omitempty"`
 }
 
 // GetIssueDetail fetches one full ticket from the daemon. The detail panel
@@ -171,10 +176,13 @@ func (a *App) GetIssueDetail(trackerKind, trackerName, key string) (IssueDetail,
 		return IssueDetail{}, daemonCause(err)
 	}
 	return IssueDetail{
-		Title:           issue.Title,
-		Assignee:        issue.Assignee,
-		Description:     issue.Description,
-		DescriptionHTML: issue.DescriptionHTML,
+		Title:              issue.Title,
+		Assignee:           issue.Assignee,
+		Description:        issue.Description,
+		DescriptionHTML:    issue.DescriptionHTML,
+		ReviewFindingsHTML: issue.ReviewFindingsHTML,
+		FailureReasonHTML:  issue.FailureReasonHTML,
+		FixSummaryHTML:     issue.FixSummaryHTML,
 	}, nil
 }
 

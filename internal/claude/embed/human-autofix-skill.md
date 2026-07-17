@@ -137,7 +137,7 @@ human <tracker> issue comment add <BUG_KEY> "[human:review-started]"
 Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria.")
 ```
 
-The reviewer writes `.human/reviews/<work-key>.md`; the first line under its `## Summary` is the verdict — `pass`, `pass with notes`, or `fail`. Post the outcome on the bug ticket (same follow-up the review pickup flow posts):
+The reviewer writes `.human/reviews/<work-key>.md`; the first line under its `## Summary` is the verdict — `pass`, `pass with notes`, or `fail`. Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
 
 ```bash
 human <tracker> issue comment add <BUG_KEY> "$(cat <<'REVIEW_EOF'
@@ -145,6 +145,11 @@ human <tracker> issue comment add <BUG_KEY> "$(cat <<'REVIEW_EOF'
 verdict: <verdict>
 reviews:
   <WORK_KEY>: <verdict> — .human/reviews/<work-key>.md
+
+## Findings
+<the reviewer's full findings, inlined: what was checked, every issue found
+ (or "no issues"), and any notes — the substance of .human/reviews/<work-key>.md,
+ not just a pointer to it>
 REVIEW_EOF
 )"
 ```

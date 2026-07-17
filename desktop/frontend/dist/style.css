@@ -1219,6 +1219,83 @@ body {
   max-width: 100%;
 }
 
+/* Comment-sourced sections (failure reason, review findings, fix summary) sit
+   below the description with a divider and a small caps-style heading, so the
+   panel reads as body-then-review rather than one undifferentiated block. */
+.detail-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--col-border);
+}
+
+.detail-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+
+/* The failure section leads with the accent so a failed stage's reason reads
+   as the alert it is. */
+.detail-section.detail-failure .detail-section-title {
+  color: var(--accent);
+}
+
+/* Section bodies carry the daemon-rendered markdown; reuse the description's
+   rendered typography by sharing the .rendered element rules below. */
+.detail-section-body {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.detail-section-body.rendered h1,
+.detail-section-body.rendered h2,
+.detail-section-body.rendered h3,
+.detail-section-body.rendered h4 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 12px 0 6px;
+}
+
+.detail-section-body.rendered p {
+  margin: 0 0 10px;
+}
+
+.detail-section-body.rendered ul,
+.detail-section-body.rendered ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.detail-section-body.rendered li {
+  margin: 2px 0;
+}
+
+.detail-section-body.rendered code {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
+.detail-section-body.rendered pre {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0 0 10px;
+  overflow-x: auto;
+}
+
+.detail-section-body.rendered pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
 .detail-tracker-btn {
   display: inline-block;
   margin-top: 12px;

@@ -46,6 +46,21 @@ type IssueDetailRequest struct {
 type IssueDetailResult struct {
 	tracker.Issue
 	DescriptionHTML string `json:"description_html,omitempty"`
+	// Comment-sourced sections, pre-rendered to sanitized HTML by the daemon
+	// (goldmark + bluemonday), so every client injects them verbatim. Empty
+	// when the ticket has no such comment (or comments could not be fetched).
+	ReviewFindingsHTML string `json:"review_findings_html,omitempty"`
+	FailureReasonHTML  string `json:"failure_reason_html,omitempty"`
+	FixSummaryHTML     string `json:"fix_summary_html,omitempty"`
+}
+
+// IssueDetailFetch is what the daemon's issue getter returns: the full issue
+// plus the comment-sourced extras. Extras are best-effort — a comment-fetch
+// failure leaves them zero-valued and the issue still returns (readable beats
+// gone).
+type IssueDetailFetch struct {
+	Issue  tracker.Issue
+	Extras IssueDetailExtras
 }
 
 // Request is sent from the client to the daemon (one JSON line per connection).

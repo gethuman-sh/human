@@ -1069,8 +1069,8 @@ func fetchTrackerIssuesLiteFunc(reg *daemon.ProjectRegistry, resolver *vault.Res
 // tracker instance named in the request and fetches the single full issue.
 // The per-key fetch exists because list endpoints on some trackers (e.g.
 // Shortcut) return slim payloads without descriptions.
-func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.IssueDetailRequest) (*tracker.Issue, error) {
-	return func(req daemon.IssueDetailRequest) (*tracker.Issue, error) {
+func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.IssueDetailRequest) (*daemon.IssueDetailFetch, error) {
+	return func(req daemon.IssueDetailRequest) (*daemon.IssueDetailFetch, error) {
 		entries := reg.Entries()
 		if len(entries) == 0 {
 			return nil, errors.WithDetails("no project registered for issue detail")
@@ -1093,7 +1093,18 @@ func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		return inst.Provider.GetIssue(ctx, req.Key)
+		issue, err := inst.Provider.GetIssue(ctx, req.Key)
+		if err != nil {
+			return nil, err
+		}
+		// AD-4: the comment-sourced extras are best-effort. A ListComments
+		// error (or a tracker blip) degrades to empty extras so the panel
+		// still shows the issue body rather than failing the whole request.
+		var extras daemon.IssueDetailExtras
+		if comments, cerr := inst.Provider.ListComments(ctx, req.Key); cerr == nil {
+			extras = daemon.BuildIssueDetailExtras(comments)
+		}
+		return &daemon.IssueDetailFetch{Issue: *issue, Extras: extras}, nil
 	}
 }
 

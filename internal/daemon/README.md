@@ -21,3 +21,4 @@ A long-running background service that holds your tracker credentials once and a
 - Runs a guided, one-question-at-a-time ideation mode with fixed/agent-generated option sets and an editable draft-approval step, reusing the same PM-role ticket creation as chat mode
 - Runs ideation in evolve mode against an existing idea ticket: the finished draft rewrites that ticket in place — title and description replaced, idea label removed, key preserved
 - Serves the desktop settings UI: returns the project's `.humanconfig` as a masked snapshot (vault references verbatim, literal secrets never leave the daemon) and writes single-key edits back with a comment-preserving YAML round-trip
+- Surfaces the board detail panel's review findings, failure reason and fix summary by extracting them from the ticket's comments (`[human:review-complete]`, the latest `*-failed` marker, `[human:fix-summary]`) — comments only, never local files, so it works across every tracker backend
