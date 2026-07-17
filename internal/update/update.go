@@ -146,13 +146,18 @@ func InstallHint() string {
 		return "brew upgrade human"
 	}
 
-	// go install places the binary inside $GOPATH/bin or $HOME/go/bin.
+	// go install places the binary inside $GOPATH/bin or <user home>/go/bin.
+	// os.UserHomeDir picks the right variable per platform (HOME on Unix,
+	// USERPROFILE on Windows) so Windows `go install` users still match.
 	gopath := os.Getenv("GOPATH")
 	gobin := os.Getenv("GOBIN")
-	homeGoBin := filepath.Join(os.Getenv("HOME"), "go", "bin")
+	var homeGoBin string
+	if home, err := os.UserHomeDir(); err == nil {
+		homeGoBin = filepath.Join(home, "go", "bin")
+	}
 	if (gopath != "" && strings.HasPrefix(exe, filepath.Join(gopath, "bin"))) ||
 		(gobin != "" && strings.HasPrefix(exe, gobin)) ||
-		strings.HasPrefix(exe, homeGoBin) {
+		(homeGoBin != "" && strings.HasPrefix(exe, homeGoBin)) {
 		return "go install github.com/gethuman-sh/human@latest"
 	}
 
