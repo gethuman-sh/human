@@ -81,12 +81,20 @@ func handleBoardAgentExit(ctx context.Context, agentName string, commenterFor fu
 	}
 	// A clean stage finish leaves the stage's done-marker as the latest marker;
 	// only treat the exit as a failure when that did NOT happen.
-	if _, state := latestStageState(comments, stage); state == BoardDone {
+	_, state := latestStageState(comments, stage)
+	if state == BoardDone {
 		if stage == BoardImplementation && chainReview != nil {
 			if err := chainReview(pmKey); err != nil {
 				logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot start review after build")
 			}
 		}
+		return
+	}
+	// The second clean end of an autofix run: triage concluded no fix is warranted
+	// (not-a-bug or undetermined). It stops with a terminal [human:no-fix-needed]
+	// verdict and no [human:ready-for-review] handoff. There is no branch to review,
+	// so do not chain; surface the card as resolved, not red (ticket 405).
+	if stage == BoardImplementation && state == BoardResolved {
 		return
 	}
 	body := failedHeaderFor(stage) + "\nagent exited without completing the stage"
