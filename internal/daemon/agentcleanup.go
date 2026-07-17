@@ -31,24 +31,25 @@ func RunAgentCleanup(ctx context.Context, store *HookEventStore, cleaner AgentCl
 
 	logger.Info().Msg("agent cleanup listener started")
 
-	cleaned := make(map[string]bool)
+	// Track events by monotonic sequence, not by agent name: board stage agents
+	// reuse the same deterministic name on every rebuild, so a name-keyed
+	// lifetime dedupe leaked the re-run's container and worktree (SC-201).
+	var lastSeq uint64
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ch:
-			for _, evt := range store.RecentEvents() {
+			newEvents, seq := store.EventsSince(lastSeq)
+			lastSeq = seq
+			for _, evt := range newEvents {
 				if evt.AgentName == "" {
 					continue
 				}
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				if cleaned[evt.AgentName] {
-					continue
-				}
-				cleaned[evt.AgentName] = true
 				go func(name string) {
 					// Wait for Claude to fully exit before stopping the container.
 					select {

@@ -63,13 +63,75 @@ func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected a failed marker to be posted")
 	}
+}
 
-	// A repeat event for the same agent must not post twice.
+// SC-201: board stage agents reuse the same deterministic name on every
+// rebuild (agentNameFor is deterministic; the rework path, forward
+// Implementation and ApplyFix all re-launch the same name). The watcher must
+// handle EVERY exit of a reused name, not just the first — a name-keyed
+// lifetime dedupe silently dropped second-and-later runs.
+func TestRunBoardFailureWatch_ReusedNameSecondIncompleteExitPostsAgain(t *testing.T) {
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
+		addCh:    make(chan string, 4),
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	// First exit of the reused name posts a failed marker.
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
 	select {
-	case <-c.addCh:
-		t.Fatal("must not post failed marker twice for the same agent")
-	case <-time.After(300 * time.Millisecond):
+	case body := <-c.addCh:
+		assert.Contains(t, body, PlanningFailedHeader)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected first failed marker")
+	}
+
+	// Second exit of the SAME name (a re-run) must post AGAIN.
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+	select {
+	case body := <-c.addCh:
+		assert.Contains(t, body, PlanningFailedHeader)
+	case <-time.After(2 * time.Second):
+		t.Fatal("second exit of a reused agent name must post a failed marker again (SC-201)")
+	}
+}
+
+// SC-201: a second cleanly-finished build of the same reused name must chain
+// into review again, not be swallowed by lifetime dedupe.
+func TestRunBoardFailureWatch_ReusedNameSecondCleanBuildChainsAgain(t *testing.T) {
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	chained := make(chan string, 2)
+	chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+	select {
+	case pmKey := <-chained:
+		assert.Equal(t, "SC-1", pmKey)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected first build to chain a review")
+	}
+
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+	select {
+	case pmKey := <-chained:
+		assert.Equal(t, "SC-1", pmKey)
+	case <-time.After(2 * time.Second):
+		t.Fatal("second clean build of a reused agent name must chain a review again (SC-201)")
 	}
 }
 

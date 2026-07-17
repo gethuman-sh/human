@@ -34,24 +34,26 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 
 	logger.Info().Msg("board failure watcher started")
 
-	handled := make(map[string]bool)
+	// Track events by monotonic sequence, not by agent name: board stage agents
+	// reuse the same deterministic name on every rebuild, so a name-keyed
+	// lifetime dedupe silently dropped every re-run's exit (SC-201). EventsSince
+	// hands us each appended event exactly once and survives ring saturation.
+	var lastSeq uint64
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ch:
-			for _, evt := range store.RecentEvents() {
+			newEvents, seq := store.EventsSince(lastSeq)
+			lastSeq = seq
+			for _, evt := range newEvents {
 				if !strings.HasPrefix(evt.AgentName, "board-") {
 					continue
 				}
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				if handled[evt.AgentName] {
-					continue
-				}
-				handled[evt.AgentName] = true
 				go handleBoardAgentExit(ctx, evt.AgentName, commenterFor, chainReview, logger)
 			}
 		}
