@@ -40,6 +40,10 @@ type Meta struct {
 	ConfigDir     string    `json:"config_dir,omitempty"`
 	ImageName     string    `json:"image_name,omitempty"`
 	RemoteUser    string    `json:"remote_user,omitempty"`
+	// ExecutionID ties this agent to its current run's execution-log dir so
+	// removal paths can copy the transcript out of the exact run before the
+	// container is destroyed.
+	ExecutionID string `json:"execution_id,omitempty"`
 }
 
 // ContainerName returns the Docker container name for an agent.
