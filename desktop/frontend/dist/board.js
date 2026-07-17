@@ -14,6 +14,7 @@ import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsvie
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, } from "./board-queue.js";
+import { buildDetailSections } from "./board-detail.js";
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
 // webview (WebKitGTK swallows the new-window request), so every external
@@ -1396,6 +1397,10 @@ let detailError = null;
 // Caching lives in the daemon (stale-while-revalidate on the tracker-issue
 // route), so the panel just shows whatever the last fetch returned.
 let detailHTML = null;
+// detailSections is the daemon-rendered HTML for the open ticket's
+// comment-sourced sections (failure reason, review findings, fix summary),
+// pre-built by buildDetailSections. Empty until fetchTicketDetail lands them.
+let detailSections = "";
 // toggleTicketDetail is the card-click entry point: a second click on the
 // ticket that is already open closes the panel instead of re-opening it.
 function toggleTicketDetail(card) {
@@ -1412,6 +1417,7 @@ function openTicketDetail(card) {
     detailCard = card;
     detailError = null;
     detailHTML = null;
+    detailSections = "";
     renderTicketDetail();
     document.getElementById("detail-panel")?.classList.remove("hidden");
     void fetchTicketDetail(card);
@@ -1429,6 +1435,11 @@ async function fetchTicketDetail(card) {
             return;
         detailError = null;
         detailHTML = detail.descriptionHTML || null;
+        detailSections = buildDetailSections({
+            reviewFindingsHTML: detail.reviewFindingsHTML,
+            failureReasonHTML: detail.failureReasonHTML,
+            fixSummaryHTML: detail.fixSummaryHTML,
+        });
         detailCard = {
             ...detailCard,
             title: detail.title || detailCard.title,
@@ -1447,6 +1458,7 @@ async function fetchTicketDetail(card) {
 function closeTicketDetail() {
     detailCard = null;
     detailHTML = null;
+    detailSections = "";
     document.getElementById("detail-panel")?.classList.add("hidden");
 }
 // refreshTicketDetail re-renders the open panel from the freshest card with
@@ -1503,6 +1515,7 @@ function renderTicketDetail() {
     <div class="detail-owner">Owner: ${owner}</div>
     ${error}
     ${desc}
+    ${detailSections}
     ${link}
   `;
     const url = detailCard.url;

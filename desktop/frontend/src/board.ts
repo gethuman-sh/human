@@ -37,6 +37,7 @@ import {
   forwardDropAllowed,
   verdictFailed,
 } from "./board-queue.js";
+import { buildDetailSections } from "./board-detail.js";
 
 interface Card {
   key: string;
@@ -186,6 +187,10 @@ interface IssueDetailData {
   description?: string;
   // Rendered and sanitized by the daemon — safe to inject verbatim.
   descriptionHTML?: string;
+  // Comment-sourced sections, also daemon-rendered and sanitized.
+  reviewFindingsHTML?: string;
+  failureReasonHTML?: string;
+  fixSummaryHTML?: string;
 }
 
 interface AppBindings {
@@ -1659,6 +1664,10 @@ let detailError: string | null = null;
 // Caching lives in the daemon (stale-while-revalidate on the tracker-issue
 // route), so the panel just shows whatever the last fetch returned.
 let detailHTML: string | null = null;
+// detailSections is the daemon-rendered HTML for the open ticket's
+// comment-sourced sections (failure reason, review findings, fix summary),
+// pre-built by buildDetailSections. Empty until fetchTicketDetail lands them.
+let detailSections = "";
 
 // toggleTicketDetail is the card-click entry point: a second click on the
 // ticket that is already open closes the panel instead of re-opening it.
@@ -1677,6 +1686,7 @@ function openTicketDetail(card: Card): void {
   detailCard = card;
   detailError = null;
   detailHTML = null;
+  detailSections = "";
   renderTicketDetail();
   document.getElementById("detail-panel")?.classList.remove("hidden");
   void fetchTicketDetail(card);
@@ -1694,6 +1704,11 @@ async function fetchTicketDetail(card: Card): Promise<void> {
     if (!detailCard || detailCard.key !== card.key) return;
     detailError = null;
     detailHTML = detail.descriptionHTML || null;
+    detailSections = buildDetailSections({
+      reviewFindingsHTML: detail.reviewFindingsHTML,
+      failureReasonHTML: detail.failureReasonHTML,
+      fixSummaryHTML: detail.fixSummaryHTML,
+    });
     detailCard = {
       ...detailCard,
       title: detail.title || detailCard.title,
@@ -1711,6 +1726,7 @@ async function fetchTicketDetail(card: Card): Promise<void> {
 function closeTicketDetail(): void {
   detailCard = null;
   detailHTML = null;
+  detailSections = "";
   document.getElementById("detail-panel")?.classList.add("hidden");
 }
 
@@ -1763,6 +1779,7 @@ function renderTicketDetail(): void {
     <div class="detail-owner">Owner: ${owner}</div>
     ${error}
     ${desc}
+    ${detailSections}
     ${link}
   `;
   const url = detailCard.url;
