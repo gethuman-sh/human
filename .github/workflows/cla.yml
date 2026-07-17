@@ -1,0 +1,31 @@
+name: cla
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+# CLA Assistant Lite: gates every external PR on a signed CLA. Signatures are
+# committed to the dedicated cla-signatures branch so main stays clean and the
+# commit-msg issue-ref convention is not violated by bot commits.
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant
+        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: signatures/cla.json
+          path-to-document: https://github.com/gethuman-sh/human/blob/main/CLA.md
+          branch: cla-signatures
+          allowlist: dependabot[bot],github-actions[bot]
