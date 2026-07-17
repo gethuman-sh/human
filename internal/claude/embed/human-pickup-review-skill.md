@@ -41,15 +41,20 @@ Your job: parse that comment, run the `human-reviewer` agent against each review
    - any pass-with-notes, no fails → `pass with notes`
    - any fail → `fail`
 
-6. **Post the follow-up comment on the PM ticket.** Use this format:
+6. **Post the follow-up comment on the PM ticket.** The comment is the canonical record of the review — it must carry the reviewer's full findings inline so a reader (and the board detail panel) sees what was found without opening any local file. The `.human/reviews/<key>.md` files remain as working artifacts, not the source of truth. Use this format:
    ```
    [human:review-complete]
    verdict: <overall-verdict>
    reviews:
      <REVIEW_KEY_1>: <verdict> — .human/reviews/<review_key_1>.md
      <REVIEW_KEY_2>: <verdict> — .human/reviews/<review_key_2>.md
+
+   ## Findings
+   <the full findings for each reviewed key, inlined from the reviewer's output:
+    what was checked, every issue found (or "no issues"), and any notes — the
+    substance of each .human/reviews/<key>.md, not just a pointer to it>
    ```
-   Post it with `human <pm-tracker> issue comment add <PM_KEY> "<body>"`. The `[human:review-complete]` header mirrors the handoff header so future tooling can close the loop (e.g. auto-transition the reviewed tickets to Done when all reviews pass).
+   Post it with `human <pm-tracker> issue comment add <PM_KEY> "<body>"`. The `[human:review-complete]` header mirrors the handoff header so future tooling can close the loop (e.g. auto-transition the reviewed tickets to Done when all reviews pass), and the inlined `## Findings` section makes the on-ticket comment the complete review record.
 
 7. **Report to the user.** Summarise in plain text: which tickets were reviewed, the overall verdict, and where each review lives.
 
