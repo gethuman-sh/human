@@ -28,6 +28,11 @@ type HookEventStore struct {
 	eventSeqs   []uint64 // monotonic id per event, index-aligned with events
 	appended    uint64   // total events ever appended (last assigned sequence)
 	subscribers []chan struct{}
+	// persist is an optional durable sink invoked for every appended event.
+	// The in-memory ring evicts under load and is empty after a restart, so a
+	// hook event tied to a since-reaped agent run is otherwise lost; the sink
+	// writes it to the host so the trail survives. nil = memory-only.
+	persist func(hookevents.Event)
 }
 
 // NewHookEventStore creates an empty store.
@@ -36,6 +41,16 @@ func NewHookEventStore() *HookEventStore {
 		events:    make([]hookevents.Event, 0, maxHookEvents),
 		eventSeqs: make([]uint64, 0, maxHookEvents),
 	}
+}
+
+// WithPersistence sets a durable sink invoked for every appended event and
+// returns the store for chaining. Wire this only on the daemon's production
+// store; tests keep the default memory-only behaviour.
+func (s *HookEventStore) WithPersistence(sink func(hookevents.Event)) *HookEventStore {
+	s.mu.Lock()
+	s.persist = sink
+	s.mu.Unlock()
+	return s
 }
 
 // Append adds a hook event. Before appending, events for the same
@@ -74,7 +89,13 @@ func (s *HookEventStore) Append(evt hookevents.Event) {
 	}
 	subs := make([]chan struct{}, len(s.subscribers))
 	copy(subs, s.subscribers)
+	persist := s.persist
 	s.mu.Unlock()
+
+	// Persist outside the mutex so slow disk I/O never holds up other appends.
+	if persist != nil {
+		persist(evt)
+	}
 
 	for _, ch := range subs {
 		select {

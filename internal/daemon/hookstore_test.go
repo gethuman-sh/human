@@ -288,3 +288,21 @@ func TestHookEventStore_UnsubscribeRaceAppend(t *testing.T) {
 		close(done)
 	}
 }
+
+func TestHookEventStore_Persists(t *testing.T) {
+	var mu sync.Mutex
+	var got []hookevents.Event
+	store := NewHookEventStore().WithPersistence(func(e hookevents.Event) {
+		mu.Lock()
+		got = append(got, e)
+		mu.Unlock()
+	})
+
+	evt := hookevents.Event{EventName: "Stop", SessionID: "s1", AgentName: "a1", Timestamp: time.Now()}
+	store.Append(evt)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, got, 1)
+	assert.Equal(t, "a1", got[0].AgentName)
+}
