@@ -50,11 +50,12 @@ type Server struct {
 	NetworkEvents    *NetworkEventStore                    // in-memory ambient network activity buffer; nil disables
 	IssueFetcher     func() ([]TrackerIssuesResult, error) // injected; fetches issues from configured trackers
 	LiteIssueFetcher func() ([]TrackerIssuesResult, error) // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
-	// IssueGetter fetches one full issue for the board's detail panel. List
-	// endpoints on some trackers (e.g. Shortcut) return slim payloads without
-	// descriptions, so reading a ticket needs a per-key fetch. nil disables
-	// the tracker-issue route.
-	IssueGetter      func(req IssueDetailRequest) (*tracker.Issue, error)
+	// IssueGetter fetches one full issue for the board's detail panel plus its
+	// comment-sourced extras (review findings, failure reason, fix summary).
+	// List endpoints on some trackers (e.g. Shortcut) return slim payloads
+	// without descriptions, so reading a ticket needs a per-key fetch. nil
+	// disables the tracker-issue route.
+	IssueGetter      func(req IssueDetailRequest) (*IssueDetailFetch, error)
 	TrackerDiagnoser func(dir string) []tracker.TrackerStatus // injected; diagnoses tracker status with vault resolution
 	Projects         *ProjectRegistry                         // multi-project routing; nil means single-project mode
 	PendingConfirms  *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
@@ -494,16 +495,19 @@ func (s *Server) handleTrackerIssue(conn net.Conn, args []string) {
 		s.writeError(conn, "invalid tracker-issue request: "+err.Error(), 1)
 		return
 	}
-	issue, err := s.IssueGetter(req)
+	detail, err := s.IssueGetter(req)
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
 	result := IssueDetailResult{
-		Issue: *issue,
+		Issue: detail.Issue,
 		// Rendered here, not in a client: the daemon is the one trusted place
 		// where untrusted tracker markdown becomes sanitized display HTML.
-		DescriptionHTML: RenderDescriptionHTML(issue.Description),
+		DescriptionHTML:    RenderDescriptionHTML(detail.Issue.Description),
+		ReviewFindingsHTML: RenderDescriptionHTML(detail.Extras.ReviewFindings),
+		FailureReasonHTML:  RenderDescriptionHTML(detail.Extras.FailureReason),
+		FixSummaryHTML:     RenderDescriptionHTML(detail.Extras.FixSummary),
 	}
 	data, err := json.Marshal(result)
 	if err != nil {

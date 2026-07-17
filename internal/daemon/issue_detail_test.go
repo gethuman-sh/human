@@ -48,16 +48,16 @@ func TestRenderDescriptionHTML_Empty(t *testing.T) {
 func TestCachedIssueGetter_MissFetchesOnce(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
-	getter := NewCachedIssueGetter(func(req IssueDetailRequest) (*tracker.Issue, error) {
+	getter := NewCachedIssueGetter(func(req IssueDetailRequest) (*IssueDetailFetch, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
-		return &tracker.Issue{Key: req.Key, Description: "v1"}, nil
+		return &IssueDetailFetch{Issue: tracker.Issue{Key: req.Key, Description: "v1"}}, nil
 	})
 
 	issue, err := getter(IssueDetailRequest{Kind: "shortcut", Tracker: "human", Key: "1"})
 	require.NoError(t, err)
-	assert.Equal(t, "v1", issue.Description)
+	assert.Equal(t, "v1", issue.Issue.Description)
 	mu.Lock()
 	assert.Equal(t, 1, calls)
 	mu.Unlock()
@@ -66,41 +66,41 @@ func TestCachedIssueGetter_MissFetchesOnce(t *testing.T) {
 func TestCachedIssueGetter_HitServesStaleThenRevalidates(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
-	getter := NewCachedIssueGetter(func(req IssueDetailRequest) (*tracker.Issue, error) {
+	getter := NewCachedIssueGetter(func(req IssueDetailRequest) (*IssueDetailFetch, error) {
 		mu.Lock()
 		calls++
 		n := calls
 		mu.Unlock()
-		return &tracker.Issue{Key: req.Key, Description: fmt.Sprintf("v%d", n)}, nil
+		return &IssueDetailFetch{Issue: tracker.Issue{Key: req.Key, Description: fmt.Sprintf("v%d", n)}}, nil
 	})
 	req := IssueDetailRequest{Kind: "shortcut", Tracker: "human", Key: "1"}
 
 	first, err := getter(req)
 	require.NoError(t, err)
-	assert.Equal(t, "v1", first.Description)
+	assert.Equal(t, "v1", first.Issue.Description)
 
 	// Second call must serve the cached copy instantly (stale is fine) while
 	// a background refresh updates the entry for a later call.
 	second, err := getter(req)
 	require.NoError(t, err)
-	assert.Equal(t, "v1", second.Description)
+	assert.Equal(t, "v1", second.Issue.Description)
 
 	assert.Eventually(t, func() bool {
 		issue, gErr := getter(req)
-		return gErr == nil && issue.Description != "v1"
+		return gErr == nil && issue.Issue.Description != "v1"
 	}, 2*time.Second, 10*time.Millisecond, "background refresh never landed")
 }
 
 func TestCachedIssueGetter_ErrorIsNotCached(t *testing.T) {
 	var mu sync.Mutex
 	fail := true
-	getter := NewCachedIssueGetter(func(req IssueDetailRequest) (*tracker.Issue, error) {
+	getter := NewCachedIssueGetter(func(req IssueDetailRequest) (*IssueDetailFetch, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if fail {
 			return nil, errors.WithDetails("tracker down")
 		}
-		return &tracker.Issue{Key: req.Key, Description: "ok"}, nil
+		return &IssueDetailFetch{Issue: tracker.Issue{Key: req.Key, Description: "ok"}}, nil
 	})
 	req := IssueDetailRequest{Kind: "shortcut", Tracker: "human", Key: "1"}
 
@@ -112,19 +112,19 @@ func TestCachedIssueGetter_ErrorIsNotCached(t *testing.T) {
 	mu.Unlock()
 	issue, err := getter(req)
 	require.NoError(t, err)
-	assert.Equal(t, "ok", issue.Description)
+	assert.Equal(t, "ok", issue.Issue.Description)
 }
 
 func TestCachedIssueGetter_FailedRefreshKeepsStaleCopy(t *testing.T) {
 	var mu sync.Mutex
 	fail := false
-	getter := NewCachedIssueGetter(func(req IssueDetailRequest) (*tracker.Issue, error) {
+	getter := NewCachedIssueGetter(func(req IssueDetailRequest) (*IssueDetailFetch, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if fail {
 			return nil, errors.WithDetails("tracker blip")
 		}
-		return &tracker.Issue{Key: req.Key, Description: "v1"}, nil
+		return &IssueDetailFetch{Issue: tracker.Issue{Key: req.Key, Description: "v1"}}, nil
 	})
 	req := IssueDetailRequest{Kind: "shortcut", Tracker: "human", Key: "1"}
 
@@ -140,7 +140,7 @@ func TestCachedIssueGetter_FailedRefreshKeepsStaleCopy(t *testing.T) {
 	for range 3 {
 		issue, gErr := getter(req)
 		require.NoError(t, gErr)
-		assert.Equal(t, "v1", issue.Description)
+		assert.Equal(t, "v1", issue.Issue.Description)
 		time.Sleep(20 * time.Millisecond)
 	}
 }

@@ -8,8 +8,6 @@ import (
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
-
-	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // descMarkdown and descPolicy render a ticket's markdown description to
@@ -45,16 +43,16 @@ func RenderDescriptionHTML(md string) string {
 // removes the per-open tracker round-trip from the reading experience without
 // the panel ever going more than one open stale. Cache size is bounded by the
 // board itself (a fetch caps at 200 issues per project), so no eviction.
-func NewCachedIssueGetter(inner func(IssueDetailRequest) (*tracker.Issue, error)) func(IssueDetailRequest) (*tracker.Issue, error) {
+func NewCachedIssueGetter(inner func(IssueDetailRequest) (*IssueDetailFetch, error)) func(IssueDetailRequest) (*IssueDetailFetch, error) {
 	var mu sync.Mutex
-	cache := make(map[string]*tracker.Issue)
+	cache := make(map[string]*IssueDetailFetch)
 	inflight := make(map[string]bool)
 
 	cacheKey := func(req IssueDetailRequest) string {
 		return req.Kind + "\x00" + req.Tracker + "\x00" + req.Key
 	}
 
-	return func(req IssueDetailRequest) (*tracker.Issue, error) {
+	return func(req IssueDetailRequest) (*IssueDetailFetch, error) {
 		key := cacheKey(req)
 
 		mu.Lock()

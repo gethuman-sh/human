@@ -1465,13 +1465,20 @@ func TestServer_HandleTrackerIssue_ReturnsIssue(t *testing.T) {
 	token := "test-token"
 	var gotReq IssueDetailRequest
 	addr, _ := startTestServerCustom(t, token, func(s *Server) {
-		s.IssueGetter = func(req IssueDetailRequest) (*tracker.Issue, error) {
+		s.IssueGetter = func(req IssueDetailRequest) (*IssueDetailFetch, error) {
 			gotReq = req
-			return &tracker.Issue{
-				Key:         "188",
-				Title:       "Building gets its own live column",
-				Assignee:    "Stephan",
-				Description: "As a product engineer I want the board to show builds.",
+			return &IssueDetailFetch{
+				Issue: tracker.Issue{
+					Key:         "188",
+					Title:       "Building gets its own live column",
+					Assignee:    "Stephan",
+					Description: "As a product engineer I want the board to show builds.",
+				},
+				Extras: IssueDetailExtras{
+					ReviewFindings: "## Findings\nNil deref in foo",
+					FailureReason:  "boom",
+					FixSummary:     "## What happened\nfixed it",
+				},
 			}, nil
 		}
 	})
@@ -1493,12 +1500,39 @@ func TestServer_HandleTrackerIssue_ReturnsIssue(t *testing.T) {
 	assert.Equal(t, "As a product engineer I want the board to show builds.", result.Description)
 	// The daemon renders the markdown itself so clients never have to.
 	assert.Contains(t, result.DescriptionHTML, "<p>As a product engineer")
+	// SC-365: comment-sourced sections are rendered to sanitized HTML too.
+	assert.Contains(t, result.ReviewFindingsHTML, "Nil deref in foo")
+	assert.Contains(t, result.FailureReasonHTML, "boom")
+	assert.Contains(t, result.FixSummaryHTML, "fixed it")
+}
+
+// TestServer_HandleTrackerIssue_ExtrasAbsent covers the AD-4 degrade path: a
+// ticket with no review/failure/fix-summary comments yields empty extras, and
+// the three HTML fields must be "" rather than stray empty markup.
+func TestServer_HandleTrackerIssue_ExtrasAbsent(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.IssueGetter = func(_ IssueDetailRequest) (*IssueDetailFetch, error) {
+			return &IssueDetailFetch{
+				Issue: tracker.Issue{Key: "188", Title: "No extras", Description: "body"},
+			}, nil
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue", `{"tracker":"human","key":"188"}`}})
+	assert.Equal(t, 0, resp.ExitCode)
+	var result IssueDetailResult
+	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &result)
+	require.NoError(t, err)
+	assert.Equal(t, "", result.ReviewFindingsHTML)
+	assert.Equal(t, "", result.FailureReasonHTML)
+	assert.Equal(t, "", result.FixSummaryHTML)
 }
 
 func TestServer_HandleTrackerIssue_GetterError(t *testing.T) {
 	token := "test-token"
 	addr, _ := startTestServerCustom(t, token, func(s *Server) {
-		s.IssueGetter = func(_ IssueDetailRequest) (*tracker.Issue, error) {
+		s.IssueGetter = func(_ IssueDetailRequest) (*IssueDetailFetch, error) {
 			return nil, fmt.Errorf("story not found")
 		}
 	})
@@ -1511,8 +1545,8 @@ func TestServer_HandleTrackerIssue_GetterError(t *testing.T) {
 func TestServer_HandleTrackerIssue_BadArgs(t *testing.T) {
 	token := "test-token"
 	addr, _ := startTestServerCustom(t, token, func(s *Server) {
-		s.IssueGetter = func(_ IssueDetailRequest) (*tracker.Issue, error) {
-			return &tracker.Issue{}, nil
+		s.IssueGetter = func(_ IssueDetailRequest) (*IssueDetailFetch, error) {
+			return &IssueDetailFetch{}, nil
 		}
 	})
 
