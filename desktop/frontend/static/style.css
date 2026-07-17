@@ -676,6 +676,13 @@ body {
   color: var(--running);
 }
 
+/* An autofix run that triage resolved as no-fix-needed (not-a-bug or
+   undetermined): a successful terminal outcome, muted rather than red — there
+   is nothing wrong and nothing to ship (ticket 405). */
+.badge.resolved {
+  color: var(--muted);
+}
+
 /* Right-click card menu: administrative actions that are not pipeline
    transitions (close ticket, open in tracker). */
 .context-menu {
