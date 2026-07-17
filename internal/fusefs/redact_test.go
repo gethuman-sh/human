@@ -196,3 +196,16 @@ func TestRedactEnv_URLWithoutCredentials(t *testing.T) {
 	got := string(RedactEnv([]byte(input)))
 	assert.Equal(t, input, got, "URL without credentials should not be redacted")
 }
+
+// A single line larger than bufio.MaxScanTokenSize (64 KiB) — realistic for a
+// base64-encoded certificate or long JWT chain — must still be redacted and
+// followed by later lines, not silently dropped mid-file.
+func TestRedactEnv_LongLineDoesNotTruncateFollowingLines(t *testing.T) {
+	longValue := make([]byte, 128*1024)
+	for i := range longValue {
+		longValue[i] = 'a'
+	}
+	input := "TLS_CERT=" + string(longValue) + "\nPORT=3000\n"
+	got := string(RedactEnv([]byte(input)))
+	assert.Equal(t, "TLS_CERT=***\nPORT=3000\n", got)
+}

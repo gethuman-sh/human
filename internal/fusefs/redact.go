@@ -3,7 +3,6 @@
 package fusefs
 
 import (
-	"bufio"
 	"bytes"
 	"strings"
 )
@@ -51,17 +50,34 @@ var safeValues = map[string]bool{
 // RedactEnv takes the raw content of an env-style KEY=VALUE file and returns
 // a copy with secret values replaced by "***". Comments and blank lines are
 // preserved. Safe keys and safe values are kept as-is.
+//
+// Splitting on '\n' directly (rather than via bufio.Scanner) avoids the 64 KiB
+// per-line cap that would silently drop realistic env values like base64-
+// encoded certificates and long JWT chains — Scanner returned bufio.ErrTooLong
+// on such lines and the caller never saw the truncation.
 func RedactEnv(content []byte) []byte {
 	var buf bytes.Buffer
-	scanner := bufio.NewScanner(bytes.NewReader(content))
+	rest := content
 	first := true
-	for scanner.Scan() {
-		line := scanner.Text()
+	for len(rest) > 0 {
+		var line []byte
+		if idx := bytes.IndexByte(rest, '\n'); idx >= 0 {
+			line = rest[:idx]
+			rest = rest[idx+1:]
+		} else {
+			line = rest
+			rest = nil
+		}
+		// Match bufio.ScanLines: a trailing '\r' from a CRLF terminator is
+		// stripped so classification does not see it as part of the value.
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
 		if !first {
 			buf.WriteByte('\n')
 		}
 		first = false
-		buf.WriteString(redactLine(line))
+		buf.WriteString(redactLine(string(line)))
 	}
 	// Preserve trailing newline if present.
 	if len(content) > 0 && content[len(content)-1] == '\n' {
