@@ -217,6 +217,16 @@ func (e *engineClient) CopyToContainer(ctx context.Context, containerID, dstPath
 	return e.cli.CopyToContainer(ctx, containerID, dstPath, content, container.CopyToContainerOptions{})
 }
 
+func (e *engineClient) CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error) {
+	// The SDK returns the archive reader plus a PathStat; only the archive is
+	// needed for transcript copy-out.
+	rc, _, err := e.cli.CopyFromContainer(ctx, containerID, srcPath)
+	if err != nil {
+		return nil, err
+	}
+	return rc, nil
+}
+
 func (e *engineClient) ExecCreate(ctx context.Context, containerID string, cmd []string, opts ExecOptions) (string, error) {
 	resp, err := e.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		User:         opts.User,

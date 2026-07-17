@@ -30,6 +30,9 @@ type DockerClient interface {
 
 	// File transfer
 	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader) error
+	// CopyFromContainer streams srcPath from the container as a tar archive.
+	// The caller closes the returned reader.
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error)
 
 	// Exec for lifecycle hooks and user commands.
 	ExecCreate(ctx context.Context, containerID string, cmd []string, opts ExecOptions) (string, error)

@@ -160,6 +160,10 @@ func (m *mockDockerClient) CopyToContainer(_ context.Context, _, _ string, _ io.
 	return nil
 }
 
+func (m *mockDockerClient) CopyFromContainer(_ context.Context, _, _ string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
 func (m *mockDockerClient) Close() error { return nil }
 
 func testLogger() zerolog.Logger {

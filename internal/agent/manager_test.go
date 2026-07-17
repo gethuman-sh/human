@@ -71,6 +71,9 @@ func (m *mockDockerClient) ContainerCommit(_ context.Context, _ string, _ string
 func (m *mockDockerClient) CopyToContainer(_ context.Context, _, _ string, _ io.Reader) error {
 	return nil
 }
+func (m *mockDockerClient) CopyFromContainer(_ context.Context, _, _ string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
 func (m *mockDockerClient) ExecCreate(_ context.Context, _ string, _ []string, _ devcontainer.ExecOptions) (string, error) {
 	return "exec-1", nil
 }
