@@ -42,6 +42,13 @@ const (
 	// reaped. At zombieSweepInterval this is ~15s, matching the wake-recovery
 	// expectation.
 	zombieMaxProcessCheckFailures = 3
+	// A single reap must never park the sweep's one goroutine indefinitely: a
+	// stalled CopyTranscript inside DeleteAgent would otherwise stop every later
+	// agent from ever being reaped (SC-427). Past this deadline the reap is
+	// abandoned to the background and the loop advances so the next tick keeps
+	// reaping other dead agents. Generous relative to the 30s delete timeout so
+	// a healthy-but-slow reap still completes inline.
+	zombieReapHardDeadline = 45 * time.Second
 )
 
 // zombieSweep carries the sweep's cross-tick memory. checkFailures counts
@@ -55,10 +62,18 @@ const (
 type zombieSweep struct {
 	checkFailures map[string]int
 	seenClaude    map[string]bool
+	// reapHardDeadline bounds a single reap so one hung delete cannot starve the
+	// sweep loop (SC-427). Injectable so tests can shrink it below the
+	// production default.
+	reapHardDeadline time.Duration
 }
 
 func newZombieSweep() *zombieSweep {
-	return &zombieSweep{checkFailures: make(map[string]int), seenClaude: make(map[string]bool)}
+	return &zombieSweep{
+		checkFailures:    make(map[string]int),
+		seenClaude:       make(map[string]bool),
+		reapHardDeadline: zombieReapHardDeadline,
+	}
 }
 
 // RunAgentZombieSweep periodically checks for agent containers that are
@@ -147,22 +162,59 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 			continue
 		}
 
-		logger.Info().Str("agent", a.Name).Msg("zombie sweep: cleaning orphaned agent")
-		deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if err := sweeper.DeleteAgent(deleteCtx, a.Name); err != nil {
-			logger.Warn().Err(err).Str("agent", a.Name).Msg("zombie sweep: cleanup failed")
-		} else {
-			// A completed reap clears the agent's cross-tick memory so a
-			// same-named future agent starts fresh.
-			delete(z.checkFailures, a.Name)
-			delete(z.seenClaude, a.Name)
-			if onReaped != nil {
-				// Notify only on a completed reap: a failed delete is retried on
-				// the next tick and must not mark the stage failed prematurely.
-				onReaped(a.Name)
-			}
+		z.reap(ctx, sweeper, a.Name, onReaped, logger)
+	}
+}
+
+// reap deletes one agent under a hard deadline that the sweep loop can never be
+// starved past. DeleteAgent runs on its own goroutine (with the existing 30s
+// delete timeout); if it exceeds reapHardDeadline the reap is abandoned to the
+// background and reap returns so the loop keeps reaping other dead agents
+// (SC-427). The abandoned goroutine still finishes into the buffered channel,
+// and the agent's cross-tick memory is intentionally left so a later tick
+// retries it.
+func (z *zombieSweep) reap(ctx context.Context, sweeper AgentZombieSweeper, name string, onReaped func(agentName string), logger zerolog.Logger) {
+	logger.Info().Str("agent", name).Msg("zombie sweep: cleaning orphaned agent")
+
+	deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Buffered so an abandoned reap goroutine can always send and exit even
+	// after this function has returned — no goroutine leak. The goroutine owns
+	// cancel(): it fires once DeleteAgent returns, whether inline or after the
+	// loop has abandoned it, so the delete ctx is always released.
+	resultCh := make(chan error, 1)
+	go func() {
+		defer cancel()
+		resultCh <- sweeper.DeleteAgent(deleteCtx, name)
+	}()
+
+	timer := time.NewTimer(z.reapHardDeadline)
+	defer timer.Stop()
+
+	select {
+	case err := <-resultCh:
+		if err != nil {
+			logger.Warn().Err(err).Str("agent", name).Msg("zombie sweep: cleanup failed")
+			return
 		}
-		cancel()
+		// A completed reap clears the agent's cross-tick memory so a same-named
+		// future agent starts fresh.
+		delete(z.checkFailures, name)
+		delete(z.seenClaude, name)
+		if onReaped != nil {
+			// Notify only on a completed reap: a failed delete is retried on the
+			// next tick and must not mark the stage failed prematurely.
+			onReaped(name)
+		}
+	case <-timer.C:
+		// Abandon the hung reap to keep the single sweep goroutine alive. The
+		// background goroutine keeps its own 30s delete budget and cancels the
+		// ctx when it eventually returns; memory is left so the next tick
+		// retries this agent.
+		logger.Warn().Str("agent", name).
+			Msg("zombie sweep: reap exceeded hard deadline, abandoning to keep the loop alive")
+	case <-ctx.Done():
+		// The whole sweep is shutting down; the goroutine's deferred cancel
+		// releases the delete ctx once DeleteAgent unwinds.
 	}
 }
 

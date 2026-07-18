@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,10 +13,17 @@ import (
 type mockSweeper struct {
 	agents     []AgentInfo
 	processUp  map[string]bool // containerID → running
-	deleted    []string
 	processErr map[string]error
 	deleteErr  map[string]error // agent name → forced delete failure
 	listErr    error
+
+	// blockDelete gates DeleteAgent per agent: if a channel is registered for a
+	// name, the call parks until that channel is closed (or the delete ctx is
+	// cancelled), modelling a reap hung inside CopyTranscript.
+	blockDelete map[string]chan struct{}
+
+	mu      sync.Mutex
+	deleted []string
 }
 
 func (m *mockSweeper) RunningAgents() ([]AgentInfo, error) {
@@ -34,14 +42,33 @@ func (m *mockSweeper) IsProcessRunning(_ context.Context, containerID string, _ 
 	return m.processUp[containerID], nil
 }
 
-func (m *mockSweeper) DeleteAgent(_ context.Context, name string) error {
+func (m *mockSweeper) DeleteAgent(ctx context.Context, name string) error {
+	if m.blockDelete != nil {
+		if block, ok := m.blockDelete[name]; ok {
+			select {
+			case <-block:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
 	if m.deleteErr != nil {
 		if err, ok := m.deleteErr[name]; ok {
 			return err
 		}
 	}
+	m.mu.Lock()
 	m.deleted = append(m.deleted, name)
+	m.mu.Unlock()
 	return nil
+}
+
+// deletedNames returns a copy of the reaped-agent record under lock, since a
+// blocked reap runs on its own goroutine and may append concurrently.
+func (m *mockSweeper) deletedNames() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.deleted...)
 }
 
 func TestSweepZombieAgents_CleansOrphaned(t *testing.T) {
@@ -318,4 +345,53 @@ func TestSweepZombieAgents_SparesIdleUnderPersistentCheckError(t *testing.T) {
 		sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 	}
 	assert.Empty(t, s.deleted, "idle agent never seen with claude must survive even a broken liveness check")
+}
+
+// SC-427: the sweep runs on a single goroutine. If one reap hangs (a stalled
+// CopyTranscript inside DeleteAgent) the tick must still return under a hard
+// deadline, so a later tick can reap a *different* dead agent. Before the
+// per-reap isolation fix, tick 1 blocks forever and the 3s guard below fires.
+func TestSweepZombieAgents_HungReapDoesNotStarveNextTick(t *testing.T) {
+	stuckRelease := make(chan struct{})
+	defer close(stuckRelease) // let the abandoned reap goroutine finish at test end
+
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "agent-stuck", ContainerID: "c1", CreatedAt: time.Now().Add(-2 * time.Minute)},
+		},
+		processUp:   map[string]bool{"c1": false, "c2": false},
+		blockDelete: map[string]chan struct{}{"agent-stuck": stuckRelease},
+	}
+
+	sweep := newZombieSweep()
+	// Shrink the hard deadline so the test does not wait the production 45s.
+	sweep.reapHardDeadline = 100 * time.Millisecond
+
+	// Tick 1: the stuck agent's reap hangs; the tick must still RETURN.
+	tick1 := make(chan struct{})
+	go func() {
+		sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+		close(tick1)
+	}()
+	select {
+	case <-tick1:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tick 1 was starved by a hung reap and never returned")
+	}
+
+	// Tick 2: a second, healthy-to-reap agent appears. It must be reaped even
+	// though the first agent's reap is still parked.
+	s.agents = append(s.agents, AgentInfo{Name: "agent-ok", ContainerID: "c2", CreatedAt: time.Now().Add(-2 * time.Minute)})
+	tick2 := make(chan struct{})
+	go func() {
+		sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+		close(tick2)
+	}()
+	select {
+	case <-tick2:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tick 2 was starved by the still-hung first reap")
+	}
+
+	assert.Contains(t, s.deletedNames(), "agent-ok", "next tick must reap a different dead agent")
 }
