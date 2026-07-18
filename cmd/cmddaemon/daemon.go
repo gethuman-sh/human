@@ -108,6 +108,7 @@ type daemonState struct {
 	statsWriter   *stats.Writer
 	auditStore    *audit.Store
 	auditWriter   *audit.Writer
+	confirmDB     *daemon.ConfirmDB
 }
 
 // runMaintenanceLoop periodically cleans up stale pending confirmations and
@@ -204,6 +205,18 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	hookStore := daemon.NewHookEventStore().WithPersistence(agent.HookEventSink)
 	networkStore := daemon.NewNetworkEventStore()
 	confirmStore := daemon.NewPendingConfirmStore()
+	// Approvals are durable: a restarted daemon re-offers undecided prompts
+	// and honors unredeemed grants instead of silently dropping them. A failed
+	// open degrades to memory-only rather than aborting startup.
+	confirmDB, err := daemon.NewConfirmDB(daemon.DefaultConfirmDBPath())
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to open confirms database, approval persistence disabled")
+		confirmDB = nil
+	} else if err := confirmStore.WithPersistence(confirmDB, logger); err != nil {
+		logger.Warn().Err(err).Msg("failed to load persisted approvals, approval persistence disabled")
+		_ = confirmDB.Close()
+		confirmDB = nil
+	}
 
 	statsStore, err := stats.NewStatsStore(stats.DefaultDBPath())
 	if err != nil {
@@ -268,6 +281,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		statsWriter:   statsWriter,
 		auditStore:    auditStore,
 		auditWriter:   auditWriter,
+		confirmDB:     confirmDB,
 	}, nil
 }
 
@@ -304,6 +318,9 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	if ds.auditStore != nil {
 		defer func() { _ = ds.auditStore.Close() }()
+	}
+	if ds.confirmDB != nil {
+		defer func() { _ = ds.confirmDB.Close() }()
 	}
 
 	out := cmd.OutOrStdout()

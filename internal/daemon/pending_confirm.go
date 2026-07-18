@@ -4,6 +4,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/gethuman-sh/human/errors"
 )
 
@@ -52,16 +54,75 @@ type PendingConfirmation struct {
 // their decisions. Entries are pure state — no parked goroutines, no
 // captured commands — so any client can submit, any UI (TUI, desktop app)
 // can decide, and any client can query or redeem the outcome later by ID.
-// Memory-only by design; entries are swept after ConfirmRetention.
+// The map is the in-process source of truth; an optional persistence sink
+// (WithPersistence) mirrors every mutation so approvals survive a daemon
+// restart. Entries are swept after ConfirmRetention in both layers.
 type PendingConfirmStore struct {
 	mu  sync.Mutex
 	ops map[string]*PendingConfirmation
+
+	// sink mirrors mutations to durable storage; nil means memory-only.
+	// Sink failures are logged, never propagated: a broken disk degrades
+	// durability, not the correctness of the running daemon.
+	sink   confirmPersistence
+	logger zerolog.Logger
+
+	// failedDeletes tracks grant consumptions whose durable delete failed —
+	// the one direction where an inconsistency could resurrect an already-
+	// redeemed grant as approved after a restart. Cleanup's periodic tick
+	// retries them until the sink recovers.
+	failedDeletes map[string]struct{}
 }
 
-// NewPendingConfirmStore creates an empty store.
+// NewPendingConfirmStore creates an empty, memory-only store.
 func NewPendingConfirmStore() *PendingConfirmStore {
 	return &PendingConfirmStore{
-		ops: make(map[string]*PendingConfirmation),
+		ops:           make(map[string]*PendingConfirmation),
+		failedDeletes: make(map[string]struct{}),
+	}
+}
+
+// WithPersistence attaches a durable sink: stale rows are pruned, the
+// survivors are absorbed into the map (a restarted daemon re-offers undecided
+// prompts and honors unredeemed grants), and every later mutation writes
+// through. Call once at startup before the store is shared; a load failure
+// leaves the store memory-only and is returned for the caller to log.
+func (s *PendingConfirmStore) WithPersistence(p confirmPersistence, logger zerolog.Logger) error {
+	if err := p.DeleteOlderThan(time.Now().Add(-ConfirmRetention)); err != nil {
+		return errors.WrapWithDetails(err, "pruning persisted confirmations")
+	}
+	loaded, err := p.LoadAll()
+	if err != nil {
+		return errors.WrapWithDetails(err, "loading persisted confirmations")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range loaded {
+		pc := loaded[i]
+		if _, exists := s.ops[pc.ID]; exists {
+			continue
+		}
+		s.ops[pc.ID] = &pc
+	}
+	s.sink = p
+	s.logger = logger
+	return nil
+}
+
+// persistDelete writes a removal through to the sink; callers hold s.mu.
+// consumed marks grant redemptions, whose failed deletes must be retried
+// (Cleanup) because a resurrected grant could authorize a second execution.
+func (s *PendingConfirmStore) persistDelete(id string, consumed bool) {
+	if s.sink == nil {
+		return
+	}
+	if err := s.sink.Delete(id); err != nil {
+		if consumed {
+			s.failedDeletes[id] = struct{}{}
+			s.logger.Error().Err(err).Str("id", id).Msg("confirm store: persisting grant consumption failed; will retry")
+			return
+		}
+		s.logger.Warn().Err(err).Str("id", id).Msg("confirm store: persisting removal failed")
 	}
 }
 
@@ -77,6 +138,13 @@ func (s *PendingConfirmStore) Submit(pc *PendingConfirmation) {
 	}
 	pc.State = ConfirmPending
 	s.ops[pc.ID] = pc
+	if s.sink != nil {
+		if err := s.sink.Insert(*pc); err != nil {
+			// Losing this write means the prompt is lost on restart — exactly
+			// the pre-persistence behavior, so a warning suffices.
+			s.logger.Warn().Err(err).Str("id", pc.ID).Msg("confirm store: persisting prompt failed")
+		}
+	}
 }
 
 // Get returns a copy of the entry with the given ID.
@@ -97,6 +165,7 @@ func (s *PendingConfirmStore) Remove(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.ops, id)
+	s.persistDelete(id, false)
 }
 
 // FindPending returns the pending entry for the given operation/tracker/key,
@@ -125,6 +194,7 @@ func (s *PendingConfirmStore) ConsumeApprovedFor(operation, trackerKind, key str
 	for id, pc := range s.ops {
 		if pc.State == ConfirmApproved && pc.Operation == operation && pc.Tracker == trackerKind && pc.Key == key {
 			delete(s.ops, id)
+			s.persistDelete(id, true)
 			return *pc, true
 		}
 	}
@@ -161,6 +231,7 @@ func (s *PendingConfirmStore) Consume(id, operation, trackerKind, key string) (P
 		return PendingConfirmation{}, false
 	}
 	delete(s.ops, id)
+	s.persistDelete(id, true)
 	return *pc, true
 }
 
@@ -199,6 +270,13 @@ func (s *PendingConfirmStore) Resolve(id string, approved bool, approverPID int)
 		pc.State = ConfirmDenied
 	}
 	pc.ResolvedAt = time.Now()
+	if s.sink != nil {
+		if err := s.sink.UpdateResolved(*pc); err != nil {
+			// A lost decision reverts to pending on restart and re-prompts the
+			// user — annoying but safe, so a warning suffices.
+			s.logger.Warn().Err(err).Str("id", id).Msg("confirm store: persisting decision failed")
+		}
+	}
 	return *pc, nil
 }
 
@@ -238,6 +316,22 @@ func (s *PendingConfirmStore) Cleanup(maxAge time.Duration) {
 		if now.Sub(pc.CreatedAt) > maxAge {
 			delete(s.ops, id)
 		}
+	}
+	if s.sink == nil {
+		return
+	}
+	// Retry grant-consumption deletes that failed at redemption time — until
+	// they land, a restart could resurrect an already-executed grant.
+	for id := range s.failedDeletes {
+		if err := s.sink.Delete(id); err != nil {
+			s.logger.Error().Err(err).Str("id", id).Msg("confirm store: grant consumption still not persisted")
+			continue
+		}
+		delete(s.failedDeletes, id)
+	}
+	if err := s.sink.DeleteOlderThan(now.Add(-maxAge)); err != nil {
+		// The next tick retries; rows only outlive memory briefly.
+		s.logger.Warn().Err(err).Msg("confirm store: pruning persisted confirmations failed")
 	}
 }
 
