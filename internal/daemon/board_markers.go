@@ -31,6 +31,10 @@ const (
 	BoardRunning BoardState = "running"
 	BoardDone    BoardState = "done"
 	BoardFailed  BoardState = "failed"
+	// BoardResolved is a non-failing, non-done terminal: an autofix run whose
+	// triage concluded no fix is warranted (not-a-bug or undetermined). It
+	// neither reds the card, chains a review, nor offers a deploy (ticket 405).
+	BoardResolved BoardState = "resolved"
 )
 
 // Board marker headers. These mirror the existing review-handoff headers in
@@ -46,6 +50,12 @@ const (
 	PlanningFailedHeader        = "[human:planning-failed]"
 	ImplementationStartedHeader = "[human:implementation-started]"
 	ImplementationFailedHeader  = "[human:implementation-failed]"
+	// NoFixNeededHeader is the autofix pipeline's second clean terminal marker:
+	// triage concluded the reported bug warrants no code change (not-a-bug or
+	// undetermined). It carries no [human:ready-for-review] handoff, so the
+	// failure watcher would otherwise mistake the missing handoff for a crash
+	// and loop forever re-triaging (ticket 405).
+	NoFixNeededHeader = "[human:no-fix-needed]"
 	ReviewStartedHeader         = "[human:review-started]"
 	ReviewFailedHeader          = "[human:review-failed]"
 	PRStartedHeader             = "[human:pr-started]"
@@ -94,6 +104,7 @@ var orderedMarkerSpecs = []markerSpec{
 	{ImplementationStartedHeader, BoardImplementation, BoardRunning},
 	{ReadyForReviewHeader, BoardImplementation, BoardDone},
 	{ImplementationFailedHeader, BoardImplementation, BoardFailed},
+	{NoFixNeededHeader, BoardImplementation, BoardResolved},
 	{ReviewStartedHeader, BoardVerification, BoardRunning},
 	{ReviewCompleteHeader, BoardVerification, BoardDone},
 	{ReviewFailedHeader, BoardVerification, BoardFailed},

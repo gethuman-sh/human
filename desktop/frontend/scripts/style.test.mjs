@@ -32,7 +32,10 @@ test("bug-grid card title is line-clamped with an ellipsis", () => {
   assert.match(body, /overflow:\s*hidden/, "clamped title must hide its overflow");
 });
 
-test("default-theme .card contains its overflow", () => {
+test("default-theme .card contains its overflow and resists shrinking", () => {
   const body = ruleBody(".card");
   assert.match(body, /overflow:\s*hidden/, ".card must clip content so text never crosses the border");
+  // SC-155 guard: cards must not shrink below their content in an overflowing
+  // flex column, otherwise the fancy theme's overflow:hidden squishes them.
+  assert.match(body, /flex-shrink:\s*0/, ".card must set flex-shrink:0 so it keeps full height when the column overflows (SC-155)");
 });

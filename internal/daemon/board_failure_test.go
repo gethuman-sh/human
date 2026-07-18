@@ -261,6 +261,80 @@ func TestRunBoardFailureWatch_SyntheticStopFailurePostsImplementationFailed(t *t
 	}
 }
 
+// ticket 405: an autofix run has a second legitimate ending — triage concludes
+// not-a-bug, makes no code change, and stops with a terminal [human:no-fix-needed]
+// marker and NO [human:ready-for-review] handoff. That is a clean stop: the
+// watcher must post NO implementation-failed marker (no endless retry loop) and
+// must NOT chain a review (there is no branch to review).
+func TestRunBoardFailureWatch_NoFixNeededIsCleanStop(t *testing.T) {
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, time.Unix(1, 0)),
+			cmt(NoFixNeededHeader+"\nverdict: not-a-bug", time.Unix(2, 0)),
+		},
+		addCh: make(chan string, 4),
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	chained := make(chan string, 1)
+	chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+
+	select {
+	case body := <-c.addCh:
+		t.Fatalf("a not-a-bug clean stop must not post any marker, got: %q", body)
+	case pmKey := <-chained:
+		t.Fatalf("a not-a-bug clean stop must not chain a review, got: %q", pmKey)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	c.mu.Lock()
+	require.Empty(t, c.added)
+	c.mu.Unlock()
+}
+
+// ticket 405 (sibling verdict): undetermined also stops with no handoff and is
+// misclassified identically. It posts the same terminal [human:no-fix-needed]
+// marker and must be treated as a clean stop — no failed marker, no chain.
+func TestRunBoardFailureWatch_UndeterminedIsCleanStop(t *testing.T) {
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, time.Unix(1, 0)),
+			cmt(NoFixNeededHeader+"\nverdict: undetermined", time.Unix(2, 0)),
+		},
+		addCh: make(chan string, 4),
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	chained := make(chan string, 1)
+	chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+
+	select {
+	case body := <-c.addCh:
+		t.Fatalf("an undetermined clean stop must not post any marker, got: %q", body)
+	case pmKey := <-chained:
+		t.Fatalf("an undetermined clean stop must not chain a review, got: %q", pmKey)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	c.mu.Lock()
+	require.Empty(t, c.added)
+	c.mu.Unlock()
+}
+
 func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 	store := NewHookEventStore()
 	c := &syncCommenter{addCh: make(chan string, 4)}

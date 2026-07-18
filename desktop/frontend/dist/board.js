@@ -116,6 +116,12 @@ function badge(card) {
     }
     if (card.state === "failed")
         return `<span class="badge failed" title="Stage failed">✕</span>`;
+    if (card.state === "resolved") {
+        // An autofix run whose triage concluded no fix is warranted (not-a-bug or
+        // undetermined): a successful terminal outcome, never red, never deployable
+        // (ticket 405).
+        return `<span class="badge resolved" title="Triage concluded no fix is warranted">no fix needed</span>`;
+    }
     if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
         return `<span class="badge warning" title="${escapeAttr("Review verdict: " + (card.verdict ?? ""))}">⚠ review found problems</span>`;
     }
