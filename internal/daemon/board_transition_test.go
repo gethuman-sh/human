@@ -162,6 +162,39 @@ func TestApplyTransitionRetriesFailedPlanning(t *testing.T) {
 	assert.Equal(t, PlanningStartedHeader, c.added[0])
 }
 
+func TestApplyTransitionRetriesFailedBuild(t *testing.T) {
+	// A failed implementation card was a dead end: Retry fix is bug-pane-only,
+	// Retry plan is planning-only, and every drop rejects it (SC-591). The
+	// "Retry build" gesture targets implementation while the card derives to
+	// implementation/failed — it must relaunch the executor, plan intact.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:plan-ready]", time.Unix(1, 0)),
+		cmt("[human:implementation-started]", time.Unix(2, 0)),
+		cmt("[human:implementation-failed]\nagent exited without completing the stage", time.Unix(3, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-execute SC-1", l.prompt)
+	assert.Equal(t, "board-SC-1-implementation", l.name)
+	require.Len(t, c.added, 1)
+	assert.Equal(t, ImplementationStartedHeader, c.added[0])
+}
+
+func TestApplyTransitionRunningBuildNotRelaunched(t *testing.T) {
+	// Contract pin: build retry is for FAILED runs only — a running build hits
+	// the idempotency guard and must not spawn a second agent.
+	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:implementation-started]", time.Unix(1, 0))}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+	assert.Empty(t, c.added)
+}
+
 func TestApplyTransitionRunningPlanningNotRelaunched(t *testing.T) {
 	// Contract pin: retry is for FAILED planning only — a running planning
 	// card hits the idempotency guard and must not spawn a second agent.
