@@ -33,21 +33,24 @@ human <TRACKER> issue comment list <TICKET_KEY>
 ## Review process
 
 1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured). The implementation plan is either the ticket description (split topology: separate engineering ticket) or a `[human:plan]` comment on the ticket — read it back with `human plan show <key>`. Use it as additional context for what was intended.
-2. **Find the ticket's commits.** Locate every commit on the current branch whose message references the ticket key. Run:
+2. **Resolve the code under review.** Check whether HEAD is detached: `git symbolic-ref -q HEAD` (exits non-zero when detached). Board runs execute in an isolated worktree detached at the DEFAULT branch — the fix commits are NOT there; they live on the branch named in the ticket's latest `[human:ready-for-review]` comment (`branch:` line, read via `human <tracker> issue comment list <key>`).
+   - **Detached HEAD + a handoff naming a branch**: check it out with `git checkout --detach <branch>` (detach avoids "already checked out in another worktree" collisions) before doing anything else. If that branch does not exist, STOP and report "handoff branch `<branch>` not found" as the review outcome — do not review the default branch and call the work missing.
+   - **On a named branch** (a user invoked the review on their own checkout): review the current branch as-is; never switch a user's checkout.
+3. **Find the ticket's commits.** Locate every commit on the current branch whose message references the ticket key. Run:
    ```sh
    git log --format=%H --grep=<KEY> HEAD
    ```
    This catches all common formats (`SC-57`, `[SC-57]`, `Issue SC-57`) because the ticket key itself is the substring being matched. If the ticket key is purely numeric (e.g. `123` from a `#123` reference), use the full reference form to avoid false positives: `git log --format=%H --grep='#<KEY>\b' --extended-regexp HEAD`.
    - **If zero commits match**, do NOT fall back to a branch diff. Stop and report: "No commits referencing `<KEY>` found on this branch. Either the work has not been committed yet, or commits are missing the ticket reference." This is a real finding, not an error, because traceability from ticket to commit is a project rule.
    - **If uncommitted changes exist** (`git status --porcelain` is non-empty), note them in a separate "Uncommitted work" section in the review but do not include them in the acceptance criteria evaluation. They have not been claimed against this ticket yet.
-3. **Build the review diff.** Concatenate the diffs of just the matched commits, in chronological order:
+4. **Build the review diff.** Concatenate the diffs of just the matched commits, in chronological order:
    ```sh
    git log --reverse --format=%H --grep=<KEY> HEAD | xargs -I{} git show --format= {}
    ```
    Or, equivalently, get a single annotated patch with `git log -p --reverse --grep=<KEY> HEAD`. This is the diff to evaluate against the acceptance criteria. Branch-relative diffs (`git diff main...HEAD`) are no longer used, because they include unrelated work that happens to share the branch.
-4. **Evaluate** the ticket-scoped diff against each acceptance criterion from the ticket.
-5. **Flag** missing criteria, unaddressed edge cases, and scope creep beyond the ticket. For this review type, "scope creep" means changes inside the ticket's commits that go beyond the ticket, NOT unrelated commits on the branch (those are simply excluded from the diff and out of scope for this review).
-6. **Write** the review to `.human/reviews/<key>.md` where `<key>` is the ticket key lowercased (e.g. `KAN-1` → `kan-1.md`). Create the directory first with `mkdir -p .human/reviews`. Include the list of commit hashes that were reviewed, so the reader can reproduce the diff.
+5. **Evaluate** the ticket-scoped diff against each acceptance criterion from the ticket.
+6. **Flag** missing criteria, unaddressed edge cases, and scope creep beyond the ticket. For this review type, "scope creep" means changes inside the ticket's commits that go beyond the ticket, NOT unrelated commits on the branch (those are simply excluded from the diff and out of scope for this review).
+7. **Write** the review to `.human/reviews/<key>.md` where `<key>` is the ticket key lowercased (e.g. `KAN-1` → `kan-1.md`). Create the directory first with `mkdir -p .human/reviews`. Include the list of commit hashes that were reviewed, so the reader can reproduce the diff.
 
 ## Principles
 
