@@ -123,3 +123,35 @@ func writeTestJSON(t *testing.T, path string, v any) {
 		t.Fatal(err)
 	}
 }
+
+func TestBuildAgentCmd_hasSendSubcommand(t *testing.T) {
+	cmd := BuildAgentCmd()
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "send" {
+			return
+		}
+	}
+	t.Error("missing send subcommand")
+}
+
+func TestBuildSendCmd_argsValidation(t *testing.T) {
+	cmd := BuildAgentCmd()
+	cmd.SetArgs([]string{"send", "only-one-arg"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error when message arg is missing, got nil")
+	}
+}
+
+func TestBuildLogsCmd_followFlagRegistered(t *testing.T) {
+	cmd := buildLogsCmd()
+	follow := cmd.Flags().Lookup("follow")
+	if follow == nil {
+		t.Fatal("missing --follow flag")
+	}
+	if follow.Shorthand != "f" {
+		t.Errorf("follow shorthand = %q, want %q", follow.Shorthand, "f")
+	}
+	if cmd.Flags().Lookup("tail") == nil {
+		t.Error("missing --tail flag")
+	}
+}

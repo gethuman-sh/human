@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"text/tabwriter"
 	"time"
 
@@ -48,7 +49,40 @@ The container image is built once (with devcontainer features) and cached.`,
 	cmd.AddCommand(buildListCmd())
 	cmd.AddCommand(buildAttachCmd())
 	cmd.AddCommand(buildLogsCmd())
+	cmd.AddCommand(buildSendCmd())
 	return cmd
+}
+
+// buildSendCmd delivers a follow-up prompt to a running agent, continuing its
+// existing Claude session (see Manager.SendMessage).
+func buildSendCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "send NAME MESSAGE",
+		Short: "Send a follow-up prompt to a running agent",
+		Long: `Continue a running agent's Claude session with a new instruction.
+
+The message is delivered as a fresh headless turn that resumes the agent's most
+recent conversation (claude --continue). The agent must be running.
+
+Example:
+  human agent send fix-bug "also update the changelog"`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr, cleanup, err := newManager(cmd)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			if err := mgr.SendMessage(cmd.Context(), args[0], args[1]); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+				"Message sent to agent %q. Follow output with: human agent logs %s --follow\n",
+				args[0], args[0])
+			return nil
+		},
+	}
 }
 
 // buildLogsCmd exposes the per-execution log store for an agent, mirroring the
@@ -58,11 +92,16 @@ The container image is built once (with devcontainer features) and cached.`,
 // daemon.
 func buildLogsCmd() *cobra.Command {
 	var asJSON bool
+	var follow bool
+	var tail int
 	cmd := &cobra.Command{
 		Use:   "logs NAME",
-		Short: "Show recorded execution logs for an agent (launch, output, transcript, outcome)",
+		Short: "Show recorded execution logs for an agent, or stream its live output",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if follow || tail > 0 {
+				return streamAgentOutput(cmd, args[0], follow, tail)
+			}
 			execs, err := agent.ListExecutions(args[0])
 			if err != nil {
 				return err
@@ -80,7 +119,21 @@ func buildLogsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "stream the latest run's output live")
+	cmd.Flags().IntVar(&tail, "tail", 0, "start from the last N lines of the latest run's output")
 	return cmd
+}
+
+// streamAgentOutput tails the latest execution's output.log, cancelling the
+// follow loop on SIGINT so Ctrl-C returns cleanly.
+func streamAgentOutput(cmd *cobra.Command, name string, follow bool, tail int) error {
+	path, err := agent.LatestOutputPath(name)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+	defer stop()
+	return agent.StreamOutput(ctx, cmd.OutOrStdout(), path, follow, tail)
 }
 
 func writeJSON(out io.Writer, v any) error {
