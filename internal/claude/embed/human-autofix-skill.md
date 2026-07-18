@@ -34,15 +34,39 @@ It posts a `[human:bug-verdict] <verdict>` comment on the bug ticket — the tic
 
 ## Step 3 — Verdict gate
 
-- **not-a-bug** — the agent has already posted its reasoning. Reclassify or close the ticket: discover statuses with `human <tracker> issue statuses <BUG_KEY>`, then move it with `human <tracker> issue status <BUG_KEY> "<closed-or-wontdo-status>"`. Make **no code changes**. Post the terminal marker `[human:no-fix-needed]` with `verdict: not-a-bug` on `<BUG_KEY>`, then Report and STOP.
-- **undetermined** — the agent has posted an honest status (e.g. could not reproduce). Make **no code changes**. Leave the ticket open for a human. Post the terminal marker `[human:no-fix-needed]` with `verdict: undetermined` on `<BUG_KEY>`, then Report and STOP.
-- **confirmed** — continue.
+- **confirmed** — continue to Step 4.
+- **not-a-bug** or **undetermined** — do NOT act on the verdict yet. A no-fix verdict closes or parks a ticket with no code change — the one outcome that can silently bury a real bug — so it must first survive an adversarial challenge (Step 3a).
+
+### Step 3a — Adversarial challenge (not-a-bug / undetermined only)
+
+Dispatch the skeptic against the verdict:
+
+```
+Task(subagent_type="human-verdict-skeptic", prompt="Challenge the latest bug-verdict on ticket <BUG_KEY>")
+```
+
+Read its `verdict-challenge:` line:
+
+- **UPHELD** — the verdict stands; act on it:
+  - **not-a-bug** — reclassify or close the ticket: discover statuses with `human <tracker> issue statuses <BUG_KEY>`, then move it with `human <tracker> issue status <BUG_KEY> "<closed-or-wontdo-status>"`. Make **no code changes**. Post the terminal marker `[human:no-fix-needed]` with `verdict: not-a-bug` on `<BUG_KEY>`, then Report and STOP.
+  - **undetermined** — make **no code changes**. Leave the ticket open for a human. Post the terminal marker `[human:no-fix-needed]` with `verdict: undetermined` on `<BUG_KEY>`, then Report and STOP.
+- **REFUTED** — the bug is real after all. Post the skeptic's evidence as a comment on `<BUG_KEY>`:
+
+  ```
+  [human:bug-verdict] confirmed
+
+  ## Verdict overturned on adversarial challenge
+  <the skeptic's refutation: reproduction, missing commit, or contradicting output>
+  ```
+
+  Then **continue to Step 4 as a confirmed bug**, using the skeptic's reproduction as the reproduction. Do NOT close anything, do NOT post `[human:no-fix-needed]`. The challenge runs ONCE — a refuted verdict never loops back through triage.
 
 The `[human:no-fix-needed]` marker is **mandatory in board context**: the autofix pipeline runs under the board implementation-stage agent name, whose failure watcher treats any exit with no `[human:ready-for-review]` handoff as a crash and would loop forever re-triaging. This terminal marker signals the clean, resolved stop (ticket 405). Body format:
 
 ```
 [human:no-fix-needed]
 verdict: <not-a-bug | undetermined>
+challenge: upheld
 ```
 
 ## Step 4 — Phase 2: Plan (topology decides where it lives)
