@@ -157,6 +157,16 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 			"/human-plan "+req.PMKey)
 	}
 
+	// Build retry: the same sanctioned in-place relaunch for a failed
+	// implementation run — without it a failed build is a dead end, since the
+	// rework re-drop requires a failed REVIEW verdict and Retry fix is
+	// bug-pane-only (SC-591). The plan is intact on the ticket; a fresh
+	// executor picks it up.
+	if isBuildRetry(req.To, card) {
+		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+			"/human-execute "+dispatchKey(req.PMKey, card))
+	}
+
 	// Forward-only, single-next-stage: the target must be exactly one rank
 	// above the current derived stage.
 	if stageRank[req.To] != stageRank[card.Stage]+1 {
@@ -421,6 +431,15 @@ func isReworkTransition(to BoardStage, card BoardCard) bool {
 func isPlanningRetry(to BoardStage, card BoardCard) bool {
 	return to == BoardPlanning &&
 		card.Stage == BoardPlanning &&
+		card.State == BoardFailed
+}
+
+// isBuildRetry mirrors isPlanningRetry for the implementation stage: failed
+// builds only — running builds are protected by the idempotency guard, and a
+// verification-stage card takes the rework path instead (SC-591).
+func isBuildRetry(to BoardStage, card BoardCard) bool {
+	return to == BoardImplementation &&
+		card.Stage == BoardImplementation &&
 		card.State == BoardFailed
 }
 

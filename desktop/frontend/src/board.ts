@@ -462,6 +462,24 @@ function showCardMenu(card: Card, x: number, y: number): void {
     menu.appendChild(retryPlan);
   }
 
+  // A failed build is otherwise a dead end on the workflow board: the rework
+  // re-drop requires a failed REVIEW verdict and Retry fix is bug-pane-only
+  // (SC-591). Mirrors Retry plan: relaunch runs an agent, same Docker gate;
+  // from="planning" is inert for validation (the daemon re-derives the stage).
+  if (!card.bug && card.stage === "implementation" && card.state === "failed") {
+    const retryBuild = document.createElement("button");
+    retryBuild.type = "button";
+    retryBuild.className = "context-menu-item";
+    retryBuild.textContent = "Retry build";
+    retryBuild.disabled = !current.dockerAvailable;
+    if (retryBuild.disabled) retryBuild.title = "Docker required";
+    retryBuild.addEventListener("click", () => {
+      menu.remove();
+      void transition(card.key, card.title, "planning", "implementation");
+    });
+    menu.appendChild(retryBuild);
+  }
+
   // Mockups belong to the product conversation: the item appears only in the
   // Product backlog column, toggling create → creating → view as the local
   // mockup set for this ticket comes into existence. Bug tickets never get
