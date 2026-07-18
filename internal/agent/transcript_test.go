@@ -48,6 +48,57 @@ func (m *copyMock) ContainerRemove(_ context.Context, _ string, _ devcontainer.C
 	return nil
 }
 
+// stalledReadCloser models a docker tar stream that never yields data: Read
+// parks until Close is called, mirroring a hung CopyFromContainer stream. Only
+// a context-aware CopyTranscript (which closes the stream on ctx.Done) can
+// unblock it.
+type stalledReadCloser struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newStalledReadCloser() *stalledReadCloser {
+	return &stalledReadCloser{closed: make(chan struct{})}
+}
+
+func (s *stalledReadCloser) Read(_ []byte) (int, error) {
+	<-s.closed
+	// A real docker tar stream closed mid-read surfaces a "use of closed
+	// connection" error, not a clean EOF — model that so the tar reader reports
+	// failure rather than treating the truncated stream as a complete archive.
+	return 0, io.ErrClosedPipe
+}
+
+func (s *stalledReadCloser) Close() error {
+	s.once.Do(func() { close(s.closed) })
+	return nil
+}
+
+// TestCopyTranscript_UnblocksOnContextCancel is the SC-427 regression guard: a
+// stalled tar stream must not park the caller forever. When the context expires
+// the watchdog closes the ReadCloser so tr.Next()/io.Copy return, and
+// CopyTranscript reports a (best-effort, swallowed by callers) error instead of
+// blocking the single zombie-sweep goroutine indefinitely.
+func TestCopyTranscript_UnblocksOnContextCancel(t *testing.T) {
+	dest := t.TempDir()
+	docker := &copyMock{archive: func() io.ReadCloser { return newStalledReadCloser() }}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- CopyTranscript(ctx, docker, "cid", "vscode", dest) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a non-nil error when the stream is closed on context cancel")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CopyTranscript did not unblock on context cancel within 2s")
+	}
+}
+
 func TestContainerTranscriptPath(t *testing.T) {
 	if got := containerTranscriptPath("vscode"); got != "/home/vscode/.claude/projects" {
 		t.Fatalf("got %q", got)
