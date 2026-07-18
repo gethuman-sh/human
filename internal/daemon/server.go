@@ -73,6 +73,9 @@ type Server struct {
 	// BoardFixer launches the autonomous bug-fix pipeline on a bug ticket for
 	// the Bugs pane's Fix drop. nil disables the board-fix route.
 	BoardFixer func(req BoardFixRequest) error
+	// BoardOptioner records a chosen option from a card's open decision block
+	// and relaunches the block's stage with the choice; nil disables.
+	BoardOptioner func(req BoardOptionRequest) error
 	// BugCreator files a defect ticket on the PM tracker for the Bugs pane's
 	// + dialog. nil disables the bug-create route.
 	BugCreator func(req BugCreateRequest) (BugCreateResponse, error)
@@ -375,6 +378,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"subscribe":           func() { s.handleSubscribe(conn) },
 		"board-transition":    func() { s.handleBoardTransition(conn, args[1:]) },
 		"board-fix":           func() { s.handleBoardFix(conn, args[1:]) },
+		"board-option":        func() { s.handleBoardOption(conn, args[1:]) },
 		"close-ticket":        func() { s.handleCloseTicket(conn, args[1:]) },
 		"ideation-start":      func() { s.handleIdeationStart(conn, args[1:]) },
 		"ideation-reply":      func() { s.handleIdeationReply(conn, args[1:]) },
@@ -606,6 +610,39 @@ func (s *Server) handleBoardFix(conn net.Conn, args []string) {
 		return
 	}
 	if err := s.BoardFixer(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	s.pokeBoard()
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleBoardOption records a chosen option from a card's open decision
+// block and relaunches the block's stage with the choice. Like board-fix it
+// is a dedicated non-destructive route — the click on a choice the reviewer
+// offered is the user's consent — and it launches an agent, so it is gated
+// on substrate health.
+func (s *Server) handleBoardOption(conn net.Conn, args []string) {
+	if s.BoardOptioner == nil {
+		s.writeError(conn, "board options not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "board-option requires one JSON arg", 1)
+		return
+	}
+	var req BoardOptionRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid board-option request: "+err.Error(), 1)
+		return
+	}
+	if err := s.launchBlockedByDoctor(); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	if err := s.BoardOptioner(req); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}

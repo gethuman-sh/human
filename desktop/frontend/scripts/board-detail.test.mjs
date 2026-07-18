@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDetailSections } from "../build/board-detail.js";
+import { buildDetailSections, buildOptionsSection } from "../build/board-detail.js";
 
 // SC-365 regression: the board detail panel must render comment-sourced review
 // findings, failure reason, and fix summary. buildDetailSections is the pure
@@ -36,4 +36,25 @@ test("only present field renders, others omitted", () => {
   assert.match(html, /Fix summary/);
   assert.doesNotMatch(html, /Why it failed/);
   assert.doesNotMatch(html, /What the review found/);
+});
+
+// --- Decision options (ticket 372/534) ---
+
+test("options render as buttons with context and escaped labels", () => {
+  const html = buildOptionsSection("review found a design gap", [
+    { id: "1", label: "Add a re-run path <b>now</b>" },
+    { id: "2", label: "Defer criterion 3" },
+  ]);
+  assert.match(html, /Decision needed/);
+  assert.match(html, /review found a design gap/);
+  assert.match(html, /data-option-id="1"/);
+  assert.match(html, /data-option-id="2"/);
+  // Labels are untrusted comment text — must arrive escaped, never as markup.
+  assert.match(html, /&lt;b&gt;now&lt;\/b&gt;/);
+  assert.doesNotMatch(html, /<b>now<\/b>/);
+});
+
+test("no options emit nothing", () => {
+  assert.equal(buildOptionsSection("context alone", []), "");
+  assert.equal(buildOptionsSection(undefined, undefined), "");
 });

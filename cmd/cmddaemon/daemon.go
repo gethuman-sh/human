@@ -269,6 +269,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		VaultResolver:     vaultResolver,
 		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver, logger),
 		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver, logger),
+		BoardOptioner:     boardOptionerFunc(projectRegistry, vaultResolver, logger),
 		BugCreator:        bugCreatorFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
@@ -1617,6 +1618,18 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 // boardFixerFunc builds the daemon's BoardFixer closure: same collaborators as
 // a board transition, but the entry point is the autonomous bug-fix pipeline
 // (planning gate skipped — autofix triages, plans and fixes in one run).
+// boardOptionerFunc builds the daemon's BoardOptioner closure: it records a
+// chosen option and relaunches the block's stage with the choice injected.
+func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) func(daemon.BoardOptionRequest) error {
+	return func(req daemon.BoardOptionRequest) error {
+		deps, err := boardTransitionDepsFor(reg, resolver, logger)
+		if err != nil {
+			return err
+		}
+		return deps.ApplyOption(context.Background(), req)
+	}
+}
+
 func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) func(daemon.BoardFixRequest) error {
 	return func(req daemon.BoardFixRequest) error {
 		deps, err := boardTransitionDepsFor(reg, resolver, logger)

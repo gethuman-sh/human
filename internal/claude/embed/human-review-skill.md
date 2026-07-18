@@ -23,4 +23,13 @@ After the agent finishes:
    ```
    The findings summary is REQUIRED when the verdict is `fail` — list each blocking finding as a bullet with its file reference; a rebuild is dispatched against exactly this comment, so it must contain everything needed to fix the problems. For `pass` verdicts one line suffices.
    Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`.
-4. **Tell the user** the verdict and that the full review lives at `.human/reviews/<key>.md`.
+4. **Offer choices when the outcome is a genuine fork.** When the review ends in a decision between alternatives rather than one clear direction (e.g. "either build the re-run path or remove the menu item"), post a SECOND comment with a machine-readable options block so the board can render the choices and relaunch the picked one — options buried in prose are invisible to the pipeline:
+   ```
+   [human:options]
+   stage: <planning | implementation | verification>
+   context: <one line: why a decision is needed>
+   1: <first option, one line>
+   2: <second option, one line>
+   ```
+   `stage:` names which stage a choice relaunches (usually `implementation`). One line per option; the full reasoning stays in the review-complete comment above. Use this sparingly — only for real forks the user must decide, never as a substitute for a verdict.
+5. **Tell the user** the verdict and that the full review lives at `.human/reviews/<key>.md`.

@@ -70,6 +70,16 @@ export function badgeInfo(card) {
         // (ticket 405).
         return { cls: "resolved", text: "no fix needed", title: "Triage concluded no fix is warranted" };
     }
+    // An open decision block outranks the generic review warning: the review
+    // deliberately handed the human a fork, and the actionable statement is
+    // "pick one", not "problems found" (ticket 372/534).
+    if (card.options && card.options.length > 0) {
+        return {
+            cls: "decision",
+            text: "decision needed",
+            title: "The review offers " + card.options.length + " ways forward — open the card to choose",
+        };
+    }
     if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
         return { cls: "warning", text: "⚠ review found problems", title: "Review verdict: " + (card.verdict ?? "") };
     }

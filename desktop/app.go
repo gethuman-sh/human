@@ -92,6 +92,10 @@ type Card struct {
 	// tracker.Issue.IsBug). Bug cards render in the Bugs pane instead of the
 	// workflow board's columns.
 	Bug bool `json:"bug,omitempty"`
+	// Options carries the card's open decision block: a stage ended in a fork
+	// and a human must pick a direction. OptionsContext is the one-line why.
+	Options        []daemon.BoardOption `json:"options,omitempty"`
+	OptionsContext string               `json:"optionsContext,omitempty"`
 	// MockupSlug/MockupState link the card to a locally generated mockup set:
 	// "ready" once mockups/<slug>/index.json is valid, "creating" while a
 	// launched generation has not produced it yet. Local file state — never
@@ -293,6 +297,8 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			TrackerKind:    pm.TrackerKind,
 			Bug:            issue.IsBug(),
 			IdeaColumn:     ideaCol,
+			Options:        card.Options,
+			OptionsContext: card.OptionsContext,
 			MockupSlug:     mock.Slug,
 			MockupState:    mock.State,
 		})
@@ -367,6 +373,20 @@ func (a *App) FixBug(pmKey, pmTitle string) error {
 	return daemonCause(daemon.BoardFix(info.Addr, info.Token, daemon.BoardFixRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
+	}))
+}
+
+// ChooseOption records the user's pick from a card's open decision block and
+// relaunches the block's stage with the choice — the click on a choice the
+// reviewer offered is the consent, exactly like a drag is for a transition.
+func (a *App) ChooseOption(pmKey, optionID string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.SendBoardOption(info.Addr, info.Token, daemon.BoardOptionRequest{
+		PMKey:    pmKey,
+		OptionID: optionID,
 	}))
 }
 

@@ -74,3 +74,20 @@ test("badgeInfo preserves prior classifications", () => {
   );
   assert.equal(badgeInfo({ stage: "done", state: "done" }).cls, "done");
 });
+
+// An open decision block must surface as its own badge, outranking the
+// generic review warning — the actionable statement is "pick one" (SC-534).
+test("open options render a decision-needed badge over the review warning", () => {
+  const card = {
+    stage: "verification",
+    state: "done",
+    verdict: "fail",
+    branch: "b",
+    options: [{ id: "1", label: "a" }, { id: "2", label: "b" }],
+  };
+  const info = badgeInfo(card);
+  assert.equal(info.cls, "decision");
+  assert.match(info.text, /decision needed/);
+  // Without options the same card falls back to the review warning.
+  assert.equal(badgeInfo({ ...card, options: [] }).cls, "warning");
+});

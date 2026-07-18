@@ -15,6 +15,7 @@ A long-running background service that holds your tracker credentials once and a
 - Derives each PM ticket's workflow-board placement and applies drag-to-trigger pipeline transitions for the desktop board
 - Places idea-labeled tickets (`human/idea`, bare `idea`) in the board's Ideas column by label alone, without scanning their comments
 - Launches the autonomous bug-fix pipeline (`/human-autofix`) on a bug ticket via a dedicated route for the desktop Bugs pane — no planning gate, and the fix chains into its review like any build
+- Records a chosen option from a card's open `[human:options]` decision block via a dedicated route and relaunches the block's stage with the choice injected — reviews that end in a fork become clickable directions instead of dead-ends
 - Quick-captures a title-only idea ticket via a dedicated route, labeled so it lands in the Ideas column
 - Files a defect ticket (title + description) via a dedicated route, bug-typed so every tracker marks it natively and the Bugs pane recognises the card
 - Reads a ticket's engineering plan from its `[human:plan]` comment: the board derives the planned state from it and, without a separate engineering ticket, dispatches implementation and verification on the PM key itself
