@@ -459,7 +459,7 @@ func runHook(stdin io.Reader, stderr io.Writer, deliver hookDeliverer) error {
 
 	eventName := resolveEventName(data, input.EventName)
 	if eventName == "" {
-		_, _ = fmt.Fprintf(stderr,
+		_, _ = fmt.Fprintf(stderr, // #nosec G705 -- CLI terminal output, not web
 			"human hook: no recognizable event-name key in %d-byte payload; dropping (update the known-key set in resolveEventName)\n",
 			len(data))
 		return nil
@@ -468,7 +468,7 @@ func runHook(stdin io.Reader, stderr io.Writer, deliver hookDeliverer) error {
 	agentName := os.Getenv("HUMAN_AGENT_NAME")
 	args := []string{"hook-event", eventName, input.SessionID, input.Cwd, input.NotificationType, input.ToolName, input.ErrorType, agentName}
 	if err := deliver(args); err != nil {
-		_, _ = fmt.Fprintf(stderr, "human hook: failed to deliver %q event to daemon: %v\n", eventName, err)
+		_, _ = fmt.Fprintf(stderr, "human hook: failed to deliver %q event to daemon: %v\n", eventName, err) // #nosec G705 -- CLI terminal output, not web
 	}
 	return nil
 }
