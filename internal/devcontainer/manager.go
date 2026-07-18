@@ -30,6 +30,13 @@ type UpOptions struct {
 	Out           io.Writer
 	ContainerName string // override container name (default: derived from project dir)
 	SourceDir     string // override mount source (default: same as ProjectDir)
+	// GitDir is the parent repo's .git directory to bind at its host-identical
+	// path when SourceDir is a git worktree: a worktree's .git FILE references
+	// the parent by absolute host path, so without this bind every in-container
+	// git command fails with "not a git repository" (ticket 482). Empty for
+	// shared-checkout and non-git workspaces, whose .git travels with the
+	// source mount itself.
+	GitDir string
 }
 
 // Up creates and starts a devcontainer. If the container already exists and is
@@ -111,7 +118,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	}
 	// Docker bind mounts require absolute paths.
 	sourceDir, _ = filepath.Abs(sourceDir)
-	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, imageName, workspaceDir, hash, opts.DaemonInfo)
+	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, imageName, workspaceDir, hash, opts.DaemonInfo, opts.GitDir)
 	ParseRunArgs(cfg.RunArgs, &createOpts, m.Logger)
 
 	_, _ = fmt.Fprintf(out, "Creating container %s...\n", containerName)
@@ -258,7 +265,7 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 
 // buildCreateOptions creates ContainerCreateOptions from the devcontainer config.
 // configDir is the directory containing .devcontainer/devcontainer.json (may differ from projectDir).
-func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, configDir, containerName, imageName, workspaceDir, hash string, daemonInfo *daemon.DaemonInfo) ContainerCreateOptions {
+func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, configDir, containerName, imageName, workspaceDir, hash string, daemonInfo *daemon.DaemonInfo, gitDir string) ContainerCreateOptions {
 	env := make([]string, 0)
 	for k, v := range cfg.ContainerEnv {
 		env = append(env, k+"="+v)
@@ -280,6 +287,13 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 
 	binds := []string{
 		projectDir + ":" + workspaceDir,
+	}
+
+	// A worktree workspace resolves git through the parent repo's .git, which
+	// lives outside the mount — bind it at its host-identical path so the
+	// worktree's absolute gitdir pointer works in-container (ticket 482).
+	if gitDir != "" {
+		binds = append(binds, gitDir+":"+gitDir)
 	}
 
 	// Mount CA cert if it exists.
