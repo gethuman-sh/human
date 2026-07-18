@@ -21,6 +21,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/devcontainer"
+	"github.com/gethuman-sh/human/internal/gitrepo"
 )
 
 // execRetentionDays is the rolling window for execution-log retention. Matches
@@ -70,6 +71,9 @@ type LaunchRecord struct {
 	Model       string    `json:"model,omitempty"`
 	ContainerID string    `json:"container_id"`
 	StartedAt   time.Time `json:"started_at"`
+	// Worktree is the per-run private worktree; the retention prune sweeps a
+	// KEPT (reaped-run) worktree when it drops the execution dir.
+	Worktree string `json:"worktree,omitempty"`
 }
 
 // OutcomeRecord is written on completion/reap: why and when a run ended.
@@ -266,6 +270,14 @@ func PruneExecutions() (int, error) {
 				continue
 			}
 			if lr.StartedAt.Before(cutoff) {
+				// A reaped run's worktree was KEPT for forensics; retention is
+				// its final sweep. Detach it from the shared repo before dropping
+				// the tree, best-effort — retention must never fail on a stale
+				// worktree (repo may be gone).
+				if lr.Worktree != "" {
+					_ = gitrepo.WorktreeRemove(context.Background(), lr.Worktree, lr.Worktree)
+					_ = os.RemoveAll(lr.Worktree)
+				}
 				if err := os.RemoveAll(dir); err == nil {
 					removed++
 				}

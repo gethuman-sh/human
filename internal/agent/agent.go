@@ -44,6 +44,12 @@ type Meta struct {
 	// removal paths can copy the transcript out of the exact run before the
 	// container is destroyed.
 	ExecutionID string `json:"execution_id,omitempty"`
+	// ProjectDir is the shared repo the run's worktree was cut from; stopLocked
+	// needs it to run `git -C <ProjectDir> worktree remove`.
+	ProjectDir string `json:"project_dir,omitempty"`
+	// Worktree is the per-run private worktree mounted into the container. Empty
+	// for non-git workspaces (mounted directly).
+	Worktree string `json:"worktree,omitempty"`
 }
 
 // ContainerName returns the Docker container name for an agent.

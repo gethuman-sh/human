@@ -62,3 +62,32 @@ var DefaultBranch = func(ctx context.Context, dir string) string {
 	}
 	return "main"
 }
+
+// IsRepo reports whether dir is inside a git working tree (running
+// `git -C <dir> rev-parse --is-inside-work-tree`). Package var so callers can
+// stub git access in tests.
+var IsRepo = func(ctx context.Context, dir string) bool {
+	out, err := runner(ctx, "git", "-C", dir, "rev-parse", "--is-inside-work-tree")
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// WorktreeAdd creates a detached private worktree at worktreePath rooted at base
+// (running `git -C <repoDir> worktree add --detach <worktreePath> <base>`). The
+// worktree shares repoDir's object DB, so branches created inside it are visible
+// from repoDir. Package var so callers can stub git access.
+var WorktreeAdd = func(ctx context.Context, repoDir, worktreePath, base string) error {
+	if _, err := runner(ctx, "git", "-C", repoDir, "worktree", "add", "--detach", worktreePath, base); err != nil {
+		return errors.WrapWithDetails(err, "adding git worktree", "repo", repoDir, "worktree", worktreePath, "base", base)
+	}
+	return nil
+}
+
+// WorktreeRemove force-removes the worktree at worktreePath (running
+// `git -C <repoDir> worktree remove --force <worktreePath>`). Force because a
+// completed run may leave modified/untracked files. Package var for test stubs.
+var WorktreeRemove = func(ctx context.Context, repoDir, worktreePath string) error {
+	if _, err := runner(ctx, "git", "-C", repoDir, "worktree", "remove", "--force", worktreePath); err != nil {
+		return errors.WrapWithDetails(err, "removing git worktree", "repo", repoDir, "worktree", worktreePath)
+	}
+	return nil
+}
