@@ -16,8 +16,22 @@ fmt-check:
 build:
 	go build -ldflags "-X main.version=dev -X main.commit=$$(git rev-parse --short HEAD) -X main.date=$$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o bin/human .
 
-install:
+# install delivers both user-facing artifacts: the CLI via go install, and the
+# board app next to it in the Go bin dir (or into ~/Applications as a .app
+# bundle on macOS, where a bare binary is not a launchable app). Building the
+# board requires the Wails CLI — `make desktop-deps`.
+install: desktop
 	go install .
+	@if [ -d desktop/build/bin/human-board.app ]; then \
+		mkdir -p "$$HOME/Applications" && \
+		rm -rf "$$HOME/Applications/human-board.app" && \
+		cp -R desktop/build/bin/human-board.app "$$HOME/Applications/" && \
+		echo "human-board.app -> $$HOME/Applications"; \
+	else \
+		bindir="$$(go env GOBIN)"; [ -n "$$bindir" ] || bindir="$$(go env GOPATH)/bin"; \
+		install -m 0755 desktop/build/bin/human-board* "$$bindir/" && \
+		echo "human-board -> $$bindir"; \
+	fi
 
 test:
 	go tool gotestsum ./...
@@ -87,6 +101,7 @@ DESKTOP_TAGS ?= wailsapp$(shell pkg-config --exists webkit2gtk-4.0 2>/dev/null |
 # `go build ./desktop/` links but panics at startup, so it is never the build
 # path (see docs/desktop-app.md).
 desktop:
+	@command -v wails >/dev/null || { echo "error: wails CLI not found — run 'make desktop-deps'"; exit 1; }
 	cd desktop && wails build -tags $(DESKTOP_TAGS)
 
 # desktop-dev runs the live-reload dev loop.
