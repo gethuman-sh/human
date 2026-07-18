@@ -9,6 +9,7 @@ A long-running background service that holds your tracker credentials once and a
 - Completes browser OAuth sign-in flows automatically
 - Surfaces ready-for-review handoffs to the TUI
 - Queues destructive operations as permission requests; an approval is a one-time grant the client redeems by re-submitting the command, and decisions stay queryable by ID for 24 hours — persisted in `~/.human/confirms.db`, so prompts and unredeemed grants survive daemon restarts
+- Runs the preflight doctor: cached substrate health checks (tracker credentials, docker, proxy CA, agent skills, persistence) behind a `doctor` route; agent launches are refused with the failing check's diagnosis, `human doctor` prints the report, and the board's rail LED shows it live
 - Rejects clients older than the wire protocol it speaks with a clear "upgrade the human CLI" error, before any side effects
 - Records tool activity for later statistics
 - Derives each PM ticket's workflow-board placement and applies drag-to-trigger pipeline transitions for the desktop board

@@ -70,6 +70,31 @@ body {
   padding: 10px 0;
 }
 
+/* The doctor LED: the substrate's health as one dot at the very top of the
+   rail. Neutral while unknown, green when every preflight check passes, red
+   when any fails or the daemon is unreachable — the tooltip carries the
+   failing checks and their fixes. */
+.rail-led {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  margin: 2px 0 4px;
+  background: var(--muted);
+  cursor: help;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+.rail-led.ok {
+  background: var(--done);
+  box-shadow: 0 0 6px var(--done);
+}
+
+.rail-led.fail {
+  background: var(--failed);
+  box-shadow: 0 0 6px var(--failed);
+}
+
 /* Discord-style icon tiles: dark rounded squares that morph toward the accent
    squircle on hover/active. The centred flex keeps glyph and svg icons aligned. */
 .rail-item {

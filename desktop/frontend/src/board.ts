@@ -194,8 +194,22 @@ interface IssueDetailData {
   fixSummaryHTML?: string;
 }
 
+interface DoctorCheck {
+  id: string;
+  name: string;
+  ok: boolean;
+  detail?: string;
+}
+
+interface DoctorData {
+  healthy: boolean;
+  checkedAt?: string;
+  checks: DoctorCheck[];
+}
+
 interface AppBindings {
   Cards(): Promise<BoardData>;
+  Doctor(): Promise<DoctorData>;
   GetIssueDetail(trackerKind: string, trackerName: string, key: string): Promise<IssueDetailData>;
   CardsQuick(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
@@ -1393,6 +1407,29 @@ async function pollDaemonStatus(): Promise<void> {
     daemonReachable = false;
   }
   renderDaemonStatus();
+  void pollDoctor();
+}
+
+// pollDoctor drives the rail LED: green when every substrate check passes,
+// red otherwise, with the failing checks (and their fixes) in the tooltip.
+// The daemon caches check results, so polling at the daemon-status cadence is
+// cheap and the LED reflects reality within seconds.
+async function pollDoctor(): Promise<void> {
+  const led = document.getElementById("doctor-led");
+  if (!led) return;
+  let doctor: DoctorData;
+  try {
+    doctor = await go().Doctor();
+  } catch {
+    doctor = { healthy: false, checks: [{ id: "daemon", name: "daemon", ok: false, detail: "not reachable" }] };
+  }
+  const failing = (doctor.checks ?? []).filter((c) => !c.ok);
+  const healthy = doctor.healthy && failing.length === 0;
+  led.classList.toggle("ok", healthy);
+  led.classList.toggle("fail", !healthy);
+  led.title = healthy
+    ? "All systems go"
+    : failing.map((c) => `${c.name}: ${c.detail || "failing"}`).join("\n") || "System health unknown";
 }
 
 // initialLoad renders the board progressively on startup: a spinner first, then

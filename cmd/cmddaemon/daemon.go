@@ -239,6 +239,12 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 
 	go runMaintenanceLoop(ctx, logger, confirmStore, statsStore, auditStore)
 
+	doctor := daemon.NewDoctorRunner(buildDoctorChecks(projectRegistry, vaultResolver, doctorPersistence{
+		stats:    statsStore != nil,
+		audit:    auditStore != nil,
+		confirms: confirmDB != nil,
+	}))
+
 	srv := &daemon.Server{
 		Addr:              addr,
 		Token:             token,
@@ -252,6 +258,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		LiteIssueFetcher:  fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
 		IssueGetter:       daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
 		TrackerDiagnoser:  trackerDiagnoserFunc(projectRegistry, vaultResolver),
+		Doctor:            doctor,
 		Projects:          projectRegistry,
 		PendingConfirms:   confirmStore,
 		StatsWriter:       statsWriter,

@@ -317,6 +317,26 @@ func (a *App) DaemonStatus() bool {
 	return alive
 }
 
+// Doctor returns the daemon's substrate health checks for the rail LED. An
+// unreachable daemon (or a daemon predating the doctor route) surfaces as an
+// unhealthy result with a single explanatory check rather than an error, so
+// the LED always has something truthful to show.
+func (a *App) Doctor() daemon.DoctorData {
+	info, err := daemon.ReadInfo()
+	if err != nil || !info.IsReachable() {
+		return daemon.DoctorData{Checks: []daemon.DoctorCheck{
+			{ID: "daemon", Name: "daemon", OK: false, Detail: "not reachable — start it with 'human daemon'"},
+		}}
+	}
+	data, err := daemon.GetDoctor(info.Addr, info.Token, false)
+	if err != nil {
+		return daemon.DoctorData{Checks: []daemon.DoctorCheck{
+			{ID: "daemon", Name: "daemon", OK: false, Detail: "doctor unavailable: " + err.Error()},
+		}}
+	}
+	return data
+}
+
 // Transition advances a card one stage by delegating to the daemon's
 // board-transition route. The daemon is authoritative: it re-derives the card
 // from live comments and enforces forward-only/gated rules, so an out-of-date

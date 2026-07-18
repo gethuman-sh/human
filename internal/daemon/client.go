@@ -504,6 +504,24 @@ func GetPendingConfirms(addr, token string) ([]PendingConfirm, error) {
 	return results, nil
 }
 
+// GetDoctor fetches the daemon's substrate health checks. refresh forces a
+// live run instead of the poller cache.
+func GetDoctor(addr, token string, refresh bool) (DoctorData, error) {
+	args := []string{"doctor"}
+	if refresh {
+		args = append(args, "refresh")
+	}
+	out, err := RunRemoteCapture(addr, token, args)
+	if err != nil {
+		return DoctorData{}, err
+	}
+	var data DoctorData
+	if err := json.Unmarshal(out, &data); err != nil {
+		return DoctorData{}, errors.WrapWithDetails(err, "invalid doctor JSON")
+	}
+	return data, nil
+}
+
 // GetToolStats fetches pre-aggregated tool call statistics from the daemon.
 func GetToolStats(addr, token string) (*stats.ToolStats, error) {
 	out, err := RunRemoteCapture(addr, token, []string{"tool-stats"})
