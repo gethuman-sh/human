@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1216,7 +1217,7 @@ func TestBuildHookRunE_malformedJSON(t *testing.T) {
 	os.Stdin = r
 
 	runE := buildHookRunE()
-	err = runE(nil, nil)
+	err = runE(&cobra.Command{}, nil)
 	assert.NoError(t, err)
 }
 
@@ -1235,7 +1236,7 @@ func TestBuildHookRunE_emptyEventName(t *testing.T) {
 	os.Stdin = r
 
 	runE := buildHookRunE()
-	err = runE(nil, nil)
+	err = runE(&cobra.Command{}, nil)
 	assert.NoError(t, err)
 }
 
@@ -1258,7 +1259,7 @@ func TestBuildHookRunE_noDaemon(t *testing.T) {
 	os.Stdin = r
 
 	runE := buildHookRunE()
-	err = runE(nil, nil)
+	err = runE(&cobra.Command{}, nil)
 	assert.NoError(t, err)
 }
 
@@ -1274,7 +1275,7 @@ func TestBuildHookRunE_emptyStdin(t *testing.T) {
 	os.Stdin = r
 
 	runE := buildHookRunE()
-	err = runE(nil, nil)
+	err = runE(&cobra.Command{}, nil)
 	assert.NoError(t, err)
 }
 

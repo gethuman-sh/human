@@ -228,7 +228,11 @@ func buildStopCmd() *cobra.Command {
 			if async {
 				// Signal the daemon to clean up asynchronously.
 				if info, infoErr := daemon.ReadInfo(); infoErr == nil && info.IsReachable() {
-					_, _ = daemon.RunRemote(info.Addr, info.Token, []string{"agent-stop-async", args[0]}, "")
+					if _, err := daemon.RunRemote(info.Addr, info.Token, []string{"agent-stop-async", args[0]}, ""); err != nil {
+						// A dropped async stop otherwise leaves the container for the
+						// zombie sweep with no trace; make the failure visible.
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: async stop signal to daemon failed for %q: %v\n", args[0], err)
+					}
 					return nil
 				}
 				// No daemon: fall through to synchronous stop.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -410,37 +411,92 @@ type hookInput struct {
 	ErrorType        string `json:"error"`
 }
 
+// hookDeliverer forwards resolved hook-event args to the daemon. Injected so
+// the forwarding path is testable without opening a socket.
+type hookDeliverer func(args []string) error
+
 // buildHookRunE returns the RunE for the "hook" command. It reads Claude Code
 // hook JSON from stdin and forwards it to the daemon as hook-event args.
 func buildHookRunE() func(*cobra.Command, []string) error {
-	return func(_ *cobra.Command, _ []string) error {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return nil // stdin unavailable — silently ignore
-		}
-		var input hookInput
-		if err := json.Unmarshal(data, &input); err != nil {
-			return nil // malformed JSON — silently ignore
-		}
-		if input.EventName == "" {
-			return nil
-		}
+	return func(cmd *cobra.Command, _ []string) error {
+		return runHook(os.Stdin, cmd.ErrOrStderr(), deliverHookEvent)
+	}
+}
 
-		// Forward to daemon if available.
-		addr := os.Getenv("HUMAN_DAEMON_ADDR")
-		token := os.Getenv("HUMAN_DAEMON_TOKEN")
-		if addr == "" {
-			addr, token = discoverDaemon(token)
-		}
-		if addr == "" {
-			return nil // no daemon — silently ignore
-		}
+// deliverHookEvent resolves the daemon address/token and performs the round-trip.
+func deliverHookEvent(args []string) error {
+	addr := os.Getenv("HUMAN_DAEMON_ADDR")
+	token := os.Getenv("HUMAN_DAEMON_TOKEN")
+	if addr == "" {
+		addr, token = discoverDaemon(token)
+	}
+	if addr == "" {
+		return errors.WithDetails("no reachable daemon for hook delivery")
+	}
+	if _, err := daemon.RunRemote(addr, token, args, version); err != nil {
+		return err
+	}
+	return nil
+}
 
-		agentName := os.Getenv("HUMAN_AGENT_NAME")
-		args := []string{"hook-event", input.EventName, input.SessionID, input.Cwd, input.NotificationType, input.ToolName, input.ErrorType, agentName}
-		_, _ = daemon.RunRemote(addr, token, args, version)
+// runHook reads a Claude Code hook payload from stdin and forwards the event to
+// the daemon via deliver. It tolerates event-key renames across Claude versions
+// and never drops a non-empty payload or a failed delivery without a stderr line,
+// so container hook failures surface in the agent's output.log (ticket 428).
+func runHook(stdin io.Reader, stderr io.Writer, deliver hookDeliverer) error {
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "human hook: cannot read stdin: %v\n", err)
 		return nil
 	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil // genuinely empty invocation — nothing to report
+	}
+
+	var input hookInput
+	// Best-effort: unknown/renamed top-level keys must not abort parsing.
+	_ = json.Unmarshal(data, &input)
+
+	eventName := resolveEventName(data, input.EventName)
+	if eventName == "" {
+		_, _ = fmt.Fprintf(stderr,
+			"human hook: no recognizable event-name key in %d-byte payload; dropping (update the known-key set in resolveEventName)\n",
+			len(data))
+		return nil
+	}
+
+	agentName := os.Getenv("HUMAN_AGENT_NAME")
+	args := []string{"hook-event", eventName, input.SessionID, input.Cwd, input.NotificationType, input.ToolName, input.ErrorType, agentName}
+	if err := deliver(args); err != nil {
+		_, _ = fmt.Fprintf(stderr, "human hook: failed to deliver %q event to daemon: %v\n", eventName, err)
+	}
+	return nil
+}
+
+// resolveEventName recovers the hook event name across Claude Code schema
+// versions. It trusts the struct-parsed canonical value first, then scans the
+// raw top-level JSON for any known alias key, guarding against a future rename
+// silently zeroing out the event.
+func resolveEventName(data []byte, structVal string) string {
+	if structVal != "" {
+		return structVal
+	}
+	knownKeys := []string{"hook_event_name", "hookEventName", "event_name", "eventName", "event"}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return ""
+	}
+	for _, k := range knownKeys {
+		v, ok := raw[k]
+		if !ok {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil && s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // localSubcommands lists commands that must execute locally rather than
