@@ -55,12 +55,12 @@ const (
 	// undetermined). It carries no [human:ready-for-review] handoff, so the
 	// failure watcher would otherwise mistake the missing handoff for a crash
 	// and loop forever re-triaging (ticket 405).
-	NoFixNeededHeader = "[human:no-fix-needed]"
-	ReviewStartedHeader         = "[human:review-started]"
-	ReviewFailedHeader          = "[human:review-failed]"
-	PRStartedHeader             = "[human:pr-started]"
-	PRPushedHeader              = "[human:pr-pushed]"
-	PRFailedHeader              = "[human:pr-failed]"
+	NoFixNeededHeader   = "[human:no-fix-needed]"
+	ReviewStartedHeader = "[human:review-started]"
+	ReviewFailedHeader  = "[human:review-failed]"
+	PRStartedHeader     = "[human:pr-started]"
+	PRPushedHeader      = "[human:pr-pushed]"
+	PRFailedHeader      = "[human:pr-failed]"
 
 	// Deploy markers supersede the PR markers for the done stage: dropping a
 	// card on Deploy runs push → PR → CI gate → merge → close, so the stage's
