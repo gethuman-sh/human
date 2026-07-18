@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, forwardDropAllowed, planReady } from "../build/board-queue.js";
+import { queueOf, forwardDropAllowed, planReady, badgeInfo } from "../build/board-queue.js";
 
 // SC-355 regression: a running or failed planning card must render in the
 // Engineering column where the user dropped it — not snap back to Product.
@@ -42,4 +42,31 @@ test("failed planning card is retry-eligible but not code-droppable", () => {
   const failed = { stage: "planning", state: "failed" };
   assert.equal(planReady(failed), false, "failed plan must not be plan-ready");
   assert.equal(forwardDropAllowed(failed, "building"), false, "failed plan must not drop into Code");
+});
+
+// SC-429 regression: "fix complete, review not started" (stage=implementation,
+// state=done) is a durable pipeline state, not a sub-second transient. It must
+// render a status badge in both the Bugs pane and the Code column — never blank.
+test("implementation/done card gets a non-empty badge (SC-429)", () => {
+  const info = badgeInfo({ stage: "implementation", state: "done" });
+  assert.notEqual(info, null, "implementation/done must classify to a badge, not blank");
+  assert.ok(info.text.length > 0, "badge text must be non-empty");
+  assert.equal(info.cls, "await");
+});
+
+test("badgeInfo preserves prior classifications", () => {
+  assert.equal(badgeInfo({ stage: "implementation", state: "running" }).cls, "running");
+  assert.equal(badgeInfo({ stage: "verification", state: "failed" }).cls, "failed");
+  // SC-405: a no-fix-needed triage outcome is resolved — never red, never blank.
+  assert.equal(badgeInfo({ stage: "implementation", state: "resolved" }).cls, "resolved");
+  assert.equal(
+    badgeInfo({ stage: "verification", state: "done", verdict: "fail", branch: "b" }).cls,
+    "warning",
+  );
+  assert.equal(
+    badgeInfo({ stage: "verification", state: "done", verdict: "pass", branch: "b" }),
+    null,
+    "a resting reviewed card needs no badge — its queue position states completion",
+  );
+  assert.equal(badgeInfo({ stage: "done", state: "done" }).cls, "done");
 });

@@ -49,6 +49,69 @@ export function isReworkable(card: QueueCard): boolean {
   return card.stage === "verification" && card.state === "done" && (verdictFailed(card.verdict) || !card.branch);
 }
 
+// A DOM-free description of a card's live status badge. board.ts renders it to
+// HTML; keeping the CLASSIFICATION here (out of the document-bound board.ts)
+// lets the badge branches be unit-tested directly. `spinner` requests the
+// running spinner glyph before the text.
+export interface BadgeInfo {
+  cls: string;
+  text: string;
+  title: string;
+  spinner?: boolean;
+}
+
+// Live badge text while a stage runs; builds and their chained reviews both
+// live in the Code lane, deploys in Ready to Deploy.
+export const RUNNING_LABELS: Record<string, string> = {
+  planning: "planning…",
+  implementation: "building…",
+  verification: "reviewing…",
+  done: "deploying…",
+};
+
+// badgeInfo classifies a card's live state into a badge descriptor, or null
+// when the card rests and needs none — its queue position IS the statement of
+// completion. A review that found problems is a WARNING, not a stage failure:
+// the work exists, it just may not advance until a rebuild passes.
+export function badgeInfo(card: QueueCard): BadgeInfo | null {
+  if (card.state === "running") {
+    return {
+      cls: "running",
+      text: RUNNING_LABELS[card.stage] ?? "working…",
+      title: "Agent running",
+      spinner: true,
+    };
+  }
+  if (card.state === "failed") return { cls: "failed", text: "✕", title: "Stage failed" };
+  if (card.state === "resolved") {
+    // An autofix run whose triage concluded no fix is warranted (not-a-bug or
+    // undetermined): a successful terminal outcome, never red, never deployable
+    // (ticket 405).
+    return { cls: "resolved", text: "no fix needed", title: "Triage concluded no fix is warranted" };
+  }
+  if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
+    return { cls: "warning", text: "⚠ review found problems", title: "Review verdict: " + (card.verdict ?? "") };
+  }
+  if (card.stage === "verification" && card.state === "done" && !card.branch) {
+    // A passed review with no recorded branch has nothing to ship — deploying
+    // it can only fail, so it must read as needing a rebuild, never as ready.
+    return {
+      cls: "warning",
+      text: "⚠ no branch recorded",
+      title: "Review passed but no branch was recorded on the handoff — drop it on the build stage to rebuild",
+    };
+  }
+  // SC-429: fix complete, review not started is a durable hand-off state, not a
+  // sub-second transient — it must read as a neutral wait, never render blank.
+  if (card.stage === "implementation" && card.state === "done") {
+    return { cls: "await", text: "awaiting review…", title: "Fix complete — waiting for review to start" };
+  }
+  if (card.stage === "done" && card.state === "done") {
+    return { cls: "done", text: "deployed", title: "Merged and shipped" };
+  }
+  return null;
+}
+
 // planReady reports a planning card whose plan is complete — the only planning
 // state permitted to advance forward into Code. A running or failed planning
 // card in Engineering must NOT launch implementation on an unplanned ticket.

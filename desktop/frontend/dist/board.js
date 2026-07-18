@@ -13,7 +13,7 @@ import { initPermissions } from "./permissions.js";
 import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsview.js";
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, badgeInfo, } from "./board-queue.js";
 import { buildDetailSections } from "./board-detail.js";
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
@@ -71,14 +71,6 @@ const QUEUE_VERB = {
     engineering: "Plan it",
     building: "Build it",
 };
-// Live badge text while a stage runs; builds and their chained reviews both
-// live in the Code lane, deploys in Ready to Deploy.
-const RUNNING_LABELS = {
-    planning: "planning…",
-    implementation: "building…",
-    verification: "reviewing…",
-    done: "deploying…",
-};
 let current = { cards: [], dockerAvailable: true, error: "" };
 let dragging = null;
 // Two-phase load state. boardLoading covers the first fetch before any titles
@@ -110,30 +102,11 @@ function targetEnabled(toQueue) {
 // problems is a WARNING, not a stage failure: the work exists, it just may
 // not advance until a rebuild passes.
 function badge(card) {
-    if (card.state === "running") {
-        const label = RUNNING_LABELS[card.stage] ?? "working…";
-        return `<span class="badge running" title="Agent running"><span class="spinner"></span> ${escapeHtml(label)}</span>`;
-    }
-    if (card.state === "failed")
-        return `<span class="badge failed" title="Stage failed">✕</span>`;
-    if (card.state === "resolved") {
-        // An autofix run whose triage concluded no fix is warranted (not-a-bug or
-        // undetermined): a successful terminal outcome, never red, never deployable
-        // (ticket 405).
-        return `<span class="badge resolved" title="Triage concluded no fix is warranted">no fix needed</span>`;
-    }
-    if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
-        return `<span class="badge warning" title="${escapeAttr("Review verdict: " + (card.verdict ?? ""))}">⚠ review found problems</span>`;
-    }
-    if (card.stage === "verification" && card.state === "done" && !card.branch) {
-        // A passed review with no recorded branch has nothing to ship — deploying
-        // it can only fail, so it must read as needing a rebuild, never as ready.
-        return `<span class="badge warning" title="Review passed but no branch was recorded on the handoff — drop it on the build stage to rebuild">⚠ no branch recorded</span>`;
-    }
-    if (card.stage === "done" && card.state === "done") {
-        return `<span class="badge done" title="Merged and shipped">deployed</span>`;
-    }
-    return "";
+    const info = badgeInfo(card);
+    if (!info)
+        return "";
+    const spinner = info.spinner ? `<span class="spinner"></span> ` : "";
+    return `<span class="badge ${info.cls}" title="${escapeAttr(info.title)}">${spinner}${escapeHtml(info.text)}</span>`;
 }
 function renderCard(card) {
     const el = document.createElement("div");
@@ -441,6 +414,15 @@ function renderBugCard(card) {
             failed.textContent = "✕ error";
             if (card.error)
                 failed.title = card.error;
+        }
+    }
+    // SC-429: the board's neutral "awaiting review…" reads as bug-language here —
+    // the fix is done, it is just waiting for its review to start.
+    if (card.stage === "implementation" && card.state === "done") {
+        const awaiting = el.querySelector(".badge.await");
+        if (awaiting) {
+            awaiting.textContent = "fixed, awaiting review…";
+            awaiting.title = "Fix complete — waiting for review to start";
         }
     }
     if (isReadyToDeploy(card)) {
