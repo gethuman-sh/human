@@ -102,7 +102,7 @@ function targetEnabled(toQueue) {
 // problems is a WARNING, not a stage failure: the work exists, it just may
 // not advance until a rebuild passes.
 function badge(card) {
-    const info = badgeInfo(card);
+    const info = badgeInfo(chosenOptions.has(card.key) ? { ...card, options: liveOptions(card) } : card);
     if (!info)
         return "";
     const spinner = info.spinner ? `<span class="spinner"></span> ` : "";
@@ -1400,6 +1400,37 @@ function renderIdeationError(msg) {
 // with the ticket's key, title, owner and description. It renders a snapshot
 // of the clicked card, re-resolved by key after each render() so the full
 // fetch backfills a description the quick titles-only pass left empty.
+// chosenOptions tracks decisions made this session, keyed by ticket with the
+// consumed block's signature. The board's comment-scan cache can lag the
+// consumption by a full cycle, so fetched cards keep re-offering a block the
+// user already chose — this is the optimistic local consumption that bridges
+// the gap. A DIFFERENT signature on a later fetch is a NEW decision block and
+// must show, so the entry clears itself (ticket 579).
+const chosenOptions = new Map();
+// optionsSignature identifies one decision block by its content, so stale
+// re-offers of a consumed block are distinguishable from a genuinely new one.
+function optionsSignature(options) {
+    return (options ?? []).map((o) => o.id + ":" + o.label).join("|");
+}
+// liveOptions returns the card's options with the session's consumed block
+// suppressed — and retires the suppression once the server catches up or a
+// new block appears.
+function liveOptions(card) {
+    const chosen = chosenOptions.get(card.key);
+    if (!chosen)
+        return card.options;
+    if (!card.options || card.options.length === 0) {
+        // Server caught up: the consumed block is gone for real.
+        chosenOptions.delete(card.key);
+        return undefined;
+    }
+    if (optionsSignature(card.options) !== chosen.signature) {
+        // A new decision block — the old choice must not mask it.
+        chosenOptions.delete(card.key);
+        return card.options;
+    }
+    return undefined;
+}
 let detailCard = null;
 // detailError surfaces a failed per-ticket backfill in the panel. A silent
 // failure is indistinguishable from "the ticket has no description", which
@@ -1523,8 +1554,21 @@ function renderTicketDetail() {
         ? `<div class="detail-error">Couldn't load the full ticket: ${escapeHtml(detailError)}</div>`
         : "";
     // The open decision renders FIRST: when the pipeline is waiting on the
-    // human, the choice is the panel's most actionable content.
-    const options = buildOptionsSection(detailCard.optionsContext, detailCard.options);
+    // human, the choice is the panel's most actionable content. A decision made
+    // this session renders as its confirmation instead — the comment-scan cache
+    // may re-offer the consumed block for a full cycle (ticket 579).
+    const chosen = chosenOptions.get(detailCard.key);
+    const visibleOptions = liveOptions(detailCard);
+    let options;
+    if (chosen && !visibleOptions) {
+        options =
+            `<section class="detail-section detail-options"><h3 class="detail-section-title">Decision made</h3>` +
+                `<div class="detail-options-context">Direction ${escapeHtml(chosen.optionID)} chosen — a fresh agent is pursuing it. ` +
+                `The choice is recorded on the ticket.</div></section>`;
+    }
+    else {
+        options = buildOptionsSection(detailCard.optionsContext, visibleOptions);
+    }
     body.innerHTML = `
     <div class="detail-title">${escapeHtml(detailCard.title)}</div>
     <div class="detail-owner">Owner: ${owner}</div>
@@ -1537,16 +1581,35 @@ function renderTicketDetail() {
     const url = detailCard.url;
     body.querySelector(".detail-tracker-btn")?.addEventListener("click", () => openExternal(url));
     const optionKey = detailCard.key;
+    const optionSig = optionsSignature(visibleOptions);
     body.querySelectorAll(".detail-option-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
             // The click is the consent: disable all choices immediately so a slow
             // daemon round-trip can never dispatch two directions.
             body.querySelectorAll(".detail-option-btn").forEach((b) => (b.disabled = true));
+            const optionID = btn.dataset.optionId ?? "";
+            // Optimistic consumption: confirm in place instead of waiting a full
+            // comment-scan cycle for the server-derived card to catch up.
+            const confirmChoice = () => {
+                chosenOptions.set(optionKey, { signature: optionSig, optionID });
+                renderTicketDetail();
+                render();
+            };
             void go()
-                .ChooseOption(optionKey, btn.dataset.optionId ?? "")
-                .then(() => reconcile())
+                .ChooseOption(optionKey, optionID)
+                .then(() => {
+                confirmChoice();
+                return reconcile();
+            })
                 .catch((err) => {
-                showError(errMessage(err));
+                const msg = errMessage(err);
+                if (msg.includes("no open decision")) {
+                    // The guard refusing a double-dispatch is the feature working —
+                    // the decision is already made, which is a state, not a failure.
+                    confirmChoice();
+                    return;
+                }
+                showError(msg);
                 void reconcile();
             });
         });
