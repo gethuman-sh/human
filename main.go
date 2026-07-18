@@ -23,6 +23,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdclickup"
 	"github.com/gethuman-sh/human/cmd/cmdcodenav"
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
+	"github.com/gethuman-sh/human/cmd/cmddoctor"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
 	"github.com/gethuman-sh/human/cmd/cmdindex"
 	"github.com/gethuman-sh/human/cmd/cmdinit"
@@ -313,6 +314,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	pingCmd.GroupID = "utility"
 	rootCmd.AddCommand(pingCmd)
 
+	doctorCmd := cmddoctor.BuildDoctorCmd()
+	doctorCmd.GroupID = "utility"
+	rootCmd.AddCommand(doctorCmd)
+
 	proxyCmd := cmdproxy.BuildProxyCmd()
 	proxyCmd.GroupID = "utility"
 	rootCmd.AddCommand(proxyCmd)
@@ -450,6 +455,7 @@ var localSubcommands = map[string]bool{
 	"codenav":       true,
 	"agent-context": true,
 	"tui":           true,
+	"doctor":        true,
 	"ping":          true,
 	"proxy":         true,
 	"hook":          true,
