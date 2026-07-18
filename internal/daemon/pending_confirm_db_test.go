@@ -292,7 +292,7 @@ func (f *failingPersistence) Delete(id string) error {
 	f.deletes = append(f.deletes, id)
 	return nil
 }
-func (f *failingPersistence) DeleteOlderThan(time.Time) error      { return f.err("prune") }
+func (f *failingPersistence) DeleteOlderThan(time.Time) error         { return f.err("prune") }
 func (f *failingPersistence) LoadAll() ([]PendingConfirmation, error) { return nil, f.err("load") }
 
 type errTestPersistence string
