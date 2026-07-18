@@ -714,6 +714,14 @@ body {
   color: var(--muted);
 }
 
+/* An open decision block (ticket 534): the pipeline is deliberately waiting
+   on the human — accent-colored like the running state, because the ball is
+   in play, just in the user's court. */
+.badge.decision {
+  color: var(--running);
+  font-weight: 600;
+}
+
 /* Right-click card menu: administrative actions that are not pipeline
    transitions (close ticket, open in tracker). */
 .context-menu {
@@ -1279,6 +1287,56 @@ body {
    as the alert it is. */
 .detail-section.detail-failure .detail-section-title {
   color: var(--accent);
+}
+
+/* The open decision (ticket 534): the panel's most actionable content — one
+   full-width button per direction, the click IS the dispatch. */
+.detail-options .detail-section-title {
+  color: var(--running);
+}
+
+.detail-options-context {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.detail-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-option-btn {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: var(--col-bg);
+  border: 1px solid var(--col-border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.detail-option-btn:hover:not(:disabled) {
+  border-color: var(--running);
+}
+
+.detail-option-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.detail-option-id {
+  flex: none;
+  font-weight: 700;
+  color: var(--running);
 }
 
 /* Section bodies carry the daemon-rendered markdown; reuse the description's

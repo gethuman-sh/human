@@ -38,7 +38,7 @@ import {
   verdictFailed,
   badgeInfo,
 } from "./board-queue.js";
-import { buildDetailSections } from "./board-detail.js";
+import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 
 interface Card {
   key: string;
@@ -67,6 +67,10 @@ interface Card {
   bug?: boolean;
   mockupSlug?: string;
   mockupState?: string; // "ready" | "creating"
+  // The card's open decision block: a stage ended in a fork and a human must
+  // pick a direction (rendered in the detail panel; badge "decision needed").
+  options?: { id: string; label: string }[];
+  optionsContext?: string;
 }
 
 interface BoardData {
@@ -214,6 +218,7 @@ interface AppBindings {
   CardsQuick(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   FixBug(pmKey: string, pmTitle: string): Promise<void>;
+  ChooseOption(pmKey: string, optionID: string): Promise<void>;
   CloseTicket(pmKey: string): Promise<void>;
   SetIdeaColumn(pmKey: string, col: number): Promise<void>;
   DaemonStatus(): Promise<boolean>;
@@ -1799,16 +1804,35 @@ function renderTicketDetail(): void {
   const error = detailError
     ? `<div class="detail-error">Couldn't load the full ticket: ${escapeHtml(detailError)}</div>`
     : "";
+  // The open decision renders FIRST: when the pipeline is waiting on the
+  // human, the choice is the panel's most actionable content.
+  const options = buildOptionsSection(detailCard.optionsContext, detailCard.options);
   body.innerHTML = `
     <div class="detail-title">${escapeHtml(detailCard.title)}</div>
     <div class="detail-owner">Owner: ${owner}</div>
     ${error}
+    ${options}
     ${desc}
     ${detailSections}
     ${link}
   `;
   const url = detailCard.url;
   body.querySelector<HTMLButtonElement>(".detail-tracker-btn")?.addEventListener("click", () => openExternal(url));
+  const optionKey = detailCard.key;
+  body.querySelectorAll<HTMLButtonElement>(".detail-option-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      // The click is the consent: disable all choices immediately so a slow
+      // daemon round-trip can never dispatch two directions.
+      body.querySelectorAll<HTMLButtonElement>(".detail-option-btn").forEach((b) => (b.disabled = true));
+      void go()
+        .ChooseOption(optionKey, btn.dataset.optionId ?? "")
+        .then(() => reconcile())
+        .catch((err) => {
+          showError(errMessage(err));
+          void reconcile();
+        });
+    });
+  });
   // Links inside the rendered description must leave via the system browser,
   // never navigate the webview away from the board.
   body.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
