@@ -59,6 +59,10 @@ test("badgeInfo preserves prior classifications", () => {
   assert.equal(badgeInfo({ stage: "verification", state: "failed" }).cls, "failed");
   // SC-405: a no-fix-needed triage outcome is resolved — never red, never blank.
   assert.equal(badgeInfo({ stage: "implementation", state: "resolved" }).cls, "resolved");
+  // SC-454: a planning card whose work already shipped is resolved with a
+  // positive "already shipped" badge — never red, never blank.
+  assert.equal(badgeInfo({ stage: "planning", state: "resolved" }).cls, "resolved");
+  assert.equal(badgeInfo({ stage: "planning", state: "resolved" }).text, "already shipped");
   assert.equal(
     badgeInfo({ stage: "verification", state: "done", verdict: "fail", branch: "b" }).cls,
     "warning",
