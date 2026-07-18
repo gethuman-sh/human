@@ -683,6 +683,12 @@ body {
   color: var(--muted);
 }
 
+/* A durable "fix done, review not yet started" hand-off (SC-429): a neutral
+   waiting state — not a warning, not a completion. */
+.badge.await {
+  color: var(--muted);
+}
+
 /* Right-click card menu: administrative actions that are not pipeline
    transitions (close ticket, open in tracker). */
 .context-menu {
