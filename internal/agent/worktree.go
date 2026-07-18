@@ -59,5 +59,93 @@ func (m *Manager) mountSourceForRun(ctx context.Context, projectDir, agentName s
 	if err := gitrepo.WorktreeAdd(ctx, projectDir, worktreePath, base); err != nil {
 		return "", err
 	}
+	if err := provisionAgentAssets(projectDir, worktreePath); err != nil {
+		// A half-provisioned workspace would launch an agent that dies later
+		// with a misleading "exited without completing the stage" — fail the
+		// launch loudly instead, and don't leave the fresh worktree behind.
+		_ = gitrepo.WorktreeRemove(ctx, projectDir, worktreePath)
+		return "", errors.WrapWithDetails(err, "provisioning agent worktree", "worktree", worktreePath)
+	}
 	return worktreePath, nil
+}
+
+// agentAssetDirs and agentAssetFiles are the project-level Claude assets an
+// agent needs inside its isolated worktree. .claude/ is git-ignored, so a
+// fresh worktree carries none of it — without the skills the agent's slash
+// command (/human-autofix, /human-plan, …) is unknown and the run dies at
+// startup (ticket 478). Allow-listed rather than copied wholesale so session
+// state (.claude/worktrees, .claude/codenav, …) never leaks into a run.
+var agentAssetDirs = []string{"skills", "commands", "agents"}
+var agentAssetFiles = []string{"settings.json", "settings.local.json"}
+
+// provisionAgentAssets copies the project's .claude agent assets into the
+// worktree. A project without .claude (or without an individual asset) is
+// fine — agents then run bare, exactly as they would in the shared checkout.
+func provisionAgentAssets(projectDir, worktreePath string) error {
+	srcRoot := filepath.Join(projectDir, ".claude")
+	if _, err := os.Stat(srcRoot); err != nil {
+		return nil
+	}
+	dstRoot := filepath.Join(worktreePath, ".claude")
+	for _, dir := range agentAssetDirs {
+		src := filepath.Join(srcRoot, dir)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if err := copyTree(src, filepath.Join(dstRoot, dir)); err != nil {
+			return err
+		}
+	}
+	for _, file := range agentAssetFiles {
+		src := filepath.Join(srcRoot, file)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if err := copyFile(src, filepath.Join(dstRoot, file)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyTree copies a directory recursively: regular files with their mode
+// preserved (skills may carry executable helpers), directories created as
+// needed. Irregular entries (sockets, device nodes) are skipped; symlinks are
+// followed via os.Open so a linked skill file still arrives as content.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return errors.WrapWithDetails(err, "walking agent assets", "path", path)
+		}
+		rel, relErr := filepath.Rel(src, path)
+		if relErr != nil {
+			return errors.WrapWithDetails(relErr, "resolving asset path", "path", path)
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o750)
+		}
+		if !d.Type().IsRegular() && d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		return copyFile(path, target)
+	})
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src) // #nosec G304 -- paths derive from the project's own .claude dir
+	if err != nil {
+		return errors.WrapWithDetails(err, "reading agent asset", "src", src)
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return errors.WrapWithDetails(err, "stat agent asset", "src", src)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return errors.WrapWithDetails(err, "creating asset dir", "dir", filepath.Dir(dst))
+	}
+	if err := os.WriteFile(dst, data, info.Mode().Perm()); err != nil {
+		return errors.WrapWithDetails(err, "writing agent asset", "dst", dst)
+	}
+	return nil
 }
