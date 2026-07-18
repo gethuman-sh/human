@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
+	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/browser"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
@@ -57,6 +58,7 @@ type Server struct {
 	// disables the tracker-issue route.
 	IssueGetter      func(req IssueDetailRequest) (*IssueDetailFetch, error)
 	TrackerDiagnoser func(dir string) []tracker.TrackerStatus // injected; diagnoses tracker status with vault resolution
+	Doctor           *DoctorRunner                            // substrate health checks; nil disables (doctor route reports healthy, launches never block)
 	Projects         *ProjectRegistry                         // multi-project routing; nil means single-project mode
 	PendingConfirms  *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
 	StatsWriter      *stats.Writer                            // async SQLite writer for tool event persistence; nil disables
@@ -364,6 +366,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"tracker-issues-lite": func() { s.handleTrackerIssuesLite(conn) },
 		"tracker-issue":       func() { s.handleTrackerIssue(conn, args[1:]) },
 		"pending-confirms":    func() { s.handlePendingConfirms(conn) },
+		"doctor":              func() { s.handleDoctor(conn, args[1:]) },
 		"confirm-op":          func() { s.handleConfirmOp(conn, args[1:], clientPID) },
 		"confirm-status":      func() { s.handleConfirmStatus(conn, args[1:]) },
 		"tool-stats":          func() { s.handleToolStats(conn) },
@@ -562,6 +565,14 @@ func (s *Server) handleBoardTransition(conn net.Conn, args []string) {
 		s.writeError(conn, "invalid board-transition request: "+err.Error(), 1)
 		return
 	}
+	// The done stage merges and closes without launching an agent, so only
+	// agent-launching targets are gated on substrate health.
+	if req.To != BoardDoneStage {
+		if err := s.launchBlockedByDoctor(); err != nil {
+			s.writeError(conn, err.Error(), 1)
+			return
+		}
+	}
 	if err := s.BoardTransitioner(req); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
@@ -588,6 +599,10 @@ func (s *Server) handleBoardFix(conn net.Conn, args []string) {
 	var req BoardFixRequest
 	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
 		s.writeError(conn, "invalid board-fix request: "+err.Error(), 1)
+		return
+	}
+	if err := s.launchBlockedByDoctor(); err != nil {
+		s.writeError(conn, err.Error(), 1)
 		return
 	}
 	if err := s.BoardFixer(req); err != nil {
@@ -1124,6 +1139,44 @@ func confirmAuditArgs(pc PendingConfirmation) []string {
 		verb = pc.Operation
 	}
 	return []string{pc.Tracker, "issue", verb, pc.Key}
+}
+
+// doctorCacheAge is how stale a doctor result may be when served to pollers
+// (the desktop LED asks every few seconds; probes should run far less often).
+const doctorCacheAge = 2 * time.Minute
+
+// launchCriticalChecks are the doctor checks a board agent launch cannot
+// survive without: launching anyway would burn a full agent run to rediscover
+// a failure the doctor already knows, and the card would blame the ticket.
+var launchCriticalChecks = []string{"docker", "agent-skills"}
+
+// handleDoctor returns the substrate health checks as JSON. "refresh" as an
+// argument forces a live run instead of the poller cache.
+func (s *Server) handleDoctor(conn net.Conn, args []string) {
+	maxAge := doctorCacheAge
+	if len(args) > 0 && args[0] == "refresh" {
+		maxAge = 0
+	}
+	data, err := json.Marshal(s.Doctor.Results(context.Background(), maxAge))
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: string(data) + "\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// launchBlockedByDoctor refuses an agent launch when a launch-critical check
+// is failing, naming the check's own diagnosis. Infrastructure failures must
+// be attributed to infrastructure, never to the ticket.
+func (s *Server) launchBlockedByDoctor() error {
+	blockers := s.Doctor.Blockers(context.Background(), launchCriticalChecks)
+	if len(blockers) == 0 {
+		return nil
+	}
+	b := blockers[0]
+	return errors.WithDetails("launch blocked by failing "+b.Name+" check: "+b.Detail, "check", b.ID)
 }
 
 // handlePendingConfirms returns the current pending confirmations as JSON.
