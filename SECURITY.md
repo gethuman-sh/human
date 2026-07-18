@@ -13,7 +13,7 @@ Report vulnerabilities privately via GitHub's private vulnerability reporting:
 
 https://github.com/gethuman-sh/human/security/advisories/new
 
-Alternatively, email stephan@inkmi.com.
+Alternatively, email stephan@amazingcto.com.
 
 Please include:
 
