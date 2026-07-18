@@ -34,6 +34,12 @@ func CopyTranscript(ctx context.Context, docker devcontainer.DockerClient, conta
 		return errors.WrapWithDetails(err, "copying transcript from container", "container", containerID, "src", srcPath)
 	}
 	defer func() { _ = rc.Close() }()
+	// A stalled docker tar stream must not park the caller forever: the watchdog
+	// closes rc when ctx is cancelled so the blocking tr.Next()/io.Copy below
+	// return an error, which callers treat as a best-effort skip (SC-427). LIFO
+	// defer order tears the watchdog down before the final rc.Close above;
+	// double-close is safe.
+	defer closeOnContextDone(ctx, rc)()
 
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return errors.WrapWithDetails(err, "creating transcript directory", "dir", destDir)
@@ -53,6 +59,22 @@ func CopyTranscript(ctx context.Context, docker devcontainer.DockerClient, conta
 		}
 	}
 	return nil
+}
+
+// closeOnContextDone starts a watchdog that closes c when ctx is cancelled,
+// unblocking a read that is parked on a stalled stream. It returns a stop func
+// the caller must invoke (typically via defer) to tear the watchdog down once
+// the read has finished on its own; stop also releases the watchdog goroutine.
+func closeOnContextDone(ctx context.Context, c io.Closer) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = c.Close()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
 }
 
 // extractTarEntry writes one tar entry under destDir, rejecting any name that
