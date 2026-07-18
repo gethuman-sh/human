@@ -373,6 +373,18 @@ func BoardFix(addr, token string, req BoardFixRequest) error {
 	return err
 }
 
+// SendBoardOption records a chosen option from a card's open decision block and
+// relaunches the block's stage with the choice. Single JSON arg, matching
+// BoardTransition; returns once the agent is launched.
+func SendBoardOption(addr, token string, req BoardOptionRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling board option request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"board-option", string(data)})
+	return err
+}
+
 // GenerateFeatures asks the daemon to launch the human-features skill, which
 // regenerates FEATURE.json for the registered project. It takes no arguments —
 // the daemon resolves the project directory itself — and returns once the agent
