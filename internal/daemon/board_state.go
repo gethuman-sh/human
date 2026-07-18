@@ -26,6 +26,13 @@ type BoardCard struct {
 	// verdict counts as pass so threads reviewed before verdicts existed keep
 	// flowing.
 	Verdict string `json:"verdict,omitempty"`
+	// Options is the latest unconsumed [human:options] block: a stage ended
+	// in a decision and the card is waiting for a human to pick a direction.
+	// Consumed (cleared) by an option-chosen comment or any later
+	// stage-started marker.
+	Options        []BoardOption `json:"options,omitempty"`
+	OptionsContext string        `json:"options_context,omitempty"`
+	OptionsStage   BoardStage    `json:"options_stage,omitempty"`
 }
 
 // VerdictFailed reports whether a review verdict blocks the card from moving
@@ -97,6 +104,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	if state == BoardFailed {
 		card.Error = failureReason(latest.Body)
 	}
+	attachOpenOptions(&card, comments)
 	return card
 }
 
