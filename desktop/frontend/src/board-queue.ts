@@ -84,6 +84,12 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
   }
   if (card.state === "failed") return { cls: "failed", text: "✕", title: "Stage failed" };
   if (card.state === "resolved") {
+    if (card.stage === "planning") {
+      // The planner verified the ticket's work is already merged, so there is
+      // nothing left to plan: a successful terminal outcome, never red, never
+      // deployable — the right resolution is Done, not re-planning (ticket 454).
+      return { cls: "resolved", text: "already shipped", title: "Work already merged — nothing left to plan" };
+    }
     // An autofix run whose triage concluded no fix is warranted (not-a-bug or
     // undetermined): a successful terminal outcome, never red, never deployable
     // (ticket 405).

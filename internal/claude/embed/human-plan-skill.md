@@ -44,6 +44,23 @@ If the verification reports found **issues** (mismatches, missing references, un
   - Replace deprecated APIs with their replacements
   - Mark unverifiable claims with "UNVERIFIED — confirm before implementing"
 
+## Phase 3a: Already-implemented terminal (nothing to plan)
+
+If the planner returned an `ALREADY IMPLEMENTED: <evidence>` verdict instead of a plan — exploration showed every acceptance criterion is already satisfied by code merged on `main` — the ticket's work has already shipped. Attaching a plan and posting `[human:plan-ready]` would advance the card and re-implement shipped code, so do NOT do that. Instead:
+
+- Do NOT run the verification phases, attach any plan, or post `[human:plan-ready]`.
+- Post the terminal `[human:nothing-to-do]` marker on the PM ticket, carrying the planner's evidence (name the merged PR/commit) so the board surfaces the card as "already shipped" (resolved), not red:
+
+```bash
+human <pm-tracker> issue comment add <PM_KEY> "$(cat <<'EOF'
+[human:nothing-to-do]
+evidence: <the planner's ALREADY IMPLEMENTED evidence — merged PR/commit>
+EOF
+)"
+```
+
+- STOP. Skip Phases 4-6 entirely. In board context this is mandatory: the workflow board's failure watcher treats `[human:nothing-to-do]` as a clean stop (resolved, no retry loop), whereas a missing `[human:plan-ready]` after a normal exit is misread as a crash and re-planned forever.
+
 ## Phase 4: Confidence check
 
 After finalizing the plan, review it yourself end-to-end:

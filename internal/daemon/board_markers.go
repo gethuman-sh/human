@@ -55,7 +55,16 @@ const (
 	// undetermined). It carries no [human:ready-for-review] handoff, so the
 	// failure watcher would otherwise mistake the missing handoff for a crash
 	// and loop forever re-triaging (ticket 405).
-	NoFixNeededHeader   = "[human:no-fix-needed]"
+	NoFixNeededHeader = "[human:no-fix-needed]"
+	// NothingToDoHeader is the planning stage's terminal "nothing to plan"
+	// marker: the planner verified the ticket's work is already merged, so
+	// attaching a [human:plan-ready] plan would advance the card and re-implement
+	// shipped code. It carries no plan, so the failure watcher would otherwise
+	// mistake the missing [human:plan-ready] for a crash and loop forever
+	// re-planning shipped work (ticket 454 — the planning twin of ticket 405).
+	// The name is stage-agnostic on purpose: it shares the BoardResolved clean
+	// terminal with the implementation stage's [human:no-fix-needed].
+	NothingToDoHeader   = "[human:nothing-to-do]"
 	ReviewStartedHeader = "[human:review-started]"
 	ReviewFailedHeader  = "[human:review-failed]"
 	PRStartedHeader     = "[human:pr-started]"
@@ -101,6 +110,7 @@ var orderedMarkerSpecs = []markerSpec{
 	{PlanningStartedHeader, BoardPlanning, BoardRunning},
 	{PlanReadyHeader, BoardPlanning, BoardDone},
 	{PlanningFailedHeader, BoardPlanning, BoardFailed},
+	{NothingToDoHeader, BoardPlanning, BoardResolved},
 	{ImplementationStartedHeader, BoardImplementation, BoardRunning},
 	{ReadyForReviewHeader, BoardImplementation, BoardDone},
 	{ImplementationFailedHeader, BoardImplementation, BoardFailed},

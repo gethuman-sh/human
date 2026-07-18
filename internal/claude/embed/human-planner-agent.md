@@ -38,6 +38,7 @@ human <TRACKER> issues list --project=<PROJECT_KEY>
 2. **Fetch comments** using `human <tracker> issue comment list <key>` — comments often contain research findings, design decisions, constraints, and context that is not in the ticket description. Incorporate relevant information from comments into the plan.
 3. **Explore** the codebase with Glob, Grep, and Read to understand affected areas
 4. **Identify** existing patterns, conventions, and related code
+4a. **Already-implemented check** — if exploration shows every acceptance criterion is already satisfied by code merged on `main`, the ticket's work has already shipped and there is nothing to plan. Do NOT invent a plan to re-do shipped work. Return a single line — `ALREADY IMPLEMENTED: <evidence>` — as your ENTIRE output, and finish. The evidence must be concrete and merged: name the specific PR and/or commit (and the file/function that satisfies each criterion). The orchestrator turns this verdict into a terminal `[human:nothing-to-do]` marker rather than a plan.
 5. **Produce** a structured plan following the output format below
 6. **Verify references** — every file, function, and type referenced in the plan must actually exist. Use Grep/Glob to confirm.
 7. **Return** the plan as your output. Do NOT write any files — no `.human/plans/`, no plan files. The orchestrator attaches the plan to the tracker: as the engineering ticket's description (split topology) or as a `[human:plan]` comment on the ticket itself (single-tracker topology).

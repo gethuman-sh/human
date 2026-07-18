@@ -90,11 +90,16 @@ func handleBoardAgentExit(ctx context.Context, agentName string, commenterFor fu
 		}
 		return
 	}
-	// The second clean end of an autofix run: triage concluded no fix is warranted
-	// (not-a-bug or undetermined). It stops with a terminal [human:no-fix-needed]
-	// verdict and no [human:ready-for-review] handoff. There is no branch to review,
-	// so do not chain; surface the card as resolved, not red (ticket 405).
-	if stage == BoardImplementation && state == BoardResolved {
+	// A stage's second clean ending: a terminal BoardResolved marker with no
+	// handoff. Implementation reaches it when triage concludes no fix is warranted
+	// ([human:no-fix-needed], ticket 405); planning reaches it when the work is
+	// already merged so there is nothing left to plan ([human:nothing-to-do],
+	// ticket 454). The gate is stage-agnostic on purpose: BoardResolved is only
+	// ever produced by these terminal markers, never by a crash, so any stage that
+	// reaches it is a clean stop — scoping this carve-out to Implementation is
+	// exactly what let the same defect class ship again on Planning. Surface the
+	// card as resolved, not red, and do not chain (there is no branch to review).
+	if state == BoardResolved {
 		return
 	}
 	body := failedHeaderFor(stage) + "\nagent exited without completing the stage"

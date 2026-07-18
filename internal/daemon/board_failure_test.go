@@ -335,6 +335,46 @@ func TestRunBoardFailureWatch_UndeterminedIsCleanStop(t *testing.T) {
 	c.mu.Unlock()
 }
 
+// ticket 454 (planning twin of ticket 405): a planning run has a second
+// legitimate ending — the planner verifies the ticket's work is already merged,
+// refuses to attach a plan (a [human:plan-ready] plan would advance the card and
+// re-implement shipped code), and stops with a terminal [human:nothing-to-do]
+// marker and NO [human:plan-ready] handoff. That is a clean stop: the watcher
+// must post NO planning-failed marker (no endless re-planning loop) and must NOT
+// chain a review (there is no branch to review).
+func TestRunBoardFailureWatch_NothingToDoIsCleanStop(t *testing.T) {
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt(PlanningStartedHeader, time.Unix(1, 0)),
+			cmt(NothingToDoHeader+"\nevidence: already merged in PR #123", time.Unix(2, 0)),
+		},
+		addCh: make(chan string, 4),
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	chained := make(chan string, 1)
+	chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+
+	select {
+	case body := <-c.addCh:
+		t.Fatalf("a nothing-to-plan clean stop must not post any marker, got: %q", body)
+	case pmKey := <-chained:
+		t.Fatalf("a nothing-to-plan clean stop must not chain a review, got: %q", pmKey)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	c.mu.Lock()
+	require.Empty(t, c.added)
+	c.mu.Unlock()
+}
+
 func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 	store := NewHookEventStore()
 	c := &syncCommenter{addCh: make(chan string, 4)}
