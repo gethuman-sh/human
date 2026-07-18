@@ -39,6 +39,9 @@ func withLogRoot(t *testing.T) string {
 func TestExecClaudeDetached_WritesLaunchRecord(t *testing.T) {
 	withLogRoot(t)
 	mgr := &Manager{Docker: &mockDockerClient{}}
+	// The tee goroutine creates output.log asynchronously; without this wait
+	// it races the TempDir RemoveAll and cleanup fails with ENOTEMPTY.
+	t.Cleanup(mgr.teeWG.Wait)
 	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{
 		Name: "a", Prompt: "P", Model: "opus",
 	})
@@ -82,17 +85,11 @@ func TestTeeExecOutput_DemuxesStdoutAndStderr(t *testing.T) {
 	if exe == nil {
 		t.Fatal("expected non-nil execution")
 	}
-	// Poll for the tee goroutine to flush both frames.
-	var out string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		data, _ := os.ReadFile(filepath.Join(exe.Dir(), "output.log"))
-		out = string(data)
-		if len(out) > 0 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// The tee goroutine has flushed and closed the log once the WaitGroup
+	// releases, so a single read observes the complete demuxed output.
+	mgr.teeWG.Wait()
+	data, _ := os.ReadFile(filepath.Join(exe.Dir(), "output.log"))
+	out := string(data)
 	if !contains(out, "OUT") || !contains(out, "ERR") {
 		t.Fatalf("output.log missing demuxed payloads, got %q", out)
 	}

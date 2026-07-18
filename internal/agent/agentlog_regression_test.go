@@ -77,6 +77,9 @@ func TestAgentExecution_PersistsOutputAndTranscript(t *testing.T) {
 		transcript:    "TRANSCRIPT-MARKER",
 	}
 	mgr := &Manager{Docker: docker}
+	// The tee goroutine creates files asynchronously; without this wait it
+	// races the TempDir RemoveAll and cleanup fails with ENOTEMPTY.
+	t.Cleanup(mgr.teeWG.Wait)
 	ctx := context.Background()
 
 	exe, err := mgr.execClaudeDetached(ctx, "container-xyz", "vscode", "", StartOpts{

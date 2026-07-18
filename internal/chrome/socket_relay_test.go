@@ -14,6 +14,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// dialRelay waits for the relay's socket to become dialable. The socket file
+// is born at bind time, a moment before listen(2), so a dial right after the
+// file appears can still hit ECONNREFUSED — retry until the deadline.
+func dialRelay(t *testing.T, dir string) net.Conn {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.sock"))
+		if len(matches) > 0 {
+			conn, err := net.Dial("unix", matches[0])
+			if err == nil {
+				return conn
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("relay socket never became dialable")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestSocketRelay_HappyPath(t *testing.T) {
 	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
@@ -42,12 +63,7 @@ func TestSocketRelay_HappyPath(t *testing.T) {
 	<-listenReady
 
 	// Simulate Chrome native host connecting.
-	matches, err := filepath.Glob(filepath.Join(dir, "*.sock"))
-	require.NoError(t, err)
-	require.Len(t, matches, 1)
-
-	chromeConn, err := net.Dial("unix", matches[0])
-	require.NoError(t, err)
+	chromeConn := dialRelay(t, dir)
 	defer func() { _ = chromeConn.Close() }()
 
 	// Spawn should dequeue the connection.
@@ -56,7 +72,7 @@ func TestSocketRelay_HappyPath(t *testing.T) {
 	defer func() { _ = wait() }()
 
 	// Chrome → bridge direction.
-	_, err = chromeConn.Write([]byte("from-chrome"))
+	_, err := chromeConn.Write([]byte("from-chrome"))
 	require.NoError(t, err)
 	_ = chromeConn.(*net.UnixConn).CloseWrite()
 
@@ -100,21 +116,8 @@ func TestSocketRelay_ChromeBeforeSpawn(t *testing.T) {
 
 	<-listenReady
 
-	matches, err := filepath.Glob(filepath.Join(dir, "*.sock"))
-	require.NoError(t, err)
-	require.Len(t, matches, 1)
-
-	// Chrome connects first. Retry to avoid race between file creation and listener readiness.
-	var chromeConn net.Conn
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		chromeConn, err = net.Dial("unix", matches[0])
-		if err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	require.NoError(t, err)
+	// Chrome connects first.
+	chromeConn := dialRelay(t, dir)
 	defer func() { _ = chromeConn.Close() }()
 
 	// Give the relay time to queue the connection.
@@ -152,10 +155,6 @@ func TestSocketRelay_SpawnBlocksUntilChrome(t *testing.T) {
 
 	<-listenReady
 
-	matches, err := filepath.Glob(filepath.Join(dir, "*.sock"))
-	require.NoError(t, err)
-	require.Len(t, matches, 1)
-
 	// Start Spawn in a goroutine — it should block.
 	spawnDone := make(chan struct{})
 	var spawnErr error
@@ -177,8 +176,7 @@ func TestSocketRelay_SpawnBlocksUntilChrome(t *testing.T) {
 	}
 
 	// Now Chrome connects.
-	chromeConn, err := net.Dial("unix", matches[0])
-	require.NoError(t, err)
+	chromeConn := dialRelay(t, dir)
 	_ = chromeConn.Close()
 
 	// Spawn should complete.
@@ -244,8 +242,7 @@ func TestSocketRelay_CleanShutdown(t *testing.T) {
 	require.Len(t, matches, 1)
 
 	// Queue a connection, then cancel.
-	chromeConn, err := net.Dial("unix", matches[0])
-	require.NoError(t, err)
+	chromeConn := dialRelay(t, dir)
 	// Don't close — let shutdown drain it.
 	_ = chromeConn
 
