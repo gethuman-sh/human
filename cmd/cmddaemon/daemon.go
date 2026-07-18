@@ -373,17 +373,26 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		})
 	}, logger)
 	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, logger)
+	// A finished build chains straight into its review — the board's
+	// auto-review; the transition engine re-derives and validates. Shared by
+	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
+	// path (RunBoardReconcile) so both launch the identical review.
+	chainReview := func(pmKey string) error {
+		return boardTransition(daemon.BoardTransitionRequest{
+			PMKey: pmKey,
+			From:  daemon.BoardImplementation,
+			To:    daemon.BoardVerification,
+		})
+	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		func(pmKey string) error {
-			// A finished build chains straight into its review — the board's
-			// auto-review; the transition engine re-derives and validates.
-			return boardTransition(daemon.BoardTransitionRequest{
-				PMKey: pmKey,
-				From:  daemon.BoardImplementation,
-				To:    daemon.BoardVerification,
-			})
-		}, logger)
+		chainReview, logger)
+	// The live chain fires only on the one-shot exit hook; this pass re-scans
+	// comments to recover a handoff orphaned by a daemon restart or lost hook
+	// (SC-430).
+	go daemon.RunBoardReconcile(ctx,
+		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
+		chainReview, daemon.BoardReconcileInterval, logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }
@@ -1835,6 +1844,55 @@ func boardPMCommenterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver)
 		}
 		entry := entries[0]
 		return resolvePMCommenter(entry.Dir, entry.EnvLookup(), resolver)
+	}
+}
+
+// boardReconcileListerFunc enumerates open PM cards with their comment threads
+// for the durable reconcile pass. It reuses the listTrackerIssues fan-out, then
+// fetches each open PM ticket's comments (skipping ideas, which carry no
+// pipeline markers) — mirroring scanReadyForReview's fan-out without altering
+// it. Best-effort: a per-ticket error drops that ticket, not the whole tick, so
+// one flaky tracker call never blocks recovery of the rest.
+func boardReconcileListerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) daemon.ReconcileLister {
+	return func(ctx context.Context) ([]daemon.ReconcileCard, error) {
+		jobs, results, err := listTrackerIssues(reg, resolver)
+		if err != nil {
+			return nil, err
+		}
+		var cards []daemon.ReconcileCard
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for i := range results {
+			if results[i].TrackerRole != "pm" || results[i].Err != "" {
+				continue
+			}
+			commenter, ok := jobs[i].inst.Provider.(tracker.Commenter)
+			if !ok {
+				continue
+			}
+			for _, issue := range results[i].Issues {
+				// Idea tickets carry no pipeline markers, so they can never be an
+				// orphaned handoff — skip the per-issue comment round-trip.
+				if issue.IsIdea() {
+					continue
+				}
+				wg.Add(1)
+				go func(c tracker.Commenter, key string) {
+					defer wg.Done()
+					fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+					defer cancel()
+					comments, err := c.ListComments(fetchCtx, key)
+					if err != nil {
+						return
+					}
+					mu.Lock()
+					cards = append(cards, daemon.ReconcileCard{Key: key, Comments: comments})
+					mu.Unlock()
+				}(commenter, issue.Key)
+			}
+		}
+		wg.Wait()
+		return cards, nil
 	}
 }
 
