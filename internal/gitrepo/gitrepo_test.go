@@ -102,3 +102,76 @@ func TestDefaultBranch_fallback(t *testing.T) {
 		t.Errorf("DefaultBranch = %q, want main fallback", got)
 	}
 }
+
+func assertArgs(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("arg[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIsRepo_TrueFalse(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return []byte("true\n"), nil
+	})
+	if !IsRepo(context.Background(), "/repo") {
+		t.Error("IsRepo = false, want true")
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "rev-parse", "--is-inside-work-tree"})
+
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("not a repo")
+	})
+	if IsRepo(context.Background(), "/plain") {
+		t.Error("IsRepo = true, want false when git fails")
+	}
+}
+
+func TestWorktreeAdd_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := WorktreeAdd(context.Background(), "/repo", "/wt", "main"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "worktree", "add", "--detach", "/wt", "main"})
+}
+
+func TestWorktreeAdd_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("already checked out")
+	})
+	if err := WorktreeAdd(context.Background(), "/repo", "/wt", "main"); err == nil {
+		t.Fatal("expected error when worktree add fails")
+	}
+}
+
+func TestWorktreeRemove_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := WorktreeRemove(context.Background(), "/repo", "/wt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "worktree", "remove", "--force", "/wt"})
+}
+
+func TestWorktreeRemove_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("no such worktree")
+	})
+	if err := WorktreeRemove(context.Background(), "/repo", "/wt"); err == nil {
+		t.Fatal("expected error when worktree remove fails")
+	}
+}

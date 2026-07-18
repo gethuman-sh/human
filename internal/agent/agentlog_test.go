@@ -13,6 +13,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/devcontainer"
+	"github.com/gethuman-sh/human/internal/gitrepo"
 )
 
 // stderrFrame wraps payload in a Docker stdcopy multiplexed stderr frame.
@@ -38,7 +39,7 @@ func withLogRoot(t *testing.T) string {
 func TestExecClaudeDetached_WritesLaunchRecord(t *testing.T) {
 	withLogRoot(t)
 	mgr := &Manager{Docker: &mockDockerClient{}}
-	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", StartOpts{
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{
 		Name: "a", Prompt: "P", Model: "opus",
 	})
 	if err != nil {
@@ -74,7 +75,7 @@ func (m *teeMock) ExecAttach(_ context.Context, _ string) (devcontainer.ExecAtta
 func TestTeeExecOutput_DemuxesStdoutAndStderr(t *testing.T) {
 	withLogRoot(t)
 	mgr := &Manager{Docker: &teeMock{}}
-	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", StartOpts{Name: "tee", Prompt: "p"})
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{Name: "tee", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("execClaudeDetached: %v", err)
 	}
@@ -156,6 +157,69 @@ func TestPruneExecutions_DropsOld(t *testing.T) {
 	execs, _ := ListExecutions("a")
 	if len(execs) != 1 || execs[0].Launch.ID != "fresh" {
 		t.Fatalf("expected only fresh to remain: %+v", execs)
+	}
+}
+
+func TestPruneExecutions_RemovesKeptWorktree(t *testing.T) {
+	withLogRoot(t)
+	wt := filepath.Join(t.TempDir(), "kept-wt")
+	if err := os.MkdirAll(wt, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var removed []string
+	prev := gitrepo.WorktreeRemove
+	gitrepo.WorktreeRemove = func(_ context.Context, _, path string) error {
+		removed = append(removed, path)
+		return nil
+	}
+	t.Cleanup(func() { gitrepo.WorktreeRemove = prev })
+
+	if _, err := NewExecution(LaunchRecord{
+		ID: "stale", Agent: "a", StartedAt: time.Now().Add(-100 * 24 * time.Hour), Worktree: wt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := PruneExecutions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 pruned, got %d", n)
+	}
+	if len(removed) != 1 || removed[0] != wt {
+		t.Fatalf("WorktreeRemove = %v, want [%s]", removed, wt)
+	}
+	if _, statErr := os.Stat(wt); !os.IsNotExist(statErr) {
+		t.Fatalf("kept worktree dir should be gone, stat err = %v", statErr)
+	}
+}
+
+func TestPruneExecutions_KeepsRecentWorktree(t *testing.T) {
+	withLogRoot(t)
+	var removed []string
+	prev := gitrepo.WorktreeRemove
+	gitrepo.WorktreeRemove = func(_ context.Context, _, path string) error {
+		removed = append(removed, path)
+		return nil
+	}
+	t.Cleanup(func() { gitrepo.WorktreeRemove = prev })
+
+	if _, err := NewExecution(LaunchRecord{
+		ID: "fresh", Agent: "a", StartedAt: time.Now(), Worktree: "/wt/fresh",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := PruneExecutions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("want 0 pruned, got %d", n)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("WorktreeRemove = %v, want none for a recent run", removed)
 	}
 }
 

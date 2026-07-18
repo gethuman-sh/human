@@ -17,6 +17,7 @@ import (
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/dockerhost"
+	"github.com/gethuman-sh/human/internal/gitrepo"
 )
 
 // isDockerUnreachable reports whether err is (or wraps) a Docker daemon
@@ -74,8 +75,18 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 	containerName := ContainerPrefix + opts.Name
 	workspace, configDir := resolveDirectories(opts)
 
+	// Isolate the run in a private git worktree so concurrent agents in one
+	// project never share HEAD/index/tree. configDir stays the shared repo so
+	// persisted Claude auth binds (derived from ProjectDir) survive across runs.
+	projectDir := workspace
+	workspace, worktree, removeWorktreeOnFailure, err := m.isolateWorkspace(ctx, projectDir, opts.Name)
+	if err != nil {
+		return Meta{}, err
+	}
+
 	dcMeta, err := m.startDevcontainer(ctx, containerName, configDir, workspace, opts.Rebuild)
 	if err != nil {
+		removeWorktreeOnFailure()
 		// A failure here is most often an unreachable Docker engine. Surface an
 		// actionable error naming the active context and attempted endpoint
 		// instead of the opaque generic message.
@@ -87,7 +98,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 
 	var executionID string
 	if !opts.Interactive && opts.Prompt != "" {
-		exe, err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, opts)
+		exe, err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, worktree, opts)
 		if err != nil {
 			// The agent process never started; don't leave a container tracked
 			// as a running agent. Best-effort teardown, then surface the error.
@@ -100,6 +111,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 			timeout := 10
 			_ = m.Docker.ContainerStop(ctx, dcMeta.ContainerID, &timeout)
 			_ = m.Docker.ContainerRemove(ctx, dcMeta.ContainerID, devcontainer.ContainerRemoveOptions{Force: true})
+			removeWorktreeOnFailure()
 			return Meta{}, errors.WrapWithDetails(err, "launching agent process", "name", opts.Name)
 		}
 		if exe != nil {
@@ -113,6 +125,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 		Status: StatusRunning, CreatedAt: time.Now(), SkipPerms: opts.SkipPerms,
 		Model: opts.Model, ConfigDir: configDir, ImageName: dcMeta.ImageName,
 		RemoteUser: dcMeta.RemoteUser, ExecutionID: executionID,
+		ProjectDir: projectDir, Worktree: worktree,
 	}
 	if err := WriteMeta(meta); err != nil {
 		return Meta{}, err
@@ -161,7 +174,7 @@ func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDi
 // (no intermediate shell), so multi-word prompts and shell metacharacters can
 // neither be word-split nor injected. Errors are returned so a failed launch is
 // not silently reported as a running agent.
-func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser string, opts StartOpts) (*Execution, error) {
+func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser, worktree string, opts StartOpts) (*Execution, error) {
 	claudeArgs := m.BuildClaudeArgs(opts)
 	claudeArgs = append(claudeArgs, "-p", opts.Prompt)
 	cmd := append([]string{"claude"}, claudeArgs...)
@@ -178,6 +191,7 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 	exe, logErr := NewExecution(LaunchRecord{
 		ID: newExecID(), Agent: opts.Name, Prompt: opts.Prompt,
 		Argv: cmd, Model: opts.Model, ContainerID: containerID, StartedAt: time.Now(),
+		Worktree: worktree,
 	})
 
 	// ExecAttach starts the exec; closing the hijacked stream detaches without
@@ -258,6 +272,13 @@ func (m *Manager) stopLocked(ctx context.Context, name string) error {
 		_ = m.Docker.ContainerRemove(ctx, meta.ContainerID, devcontainer.ContainerRemoveOptions{Force: true})
 		// Clean up devcontainer metadata to avoid stale entries.
 		_ = devcontainer.DeleteMeta(meta.Name)
+	}
+
+	// Worktree lifecycle rides this choke point: a COMPLETED run's private
+	// worktree is removed; a reaped/failed run's is KEPT beside its execution
+	// log for forensics/resume and swept later by PruneExecutions.
+	if meta.Worktree != "" && meta.ProjectDir != "" && stopReason(meta) == "completed" {
+		_ = gitrepo.WorktreeRemove(ctx, meta.ProjectDir, meta.Worktree)
 	}
 
 	meta.Status = StatusStopped
