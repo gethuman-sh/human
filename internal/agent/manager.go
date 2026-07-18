@@ -49,6 +49,11 @@ type StartOpts struct {
 // Manager orchestrates agent lifecycle using devcontainers.
 type Manager struct {
 	Docker devcontainer.DockerClient
+
+	// teeWG tracks detached tee goroutines so tests can wait for the output
+	// log to be fully flushed before their temp dirs are removed; production
+	// callers never wait — the tee outlives the launch by design.
+	teeWG sync.WaitGroup
 }
 
 // Start creates a new container-based agent.
@@ -217,7 +222,11 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 		// The tee goroutine owns the attach and closes it on stream EOF (the
 		// exec exiting), so launch returns immediately while the detached
 		// stdout/stderr is durably persisted to the host.
-		go teeExecOutput(attach, exe)
+		m.teeWG.Add(1)
+		go func() {
+			defer m.teeWG.Done()
+			teeExecOutput(attach, exe)
+		}()
 	} else {
 		_ = attach.Close()
 	}
