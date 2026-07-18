@@ -1,10 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -149,6 +152,49 @@ func TestLoadInstances_incompleteSkipped(t *testing.T) {
 	instances, err := LoadInstances(dir, testSpec(""))
 	require.NoError(t, err)
 	assert.Empty(t, instances)
+}
+
+// captureLog redirects the global zerolog logger to a buffer for the duration
+// of the test, restoring the previous logger afterwards.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = prev })
+	return &buf
+}
+
+func TestLoadInstances_warnsOnSkippedInstance(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "tests:\n  - name: work\n    url: https://example.com\n")
+	unsetTestEnv(t)
+
+	buf := captureLog(t)
+
+	instances, err := LoadInstances(dir, testSpec(""))
+	require.NoError(t, err)
+	assert.Empty(t, instances)
+
+	out := buf.String()
+	assert.Contains(t, out, "work")
+	assert.Contains(t, out, "TEST_WORK_TOKEN")
+	assert.Contains(t, out, "TEST_TOKEN")
+	assert.Contains(t, out, "skipped")
+}
+
+func TestLoadInstances_noWarnOnValidInstance(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "tests:\n  - name: work\n    url: https://example.com\n    token: tok\n")
+	unsetTestEnv(t)
+
+	buf := captureLog(t)
+
+	instances, err := LoadInstances(dir, testSpec(""))
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+
+	assert.NotContains(t, buf.String(), "skipped")
 }
 
 func TestLoadInstances_envOverride(t *testing.T) {

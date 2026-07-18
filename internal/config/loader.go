@@ -1,8 +1,11 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // EnvLookup is a function that looks up an environment variable by key.
@@ -120,11 +123,64 @@ func LoadInstances[C any, I any](dir string, spec InstanceSpec[C, I]) ([]I, erro
 
 		inst, ok := spec.Build(cfg)
 		if !ok {
+			// A configured entry that fails to build is almost always an
+			// instance-name/env-var mismatch. Surface it so the instance does
+			// not vanish silently from `human tracker list`.
+			warnSkippedInstance(spec, cfg)
 			continue
 		}
 		instances = append(instances, inst)
 	}
 	return instances, nil
+}
+
+// warnSkippedInstance emits a diagnostic when a configured entry was dropped by
+// Build. Every entry in configs came straight from YAML, so a rejected build
+// means "configured but incomplete" and warrants naming the culprit and the
+// exact env vars that would satisfy it.
+func warnSkippedInstance[C any, I any](spec InstanceSpec[C, I], cfg C) {
+	name := ""
+	if spec.GetName != nil {
+		name = spec.GetName(cfg)
+	}
+
+	// Collect every credential field that resolves empty — these are the
+	// reasons Build rejected the entry.
+	var missing []string
+	var hints []string
+	for _, f := range spec.EnvFields {
+		if f.Get == nil || f.Get(cfg) != "" {
+			continue
+		}
+		missing = append(missing, f.Suffix)
+
+		globalVar := spec.EnvPrefix + f.Suffix
+		instanceVar := globalVar
+		if name != "" {
+			instanceVar = spec.EnvPrefix + strings.ToUpper(name) + "_" + f.Suffix
+		}
+		hints = append(hints, fmt.Sprintf(
+			"set %s (or %s) or add %s: to .humanconfig",
+			instanceVar, globalVar, strings.ToLower(f.Suffix),
+		))
+	}
+
+	if len(missing) == 0 {
+		// Build rejected for a reason not tied to an empty EnvField (future
+		// provider): still surface that the entry was dropped.
+		log.Warn().
+			Str("section", spec.Section).
+			Str("instance", name).
+			Msg("skipped configured instance: required configuration is incomplete")
+		return
+	}
+
+	log.Warn().
+		Str("section", spec.Section).
+		Str("instance", name).
+		Strs("missing", missing).
+		Strs("hints", hints).
+		Msg("skipped configured instance: unresolved credentials")
 }
 
 // resolveSecrets iterates over EnvFields that have a Get function and resolves
