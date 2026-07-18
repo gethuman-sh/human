@@ -606,6 +606,57 @@ func TestManager_Up_WithMounts(t *testing.T) {
 	}
 }
 
+// Regression for SC-482: a worktree workspace's .git is a FILE pointing at the
+// parent repo's .git by absolute host path. Binding only the worktree leaves
+// every in-container git command dying with "not a git repository" — the
+// parent .git must be bound at its host-identical path alongside.
+func TestManager_Up_WorktreeGitDirBind(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+	gitDir := filepath.Join(projectDir, ".git")
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	_, err := mgr.Up(context.Background(), UpOptions{
+		ProjectDir: projectDir,
+		SourceDir:  t.TempDir(), // stands in for the private worktree
+		GitDir:     gitDir,
+		Out:        &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(mock.createCalls) != 1 {
+		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
+	}
+	want := gitDir + ":" + gitDir
+	for _, b := range mock.createCalls[0].Binds {
+		if b == want {
+			return
+		}
+	}
+	t.Errorf("missing parent-repo git bind %q in binds: %v", want, mock.createCalls[0].Binds)
+}
+
+// Without a GitDir (shared-checkout mount, non-git workspace) no extra bind
+// appears — the workspace's own .git directory travels with the source mount.
+func TestManager_Up_NoGitDirNoExtraBind(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	_, err := mgr.Up(context.Background(), UpOptions{
+		ProjectDir: projectDir,
+		Out:        &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range mock.createCalls[0].Binds {
+		if strings.Contains(b, ".git:") {
+			t.Errorf("unexpected .git bind %q without GitDir", b)
+		}
+	}
+}
+
 func TestManager_Up_WithCACert(t *testing.T) {
 	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
 

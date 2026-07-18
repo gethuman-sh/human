@@ -84,7 +84,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 		return Meta{}, err
 	}
 
-	dcMeta, err := m.startDevcontainer(ctx, containerName, configDir, workspace, opts.Rebuild)
+	dcMeta, err := m.startDevcontainer(ctx, containerName, configDir, workspace, worktreeGitDir(projectDir, worktree), opts.Rebuild)
 	if err != nil {
 		removeWorktreeOnFailure()
 		// A failure here is most often an unreachable Docker engine. Surface an
@@ -133,6 +133,17 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 	return meta, nil
 }
 
+// worktreeGitDir names the parent repo's .git for a worktree workspace — a
+// worktree's .git FILE points there by absolute host path, so the container
+// must bind it alongside (ticket 482). Shared-checkout runs (no worktree)
+// carry their .git inside the source mount and need nothing extra.
+func worktreeGitDir(projectDir, worktree string) string {
+	if worktree == "" {
+		return ""
+	}
+	return filepath.Join(projectDir, ".git")
+}
+
 func resolveDirectories(opts StartOpts) (workspace, configDir string) {
 	workspace = opts.Workspace
 	if workspace == "" {
@@ -154,7 +165,7 @@ func resolveDirectories(opts StartOpts) (workspace, configDir string) {
 	return
 }
 
-func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDir, workspace string, rebuild bool) (*devcontainer.Meta, error) {
+func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDir, workspace, gitDir string, rebuild bool) (*devcontainer.Meta, error) {
 	// Ensure daemon is running and reachable from containers (0.0.0.0).
 	daemonInfo := m.ensureDaemonForContainers(configDir)
 
@@ -163,6 +174,7 @@ func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDi
 		ProjectDir:    configDir,
 		ContainerName: containerName,
 		SourceDir:     workspace,
+		GitDir:        gitDir,
 		Rebuild:       rebuild,
 		DaemonInfo:    daemonInfo,
 		Out:           os.Stderr,

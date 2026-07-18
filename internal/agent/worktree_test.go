@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -81,6 +83,111 @@ func TestMountSourceForRun_AddErrorPropagates(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("mount source = %q, want empty on error", got)
+	}
+}
+
+// Regression for SC-478: .claude/ is git-ignored, so a fresh worktree carries
+// no skills/commands/agents — the agent's slash-command launch (/human-autofix)
+// is then an unknown command and every board run dies at startup. The worktree
+// must be provisioned with the project's Claude assets; session state
+// (worktrees/, codenav/, …) must NOT leak in.
+func TestMountSourceForRun_ProvisionsClaudeAssets(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubGit(t, true)
+	// The real WorktreeAdd materializes the worktree dir; the stub must too so
+	// provisioning has a destination.
+	gitrepo.WorktreeAdd = func(_ context.Context, _, worktreePath, _ string) error {
+		return os.MkdirAll(worktreePath, 0o750)
+	}
+
+	proj := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(proj, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".claude/skills/human-autofix/SKILL.md", "autofix skill")
+	write(".claude/commands/human-plan.md", "plan command")
+	write(".claude/agents/human-bug-fixer.md", "bug fixer agent")
+	write(".claude/settings.local.json", "{}")
+	write(".claude/worktrees/leak.txt", "session state")
+	write(".claude/codenav/index.db", "db")
+
+	m := &Manager{}
+	wt, err := m.mountSourceForRun(context.Background(), proj, "agent-a")
+	if err != nil {
+		t.Fatalf("mountSourceForRun: %v", err)
+	}
+
+	for _, rel := range []string{
+		".claude/skills/human-autofix/SKILL.md",
+		".claude/commands/human-plan.md",
+		".claude/agents/human-bug-fixer.md",
+		".claude/settings.local.json",
+	} {
+		if _, err := os.Stat(filepath.Join(wt, rel)); err != nil {
+			t.Errorf("worktree missing agent asset %s: %v", rel, err)
+		}
+	}
+	for _, rel := range []string{".claude/worktrees", ".claude/codenav"} {
+		if _, err := os.Stat(filepath.Join(wt, rel)); err == nil {
+			t.Errorf("session state %s must not leak into the worktree", rel)
+		}
+	}
+}
+
+// A project without a .claude dir (non-board, plain repo) provisions nothing
+// and must not fail the launch.
+func TestMountSourceForRun_NoClaudeDirIsFine(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubGit(t, true)
+	gitrepo.WorktreeAdd = func(_ context.Context, _, worktreePath, _ string) error {
+		return os.MkdirAll(worktreePath, 0o750)
+	}
+
+	m := &Manager{}
+	wt, err := m.mountSourceForRun(context.Background(), t.TempDir(), "agent-a")
+	if err != nil {
+		t.Fatalf("mountSourceForRun: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, ".claude")); err == nil {
+		t.Fatal("no source .claude, yet one appeared in the worktree")
+	}
+}
+
+// A provisioning failure must fail the launch loudly AND remove the fresh
+// worktree — never hand back a half-provisioned workspace whose agent would
+// die later with a misleading "exited without completing the stage".
+func TestMountSourceForRun_ProvisionFailureCleansUp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubGit(t, true)
+	removed := stubWorktreeRemove(t)
+	// Materialize the worktree path as a FILE: provisioning cannot create
+	// .claude inside it and must error.
+	gitrepo.WorktreeAdd = func(_ context.Context, _, worktreePath, _ string) error {
+		return os.WriteFile(worktreePath, []byte("not a dir"), 0o600)
+	}
+
+	proj := t.TempDir()
+	skill := filepath.Join(proj, ".claude", "skills", "s", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skill, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &Manager{}
+	if _, err := m.mountSourceForRun(context.Background(), proj, "agent-a"); err == nil {
+		t.Fatal("expected provisioning failure to fail the launch")
+	}
+	if len(*removed) != 1 {
+		t.Fatalf("WorktreeRemove calls = %d, want 1 (failed provision must not leave the worktree behind)", len(*removed))
 	}
 }
 
