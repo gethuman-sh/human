@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in human does not work as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, and what went wrong? Include the exact command and output where possible.
+      placeholder: Running `human list` fails with ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `human --version`
+      placeholder: v0.20.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and how you installed human (Homebrew, go install, release binary)
+      placeholder: macOS 15, Homebrew
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Setup context
+      description: Relevant setup — which trackers are configured, whether the daemon is running, devcontainer or host. Do NOT paste tokens or secrets.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output. Redact anything sensitive.
+      render: shell
