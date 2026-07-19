@@ -40,9 +40,13 @@ func (defaultBrowserOpener) Open(url string) error {
 
 // Server listens for incoming client connections and executes CLI commands.
 type Server struct {
-	Addr             string
-	Token            string
-	SafeMode         bool
+	Addr     string
+	Token    string
+	SafeMode bool
+	// DaemonStartedAt is when this server was constructed, in UTC. The board's
+	// stats view compares it against the selected range to show a "history still
+	// filling" note when the daemon has not been up long enough to have data.
+	DaemonStartedAt  time.Time
 	CmdFactory       func() *cobra.Command
 	Opener           BrowserOpener // used for OAuth relay; defaults to browser.DefaultOpener
 	Logger           zerolog.Logger
@@ -371,6 +375,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"confirm-op":          func() { s.handleConfirmOp(conn, args[1:], clientPID) },
 		"confirm-status":      func() { s.handleConfirmStatus(conn, args[1:]) },
 		"tool-stats":          func() { s.handleToolStats(conn) },
+		"stats-overview":      func() { s.handleStatsOverview(conn, args[1:]) },
 		"audit-query":         func() { s.handleAuditQuery(conn, args[1:]) },
 		"agent-stop-async":    func() { s.handleAgentStopAsync(conn, args[1:]) },
 		"subscribe":           func() { s.handleSubscribe(conn) },
@@ -750,6 +755,49 @@ func (s *Server) handleToolStats(conn net.Conn) {
 	resp := Response{Stdout: out}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
+}
+
+// handleStatsOverview returns the consolidated board-stats payload for the
+// requested range as JSON. Unlike tool-stats it always builds a payload (each
+// source degrades to empty on its own), so there is no unset-store short circuit.
+func (s *Server) handleStatsOverview(conn net.Conn, args []string) {
+	r := parseRangeArg(args)
+	ov, err := s.buildStatsOverview(context.Background(), r)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	data, err := json.Marshal(ov)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: string(data) + "\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// parseRangeArg extracts --range (both "--range 7d" and "--range=7d" forms)
+// from pre-parsed args, validating against the three known windows. An unknown
+// or absent value defaults to 24h, so a malformed request still returns data.
+func parseRangeArg(args []string) StatsRange {
+	for i := 0; i < len(args); i++ {
+		name, value, consumed := auditFlagValue(args, i)
+		if name != "--range" {
+			if name == "" {
+				continue
+			}
+			i += consumed
+			continue
+		}
+		switch StatsRange(value) {
+		case RangeDay, RangeWeek, RangeMonth:
+			return StatsRange(value)
+		default:
+			return RangeDay
+		}
+	}
+	return RangeDay
 }
 
 // handleAuditQuery serves "human audit list/show" reads through the daemon,

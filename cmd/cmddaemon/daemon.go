@@ -249,6 +249,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		Addr:              addr,
 		Token:             token,
 		SafeMode:          safe,
+		DaemonStartedAt:   time.Now().UTC(),
 		CmdFactory:        cmdFactory,
 		Logger:            logger,
 		ConnectedPIDs:     connTracker,

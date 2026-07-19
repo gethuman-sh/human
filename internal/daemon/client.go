@@ -547,6 +547,20 @@ func GetToolStats(addr, token string) (*stats.ToolStats, error) {
 	return &ts, nil
 }
 
+// GetStatsOverview fetches the consolidated board-stats payload for a range
+// ("24h" | "7d" | "30d") from the daemon.
+func GetStatsOverview(addr, token, rng string) (*StatsOverview, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"stats-overview", "--range", rng})
+	if err != nil {
+		return nil, err
+	}
+	var ov StatsOverview
+	if err := json.Unmarshal(out, &ov); err != nil {
+		return nil, errors.WrapWithDetails(err, "invalid stats overview JSON")
+	}
+	return &ov, nil
+}
+
 // SendConfirmDecision sends a confirmation decision for a pending destructive operation.
 func SendConfirmDecision(addr, token, id string, approved bool) error {
 	decision := "no"

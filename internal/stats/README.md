@@ -8,3 +8,4 @@ Keeps a rolling record of what AI agents do through `human`, so you can look bac
 - Writes activity in the background without slowing work
 - Drops events under load instead of stalling
 - Stores everything locally in SQLite
+- Splits a range's tool calls into ok vs error counts for the board's stats headline (`QueryToolOutcomes`), feeding the daemon's consolidated `stats-overview` aggregation
