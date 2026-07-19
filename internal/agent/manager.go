@@ -186,13 +186,16 @@ func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDi
 	})
 }
 
-// execClaudeDetached launches the agent's `claude -p <prompt>` process inside
-// the container and detaches. The prompt is passed as a discrete argv element
-// (no intermediate shell), so multi-word prompts and shell metacharacters can
-// neither be word-split nor injected. Errors are returned so a failed launch is
+// execClaudeDetached launches the agent's `claude <buildArgs> <extraArgs> -p
+// <prompt>` process inside the container and detaches. The prompt is passed as a
+// discrete argv element (no intermediate shell), so multi-word prompts and shell
+// metacharacters can neither be word-split nor injected. extraArgs carries
+// follow-up flags (e.g. "--continue") so SendMessage can resume the agent's
+// existing session; Start passes none. Errors are returned so a failed launch is
 // not silently reported as a running agent.
-func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser, worktree string, opts StartOpts) (*Execution, error) {
+func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser, worktree string, opts StartOpts, extraArgs ...string) (*Execution, error) {
 	claudeArgs := m.BuildClaudeArgs(opts)
+	claudeArgs = append(claudeArgs, extraArgs...)
 	claudeArgs = append(claudeArgs, "-p", opts.Prompt)
 	cmd := append([]string{"claude"}, claudeArgs...)
 	execID, err := m.Docker.ExecCreate(ctx, containerID, cmd, devcontainer.ExecOptions{
@@ -342,6 +345,49 @@ func (m *Manager) Attach(_ context.Context, name string) (Meta, error) {
 		return Meta{}, errors.WithDetails("agent has no container", "name", name)
 	}
 	return meta, nil
+}
+
+// SendMessage delivers a follow-up prompt to a running agent by launching a new
+// detached `claude -p --continue "<message>"` exec in the agent's existing
+// container. --continue resumes the agent's most recent conversation (the run's
+// isolated worktree holds exactly one), so the message lands in the same
+// session. Output is teed to a fresh execution log, which becomes the current
+// run so `logs --follow` and artifact preservation target the follow-up turn.
+func (m *Manager) SendMessage(ctx context.Context, name, message string) error {
+	if message == "" {
+		return errors.WithDetails("message must not be empty", "name", name)
+	}
+	// Hold the per-name lock so a concurrent stop/delete cannot race the meta
+	// write below, mirroring the other lifecycle methods.
+	defer lockAgent(name)()
+
+	meta, err := ReadMeta(name)
+	if err != nil {
+		return err
+	}
+	if meta.Status != StatusRunning || !m.isContainerAlive(ctx, meta.ContainerID) {
+		return errors.WithDetails("agent is not running", "name", name)
+	}
+
+	opts := StartOpts{
+		Name:      meta.Name,
+		Prompt:    message,
+		Model:     meta.Model,
+		SkipPerms: meta.SkipPerms,
+	}
+	exe, err := m.execClaudeDetached(ctx, meta.ContainerID, meta.RemoteUser, meta.Worktree, opts, "--continue")
+	if err != nil {
+		return errors.WrapWithDetails(err, "sending message to agent", "name", name)
+	}
+	// Point the agent's meta at the new run so logs --follow and artifact
+	// preservation target the follow-up turn.
+	if exe != nil {
+		meta.ExecutionID = exe.Launch.ID
+		if err := WriteMeta(meta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Refresh syncs metadata with actual container state.
