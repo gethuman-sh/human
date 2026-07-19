@@ -19,6 +19,8 @@ tools/
 desktop/frontend/node_modules
 desktop/frontend/build/
 desktop/build/bin/
+# Wails generates this dev-mode variant of Info.plist at build time.
+desktop/build/darwin/Info.dev.plist
 # Wails regenerates these on every `wails build`; the frontend talks to the
 # bindings via window.go directly, so the generated copies are not source.
 desktop/frontend/wailsjs/
