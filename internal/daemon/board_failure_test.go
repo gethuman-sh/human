@@ -202,7 +202,7 @@ func TestHandleBoardAgentExit_PhantomCommitFailsLoudly(t *testing.T) {
 	chain := func(string) error { chained = true; return nil }
 	commitsPresent := func(string, []string) bool { return false }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, alwaysReachable, commitsPresent, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, alwaysReachable, commitsPresent, nil, nil, "", zerolog.Nop())
 
 	assert.False(t, chained, "a phantom-commit handoff must not chain a review")
 	c.mu.Lock()
@@ -224,7 +224,7 @@ func TestHandleBoardAgentExit_PresentCommitsChainReview(t *testing.T) {
 	chain := func(string) error { chained = true; return nil }
 	commitsPresent := func(string, []string) bool { return true }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, alwaysReachable, commitsPresent, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, alwaysReachable, commitsPresent, nil, nil, "", zerolog.Nop())
 
 	assert.True(t, chained, "a handoff whose commits are present must chain its review")
 	c.mu.Lock()
