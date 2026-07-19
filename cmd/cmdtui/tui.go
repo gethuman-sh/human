@@ -3,6 +3,7 @@ package cmdtui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -444,9 +445,7 @@ func (m model) checkIdleTransitions() {
 	for k := range m.prevStatuses {
 		delete(m.prevStatuses, k)
 	}
-	for k, v := range current {
-		m.prevStatuses[k] = v
-	}
+	maps.Copy(m.prevStatuses, current)
 	if bing {
 		playNotificationSound()
 	}
@@ -744,8 +743,8 @@ func nextAgentName() string {
 	}
 	maxN := 0
 	for _, m := range metas {
-		if strings.HasPrefix(m.Name, "agent-") {
-			if n, parseErr := strconv.Atoi(strings.TrimPrefix(m.Name, "agent-")); parseErr == nil && n > maxN {
+		if after, ok := strings.CutPrefix(m.Name, "agent-"); ok {
+			if n, parseErr := strconv.Atoi(after); parseErr == nil && n > maxN {
 				maxN = n
 			}
 		}
@@ -1198,10 +1197,7 @@ func (m model) issuesBudget(emitted string, reserved int) int {
 	if m.height <= 0 {
 		return 0
 	}
-	budget := m.height - strings.Count(emitted, "\n") - reserved
-	if budget < 1 {
-		budget = 1
-	}
+	budget := max(m.height-strings.Count(emitted, "\n")-reserved, 1)
 	return budget
 }
 
@@ -1264,10 +1260,7 @@ func (m model) renderHeader(w int) string {
 		right = subtleStyle.Render(fmt.Sprintf("%02d:00 – %02d:00", localStart.Hour(), localEnd.Hour()))
 	}
 
-	gap := w - lipgloss.Width(title) - lipgloss.Width(right) - 4
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(w-lipgloss.Width(title)-lipgloss.Width(right)-4, 1)
 	return "  " + title + strings.Repeat(" ", gap) + right
 }
 
@@ -1294,10 +1287,7 @@ func renderStatusLine(snap *monitor.Snapshot, w int) string {
 		rightParts = append(rightParts, snap.Slack)
 	}
 	right := subtleStyle.Render(strings.Join(rightParts, "  "))
-	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right)-2, 1)
 	return left + strings.Repeat(" ", gap) + right
 }
 
@@ -1401,10 +1391,7 @@ func renderModelBars(b *strings.Builder, summary *claude.UsageSummary, w int) {
 	sort.Strings(models)
 
 	// Bar width: total width - indent(4) - label(12) - stats(~30) - padding(4)
-	barWidth := w - 50
-	if barWidth < 10 {
-		barWidth = 10
-	}
+	barWidth := max(w-50, 10)
 	if barWidth > 50 {
 		barWidth = 50
 	}
@@ -1630,10 +1617,7 @@ func renderFooter(w int, logMode, dispatchStatus string, showTabs, tmuxOK bool) 
 		keys = "Tab switch  " + keys
 	}
 	right := subtleStyle.Render(keys)
-	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
-	if gap < 1 {
-		gap = 1
-	}
+	gap := max(w-lipgloss.Width(left)-lipgloss.Width(right)-2, 1)
 	return left + strings.Repeat(" ", gap) + right
 }
 
@@ -2220,10 +2204,7 @@ func windowIssueLines(lines []string, cursorLine, budget int) []string {
 		cursorLine = 0
 	}
 
-	start := cursorLine - budget/2
-	if start < 0 {
-		start = 0
-	}
+	start := max(cursorLine-budget/2, 0)
 	if start+budget > len(lines) {
 		start = len(lines) - budget
 	}
@@ -2320,10 +2301,7 @@ func renderDomainRow(evt daemon.NetworkEvent, w int, now time.Time) string {
 	// Truncate the host to prevent overflow on narrow terminals. The
 	// lower bound of 10 keeps at least enough room for a short hostname
 	// plus the count suffix.
-	hostMax := w - 24
-	if hostMax < 10 {
-		hostMax = 10
-	}
+	hostMax := max(w-24, 10)
 	host = truncate(host, hostMax)
 
 	rel := subtleStyle.Render(formatElapsed(now.Sub(evt.LastSeen)) + " ago")
@@ -2371,10 +2349,7 @@ func sparkline(values []int, width int) string {
 		display = make([]int, width)
 		for i := range display {
 			start := i * len(values) / width
-			end := (i + 1) * len(values) / width
-			if end > len(values) {
-				end = len(values)
-			}
+			end := min((i+1)*len(values)/width, len(values))
 			sum := 0
 			for _, v := range values[start:end] {
 				sum += v
@@ -2417,10 +2392,7 @@ func byHourToValues(buckets []stats.TimeBucket, since, until time.Time) []int {
 	// Compute the number of hour slots in the window.
 	sinceHour := since.UTC().Truncate(time.Hour)
 	untilHour := until.UTC().Truncate(time.Hour)
-	hours := int(untilHour.Sub(sinceHour)/time.Hour) + 1
-	if hours < 1 {
-		hours = 1
-	}
+	hours := max(int(untilHour.Sub(sinceHour)/time.Hour)+1, 1)
 	if hours > 168 { // safety cap at 1 week
 		hours = 168
 	}
@@ -2461,10 +2433,9 @@ func renderToolStatsPanel(ts *stats.ToolStats, w int) string {
 	// Sparkline from hourly data.
 	if len(ts.ByHour) > 0 {
 		values := byHourToValues(ts.ByHour, ts.Since, ts.Until)
-		sparkWidth := w - 6 // 4-char indent + 2-char margin
-		if sparkWidth < 10 {
-			sparkWidth = 10
-		}
+		sparkWidth := max(
+			// 4-char indent + 2-char margin
+			w-6, 10)
 		if line := sparkline(values, sparkWidth); line != "" {
 			_, _ = fmt.Fprintf(&b, "    %s\n", subtleStyle.Render(line))
 		}
@@ -2477,10 +2448,7 @@ func renderToolStatsPanel(ts *stats.ToolStats, w int) string {
 }
 
 func renderToolDistribution(b *strings.Builder, ts *stats.ToolStats, w int) {
-	maxTools := 8
-	if len(ts.ByTool) < maxTools {
-		maxTools = len(ts.ByTool)
-	}
+	maxTools := min(len(ts.ByTool), 8)
 
 	maxCount := 0
 	for _, tc := range ts.ByTool[:maxTools] {
@@ -2489,10 +2457,7 @@ func renderToolDistribution(b *strings.Builder, ts *stats.ToolStats, w int) {
 		}
 	}
 
-	barWidth := w - 40
-	if barWidth < 10 {
-		barWidth = 10
-	}
+	barWidth := max(w-40, 10)
 
 	for _, tc := range ts.ByTool[:maxTools] {
 		barLen := 0

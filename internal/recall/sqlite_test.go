@@ -134,7 +134,7 @@ func TestSearch_limit(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		key := "KAN-" + string(rune('1'+i))
 		require.NoError(t, s.UpsertEntry(ctx, Entry{Key: key, Source: "work", Kind: "jira", Title: "retry issue"}, "desc"))
 	}
@@ -178,7 +178,7 @@ func TestSearchWithKind_filterAppliesBeforeLimit(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed 5 GitHub rows that will dominate the BM25 ranking.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		key := "gh-" + string(rune('1'+i))
 		require.NoError(t, s.UpsertEntry(ctx, Entry{
 			Key: key, Source: "gh", Kind: "github", Title: "retry flow",
@@ -354,7 +354,7 @@ func TestSearchWithKind_defaultLimit(t *testing.T) {
 	ctx := context.Background()
 
 	// Upsert enough entries to verify the default limit is applied.
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		key := "KAN-" + strings.Repeat("x", i+1)
 		require.NoError(t, s.UpsertEntry(ctx, Entry{Key: key, Source: "work", Kind: "jira", Title: "retry issue"}, "retry desc"))
 	}
@@ -589,7 +589,7 @@ func FuzzSanitizeFTSQuery(f *testing.F) {
 		if out == "" {
 			return
 		}
-		for _, tok := range strings.Split(out, " ") {
+		for tok := range strings.SplitSeq(out, " ") {
 			if !strings.HasPrefix(tok, `"`) || !strings.HasSuffix(tok, `"`) {
 				t.Fatalf("token %q is not wrapped in quotes (input=%q)", tok, input)
 			}

@@ -23,7 +23,7 @@ type TelegramSource struct {
 	AllowedChats []int64 // see telegram.Config.AllowedChats
 	Logger       zerolog.Logger
 
-	rejectedCount uint64 // atomic
+	rejectedCount atomic.Uint64 // atomic
 }
 
 // FetchMessages returns pending Telegram messages filtered by allowed
@@ -67,13 +67,13 @@ func (s *TelegramSource) AckMessage(ctx context.Context, updateID int) error {
 // RejectedCount returns the total number of updates that have been rejected
 // (and acked) across the lifetime of this source.
 func (s *TelegramSource) RejectedCount() uint64 {
-	return atomic.LoadUint64(&s.rejectedCount)
+	return s.rejectedCount.Load()
 }
 
 // rejectUpdate acks a disallowed update, logs it at WARN with structured
 // fields (but not the message body), and bumps the rejection counter.
 func (s *TelegramSource) rejectUpdate(ctx context.Context, u telegram.Update, reason telegram.AuthzReason) {
-	atomic.AddUint64(&s.rejectedCount, 1)
+	s.rejectedCount.Add(1)
 
 	var userID int64
 	if u.Message.From != nil {

@@ -20,7 +20,7 @@ import (
 //   - map[string]interface{}: run each value in parallel (keys are labels)
 //
 // Returns nil if cmd is nil (hook not defined).
-func RunHook(ctx context.Context, docker DockerClient, containerID, user string, cmd interface{}, logger zerolog.Logger) error {
+func RunHook(ctx context.Context, docker DockerClient, containerID, user string, cmd any, logger zerolog.Logger) error {
 	if cmd == nil {
 		return nil
 	}
@@ -32,7 +32,7 @@ func RunHook(ctx context.Context, docker DockerClient, containerID, user string,
 		}
 		return execInContainer(ctx, docker, containerID, user, []string{"/bin/sh", "-c", v}, nil, logger)
 
-	case []interface{}:
+	case []any:
 		args := make([]string, 0, len(v))
 		for _, a := range v {
 			s, ok := a.(string)
@@ -47,7 +47,7 @@ func RunHook(ctx context.Context, docker DockerClient, containerID, user string,
 		}
 		return execInContainer(ctx, docker, containerID, user, args, nil, logger)
 
-	case map[string]interface{}:
+	case map[string]any:
 		return runParallelHooks(ctx, docker, containerID, user, v, logger)
 
 	default:
@@ -58,14 +58,14 @@ func RunHook(ctx context.Context, docker DockerClient, containerID, user string,
 
 // runParallelHooks executes multiple named commands in parallel, as specified
 // by the devcontainer.json object-form lifecycle commands.
-func runParallelHooks(ctx context.Context, docker DockerClient, containerID, user string, cmds map[string]interface{}, logger zerolog.Logger) error {
+func runParallelHooks(ctx context.Context, docker DockerClient, containerID, user string, cmds map[string]any, logger zerolog.Logger) error {
 	var mu sync.Mutex
 	var errs []error
 	var wg sync.WaitGroup
 
 	for name, cmd := range cmds {
 		wg.Add(1)
-		go func(name string, cmd interface{}) {
+		go func(name string, cmd any) {
 			defer wg.Done()
 			logger.Info().Str("hook", name).Msg("running parallel hook")
 			if err := RunHook(ctx, docker, containerID, user, cmd, logger); err != nil {
@@ -160,7 +160,7 @@ func lastLines(s string, maxBytes int) string {
 func RunLifecycleHooks(ctx context.Context, docker DockerClient, containerID, user string, cfg *DevcontainerConfig, logger zerolog.Logger, out io.Writer) error {
 	hooks := []struct {
 		name string
-		cmd  interface{}
+		cmd  any
 	}{
 		{"onCreateCommand", cfg.OnCreateCommand},
 		{"updateContentCommand", cfg.UpdateContentCommand},

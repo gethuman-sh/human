@@ -92,8 +92,7 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	chained := make(chan string, 1)
 	chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
 	go RunBoardReconcile(ctx, lister, chain, time.Hour, zerolog.Nop())

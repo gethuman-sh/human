@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -51,7 +52,7 @@ func ParseURL(rawURL string) (*ParsedURL, bool) {
 // splitPath splits a URL path into non-empty segments.
 func splitPath(path string) []string {
 	var segments []string
-	for _, s := range strings.Split(path, "/") {
+	for s := range strings.SplitSeq(path, "/") {
 		if s != "" {
 			segments = append(segments, s)
 		}
@@ -224,10 +225,5 @@ func parseShortcutURL(host string, _ *url.URL, segments []string) (*ParsedURL, b
 
 // containsSegment checks if a path segment exists in the list.
 func containsSegment(segments []string, target string) bool {
-	for _, s := range segments {
-		if s == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(segments, target)
 }

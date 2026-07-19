@@ -254,8 +254,8 @@ func objQName(obj types.Object) string {
 // candidates, which keeps stdlib calls out of the buffered edge set.
 func isExternalModule(pkgPath string) bool {
 	seg := pkgPath
-	if i := strings.IndexByte(pkgPath, '/'); i >= 0 {
-		seg = pkgPath[:i]
+	if before, _, ok := strings.Cut(pkgPath, "/"); ok {
+		seg = before
 	}
 	return strings.Contains(seg, ".")
 }

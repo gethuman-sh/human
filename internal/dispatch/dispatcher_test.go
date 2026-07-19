@@ -404,7 +404,7 @@ func TestDispatcher_SeenMapPruning(t *testing.T) {
 	d.seen = make(map[int]bool)
 
 	// Pre-fill seen with maxSeenSize+100 entries.
-	for i := 0; i < maxSeenSize+100; i++ {
+	for i := range maxSeenSize + 100 {
 		d.seen[i] = true
 	}
 

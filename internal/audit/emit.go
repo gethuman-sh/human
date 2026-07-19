@@ -71,10 +71,10 @@ func stripCredentials(args []string) []string {
 // isInlineCredential reports whether a is an inline "--<x>-token=…" or
 // "--<x>-key=…" flag carrying a secret value in the same token.
 func isInlineCredential(a string) bool {
-	eq := strings.IndexByte(a, '=')
-	if eq < 0 {
+	before, _, ok := strings.Cut(a, "=")
+	if !ok {
 		return false
 	}
-	name := a[:eq]
+	name := before
 	return strings.HasSuffix(name, "-token") || strings.HasSuffix(name, "-key")
 }

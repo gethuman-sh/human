@@ -26,7 +26,7 @@ func TestBuildWithFeatures_BakesContainerEnv(t *testing.T) {
 
 	cfg := &DevcontainerConfig{
 		Image:    "mcr.microsoft.com/devcontainers/base:ubuntu",
-		Features: map[string]interface{}{"ghcr.io/devcontainers/features/node:1": map[string]interface{}{}},
+		Features: map[string]any{"ghcr.io/devcontainers/features/node:1": map[string]any{}},
 	}
 	id, _, err := builder.buildWithFeatures(context.Background(), cfg, "base:ref", "human-dc-test:hash", &strings.Builder{})
 	if err != nil {

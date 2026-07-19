@@ -50,8 +50,7 @@ func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
 	}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -78,8 +77,7 @@ func TestRunBoardFailureWatch_ReusedNameSecondIncompleteExitPostsAgain(t *testin
 	}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -113,8 +111,7 @@ func TestRunBoardFailureWatch_ReusedNameSecondCleanBuildChainsAgain(t *testing.T
 	chained := make(chan string, 2)
 	chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -143,8 +140,7 @@ func TestRunBoardFailureWatch_NoPostWhenStageDone(t *testing.T) {
 	}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -193,8 +189,7 @@ func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
 	chained := make(chan string, 1)
 	chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -218,8 +213,7 @@ func TestRunBoardFailureWatch_NoChainForOtherStages(t *testing.T) {
 	chained := make(chan string, 1)
 	chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -244,8 +238,7 @@ func TestRunBoardFailureWatch_SyntheticStopFailurePostsImplementationFailed(t *t
 	}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -279,8 +272,7 @@ func TestRunBoardFailureWatch_NoFixNeededIsCleanStop(t *testing.T) {
 	chained := make(chan string, 1)
 	chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -315,8 +307,7 @@ func TestRunBoardFailureWatch_UndeterminedIsCleanStop(t *testing.T) {
 	chained := make(chan string, 1)
 	chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -355,8 +346,7 @@ func TestRunBoardFailureWatch_NothingToDoIsCleanStop(t *testing.T) {
 	chained := make(chan string, 1)
 	chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -447,8 +437,7 @@ func TestRunBoardFailureWatch_PassesErrorTypeToDiagnoser(t *testing.T) {
 		return FailureDiagnosis{Headline: "Claude hit a rate limit and stopped"}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, nil, diag, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
@@ -473,8 +462,7 @@ func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 	c := &syncCommenter{addCh: make(chan string, 4)}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 

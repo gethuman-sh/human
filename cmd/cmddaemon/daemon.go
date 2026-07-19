@@ -1786,9 +1786,8 @@ func (r hostClaudeIdeationRunner) Run(ctx context.Context, resumeID, prompt stri
 		if ctx.Err() != nil {
 			return daemon.IdeationTurn{}, errors.WrapWithDetails(ctx.Err(), "ideation agent turn timed out")
 		}
-		var ee *exec.ExitError
 		detail := ""
-		if goerrors.As(err, &ee) {
+		if ee, ok := goerrors.AsType[*exec.ExitError](err); ok {
 			detail = strings.TrimSpace(string(ee.Stderr))
 		}
 		return daemon.IdeationTurn{}, errors.WrapWithDetails(err, "running ideation agent turn", "stderr", detail)

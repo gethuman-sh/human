@@ -645,9 +645,9 @@ func findAncestorClaude() int {
 			break
 		}
 		ppid := 0
-		for _, line := range strings.Split(string(status), "\n") {
-			if strings.HasPrefix(line, "PPid:") {
-				ppid, _ = strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "PPid:")))
+		for line := range strings.SplitSeq(string(status), "\n") {
+			if after, ok := strings.CutPrefix(line, "PPid:"); ok {
+				ppid, _ = strconv.Atoi(strings.TrimSpace(after))
 				break
 			}
 		}

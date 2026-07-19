@@ -614,11 +614,11 @@ func toTrackerIssue(owner, repo string, gi ghIssue) tracker.Issue {
 func parseRepoURL(repoURL string) (string, string) {
 	// Find "/repos/" and split what follows.
 	const prefix = "/repos/"
-	idx := strings.Index(repoURL, prefix)
-	if idx < 0 {
+	_, after, ok := strings.Cut(repoURL, prefix)
+	if !ok {
 		return "", ""
 	}
-	parts := strings.SplitN(repoURL[idx+len(prefix):], "/", 2)
+	parts := strings.SplitN(after, "/", 2)
 	if len(parts) != 2 {
 		return "", ""
 	}

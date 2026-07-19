@@ -243,7 +243,7 @@ func (c *Client) displayName() string {
 // body. Response bodies are capped at MaxResponseBodyBytes so an oversized or
 // adversarial upstream cannot exhaust memory. The context args are passed to
 // errors.WrapWithDetails on decode failure.
-func DecodeJSON(resp *http.Response, dest interface{}, contextArgs ...interface{}) error {
+func DecodeJSON(resp *http.Response, dest any, contextArgs ...any) error {
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodyBytes+1))
 	if err != nil {

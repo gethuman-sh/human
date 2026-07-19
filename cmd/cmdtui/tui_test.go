@@ -506,7 +506,7 @@ func TestRenderIssuesPanel_Empty(t *testing.T) {
 // tail is replaced with a "more" indicator so the footer stays on screen.
 func TestRenderIssuesPanel_CapsToBudget(t *testing.T) {
 	var issues []tracker.Issue
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		issues = append(issues, tracker.Issue{
 			Key:        fmt.Sprintf("HUM-%d", i),
 			Status:     "Todo",
@@ -528,7 +528,7 @@ func TestRenderIssuesPanel_CapsToBudget(t *testing.T) {
 // even when it sits deep in a list that overflows the budget.
 func TestRenderIssuesPanel_WindowFollowsCursor(t *testing.T) {
 	var issues []tracker.Issue
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		issues = append(issues, tracker.Issue{
 			Key:        fmt.Sprintf("HUM-%d", i),
 			Status:     "Todo",

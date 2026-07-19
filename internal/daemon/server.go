@@ -141,12 +141,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		select {
 		case sem <- struct{}{}:
-			s.wg.Add(1)
-			go func() {
-				defer s.wg.Done()
+			s.wg.Go(func() {
 				defer func() { <-sem }()
 				s.handleConn(conn)
-			}()
+			})
 		default:
 			s.Logger.Warn().Msg("connection limit reached, rejecting")
 			if conn != nil {
@@ -812,8 +810,8 @@ func auditFlagValue(args []string, i int) (name, value string, consumed int) {
 	if !strings.HasPrefix(a, "--") {
 		return "", "", 0
 	}
-	if eq := strings.IndexByte(a, '='); eq >= 0 {
-		return a[:eq], a[eq+1:], 0
+	if before, after, ok := strings.Cut(a, "="); ok {
+		return before, after, 0
 	}
 	if i+1 < len(args) {
 		return a, args[i+1], 1

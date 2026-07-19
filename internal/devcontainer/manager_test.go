@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -629,10 +630,8 @@ func TestManager_Up_WorktreeGitDirBind(t *testing.T) {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
 	want := gitDir + ":" + gitDir
-	for _, b := range mock.createCalls[0].Binds {
-		if b == want {
-			return
-		}
+	if slices.Contains(mock.createCalls[0].Binds, want) {
+		return
 	}
 	t.Errorf("missing parent-repo git bind %q in binds: %v", want, mock.createCalls[0].Binds)
 }

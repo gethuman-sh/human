@@ -87,7 +87,7 @@ func TestPrune(t *testing.T) {
 func TestQueryLimit(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Now().UTC()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		// Spread timestamps so newest-first ordering is deterministic.
 		seedEvent(t, s, "jira", "KAN-1", base.Add(time.Duration(i)*time.Minute))
 	}

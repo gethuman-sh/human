@@ -137,23 +137,23 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers * 3)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		key := string(rune('a' + w))
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for i := range iterations {
 				assert.NoError(t, s.Set(key, i%Columns))
 			}
 		}()
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				_ = s.Assignments()
 			}
 		}()
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				assert.NoError(t, s.PruneExcept(map[string]struct{}{
 					"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {},
 				}))

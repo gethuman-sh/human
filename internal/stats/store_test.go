@@ -155,10 +155,10 @@ func TestConcurrentWrites(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				_ = s.InsertEvent(ctx, fmt.Sprintf("s-%d", workerID), "PostToolUse", "Bash", "/proj", "", now)
 			}
 		}(w)

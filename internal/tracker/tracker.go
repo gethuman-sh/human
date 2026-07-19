@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -202,12 +203,7 @@ func (i Issue) IsBug() bool {
 	if isBugToken(i.Type) {
 		return true
 	}
-	for _, l := range i.Labels {
-		if isBugToken(l) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(i.Labels, isBugToken)
 }
 
 func isBugToken(s string) bool {
@@ -235,10 +231,8 @@ func CreateLabels(i *Issue) []string {
 	if !isBugToken(i.Type) {
 		return i.Labels
 	}
-	for _, l := range i.Labels {
-		if isBugToken(l) {
-			return i.Labels
-		}
+	if slices.ContainsFunc(i.Labels, isBugToken) {
+		return i.Labels
 	}
 	return append(append([]string{}, i.Labels...), BugLabel)
 }
