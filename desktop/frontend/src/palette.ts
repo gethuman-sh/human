@@ -69,7 +69,7 @@ function scoreAgainst(text: string, q: string): { score: number; positions: numb
   for (const ch of needle) {
     const found = lower.indexOf(ch, ti);
     if (found < 0) return null;
-    const prev = positions[positions.length - 1];
+    const prev = positions.at(-1);
     if (prev !== undefined && found === prev + 1) score += 3; // contiguous run
     if (found === 0 || lower[found - 1] === "." || lower[found - 1] === " ") score += 2;
     score += 1;
@@ -99,7 +99,7 @@ function hits(): Hit[] {
 }
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 function markPath(path: string, positions: number[]): string {
@@ -210,7 +210,7 @@ function renderEditor(v: SettingValue): string {
       : "";
   return (
     `<div class="palette-editor">` +
-    `<div class="palette-editor-label">${escapeHtml(v.label)}${v.description ? " — " + escapeHtml(v.description) : ""}</div>` +
+    `<div class="palette-editor-label">${escapeHtml(v.label)}${v.description ? ` — ${escapeHtml(v.description)}` : ""}</div>` +
     `<input id="palette-editor-input" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(raw)}" placeholder="${escapeHtml(placeholder)}" />` +
     `<div id="palette-editor-msg" class="palette-editor-hint">↵ save · esc back</div>` +
     `</div>`

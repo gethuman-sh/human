@@ -377,7 +377,7 @@ func parseMountString(s string) string {
 	var source, target, mountType string
 	readonly := false
 
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		part = strings.TrimSpace(part)
 		k, v, _ := strings.Cut(part, "=")
 		switch k {
@@ -576,7 +576,7 @@ func (m *Manager) List(ctx context.Context) ([]Meta, error) {
 
 // runHostCommand executes a devcontainer.json initializeCommand on the host.
 // Supports string (shell) and []interface{} (direct exec) forms.
-func runHostCommand(cmd interface{}, projectDir string) error {
+func runHostCommand(cmd any, projectDir string) error {
 	switch v := cmd.(type) {
 	case string:
 		if v == "" {
@@ -587,7 +587,7 @@ func runHostCommand(cmd interface{}, projectDir string) error {
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		return c.Run()
-	case []interface{}:
+	case []any:
 		if len(v) == 0 {
 			return nil
 		}

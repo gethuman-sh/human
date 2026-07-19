@@ -39,10 +39,10 @@ func (s *stubFinder) FindInstances(_ context.Context) ([]claude.Instance, error)
 
 func makeTestLine(t *testing.T, model string, ts time.Time, input, output int) []byte {
 	t.Helper()
-	m := map[string]interface{}{
+	m := map[string]any{
 		"type":      "assistant",
 		"timestamp": ts.Format(time.RFC3339),
-		"message": map[string]interface{}{
+		"message": map[string]any{
 			"model": model,
 			"usage": map[string]int{
 				"input_tokens":                input,

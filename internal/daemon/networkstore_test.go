@@ -57,7 +57,7 @@ func TestNetworkEventStore_ConsecutiveDedup(t *testing.T) {
 	clock := newFakeClock(time.Unix(1_700_000_000, 0).UTC())
 	store := NewNetworkEventStoreWithClock(clock.Now)
 
-	for i := 0; i < 47; i++ {
+	for range 47 {
 		store.Emit("proxy", "forward", "github.com")
 		clock.Advance(time.Second)
 	}
@@ -107,7 +107,7 @@ func TestNetworkEventStore_RingBufferCap(t *testing.T) {
 	store := NewNetworkEventStoreWithClock(clock.Now)
 
 	total := 250
-	for i := 0; i < total; i++ {
+	for i := range total {
 		// Unique host per iteration so dedup does not collapse rows.
 		store.Emit("proxy", "forward", hostName(i))
 	}
@@ -128,10 +128,10 @@ func TestNetworkEventStore_ConcurrentEmit(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(id int) {
 			defer wg.Done()
-			for i := 0; i < iter; i++ {
+			for i := range iter {
 				store.Emit("proxy", "forward", hostName(id*1000+i))
 			}
 		}(w)

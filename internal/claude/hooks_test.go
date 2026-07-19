@@ -37,10 +37,10 @@ func TestInstallHooks_NewSettings(t *testing.T) {
 	}
 	require.NotEmpty(t, settingsPath, "settings.json should be written")
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	require.NoError(t, json.Unmarshal(fw.files[settingsPath], &settings))
 
-	hooks, ok := settings["hooks"].(map[string]interface{})
+	hooks, ok := settings["hooks"].(map[string]any)
 	require.True(t, ok, "hooks key should exist")
 
 	// All 12 events registered. SessionStart carries two commands: the
@@ -48,7 +48,7 @@ func TestInstallHooks_NewSettings(t *testing.T) {
 	for _, evt := range []string{"UserPromptSubmit", "Stop", "SubagentStart", "SubagentStop",
 		"PreToolUse", "PostToolUse", "PostToolUseFailure",
 		"PermissionRequest", "Notification", "StopFailure", "SessionStart", "SessionEnd"} {
-		matchers, ok := hooks[evt].([]interface{})
+		matchers, ok := hooks[evt].([]any)
 		require.True(t, ok, "event %s should have matchers", evt)
 		want := 1
 		if evt == "SessionStart" {
@@ -67,11 +67,11 @@ func TestInstallHooks_NewSettings(t *testing.T) {
 func TestInstallHooks_ExistingSettings(t *testing.T) {
 	fw := newMockFileWriter()
 
-	existingSettings := map[string]interface{}{
-		"permissions": map[string]interface{}{
+	existingSettings := map[string]any{
+		"permissions": map[string]any{
 			"allow": []string{"WebSearch"},
 		},
-		"statusLine": map[string]interface{}{
+		"statusLine": map[string]any{
 			"type":    "command",
 			"command": "bash ~/status.sh",
 		},
@@ -100,20 +100,20 @@ func TestInstallHooks_ExistingSettings(t *testing.T) {
 	}
 	require.NotEmpty(t, settingsPath)
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	require.NoError(t, json.Unmarshal(fw.files[settingsPath], &settings))
 
 	// Existing fields preserved.
-	perms, ok := settings["permissions"].(map[string]interface{})
+	perms, ok := settings["permissions"].(map[string]any)
 	require.True(t, ok, "permissions should be preserved")
 	assert.NotNil(t, perms["allow"])
 
-	statusLine, ok := settings["statusLine"].(map[string]interface{})
+	statusLine, ok := settings["statusLine"].(map[string]any)
 	require.True(t, ok, "statusLine should be preserved")
 	assert.Equal(t, "command", statusLine["type"])
 
 	// Hooks added.
-	_, ok = settings["hooks"].(map[string]interface{})
+	_, ok = settings["hooks"].(map[string]any)
 	assert.True(t, ok, "hooks should be added")
 }
 
@@ -157,13 +157,13 @@ func TestInstallHooks_Idempotent(t *testing.T) {
 	assert.Contains(t, buf2.String(), "hooks already registered")
 
 	// Settings should not have duplicate matchers.
-	var settings map[string]interface{}
+	var settings map[string]any
 	require.NoError(t, json.Unmarshal(fw.files[settingsPath], &settings))
-	hooks := settings["hooks"].(map[string]interface{})
+	hooks := settings["hooks"].(map[string]any)
 	for _, evt := range []string{"UserPromptSubmit", "Stop", "SubagentStart", "SubagentStop",
 		"PreToolUse", "PostToolUse", "PostToolUseFailure",
 		"PermissionRequest", "Notification", "StopFailure", "SessionStart", "SessionEnd"} {
-		matchers := hooks[evt].([]interface{})
+		matchers := hooks[evt].([]any)
 		want := 1
 		if evt == "SessionStart" {
 			want = 2 // human hook + human agent-context, still no duplicates
@@ -176,13 +176,13 @@ func TestInstallHooks_MergesWithUserHooks(t *testing.T) {
 	fw := newMockFileWriter()
 
 	// User already has a Stop hook.
-	existingSettings := map[string]interface{}{
-		"hooks": map[string]interface{}{
-			"Stop": []interface{}{
-				map[string]interface{}{
+	existingSettings := map[string]any{
+		"hooks": map[string]any{
+			"Stop": []any{
+				map[string]any{
 					"matcher": "",
-					"hooks": []interface{}{
-						map[string]interface{}{
+					"hooks": []any{
+						map[string]any{
 							"type":    "command",
 							"command": "echo user hook",
 						},
@@ -211,16 +211,16 @@ func TestInstallHooks_MergesWithUserHooks(t *testing.T) {
 		}
 	}
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	require.NoError(t, json.Unmarshal(fw.files[settingsPath], &settings))
-	hooks := settings["hooks"].(map[string]interface{})
+	hooks := settings["hooks"].(map[string]any)
 
 	// Stop should have 2 matchers: user's + ours.
-	stopMatchers := hooks["Stop"].([]interface{})
+	stopMatchers := hooks["Stop"].([]any)
 	assert.Len(t, stopMatchers, 2, "Stop should have user hook + our hook")
 
 	// UserPromptSubmit should have 1 (only ours).
-	promptMatchers := hooks["UserPromptSubmit"].([]interface{})
+	promptMatchers := hooks["UserPromptSubmit"].([]any)
 	assert.Len(t, promptMatchers, 1)
 }
 
@@ -257,18 +257,18 @@ func TestInstallHooks_NotificationMatcher(t *testing.T) {
 		}
 	}
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	require.NoError(t, json.Unmarshal(fw.files[settingsPath], &settings))
-	hooks := settings["hooks"].(map[string]interface{})
+	hooks := settings["hooks"].(map[string]any)
 
 	// Notification should have matcher ".*" (not empty).
-	matchers := hooks["Notification"].([]interface{})
-	matcher := matchers[0].(map[string]interface{})
+	matchers := hooks["Notification"].([]any)
+	matcher := matchers[0].(map[string]any)
 	assert.Equal(t, ".*", matcher["matcher"], "Notification hook should have .* matcher")
 
 	// Other hooks should have empty matcher.
-	stopMatchers := hooks["Stop"].([]interface{})
-	stopMatcher := stopMatchers[0].(map[string]interface{})
+	stopMatchers := hooks["Stop"].([]any)
+	stopMatcher := stopMatchers[0].(map[string]any)
 	assert.Equal(t, "", stopMatcher["matcher"], "Stop hook should have empty matcher")
 }
 
@@ -289,22 +289,22 @@ func TestInstallHooks_UserPromptSubmitNotAsync(t *testing.T) {
 		}
 	}
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	require.NoError(t, json.Unmarshal(fw.files[settingsPath], &settings))
-	hooks := settings["hooks"].(map[string]interface{})
+	hooks := settings["hooks"].(map[string]any)
 
 	// UserPromptSubmit should NOT have async.
-	matchers := hooks["UserPromptSubmit"].([]interface{})
-	matcher := matchers[0].(map[string]interface{})
-	hookList := matcher["hooks"].([]interface{})
-	hookDef := hookList[0].(map[string]interface{})
+	matchers := hooks["UserPromptSubmit"].([]any)
+	matcher := matchers[0].(map[string]any)
+	hookList := matcher["hooks"].([]any)
+	hookDef := hookList[0].(map[string]any)
 	_, hasAsync := hookDef["async"]
 	assert.False(t, hasAsync, "UserPromptSubmit hook should not have async field")
 
 	// Stop SHOULD have async: true.
-	stopMatchers := hooks["Stop"].([]interface{})
-	stopMatcher := stopMatchers[0].(map[string]interface{})
-	stopHookList := stopMatcher["hooks"].([]interface{})
-	stopHookDef := stopHookList[0].(map[string]interface{})
+	stopMatchers := hooks["Stop"].([]any)
+	stopMatcher := stopMatchers[0].(map[string]any)
+	stopHookList := stopMatcher["hooks"].([]any)
+	stopHookDef := stopHookList[0].(map[string]any)
 	assert.Equal(t, true, stopHookDef["async"], "Stop hook should have async: true")
 }

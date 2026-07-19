@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/gitrepo"
@@ -92,6 +93,59 @@ func TestTeeExecOutput_DemuxesStdoutAndStderr(t *testing.T) {
 	out := string(data)
 	if !contains(out, "OUT") || !contains(out, "ERR") {
 		t.Fatalf("output.log missing demuxed payloads, got %q", out)
+	}
+}
+
+// inspectTeeMock reports the exec as exited with a nonzero code so the tee's
+// exit trailer can be observed.
+type inspectTeeMock struct {
+	teeMock
+}
+
+func (m *inspectTeeMock) ExecInspect(_ context.Context, _ string) (devcontainer.ExecInspectResponse, error) {
+	return devcontainer.ExecInspectResponse{ExitCode: 137, Running: false}, nil
+}
+
+func TestTeeExecOutput_AppendsExitCodeTrailer(t *testing.T) {
+	withLogRoot(t)
+	mgr := &Manager{Docker: &inspectTeeMock{}}
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{Name: "tee", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("execClaudeDetached: %v", err)
+	}
+	if exe == nil {
+		t.Fatal("expected non-nil execution")
+	}
+	mgr.teeWG.Wait()
+	data, _ := os.ReadFile(filepath.Join(exe.Dir(), "output.log"))
+	if !strings.HasSuffix(strings.TrimRight(string(data), "\n"), "[human] claude exec exited with code 137") {
+		t.Fatalf("output.log missing exit trailer, got %q", string(data))
+	}
+}
+
+// inspectErrTeeMock fails inspection so the trailer must be omitted, not fabricated.
+type inspectErrTeeMock struct {
+	teeMock
+}
+
+func (m *inspectErrTeeMock) ExecInspect(_ context.Context, _ string) (devcontainer.ExecInspectResponse, error) {
+	return devcontainer.ExecInspectResponse{}, errors.WithDetails("inspect down")
+}
+
+func TestTeeExecOutput_InspectErrorOmitsTrailer(t *testing.T) {
+	withLogRoot(t)
+	mgr := &Manager{Docker: &inspectErrTeeMock{}}
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{Name: "tee", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("execClaudeDetached: %v", err)
+	}
+	if exe == nil {
+		t.Fatal("expected non-nil execution")
+	}
+	mgr.teeWG.Wait()
+	data, _ := os.ReadFile(filepath.Join(exe.Dir(), "output.log"))
+	if strings.Contains(string(data), "[human] claude exec exited") {
+		t.Fatalf("trailer must be omitted on inspect error, got %q", string(data))
 	}
 }
 

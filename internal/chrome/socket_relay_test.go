@@ -39,8 +39,7 @@ func TestSocketRelay_HappyPath(t *testing.T) {
 	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	listenReady := make(chan struct{})
 	go func() {
@@ -94,8 +93,7 @@ func TestSocketRelay_ChromeBeforeSpawn(t *testing.T) {
 	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	listenReady := make(chan struct{})
 	go func() {
@@ -133,8 +131,7 @@ func TestSocketRelay_SpawnBlocksUntilChrome(t *testing.T) {
 	dir := shortTempDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	listenReady := make(chan struct{})
 	go func() {

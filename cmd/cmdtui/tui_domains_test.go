@@ -157,7 +157,7 @@ func TestRenderDomainsPanel_noOverlapWithFooter(t *testing.T) {
 	// Populate far more events than can fit so the panel has to truncate
 	// itself rather than push the footer off-screen.
 	hosts := make([]string, 0, 30)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		hosts = append(hosts, "host-"+strings.Repeat("x", i%5)+".example.com")
 	}
 

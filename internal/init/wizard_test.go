@@ -417,9 +417,7 @@ func TestRunInit_CollectsHints(t *testing.T) {
 
 func TestServicesStep_AddTrackersDeclined(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{confirmAddTrackers: false}
 	step := NewServicesStep(prompter)
@@ -435,9 +433,7 @@ func TestServicesStep_AddTrackersDeclined(t *testing.T) {
 
 func TestServicesStep_AddTrackersAccepted(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	registry := ServiceRegistry()
 	prompter := &mockPrompter{
@@ -457,9 +453,7 @@ func TestServicesStep_AddTrackersAccepted(t *testing.T) {
 
 func TestServicesStep_AddTrackersError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{confirmAddTrackersErr: fmt.Errorf("prompt error")}
 	step := NewServicesStep(prompter)
@@ -487,9 +481,7 @@ func TestServicesStep_NoServicesSelected(t *testing.T) {
 
 func TestServicesStep_AbortOnExistingConfig(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".humanconfig.yaml"), []byte("existing"), 0o644))
 
 	prompter := &mockPrompter{overwrite: false}
@@ -505,9 +497,7 @@ func TestServicesStep_AbortOnExistingConfig(t *testing.T) {
 
 func TestServicesStep_FullFlow(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	registry := ServiceRegistry()
 	jira := registry[0]
@@ -539,9 +529,7 @@ func TestServicesStep_FullFlow(t *testing.T) {
 
 func TestServicesStep_OverwriteError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".humanconfig.yaml"), []byte("existing"), 0o644))
 
 	prompter := &mockPrompter{overwriteErr: fmt.Errorf("input error")}
@@ -557,9 +545,7 @@ func TestServicesStep_OverwriteError(t *testing.T) {
 
 func TestServicesStep_SelectError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{confirmAddTrackers: true, selectErr: fmt.Errorf("select error")}
 	step := NewServicesStep(prompter)
@@ -574,9 +560,7 @@ func TestServicesStep_SelectError(t *testing.T) {
 
 func TestServicesStep_InstancePromptError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	registry := ServiceRegistry()
 	prompter := &mockPrompter{
@@ -596,9 +580,7 @@ func TestServicesStep_InstancePromptError(t *testing.T) {
 
 func TestServicesStep_WriteError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	registry := ServiceRegistry()
 	prompter := &mockPrompter{
@@ -637,9 +619,7 @@ func TestAgentInstallStep_Declined(t *testing.T) {
 
 func TestAgentInstallStep_Accepted(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{installAgents: true}
 	step := NewAgentInstallStep(prompter)
@@ -691,9 +671,7 @@ func TestDevcontainerStep_Declined(t *testing.T) {
 func TestDevcontainerStep_BasicConfig(t *testing.T) {
 	stageTestCA(t)
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{
 		confirmDevcontainer: true,
@@ -714,7 +692,9 @@ func TestDevcontainerStep_BasicConfig(t *testing.T) {
 	assert.Contains(t, data, "ghcr.io/devcontainers/features/node:1")
 	assert.Contains(t, data, "ghcr.io/gethuman-sh/treehouse/human:1")
 	assert.Contains(t, data, `"BROWSER": "human-browser"`)
-	assert.Contains(t, data, ".human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly")
+	// No proxy/intercept selected: the ca.crt mount only belongs in an
+	// intercept config, so it must be absent from a basic devcontainer.
+	assert.NotContains(t, data, ".human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly")
 	assert.Contains(t, data, `"HUMAN_DAEMON_ADDR": "host.docker.internal:19285"`)
 	assert.Contains(t, data, `"HUMAN_DAEMON_TOKEN": "${localEnv:HUMAN_DAEMON_TOKEN}"`)
 	assert.Contains(t, data, `"HUMAN_CHROME_ADDR": "host.docker.internal:19286"`)
@@ -729,9 +709,7 @@ func TestDevcontainerStep_BasicConfig(t *testing.T) {
 func TestDevcontainerStep_WithProxy(t *testing.T) {
 	stageTestCA(t)
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{
 		confirmDevcontainer: true,
@@ -761,9 +739,7 @@ func TestDevcontainerStep_WithProxy(t *testing.T) {
 func TestDevcontainerStep_WithProxyAndIntercept(t *testing.T) {
 	stageTestCA(t)
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{
 		confirmDevcontainer: true,
@@ -794,9 +770,7 @@ func TestDevcontainerStep_NoCA_OmitsMount(t *testing.T) {
 	// HOME points at an empty temp dir: no ~/.human/ca.crt.
 	t.Setenv("HOME", t.TempDir())
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{
 		confirmDevcontainer: true,
@@ -821,9 +795,7 @@ func TestDevcontainerStep_NoCA_OmitsMount(t *testing.T) {
 
 func TestDevcontainerStep_OverwriteDeclined_InjectsFeature(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".devcontainer"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".devcontainer/devcontainer.json"), []byte(`{"image":"node:20"}`), 0o644))
 
@@ -847,9 +819,7 @@ func TestDevcontainerStep_OverwriteDeclined_InjectsFeature(t *testing.T) {
 
 func TestDevcontainerStep_OverwriteDeclined_FeatureAlreadyPresent(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".devcontainer"), 0o755))
 	existing := `{"features":{"ghcr.io/gethuman-sh/treehouse/human:1":{}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".devcontainer/devcontainer.json"), []byte(existing), 0o644))
@@ -871,9 +841,7 @@ func TestDevcontainerStep_OverwriteDeclined_FeatureAlreadyPresent(t *testing.T) 
 
 func TestDevcontainerStep_OverwriteAccepted(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".devcontainer"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".devcontainer/devcontainer.json"), []byte("{}"), 0o644))
 
@@ -907,9 +875,7 @@ func TestDevcontainerStep_PromptError(t *testing.T) {
 
 func TestDevcontainerStep_OverwritePromptError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".devcontainer"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".devcontainer/devcontainer.json"), []byte("{}"), 0o644))
 
@@ -929,9 +895,7 @@ func TestDevcontainerStep_OverwritePromptError(t *testing.T) {
 
 func TestDevcontainerStep_ProxyPromptError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{
 		confirmDevcontainer: true,
@@ -969,9 +933,7 @@ func TestStackRegistry_AllStacks(t *testing.T) {
 
 func TestDevcontainerStep_WithStacks(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	reg := StackRegistry()
 	prompter := &mockPrompter{
@@ -994,9 +956,7 @@ func TestDevcontainerStep_WithStacks(t *testing.T) {
 
 func TestDevcontainerStep_StacksWithProxy(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	reg := StackRegistry()
 	prompter := &mockPrompter{
@@ -1020,9 +980,7 @@ func TestDevcontainerStep_StacksWithProxy(t *testing.T) {
 
 func TestDevcontainerStep_SelectStacksError(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	prompter := &mockPrompter{
 		confirmDevcontainer: true,
@@ -1084,9 +1042,7 @@ func (m *mockLspInstaller) EnsureMarketplace(repo string) error {
 
 func TestRunInit_FullWizardFlow(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	registry := ServiceRegistry()
 	jira := registry[0]
@@ -1133,9 +1089,7 @@ func TestRunInit_FullWizardFlow(t *testing.T) {
 
 func TestRunInit_FullWizardWithAgentInstall(t *testing.T) {
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmpDir))
+	t.Chdir(tmpDir)
 
 	registry := ServiceRegistry()
 	prompter := &mockPrompter{

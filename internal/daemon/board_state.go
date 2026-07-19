@@ -113,12 +113,26 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 // markers posted without a reason, so a failed card never shows empty.
 func failureReason(body string) string {
 	trimmed := strings.TrimSpace(body)
-	if idx := strings.IndexByte(trimmed, '\n'); idx >= 0 {
-		if reason := firstLine(trimmed[idx+1:]); reason != "" {
+	if _, after, ok := strings.Cut(trimmed, "\n"); ok {
+		if reason := firstLine(after); reason != "" {
 			return reason
 		}
 	}
 	return firstLine(trimmed)
+}
+
+// failureBody returns everything after a *-failed marker's header line — the
+// full diagnosis (headline plus markdown detail) for surfaces that can render
+// more than one line. Falls back to failureReason so a reason-less marker
+// still shows something.
+func failureBody(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if _, after, ok := strings.Cut(trimmed, "\n"); ok {
+		if rest := strings.TrimSpace(after); rest != "" {
+			return rest
+		}
+	}
+	return failureReason(body)
 }
 
 // latestStateInStage resolves the stage's state from its newest marker and
@@ -213,7 +227,7 @@ func latestPrefixedLine(comments []tracker.Comment, header, prefix string) strin
 // parsePrefixedLine returns the trimmed value following the first line that
 // begins with prefix (e.g. "engineering:"), or "" when absent.
 func parsePrefixedLine(body, prefix string) string {
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		if rest, ok := strings.CutPrefix(line, prefix); ok {
 			return strings.TrimSpace(rest)
@@ -225,7 +239,7 @@ func parsePrefixedLine(body, prefix string) string {
 // firstLine returns the first non-empty line of a body, used as the error
 // summary for a failed marker.
 func firstLine(body string) string {
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			return line
 		}

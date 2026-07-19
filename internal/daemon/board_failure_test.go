@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -43,26 +44,27 @@ func (s *syncCommenter) AddComment(_ context.Context, _ string, body string) (*t
 }
 
 func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{cmt("[human:planning-started]", time.Unix(1, 0))},
-		addCh:    make(chan string, 4),
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt("[human:planning-started]", time.Unix(1, 0))},
+			addCh:    make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
 
-	select {
-	case body := <-c.addCh:
-		assert.Contains(t, body, PlanningFailedHeader)
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected a failed marker to be posted")
-	}
+		select {
+		case body := <-c.addCh:
+			assert.Contains(t, body, PlanningFailedHeader)
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected a failed marker to be posted")
+		}
+	})
 }
 
 // SC-201: board stage agents reuse the same deterministic name on every
@@ -71,94 +73,97 @@ func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
 // handle EVERY exit of a reused name, not just the first — a name-keyed
 // lifetime dedupe silently dropped second-and-later runs.
 func TestRunBoardFailureWatch_ReusedNameSecondIncompleteExitPostsAgain(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
-		addCh:    make(chan string, 4),
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
+			addCh:    make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	// First exit of the reused name posts a failed marker.
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
-	select {
-	case body := <-c.addCh:
-		assert.Contains(t, body, PlanningFailedHeader)
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected first failed marker")
-	}
+		// First exit of the reused name posts a failed marker.
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+		select {
+		case body := <-c.addCh:
+			assert.Contains(t, body, PlanningFailedHeader)
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected first failed marker")
+		}
 
-	// Second exit of the SAME name (a re-run) must post AGAIN.
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
-	select {
-	case body := <-c.addCh:
-		assert.Contains(t, body, PlanningFailedHeader)
-	case <-time.After(2 * time.Second):
-		t.Fatal("second exit of a reused agent name must post a failed marker again (SC-201)")
-	}
+		// Second exit of the SAME name (a re-run) must post AGAIN.
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+		select {
+		case body := <-c.addCh:
+			assert.Contains(t, body, PlanningFailedHeader)
+		case <-time.After(2 * time.Second):
+			t.Fatal("second exit of a reused agent name must post a failed marker again (SC-201)")
+		}
+	})
 }
 
 // SC-201: a second cleanly-finished build of the same reused name must chain
 // into review again, not be swallowed by lifetime dedupe.
 func TestRunBoardFailureWatch_ReusedNameSecondCleanBuildChainsAgain(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
-	chained := make(chan string, 2)
-	chain := func(pmKey string) error { chained <- pmKey; return nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 2)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
-	select {
-	case pmKey := <-chained:
-		assert.Equal(t, "SC-1", pmKey)
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected first build to chain a review")
-	}
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+		select {
+		case pmKey := <-chained:
+			assert.Equal(t, "SC-1", pmKey)
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected first build to chain a review")
+		}
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
-	select {
-	case pmKey := <-chained:
-		assert.Equal(t, "SC-1", pmKey)
-	case <-time.After(2 * time.Second):
-		t.Fatal("second clean build of a reused agent name must chain a review again (SC-201)")
-	}
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+		select {
+		case pmKey := <-chained:
+			assert.Equal(t, "SC-1", pmKey)
+		case <-time.After(2 * time.Second):
+			t.Fatal("second clean build of a reused agent name must chain a review again (SC-201)")
+		}
+	})
 }
 
 func TestRunBoardFailureWatch_NoPostWhenStageDone(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-9", time.Unix(1, 0))},
-		addCh:    make(chan string, 4),
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt("[human:plan-ready]\nengineering: HUM-9", time.Unix(1, 0))},
+			addCh:    make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
 
-	select {
-	case <-c.addCh:
-		t.Fatal("must not post failed marker when stage completed cleanly")
-	case <-time.After(500 * time.Millisecond):
-	}
+		select {
+		case <-c.addCh:
+			t.Fatal("must not post failed marker when stage completed cleanly")
+		case <-time.After(500 * time.Millisecond):
+		}
 
-	c.mu.Lock()
-	require.Empty(t, c.added)
-	c.mu.Unlock()
+		c.mu.Lock()
+		require.Empty(t, c.added)
+		c.mu.Unlock()
+	})
 }
 
 func TestHandleBoardAgentExit_MalformedName(t *testing.T) {
@@ -168,7 +173,7 @@ func TestHandleBoardAgentExit_MalformedName(t *testing.T) {
 		return &syncCommenter{}, nil
 	}
 	// A name that does not parse must short-circuit before resolving a commenter.
-	handleBoardAgentExit(context.Background(), "board-", commenterFor, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-", "", commenterFor, nil, nil, zerolog.Nop())
 	assert.False(t, called)
 }
 
@@ -177,7 +182,7 @@ func TestHandleBoardAgentExit_CommenterError(t *testing.T) {
 		return nil, assertErr{}
 	}
 	// Must not panic when the commenter cannot be resolved.
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", commenterFor, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, zerolog.Nop())
 }
 
 type assertErr struct{}
@@ -185,51 +190,53 @@ type assertErr struct{}
 func (assertErr) Error() string { return "no commenter" }
 
 func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
-	chained := make(chan string, 1)
-	chain := func(pmKey string) error { chained <- pmKey; return nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 1)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
 
-	select {
-	case pmKey := <-chained:
-		assert.Equal(t, "SC-1", pmKey)
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected the finished build to chain into a review")
-	}
+		select {
+		case pmKey := <-chained:
+			assert.Equal(t, "SC-1", pmKey)
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected the finished build to chain into a review")
+		}
+	})
 }
 
 func TestRunBoardFailureWatch_NoChainForOtherStages(t *testing.T) {
-	// A cleanly finished PLANNING stage must not chain a review — only builds do.
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{cmt("[human:plan-ready]", time.Unix(1, 0))},
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
-	chained := make(chan string, 1)
-	chain := func(pmKey string) error { chained <- pmKey; return nil }
+	synctest.Test(t, func(t *testing.T) {
+		// A cleanly finished PLANNING stage must not chain a review — only builds do.
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt("[human:plan-ready]", time.Unix(1, 0))},
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 1)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
 
-	select {
-	case <-chained:
-		t.Fatal("planning completion must not chain a review")
-	case <-time.After(300 * time.Millisecond):
-	}
+		select {
+		case <-chained:
+			t.Fatal("planning completion must not chain a review")
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
 }
 
 // SC-206 contract pin: the zombie sweep reports a reap as a synthetic
@@ -237,28 +244,29 @@ func TestRunBoardFailureWatch_NoChainForOtherStages(t *testing.T) {
 // posting the stage's failed marker when only the started marker exists.
 // Tightening the watcher's event filter would silently reopen the bug.
 func TestRunBoardFailureWatch_SyntheticStopFailurePostsImplementationFailed(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
-		addCh:    make(chan string, 4),
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
+			addCh:    make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	// The reap-synthesized event carries no SessionID — only name + time.
-	store.Append(hookevents.Event{EventName: "StopFailure", AgentName: "board-204-implementation", Timestamp: time.Now()})
+		// The reap-synthesized event carries no SessionID — only name + time.
+		store.Append(hookevents.Event{EventName: "StopFailure", AgentName: "board-204-implementation", Timestamp: time.Now()})
 
-	select {
-	case body := <-c.addCh:
-		assert.True(t, strings.HasPrefix(body, ImplementationFailedHeader),
-			"failed marker must lead the comment body, got: %q", body)
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected a failed marker for the reaped implementation stage")
-	}
+		select {
+		case body := <-c.addCh:
+			assert.True(t, strings.HasPrefix(body, ImplementationFailedHeader),
+				"failed marker must lead the comment body, got: %q", body)
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected a failed marker for the reaped implementation stage")
+		}
+	})
 }
 
 // ticket 405: an autofix run has a second legitimate ending — triage concludes
@@ -267,72 +275,74 @@ func TestRunBoardFailureWatch_SyntheticStopFailurePostsImplementationFailed(t *t
 // watcher must post NO implementation-failed marker (no endless retry loop) and
 // must NOT chain a review (there is no branch to review).
 func TestRunBoardFailureWatch_NoFixNeededIsCleanStop(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{
-			cmt(ImplementationStartedHeader, time.Unix(1, 0)),
-			cmt(NoFixNeededHeader+"\nverdict: not-a-bug", time.Unix(2, 0)),
-		},
-		addCh: make(chan string, 4),
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
-	chained := make(chan string, 1)
-	chain := func(pmKey string) error { chained <- pmKey; return nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{
+				cmt(ImplementationStartedHeader, time.Unix(1, 0)),
+				cmt(NoFixNeededHeader+"\nverdict: not-a-bug", time.Unix(2, 0)),
+			},
+			addCh: make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 1)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
 
-	select {
-	case body := <-c.addCh:
-		t.Fatalf("a not-a-bug clean stop must not post any marker, got: %q", body)
-	case pmKey := <-chained:
-		t.Fatalf("a not-a-bug clean stop must not chain a review, got: %q", pmKey)
-	case <-time.After(500 * time.Millisecond):
-	}
+		select {
+		case body := <-c.addCh:
+			t.Fatalf("a not-a-bug clean stop must not post any marker, got: %q", body)
+		case pmKey := <-chained:
+			t.Fatalf("a not-a-bug clean stop must not chain a review, got: %q", pmKey)
+		case <-time.After(500 * time.Millisecond):
+		}
 
-	c.mu.Lock()
-	require.Empty(t, c.added)
-	c.mu.Unlock()
+		c.mu.Lock()
+		require.Empty(t, c.added)
+		c.mu.Unlock()
+	})
 }
 
 // ticket 405 (sibling verdict): undetermined also stops with no handoff and is
 // misclassified identically. It posts the same terminal [human:no-fix-needed]
 // marker and must be treated as a clean stop — no failed marker, no chain.
 func TestRunBoardFailureWatch_UndeterminedIsCleanStop(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{
-		comments: []tracker.Comment{
-			cmt(ImplementationStartedHeader, time.Unix(1, 0)),
-			cmt(NoFixNeededHeader+"\nverdict: undetermined", time.Unix(2, 0)),
-		},
-		addCh: make(chan string, 4),
-	}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
-	chained := make(chan string, 1)
-	chain := func(pmKey string) error { chained <- pmKey; return nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{
+				cmt(ImplementationStartedHeader, time.Unix(1, 0)),
+				cmt(NoFixNeededHeader+"\nverdict: undetermined", time.Unix(2, 0)),
+			},
+			addCh: make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 1)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
 
-	select {
-	case body := <-c.addCh:
-		t.Fatalf("an undetermined clean stop must not post any marker, got: %q", body)
-	case pmKey := <-chained:
-		t.Fatalf("an undetermined clean stop must not chain a review, got: %q", pmKey)
-	case <-time.After(500 * time.Millisecond):
-	}
+		select {
+		case body := <-c.addCh:
+			t.Fatalf("an undetermined clean stop must not post any marker, got: %q", body)
+		case pmKey := <-chained:
+			t.Fatalf("an undetermined clean stop must not chain a review, got: %q", pmKey)
+		case <-time.After(500 * time.Millisecond):
+		}
 
-	c.mu.Lock()
-	require.Empty(t, c.added)
-	c.mu.Unlock()
+		c.mu.Lock()
+		require.Empty(t, c.added)
+		c.mu.Unlock()
+	})
 }
 
 // ticket 454 (planning twin of ticket 405): a planning run has a second
@@ -343,52 +353,148 @@ func TestRunBoardFailureWatch_UndeterminedIsCleanStop(t *testing.T) {
 // must post NO planning-failed marker (no endless re-planning loop) and must NOT
 // chain a review (there is no branch to review).
 func TestRunBoardFailureWatch_NothingToDoIsCleanStop(t *testing.T) {
-	store := NewHookEventStore()
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{
+				cmt(PlanningStartedHeader, time.Unix(1, 0)),
+				cmt(NothingToDoHeader+"\nevidence: already merged in PR #123", time.Unix(2, 0)),
+			},
+			addCh: make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 1)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
+
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+
+		select {
+		case body := <-c.addCh:
+			t.Fatalf("a nothing-to-plan clean stop must not post any marker, got: %q", body)
+		case pmKey := <-chained:
+			t.Fatalf("a nothing-to-plan clean stop must not chain a review, got: %q", pmKey)
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		c.mu.Lock()
+		require.Empty(t, c.added)
+		c.mu.Unlock()
+	})
+}
+
+// SC-620: the failed marker's body is headline-first — the card badge/tooltip
+// reads exactly the first non-header line via failureReason — followed by the
+// diagnosis detail block for the detail pane.
+func TestHandleBoardAgentExit_UsesDiagnoserHeadlineAndDetail(t *testing.T) {
 	c := &syncCommenter{
-		comments: []tracker.Comment{
-			cmt(PlanningStartedHeader, time.Unix(1, 0)),
-			cmt(NothingToDoHeader+"\nevidence: already merged in PR #123", time.Unix(2, 0)),
-		},
-		addCh: make(chan string, 4),
+		comments: []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
 	}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
-	chained := make(chan string, 1)
-	chain := func(pmKey string) error { chained <- pmKey; return nil }
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
-
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
-
-	select {
-	case body := <-c.addCh:
-		t.Fatalf("a nothing-to-plan clean stop must not post any marker, got: %q", body)
-	case pmKey := <-chained:
-		t.Fatalf("a nothing-to-plan clean stop must not chain a review, got: %q", pmKey)
-	case <-time.After(500 * time.Millisecond):
+	diag := func(agentName, errorType string) FailureDiagnosis {
+		assert.Equal(t, "board-SC-1-implementation", agentName)
+		return FailureDiagnosis{
+			Headline: "claude exited with code 1: API Error",
+			Detail:   "agent: board-SC-1-implementation\n\nlast output:\n~~~\nboom\n~~~",
+		}
 	}
 
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, nil, diag, zerolog.Nop())
+
 	c.mu.Lock()
-	require.Empty(t, c.added)
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	body := c.added[0]
+	want := ImplementationFailedHeader + "\nclaude exited with code 1: API Error\n\nagent: board-SC-1-implementation\n\nlast output:\n~~~\nboom\n~~~"
+	assert.Equal(t, want, body)
+	// Contract pin: the card's one-line error is exactly the headline.
+	assert.Equal(t, "claude exited with code 1: API Error", failureReason(body))
+}
+
+func TestHandleBoardAgentExit_NilDiagnoserFallsBackToGeneric(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, zerolog.Nop())
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.Equal(t, PlanningFailedHeader+"\n"+genericStageFailure, c.added[0])
+}
+
+func TestHandleBoardAgentExit_EmptyHeadlineFallsBackToGeneric(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	diag := func(string, string) FailureDiagnosis { return FailureDiagnosis{} }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, diag, zerolog.Nop())
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.Equal(t, PlanningFailedHeader+"\n"+genericStageFailure, c.added[0])
+}
+
+// The watch loop must hand the hook event's error type to the diagnoser —
+// a rate-limit stop is diagnosed from the event, not the artifacts.
+func TestRunBoardFailureWatch_PassesErrorTypeToDiagnoser(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
+			addCh:    make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		gotErrorType := make(chan string, 1)
+		diag := func(_, errorType string) FailureDiagnosis {
+			gotErrorType <- errorType
+			return FailureDiagnosis{Headline: "Claude hit a rate limit and stopped"}
+		}
+
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, diag, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
+
+		store.Append(hookevents.Event{EventName: "StopFailure", AgentName: "board-SC-1-planning", ErrorType: "rate_limit", Timestamp: time.Now()})
+
+		select {
+		case et := <-gotErrorType:
+			assert.Equal(t, "rate_limit", et)
+		case <-time.After(2 * time.Second):
+			t.Fatal("diagnoser never received the event's error type")
+		}
+		select {
+		case body := <-c.addCh:
+			assert.Contains(t, body, "rate limit")
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected the diagnosed failed marker")
+		}
+	})
 }
 
 func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
-	store := NewHookEventStore()
-	c := &syncCommenter{addCh: make(chan string, 4)}
-	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{addCh: make(chan string, 4)}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
-	time.Sleep(50 * time.Millisecond)
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
 
-	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "some-other-agent", Timestamp: time.Now()})
-	select {
-	case <-c.addCh:
-		t.Fatal("must ignore non-board agents")
-	case <-time.After(300 * time.Millisecond):
-	}
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "some-other-agent", Timestamp: time.Now()})
+		select {
+		case <-c.addCh:
+			t.Fatal("must ignore non-board agents")
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
 }

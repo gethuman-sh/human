@@ -70,7 +70,7 @@ func TestWriter_ContextCancellationDrains(t *testing.T) {
 
 	now := time.Now().UTC()
 	// Send a few events.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		w.Send(hookevents.Event{
 			SessionID: "s1",
 			EventName: "PostToolUse",
@@ -119,14 +119,13 @@ func TestWriter_CloseAfterContextCancelDoesNotHang(t *testing.T) {
 
 func TestWriter_ChannelFullDrops(t *testing.T) {
 	store := newTestStore(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	w := NewWriter(ctx, store, zerolog.Nop())
 
 	// Fill the channel beyond capacity — extras should be silently dropped.
 	now := time.Now().UTC()
-	for i := 0; i < writerBufSize+100; i++ {
+	for range writerBufSize + 100 {
 		w.Send(hookevents.Event{
 			SessionID: "s1",
 			EventName: "PostToolUse",

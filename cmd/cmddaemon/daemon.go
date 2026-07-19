@@ -249,6 +249,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		Addr:              addr,
 		Token:             token,
 		SafeMode:          safe,
+		DaemonStartedAt:   time.Now().UTC(),
 		CmdFactory:        cmdFactory,
 		Logger:            logger,
 		ConnectedPIDs:     connTracker,
@@ -409,9 +410,15 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			To:    daemon.BoardVerification,
 		})
 	}
+	// The diagnoser reads the dead run's persisted artifacts so the failed
+	// marker says what actually broke instead of the generic stage line.
+	diagnoseFailure := func(agentName, hookErrorType string) daemon.FailureDiagnosis {
+		d := agent.DiagnoseFailure(agentName, hookErrorType)
+		return daemon.FailureDiagnosis{Headline: d.Headline, Detail: d.Detail}
+	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, logger)
+		chainReview, diagnoseFailure, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
@@ -1780,9 +1787,8 @@ func (r hostClaudeIdeationRunner) Run(ctx context.Context, resumeID, prompt stri
 		if ctx.Err() != nil {
 			return daemon.IdeationTurn{}, errors.WrapWithDetails(ctx.Err(), "ideation agent turn timed out")
 		}
-		var ee *exec.ExitError
 		detail := ""
-		if goerrors.As(err, &ee) {
+		if ee, ok := goerrors.AsType[*exec.ExitError](err); ok {
 			detail = strings.TrimSpace(string(ee.Stderr))
 		}
 		return daemon.IdeationTurn{}, errors.WrapWithDetails(err, "running ideation agent turn", "stderr", detail)

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -161,6 +163,71 @@ func CalculateUsage(walker DirWalker, root string, now time.Time) (*UsageSummary
 		return nil, errors.WrapWithDetails(err, "scanning JSONL files", "root", root)
 	}
 	return summary, nil
+}
+
+// TokenHourBucket is one hour's fresh vs cache-read token split. Fresh folds
+// input, output and cache-creation tokens (all of which are billed work);
+// cache reads are kept apart so the panel can show what the cache saved.
+type TokenHourBucket struct {
+	Bucket    string `json:"bucket"` // "2006-01-02 15:00" in UTC
+	Fresh     int    `json:"fresh"`
+	CacheRead int    `json:"cacheRead"`
+}
+
+// ClaudeProjectsRoot returns ~/.claude/projects on the local host. The path was
+// only ever built inline before (discovery.go); the board's token panel needs
+// the projects root without a specific project dir, so it gets a named helper.
+func ClaudeProjectsRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", errors.WrapWithDetails(err, "resolving home directory for Claude projects root")
+	}
+	return filepath.Join(home, ".claude", "projects"), nil
+}
+
+// TokensByHour scans JSONL under root and returns per-hour token buckets whose
+// timestamps fall within [since, until], ordered ascending by hour. It reuses
+// the same assistant-usage filter as CalculateUsage; only the windowing and the
+// fresh/cache split differ. This reads already-recorded local files — it adds
+// no new collection.
+func TokensByHour(walker DirWalker, root string, since, until time.Time) ([]TokenHourBucket, error) {
+	buckets := make(map[string]*TokenHourBucket)
+
+	err := walker.WalkJSONL(root, func(line []byte) error {
+		var entry jsonlLine
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return nil // skip malformed lines
+		}
+		if entry.Type != "assistant" || entry.Message.Usage == nil {
+			return nil
+		}
+		if entry.Timestamp.Before(since) || entry.Timestamp.After(until) {
+			return nil
+		}
+
+		// A fixed-width "YYYY-MM-DD HH:00" key sorts lexically == chronologically,
+		// so the final sort needs no time parsing.
+		key := entry.Timestamp.UTC().Truncate(time.Hour).Format("2006-01-02 15:00")
+		b := buckets[key]
+		if b == nil {
+			b = &TokenHourBucket{Bucket: key}
+			buckets[key] = b
+		}
+		u := entry.Message.Usage
+		b.Fresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
+		b.CacheRead += u.CacheReadInputTokens
+		return nil
+	})
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "scanning JSONL for token buckets", "root", root)
+	}
+
+	out := make([]TokenHourBucket, 0, len(buckets))
+	for _, b := range buckets {
+		out = append(out, *b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Bucket < out[j].Bucket })
+	return out, nil
 }
 
 func formatBytes(b uint64) string {

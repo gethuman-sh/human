@@ -155,10 +155,10 @@ func TestConcurrentWrites(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				_ = s.InsertEvent(ctx, fmt.Sprintf("s-%d", workerID), "PostToolUse", "Bash", "/proj", "", now)
 			}
 		}(w)
@@ -178,4 +178,33 @@ func TestQueryByTool_emptyRange(t *testing.T) {
 	result, err := s.QueryByTool(ctx, now.Add(-time.Hour), now.Add(time.Hour))
 	require.NoError(t, err)
 	assert.Empty(t, result)
+}
+
+func TestQueryToolOutcomes(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Two ok events (empty error_type → NULL) and one error event.
+	require.NoError(t, s.InsertEvent(ctx, "s1", "PostToolUse", "Bash", "/proj", "", now))
+	require.NoError(t, s.InsertEvent(ctx, "s1", "PostToolUse", "Read", "/proj", "", now))
+	require.NoError(t, s.InsertEvent(ctx, "s1", "PostToolUseFailure", "Bash", "/proj", "timeout", now))
+
+	got, err := s.QueryToolOutcomes(ctx, now.Add(-time.Hour), now.Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, ToolOutcomeCounts{OK: 2, Error: 1}, got)
+}
+
+func TestQueryToolOutcomes_emptyRange(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Event exists but outside the queried window → SUM over zero rows is NULL,
+	// which must coalesce to zero rather than error.
+	require.NoError(t, s.InsertEvent(ctx, "s1", "PostToolUse", "Bash", "/proj", "", now.Add(-48*time.Hour)))
+
+	got, err := s.QueryToolOutcomes(ctx, now.Add(-time.Hour), now.Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, ToolOutcomeCounts{OK: 0, Error: 0}, got)
 }

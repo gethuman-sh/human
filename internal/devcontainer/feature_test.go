@@ -27,7 +27,7 @@ func findInstallRun(t *testing.T, calls []mockExecCall) mockExecCall {
 }
 
 func TestFeatureEnv_BasicOptions(t *testing.T) {
-	opts := map[string]interface{}{
+	opts := map[string]any{
 		"version": "22",
 	}
 	meta := &FeatureMeta{
@@ -71,7 +71,7 @@ func TestFeatureEnv_Defaults(t *testing.T) {
 }
 
 func TestFeatureEnv_OverridesDefaults(t *testing.T) {
-	opts := map[string]interface{}{"version": "20"}
+	opts := map[string]any{"version": "20"}
 	meta := &FeatureMeta{
 		Options: map[string]FeatureOption{
 			"version": {Type: "string", Default: "lts"},
@@ -142,8 +142,8 @@ func TestInstallFeatures_ExecCalls(t *testing.T) {
 		meta:    meta,
 	}
 
-	features := map[string]interface{}{
-		"ghcr.io/devcontainers/features/node:1": map[string]interface{}{"version": "22"},
+	features := map[string]any{
+		"ghcr.io/devcontainers/features/node:1": map[string]any{"version": "22"},
 	}
 
 	_, err := InstallFeatures(context.Background(), mock, puller, "container-123",
@@ -184,7 +184,7 @@ func TestInstallFeatures_InstallsInDependencyOrder(t *testing.T) {
 		},
 	}
 
-	features := map[string]interface{}{claude: map[string]interface{}{}, node: map[string]interface{}{}}
+	features := map[string]any{claude: map[string]any{}, node: map[string]any{}}
 
 	if _, err := InstallFeatures(context.Background(), mock, puller, "container-123",
 		features, "vscode", testLogger(), &strings.Builder{}); err != nil {
@@ -235,7 +235,7 @@ func TestInstallFeatures_ContainerEnvPropagates(t *testing.T) {
 				Options: map[string]FeatureOption{"marker": {Default: "second"}}},
 		},
 	}
-	features := map[string]interface{}{first: map[string]interface{}{}, second: map[string]interface{}{}}
+	features := map[string]any{first: map[string]any{}, second: map[string]any{}}
 
 	baked, err := InstallFeatures(context.Background(), mock, puller, "cid",
 		features, "vscode", testLogger(), &strings.Builder{})

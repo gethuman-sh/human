@@ -37,10 +37,10 @@ func (f fakeWalker) WalkJSONL(_ string, fn func(line []byte) error) error {
 
 func makeLine(t *testing.T, typ, model string, ts time.Time, input, output, cacheCreate, cacheRead int) []byte {
 	t.Helper()
-	m := map[string]interface{}{
+	m := map[string]any{
 		"type":      typ,
 		"timestamp": ts.Format(time.RFC3339),
-		"message": map[string]interface{}{
+		"message": map[string]any{
 			"model": model,
 			"usage": map[string]int{
 				"input_tokens":                input,

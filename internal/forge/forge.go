@@ -114,12 +114,12 @@ func ParseRemoteURL(raw string) (host, repo string, ok bool) {
 		if at := strings.LastIndex(rest, "@"); at >= 0 {
 			rest = rest[at+1:]
 		}
-		colon := strings.Index(rest, ":")
-		if colon < 0 {
+		before, after, ok := strings.Cut(rest, ":")
+		if !ok {
 			return "", "", false
 		}
-		host = rest[:colon]
-		repo = normalizeRepoPath(rest[colon+1:])
+		host = before
+		repo = normalizeRepoPath(after)
 		if host == "" || repo == "" {
 			return "", "", false
 		}

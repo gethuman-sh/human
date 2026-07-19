@@ -225,22 +225,26 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 		// The tee goroutine owns the attach and closes it on stream EOF (the
 		// exec exiting), so launch returns immediately while the detached
 		// stdout/stderr is durably persisted to the host.
-		m.teeWG.Add(1)
-		go func() {
-			defer m.teeWG.Done()
-			teeExecOutput(attach, exe)
-		}()
+		m.teeWG.Go(func() {
+			teeExecOutput(attach, exe, m.Docker, execID)
+		})
 	} else {
 		_ = attach.Close()
 	}
 	return exe, nil
 }
 
+// execExitTrailerPrefix marks the machine-parsable last line the tee appends to
+// output.log once the exec ends. It lives in the log itself (not outcome.json)
+// so it survives artifact preservation overwrites and stays visible to anyone
+// reading the raw log; DiagnoseFailure parses it back out.
+const execExitTrailerPrefix = "[human] claude exec exited with code "
+
 // teeExecOutput demuxes the detached agent's multiplexed stdout/stderr into the
 // execution's host output log until the stream ends (the exec exits), then
 // closes the attach. This is the durability path the detached launch never had:
 // without it the output is unrecoverable once the container is gone.
-func teeExecOutput(attach devcontainer.ExecAttachResponse, exe *Execution) {
+func teeExecOutput(attach devcontainer.ExecAttachResponse, exe *Execution, docker devcontainer.DockerClient, execID string) {
 	defer func() { _ = attach.Close() }()
 	w, err := exe.OutputWriter()
 	if err != nil {
@@ -249,6 +253,17 @@ func teeExecOutput(attach devcontainer.ExecAttachResponse, exe *Execution) {
 	defer func() { _ = w.Close() }()
 	// stdout and stderr both go to the one host log; StdCopy demuxes the frames.
 	_, _ = devcontainer.StdCopy(w, w, attach.Reader)
+	// Stream EOF means the exec ended — the only moment anyone knows its exit
+	// code. Best-effort by design: a missing trailer degrades diagnosis, never
+	// the run. Background context because the launch ctx is long gone.
+	if docker == nil {
+		return
+	}
+	inspect, err := docker.ExecInspect(context.Background(), execID)
+	if err != nil || inspect.Running {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "\n%s%d\n", execExitTrailerPrefix, inspect.ExitCode)
 }
 
 // agentLocks serialises lifecycle operations per agent name. Stop/Delete can be
@@ -479,7 +494,7 @@ func (m *Manager) restartDaemon(projectDir, host string) {
 	_ = child.Run()
 
 	// Poll for readiness.
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		if info, readErr := daemon.ReadInfo(); readErr == nil && info.IsReachable() {
 			return
 		}

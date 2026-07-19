@@ -428,7 +428,7 @@ func TestServer_ConcurrentEnvIsolation(t *testing.T) {
 	const goroutines = 16
 	results := make([]string, goroutines)
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -443,7 +443,7 @@ func TestServer_ConcurrentEnvIsolation(t *testing.T) {
 	}
 	wg.Wait()
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		expected := fmt.Sprintf("NO_COLOR=client-%d", i)
 		assert.Equal(t, expected, results[i],
 			"goroutine %d observed wrong env value (cross-request contamination)", i)
@@ -457,8 +457,7 @@ func TestServer_TracksClientPID(t *testing.T) {
 	token := "test-token"
 	tracker := NewConnectedTracker()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv := &Server{
 		Addr:          "127.0.0.1:0",
@@ -501,8 +500,7 @@ func TestServer_IgnoresZeroClientPID(t *testing.T) {
 	token := "test-token"
 	tracker := NewConnectedTracker()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv := &Server{
 		Addr:          "127.0.0.1:0",
@@ -966,7 +964,7 @@ func TestServer_ConnectionLimit(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-	for i := 0; i < cap; i++ {
+	for range cap {
 		c, err := net.DialTimeout("tcp", addr, 2*time.Second)
 		require.NoError(t, err)
 		holders = append(holders, c)
@@ -982,15 +980,15 @@ func TestServer_ConnectionLimit(t *testing.T) {
 	// in-flight conns would instead stay open until their 10s deadline,
 	// so a 500ms read with io.EOF distinguishes cleanly.
 	const extra = 10
-	var rejected int32
+	var rejected atomic.Int32
 	var wg sync.WaitGroup
 	wg.Add(extra)
-	for i := 0; i < extra; i++ {
+	for range extra {
 		go func() {
 			defer wg.Done()
 			c, err := net.DialTimeout("tcp", addr, 2*time.Second)
 			if err != nil {
-				atomic.AddInt32(&rejected, 1)
+				rejected.Add(1)
 				return
 			}
 			defer func() { _ = c.Close() }()
@@ -998,13 +996,13 @@ func TestServer_ConnectionLimit(t *testing.T) {
 			buf := make([]byte, 1)
 			_, rerr := c.Read(buf)
 			if errors.Is(rerr, io.EOF) {
-				atomic.AddInt32(&rejected, 1)
+				rejected.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
 
-	assert.GreaterOrEqual(t, int(atomic.LoadInt32(&rejected)), extra-2,
+	assert.GreaterOrEqual(t, int(rejected.Load()), extra-2,
 		"expected most of the over-cap conns to be rejected quickly (cap=%d, extra=%d)", cap, extra)
 }
 
@@ -1216,7 +1214,7 @@ func TestServer_HandleHookSnapshot_WithEvents(t *testing.T) {
 	assert.Contains(t, resp.Stdout, "sess-A")
 
 	// Verify it's valid JSON.
-	var snapshot map[string]interface{}
+	var snapshot map[string]any
 	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &snapshot)
 	require.NoError(t, err)
 	assert.Contains(t, snapshot, "sess-A")

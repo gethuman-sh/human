@@ -147,7 +147,7 @@ func TestLeafCache_capacityBound(t *testing.T) {
 
 	// Generate cap+50 unique entries.
 	total := leafCacheCapacity + 50
-	for i := 0; i < total; i++ {
+	for i := range total {
 		_, err := cache.Get(fmt.Sprintf("host-%d.example.com", i))
 		require.NoError(t, err)
 	}
@@ -170,7 +170,7 @@ func TestLeafCache_concurrentCollapsesGenerations(t *testing.T) {
 	var wg sync.WaitGroup
 	const goroutines = 50
 	results := make([]*tls.Certificate, goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

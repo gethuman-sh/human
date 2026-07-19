@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/boardprefs"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/ideaspace"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -45,12 +46,18 @@ type App struct {
 	// I/O rather than a daemon route: this is UI preference state that must
 	// never touch the ticket, in line with the credential-only rationale above.
 	ideas *ideaspace.Store
+	// prefs holds the board view preferences (per-column card order, hidden
+	// tickets) — the same local-only rationale as ideas.
+	prefs *boardprefs.Store
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
 // startup, so there is nothing to wire here.
 func NewApp() *App {
-	return &App{ideas: ideaspace.NewStore(ideaspace.DefaultPath())}
+	return &App{
+		ideas: ideaspace.NewStore(ideaspace.DefaultPath()),
+		prefs: boardprefs.NewStore(boardprefs.DefaultPath()),
+	}
 }
 
 // Card is the flat, frontend-facing shape of one board ticket: a PM issue joined
@@ -92,6 +99,10 @@ type Card struct {
 	// tracker.Issue.IsBug). Bug cards render in the Bugs pane instead of the
 	// workflow board's columns.
 	Bug bool `json:"bug,omitempty"`
+	// Hidden marks a ticket the user parked off the board (right-click →
+	// Hide). Locally persisted view preference, never tracker state; the
+	// frontend filters hidden cards out unless the user reveals them.
+	Hidden bool `json:"hidden,omitempty"`
 	// Options carries the card's open decision block: a stage ended in a fork
 	// and a human must pick a direction. OptionsContext is the one-line why.
 	Options        []daemon.BoardOption `json:"options,omitempty"`
@@ -112,6 +123,10 @@ type BoardData struct {
 	Cards           []Card `json:"cards"`
 	Error           string `json:"error,omitempty"`
 	DockerAvailable bool   `json:"dockerAvailable"`
+	// ColumnOrder is the hand-sorted ticket order per queue column (top
+	// first). The frontend sorts each column by it; cards absent from their
+	// queue's list render after it in fetch order.
+	ColumnOrder map[string][]string `json:"columnOrder,omitempty"`
 }
 
 // Cards fetches the current board state from the daemon and flattens the single
@@ -129,8 +144,9 @@ func (a *App) Cards() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
-	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments(), cardMockups())
+	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments(), cardMockups(), a.prefs.Snapshot())
 	a.pruneIdeaSpace(data)
+	a.pruneBoardPrefs(data)
 	return data, nil
 }
 
@@ -214,6 +230,33 @@ func (a *App) SetIdeaColumn(pmKey string, col int) error {
 	return a.ideas.Set(pmKey, col)
 }
 
+// SetColumnOrder persists the hand-sorted card order for one queue column.
+// Purely local UI state — never a tracker write or a board transition.
+func (a *App) SetColumnOrder(queue string, keys []string) error {
+	return a.prefs.SetOrder(queue, keys)
+}
+
+// SetCardHidden parks a ticket off the board (or restores it). Purely local
+// UI state — the ticket on the tracker is untouched.
+func (a *App) SetCardHidden(pmKey string, hidden bool) error {
+	return a.prefs.SetHidden(pmKey, hidden)
+}
+
+// pruneBoardPrefs drops order slots and hidden flags for tickets that are no
+// longer on the board. Same contract as pruneIdeaSpace: only a fully
+// successful full fetch may prune, and a prune failure is ignored — a stale
+// entry is harmless.
+func (a *App) pruneBoardPrefs(data BoardData) {
+	if data.Error != "" {
+		return
+	}
+	keys := make(map[string]struct{}, len(data.Cards))
+	for _, card := range data.Cards {
+		keys[card.Key] = struct{}{}
+	}
+	_ = a.prefs.PruneExcept(keys)
+}
+
 // CardsQuick fetches issue titles only — skipping the per-ticket comment scan
 // that derives board stages — and places every open PM issue in the Backlog. It
 // returns far faster than Cards(), so the board can render titles immediately;
@@ -230,7 +273,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
-	return boardFromResults(results, true, a.ideas.Assignments(), cardMockups()), nil
+	return boardFromResults(results, true, a.ideas.Assignments(), cardMockups(), a.prefs.Snapshot()), nil
 }
 
 // boardFromResults flattens the single PM-role result into the frontend card
@@ -239,8 +282,8 @@ func (a *App) CardsQuick() (BoardData, error) {
 // Backlog). A PM issue with no derived card is hidden when its status is
 // done/closed and placed in Backlog otherwise, mirroring daemon.DeriveBoardCard's
 // marker-less decision so the quick pass and full pass agree on what to show.
-func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo) BoardData {
-	data := BoardData{DockerAvailable: dockerAvailable}
+func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs) BoardData {
+	data := BoardData{DockerAvailable: dockerAvailable, ColumnOrder: prefs.Columns}
 	pm, ok := firstPMResult(results)
 	if !ok {
 		// No PM-role tracker configured yet: render five empty columns rather
@@ -279,6 +322,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			ideaCol = ideaCols[issue.Key]
 		}
 		mock := mocks[issue.Key]
+		_, hidden := prefs.Hidden[issue.Key]
 		data.Cards = append(data.Cards, Card{
 			Key:            issue.Key,
 			Title:          issue.Title,
@@ -296,6 +340,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Tracker:        pm.TrackerName,
 			TrackerKind:    pm.TrackerKind,
 			Bug:            issue.IsBug(),
+			Hidden:         hidden,
 			IdeaColumn:     ideaCol,
 			Options:        card.Options,
 			OptionsContext: card.OptionsContext,

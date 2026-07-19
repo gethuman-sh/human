@@ -206,7 +206,7 @@ function removeAfterAnimation(el: HTMLElement, fallbackMs: number): void {
 }
 
 function cssEscape(v: string): string {
-  return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(v) : v.replace(/["\\]/g, "\\$&");
+  return globalThis.CSS?.escape?.(v) ?? v.replace(/["\\]/g, "\\$&");
 }
 
 // --- Cursor spotlight + holographic sheen (shared pointermove) ------------

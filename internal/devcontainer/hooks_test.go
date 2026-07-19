@@ -211,7 +211,7 @@ func TestRunHook_EmptyString(t *testing.T) {
 
 func TestRunHook_Array(t *testing.T) {
 	mock := &mockDockerClient{}
-	cmd := []interface{}{"npm", "install"}
+	cmd := []any{"npm", "install"}
 	err := RunHook(context.Background(), mock, "cid", "user", cmd, testLogger())
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestRunHook_Array(t *testing.T) {
 
 func TestRunHook_Map(t *testing.T) {
 	mock := &mockDockerClient{}
-	cmd := map[string]interface{}{
+	cmd := map[string]any{
 		"setup": "make setup",
 		"lint":  "make lint",
 	}
@@ -257,7 +257,7 @@ func TestRunHook_UnsupportedType(t *testing.T) {
 
 func TestRunHook_EmptyArray(t *testing.T) {
 	mock := &mockDockerClient{}
-	cmd := []interface{}{}
+	cmd := []any{}
 	err := RunHook(context.Background(), mock, "cid", "user", cmd, testLogger())
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestRunHook_EmptyArray(t *testing.T) {
 
 func TestRunHook_ArrayWithNonString(t *testing.T) {
 	mock := &mockDockerClient{}
-	cmd := []interface{}{"echo", 42}
+	cmd := []any{"echo", 42}
 	err := RunHook(context.Background(), mock, "cid", "user", cmd, testLogger())
 	if err == nil {
 		t.Error("expected error for non-string element in array")

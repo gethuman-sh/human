@@ -832,6 +832,36 @@ body {
   color: var(--muted);
 }
 
+/* Header toggle revealing/concealing user-hidden tickets. Appears only while
+   hidden tickets exist (updateHideToggle), so it never sits dead in the
+   header. justify-content: space-between on .app-header pushes it right. */
+.hide-toggle {
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.hide-toggle:hover {
+  border-color: var(--accent);
+}
+
+/* Marks a hidden card while it is revealed via Unhide — without it, revealed
+   and normal cards would be indistinguishable. */
+.hidden-pill {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  font: 10px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--muted);
+  vertical-align: 1px;
+}
+
 /* Bottom status bar, mirroring the TUI's "● Daemon running" status line. Sits
    below the board as a fixed-height footer in the app-main flex column. */
 .statusbar {
@@ -2897,4 +2927,256 @@ input[type="checkbox"].settings-input {
 
 .card-action:hover {
   opacity: 0.9;
+}
+
+/* Stats view — a scrollable page of headline numbers + four panels, fed by one
+   daemon route (App.Stats). Reuses .token-bar / .token-bar-fill for bar fills
+   and the --done/--failed/--running palette so it reads consistently with the
+   agents and board surfaces. */
+.stats-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.stats-view.hidden {
+  display: none;
+}
+
+.stats-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 14px;
+}
+
+.stats-range {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.stats-range-btn {
+  background: var(--col-bg);
+  border: 1px solid var(--col-border);
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.stats-range-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.stats-note {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--running);
+}
+
+.stats-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 6px 0;
+}
+
+/* Headline row: four responsive cards that wrap on a narrow window. */
+.stats-headline-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.stats-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.stats-card-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stats-card-big {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 4px 0 2px;
+}
+
+.stats-card-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Panels: 2×2 grid that collapses to a single column on a narrow window. */
+.stats-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 760px) {
+  .stats-panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+.stats-panel {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.stats-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.stats-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--col-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.stats-hour-row,
+.stats-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.stats-hour-label,
+.stats-bar-label {
+  flex: none;
+  width: 88px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-hour-bars {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 40px;
+}
+
+.stats-hour-val,
+.stats-bar-val {
+  flex: none;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.token-bar-fill.fresh {
+  background: var(--accent);
+}
+
+.token-bar-fill.cache {
+  background: var(--muted);
+}
+
+/* Audit stacked bar: three coloured segments inside one .token-bar track. */
+.stats-seg {
+  display: inline-block;
+  height: 100%;
+  vertical-align: top;
+}
+
+.stats-seg.approved {
+  background: var(--done);
+}
+
+.stats-seg.denied {
+  background: var(--running);
+}
+
+.stats-seg.failed {
+  background: var(--failed);
+}
+
+/* Network rows: status pill + host + source/count. */
+.stats-net-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.stats-net-status {
+  flex: none;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--col-border);
+}
+
+.stats-net-status.forward,
+.stats-net-status.callback {
+  color: var(--done);
+  border-color: var(--done);
+}
+
+.stats-net-status.block,
+.stats-net-status.dial-fail,
+.stats-net-status.parse-fail {
+  color: var(--failed);
+  border-color: var(--failed);
+}
+
+.stats-net-status.intercept,
+.stats-net-status.no-sni {
+  color: var(--running);
+  border-color: var(--running);
+}
+
+.stats-net-host {
+  flex: 1;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-net-meta {
+  flex: none;
+  color: var(--muted);
+  white-space: nowrap;
 }

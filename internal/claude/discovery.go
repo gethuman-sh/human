@@ -201,9 +201,9 @@ func (ProcPPIDResolver) ResolvePPID(pid int) int {
 	if err != nil {
 		return 0
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "PPid:") {
-			ppid, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "PPid:")))
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if after, ok := strings.CutPrefix(line, "PPid:"); ok {
+			ppid, _ := strconv.Atoi(strings.TrimSpace(after))
 			return ppid
 		}
 	}
@@ -662,7 +662,7 @@ func sortFilesByMtime(data []byte) []string {
 	}
 
 	var files []timedFile
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue

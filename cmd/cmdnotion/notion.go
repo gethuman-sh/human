@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -258,19 +259,21 @@ func printDatabaseRowsTable(out io.Writer, rows []notion.DatabaseRow) error {
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 
 	// Header.
-	header := "ID"
+	var header strings.Builder
+	header.WriteString("ID")
 	for _, k := range keys {
-		header += "\t" + k
+		header.WriteString("\t" + k)
 	}
-	_, _ = fmt.Fprintln(w, header)
+	_, _ = fmt.Fprintln(w, header.String())
 
 	// Rows.
 	for _, row := range rows {
-		line := row.ID
+		var line strings.Builder
+		line.WriteString(row.ID)
 		for _, k := range keys {
-			line += "\t" + row.Properties[k]
+			line.WriteString("\t" + row.Properties[k])
 		}
-		_, _ = fmt.Fprintln(w, line)
+		_, _ = fmt.Fprintln(w, line.String())
 	}
 	return w.Flush()
 }
