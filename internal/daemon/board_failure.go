@@ -111,7 +111,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 			onHandoff(agentName)
 		}
 		if stage == BoardImplementation && chainReview != nil {
-			chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, logger)
+			chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
 		}
 		return
 	}
@@ -143,7 +143,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 // commit gate is wired) the handoff's named commits must actually be present on
 // that branch. Pulled out of handleBoardAgentExit so the exit handler stays a
 // thin stage dispatcher and the chain's gates read as one unit.
-func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, logger zerolog.Logger) {
+func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, daemonID string, logger zerolog.Logger) {
 	// Only chain a review for a branch this machine can resolve; a board-context
 	// fix leaves its branch local on the machine that produced it, so a daemon
 	// elsewhere must leave the handoff for one that can reach it rather than start
@@ -161,7 +161,7 @@ func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker
 	if handoffNamesPhantomCommits(comments, branch, commitsPresent) {
 		body := ImplementationFailedHeader +
 			"\nhandoff names commits absent from branch " + branch + " on this machine — re-run the fix"
-		if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+		if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 			logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post phantom-commit failure")
 		}
 		return
