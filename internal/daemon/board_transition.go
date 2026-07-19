@@ -27,6 +27,12 @@ type AgentLauncher interface {
 type Deployer interface {
 	PushAndCreatePR(ctx context.Context, req PRRequest) (PRResult, error)
 	PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error)
+	// EnsureMergeable makes the handoff branch current with the base before the
+	// merge is attempted: it verifies the PR is mergeable against current main
+	// and, when it is not, rebases the branch, re-pushes (lease), and re-verifies.
+	// A returned error is a real conflict the mechanical path cannot resolve — the
+	// deploy must NOT attempt the merge blind, but fail loudly instead.
+	EnsureMergeable(ctx context.Context, req PRRequest) error
 	MergePullRequest(ctx context.Context, workspaceDir string, number int) error
 	DeleteRemoteBranch(ctx context.Context, workspaceDir, branch string) error
 }
@@ -181,6 +187,15 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	if isReviewRetry(req.To, card) {
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
 			reviewPrompt(dispatchKey(req.PMKey, card), card))
+	}
+
+	// Deploy retry: a card sitting on a failed deploy, re-dropped on Deploy, must
+	// re-run the deploy pipeline — the freshness stage rebases the already-reviewed
+	// branch and re-attempts the merge. Without this the forward-only rule below
+	// rejects the same-stage move and a conflicted deploy is a dead end that can
+	// only be escaped by re-implementing already-reviewed work (735).
+	if isDeployRetry(req.To, card) {
+		return d.runDoneStage(ctx, req, card)
 	}
 
 	// Forward-only, single-next-stage: the target must be exactly one rank
@@ -343,6 +358,18 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 		d.deployFailed(req.PMKey, res.URL, err.Error())
 		return
 	}
+	// Freshness stage: own the branch's mergeability BEFORE attempting the merge.
+	// When main has advanced past the branch point the forge would reject the
+	// merge (GitHub 405) and the card would dead-end; rebasing and re-pushing here
+	// turns that terminal failure into a mechanical, human-free recovery. A real
+	// conflict surfaces as a loud deploy-failed instead of a blind merge attempt.
+	if err := d.Deployer.EnsureMergeable(ctx, PRRequest{
+		WorkspaceDir: d.WorkspaceDir,
+		Branch:       card.Branch,
+	}); err != nil {
+		d.deployFailed(req.PMKey, res.URL, "branch could not be made mergeable: "+err.Error())
+		return
+	}
 	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
 		d.deployFailed(req.PMKey, res.URL, err.Error())
 		return
@@ -483,6 +510,17 @@ func isPlanningRetry(to BoardStage, card BoardCard) bool {
 func isBuildRetry(to BoardStage, card BoardCard) bool {
 	return to == BoardImplementation &&
 		card.Stage == BoardImplementation &&
+		card.State == BoardFailed
+}
+
+// isDeployRetry reports the deploy-stage twin of isBuildRetry: relaunching the
+// deploy pipeline on a card whose deploy failed. Failed-state only — a running
+// deploy is protected by ApplyTransition's idempotency guard. The retry rebases
+// and re-deploys the already-reviewed branch rather than re-implementing it, so
+// a conflicted deploy is never a dead end (735).
+func isDeployRetry(to BoardStage, card BoardCard) bool {
+	return to == BoardDoneStage &&
+		card.Stage == BoardDoneStage &&
 		card.State == BoardFailed
 }
 

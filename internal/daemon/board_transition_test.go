@@ -64,6 +64,15 @@ type fakeDeployer struct {
 	mergeErr  error
 	merged    int
 	deleted   []string
+	// ensureErr is returned by EnsureMergeable — a non-nil value models a branch
+	// that could not be made current with main (a real rebase conflict).
+	ensureErr error
+	// ensured counts EnsureMergeable calls so a test can assert the freshness
+	// stage ran exactly once before the merge.
+	ensured int
+	// mergeUntil models GitHub's 405 on a stale branch: MergePullRequest fails
+	// with a merge-conflict error until EnsureMergeable has run, then succeeds.
+	mergeUntil bool
 }
 
 func (f *fakeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResult, error) {
@@ -87,8 +96,18 @@ func (f *fakeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (fo
 	return f.checks[i], nil
 }
 
+func (f *fakeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) error {
+	f.ensured++
+	return f.ensureErr
+}
+
 func (f *fakeDeployer) MergePullRequest(_ context.Context, _ string, _ int) error {
 	f.merged++
+	// A stale branch mirrors GitHub's 405 "merge conflicts" until the freshness
+	// stage (EnsureMergeable) has rebased and re-pushed it.
+	if f.mergeUntil && f.ensured == 0 {
+		return errors.New("Pull Request has merge conflicts")
+	}
 	return f.mergeErr
 }
 
@@ -440,6 +459,94 @@ func TestApplyTransitionDeployMergeFails(t *testing.T) {
 		}
 	}
 	assert.True(t, sawFailed)
+}
+
+// TestApplyTransitionDeployRebasesStaleBranch is the ticket-735 regression: a
+// handoff branch that has fallen behind main must be made mergeable (rebased,
+// re-pushed) by a freshness stage BEFORE the merge, instead of dead-ending on a
+// terminal [human:deploy-failed]. mergeUntil models GitHub's 405 on the stale
+// tip; the freshness stage clears it. On the pre-fix deploy() (no EnsureMergeable
+// call) the merge stays conflicted and the card reds — this test fails there.
+func TestApplyTransitionDeployRebasesStaleBranch(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/12", Number: 12},
+		checks: []forge.ChecksState{forge.ChecksPassing}, mergeUntil: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	// The freshness stage ran once, before the merge.
+	assert.Equal(t, 1, p.ensured, "EnsureMergeable must run exactly once before the merge")
+	assert.Equal(t, 1, p.merged, "the branch must merge after being made mergeable")
+	assert.Equal(t, []string{"feat/x"}, p.deleted)
+	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/12")
+	for _, b := range c.added {
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader),
+			"a stale branch must be rebased and merged, never dead-end on deploy-failed: %q", b)
+	}
+}
+
+// TestApplyTransitionDeployEnsureMergeableConflict covers a genuine rebase
+// conflict: EnsureMergeable fails, the deploy must NOT attempt the merge and
+// must red the card with a mergeability reason.
+func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
+		checks: []forge.ChecksState{forge.ChecksPassing}, ensureErr: errors.New("rebase hit a conflict")}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.ensured)
+	assert.Zero(t, p.merged, "a branch that could not be made mergeable must not be merged blind")
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Contains(t, failed, "branch could not be made mergeable")
+	assert.Contains(t, failed, "rebase hit a conflict")
+}
+
+// TestIsDeployRetry pins the retry predicate: a failed done stage re-dropped on
+// Deploy is a rebase-and-redeploy, not a dead end.
+func TestIsDeployRetry(t *testing.T) {
+	assert.True(t, isDeployRetry(BoardDoneStage, BoardCard{Stage: BoardDoneStage, State: BoardFailed}))
+	assert.False(t, isDeployRetry(BoardDoneStage, BoardCard{Stage: BoardDoneStage, State: BoardRunning}))
+	assert.False(t, isDeployRetry(BoardDoneStage, BoardCard{Stage: BoardVerification, State: BoardFailed}))
+	assert.False(t, isDeployRetry(BoardVerification, BoardCard{Stage: BoardDoneStage, State: BoardFailed}))
+}
+
+// TestApplyTransitionDeployRetryRebasesAndRedeploys drives the whole retry path:
+// a card sitting on a failed deploy, re-dropped on Deploy, must re-run the
+// deploy pipeline (rebase + merge) rather than being rejected by the
+// forward-only rule.
+func TestApplyTransitionDeployRetryRebasesAndRedeploys(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+		cmt(DeployFailedHeader+"\nPull Request has merge conflicts", time.Unix(3, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/14", Number: 14},
+		checks: []forge.ChecksState{forge.ChecksPassing}, mergeUntil: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardDoneStage, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.ensured)
+	assert.Equal(t, 1, p.merged)
+	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/14")
 }
 
 func TestApplyTransitionDonePushFails(t *testing.T) {
@@ -801,6 +908,8 @@ func (f *gateProbeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (P
 func (f *gateProbeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (forge.ChecksState, error) {
 	return forge.ChecksPassing, nil
 }
+
+func (f *gateProbeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) error { return nil }
 
 func (f *gateProbeDeployer) MergePullRequest(_ context.Context, _ string, _ int) error { return nil }
 
