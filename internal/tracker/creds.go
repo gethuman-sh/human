@@ -72,6 +72,11 @@ type TrackerStatus struct {
 	Working  bool     // true when all required credentials are present (and not vault refs)
 	VaultRef bool     // true when credentials are vault references (e.g. 1pw://) — unverified
 	Missing  []string // env var names for missing credentials (empty when Working)
+	// Role is the role DECLARED in .humanconfig ("pm", "engineering", or empty).
+	// Captured independently of credential resolution so topology divergence — a
+	// tracker declared role: engineering whose token does not resolve — can be
+	// detected even when the entry is not Working (SC-660 rule 7).
+	Role string
 }
 
 // KindToSection maps tracker kinds to their .humanconfig YAML section names.
@@ -107,6 +112,7 @@ type diagnoseEntry struct {
 	User   string `mapstructure:"user"`
 	Token  string `mapstructure:"token"`
 	Secret string `mapstructure:"secret"` // #nosec G117 -- config field name, not an actual secret value
+	Role   string `mapstructure:"role"`
 }
 
 func (e diagnoseEntry) fieldValue(suffix string) string {
@@ -166,6 +172,7 @@ func DiagnoseTrackers(dir string, unmarshal func(dir, section string, target any
 				Working:  len(missing) == 0 && !vaultRef,
 				VaultRef: vaultRef,
 				Missing:  missing,
+				Role:     entry.Role,
 			})
 		}
 	}

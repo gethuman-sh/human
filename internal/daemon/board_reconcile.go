@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -13,6 +14,11 @@ import (
 // PM cards for orphaned handoffs after its immediate startup pass. Exported so
 // the daemon wiring supplies it and tests can shorten it.
 var BoardReconcileInterval = 2 * time.Minute
+
+// BoardReconcileJitter is the fraction of the interval added/subtracted at
+// random each cycle so independently started daemons do not converge on the
+// same reconcile instant and stampede one orphaned handoff (SC-660 rule 6).
+var BoardReconcileJitter = 0.5
 
 // ReconcileCard pairs an open PM ticket key with its comment thread, the input
 // the reconcile pass derives a board placement from.
@@ -53,20 +59,35 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable
 
 	logger.Info().Msg("board reconcile started")
 
-	// Recover a restart-orphaned handoff immediately, before the first tick.
+	// Recover a restart-orphaned handoff immediately, before the first wait. The
+	// jitter applies only to subsequent cycles, so a restart-orphan is never made
+	// to wait a full interval.
 	reconcileOnce(ctx, listCards, reachable, chainReview, logger)
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
 			reconcileOnce(ctx, listCards, reachable, chainReview, logger)
 		}
 	}
+}
+
+// jitteredInterval returns d randomly perturbed by up to ±d*fraction, floored
+// at zero, so N independently started daemons spread their reconcile wake-ups
+// instead of firing on the same wall-clock tick. A non-positive fraction
+// returns d unchanged.
+func jitteredInterval(d time.Duration, fraction float64) time.Duration {
+	if fraction <= 0 {
+		return d
+	}
+	delta := (rand.Float64()*2 - 1) * fraction * float64(d) // #nosec G404 -- scheduling jitter, not security
+	j := time.Duration(float64(d) + delta)
+	if j < 0 {
+		return 0
+	}
+	return j
 }
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged

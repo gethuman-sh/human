@@ -72,6 +72,10 @@ type BoardTransitionDeps struct {
 	CloseTicket  func(pmKey string) error
 	WorkspaceDir string
 	ConfigDir    string
+	// DaemonID stamps this daemon's identity on every marker it posts. Empty
+	// leaves markers un-stamped (StampDaemon no-ops), so an un-provisioned
+	// daemon still functions.
+	DaemonID string
 	// Logger records best-effort post-merge failures (e.g. a failed automated
 	// close). The zero value is a safe no-op writer, so an un-wired path stays
 	// valid without a logger.
@@ -260,13 +264,13 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 // launch failure it posts the stage's *-failed marker so the board reflects the
 // error rather than leaving a stuck spinner.
 func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string) error {
-	if _, err := d.Commenter.AddComment(ctx, pmKey, startedHeader); err != nil {
+	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(startedHeader, d.DaemonID)); err != nil {
 		return errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
 	}
 	name := agentNameFor(pmKey, stage)
 	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
 		failBody := failedHeaderFor(stage) + "\n" + err.Error()
-		_, _ = d.Commenter.AddComment(ctx, pmKey, failBody)
+		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(failBody, d.DaemonID))
 		return errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
 	}
 	return nil
@@ -285,10 +289,10 @@ var startDeploy = func(d BoardTransitionDeps, req BoardTransitionRequest, card B
 func (d BoardTransitionDeps) runDoneStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) error {
 	if card.Branch == "" {
 		body := DeployFailedHeader + "\nno branch recorded on ready-for-review handoff"
-		_, _ = d.Commenter.AddComment(ctx, req.PMKey, body)
+		_, _ = d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(body, d.DaemonID))
 		return errors.WithDetails("no branch recorded for deploy", "pm", req.PMKey)
 	}
-	if _, err := d.Commenter.AddComment(ctx, req.PMKey, DeployStartedHeader); err != nil {
+	if _, err := d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(DeployStartedHeader, d.DaemonID)); err != nil {
 		return errors.WrapWithDetails(err, "posting deploy-started marker", "pm", req.PMKey)
 	}
 	startDeploy(d, req, card)
@@ -337,7 +341,7 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 	// board's Fix column (the frontend only drops a card once the ticket leaves
 	// the tracker's open list), so the operator must see it and close by hand.
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, card.Branch)
-	_, _ = d.Commenter.AddComment(ctx, req.PMKey, DeployedHeader+"\npr: "+res.URL)
+	_, _ = d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
 	d.closeTicketBestEffort(req.PMKey)
 }
 
@@ -365,7 +369,7 @@ func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
 	defer cancel()
 	body := CloseFailedHeader + "\ndeployed, but the automated close of " + pmKey +
 		" failed: " + err.Error() + "\nclose this ticket manually to clear the card."
-	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
 }
 
 // waitForChecks blocks until the PR's CI verdict is conclusive. Passing
@@ -401,7 +405,7 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) {
 	if prURL != "" {
 		body += "\npr: " + prURL
 	}
-	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
 }
 
 // dispatchKey resolves the key an agent is dispatched on: the engineering
