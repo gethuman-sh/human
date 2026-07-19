@@ -7,12 +7,9 @@ import (
 	"path/filepath"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/starter"
 )
-
-// humanconfigNames are the accepted project-config filenames (the same set
-// internal/config resolves via viper); any of them marks the project root.
-var humanconfigNames = []string{".humanconfig.yaml", ".humanconfig.yml", ".humanconfig"}
 
 // StartProjectInfo tells the frontend whether the Start Project wizard applies
 // and which templates it can offer. Error is soft (FeatureDoc.Error convention):
@@ -76,7 +73,7 @@ func projectRoot() (string, error) {
 		return "", errors.WrapWithDetails(err, "resolving working directory")
 	}
 	for dir := cwd; ; dir = filepath.Dir(dir) {
-		for _, name := range humanconfigNames {
+		for _, name := range config.ConfigFileNames {
 			if _, statErr := os.Stat(filepath.Join(dir, name)); statErr == nil {
 				return dir, nil
 			}
