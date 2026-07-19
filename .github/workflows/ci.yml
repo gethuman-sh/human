@@ -17,9 +17,12 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      - run: go vet ./...
-      - run: go tool staticcheck ./...
+      # golangci-lint's default set includes govet and the full staticcheck
+      # suite — one owner per analysis. nilaway and gocyclo are enforced here
+      # (CI wall-clock is parallel and free) and stay out of the local hot loop.
       - run: go tool golangci-lint run ./...
+      - run: go tool nilaway ./...
+      - run: go tool gocyclo -over 15 .
 
   test:
     runs-on: ubuntu-24.04
