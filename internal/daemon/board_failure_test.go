@@ -53,7 +53,7 @@ func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
 		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -82,7 +82,7 @@ func TestRunBoardFailureWatch_ReusedNameSecondIncompleteExitPostsAgain(t *testin
 		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		// First exit of the reused name posts a failed marker.
@@ -118,7 +118,7 @@ func TestRunBoardFailureWatch_ReusedNameSecondCleanBuildChainsAgain(t *testing.T
 		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
@@ -149,7 +149,7 @@ func TestRunBoardFailureWatch_NoPostWhenStageDone(t *testing.T) {
 		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -173,7 +173,7 @@ func TestHandleBoardAgentExit_MalformedName(t *testing.T) {
 		return &syncCommenter{}, nil
 	}
 	// A name that does not parse must short-circuit before resolving a commenter.
-	handleBoardAgentExit(context.Background(), "board-", "", commenterFor, nil, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-", "", commenterFor, nil, alwaysReachable, nil, zerolog.Nop())
 	assert.False(t, called)
 }
 
@@ -182,7 +182,7 @@ func TestHandleBoardAgentExit_CommenterError(t *testing.T) {
 		return nil, assertErr{}
 	}
 	// Must not panic when the commenter cannot be resolved.
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, alwaysReachable, nil, zerolog.Nop())
 }
 
 type assertErr struct{}
@@ -200,7 +200,7 @@ func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
 		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
@@ -210,6 +210,35 @@ func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
 			assert.Equal(t, "SC-1", pmKey)
 		case <-time.After(2 * time.Second):
 			t.Fatal("expected the finished build to chain into a review")
+		}
+	})
+}
+
+// A board-context fix leaves its branch local on the machine that produced it.
+// When the live exit fires on a daemon that cannot resolve that branch, the
+// watcher must NOT chain a review it could never satisfy — it leaves the handoff
+// for a daemon that can reach the branch (SC-652).
+func TestRunBoardFailureWatch_SkipsChainWhenBranchUnreachable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: autofix/sc-1", time.Unix(1, 0))},
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 1)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
+		unreachable := func(string) bool { return false }
+
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, unreachable, nil, zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
+
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+
+		select {
+		case pmKey := <-chained:
+			t.Fatalf("an unreachable handoff branch must not chain a review, got: %q", pmKey)
+		case <-time.After(500 * time.Millisecond):
 		}
 	})
 }
@@ -226,7 +255,7 @@ func TestRunBoardFailureWatch_NoChainForOtherStages(t *testing.T) {
 		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -253,7 +282,7 @@ func TestRunBoardFailureWatch_SyntheticStopFailurePostsImplementationFailed(t *t
 		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		// The reap-synthesized event carries no SessionID — only name + time.
@@ -289,7 +318,7 @@ func TestRunBoardFailureWatch_NoFixNeededIsCleanStop(t *testing.T) {
 		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
@@ -326,7 +355,7 @@ func TestRunBoardFailureWatch_UndeterminedIsCleanStop(t *testing.T) {
 		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
@@ -367,7 +396,7 @@ func TestRunBoardFailureWatch_NothingToDoIsCleanStop(t *testing.T) {
 		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -402,7 +431,7 @@ func TestHandleBoardAgentExit_UsesDiagnoserHeadlineAndDetail(t *testing.T) {
 		}
 	}
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, nil, diag, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, nil, alwaysReachable, diag, zerolog.Nop())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -420,7 +449,7 @@ func TestHandleBoardAgentExit_NilDiagnoserFallsBackToGeneric(t *testing.T) {
 	}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, alwaysReachable, nil, zerolog.Nop())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -435,7 +464,7 @@ func TestHandleBoardAgentExit_EmptyHeadlineFallsBackToGeneric(t *testing.T) {
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	diag := func(string, string) FailureDiagnosis { return FailureDiagnosis{} }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, diag, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, alwaysReachable, diag, zerolog.Nop())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -460,7 +489,7 @@ func TestRunBoardFailureWatch_PassesErrorTypeToDiagnoser(t *testing.T) {
 		}
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, nil, diag, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, alwaysReachable, diag, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "StopFailure", AgentName: "board-SC-1-planning", ErrorType: "rate_limit", Timestamp: time.Now()})
@@ -487,7 +516,7 @@ func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, alwaysReachable, nil, zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "some-other-agent", Timestamp: time.Now()})
