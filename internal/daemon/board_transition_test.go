@@ -238,8 +238,62 @@ func TestApplyTransitionImplementationToVerification(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardVerification})
 	require.NoError(t, err)
-	assert.Equal(t, "/human-review HUM-9", l.prompt)
+	// SC-695: the review dispatch must pin the reviewer to the handoff branch,
+	// not leave it to free-associate from whatever HEAD the worktree sits on.
+	assert.Equal(t, "/human-review HUM-9 --branch=feat/x", l.prompt)
 	assert.Contains(t, c.added, ReviewStartedHeader)
+}
+
+func TestApplyTransitionReviewDispatchCarriesBranchBinding(t *testing.T) {
+	// SC-695: a full handoff (branch + commits) must thread both into the
+	// review prompt as an authoritative binding — the reviewer verifies the
+	// checked-out code IS this branch and these commits before reviewing.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x\ncommits: abc123, def456", time.Unix(1, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardVerification})
+	require.NoError(t, err)
+	assert.Equal(t, "/human-review HUM-9 --branch=feat/x --commits=abc123, def456", l.prompt)
+	assert.Contains(t, c.added, ReviewStartedHeader)
+}
+
+func TestApplyTransitionReviewRetry(t *testing.T) {
+	// SC-695: a stage-failed review ([human:review-failed], state failed) was a
+	// dead end — the rework re-drop needs a DONE verification with a failing
+	// verdict, and a failed review matches neither it nor any forward move. A
+	// verification→verification drop on a failed card must relaunch the review
+	// in place, re-bound to the handoff branch and commits.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+		cmt("[human:review-started]", time.Unix(2, 0)),
+		cmt("[human:review-failed]\nbranch checkout failed", time.Unix(3, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardVerification})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-review HUM-9 --branch=feat/x --commits=abc123", l.prompt)
+	assert.Equal(t, "board-SC-1-verification", l.name)
+	require.Len(t, c.added, 1)
+	assert.Equal(t, ReviewStartedHeader, c.added[0])
+}
+
+func TestApplyTransitionRunningReviewNotRelaunched(t *testing.T) {
+	// Contract pin: review retry is for FAILED runs only — a running review hits
+	// the idempotency guard and must not spawn a second agent (SC-695).
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-started]", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardVerification})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+	assert.Empty(t, c.added)
 }
 
 func TestApplyTransitionIdempotentDuplicate(t *testing.T) {
@@ -495,7 +549,9 @@ func TestApplyTransitionVerificationWithoutEngineeringKey(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardVerification})
 	require.NoError(t, err)
-	assert.Equal(t, "/human-review SC-1", l.prompt)
+	// SC-695: single-tracker topology dispatches on the PM key and still carries
+	// the handoff branch binding.
+	assert.Equal(t, "/human-review SC-1 --branch=feat/x", l.prompt)
 }
 
 func TestDoneBodySingleRef(t *testing.T) {

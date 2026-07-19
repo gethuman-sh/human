@@ -32,17 +32,34 @@ human <TRACKER> issue comment list <TICKET_KEY>
 
 ## Review process
 
-1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured). The implementation plan is either the ticket description (split topology: separate engineering ticket) or a `[human:plan]` comment on the ticket — read it back with `human plan show <key>`. Use it as additional context for what was intended.
-2. **Resolve the code under review.** Check whether HEAD is detached: `git symbolic-ref -q HEAD` (exits non-zero when detached). Board runs execute in an isolated worktree detached at the DEFAULT branch — the fix commits are NOT there; they live on the branch named in the ticket's latest `[human:ready-for-review]` comment (`branch:` line, read via `human <tracker> issue comment list <key>`).
-   - **Detached HEAD + a handoff naming a branch**: check it out with `git checkout --detach <branch>` (detach avoids "already checked out in another worktree" collisions) before doing anything else. If that branch does not exist, STOP and report the `## Summary` as `unreviewable: handoff branch <branch> not found — no code was reviewed`. This is a stage failure, not a review verdict: the code could not be obtained, so there is nothing to pass or fail. Never review the default branch as a fallback, and never emit a `fail` — the calling skill translates `unreviewable` into a `[human:review-failed]` stage failure, not a fail verdict.
-   - **On a named branch** (a user invoked the review on their own checkout): review the current branch as-is; never switch a user's checkout.
-3. **Find the ticket's commits.** Locate every commit on the current branch whose message references the ticket key. Run:
+### Step 0 — Verify the binding (MANDATORY, before any review)
+
+You are dispatched for exactly ONE ticket — the **dispatched key** — and one handoff (branch + commits). This binding is fixed for the whole run. You verify it before reviewing anything, and you post your outcome on the dispatched key and **no other ticket, ever**. Never infer a "more plausible" ticket from the diff or from whatever HEAD your worktree sits on — that is exactly the misfire this gate exists to stop (a review for one ticket must never post a verdict on another).
+
+The dispatch carries the binding as flags: `Review changes for ticket <DISPATCHED_KEY> --branch=<branch> --commits=<sha,sha>`. Perform each check in order; on ANY failure post `[human:review-failed]` on the **dispatched key only** (via the calling skill's `unreviewable` translation) and STOP:
+
+1. **Resolve the dispatched key.** `human <tracker> issue get <DISPATCHED_KEY>` must succeed. The implementation plan is either the ticket description (split topology) or a `[human:plan]` comment (`human plan show <DISPATCHED_KEY>`).
+2. **Cross-check the handoff (defense in depth).** Read the latest `[human:ready-for-review]` comment: `human <tracker> issue comment list <DISPATCHED_KEY>`. The `--branch=` flag must equal its `branch:` line and the `--commits=` shas must equal its `commits:` line. On a mismatch, treat it as `unreviewable: handoff binding mismatch — dispatched branch/commits do not match the ready-for-review handoff on <DISPATCHED_KEY>` and STOP. The flags are authoritative for what to check out; the comment is the corroborating record — they must agree.
+3. **Check out the bound branch.** Board runs execute in a worktree detached at the DEFAULT branch — the fix commits are NOT there. Check out the handoff branch with `git checkout --detach <branch>` (detach avoids "already checked out in another worktree" collisions). If the branch does not exist, STOP with `unreviewable: handoff branch <branch> not found — no code was reviewed`. Never review the default branch as a fallback; there is no "review the current branch as-is" hatch on a board run — the branch is always the one Step 0 pinned.
+4. **Verify every handoff commit is reachable from HEAD.** For each sha on the `--commits=` line, `git merge-base --is-ancestor <sha> HEAD` must succeed. If any is missing, STOP with `unreviewable: handoff commit <sha> not reachable on <branch> — no code was reviewed`.
+
+Only once all four checks pass do you review. The dispatched key is the post target for the rest of the run; it is never re-derived from the diff.
+
+### Reviewing the bound code
+
+1. **Fetch** the dispatched ticket (already done in Step 0). Use its plan as context for what was intended.
+2. The code under review is the branch Step 0 checked out — never switch away from it, never fall back to the default branch.
+3. **Find the ticket's commits.** Prefer the handoff `--commits=` shas as the authoritative set under review. To discover any additional commits attributed to the key, locate every commit on the branch whose message references the dispatched key:
    ```sh
-   git log --format=%H --grep=<KEY> HEAD
+   git log --format=%H --grep='\[<KEY>\]' --extended-regexp HEAD
    ```
-   This catches all common formats (`SC-57`, `[SC-57]`, `Issue SC-57`) because the ticket key itself is the substring being matched. If the ticket key is purely numeric (e.g. `123` from a `#123` reference), use the full reference form to avoid false positives: `git log --format=%H --grep='#<KEY>\b' --extended-regexp HEAD`.
-   - **If zero commits match**, do NOT fall back to a branch diff. Stop and report the `## Summary` as `unreviewable: no commits referencing <KEY> are reachable on <branch> — no code was reviewed`. Either the work has not been committed yet, or commits are missing the ticket reference — in both cases the code under review could not be obtained, so this is a stage failure (`unreviewable`), NOT a `fail` verdict. The calling skill translates it into a `[human:review-failed]` stage failure.
-   - **If uncommitted changes exist** (`git status --porcelain` is non-empty), note them in a separate "Uncommitted work" section in the review but do not include them in the acceptance criteria evaluation. They have not been claimed against this ticket yet.
+   This anchors to the pipeline's own reference conventions. For a purely numeric key (e.g. `64` from a `#64` reference), a bare `#64` still matches `Merge pull request #64 from …` — an unrelated PR merge, the exact observed false positive. Anchor and exclude merge subjects:
+   ```sh
+   git log --format='%H %s' --extended-regexp --grep='\[#?<KEY>\]|(^|[^0-9])#<KEY>([^0-9]|$)|Issue #?<KEY>' HEAD | grep -v 'Merge pull request'
+   ```
+   Always cross-check the result against the handoff `--commits=` shas; those are the binding.
+   - **If zero commits match** (and the handoff shas are also absent), do NOT fall back to a branch diff. Stop and report the `## Summary` as `unreviewable: no commits referencing <KEY> are reachable on <branch> — no code was reviewed`. This is a stage failure (`unreviewable`), NOT a `fail` verdict.
+   - **If uncommitted changes exist** (`git status --porcelain` is non-empty), note them in a separate "Uncommitted work" section but do not include them in the acceptance criteria evaluation.
 4. **Build the review diff.** Concatenate the diffs of just the matched commits, in chronological order:
    ```sh
    git log --reverse --format=%H --grep=<KEY> HEAD | xargs -I{} git show --format= {}
