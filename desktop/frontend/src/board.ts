@@ -501,6 +501,23 @@ function showCardMenu(card: Card, x: number, y: number): void {
     menu.appendChild(retryBuild);
   }
 
+  // A failed deploy is otherwise a dead end: the Deploy zone only accepts
+  // stage "verification" (SC-297's isReadyToDeploy), and a deploy failure
+  // parks the card at stage "done"/state "failed" with no forward neighbor
+  // to re-enter through. Applies to bugs too — they ship through this same
+  // transition. Deploying launches no agent, so no Docker gate.
+  if (card.stage === "done" && card.state === "failed") {
+    const retryDeploy = document.createElement("button");
+    retryDeploy.type = "button";
+    retryDeploy.className = "context-menu-item";
+    retryDeploy.textContent = "Retry deploy";
+    retryDeploy.addEventListener("click", () => {
+      menu.remove();
+      void transition(card.key, card.title, "verification", "done");
+    });
+    menu.appendChild(retryDeploy);
+  }
+
   // Mockups belong to the product conversation: the item appears only in the
   // Product backlog column, toggling create → creating → view as the local
   // mockup set for this ticket comes into existence. Bug tickets never get

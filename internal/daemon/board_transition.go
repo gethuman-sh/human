@@ -167,6 +167,16 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 			"/human-execute "+dispatchKey(req.PMKey, card))
 	}
 
+	// Deploy retry: the same sanctioned in-place relaunch for a failed deploy
+	// pipeline — without it a failed deploy (e.g. a transient forge/CI error,
+	// or a config gap fixed after the fact) is a dead end, since the done
+	// stage has no forward neighbor to re-enter through. card.Branch survives
+	// from the original [human:ready-for-review] marker, so the retry has
+	// everything runDoneStage needs.
+	if isDeployRetry(req.To, card) {
+		return d.runDoneStage(ctx, req, card)
+	}
+
 	// Forward-only, single-next-stage: the target must be exactly one rank
 	// above the current derived stage.
 	if stageRank[req.To] != stageRank[card.Stage]+1 {
@@ -265,7 +275,7 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	}
 	name := agentNameFor(pmKey, stage)
 	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
-		failBody := failedHeaderFor(stage) + "\n" + err.Error()
+		failBody := failedHeaderFor(stage) + "\n" + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, failBody)
 		return errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
 	}
@@ -320,15 +330,15 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 		Body:         doneBody(req.PMKey, card),
 	})
 	if err != nil {
-		d.deployFailed(req.PMKey, "", err.Error())
+		d.deployFailed(req.PMKey, "", errors.CauseChain(err))
 		return
 	}
 	if err := d.waitForChecks(ctx, res); err != nil {
-		d.deployFailed(req.PMKey, res.URL, err.Error())
+		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
 		return
 	}
 	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
-		d.deployFailed(req.PMKey, res.URL, err.Error())
+		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
 		return
 	}
 	// Past the merge the work IS shipped: branch cleanup and the ticket close
@@ -364,7 +374,7 @@ func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
 	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	body := CloseFailedHeader + "\ndeployed, but the automated close of " + pmKey +
-		" failed: " + err.Error() + "\nclose this ticket manually to clear the card."
+		" failed: " + errors.CauseChain(err) + "\nclose this ticket manually to clear the card."
 	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
 }
 
@@ -440,6 +450,16 @@ func isPlanningRetry(to BoardStage, card BoardCard) bool {
 func isBuildRetry(to BoardStage, card BoardCard) bool {
 	return to == BoardImplementation &&
 		card.Stage == BoardImplementation &&
+		card.State == BoardFailed
+}
+
+// isDeployRetry mirrors isPlanningRetry/isBuildRetry for the deploy stage:
+// failed deploys only — a running deploy is protected by the idempotency
+// guard above. Applies to both tickets and bugs, which share this same
+// verification->done transition (SC-296's deployGate serializes either).
+func isDeployRetry(to BoardStage, card BoardCard) bool {
+	return to == BoardDoneStage &&
+		card.Stage == BoardDoneStage &&
 		card.State == BoardFailed
 }
 
