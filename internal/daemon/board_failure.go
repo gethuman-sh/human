@@ -9,6 +9,23 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
+// FailureDiagnosis is the distilled cause of a dead agent run. It mirrors the
+// agent package's type without importing it — the daemon package's agent
+// collaborators are all interfaces wired in cmd/cmddaemon.
+type FailureDiagnosis struct {
+	Headline string
+	Detail   string
+}
+
+// BoardFailureDiagnoser distills why a board agent's run died from its
+// persisted execution artifacts. hookErrorType is the exit event's ErrorType
+// ("" when it carried none). nil disables diagnosis (generic fallback).
+type BoardFailureDiagnoser func(agentName, hookErrorType string) FailureDiagnosis
+
+// genericStageFailure is the diagnosis-free failure line, kept for nil or
+// empty-handed diagnosers so the marker never posts headerless.
+const genericStageFailure = "agent exited without completing the stage"
+
 // RunBoardFailureWatch watches for SessionEnd-style hook events from board
 // agents and posts the stage's *-failed marker when an agent exits WITHOUT
 // having posted its stage's done-marker. This closes the gap where an agent
@@ -24,7 +41,7 @@ import (
 // commenterFor resolves the PM-role commenter lazily (per event) so the watcher
 // holds no tracker handle across its lifetime; the PM commenter MUST be
 // resolved by role, never by key prefix (both trackers may share a name).
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, diagnose BoardFailureDiagnoser, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -54,7 +71,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, commenterFor, chainReview, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, diagnose, logger)
 			}
 		}
 	}
@@ -64,7 +81,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, diagnose BoardFailureDiagnoser, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
@@ -102,8 +119,26 @@ func handleBoardAgentExit(ctx context.Context, agentName string, commenterFor fu
 	if state == BoardResolved {
 		return
 	}
-	body := failedHeaderFor(stage) + "\nagent exited without completing the stage"
+	body := failedHeaderFor(stage) + "\n" + failureMarkerBody(diagnose, agentName, errorType)
 	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
 	}
+}
+
+// failureMarkerBody composes the failed marker's body: a one-line headline
+// first (the card badge/tooltip reads exactly that line via failureReason),
+// then a blank line and the markdown detail block for the detail pane. A nil
+// or empty-handed diagnoser degrades to the pre-diagnosis generic line.
+func failureMarkerBody(diagnose BoardFailureDiagnoser, agentName, errorType string) string {
+	if diagnose == nil {
+		return genericStageFailure
+	}
+	d := diagnose(agentName, errorType)
+	if d.Headline == "" {
+		return genericStageFailure
+	}
+	if d.Detail == "" {
+		return d.Headline
+	}
+	return d.Headline + "\n\n" + d.Detail
 }

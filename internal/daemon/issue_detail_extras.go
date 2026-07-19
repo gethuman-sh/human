@@ -17,7 +17,7 @@ const FixSummaryHeader = "[human:fix-summary]"
 // the wire boundary. Every field is optional — absence renders no section.
 type IssueDetailExtras struct {
 	ReviewFindings string // body of the newest [human:review-complete] comment, header line stripped
-	FailureReason  string // reason from the newest *-failed marker, via failureReason()
+	FailureReason  string // full diagnosis body of the newest *-failed marker (markdown, header stripped), via failureBody()
 	FixSummary     string // body of the newest [human:fix-summary] comment, header line stripped
 }
 
@@ -68,9 +68,10 @@ func latestSectionComment(comments []tracker.Comment, header string) string {
 	return body
 }
 
-// latestFailureReason returns the human-readable reason from the newest
-// *-failed marker across all stages, reusing the existing classifier and
-// reason extractor. Returns "" when no failure marker is present.
+// latestFailureReason returns the full diagnosis from the newest *-failed
+// marker across all stages: header stripped, headline and markdown detail kept,
+// so the detail pane shows the whole "why" while the card keeps its one-line
+// failureReason. Returns "" when no failure marker is present.
 func latestFailureReason(comments []tracker.Comment) string {
 	var haveLatest bool
 	var latest tracker.Comment
@@ -87,5 +88,5 @@ func latestFailureReason(comments []tracker.Comment) string {
 	if !haveLatest {
 		return ""
 	}
-	return failureReason(latest.Body)
+	return failureBody(latest.Body)
 }

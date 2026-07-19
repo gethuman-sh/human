@@ -64,6 +64,17 @@ func TestFailureReason_fromLatestFailedMarker(t *testing.T) {
 	assert.Equal(t, "panic in board_state.go", latestFailureReason(comments))
 }
 
+// SC-620: the detail pane surfaces the whole diagnosis — headline plus the
+// markdown detail block — not just the first line.
+func TestFailureReason_fullDiagnosisBodyKept(t *testing.T) {
+	body := ImplementationFailedHeader + "\nclaude exited with code 1: API Error\n\nagent: board-SC-1-implementation\nexit code: 1\n\nlast output:\n~~~\nboom\n~~~"
+	comments := []tracker.Comment{{Body: body, Created: time.Now()}}
+	got := latestFailureReason(comments)
+	assert.Contains(t, got, "claude exited with code 1: API Error")
+	assert.Contains(t, got, "last output:\n~~~\nboom\n~~~")
+	assert.NotContains(t, got, ImplementationFailedHeader)
+}
+
 func TestBuildIssueDetailExtras_allThree(t *testing.T) {
 	comments := []tracker.Comment{
 		{Body: ReviewCompleteHeader + "\n## Findings\nreview text", Created: time.Now()},

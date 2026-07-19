@@ -108,6 +108,15 @@ func TestDeriveBoardCard(t *testing.T) {
 		assert.Equal(t, "compile error in foo.go", card.Error)
 	})
 
+	t.Run("diagnosed failure keeps card error to the headline", func(t *testing.T) {
+		// SC-620: the marker body is headline-first, then a markdown detail
+		// block; the card's one-line error must stay exactly the headline.
+		body := "[human:implementation-failed]\nclaude exited with code 1: API Error\n\nagent: board-SC-1-implementation\n\nlast output:\n~~~\nboom\n~~~"
+		card := DeriveBoardCard([]tracker.Comment{cmt(body, t0)}, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardFailed, card.State)
+		assert.Equal(t, "claude exited with code 1: API Error", card.Error)
+	})
+
 	t.Run("full chain ending pr-pushed", func(t *testing.T) {
 		comments := []tracker.Comment{
 			cmt("[human:plan-ready]\nengineering: HUM-9", t0),
@@ -121,6 +130,19 @@ func TestDeriveBoardCard(t *testing.T) {
 		assert.Equal(t, "https://example/pr/1", card.PRURL)
 		assert.Equal(t, "feat/x", card.Branch)
 		assert.Equal(t, "HUM-9", card.EngineeringKey)
+	})
+}
+
+func TestFailureBody(t *testing.T) {
+	t.Run("full diagnosis returned without the header", func(t *testing.T) {
+		body := "[human:planning-failed]\nheadline here\n\ndetail block\n~~~\ntail\n~~~"
+		assert.Equal(t, "headline here\n\ndetail block\n~~~\ntail\n~~~", failureBody(body))
+	})
+	t.Run("headline-only marker returns the headline", func(t *testing.T) {
+		assert.Equal(t, "just a reason", failureBody("[human:planning-failed]\njust a reason"))
+	})
+	t.Run("header-only marker falls back to the header", func(t *testing.T) {
+		assert.Equal(t, "[human:planning-failed]", failureBody("[human:planning-failed]"))
 	})
 }
 
