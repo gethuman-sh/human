@@ -24,6 +24,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/ideaspace"
+	"github.com/gethuman-sh/human/internal/recentprojects"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -45,12 +46,19 @@ type App struct {
 	// I/O rather than a daemon route: this is UI preference state that must
 	// never touch the ticket, in line with the credential-only rationale above.
 	ideas *ideaspace.Store
+	// recents holds the Projects Overview's most-recently-opened list. Same
+	// local-file rationale as ideas: which projects were opened, and in what
+	// order, is desktop-workspace state, never tracker or daemon state.
+	recents *recentprojects.Store
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
 // startup, so there is nothing to wire here.
 func NewApp() *App {
-	return &App{ideas: ideaspace.NewStore(ideaspace.DefaultPath())}
+	return &App{
+		ideas:   ideaspace.NewStore(ideaspace.DefaultPath()),
+		recents: recentprojects.NewStore(recentprojects.DefaultPath()),
+	}
 }
 
 // Card is the flat, frontend-facing shape of one board ticket: a PM issue joined
