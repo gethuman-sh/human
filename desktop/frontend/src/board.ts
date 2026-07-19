@@ -17,8 +17,8 @@ import {
   toggleTheme,
   trail,
 } from "./fancy.js";
-import { initPermissions, PermissionRequest } from "./permissions.js";
-import { initMockupsView, showMockups, setPendingMockupSlug, MockupSet } from "./mockupsview.js";
+import { initPermissions, type PermissionRequest } from "./permissions.js";
+import { initMockupsView, showMockups, setPendingMockupSlug, type MockupSet } from "./mockupsview.js";
 import {
   initSettingsView,
   showSettings,
@@ -26,7 +26,7 @@ import {
   saveSetting,
   setPaletteOpener,
   setActiveSection,
-  SettingsData,
+  type SettingsData,
 } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import {
@@ -1059,7 +1059,7 @@ function dropAllowed(target: HTMLElement): boolean {
     if (!card.bug || !current.dockerAvailable) return false;
     return bugAreaOf(card) === "grid" || isReworkable(card);
   }
-  const toQueue = target.dataset.dropQueue || "";
+  const toQueue = target.dataset.dropQueue ?? "";
   // A drop back into the card's own column is a local reorder — it launches
   // nothing, so neither the Docker gate nor forward-adjacency applies.
   if (!card.bug && toQueue === queueOf(card)) return true;
@@ -1089,7 +1089,7 @@ function setHoverTarget(target: HTMLElement | null): void {
   if (ok && target.dataset.drop === "queue" && drag) {
     const card = current.cards.find((c) => c.key === drag.key);
     const sorting = !!card && target.dataset.dropQueue === queueOf(card);
-    const verb = sorting ? "Sort here" : QUEUE_VERB[target.dataset.dropQueue || ""];
+    const verb = sorting ? "Sort here" : QUEUE_VERB[target.dataset.dropQueue ?? ""];
     if (verb) target.dataset.verb = verb;
     else delete target.dataset.verb;
   }
@@ -1230,7 +1230,7 @@ function performDrop(
     void fixBug(info.key, info.title);
     return;
   }
-  const toQueue = target.dataset.dropQueue || "";
+  const toQueue = target.dataset.dropQueue ?? "";
   const dropped = current.cards.find((c) => c.key === info.key);
   if (dropped && !dropped.bug && toQueue === queueOf(dropped)) {
     // A drop into the card's own column sorts it — mirrors the idea-space
@@ -1245,7 +1245,7 @@ function performDrop(
     void promoteIdea(info.key);
     return;
   }
-  const to = QUEUE_TRANSITION_TO[toQueue] || "";
+  const to = QUEUE_TRANSITION_TO[toQueue] ?? "";
   if (!to) return;
   celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: false });
   void transition(info.key, info.title, info.stage, to);
@@ -1262,8 +1262,8 @@ function reorderWithinQueue(queue: string, key: string, dropY: number): void {
   if (!body) return;
   const resting: string[] = [];
   const midpoints: number[] = [];
-  for (const el of Array.from(body.querySelectorAll<HTMLElement>(".card"))) {
-    const k = el.dataset.key || "";
+  for (const el of body.querySelectorAll<HTMLElement>(".card")) {
+    const k = el.dataset.key ?? "";
     if (!k || k === key) continue;
     const r = el.getBoundingClientRect();
     resting.push(k);
@@ -1300,7 +1300,7 @@ async function promoteIdea(key: string): Promise<void> {
   }
 
   let seed = card.title;
-  if (card.description) seed += "\n\n" + card.description;
+  if (card.description) seed += `\n\n${card.description}`;
 
   const panel = document.getElementById("ideation-panel");
   if (panel) panel.classList.remove("hidden");
@@ -1608,7 +1608,7 @@ async function initialLoad(): Promise<void> {
   try {
     const quick = await go().CardsQuick();
     current = {
-      cards: quick.cards || [],
+      cards: quick.cards ?? [],
       dockerAvailable: !!quick.dockerAvailable,
       // Suppress the quick-phase error: the full reconcile surfaces it, and
       // clearing it here avoids a banner that flickers away a moment later.
@@ -1641,9 +1641,9 @@ async function reconcile(): Promise<void> {
     const data = await go().Cards();
     if (epoch !== reconcileEpoch) return;
     current = {
-      cards: data.cards || [],
+      cards: data.cards ?? [],
       dockerAvailable: !!data.dockerAvailable,
-      error: data.error || "",
+      error: data.error ?? "",
     };
   } catch (err) {
     if (epoch !== reconcileEpoch) return;
@@ -1675,14 +1675,14 @@ function errMessage(err: unknown): string {
 }
 
 function escapeHtml(s: unknown): string {
-  return String(s == null ? "" : s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function escapeAttr(s: unknown): string {
-  return escapeHtml(s).replace(/"/g, "&quot;");
+  return escapeHtml(s).replaceAll('"', "&quot;");
 }
 
 // --- Ideation chat panel -----------------------------------------------
@@ -1781,11 +1781,11 @@ function renderIdeationDraft(): void {
   // user edits on every poll tick).
   if (titleInput && titleInput.dataset.sessionId !== ideation.sessionId) {
     titleInput.value = ideation.draft.title;
-    titleInput.dataset.sessionId = ideation.sessionId || "";
+    titleInput.dataset.sessionId = ideation.sessionId ?? "";
   }
   if (descInput && descInput.dataset.sessionId !== ideation.sessionId) {
     descInput.value = ideation.draft.description;
-    descInput.dataset.sessionId = ideation.sessionId || "";
+    descInput.dataset.sessionId = ideation.sessionId ?? "";
   }
 }
 
@@ -1806,7 +1806,7 @@ function renderIdeation(): void {
       statusLine.textContent = ideation.error || "Ideation session failed";
       statusLine.classList.add("error");
     } else if (ideation.state === "done") {
-      statusLine.textContent = "Created " + (ideation.createdKey || "");
+      statusLine.textContent = `Created ${ideation.createdKey ?? ""}`;
     } else {
       statusLine.classList.add("hidden");
     }
@@ -1857,7 +1857,7 @@ const chosenOptions = new Map<string, { signature: string; optionID: string }>()
 // optionsSignature identifies one decision block by its content, so stale
 // re-offers of a consumed block are distinguishable from a genuinely new one.
 function optionsSignature(options: { id: string; label: string }[] | undefined): string {
-  return (options ?? []).map((o) => o.id + ":" + o.label).join("|");
+  return (options ?? []).map((o) => `${o.id}:${o.label}`).join("|");
 }
 
 // liveOptions returns the card's options with the session's consumed block
@@ -2222,7 +2222,7 @@ async function maybeOfferStartProject(): Promise<void> {
   }
   // A failed probe (info.error) means "don't offer", never a broken app.
   if (info.error || !info.emptyProject) return;
-  wizardTemplates = info.templates || [];
+  wizardTemplates = info.templates ?? [];
   if (wizardTemplates.length === 0) return;
   openStartWizard();
 }
@@ -2419,8 +2419,8 @@ async function pollAgents(): Promise<void> {
 }
 
 function formatTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1_000) return (n / 1e3).toFixed(1) + "K";
+  if (n >= 1_000_000) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1e3).toFixed(1)}K`;
   return String(n);
 }
 
@@ -2508,7 +2508,7 @@ function renderAgentRow(a: AgentInstance): string {
   if (elapsed) chips.push(`<span class="agent-chip">${elapsed}</span>`);
   if (a.slug) chips.push(`<span class="agent-chip slug">${escapeHtml(a.slug)}</span>`);
   const ctx = a.errorType || a.blockedTool || a.currentTool;
-  if (ctx) chips.push(`<span class="agent-chip ctx">${escapeHtml(a.errorType ? a.errorType : a.blockedTool ? "⚠ " + a.blockedTool : "[" + a.currentTool + "]")}</span>`);
+  if (ctx) chips.push(`<span class="agent-chip ctx">${escapeHtml(a.errorType ? a.errorType : a.blockedTool ? `⚠ ${a.blockedTool}` : `[${a.currentTool}]`)}</span>`);
 
   const rowClass = a.status === "blocked" ? "agent-row blocked" : "agent-row";
   return `<div class="${rowClass}">
@@ -2577,14 +2577,12 @@ function featureSig(doc: FeatureDoc): string {
     gs
       .map(
         (g) =>
-          g.group +
-          "|" +
-          (g.features ?? []).map((f) => f.name + ":" + f.description + (f.recent ? "*" : "")).join(",") +
-          "|" +
-          walk(g.groups),
+          `${g.group}|${(g.features ?? [])
+            .map((f) => `${f.name}:${f.description}${f.recent ? "*" : ""}`)
+            .join(",")}|${walk(g.groups)}`,
       )
       .join(";");
-  return (doc.product ?? "") + "¦" + (doc.tagline ?? "") + "¦" + walk(doc.groups);
+  return `${doc.product ?? ""}¦${doc.tagline ?? ""}¦${walk(doc.groups)}`;
 }
 
 function stopFeaturesPoll(): void {
@@ -2644,7 +2642,7 @@ async function onGenerateFeatures(): Promise<void> {
     await go().GenerateFeatures();
   } catch (err) {
     featuresGenerating = false;
-    featuresNote = "Couldn't start generation: " + errMessage(err);
+    featuresNote = `Couldn't start generation: ${errMessage(err)}`;
     renderFeatures(currentFeatureDoc);
     return;
   }
