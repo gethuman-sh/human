@@ -420,7 +420,7 @@ func mergeLabels(existing, add, remove []string) []string {
 // sometimes omits.
 func splitTags(tags string) []string {
 	var names []string
-	for _, part := range strings.Split(tags, ";") {
+	for part := range strings.SplitSeq(tags, ";") {
 		if name := strings.TrimSpace(part); name != "" {
 			names = append(names, name)
 		}

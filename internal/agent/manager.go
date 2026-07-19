@@ -222,11 +222,9 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 		// The tee goroutine owns the attach and closes it on stream EOF (the
 		// exec exiting), so launch returns immediately while the detached
 		// stdout/stderr is durably persisted to the host.
-		m.teeWG.Add(1)
-		go func() {
-			defer m.teeWG.Done()
+		m.teeWG.Go(func() {
 			teeExecOutput(attach, exe, m.Docker, execID)
-		}()
+		})
 	} else {
 		_ = attach.Close()
 	}
@@ -450,7 +448,7 @@ func (m *Manager) restartDaemon(projectDir, host string) {
 	_ = child.Run()
 
 	// Poll for readiness.
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		if info, readErr := daemon.ReadInfo(); readErr == nil && info.IsReachable() {
 			return
 		}

@@ -47,24 +47,24 @@ func TestInteractiveDecider_promptDenied(t *testing.T) {
 }
 
 func TestInteractiveDecider_cacheHit(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 	d := NewInteractiveDecider(&stubDecider{allowed: false}, func(_ string) (bool, error) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		return true, nil
 	})
 
 	assert.True(t, d.Allowed("example.com"))
 	assert.True(t, d.Allowed("example.com"))
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "prompt should be called only once")
+	assert.Equal(t, int32(1), calls.Load(), "prompt should be called only once")
 }
 
 func TestInteractiveDecider_concurrentSameDomain(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 	started := make(chan struct{})
 	proceed := make(chan struct{})
 
 	d := NewInteractiveDecider(&stubDecider{allowed: false}, func(_ string) (bool, error) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		close(started)
 		<-proceed
 		return true, nil
@@ -73,19 +73,15 @@ func TestInteractiveDecider_concurrentSameDomain(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make([]bool, 2)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		results[0] = d.Allowed("example.com")
-	}()
+	})
 
 	<-started // first goroutine is inside prompt
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		results[1] = d.Allowed("example.com")
-	}()
+	})
 
 	// Let the second goroutine reach the pending wait.
 	// A small sleep is acceptable here since we need the goroutine to enter Wait().
@@ -96,7 +92,7 @@ func TestInteractiveDecider_concurrentSameDomain(t *testing.T) {
 
 	assert.True(t, results[0])
 	assert.True(t, results[1])
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "prompt should be called only once")
+	assert.Equal(t, int32(1), calls.Load(), "prompt should be called only once")
 }
 
 func TestInteractiveDecider_promptError(t *testing.T) {

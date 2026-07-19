@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"regexp"
 	"sort"
@@ -32,8 +33,8 @@ type FeatureMeta struct {
 
 // FeatureOption describes a single feature option.
 type FeatureOption struct {
-	Type    string      `json:"type"`
-	Default interface{} `json:"default"`
+	Type    string `json:"type"`
+	Default any    `json:"default"`
 }
 
 // FeaturePuller abstracts OCI feature download for testability.
@@ -127,7 +128,7 @@ func extractFeatureMeta(tarData []byte, ref string) (*FeatureMeta, error) {
 // like claude-code can't find node and fails. The returned map is baked into the
 // image by the caller via ContainerCommit.
 func InstallFeatures(ctx context.Context, docker DockerClient, puller FeaturePuller,
-	containerID string, features map[string]interface{}, remoteUser string,
+	containerID string, features map[string]any, remoteUser string,
 	logger zerolog.Logger, out io.Writer) (map[string]string, error) {
 
 	if len(features) == 0 {
@@ -167,7 +168,7 @@ func InstallFeatures(ctx context.Context, docker DockerClient, puller FeaturePul
 	featureAccum := make(map[string]string)
 
 	for _, ref := range refs {
-		opts, _ := features[ref].(map[string]interface{})
+		opts, _ := features[ref].(map[string]any)
 		_, _ = fmt.Fprintf(out, "  Installing feature: %s\n", ref) // #nosec G705 -- CLI output
 
 		pf := pulled[ref]
@@ -205,7 +206,7 @@ func captureContainerEnv(ctx context.Context, docker DockerClient, containerID, 
 		return nil, err
 	}
 	env := make(map[string]string)
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if i := strings.IndexByte(line, '='); i > 0 {
 			env[line[:i]] = strings.TrimRight(line[i+1:], "\r")
 		}
@@ -274,7 +275,7 @@ var nonWordChars = regexp.MustCompile(`[^\w]`)
 // featureEnv converts feature options to environment variables as specified
 // by the devcontainer features spec. Option keys are uppercased with
 // non-word characters replaced by underscores.
-func featureEnv(opts map[string]interface{}, meta *FeatureMeta, remoteUser string) []string {
+func featureEnv(opts map[string]any, meta *FeatureMeta, remoteUser string) []string {
 	env := []string{
 		"_REMOTE_USER=" + remoteUser,
 		"_CONTAINER_USER=" + remoteUser,
@@ -287,7 +288,7 @@ func featureEnv(opts map[string]interface{}, meta *FeatureMeta, remoteUser strin
 	}
 
 	// Apply defaults from feature metadata, then override with user options.
-	merged := make(map[string]interface{})
+	merged := make(map[string]any)
 	if meta != nil {
 		for k, opt := range meta.Options {
 			if opt.Default != nil {
@@ -295,9 +296,7 @@ func featureEnv(opts map[string]interface{}, meta *FeatureMeta, remoteUser strin
 			}
 		}
 	}
-	for k, v := range opts {
-		merged[k] = v
-	}
+	maps.Copy(merged, opts)
 
 	for k, v := range merged {
 		envKey := strings.ToUpper(nonWordChars.ReplaceAllString(k, "_"))

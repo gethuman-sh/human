@@ -55,7 +55,7 @@ func DetectMutating(args []string) (MutatingOp, bool) {
 // captureValueFlags extracts --tracker and --project (both "--flag value" and
 // "--flag=value" forms) before flag-stripping discards their values.
 func captureValueFlags(args []string) (trackerName, project string) {
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		a := args[i]
 		switch {
 		case a == "--tracker" && i+1 < len(args):

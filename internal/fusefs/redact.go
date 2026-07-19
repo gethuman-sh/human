@@ -96,13 +96,13 @@ func redactLine(line string) string {
 	}
 
 	// Lines without '=' pass through (e.g. export-only statements).
-	idx := strings.IndexByte(trimmed, '=')
-	if idx < 0 {
+	before, after, ok := strings.Cut(trimmed, "=")
+	if !ok {
 		return line
 	}
 
-	key := strings.TrimSpace(trimmed[:idx])
-	value := strings.TrimSpace(trimmed[idx+1:])
+	key := strings.TrimSpace(before)
+	value := strings.TrimSpace(after)
 
 	// Strip optional quotes from value for classification.
 	unquoted := unquoteValue(value)

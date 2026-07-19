@@ -62,8 +62,7 @@ func TestRunAgentCleanup_ReusedNameSecondExitCleansAgain(t *testing.T) {
 	store := NewHookEventStore()
 	cleaner := newCountingCleaner()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go RunAgentCleanup(ctx, store, cleaner, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 

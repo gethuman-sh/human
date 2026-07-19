@@ -257,7 +257,7 @@ func enableLspTool(w io.Writer, fw claude.FileWriter) error {
 	}
 
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	settings := make(map[string]interface{})
+	settings := make(map[string]any)
 
 	data, err := fw.ReadFile(settingsPath)
 	if err == nil {
@@ -269,9 +269,9 @@ func enableLspTool(w io.Writer, fw claude.FileWriter) error {
 	}
 
 	// Merge into the existing env map.
-	envMap, _ := settings["env"].(map[string]interface{})
+	envMap, _ := settings["env"].(map[string]any)
 	if envMap == nil {
-		envMap = make(map[string]interface{})
+		envMap = make(map[string]any)
 	}
 
 	if envMap["ENABLE_LSP_TOOL"] == "1" {
@@ -303,7 +303,7 @@ func appendLspToDevcontainer(w io.Writer, fw claude.FileWriter, cmds []string) {
 	if err != nil {
 		return
 	}
-	raw := map[string]interface{}{}
+	raw := map[string]any{}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return
 	}

@@ -29,29 +29,29 @@ func LoadHumanConfig(dir string) (*HumanConfig, error) {
 // DevcontainerConfig represents a parsed devcontainer.json.
 // Supports the subset of the spec needed for image-based and Dockerfile-based configs.
 type DevcontainerConfig struct {
-	Name                 string                 `json:"name,omitempty"`
-	Image                string                 `json:"image,omitempty"`
-	Build                *BuildConfig           `json:"build,omitempty"`
-	DockerFile           string                 `json:"dockerFile,omitempty"`
-	Features             map[string]interface{} `json:"features,omitempty"`
-	Mounts               []interface{}          `json:"mounts,omitempty"`
-	RunArgs              []string               `json:"runArgs,omitempty"`
-	ForwardPorts         []interface{}          `json:"forwardPorts,omitempty"`
-	RemoteEnv            map[string]string      `json:"remoteEnv,omitempty"`
-	ContainerEnv         map[string]string      `json:"containerEnv,omitempty"`
-	RemoteUser           string                 `json:"remoteUser,omitempty"`
-	ContainerUser        string                 `json:"containerUser,omitempty"`
-	WorkspaceFolder      string                 `json:"workspaceFolder,omitempty"`
-	CapAdd               []string               `json:"capAdd,omitempty"`
-	SecurityOpt          []string               `json:"securityOpt,omitempty"`
-	Privileged           bool                   `json:"privileged,omitempty"`
-	OverrideCommand      *bool                  `json:"overrideCommand,omitempty"`
-	InitializeCommand    interface{}            `json:"initializeCommand,omitempty"`
-	OnCreateCommand      interface{}            `json:"onCreateCommand,omitempty"`
-	UpdateContentCommand interface{}            `json:"updateContentCommand,omitempty"`
-	PostCreateCommand    interface{}            `json:"postCreateCommand,omitempty"`
-	PostStartCommand     interface{}            `json:"postStartCommand,omitempty"`
-	PostAttachCommand    interface{}            `json:"postAttachCommand,omitempty"`
+	Name                 string            `json:"name,omitempty"`
+	Image                string            `json:"image,omitempty"`
+	Build                *BuildConfig      `json:"build,omitempty"`
+	DockerFile           string            `json:"dockerFile,omitempty"`
+	Features             map[string]any    `json:"features,omitempty"`
+	Mounts               []any             `json:"mounts,omitempty"`
+	RunArgs              []string          `json:"runArgs,omitempty"`
+	ForwardPorts         []any             `json:"forwardPorts,omitempty"`
+	RemoteEnv            map[string]string `json:"remoteEnv,omitempty"`
+	ContainerEnv         map[string]string `json:"containerEnv,omitempty"`
+	RemoteUser           string            `json:"remoteUser,omitempty"`
+	ContainerUser        string            `json:"containerUser,omitempty"`
+	WorkspaceFolder      string            `json:"workspaceFolder,omitempty"`
+	CapAdd               []string          `json:"capAdd,omitempty"`
+	SecurityOpt          []string          `json:"securityOpt,omitempty"`
+	Privileged           bool              `json:"privileged,omitempty"`
+	OverrideCommand      *bool             `json:"overrideCommand,omitempty"`
+	InitializeCommand    any               `json:"initializeCommand,omitempty"`
+	OnCreateCommand      any               `json:"onCreateCommand,omitempty"`
+	UpdateContentCommand any               `json:"updateContentCommand,omitempty"`
+	PostCreateCommand    any               `json:"postCreateCommand,omitempty"`
+	PostStartCommand     any               `json:"postStartCommand,omitempty"`
+	PostAttachCommand    any               `json:"postAttachCommand,omitempty"`
 }
 
 // BuildConfig holds Dockerfile build configuration.

@@ -77,11 +77,12 @@ func renderListItem(tb *textBlock, prefix, indent string, children []notionBlock
 	if tb == nil {
 		return ""
 	}
-	result := prefix + richTextToMarkdown(tb.RichText) + "\n"
+	var result strings.Builder
+	result.WriteString(prefix + richTextToMarkdown(tb.RichText) + "\n")
 	for _, child := range children {
-		result += indent + renderBlock(child)
+		result.WriteString(indent + renderBlock(child))
 	}
-	return result
+	return result.String()
 }
 
 func renderToDo(block notionBlock) string {

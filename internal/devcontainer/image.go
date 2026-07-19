@@ -177,7 +177,6 @@ func (b *ImageBuilder) buildFromDockerfile(ctx context.Context, cfg *Devcontaine
 	// Convert build args.
 	buildArgs := make(map[string]*string)
 	for k, v := range cfg.Build.Args {
-		v := v
 		buildArgs[k] = &v
 	}
 

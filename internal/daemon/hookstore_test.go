@@ -61,7 +61,7 @@ func TestHookEventStore_RingBufferTrim(t *testing.T) {
 	// Flooding from a single session trips the per-session cap first,
 	// so the total tops out at maxHookEventsPerSession. The global cap
 	// still applies and is exercised by the MultiSession test below.
-	for i := 0; i < maxHookEvents+20; i++ {
+	for range maxHookEvents + 20 {
 		store.Append(hookevents.Event{
 			EventName: "UserPromptSubmit",
 			SessionID: "s1",
@@ -80,7 +80,7 @@ func TestHookEventStore_EventsSinceSurvivesSaturation(t *testing.T) {
 
 	// Saturate the global ring across many sessions (so the per-session cap
 	// does not trip first); len(events) pins at maxHookEvents and stops growing.
-	for i := 0; i < maxHookEvents; i++ {
+	for i := range maxHookEvents {
 		store.Append(hookevents.Event{
 			EventName: "UserPromptSubmit",
 			SessionID: fmt.Sprintf("s%d", i%200),
@@ -114,7 +114,7 @@ func TestHookEventStore_PerSessionCapProtectsOtherSessions(t *testing.T) {
 	store := NewHookEventStore()
 
 	// Legitimate session posts a handful of events.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		store.Append(hookevents.Event{
 			EventName: "UserPromptSubmit",
 			SessionID: "legit",
@@ -122,7 +122,7 @@ func TestHookEventStore_PerSessionCapProtectsOtherSessions(t *testing.T) {
 		})
 	}
 	// Abuser floods with far more than the per-session cap.
-	for i := 0; i < maxHookEventsPerSession*3; i++ {
+	for range maxHookEventsPerSession * 3 {
 		store.Append(hookevents.Event{
 			EventName: "UserPromptSubmit",
 			SessionID: "flood",
@@ -229,11 +229,11 @@ func TestHookEventStore_concurrentAppendAndSnapshot(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(workers * 2)
 
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		sessionID := fmt.Sprintf("s-%d", w)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				store.Append(hookevents.Event{
 					EventName: "Stop",
 					SessionID: sessionID,
@@ -242,10 +242,10 @@ func TestHookEventStore_concurrentAppendAndSnapshot(t *testing.T) {
 			}
 		}()
 	}
-	for w := 0; w < workers; w++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				_ = store.Snapshot()
 			}
 		}()
@@ -259,7 +259,7 @@ func TestHookEventStore_concurrentAppendAndSnapshot(t *testing.T) {
 func TestHookEventStore_UnsubscribeRaceAppend(t *testing.T) {
 	const iterations = 500
 	var wg sync.WaitGroup
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		store := NewHookEventStore()
 		ch := store.Subscribe()
 		// Drain any notifications so the send path in Append always takes the

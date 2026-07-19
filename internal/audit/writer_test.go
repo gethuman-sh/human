@@ -51,13 +51,12 @@ func TestWriterZeroTimestampFallback(t *testing.T) {
 
 func TestWriterDropsWhenFull(t *testing.T) {
 	store := newTestStore(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	w := NewWriter(ctx, store, zerolog.Nop())
 
 	now := time.Now().UTC()
 	op := MutatingOp{Operation: "create", TrackerKind: "jira", Key: "KAN-1"}
-	for i := 0; i < writerBufSize+100; i++ {
+	for range writerBufSize + 100 {
 		e, err := BuildEvent(now, op, OutcomeSuccess, DecisionContext{}, nil)
 		require.NoError(t, err)
 		w.Send(e) // must not panic when the channel is full

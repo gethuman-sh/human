@@ -124,16 +124,16 @@ const devcontainerDir = ".devcontainer"
 const devcontainerPath = ".devcontainer/devcontainer.json"
 
 type devcontainerConfig struct {
-	Name             string                 `json:"name"`
-	Image            string                 `json:"image"`
-	RemoteUser       string                 `json:"remoteUser,omitempty"`
-	Features         map[string]interface{} `json:"features"`
-	Mounts           []string               `json:"mounts,omitempty"`
-	RunArgs          []string               `json:"runArgs,omitempty"`
-	CapAdd           []string               `json:"capAdd,omitempty"`
-	ForwardPorts     []int                  `json:"forwardPorts"`
-	RemoteEnv        map[string]string      `json:"remoteEnv,omitempty"`
-	PostStartCommand string                 `json:"postStartCommand,omitempty"`
+	Name             string            `json:"name"`
+	Image            string            `json:"image"`
+	RemoteUser       string            `json:"remoteUser,omitempty"`
+	Features         map[string]any    `json:"features"`
+	Mounts           []string          `json:"mounts,omitempty"`
+	RunArgs          []string          `json:"runArgs,omitempty"`
+	CapAdd           []string          `json:"capAdd,omitempty"`
+	ForwardPorts     []int             `json:"forwardPorts"`
+	RemoteEnv        map[string]string `json:"remoteEnv,omitempty"`
+	PostStartCommand string            `json:"postStartCommand,omitempty"`
 }
 
 const humanFeatureKey = "ghcr.io/gethuman-sh/treehouse/human:1"
@@ -148,12 +148,12 @@ func ensureHumanFeature(w io.Writer, fw claude.FileWriter) ([]string, error) {
 		return nil, errors.WrapWithDetails(err, "reading existing devcontainer config")
 	}
 
-	raw := map[string]interface{}{}
+	raw := map[string]any{}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, errors.WrapWithDetails(err, "parsing existing devcontainer config")
 	}
 
-	features, _ := raw["features"].(map[string]interface{})
+	features, _ := raw["features"].(map[string]any)
 	if features != nil {
 		if _, ok := features[humanFeatureKey]; ok {
 			_, _ = fmt.Fprintln(w, "Keeping existing devcontainer config (human feature already present).")
@@ -162,10 +162,10 @@ func ensureHumanFeature(w io.Writer, fw claude.FileWriter) ([]string, error) {
 	}
 
 	if features == nil {
-		features = map[string]interface{}{}
+		features = map[string]any{}
 		raw["features"] = features
 	}
-	features[humanFeatureKey] = map[string]interface{}{}
+	features[humanFeatureKey] = map[string]any{}
 
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
@@ -194,21 +194,21 @@ func checkDevcontainerPrereqs() []string {
 }
 
 func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresent bool) devcontainerConfig {
-	featureOpts := map[string]interface{}{}
+	featureOpts := map[string]any{}
 	if proxy {
 		featureOpts["proxy"] = true
 	}
 
-	features := map[string]interface{}{
-		nodeFeatureKey:   map[string]interface{}{"version": "22"},
+	features := map[string]any{
+		nodeFeatureKey:   map[string]any{"version": "22"},
 		humanFeatureKey:  featureOpts,
-		claudeFeatureKey: map[string]interface{}{},
+		claudeFeatureKey: map[string]any{},
 	}
 	for _, stack := range stacks {
 		if stack.Fixed {
 			continue // already added with pinned options above
 		}
-		features[stack.FeatureKey] = map[string]interface{}{}
+		features[stack.FeatureKey] = map[string]any{}
 	}
 
 	cfg := devcontainerConfig{

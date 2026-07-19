@@ -795,10 +795,10 @@ func TestIsClaudeRemoteCmd(t *testing.T) {
 
 func makeJSONLLine(t *testing.T, model string, ts time.Time, input, output int) []byte {
 	t.Helper()
-	m := map[string]interface{}{
+	m := map[string]any{
 		"type":      "assistant",
 		"timestamp": ts.Format(time.RFC3339),
-		"message": map[string]interface{}{
+		"message": map[string]any{
 			"model": model,
 			"usage": map[string]int{
 				"input_tokens":                input,
@@ -871,16 +871,16 @@ func TestDockerFinder_StateUsesNewestFile(t *testing.T) {
 	// so DetermineState should return Busy.
 
 	endTurn := "end_turn"
-	oldSession, _ := json.Marshal(map[string]interface{}{
+	oldSession, _ := json.Marshal(map[string]any{
 		"type": "assistant",
-		"message": map[string]interface{}{
+		"message": map[string]any{
 			"stop_reason": &endTurn,
 		},
 	})
 	// Streaming assistant — null stop_reason means actively generating.
-	newSession, _ := json.Marshal(map[string]interface{}{
+	newSession, _ := json.Marshal(map[string]any{
 		"type":    "assistant",
-		"message": map[string]interface{}{},
+		"message": map[string]any{},
 	})
 
 	// File listing: newer file (mtime 2000) and older file (mtime 1000)
@@ -1249,7 +1249,7 @@ func TestFindNewestJSONL_SameMtime(t *testing.T) {
 	}
 
 	// Run multiple times to verify stability.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		got, err := findNewestJSONL(dir)
 		if err != nil {
 			t.Fatal(err)
