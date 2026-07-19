@@ -73,7 +73,7 @@ sec:
 	# .claude/worktrees holds agent worktrees — stale snapshots there must not
 	# be compiled against the live tree (a changed interface fails the scan).
 	go tool gosec -exclude-dir .claude ./...
-	./scripts/govulncheck.sh
+	go tool govulncheck ./...
 
 secrets:
 	go tool gitleaks git -v

@@ -5,8 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/gethuman-sh/human/internal/dockerhost"
 )
@@ -54,16 +53,16 @@ func dockerBridgeGateway(ctx context.Context) string {
 		return ""
 	}
 	defer func() { _ = cli.Close() }()
-	if _, err := cli.Ping(ctx); err != nil {
+	if _, err := cli.Ping(ctx, client.PingOptions{}); err != nil {
 		return "" // Docker not running
 	}
-	insp, err := cli.NetworkInspect(ctx, "bridge", network.InspectOptions{})
+	insp, err := cli.NetworkInspect(ctx, "bridge", client.NetworkInspectOptions{})
 	if err != nil {
 		return ""
 	}
-	for _, cfg := range insp.IPAM.Config {
-		if cfg.Gateway != "" {
-			return cfg.Gateway
+	for _, cfg := range insp.Network.IPAM.Config {
+		if cfg.Gateway.IsValid() {
+			return cfg.Gateway.String()
 		}
 	}
 	return ""
@@ -73,9 +72,9 @@ func dockerBridgeGateway(ctx context.Context) string {
 // resolution as NewDockerClient, for the operations (ping, network inspect) not
 // exposed by the DockerClient interface.
 func newRawDockerClient() (*client.Client, error) {
-	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	opts := []client.Opt{client.FromEnv}
 	if host := dockerhost.Resolve().Host; host != "" {
 		opts = append(opts, client.WithHost(host))
 	}
-	return client.NewClientWithOpts(opts...)
+	return client.New(opts...)
 }
