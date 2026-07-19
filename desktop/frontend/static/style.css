@@ -2898,3 +2898,122 @@ input[type="checkbox"].settings-input {
 .card-action:hover {
   opacity: 0.9;
 }
+
+.switch-project-btn {
+  background: transparent;
+  border: 1px solid var(--col-border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.switch-project-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.projects-overview {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+
+.projects-overview.hidden {
+  display: none;
+}
+
+.projects-overview-panel {
+  width: 480px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.projects-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.projects-error {
+  color: var(--failed);
+  font-size: 13px;
+}
+
+.projects-empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.projects-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.projects-recent-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.projects-recent-item:hover {
+  border-color: var(--accent);
+}
+
+.projects-recent-name {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.projects-recent-path {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.projects-open-row {
+  display: flex;
+  gap: 8px;
+}
+
+.projects-path-input {
+  flex: 1;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.projects-path-open,
+.projects-browse {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.projects-opening {
+  color: var(--muted);
+  font-size: 12px;
+}

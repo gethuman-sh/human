@@ -15,6 +15,7 @@ import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteO
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, badgeInfo, } from "./board-queue.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
+import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
 // webview (WebKitGTK swallows the new-window request), so every external
@@ -89,6 +90,8 @@ const DAEMON_POLL_MS = 3000;
 // only bounds the staleness window.
 const BOARD_SAFETY_POLL_MS = 90000;
 let daemonReachable = false;
+let boardPollTimer = null;
+let safetyPollTimer = null;
 function go() {
     const app = window.go?.main?.App;
     if (!app)
@@ -1254,6 +1257,61 @@ async function reconcile() {
     // see the Start Project wizard section for the guards.
     void maybeOfferStartProject();
 }
+function startBoardPolling() {
+    void initialLoad();
+    void pollDaemonStatus();
+    if (boardPollTimer === null)
+        boardPollTimer = setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
+    if (safetyPollTimer === null) {
+        safetyPollTimer = setInterval(() => {
+            if (daemonReachable)
+                void reconcile();
+        }, BOARD_SAFETY_POLL_MS);
+    }
+}
+function stopBoardPolling() {
+    if (boardPollTimer !== null) {
+        clearInterval(boardPollTimer);
+        boardPollTimer = null;
+    }
+    if (safetyPollTimer !== null) {
+        clearInterval(safetyPollTimer);
+        safetyPollTimer = null;
+    }
+}
+function setActiveProjectName(name) {
+    const title = document.querySelector(".app-title");
+    if (title)
+        title.textContent = name ? `human — workflow board · ${name}` : "human — workflow board";
+}
+function showAppShell(projectName) {
+    document.querySelector(".app-shell")?.classList.remove("hidden");
+    document.getElementById("projects-overview")?.classList.add("hidden");
+    if (projectName !== undefined)
+        setActiveProjectName(projectName);
+}
+function showOverviewScreen(errText) {
+    document.querySelector(".app-shell")?.classList.add("hidden");
+    document.getElementById("projects-overview")?.classList.remove("hidden");
+    stopBoardPolling();
+    setActiveProjectName("");
+    void showProjectsOverview(errText);
+}
+async function bootstrapProject() {
+    let result;
+    try {
+        result = await go().ProjectBootstrap();
+    }
+    catch (err) {
+        result = { status: "overview", error: errMessage(err) };
+    }
+    if (result.status === "overview") {
+        showOverviewScreen(result.error);
+        return;
+    }
+    showAppShell(result.project);
+    startBoardPolling();
+}
 function errMessage(err) {
     if (err instanceof Error)
         return err.message;
@@ -2354,20 +2412,28 @@ function init() {
             void reconcile();
         });
     }
-    void initialLoad();
-    void pollDaemonStatus();
-    setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
-    setInterval(() => {
-        // Only when the daemon is reachable: a dead daemon already shows its
-        // banner, and polling into it would just churn the error state.
-        if (daemonReachable)
-            void reconcile();
-    }, BOARD_SAFETY_POLL_MS);
+    void bootstrapProject();
     wireRail();
     initFancy();
     initPermissions(() => go(), applyPermissionDecision);
     initMockupsView(() => go());
     initSettingsView(() => go());
+    initProjectsView(() => go(), (project) => {
+        showAppShell(project.name);
+        startBoardPolling();
+    });
+    document.getElementById("switch-project-btn")?.addEventListener("click", () => {
+        void (async () => {
+            try {
+                await go().SwitchProject();
+            }
+            catch {
+                // Best-effort: even if the stop call fails, still show the
+                // picker — OpenProject's own StopIfRunning covers a stale daemon.
+            }
+            showOverviewScreen();
+        })();
+    });
     initPalette({ index: settingsIndex, refresh: showSettings, save: saveSetting });
     setPaletteOpener(() => openPalette());
     // The daemon status line deep-links to its home: Settings → Daemon shows
