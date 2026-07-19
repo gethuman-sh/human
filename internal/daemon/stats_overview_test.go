@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/internal/audit"
+	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/stats"
 )
 
@@ -158,6 +160,69 @@ func TestBuildStatsOverview_emptyStores(t *testing.T) {
 	assert.Empty(t, ov.AuditByDay)
 	assert.Empty(t, ov.NetworkDecisions)
 	assert.Equal(t, started, ov.DaemonStartedAt, "DaemonStartedAt is propagated")
+}
+
+// TestBuildStatsOverview_tokenScanCachedWithinTTL proves the expensive JSONL
+// walk is cached daemon-side: two same-range overviews within the TTL trigger
+// exactly one scan, and both carry its tokens. This is what lets repeated polls
+// and re-renders read the cache instead of re-walking history.
+func TestBuildStatsOverview_tokenScanCachedWithinTTL(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var calls int32
+	scan := claude.TokenScan{
+		WindowFresh:     4200,
+		WindowCacheRead: 1300,
+		PerHour:         []claude.TokenHourBucket{{Bucket: "2026-03-20 11:00", Fresh: 4200, CacheRead: 1300}},
+	}
+	srv := &Server{
+		Logger:          zerolog.Nop(),
+		DaemonStartedAt: time.Now().UTC().Add(-90 * 24 * time.Hour),
+		TokenScanner: func(_, _, _ time.Time) (claude.TokenScan, error) {
+			atomic.AddInt32(&calls, 1)
+			return scan, nil
+		},
+	}
+
+	ctx := context.Background()
+	ov1, err := srv.buildStatsOverview(ctx, RangeDay)
+	require.NoError(t, err)
+	ov2, err := srv.buildStatsOverview(ctx, RangeDay)
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "same range within TTL scans once")
+	for _, ov := range []StatsOverview{ov1, ov2} {
+		assert.Equal(t, 4200, ov.Tokens.Fresh)
+		assert.Equal(t, 1300, ov.Tokens.CacheRead)
+		assert.Equal(t, scan.PerHour, ov.TokensPerHour)
+	}
+}
+
+// TestBuildStatsOverview_tokenScanCacheKeyedByRange proves the cache is keyed by
+// range: a day overview and a week overview each get their own scan, so a
+// range switch never serves the wrong window from cache.
+func TestBuildStatsOverview_tokenScanCacheKeyedByRange(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var calls int32
+	srv := &Server{
+		Logger:          zerolog.Nop(),
+		DaemonStartedAt: time.Now().UTC().Add(-90 * 24 * time.Hour),
+		TokenScanner: func(_, _, _ time.Time) (claude.TokenScan, error) {
+			atomic.AddInt32(&calls, 1)
+			return claude.TokenScan{}, nil
+		},
+	}
+
+	ctx := context.Background()
+	_, err := srv.buildStatsOverview(ctx, RangeDay)
+	require.NoError(t, err)
+	_, err = srv.buildStatsOverview(ctx, RangeWeek)
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "distinct ranges scan separately")
 }
 
 func TestParseRangeArg(t *testing.T) {

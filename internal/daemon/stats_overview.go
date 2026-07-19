@@ -99,23 +99,13 @@ func (s *Server) buildStatsOverview(ctx context.Context, r StatsRange) (StatsOve
 	}
 
 	// Tokens: current 5h window for the headline, per-hour buckets over the
-	// range for the panel. The JSONL scan is best-effort — any error leaves the
-	// token fields empty (the panel then shows its empty state) rather than
-	// failing the whole overview.
-	if root, err := claude.ClaudeProjectsRoot(); err == nil {
-		if summary, err := claude.CalculateUsage(claude.OSDirWalker{}, root, now); err == nil {
-			for _, mu := range summary.Models {
-				if mu == nil {
-					continue
-				}
-				ov.Tokens.Fresh += mu.InputTokens + mu.OutputTokens + mu.CacheCreate
-				ov.Tokens.CacheRead += mu.CacheRead
-			}
-		}
-		if buckets, err := claude.TokensByHour(claude.OSDirWalker{}, root, since, now); err == nil {
-			ov.TokensPerHour = buckets
-		}
-	}
+	// range for the panel — both from one cached JSONL scan (see
+	// scanTokensCached). The scan is best-effort: any error yields an empty scan
+	// so the panel shows its empty state rather than failing the whole overview.
+	scan := s.scanTokensCached(r, since, now, now)
+	ov.Tokens.Fresh = scan.WindowFresh
+	ov.Tokens.CacheRead = scan.WindowCacheRead
+	ov.TokensPerHour = scan.PerHour
 
 	// Tool calls: panel breakdown plus the ok/error headline split.
 	if s.StatsStore != nil {
@@ -157,6 +147,61 @@ func (s *Server) buildStatsOverview(ctx context.Context, r StatsRange) (StatsOve
 	}
 
 	return ov, nil
+}
+
+// statsTokenTTL is how long a range's token scan is served from cache. Only the
+// JSONL walk is expensive; the tool/audit/agent reads are cheap and the network
+// panel is a live snapshot, so just the walk is cached. A few seconds of
+// staleness on a 5h-window headline is imperceptible, and the TTL is what lets
+// repeated polls and re-renders read the cache instead of re-walking history.
+const statsTokenTTL = 3 * time.Second
+
+// tokenScanEntry is a cached scan with its expiry.
+type tokenScanEntry struct {
+	scan    claude.TokenScan
+	expires time.Time
+}
+
+// scanTokensCached returns the range's token scan, serving a non-expired cache
+// entry when one exists. The mutex is held across the walk, so concurrent
+// same-range requests serialize onto a single scan (the daemon side of the poll
+// pile-up fix) rather than each launching its own. A scanner error degrades to
+// an empty scan — the token panels then show their empty state, matching the
+// route's best-effort contract, and the empty result is not cached so the next
+// request retries.
+func (s *Server) scanTokensCached(r StatsRange, since, until, now time.Time) claude.TokenScan {
+	s.tokenMu.Lock()
+	defer s.tokenMu.Unlock()
+
+	if entry, ok := s.tokenCache[r]; ok && now.Before(entry.expires) {
+		return entry.scan
+	}
+
+	scanner := s.TokenScanner
+	if scanner == nil {
+		scanner = defaultTokenScan
+	}
+	scan, err := scanner(since, until, now)
+	if err != nil {
+		return claude.TokenScan{}
+	}
+
+	if s.tokenCache == nil {
+		s.tokenCache = make(map[StatsRange]tokenScanEntry)
+	}
+	s.tokenCache[r] = tokenScanEntry{scan: scan, expires: now.Add(statsTokenTTL)}
+	return scan
+}
+
+// defaultTokenScan is the production TokenScanner: one JSONL pass over the real
+// ~/.claude/projects tree. A missing root (Claude never ran) yields an empty
+// scan with no error, preserving the degrade-to-empty contract.
+func defaultTokenScan(since, until, now time.Time) (claude.TokenScan, error) {
+	root, err := claude.ClaudeProjectsRoot()
+	if err != nil {
+		return claude.TokenScan{}, nil
+	}
+	return claude.ScanTokens(claude.OSDirWalker{}, root, since, until, now)
 }
 
 // auditOverRange buckets audit events by UTC day and folds the per-day counts

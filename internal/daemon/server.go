@@ -21,6 +21,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/browser"
+	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/cliflags"
 	"github.com/gethuman-sh/human/internal/config"
@@ -96,6 +97,17 @@ type Server struct {
 	// Ideation owns the board's single agent-driven ideation session. nil
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
+
+	// TokenScanner performs the one expensive JSONL walk the stats view needs
+	// (current-window token split + per-hour buckets). Injectable so tests can
+	// count and stub it; nil falls back to defaultTokenScan over the real
+	// ~/.claude/projects tree.
+	TokenScanner func(since, until, now time.Time) (claude.TokenScan, error)
+	// tokenMu is held across the walk so concurrent same-range requests serialize
+	// onto one scan instead of each launching its own — the daemon side of the
+	// poll pile-up fix.
+	tokenMu    sync.Mutex
+	tokenCache map[StatsRange]tokenScanEntry
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
 
