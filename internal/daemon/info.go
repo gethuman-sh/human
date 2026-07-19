@@ -40,7 +40,11 @@ type DaemonInfo struct {
 	// about skew between the running daemon and the CLI binary.
 	// omitempty preserves backward-compatibility with daemon.json files
 	// written by older builds that do not emit this field.
-	Version  string        `json:"version,omitempty"`
+	Version string `json:"version,omitempty"`
+	// DaemonID is the stable, non-secret identifier this daemon stamps on every
+	// marker it posts, so a teammate can tell which machine's bot acted.
+	// omitempty keeps daemon.json written by older builds unmarshalling cleanly.
+	DaemonID string        `json:"daemon_id,omitempty"`
 	Projects []ProjectInfo `json:"projects,omitempty"`
 }
 

@@ -44,6 +44,10 @@ type StartOpts struct {
 	Workspace   string // directory to mount into container (default: cwd)
 	Rebuild     bool
 	Interactive bool // foreground TTY mode
+	// DaemonID is the posting daemon's stable, non-secret identifier. It reaches
+	// the container as HUMAN_DAEMON_ID so agent-posted markers (ready-for-review,
+	// plan-ready) can be attributed to the machine's bot like daemon-posted ones.
+	DaemonID string
 }
 
 // Manager orchestrates agent lifecycle using devcontainers.
@@ -200,7 +204,7 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 	cmd := append([]string{"claude"}, claudeArgs...)
 	execID, err := m.Docker.ExecCreate(ctx, containerID, cmd, devcontainer.ExecOptions{
 		User: remoteUser, AttachStdout: true, AttachStderr: true,
-		Env: []string{"HUMAN_AGENT_NAME=" + opts.Name},
+		Env: []string{"HUMAN_AGENT_NAME=" + opts.Name, "HUMAN_DAEMON_ID=" + opts.DaemonID},
 	})
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "creating agent exec")

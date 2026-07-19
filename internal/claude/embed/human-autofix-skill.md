@@ -140,7 +140,7 @@ Only after a DONE verdict.
 
 ### 7.1 Post the review handoff
 
-Post the review handoff comment on the bug (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically. The format is fixed so it can be parsed across trackers; `<short-shas>` come from `git log --grep=<WORK_KEY> --format='%h' HEAD` (comma-separated). In single-tracker topology OMIT the `engineering:` line entirely — the reviewer works from the bug key the comment sits on:
+Post the review handoff comment on the bug (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically. The format is fixed so it can be parsed across trackers; `<short-shas>` come from `git log --grep=<WORK_KEY> --format='%h' HEAD` (comma-separated). In single-tracker topology OMIT the `engineering:` line entirely — the reviewer works from the bug key the comment sits on. Append a `daemon: <daemon-id>` line carrying the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1); OMIT the `daemon:` line entirely when `HUMAN_DAEMON_ID` is unset or empty:
 
 ```bash
 human <tracker> issue comment add <BUG_KEY> "$(cat <<'HANDOFF_EOF'
@@ -148,6 +148,7 @@ human <tracker> issue comment add <BUG_KEY> "$(cat <<'HANDOFF_EOF'
 engineering: <ENG_KEY>
 branch: autofix/<work-key>
 commits: <short-shas>
+daemon: <daemon-id>
 HANDOFF_EOF
 )"
 ```

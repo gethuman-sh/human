@@ -46,7 +46,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // resolved marker). It is the success signal that authorizes reclaiming the
 // run's private worktree — every other exit KEEPS the worktree so uncommitted
 // work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), daemonID string, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -76,7 +76,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, diagnose, onHandoff, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, diagnose, onHandoff, daemonID, logger)
 			}
 		}
 	}
@@ -86,7 +86,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), daemonID string, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
@@ -145,7 +145,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 		return
 	}
 	body := failedHeaderFor(stage) + "\n" + failureMarkerBody(diagnose, agentName, errorType)
-	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
 	}
 }
