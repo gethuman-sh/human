@@ -28,13 +28,13 @@ Your job: parse that comment, run the `human-reviewer` agent against each review
    - `branch:` — the branch the reviewer should be on.
    - `commits:` — short SHAs, for cross-checking.
 
-   If the current branch does not match `branch:`, warn the user but proceed (the reviewer agent operates on the current branch; the user may have chosen to review from a different branch deliberately).
+   Do NOT proceed against a branch that disagrees with `branch:`. The reviewer's Step 0 binding gate checks out the handoff branch itself and returns `unreviewable` on any mismatch — never review "the current branch as-is" hoping it is close enough, and never post a verdict for code that is not the handed-off branch.
 
-4. **Run the reviewer per review key.** For each key in `engineering:` (or for `<PM_KEY>` when the line is absent), invoke the existing reviewer agent via the Task tool:
+4. **Run the reviewer per review key, bound to the handoff.** For each key in `engineering:` (or for `<PM_KEY>` when the line is absent), invoke the existing reviewer agent via the Task tool, threading the parsed `branch:`/`commits:` as the binding so the agent verifies the checkout before reviewing:
    ```
-   Task(subagent_type="human-reviewer", prompt="Review changes for ticket <REVIEW_KEY>")
+   Task(subagent_type="human-reviewer", prompt="Review changes for ticket <REVIEW_KEY> --branch=<branch> --commits=<commits>")
    ```
-   Each run writes `.human/reviews/<review_key_lowercased>.md`.
+   Each run writes `.human/reviews/<review_key_lowercased>.md`. Review ONLY the keys named in this handoff, and post markers ONLY on `<PM_KEY>` — never on any ticket the handoff does not name.
 
 5. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the outcome (`pass`, `pass with notes`, `fail`, or `unreviewable: <reason>`). If ANY reviewed key's Summary starts with `unreviewable`, the reviewer could not obtain that code — skip the pass/notes/fail roll-up entirely and go to the unreviewable branch of step 6. Otherwise roll them up into an overall verdict:
    - all pass → `pass`
