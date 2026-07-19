@@ -15,41 +15,93 @@ let latest = null;
 let error = "";
 let range = "24h";
 let timer = null;
-const POLL_MS = 5000;
+// inFlight guards against a second fetch stacking on the first: a poll tick or a
+// range-switch arriving mid-fetch sets pendingFetch instead of walking again.
+let inFlight = false;
+let pendingFetch = false;
+// polling tracks whether the self-rescheduling poll loop should keep arming its
+// next tick; stopStatsPoll clears it so an in-flight fetch's .finally does not
+// resurrect the timer after the view is left.
+let polling = false;
+// The token walk is the daemon's only expensive stats source and is cached with
+// a short TTL, so the live network panel — the only truly live source — can
+// refresh on a relaxed cadence that leaves the daemon headroom.
+const POLL_MS = 15000;
 export function initStatsView(getBindings) {
     bindings = getBindings;
+    // A fresh view starts blank with no fetch outstanding, so re-init clears any
+    // prior render/fetch state rather than inheriting a stale payload or a
+    // dangling in-flight flag.
+    latest = null;
+    error = "";
+    inFlight = false;
+    pendingFetch = false;
 }
 export function setStatsRange(r) {
     range = r;
     void showStats();
 }
-// showStats refreshes the payload for the current range and renders. Called on
-// every activation and on each poll tick; an error is caught into a banner
-// rather than left to blank the page (mirrors the agents view error path).
+// showStats paints first, then fetches. The synchronous render() shows the
+// header and a Loading state (or the last data) the instant the view activates,
+// so the section is never blank while the fetch is in flight. A fetch already
+// running is not doubled: pendingFetch flags a single follow-up that picks up
+// the current range, coalescing a mid-fetch range-switch or poll tick into one
+// refetch. Errors land in a banner rather than blanking the page (mirrors the
+// agents view error path).
 export async function showStats() {
     if (!bindings)
         return;
+    render(); // first paint: header + Loading / last data, before any await
+    if (inFlight) {
+        pendingFetch = true;
+        return;
+    }
+    inFlight = true;
     try {
-        latest = await bindings().Stats(range);
-        error = "";
+        do {
+            pendingFetch = false;
+            try {
+                latest = await bindings().Stats(range);
+                error = "";
+            }
+            catch (err) {
+                error = err instanceof Error ? err.message : String(err);
+            }
+            render();
+        } while (pendingFetch); // a range-switch mid-fetch resolves to the last-clicked range
     }
-    catch (err) {
-        error = err instanceof Error ? err.message : String(err);
+    finally {
+        inFlight = false;
     }
-    render();
 }
 function stopStatsPollTimer() {
     if (timer !== null) {
-        clearInterval(timer);
+        clearTimeout(timer);
         timer = null;
     }
 }
-export function startStatsPoll() {
-    if (timer !== null)
+// scheduleStatsPoll arms the next poll only after the current fetch resolves, so
+// ticks never overlap (a slow fetch simply delays the next tick rather than
+// stacking a second one). It re-checks polling each time so a stop that lands
+// mid-fetch is honored.
+function scheduleStatsPoll() {
+    if (!polling)
         return;
-    timer = window.setInterval(() => void showStats(), POLL_MS);
+    timer = window.setTimeout(() => {
+        timer = null;
+        if (!polling)
+            return;
+        void showStats().finally(scheduleStatsPoll);
+    }, POLL_MS);
+}
+export function startStatsPoll() {
+    if (polling)
+        return;
+    polling = true;
+    scheduleStatsPoll();
 }
 export function stopStatsPoll() {
+    polling = false;
     stopStatsPollTimer();
 }
 // rangeCoversHistory reports whether the daemon has been up at least as long as
