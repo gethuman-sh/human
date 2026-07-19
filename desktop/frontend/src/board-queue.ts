@@ -159,6 +159,34 @@ export function sortByHandOrder<T extends { key: string }>(cards: T[], order: st
   );
 }
 
+export interface BoardPayload<C> {
+  cards?: C[];
+  dockerAvailable?: boolean;
+  error?: string;
+  columnOrder?: Record<string, string[]>;
+}
+
+export interface BoardState<C> {
+  cards: C[];
+  dockerAvailable: boolean;
+  error: string;
+  columnOrder?: Record<string, string[]>;
+}
+
+// boardStateFromPayload normalizes a BoardData fetch into the runtime `current`
+// state, so every reload site rebuilds `current` through ONE path: bug 631 was a
+// field-by-field rebuild that silently dropped the board-level columnOrder the
+// daemon ships, collapsing the hand-sort back to fetch order. suppressError blanks
+// the payload error for the startup quick phase (avoids a flickering banner).
+export function boardStateFromPayload<C>(payload: BoardPayload<C>, suppressError = false): BoardState<C> {
+  return {
+    cards: payload.cards || [],
+    dockerAvailable: !!payload.dockerAvailable,
+    error: suppressError ? "" : payload.error || "",
+    columnOrder: payload.columnOrder,
+  };
+}
+
 // insertKeyAt rebuilds a column's hand-sorted key list after a same-column
 // drop: the dragged key lands before the first resting card whose vertical
 // midpoint is below the drop point, or last when the drop was below them all.

@@ -39,6 +39,7 @@ import {
   badgeInfo,
   sortByHandOrder,
   insertKeyAt,
+  boardStateFromPayload,
 } from "./board-queue.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 
@@ -1607,13 +1608,9 @@ async function initialLoad(): Promise<void> {
   render();
   try {
     const quick = await go().CardsQuick();
-    current = {
-      cards: quick.cards ?? [],
-      dockerAvailable: !!quick.dockerAvailable,
-      // Suppress the quick-phase error: the full reconcile surfaces it, and
-      // clearing it here avoids a banner that flickers away a moment later.
-      error: "",
-    };
+    // Suppress the quick-phase error: the full reconcile surfaces it, and
+    // clearing it here avoids a banner that flickers away a moment later.
+    current = boardStateFromPayload(quick, true);
     boardLoading = false;
     stagesLoading = true;
     render();
@@ -1640,11 +1637,7 @@ async function reconcile(): Promise<void> {
   try {
     const data = await go().Cards();
     if (epoch !== reconcileEpoch) return;
-    current = {
-      cards: data.cards ?? [],
-      dockerAvailable: !!data.dockerAvailable,
-      error: data.error ?? "",
-    };
+    current = boardStateFromPayload(data);
   } catch (err) {
     if (epoch !== reconcileEpoch) return;
     current = { cards: [], dockerAvailable: false, error: errMessage(err) };
