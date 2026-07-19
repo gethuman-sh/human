@@ -87,9 +87,9 @@ function escapeHtml(s) {
         .replace(/"/g, "&quot;");
 }
 function fmtNum(n) {
-    if (n >= 1000000)
+    if (n >= 1_000_000)
         return (n / 1e6).toFixed(1) + "M";
-    if (n >= 1000)
+    if (n >= 1_000)
         return (n / 1e3).toFixed(1) + "K";
     return String(n);
 }

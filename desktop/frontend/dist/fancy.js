@@ -28,7 +28,7 @@ const EFFECTS = {
 };
 const THEME_KEY = "human.theme";
 const MOTE_TARGET = 32;
-const STREAK_WINDOW_MS = 10000;
+const STREAK_WINDOW_MS = 10_000;
 // --- Theme state --------------------------------------------------------
 export function isFancy() {
     return document.documentElement.dataset.theme === "fancy";
@@ -177,7 +177,7 @@ function removeAfterAnimation(el, fallbackMs) {
     window.setTimeout(() => el.remove(), fallbackMs);
 }
 function cssEscape(v) {
-    return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(v) : v.replace(/["\\]/g, "\\$&");
+    return globalThis.CSS?.escape?.(v) ?? v.replace(/["\\]/g, "\\$&");
 }
 // --- Cursor spotlight + holographic sheen (shared pointermove) ------------
 let spotlight = null;

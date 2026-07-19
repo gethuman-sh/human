@@ -103,11 +103,11 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
     return {
       cls: "decision",
       text: "decision needed",
-      title: "The review offers " + card.options.length + " ways forward — open the card to choose",
+      title: `The review offers ${card.options.length} ways forward — open the card to choose`,
     };
   }
   if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
-    return { cls: "warning", text: "⚠ review found problems", title: "Review verdict: " + (card.verdict ?? "") };
+    return { cls: "warning", text: "⚠ review found problems", title: `Review verdict: ${card.verdict ?? ""}` };
   }
   if (card.stage === "verification" && card.state === "done" && !card.branch) {
     // A passed review with no recorded branch has nothing to ship — deploying
@@ -157,6 +157,34 @@ export function sortByHandOrder<T extends { key: string }>(cards: T[], order: st
   return cards.sort(
     (a, b) => (pos.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (pos.get(b.key) ?? Number.MAX_SAFE_INTEGER),
   );
+}
+
+export interface BoardPayload<C> {
+  cards?: C[];
+  dockerAvailable?: boolean;
+  error?: string;
+  columnOrder?: Record<string, string[]>;
+}
+
+export interface BoardState<C> {
+  cards: C[];
+  dockerAvailable: boolean;
+  error: string;
+  columnOrder?: Record<string, string[]>;
+}
+
+// boardStateFromPayload normalizes a BoardData fetch into the runtime `current`
+// state, so every reload site rebuilds `current` through ONE path: bug 631 was a
+// field-by-field rebuild that silently dropped the board-level columnOrder the
+// daemon ships, collapsing the hand-sort back to fetch order. suppressError blanks
+// the payload error for the startup quick phase (avoids a flickering banner).
+export function boardStateFromPayload<C>(payload: BoardPayload<C>, suppressError = false): BoardState<C> {
+  return {
+    cards: payload.cards || [],
+    dockerAvailable: !!payload.dockerAvailable,
+    error: suppressError ? "" : payload.error || "",
+    columnOrder: payload.columnOrder,
+  };
 }
 
 // insertKeyAt rebuilds a column's hand-sorted key list after a same-column

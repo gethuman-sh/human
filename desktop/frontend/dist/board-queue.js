@@ -77,11 +77,11 @@ export function badgeInfo(card) {
         return {
             cls: "decision",
             text: "decision needed",
-            title: "The review offers " + card.options.length + " ways forward — open the card to choose",
+            title: `The review offers ${card.options.length} ways forward — open the card to choose`,
         };
     }
     if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
-        return { cls: "warning", text: "⚠ review found problems", title: "Review verdict: " + (card.verdict ?? "") };
+        return { cls: "warning", text: "⚠ review found problems", title: `Review verdict: ${card.verdict ?? ""}` };
     }
     if (card.stage === "verification" && card.state === "done" && !card.branch) {
         // A passed review with no recorded branch has nothing to ship — deploying
@@ -130,6 +130,19 @@ export function sortByHandOrder(cards, order) {
         return cards;
     const pos = new Map(order.map((k, i) => [k, i]));
     return cards.sort((a, b) => (pos.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (pos.get(b.key) ?? Number.MAX_SAFE_INTEGER));
+}
+// boardStateFromPayload normalizes a BoardData fetch into the runtime `current`
+// state, so every reload site rebuilds `current` through ONE path: bug 631 was a
+// field-by-field rebuild that silently dropped the board-level columnOrder the
+// daemon ships, collapsing the hand-sort back to fetch order. suppressError blanks
+// the payload error for the startup quick phase (avoids a flickering banner).
+export function boardStateFromPayload(payload, suppressError = false) {
+    return {
+        cards: payload.cards || [],
+        dockerAvailable: !!payload.dockerAvailable,
+        error: suppressError ? "" : payload.error || "",
+        columnOrder: payload.columnOrder,
+    };
 }
 // insertKeyAt rebuilds a column's hand-sorted key list after a same-column
 // drop: the dragged key lands before the first resting card whose vertical

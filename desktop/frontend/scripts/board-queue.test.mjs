@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, forwardDropAllowed, planReady, badgeInfo, sortByHandOrder, insertKeyAt } from "../build/board-queue.js";
+import { queueOf, forwardDropAllowed, planReady, badgeInfo, sortByHandOrder, insertKeyAt, boardStateFromPayload } from "../build/board-queue.js";
 
 // SC-355 regression: a running or failed planning card must render in the
 // Engineering column where the user dropped it — not snap back to Product.
@@ -106,6 +106,48 @@ test("sortByHandOrder: no saved order leaves fetch order untouched", () => {
   assert.deepEqual(cards.map((c) => c.key), ["B", "A"]);
   sortByHandOrder(cards, []);
   assert.deepEqual(cards.map((c) => c.key), ["B", "A"]);
+});
+
+// SC-631 regression: the payload-to-state mapping must carry the board-level
+// columnOrder the daemon ships. A field-by-field rebuild (cards/dockerAvailable/
+// error only) dropped it, collapsing the hand-sort back to fetch order on every
+// reload. These pin the mapping so that class of bug cannot ship again.
+test("boardStateFromPayload carries columnOrder through the mapping (SC-631)", () => {
+  const payload = {
+    cards: [{ key: "A" }, { key: "B" }, { key: "C" }],
+    dockerAvailable: true,
+    columnOrder: { product: ["C", "A", "B"] },
+  };
+  const state = boardStateFromPayload(payload);
+  assert.deepEqual(state.columnOrder, { product: ["C", "A", "B"] });
+  assert.deepEqual(state.cards.map((c) => c.key), ["A", "B", "C"]);
+  assert.equal(state.dockerAvailable, true);
+  assert.equal(state.error, "");
+});
+
+test("boardStateFromPayload state feeds sortByHandOrder to the saved order (SC-631)", () => {
+  const payload = {
+    cards: [{ key: "A" }, { key: "B" }, { key: "C" }],
+    dockerAvailable: true,
+    columnOrder: { product: ["C", "A", "B"] },
+  };
+  const state = boardStateFromPayload(payload);
+  const sorted = sortByHandOrder([...state.cards], state.columnOrder?.product);
+  assert.deepEqual(sorted.map((c) => c.key), ["C", "A", "B"]);
+});
+
+test("boardStateFromPayload suppresses error but keeps columnOrder for quick phase (SC-631)", () => {
+  const state = boardStateFromPayload({ error: "boom", columnOrder: { product: ["A"] } }, true);
+  assert.equal(state.error, "");
+  assert.deepEqual(state.columnOrder, { product: ["A"] });
+});
+
+test("boardStateFromPayload normalizes an empty payload (SC-631)", () => {
+  const state = boardStateFromPayload({});
+  assert.deepEqual(state.cards, []);
+  assert.equal(state.dockerAvailable, false);
+  assert.equal(state.error, "");
+  assert.equal(state.columnOrder, undefined);
 });
 
 // SC-624: a same-column drop inserts the dragged key at the pointer position.
