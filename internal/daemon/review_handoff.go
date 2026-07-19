@@ -42,6 +42,36 @@ func ParseEngineeringKeysFromHandoff(body string) []string {
 	return nil
 }
 
+// ParseCommitsFromHandoff extracts the short SHAs listed on the `commits:` line
+// of a [human:ready-for-review] comment body. Returns nil when the body is not a
+// handoff block or carries no commits line. The commits are the SHAs a reviewer
+// or the deploy binds against; verifying they exist on the branch is what keeps
+// a handoff from naming commits that live nowhere but a local checkout (735).
+//
+// Like ParseEngineeringKeysFromHandoff, the body must START with
+// ReadyForReviewHeader so a comment merely quoting the header does not register.
+func ParseCommitsFromHandoff(body string) []string {
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, ReadyForReviewHeader) {
+		return nil
+	}
+	for line := range strings.SplitSeq(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "commits:")
+		if !ok {
+			continue
+		}
+		var commits []string
+		for sha := range strings.SplitSeq(rest, ",") {
+			if sha = strings.TrimSpace(sha); sha != "" {
+				commits = append(commits, sha)
+			}
+		}
+		return commits
+	}
+	return nil
+}
+
 // ParsePRFromHandoff extracts the pull-request URL from the optional `pr:`
 // line of a [human:ready-for-review] comment body. Returns "" when the body is
 // not a handoff block or carries no pr: line (the line is optional — handoffs
