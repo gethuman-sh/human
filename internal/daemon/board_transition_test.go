@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,11 +16,15 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
-// fakeCommenter records AddComment bodies and returns canned ListComments.
+// fakeCommenter records AddComment bodies and returns canned ListComments. It
+// assigns each posted comment a monotonic numeric id, mirroring the
+// server-assigned, server-ordered ids every real backend returns — the claim
+// gate's "lowest comment id wins" arbitration reads them.
 type fakeCommenter struct {
 	comments []tracker.Comment
 	added    []string
 	addErr   error
+	nextID   int
 }
 
 func (f *fakeCommenter) ListComments(_ context.Context, _ string) ([]tracker.Comment, error) {
@@ -31,7 +36,8 @@ func (f *fakeCommenter) AddComment(_ context.Context, _ string, body string) (*t
 		return nil, f.addErr
 	}
 	f.added = append(f.added, body)
-	c := tracker.Comment{Body: body, Created: time.Now()}
+	f.nextID++
+	c := tracker.Comment{ID: strconv.Itoa(f.nextID), Body: body, Created: time.Now()}
 	f.comments = append(f.comments, c)
 	return &c, nil
 }
