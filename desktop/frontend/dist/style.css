@@ -832,6 +832,36 @@ body {
   color: var(--muted);
 }
 
+/* Header toggle revealing/concealing user-hidden tickets. Appears only while
+   hidden tickets exist (updateHideToggle), so it never sits dead in the
+   header. justify-content: space-between on .app-header pushes it right. */
+.hide-toggle {
+  font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.hide-toggle:hover {
+  border-color: var(--accent);
+}
+
+/* Marks a hidden card while it is revealed via Unhide — without it, revealed
+   and normal cards would be indistinguishable. */
+.hidden-pill {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  font: 10px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--muted);
+  vertical-align: 1px;
+}
+
 /* Bottom status bar, mirroring the TUI's "● Daemon running" status line. Sits
    below the board as a fixed-height footer in the app-main flex column. */
 .statusbar {

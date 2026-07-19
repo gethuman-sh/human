@@ -13,7 +13,7 @@ import { initPermissions } from "./permissions.js";
 import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsview.js";
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, badgeInfo, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, badgeInfo, sortByHandOrder, insertKeyAt, } from "./board-queue.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
@@ -73,6 +73,12 @@ const QUEUE_VERB = {
 };
 let current = { cards: [], dockerAvailable: true, error: "" };
 let dragging = null;
+// showHidden reveals user-hidden cards (marked with an "H" pill) instead of
+// filtering them out. Session-local so the board always starts clean.
+let showHidden = false;
+function cardVisible(card) {
+    return !card.hidden || showHidden;
+}
 // Two-phase load state. boardLoading covers the first fetch before any titles
 // exist (the board shows a centered spinner). stagesLoading covers the window
 // after titles render but before the comment scan resolves each card's real
@@ -137,9 +143,15 @@ function renderCard(card) {
         meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
     if (card.prURL)
         meta.push(`<a href="${escapeAttr(card.prURL)}" target="_blank">PR</a>`);
+    // The H pill marks a hidden card while it is revealed via the header's
+    // Unhide toggle — without it, revealed and normal cards would be
+    // indistinguishable and re-hiding would feel like cards vanishing at random.
+    const hiddenPill = card.hidden
+        ? `<span class="hidden-pill" title="Hidden ticket — shown via Unhide">H</span>`
+        : "";
     el.innerHTML = `
     <div class="card-key">${escapeHtml(card.key)}</div>
-    <div class="card-title" title="${escapeAttr(card.title)}">${escapeHtml(card.title)}</div>
+    <div class="card-title" title="${escapeAttr(card.title)}">${hiddenPill}${escapeHtml(card.title)}</div>
     <div class="card-meta">${meta.join("")}</div>
     ${card.error ? `<div class="card-error">${escapeHtml(card.error)}</div>` : ""}
   `;
@@ -266,6 +278,17 @@ function showCardMenu(card, x, y) {
         }
         menu.appendChild(mockItem);
     }
+    // Hiding is view hygiene, not ticket lifecycle: parked noise disappears
+    // from the board while the ticket on the tracker stays untouched.
+    const hideItem = document.createElement("button");
+    hideItem.type = "button";
+    hideItem.className = "context-menu-item";
+    hideItem.textContent = card.hidden ? "Unhide ticket" : "Hide ticket";
+    hideItem.addEventListener("click", () => {
+        menu.remove();
+        toggleCardHidden(card);
+    });
+    menu.appendChild(hideItem);
     const closeItem = document.createElement("button");
     closeItem.type = "button";
     closeItem.className = "context-menu-item danger";
@@ -304,8 +327,10 @@ function renderColumn(queue) {
     const col = document.createElement("section");
     col.className = "column";
     col.dataset.stage = queue;
-    // Bug tickets live in the Bugs pane, never in the workflow columns.
-    const cards = current.cards.filter((c) => queueOf(c) === queue && !c.bug);
+    // Bug tickets live in the Bugs pane, never in the workflow columns; hidden
+    // tickets only render while revealed. The saved hand order sorts what's left.
+    const cards = current.cards.filter((c) => queueOf(c) === queue && !c.bug && cardVisible(c));
+    sortByHandOrder(cards, current.columnOrder?.[queue]);
     const header = document.createElement("div");
     header.className = "column-header";
     if (queue === "product") {
@@ -323,12 +348,11 @@ function renderColumn(queue) {
     body.className = "column-body";
     for (const card of cards)
         body.appendChild(renderCard(card));
-    if (queue === "product" || QUEUE_TRANSITION_TO[queue] !== undefined) {
-        // Drop targets are the queues a drag can act on: product (idea promotion)
-        // and the transition-launching queues. Ready to Deploy is deliberately
-        // NOT a target — cards arrive there only by passing review.
-        markQueueTarget(body, queue);
-    }
+    // Every column is at least a same-column sort target; product additionally
+    // accepts idea promotion and the transition queues launch stages. Dropping
+    // INTO Ready to Deploy stays impossible (dropAllowed gates it) — cards
+    // arrive there only by passing review, but sorting within it is fine.
+    markQueueTarget(body, queue);
     col.appendChild(body);
     return col;
 }
@@ -343,7 +367,7 @@ function renderIdeaSpace() {
     // (fancy tint, clear sweep) anchored to the space as a whole.
     space.className = "idea-space";
     space.dataset.stage = "ideas";
-    const ideas = current.cards.filter((c) => queueOf(c) === "ideas" && !c.bug);
+    const ideas = current.cards.filter((c) => queueOf(c) === "ideas" && !c.bug && cardVisible(c));
     const grid = document.createElement("div");
     grid.className = "idea-space-grid";
     const subcols = [];
@@ -466,7 +490,7 @@ function renderBugs() {
         return;
     const scrollByStage = captureColumnScroll(host);
     host.innerHTML = "";
-    const bugs = current.cards.filter((c) => c.bug);
+    const bugs = current.cards.filter((c) => c.bug && cardVisible(c));
     const gridBugs = bugs.filter((c) => bugAreaOf(c) === "grid");
     const fixBugs = bugs.filter((c) => bugAreaOf(c) !== "grid");
     const ready = bugs.filter(isReadyToDeploy);
@@ -763,6 +787,14 @@ function dropAllowed(target) {
         return bugAreaOf(card) === "grid" || isReworkable(card);
     }
     const toQueue = target.dataset.dropQueue || "";
+    // A drop back into the card's own column is a local reorder — it launches
+    // nothing, so neither the Docker gate nor forward-adjacency applies.
+    if (!card.bug && toQueue === queueOf(card))
+        return true;
+    // Ready to Deploy is never a transition target — cards earn their way in by
+    // passing review; only the same-column sort above may drop here.
+    if (toQueue === "deploy")
+        return false;
     // forwardDropAllowed owns forward-adjacency, the Code rework re-drop, and the
     // Engineering->Code plan-ready gate; targetEnabled keeps the local Docker gate.
     return forwardDropAllowed(card, toQueue) && targetEnabled(toQueue);
@@ -779,6 +811,19 @@ function setHoverTarget(target) {
     const ok = dropAllowed(target);
     target.classList.toggle("drop-ok", ok);
     target.classList.toggle("drop-reject", !ok);
+    // The overlay verb must state what the drop DOES: a same-column drop sorts,
+    // it never launches, so the transition verb would lie ("Build it" on a card
+    // already in Code). Recomputed on every hover since the same body serves both.
+    const drag = dragging;
+    if (ok && target.dataset.drop === "queue" && drag) {
+        const card = current.cards.find((c) => c.key === drag.key);
+        const sorting = !!card && target.dataset.dropQueue === queueOf(card);
+        const verb = sorting ? "Sort here" : QUEUE_VERB[target.dataset.dropQueue || ""];
+        if (verb)
+            target.dataset.verb = verb;
+        else
+            delete target.dataset.verb;
+    }
 }
 function makeDragGhost(card) {
     const ghost = document.createElement("div");
@@ -910,6 +955,13 @@ function performDrop(target, info, pt) {
         return;
     }
     const toQueue = target.dataset.dropQueue || "";
+    const dropped = current.cards.find((c) => c.key === info.key);
+    if (dropped && !dropped.bug && toQueue === queueOf(dropped)) {
+        // A drop into the card's own column sorts it — mirrors the idea-space
+        // local reorder, never a transition.
+        reorderWithinQueue(toQueue, info.key, pt.y);
+        return;
+    }
     if (toQueue === "product" && info.stage === "ideas") {
         // Promotion is a conversation, not a stage transition: the evolve-mode
         // ideation session rewrites the ticket in place and removes the idea
@@ -922,6 +974,38 @@ function performDrop(target, info, pt) {
         return;
     celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: false });
     void transition(info.key, info.title, info.stage, to);
+}
+// reorderWithinQueue persists a same-column drop as the queue's new hand
+// order, read from the live DOM so the dragged card lands exactly where the
+// pointer released among the cards the user was looking at. Optimistic like
+// SetIdeaColumn: render from the new order immediately, snap back via
+// reconcile only if the write fails. Hidden cards are absent from the DOM and
+// so from the saved list — they simply re-append after it when revealed.
+function reorderWithinQueue(queue, key, dropY) {
+    const body = document.querySelector(`.column[data-stage="${queue}"] .column-body`);
+    if (!body)
+        return;
+    const resting = [];
+    const midpoints = [];
+    for (const el of Array.from(body.querySelectorAll(".card"))) {
+        const k = el.dataset.key || "";
+        if (!k || k === key)
+            continue;
+        const r = el.getBoundingClientRect();
+        resting.push(k);
+        midpoints.push(r.top + r.height / 2);
+    }
+    const keys = insertKeyAt(resting, midpoints, key, dropY);
+    if (!current.columnOrder)
+        current.columnOrder = {};
+    current.columnOrder[queue] = keys;
+    render();
+    void go()
+        .SetColumnOrder(queue, keys)
+        .catch((err) => {
+        showError(errMessage(err));
+        void reconcile();
+    });
 }
 // promoteIdea opens the ideation panel in evolve mode, seeded with the idea
 // card's content. An active session must be explicitly replaced — the daemon
@@ -1135,10 +1219,55 @@ function render() {
     // The detail panel lives outside #board, so the rebuild above never touches
     // it — it only needs its card data refreshed from the new board state.
     refreshTicketDetail();
+    updateHideToggle();
 }
 function showError(msg) {
     current.error = msg;
     render();
+}
+// toggleCardHidden parks a ticket off the board or restores it. Optimistic
+// like SetIdeaColumn: flip and render immediately, snap back via reconcile
+// only if the write fails.
+function toggleCardHidden(card) {
+    card.hidden = !card.hidden;
+    render();
+    void go()
+        .SetCardHidden(card.key, !!card.hidden)
+        .catch((err) => {
+        showError(errMessage(err));
+        void reconcile();
+    });
+}
+// updateHideToggle keeps the header's Unhide/Hide button in sync: present only
+// while hidden tickets exist (labeled with the count), toggling whether they
+// render with their H pill or stay filtered out. When the last hidden ticket
+// is unhidden the reveal state resets, so the button never sticks around dead.
+function updateHideToggle() {
+    const header = document.getElementById("app-header");
+    if (!header)
+        return;
+    let btn = document.getElementById("hide-toggle");
+    const hiddenCount = current.cards.filter((c) => c.hidden).length;
+    if (hiddenCount === 0) {
+        showHidden = false;
+        btn?.remove();
+        return;
+    }
+    if (!btn) {
+        btn = document.createElement("button");
+        btn.id = "hide-toggle";
+        btn.type = "button";
+        btn.className = "hide-toggle";
+        btn.addEventListener("click", () => {
+            showHidden = !showHidden;
+            render();
+        });
+        header.appendChild(btn);
+    }
+    btn.textContent = showHidden ? `Hide hidden (${hiddenCount})` : `Unhide (${hiddenCount})`;
+    btn.title = showHidden
+        ? "Conceal the revealed hidden tickets again"
+        : "Reveal hidden tickets (marked with an H pill)";
 }
 function renderDaemonStatus() {
     // Mirrors the TUI's bottom status line ("● Daemon running"/"stopped").

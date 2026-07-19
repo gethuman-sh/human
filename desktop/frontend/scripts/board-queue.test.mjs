@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, forwardDropAllowed, planReady, badgeInfo } from "../build/board-queue.js";
+import { queueOf, forwardDropAllowed, planReady, badgeInfo, sortByHandOrder, insertKeyAt } from "../build/board-queue.js";
 
 // SC-355 regression: a running or failed planning card must render in the
 // Engineering column where the user dropped it — not snap back to Product.
@@ -90,4 +90,31 @@ test("open options render a decision-needed badge over the review warning", () =
   assert.match(info.text, /decision needed/);
   // Without options the same card falls back to the review warning.
   assert.equal(badgeInfo({ ...card, options: [] }).cls, "warning");
+});
+
+// SC-624: columns render in the user's hand-sorted order; cards without a
+// saved slot keep fetch order after the sorted ones.
+test("sortByHandOrder: listed keys first in saved order, rest stable after", () => {
+  const cards = [{ key: "A" }, { key: "B" }, { key: "C" }, { key: "D" }];
+  sortByHandOrder(cards, ["C", "A"]);
+  assert.deepEqual(cards.map((c) => c.key), ["C", "A", "B", "D"]);
+});
+
+test("sortByHandOrder: no saved order leaves fetch order untouched", () => {
+  const cards = [{ key: "B" }, { key: "A" }];
+  sortByHandOrder(cards, undefined);
+  assert.deepEqual(cards.map((c) => c.key), ["B", "A"]);
+  sortByHandOrder(cards, []);
+  assert.deepEqual(cards.map((c) => c.key), ["B", "A"]);
+});
+
+// SC-624: a same-column drop inserts the dragged key at the pointer position.
+test("insertKeyAt places dragged key by drop midpoint", () => {
+  // Cards A(mid 100), B(mid 200), C(mid 300).
+  const resting = ["A", "B", "C"];
+  const mids = [100, 200, 300];
+  assert.deepEqual(insertKeyAt(resting, mids, "X", 50), ["X", "A", "B", "C"]);
+  assert.deepEqual(insertKeyAt(resting, mids, "X", 150), ["A", "X", "B", "C"]);
+  assert.deepEqual(insertKeyAt(resting, mids, "X", 999), ["A", "B", "C", "X"]);
+  assert.deepEqual(insertKeyAt([], [], "X", 10), ["X"]);
 });
