@@ -30,8 +30,8 @@ type Meta struct {
 	ImageName     string    `json:"image_name"`
 	Status        Status    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
-	StartedAt     time.Time `json:"started_at"`
-	StoppedAt     time.Time `json:"stopped_at"`
+	StartedAt     time.Time `json:"started_at,omitzero"`
+	StoppedAt     time.Time `json:"stopped_at,omitzero"`
 	WorkspaceDir  string    `json:"workspace_dir"`
 	RemoteUser    string    `json:"remote_user"`
 	DaemonAddr    string    `json:"daemon_addr,omitempty"`

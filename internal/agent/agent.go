@@ -34,7 +34,7 @@ type Meta struct {
 	Prompt        string    `json:"prompt,omitempty"`
 	Status        Status    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
-	StoppedAt     time.Time `json:"stopped_at"`
+	StoppedAt     time.Time `json:"stopped_at,omitzero"`
 	SkipPerms     bool      `json:"skip_perms,omitempty"`
 	Model         string    `json:"model,omitempty"`
 	ConfigDir     string    `json:"config_dir,omitempty"`
