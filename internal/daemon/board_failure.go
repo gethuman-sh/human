@@ -41,7 +41,12 @@ const genericStageFailure = "agent exited without completing the stage"
 // commenterFor resolves the PM-role commenter lazily (per event) so the watcher
 // holds no tracker handle across its lifetime; the PM commenter MUST be
 // resolved by role, never by key prefix (both trackers may share a name).
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, logger zerolog.Logger) {
+// onHandoff, when non-nil, is fired with the exiting agent's name the moment
+// its stage is observed to have ended cleanly (a done/handoff or terminal
+// resolved marker). It is the success signal that authorizes reclaiming the
+// run's private worktree — every other exit KEEPS the worktree so uncommitted
+// work is never destroyed (SC-731). Best-effort/idempotent by contract.
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -71,7 +76,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, diagnose, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, diagnose, onHandoff, logger)
 			}
 		}
 	}
@@ -81,7 +86,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
@@ -100,6 +105,11 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	// only treat the exit as a failure when that did NOT happen.
 	_, state := latestStageState(comments, stage)
 	if state == BoardDone {
+		// A clean finish is the positive success signal: authorize reclaiming the
+		// run's worktree (the work is safely committed on its branch).
+		if onHandoff != nil {
+			onHandoff(agentName)
+		}
 		if stage == BoardImplementation && chainReview != nil {
 			// Only chain a review for a branch this machine can resolve; a
 			// board-context fix leaves its branch local on the machine that produced
@@ -127,6 +137,11 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	// exactly what let the same defect class ship again on Planning. Surface the
 	// card as resolved, not red, and do not chain (there is no branch to review).
 	if state == BoardResolved {
+		// A terminal resolved marker (no-fix-needed / nothing-to-do) is a clean
+		// stop with no work to lose: reclaim the worktree like a handoff.
+		if onHandoff != nil {
+			onHandoff(agentName)
+		}
 		return
 	}
 	body := failedHeaderFor(stage) + "\n" + failureMarkerBody(diagnose, agentName, errorType)

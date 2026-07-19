@@ -626,7 +626,7 @@ func TestExecClaudeDetached_continueFlag(t *testing.T) {
 	t.Cleanup(mgr.teeWG.Wait)
 
 	opts := StartOpts{Name: "flagged", Prompt: "resume this", SkipPerms: true}
-	if _, err := mgr.execClaudeDetached(context.Background(), "c", "vscode", "", opts, "--continue"); err != nil {
+	if _, err := mgr.execClaudeDetached(context.Background(), "c", "vscode", "", "", opts, "--continue"); err != nil {
 		t.Fatalf("execClaudeDetached: %v", err)
 	}
 

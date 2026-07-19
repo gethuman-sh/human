@@ -103,7 +103,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 
 	var executionID string
 	if !opts.Interactive && opts.Prompt != "" {
-		exe, err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, worktree, opts)
+		exe, err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, worktree, projectDir, opts)
 		if err != nil {
 			// The agent process never started; don't leave a container tracked
 			// as a running agent. Best-effort teardown, then surface the error.
@@ -193,7 +193,7 @@ func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDi
 // follow-up flags (e.g. "--continue") so SendMessage can resume the agent's
 // existing session; Start passes none. Errors are returned so a failed launch is
 // not silently reported as a running agent.
-func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser, worktree string, opts StartOpts, extraArgs ...string) (*Execution, error) {
+func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser, worktree, repoDir string, opts StartOpts, extraArgs ...string) (*Execution, error) {
 	claudeArgs := m.BuildClaudeArgs(opts)
 	claudeArgs = append(claudeArgs, extraArgs...)
 	claudeArgs = append(claudeArgs, "-p", opts.Prompt)
@@ -211,7 +211,7 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 	exe, logErr := NewExecution(LaunchRecord{
 		ID: newExecID(), Agent: opts.Name, Prompt: opts.Prompt,
 		Argv: cmd, Model: opts.Model, ContainerID: containerID, StartedAt: time.Now(),
-		Worktree: worktree,
+		Worktree: worktree, RepoDir: repoDir,
 	})
 
 	// ExecAttach starts the exec; closing the hijacked stream detaches without
@@ -313,10 +313,14 @@ func (m *Manager) stopLocked(ctx context.Context, name string) error {
 		_ = devcontainer.DeleteMeta(meta.Name)
 	}
 
-	// Worktree lifecycle rides this choke point: a COMPLETED run's private
-	// worktree is removed; a reaped/failed run's is KEPT beside its execution
-	// log for forensics/resume and swept later by PruneExecutions.
-	if meta.Worktree != "" && meta.ProjectDir != "" && stopReason(meta) == "completed" {
+	// Worktree lifecycle rides this choke point. The gate is positive success,
+	// not "did not fail": only a run that posted its handoff (work committed on a
+	// branch) has its private worktree removed. Every other ending — a reaped
+	// run, or a clean exit that never handed off — KEEPS the worktree beside its
+	// execution log for forensics/resume, swept later by PruneExecutions. A
+	// no-handoff exit 0 is precisely the data-loss case where uncommitted work
+	// exists to lose, so it must default to keep (SC-731).
+	if meta.Worktree != "" && meta.ProjectDir != "" && meta.Handoff {
 		_ = gitrepo.WorktreeRemove(ctx, meta.ProjectDir, meta.Worktree)
 	}
 
@@ -333,6 +337,25 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	defer lockAgent(name)()
 	_ = m.stopLocked(ctx, name)
 	return DeleteMeta(name)
+}
+
+// MarkHandoff records that the named agent's run reached a positive success
+// signal (its board stage posted a done/handoff marker), authorizing stopLocked
+// to reclaim the run's private worktree. Best-effort and idempotent: it takes
+// the per-name lock, is a no-op when the meta is missing (already torn down),
+// and re-marking an already-flagged run is harmless. Fired from the daemon's
+// board-failure watcher on the clean-finish branch, mirroring onReaped.
+func MarkHandoff(name string) {
+	defer lockAgent(name)()
+	meta, err := ReadMeta(name)
+	if err != nil {
+		return
+	}
+	if meta.Handoff {
+		return
+	}
+	meta.Handoff = true
+	_ = WriteMeta(meta)
 }
 
 // Attach returns the container name for docker exec -it.
@@ -375,7 +398,7 @@ func (m *Manager) SendMessage(ctx context.Context, name, message string) error {
 		Model:     meta.Model,
 		SkipPerms: meta.SkipPerms,
 	}
-	exe, err := m.execClaudeDetached(ctx, meta.ContainerID, meta.RemoteUser, meta.Worktree, opts, "--continue")
+	exe, err := m.execClaudeDetached(ctx, meta.ContainerID, meta.RemoteUser, meta.Worktree, meta.ProjectDir, opts, "--continue")
 	if err != nil {
 		return errors.WrapWithDetails(err, "sending message to agent", "name", name)
 	}

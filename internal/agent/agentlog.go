@@ -74,6 +74,11 @@ type LaunchRecord struct {
 	// Worktree is the per-run private worktree; the retention prune sweeps a
 	// KEPT (reaped-run) worktree when it drops the execution dir.
 	Worktree string `json:"worktree,omitempty"`
+	// RepoDir is the shared repo the worktree was cut from — the `git -C <repo>
+	// worktree remove <worktree>` needs the parent repo as its first operand.
+	// Retention persisted it so the sweep can detach a kept worktree instead of
+	// passing the worktree as both operands (a no-op that leaked the tree).
+	RepoDir string `json:"repo_dir,omitempty"`
 }
 
 // OutcomeRecord is written on completion/reap: why and when a run ended.
@@ -273,9 +278,11 @@ func PruneExecutions() (int, error) {
 				// A reaped run's worktree was KEPT for forensics; retention is
 				// its final sweep. Detach it from the shared repo before dropping
 				// the tree, best-effort — retention must never fail on a stale
-				// worktree (repo may be gone).
+				// worktree (repo may be gone). The parent repo is the first
+				// operand; passing the worktree as both (the earlier defect) is a
+				// no-op that left the tree registered.
 				if lr.Worktree != "" {
-					_ = gitrepo.WorktreeRemove(context.Background(), lr.Worktree, lr.Worktree)
+					_ = gitrepo.WorktreeRemove(context.Background(), lr.RepoDir, lr.Worktree)
 					_ = os.RemoveAll(lr.Worktree)
 				}
 				if err := os.RemoveAll(dir); err == nil {
