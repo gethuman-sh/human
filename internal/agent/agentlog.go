@@ -74,6 +74,11 @@ type LaunchRecord struct {
 	// Worktree is the per-run private worktree; the retention prune sweeps a
 	// KEPT (reaped-run) worktree when it drops the execution dir.
 	Worktree string `json:"worktree,omitempty"`
+	// RepoDir is the shared repo the worktree was cut from — the `git -C <repo>
+	// worktree remove <worktree>` needs the parent repo as its first operand.
+	// Retention persisted it so the sweep can detach a kept worktree instead of
+	// passing the worktree as both operands (a no-op that leaked the tree).
+	RepoDir string `json:"repo_dir,omitempty"`
 }
 
 // OutcomeRecord is written on completion/reap: why and when a run ended.
@@ -273,9 +278,11 @@ func PruneExecutions() (int, error) {
 				// A reaped run's worktree was KEPT for forensics; retention is
 				// its final sweep. Detach it from the shared repo before dropping
 				// the tree, best-effort — retention must never fail on a stale
-				// worktree (repo may be gone).
+				// worktree (repo may be gone). The parent repo is the first
+				// operand; passing the worktree as both (the earlier defect) is a
+				// no-op that left the tree registered.
 				if lr.Worktree != "" {
-					_ = gitrepo.WorktreeRemove(context.Background(), lr.Worktree, lr.Worktree)
+					_ = gitrepo.WorktreeRemove(context.Background(), lr.RepoDir, lr.Worktree)
 					_ = os.RemoveAll(lr.Worktree)
 				}
 				if err := os.RemoveAll(dir); err == nil {
@@ -311,6 +318,99 @@ func HookEventSink(evt hookevents.Event) {
 	}
 	defer func() { _ = f.Close() }()
 	_, _ = f.Write(append(line, '\n'))
+}
+
+// LatestOutputPath returns the output.log path of the agent's newest execution,
+// erroring when the agent has no recorded runs.
+func LatestOutputPath(agentName string) (string, error) {
+	exe, err := LatestExecution(agentName)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(exe.Dir(), "output.log"), nil
+}
+
+// StreamOutput writes the contents of the file at path to w. When follow is
+// true it keeps polling for appended bytes (every pollInterval) and writes them
+// until ctx is cancelled. tailLines > 0 starts the stream at the last N lines of
+// existing content instead of the whole file.
+func StreamOutput(ctx context.Context, w io.Writer, path string, follow bool, tailLines int) error {
+	f, err := os.Open(path) // #nosec G304 -- path derived from validated agent name + hex id
+	if err != nil {
+		return errors.WrapWithDetails(err, "opening agent output log", "path", path)
+	}
+	defer func() { _ = f.Close() }()
+
+	if tailLines > 0 {
+		if err := seekToLastLines(f, tailLines); err != nil {
+			return err
+		}
+	}
+
+	// io.Copy from a *os.File preserves the file offset across calls, so after it
+	// reaches EOF a later io.Copy on the same handle picks up appended bytes —
+	// this is the tail-f loop. (Regular files only; the log is never rotated.)
+	if _, err := io.Copy(w, f); err != nil {
+		return errors.WrapWithDetails(err, "reading agent output log", "path", path)
+	}
+	if !follow {
+		return nil
+	}
+
+	const pollInterval = 400 * time.Millisecond
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if _, err := io.Copy(w, f); err != nil {
+				return errors.WrapWithDetails(err, "tailing agent output log", "path", path)
+			}
+		}
+	}
+}
+
+// seekToLastLines positions f at the start of its final n lines (or the file
+// start if it has fewer). Scans from the end in fixed-size chunks counting
+// newlines; a whole-file scan is unnecessary for a rolling tail. Note ReadAt
+// does not move the file offset, so the final Seek sets the streaming cursor.
+func seekToLastLines(f *os.File, n int) error {
+	stat, err := f.Stat()
+	if err != nil {
+		return errors.WrapWithDetails(err, "stat agent output log")
+	}
+	const chunk = 4096
+	size := stat.Size()
+	var (
+		newlines int
+		offset   = size
+		buf      = make([]byte, chunk)
+	)
+	for offset > 0 {
+		readSize := int64(chunk)
+		if offset < readSize {
+			readSize = offset
+		}
+		offset -= readSize
+		if _, err := f.ReadAt(buf[:readSize], offset); err != nil && err != io.EOF {
+			return errors.WrapWithDetails(err, "scanning agent output log tail")
+		}
+		for i := int(readSize) - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				newlines++
+				// n newlines below the top means n complete trailing lines start
+				// just after this newline.
+				if newlines > n {
+					_, err := f.Seek(offset+int64(i)+1, io.SeekStart)
+					return err
+				}
+			}
+		}
+	}
+	_, err = f.Seek(0, io.SeekStart)
+	return err
 }
 
 // writeJSONFile writes v as indented JSON with 0600 permissions, matching

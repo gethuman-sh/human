@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
@@ -44,6 +44,10 @@ type StartOpts struct {
 	Workspace   string // directory to mount into container (default: cwd)
 	Rebuild     bool
 	Interactive bool // foreground TTY mode
+	// DaemonID is the posting daemon's stable, non-secret identifier. It reaches
+	// the container as HUMAN_DAEMON_ID so agent-posted markers (ready-for-review,
+	// plan-ready) can be attributed to the machine's bot like daemon-posted ones.
+	DaemonID string
 }
 
 // Manager orchestrates agent lifecycle using devcontainers.
@@ -103,7 +107,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 
 	var executionID string
 	if !opts.Interactive && opts.Prompt != "" {
-		exe, err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, worktree, opts)
+		exe, err := m.execClaudeDetached(ctx, dcMeta.ContainerID, dcMeta.RemoteUser, worktree, projectDir, opts)
 		if err != nil {
 			// The agent process never started; don't leave a container tracked
 			// as a running agent. Best-effort teardown, then surface the error.
@@ -186,18 +190,21 @@ func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDi
 	})
 }
 
-// execClaudeDetached launches the agent's `claude -p <prompt>` process inside
-// the container and detaches. The prompt is passed as a discrete argv element
-// (no intermediate shell), so multi-word prompts and shell metacharacters can
-// neither be word-split nor injected. Errors are returned so a failed launch is
+// execClaudeDetached launches the agent's `claude <buildArgs> <extraArgs> -p
+// <prompt>` process inside the container and detaches. The prompt is passed as a
+// discrete argv element (no intermediate shell), so multi-word prompts and shell
+// metacharacters can neither be word-split nor injected. extraArgs carries
+// follow-up flags (e.g. "--continue") so SendMessage can resume the agent's
+// existing session; Start passes none. Errors are returned so a failed launch is
 // not silently reported as a running agent.
-func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser, worktree string, opts StartOpts) (*Execution, error) {
+func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUser, worktree, repoDir string, opts StartOpts, extraArgs ...string) (*Execution, error) {
 	claudeArgs := m.BuildClaudeArgs(opts)
+	claudeArgs = append(claudeArgs, extraArgs...)
 	claudeArgs = append(claudeArgs, "-p", opts.Prompt)
 	cmd := append([]string{"claude"}, claudeArgs...)
 	execID, err := m.Docker.ExecCreate(ctx, containerID, cmd, devcontainer.ExecOptions{
 		User: remoteUser, AttachStdout: true, AttachStderr: true,
-		Env: []string{"HUMAN_AGENT_NAME=" + opts.Name},
+		Env: []string{"HUMAN_AGENT_NAME=" + opts.Name, "HUMAN_DAEMON_ID=" + opts.DaemonID},
 	})
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "creating agent exec")
@@ -208,7 +215,7 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 	exe, logErr := NewExecution(LaunchRecord{
 		ID: newExecID(), Agent: opts.Name, Prompt: opts.Prompt,
 		Argv: cmd, Model: opts.Model, ContainerID: containerID, StartedAt: time.Now(),
-		Worktree: worktree,
+		Worktree: worktree, RepoDir: repoDir,
 	})
 
 	// ExecAttach starts the exec; closing the hijacked stream detaches without
@@ -222,11 +229,9 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 		// The tee goroutine owns the attach and closes it on stream EOF (the
 		// exec exiting), so launch returns immediately while the detached
 		// stdout/stderr is durably persisted to the host.
-		m.teeWG.Add(1)
-		go func() {
-			defer m.teeWG.Done()
+		m.teeWG.Go(func() {
 			teeExecOutput(attach, exe, m.Docker, execID)
-		}()
+		})
 	} else {
 		_ = attach.Close()
 	}
@@ -312,10 +317,14 @@ func (m *Manager) stopLocked(ctx context.Context, name string) error {
 		_ = devcontainer.DeleteMeta(meta.Name)
 	}
 
-	// Worktree lifecycle rides this choke point: a COMPLETED run's private
-	// worktree is removed; a reaped/failed run's is KEPT beside its execution
-	// log for forensics/resume and swept later by PruneExecutions.
-	if meta.Worktree != "" && meta.ProjectDir != "" && stopReason(meta) == "completed" {
+	// Worktree lifecycle rides this choke point. The gate is positive success,
+	// not "did not fail": only a run that posted its handoff (work committed on a
+	// branch) has its private worktree removed. Every other ending — a reaped
+	// run, or a clean exit that never handed off — KEEPS the worktree beside its
+	// execution log for forensics/resume, swept later by PruneExecutions. A
+	// no-handoff exit 0 is precisely the data-loss case where uncommitted work
+	// exists to lose, so it must default to keep (SC-731).
+	if meta.Worktree != "" && meta.ProjectDir != "" && meta.Handoff {
 		_ = gitrepo.WorktreeRemove(ctx, meta.ProjectDir, meta.Worktree)
 	}
 
@@ -334,6 +343,25 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	return DeleteMeta(name)
 }
 
+// MarkHandoff records that the named agent's run reached a positive success
+// signal (its board stage posted a done/handoff marker), authorizing stopLocked
+// to reclaim the run's private worktree. Best-effort and idempotent: it takes
+// the per-name lock, is a no-op when the meta is missing (already torn down),
+// and re-marking an already-flagged run is harmless. Fired from the daemon's
+// board-failure watcher on the clean-finish branch, mirroring onReaped.
+func MarkHandoff(name string) {
+	defer lockAgent(name)()
+	meta, err := ReadMeta(name)
+	if err != nil {
+		return
+	}
+	if meta.Handoff {
+		return
+	}
+	meta.Handoff = true
+	_ = WriteMeta(meta)
+}
+
 // Attach returns the container name for docker exec -it.
 func (m *Manager) Attach(_ context.Context, name string) (Meta, error) {
 	meta, err := ReadMeta(name)
@@ -344,6 +372,49 @@ func (m *Manager) Attach(_ context.Context, name string) (Meta, error) {
 		return Meta{}, errors.WithDetails("agent has no container", "name", name)
 	}
 	return meta, nil
+}
+
+// SendMessage delivers a follow-up prompt to a running agent by launching a new
+// detached `claude -p --continue "<message>"` exec in the agent's existing
+// container. --continue resumes the agent's most recent conversation (the run's
+// isolated worktree holds exactly one), so the message lands in the same
+// session. Output is teed to a fresh execution log, which becomes the current
+// run so `logs --follow` and artifact preservation target the follow-up turn.
+func (m *Manager) SendMessage(ctx context.Context, name, message string) error {
+	if message == "" {
+		return errors.WithDetails("message must not be empty", "name", name)
+	}
+	// Hold the per-name lock so a concurrent stop/delete cannot race the meta
+	// write below, mirroring the other lifecycle methods.
+	defer lockAgent(name)()
+
+	meta, err := ReadMeta(name)
+	if err != nil {
+		return err
+	}
+	if meta.Status != StatusRunning || !m.isContainerAlive(ctx, meta.ContainerID) {
+		return errors.WithDetails("agent is not running", "name", name)
+	}
+
+	opts := StartOpts{
+		Name:      meta.Name,
+		Prompt:    message,
+		Model:     meta.Model,
+		SkipPerms: meta.SkipPerms,
+	}
+	exe, err := m.execClaudeDetached(ctx, meta.ContainerID, meta.RemoteUser, meta.Worktree, meta.ProjectDir, opts, "--continue")
+	if err != nil {
+		return errors.WrapWithDetails(err, "sending message to agent", "name", name)
+	}
+	// Point the agent's meta at the new run so logs --follow and artifact
+	// preservation target the follow-up turn.
+	if exe != nil {
+		meta.ExecutionID = exe.Launch.ID
+		if err := WriteMeta(meta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Refresh syncs metadata with actual container state.
@@ -450,7 +521,7 @@ func (m *Manager) restartDaemon(projectDir, host string) {
 	_ = child.Run()
 
 	// Poll for readiness.
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		if info, readErr := daemon.ReadInfo(); readErr == nil && info.IsReachable() {
 			return
 		}

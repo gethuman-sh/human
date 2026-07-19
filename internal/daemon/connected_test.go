@@ -101,27 +101,27 @@ func TestConnectedTracker_concurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(workers * 3)
 
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		base := w * 1000
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for i := range iterations {
 				tr.Touch(base + i)
 			}
 		}()
 	}
-	for w := 0; w < workers; w++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				_ = tr.PIDs()
 			}
 		}()
 	}
-	for w := 0; w < workers; w++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				tr.Prune(1 * time.Hour)
 			}
 		}()

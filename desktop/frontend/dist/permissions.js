@@ -55,7 +55,7 @@ export function formatAge(createdAt, now = new Date()) {
     return `${Math.floor(s / 3600)}h`;
 }
 function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 function render() {
     const e = els();

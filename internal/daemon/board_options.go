@@ -48,7 +48,7 @@ func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
 	var stage BoardStage
 	var context string
 	var opts []BoardOption
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "["):
@@ -133,7 +133,7 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 	}
 
 	if _, err := d.Commenter.AddComment(ctx, req.PMKey,
-		OptionChosenHeader+" "+chosen.ID+": "+chosen.Label); err != nil {
+		StampDaemon(OptionChosenHeader+" "+chosen.ID+": "+chosen.Label, d.DaemonID)); err != nil {
 		return errors.WrapWithDetails(err, "recording option choice", "pm", req.PMKey)
 	}
 

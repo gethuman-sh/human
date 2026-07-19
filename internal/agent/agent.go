@@ -34,7 +34,7 @@ type Meta struct {
 	Prompt        string    `json:"prompt,omitempty"`
 	Status        Status    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
-	StoppedAt     time.Time `json:"stopped_at,omitempty"`
+	StoppedAt     time.Time `json:"stopped_at,omitzero"`
 	SkipPerms     bool      `json:"skip_perms,omitempty"`
 	Model         string    `json:"model,omitempty"`
 	ConfigDir     string    `json:"config_dir,omitempty"`
@@ -50,6 +50,12 @@ type Meta struct {
 	// Worktree is the per-run private worktree mounted into the container. Empty
 	// for non-git workspaces (mounted directly).
 	Worktree string `json:"worktree,omitempty"`
+	// Handoff records that the run reached a positive success signal (its board
+	// stage posted a done/handoff marker). It is the ONLY gate that authorizes
+	// removing the run's private worktree: unset (the default) means KEEP the
+	// work — a clean exit with no handoff is exactly the data-loss case where
+	// uncommitted work exists to lose (SC-731). Retention sweeps kept worktrees.
+	Handoff bool `json:"handoff,omitempty"`
 }
 
 // ContainerName returns the Docker container name for an agent.

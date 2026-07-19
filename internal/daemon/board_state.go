@@ -14,8 +14,13 @@ type BoardCard struct {
 	State          BoardState `json:"state"`
 	EngineeringKey string     `json:"engineering_key,omitempty"`
 	Branch         string     `json:"branch,omitempty"`
-	PRURL          string     `json:"pr_url,omitempty"`
-	Error          string     `json:"error,omitempty"`
+	// Commits is the `commits:` line of the latest [human:ready-for-review]
+	// handoff — the exact SHAs under review. It rides the card so the daemon can
+	// hard-bind a dispatched reviewer to the handed-off work rather than letting
+	// it free-associate from whatever HEAD its worktree sits on (SC-695).
+	Commits string `json:"commits,omitempty"`
+	PRURL   string `json:"pr_url,omitempty"`
+	Error   string `json:"error,omitempty"`
 	// HasPlan reports a [human:plan] comment on the ticket — the plan lives
 	// here instead of on a separate engineering ticket (single-tracker
 	// topology).
@@ -94,6 +99,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
+	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
 	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
 	card.PRURL = latestPrefixedLine(comments, DeployedHeader, "pr:")
 	if card.PRURL == "" {
@@ -113,8 +119,8 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 // markers posted without a reason, so a failed card never shows empty.
 func failureReason(body string) string {
 	trimmed := strings.TrimSpace(body)
-	if idx := strings.IndexByte(trimmed, '\n'); idx >= 0 {
-		if reason := firstLine(trimmed[idx+1:]); reason != "" {
+	if _, after, ok := strings.Cut(trimmed, "\n"); ok {
+		if reason := firstLine(after); reason != "" {
 			return reason
 		}
 	}
@@ -127,8 +133,8 @@ func failureReason(body string) string {
 // still shows something.
 func failureBody(body string) string {
 	trimmed := strings.TrimSpace(body)
-	if idx := strings.IndexByte(trimmed, '\n'); idx >= 0 {
-		if rest := strings.TrimSpace(trimmed[idx+1:]); rest != "" {
+	if _, after, ok := strings.Cut(trimmed, "\n"); ok {
+		if rest := strings.TrimSpace(after); rest != "" {
 			return rest
 		}
 	}
@@ -224,10 +230,31 @@ func latestPrefixedLine(comments []tracker.Comment, header, prefix string) strin
 	return value
 }
 
+// latestHandoffBody returns the full body of the latest [human:ready-for-review]
+// handoff comment, or "" when none is present. Callers parse it for the branch
+// and commit SHAs a review or deploy binds against — reading the whole body once
+// rather than re-scanning per field.
+func latestHandoffBody(comments []tracker.Comment) string {
+	var body string
+	var haveLatest bool
+	var latest tracker.Comment
+	for _, c := range comments {
+		if !strings.HasPrefix(strings.TrimSpace(c.Body), ReadyForReviewHeader) {
+			continue
+		}
+		if !haveLatest || c.Created.After(latest.Created) {
+			latest = c
+			haveLatest = true
+			body = c.Body
+		}
+	}
+	return body
+}
+
 // parsePrefixedLine returns the trimmed value following the first line that
 // begins with prefix (e.g. "engineering:"), or "" when absent.
 func parsePrefixedLine(body, prefix string) string {
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		if rest, ok := strings.CutPrefix(line, prefix); ok {
 			return strings.TrimSpace(rest)
@@ -239,7 +266,7 @@ func parsePrefixedLine(body, prefix string) string {
 // firstLine returns the first non-empty line of a body, used as the error
 // summary for a failed marker.
 func firstLine(body string) string {
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			return line
 		}

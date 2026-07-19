@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -629,10 +630,8 @@ func TestManager_Up_WorktreeGitDirBind(t *testing.T) {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
 	want := gitDir + ":" + gitDir
-	for _, b := range mock.createCalls[0].Binds {
-		if b == want {
-			return
-		}
+	if slices.Contains(mock.createCalls[0].Binds, want) {
+		return
 	}
 	t.Errorf("missing parent-repo git bind %q in binds: %v", want, mock.createCalls[0].Binds)
 }
@@ -1025,5 +1024,130 @@ func TestNeedsValue(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("needsValue(%q) = %v, want %v", tt.key, got, tt.want)
 		}
+	}
+}
+
+// SC-783: project-declared cache volumes become named-volume binds so
+// consecutive runs build warm; the volume roots are chowned for a non-root
+// remote user because Docker creates fresh named volumes root-owned.
+func TestManager_Up_CacheVolumes(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+	writeCachesConfig(t, projectDir, `caches:
+  - name: go-build
+    path: /home/vscode/.cache/go-build
+  - name: go-mod
+    path: /go/pkg/mod
+`)
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binds := mock.createCalls[0].Binds
+	for _, want := range []string{
+		"human-cache-go-build:/home/vscode/.cache/go-build",
+		"human-cache-go-mod:/go/pkg/mod",
+	} {
+		if !slices.Contains(binds, want) {
+			t.Errorf("missing %q in binds: %v", want, binds)
+		}
+	}
+
+	// Ownership fix: exactly one mkdir and one chown exec as root.
+	var mkdirAsRoot, chownAsRoot bool
+	for _, c := range mock.execCalls {
+		if c.Opts.User != "root" {
+			continue
+		}
+		if len(c.Cmd) > 0 && c.Cmd[0] == "mkdir" && slices.Contains(c.Cmd, "/go/pkg/mod") {
+			mkdirAsRoot = true
+		}
+		if len(c.Cmd) > 0 && c.Cmd[0] == "chown" && slices.Contains(c.Cmd, "vscode") {
+			chownAsRoot = true
+		}
+	}
+	if !mkdirAsRoot || !chownAsRoot {
+		t.Errorf("expected root mkdir+chown for cache roots, got execs: %+v", mock.execCalls)
+	}
+}
+
+func TestManager_Up_CacheVolumes_RootUserSkipsChown(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+	writeCachesConfig(t, projectDir, "caches:\n  - name: go-mod\n    path: /go/pkg/mod\n")
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(mock.createCalls[0].Binds, "human-cache-go-mod:/go/pkg/mod") {
+		t.Fatalf("volume bind missing: %v", mock.createCalls[0].Binds)
+	}
+	for _, c := range mock.execCalls {
+		if len(c.Cmd) > 0 && c.Cmd[0] == "chown" {
+			t.Errorf("root remoteUser must not trigger a chown exec: %+v", c)
+		}
+	}
+}
+
+func TestManager_Up_CacheVolumes_InvalidSkippedWithWarning(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+	writeCachesConfig(t, projectDir, `caches:
+  - name: ../escape
+    path: /data
+  - name: relative
+    path: data
+  - name: good
+    path: /data
+`)
+
+	var out bytes.Buffer
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binds := mock.createCalls[0].Binds
+	if !slices.Contains(binds, "human-cache-good:/data") {
+		t.Errorf("valid entry missing: %v", binds)
+	}
+	for _, b := range binds {
+		if strings.Contains(b, "escape") || strings.Contains(b, "relative") {
+			t.Errorf("invalid entry reached binds: %v", binds)
+		}
+	}
+	if !strings.Contains(out.String(), "ignoring invalid cache volume") {
+		t.Errorf("expected warning, got: %s", out.String())
+	}
+}
+
+func TestManager_Up_NoCachesNoExtraExecs(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range mock.execCalls {
+		if len(c.Cmd) > 0 && (c.Cmd[0] == "chown" || c.Cmd[0] == "mkdir") {
+			t.Errorf("no caches declared but ownership exec ran: %+v", c)
+		}
+	}
+	for _, b := range mock.createCalls[0].Binds {
+		if strings.HasPrefix(b, "human-cache-") {
+			t.Errorf("unexpected cache bind: %v", b)
+		}
+	}
+}
+
+// writeCachesConfig drops a .humanconfig.yaml with the given content into the
+// test project dir.
+func writeCachesConfig(t *testing.T, projectDir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(projectDir, ".humanconfig.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

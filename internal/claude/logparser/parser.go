@@ -76,10 +76,7 @@ func (p *FileParser) parseBytes(data []byte) int {
 	// every poll and the session is permanently stuck — skip past the
 	// next newline so subsequent parses see fresh data.
 	if err := scanner.Err(); err == bufio.ErrTooLong {
-		skipStart := consumed
-		if skipStart > len(data) {
-			skipStart = len(data)
-		}
+		skipStart := min(consumed, len(data))
 		if nextNL := bytes.IndexByte(data[skipStart:], '\n'); nextNL >= 0 {
 			consumed = skipStart + nextNL + 1
 		} else {

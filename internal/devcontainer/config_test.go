@@ -126,12 +126,12 @@ func TestParseConfig_LifecycleCommands(t *testing.T) {
 	}
 
 	// Array command.
-	if arr, ok := cfg.OnCreateCommand.([]interface{}); !ok || len(arr) != 2 {
+	if arr, ok := cfg.OnCreateCommand.([]any); !ok || len(arr) != 2 {
 		t.Errorf("onCreateCommand = %v", cfg.OnCreateCommand)
 	}
 
 	// Map command (parallel).
-	if m, ok := cfg.PostCreateCommand.(map[string]interface{}); !ok || len(m) != 2 {
+	if m, ok := cfg.PostCreateCommand.(map[string]any); !ok || len(m) != 2 {
 		t.Errorf("postCreateCommand = %v", cfg.PostCreateCommand)
 	}
 }
@@ -229,7 +229,7 @@ func TestResolveVariables_MountStrings(t *testing.T) {
 	t.Setenv("HOME", "/home/testuser")
 
 	cfg := &DevcontainerConfig{
-		Mounts: []interface{}{
+		Mounts: []any{
 			"source=${localEnv:HOME}/.human/ca.crt,target=/tmp/ca.crt,type=bind",
 			42, // non-string entries should be left alone
 		},
@@ -441,4 +441,51 @@ func containsStr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestCacheVolume_Valid(t *testing.T) {
+	cases := []struct {
+		name  string
+		cv    CacheVolume
+		valid bool
+	}{
+		{"go pair", CacheVolume{Name: "go-build", Path: "/home/vscode/.cache/go-build"}, true},
+		{"dots and underscore", CacheVolume{Name: "npm_v10.x", Path: "/root/.npm"}, true},
+		{"relative path", CacheVolume{Name: "good", Path: "cache"}, false},
+		{"slash in name", CacheVolume{Name: "../escape", Path: "/data"}, false},
+		{"empty name", CacheVolume{Name: "", Path: "/data"}, false},
+		{"leading dash", CacheVolume{Name: "-x", Path: "/data"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.cv.Valid(); got != c.valid {
+				t.Fatalf("Valid() = %v, want %v", got, c.valid)
+			}
+		})
+	}
+}
+
+func TestLoadCaches(t *testing.T) {
+	dir := t.TempDir()
+	content := "caches:\n  - name: go-build\n    path: /home/vscode/.cache/go-build\n"
+	if err := os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	caches, err := LoadCaches(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caches) != 1 || caches[0].VolumeName() != "human-cache-go-build" || caches[0].Path != "/home/vscode/.cache/go-build" {
+		t.Fatalf("unexpected caches: %+v", caches)
+	}
+}
+
+func TestLoadCaches_AbsentIsEmpty(t *testing.T) {
+	caches, err := LoadCaches(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caches) != 0 {
+		t.Fatalf("want empty, got %+v", caches)
+	}
 }

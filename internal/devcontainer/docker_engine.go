@@ -5,13 +5,9 @@ import (
 	"io"
 	"sort"
 
-	"github.com/docker/docker/api/types/build"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	dockerimage "github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/strslice"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 // NewDockerClient creates a DockerClient backed by the Docker Engine API.
@@ -35,8 +31,22 @@ type engineClient struct {
 	cli *client.Client
 }
 
+// labelFilters builds the moby client's filter predicate from our label map.
+func labelFilters(labels map[string]string) client.Filters {
+	f := client.Filters{}
+	if len(labels) == 0 {
+		return f
+	}
+	terms := make(map[string]bool, len(labels))
+	for k, v := range labels {
+		terms[k+"="+v] = true
+	}
+	f["label"] = terms
+	return f
+}
+
 func (e *engineClient) ImageBuild(ctx context.Context, buildContext io.Reader, opts ImageBuildOptions) (io.ReadCloser, error) {
-	sdkOpts := build.ImageBuildOptions{
+	sdkOpts := client.ImageBuildOptions{
 		Dockerfile: opts.Dockerfile,
 		Tags:       opts.Tags,
 		BuildArgs:  opts.BuildArgs,
@@ -52,10 +62,13 @@ func (e *engineClient) ImageBuild(ctx context.Context, buildContext io.Reader, o
 }
 
 func (e *engineClient) ImagePull(ctx context.Context, ref string, opts ImagePullOptions) (io.ReadCloser, error) {
-	sdkOpts := dockerimage.PullOptions{
+	resp, err := e.cli.ImagePull(ctx, ref, client.ImagePullOptions{
 		RegistryAuth: opts.RegistryAuth,
+	})
+	if err != nil {
+		return nil, err
 	}
-	return e.cli.ImagePull(ctx, ref, sdkOpts)
+	return resp, nil
 }
 
 func (e *engineClient) ImageInspect(ctx context.Context, imageRef string) (ImageInspectResponse, error) {
@@ -70,16 +83,12 @@ func (e *engineClient) ImageInspect(ctx context.Context, imageRef string) (Image
 }
 
 func (e *engineClient) ImageList(ctx context.Context, opts ImageListOptions) ([]ImageSummary, error) {
-	f := filters.NewArgs()
-	for k, v := range opts.LabelFilters {
-		f.Add("label", k+"="+v)
-	}
-	list, err := e.cli.ImageList(ctx, dockerimage.ListOptions{Filters: f})
+	list, err := e.cli.ImageList(ctx, client.ImageListOptions{Filters: labelFilters(opts.LabelFilters)})
 	if err != nil {
 		return nil, err
 	}
-	summaries := make([]ImageSummary, 0, len(list))
-	for _, img := range list {
+	summaries := make([]ImageSummary, 0, len(list.Items))
+	for _, img := range list.Items {
 		summaries = append(summaries, ImageSummary{
 			ID:   img.ID,
 			Tags: img.RepoTags,
@@ -91,7 +100,7 @@ func (e *engineClient) ImageList(ctx context.Context, opts ImageListOptions) ([]
 func (e *engineClient) ContainerCreate(ctx context.Context, opts ContainerCreateOptions) (string, error) {
 	config := &container.Config{
 		Image:      opts.Image,
-		Cmd:        strslice.StrSlice(opts.Cmd),
+		Cmd:        opts.Cmd,
 		Env:        opts.Env,
 		Labels:     opts.Labels,
 		WorkingDir: opts.WorkingDir,
@@ -101,7 +110,7 @@ func (e *engineClient) ContainerCreate(ctx context.Context, opts ContainerCreate
 	hostConfig := &container.HostConfig{
 		Binds:       opts.Binds,
 		ExtraHosts:  opts.ExtraHosts,
-		CapAdd:      strslice.StrSlice(opts.CapAdd),
+		CapAdd:      opts.CapAdd,
 		SecurityOpt: opts.SecurityOpt,
 		Privileged:  opts.Privileged,
 		ShmSize:     opts.ShmSize,
@@ -110,7 +119,11 @@ func (e *engineClient) ContainerCreate(ctx context.Context, opts ContainerCreate
 		hostConfig.NetworkMode = container.NetworkMode(opts.NetworkMode)
 	}
 
-	resp, err := e.cli.ContainerCreate(ctx, config, hostConfig, nil, nil, opts.Name)
+	resp, err := e.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     config,
+		HostConfig: hostConfig,
+		Name:       opts.Name,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -118,67 +131,68 @@ func (e *engineClient) ContainerCreate(ctx context.Context, opts ContainerCreate
 }
 
 func (e *engineClient) ContainerStart(ctx context.Context, containerID string) error {
-	return e.cli.ContainerStart(ctx, containerID, container.StartOptions{})
+	_, err := e.cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{})
+	return err
 }
 
 func (e *engineClient) ContainerStop(ctx context.Context, containerID string, timeout *int) error {
-	return e.cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: timeout})
+	_, err := e.cli.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: timeout})
+	return err
 }
 
 func (e *engineClient) ContainerRemove(ctx context.Context, containerID string, opts ContainerRemoveOptions) error {
-	return e.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{
+	_, err := e.cli.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{
 		Force:         opts.Force,
 		RemoveVolumes: opts.RemoveVolumes,
 	})
+	return err
 }
 
 func (e *engineClient) ContainerInspect(ctx context.Context, containerID string) (ContainerInspectResponse, error) {
-	resp, err := e.cli.ContainerInspect(ctx, containerID)
+	resp, err := e.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return ContainerInspectResponse{}, err
 	}
+	ctr := resp.Container
 	state := ContainerState{}
-	if resp.State != nil {
-		state.Status = resp.State.Status
-		state.Running = resp.State.Running
-		state.ExitCode = resp.State.ExitCode
+	if ctr.State != nil {
+		state.Status = string(ctr.State.Status)
+		state.Running = ctr.State.Running
+		state.ExitCode = ctr.State.ExitCode
 	}
 	configInfo := ContainerConfigInfo{}
-	if resp.Config != nil {
-		configInfo.Env = resp.Config.Env
-		configInfo.Labels = resp.Config.Labels
+	if ctr.Config != nil {
+		configInfo.Env = ctr.Config.Env
+		configInfo.Labels = ctr.Config.Labels
 	}
 	return ContainerInspectResponse{
-		ID:     resp.ID,
-		Name:   resp.Name,
+		ID:     ctr.ID,
+		Name:   ctr.Name,
 		State:  state,
-		Image:  resp.Image,
+		Image:  ctr.Image,
 		Config: configInfo,
 	}, nil
 }
 
 func (e *engineClient) ContainerList(ctx context.Context, opts ContainerListOptions) ([]ContainerSummary, error) {
-	f := filters.NewArgs()
-	for k, v := range opts.LabelFilters {
-		f.Add("label", k+"="+v)
-	}
+	f := labelFilters(opts.LabelFilters)
 	if opts.NameFilter != "" {
-		f.Add("name", opts.NameFilter)
+		f["name"] = map[string]bool{opts.NameFilter: true}
 	}
-	list, err := e.cli.ContainerList(ctx, container.ListOptions{
+	list, err := e.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     opts.All,
 		Filters: f,
 	})
 	if err != nil {
 		return nil, err
 	}
-	summaries := make([]ContainerSummary, 0, len(list))
-	for _, c := range list {
+	summaries := make([]ContainerSummary, 0, len(list.Items))
+	for _, c := range list.Items {
 		summaries = append(summaries, ContainerSummary{
 			ID:     c.ID,
 			Names:  c.Names,
 			Image:  c.Image,
-			State:  c.State,
+			State:  string(c.State),
 			Labels: c.Labels,
 		})
 	}
@@ -186,12 +200,16 @@ func (e *engineClient) ContainerList(ctx context.Context, opts ContainerListOpti
 }
 
 func (e *engineClient) ContainerLogs(ctx context.Context, containerID string, opts LogsOptions) (io.ReadCloser, error) {
-	return e.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+	resp, err := e.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		Follow:     opts.Follow,
 		Tail:       opts.Tail,
 		ShowStdout: opts.ShowStdout,
 		ShowStderr: opts.ShowStderr,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (e *engineClient) ContainerCommit(ctx context.Context, containerID string, ref string, env map[string]string) (string, error) {
@@ -203,7 +221,7 @@ func (e *engineClient) ContainerCommit(ctx context.Context, containerID string, 
 	}
 	sort.Strings(changes)
 
-	resp, err := e.cli.ContainerCommit(ctx, containerID, container.CommitOptions{
+	resp, err := e.cli.ContainerCommit(ctx, containerID, client.ContainerCommitOptions{
 		Reference: ref,
 		Changes:   changes,
 	})
@@ -214,21 +232,27 @@ func (e *engineClient) ContainerCommit(ctx context.Context, containerID string, 
 }
 
 func (e *engineClient) CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader) error {
-	return e.cli.CopyToContainer(ctx, containerID, dstPath, content, container.CopyToContainerOptions{})
+	_, err := e.cli.CopyToContainer(ctx, containerID, client.CopyToContainerOptions{
+		DestinationPath: dstPath,
+		Content:         content,
+	})
+	return err
 }
 
 func (e *engineClient) CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error) {
 	// The SDK returns the archive reader plus a PathStat; only the archive is
 	// needed for transcript copy-out.
-	rc, _, err := e.cli.CopyFromContainer(ctx, containerID, srcPath)
+	resp, err := e.cli.CopyFromContainer(ctx, containerID, client.CopyFromContainerOptions{
+		SourcePath: srcPath,
+	})
 	if err != nil {
 		return nil, err
 	}
-	return rc, nil
+	return resp.Content, nil
 }
 
 func (e *engineClient) ExecCreate(ctx context.Context, containerID string, cmd []string, opts ExecOptions) (string, error) {
-	resp, err := e.cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+	resp, err := e.cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		User:         opts.User,
 		WorkingDir:   opts.WorkingDir,
 		Env:          opts.Env,
@@ -236,7 +260,7 @@ func (e *engineClient) ExecCreate(ctx context.Context, containerID string, cmd [
 		AttachStdout: opts.AttachStdout,
 		AttachStderr: opts.AttachStderr,
 		AttachStdin:  opts.AttachStdin,
-		Tty:          opts.Tty,
+		TTY:          opts.Tty,
 	})
 	if err != nil {
 		return "", err
@@ -245,7 +269,7 @@ func (e *engineClient) ExecCreate(ctx context.Context, containerID string, cmd [
 }
 
 func (e *engineClient) ExecAttach(ctx context.Context, execID string) (ExecAttachResponse, error) {
-	attach, err := e.cli.ContainerExecAttach(ctx, execID, container.ExecStartOptions{})
+	attach, err := e.cli.ExecAttach(ctx, execID, client.ExecAttachOptions{})
 	if err != nil {
 		return ExecAttachResponse{}, err
 	}
@@ -258,7 +282,7 @@ func (e *engineClient) ExecAttach(ctx context.Context, execID string) (ExecAttac
 }
 
 func (e *engineClient) ExecInspect(ctx context.Context, execID string) (ExecInspectResponse, error) {
-	resp, err := e.cli.ContainerExecInspect(ctx, execID)
+	resp, err := e.cli.ExecInspect(ctx, execID, client.ExecInspectOptions{})
 	if err != nil {
 		return ExecInspectResponse{}, err
 	}

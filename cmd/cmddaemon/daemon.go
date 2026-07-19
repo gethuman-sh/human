@@ -109,6 +109,7 @@ type daemonState struct {
 	auditStore    *audit.Store
 	auditWriter   *audit.Writer
 	confirmDB     *daemon.ConfirmDB
+	daemonID      string
 }
 
 // runMaintenanceLoop periodically cleans up stale pending confirmations and
@@ -165,6 +166,18 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		return nil, errors.WrapWithDetails(err, "failed to load/create token")
 	}
 
+	// The daemon id stamps every machine-posted marker so a teammate can tell
+	// which machine's bot acted (SC-660 rule 1). An operator-friendly override
+	// via HUMAN_DAEMON_ID wins verbatim and is never persisted, so a readable
+	// name (e.g. "alice-macbook") can replace the opaque persisted hex.
+	daemonID := os.Getenv("HUMAN_DAEMON_ID")
+	if daemonID == "" {
+		daemonID, err = daemon.LoadOrCreateDaemonID()
+		if err != nil {
+			return nil, errors.WrapWithDetails(err, "failed to load/create daemon id")
+		}
+	}
+
 	if err := WritePidFile(os.Getpid()); err != nil {
 		return nil, errors.WrapWithDetails(err, "failed to write PID file")
 	}
@@ -187,17 +200,23 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		Token:      token,
 		PID:        os.Getpid(),
 		Version:    version,
+		DaemonID:   daemonID,
 		Projects:   projectInfos,
 	}
 	if err := daemon.WriteInfo(info); err != nil {
 		return nil, errors.WrapWithDetails(err, "failed to write daemon info")
 	}
 
-	printStartBanner(out, token, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr, projectInfos)
+	printStartBanner(out, token, daemonID, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr, projectInfos)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	logger := newDaemonLogger(debug)
 	vaultResolver := buildVaultResolver(projectRegistry, logger)
+
+	// Turn a silent split->single topology fallback into a loud startup signal:
+	// a tracker declared role: engineering whose token does not resolve would run
+	// single-tracker here and split elsewhere from the same config (SC-660 rule 7).
+	warnTopologyDivergence(projectRegistry, vaultResolver, out, logger)
 
 	connTracker := daemon.NewConnectedTracker()
 	// Persist hook events to the host so they survive the in-memory ring's
@@ -249,6 +268,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		Addr:              addr,
 		Token:             token,
 		SafeMode:          safe,
+		DaemonStartedAt:   time.Now().UTC(),
 		CmdFactory:        cmdFactory,
 		Logger:            logger,
 		ConnectedPIDs:     connTracker,
@@ -267,9 +287,9 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AuditStore:        auditStore,
 		AgentCleaner:      &dockerAgentCleaner{},
 		VaultResolver:     vaultResolver,
-		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver, logger),
-		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver, logger),
-		BoardOptioner:     boardOptionerFunc(projectRegistry, vaultResolver, logger),
+		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger),
+		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger),
+		BoardOptioner:     boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger),
 		BugCreator:        bugCreatorFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
@@ -290,6 +310,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		auditStore:    auditStore,
 		auditWriter:   auditWriter,
 		confirmDB:     confirmDB,
+		daemonID:      daemonID,
 	}, nil
 }
 
@@ -397,7 +418,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			Timestamp: time.Now().UTC(),
 		})
 	}, logger)
-	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, logger)
+	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger)
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by
 	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
@@ -415,15 +436,33 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		d := agent.DiagnoseFailure(agentName, hookErrorType)
 		return daemon.FailureDiagnosis{Headline: d.Headline, Detail: d.Detail}
 	}
+	// A daemon only chains a review for a handoff branch it can resolve on its
+	// own machine — a board-context fix leaves its branch local on the machine
+	// that produced it, so a daemon elsewhere leaves the handoff for one that can
+	// reach it (SC-652). The board operates on the single registered project.
+	branchReachable := func(branch string) bool {
+		return boardBranchReachable(ctx, ds.srv.Projects, branch)
+	}
+	// A handoff must name commits the branch actually contains — a retry that never
+	// pushed its work named SHAs no machine could see (735). This gate verifies
+	// every named commit is reachable from the branch on this machine (local ref or
+	// origin/<branch>); any absent commit fails the check.
+	commitsPresent := func(branch string, commits []string) bool {
+		return boardCommitsPresent(ctx, ds.srv.Projects, branch, commits)
+	}
+	// A cleanly finished stage is the only thing that authorizes reclaiming the
+	// run's private worktree; every other exit keeps the work for forensics
+	// (SC-731). MarkHandoff is best-effort/idempotent.
+	onHandoff := func(agentName string) { agent.MarkHandoff(agentName) }
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, diagnoseFailure, logger)
+		chainReview, branchReachable, commitsPresent, diagnoseFailure, onHandoff, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
 	go daemon.RunBoardReconcile(ctx,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, daemon.BoardReconcileInterval, logger)
+		branchReachable, commitsPresent, chainReview, daemon.BoardReconcileInterval, logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }
@@ -937,9 +976,10 @@ func newDaemonLogger(debug bool) zerolog.Logger {
 }
 
 // printStartBanner prints the daemon startup information.
-func printStartBanner(out io.Writer, token, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr string, projects []daemon.ProjectInfo) {
+func printStartBanner(out io.Writer, token, daemonID, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr string, projects []daemon.ProjectInfo) {
 	_, _ = fmt.Fprintln(out, "Token:", token)
 	_, _ = fmt.Fprintln(out, "Token file:", daemon.TokenPath())
+	_, _ = fmt.Fprintln(out, "Daemon ID:", daemonID)
 	_, _ = fmt.Fprintln(out, "Listening on:", addr)
 	_, _ = fmt.Fprintln(out, "Chrome proxy on:", chromeAddr)
 	_, _ = fmt.Fprintln(out, "HTTPS proxy on:", proxyAddr)
@@ -1067,6 +1107,42 @@ func trackerDiagnoserFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver)
 			configured[i].Working = loadedSet[key]
 		}
 		return configured
+	}
+}
+
+// warnTopologyDivergence turns a silent split->single topology fallback into a
+// loud startup signal (SC-660 rule 7). For each registered project it compares
+// the topology the config DECLARES (a tracker carrying role: engineering) with
+// the topology its RESOLVABLE credentials can actually run; a declared
+// engineering tracker whose token does not resolve would run single-tracker here
+// and split elsewhere from the same config. The daemon still starts (one
+// misconfigured project must not take down a multi-project daemon), but the
+// divergence is logged at error level and printed on the startup banner so an
+// operator cannot miss it.
+func warnTopologyDivergence(reg *daemon.ProjectRegistry, resolver *vault.Resolver, out io.Writer, logger zerolog.Logger) {
+	if reg == nil {
+		return
+	}
+	for _, entry := range reg.Entries() {
+		declared := tracker.DiagnoseTrackers(entry.Dir, config.UnmarshalSection, os.Getenv)
+		instances, err := cmdutil.LoadAllInstancesWithResolver(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			logger.Warn().Err(err).Str("project", entry.Name).
+				Msg("topology check: cannot load instances")
+			continue
+		}
+		resolvedEngineering := false
+		for _, inst := range instances {
+			if inst.InferRole() == "engineering" {
+				resolvedEngineering = true
+				break
+			}
+		}
+		if err := tracker.ValidateTopology(declared, resolvedEngineering); err != nil {
+			logger.Error().Err(err).Str("project", entry.Name).
+				Msg("topology divergence: engineering-role tracker declared but not resolved")
+			_, _ = fmt.Fprintf(out, "WARNING: topology divergence in %s: %s\n", entry.Name, err.Error())
+		}
 	}
 }
 
@@ -1393,7 +1469,12 @@ func (c *dockerAgentCleaner) StopContainer(ctx context.Context, containerID stri
 // devcontainer-based agent. It mirrors cmdagent.newManager and the existing
 // dockerAgentCleaner. Board launches set SkipPerms:true so the agent runs with
 // --dangerously-skip-permissions (required for unattended pipeline work).
-type dockerAgentLauncher struct{}
+type dockerAgentLauncher struct {
+	// daemonID reaches the container as HUMAN_DAEMON_ID so agent-posted markers
+	// (ready-for-review, plan-ready) are attributed to this machine's bot like
+	// the daemon-posted ones (SC-660 rule 1).
+	daemonID string
+}
 
 func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace, configDir string) error {
 	docker, err := devcontainer.NewDockerClient()
@@ -1409,8 +1490,54 @@ func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace
 		SkipPerms: true,
 		Workspace: workspace,
 		ConfigDir: configDir,
+		DaemonID:  l.daemonID,
 	})
 	return err
+}
+
+// boardProjectDir resolves the single registered project's directory, the repo
+// the board's git probes run against. ok is false when no project is registered.
+func boardProjectDir(projects *daemon.ProjectRegistry) (string, bool) {
+	if projects == nil {
+		return "", false
+	}
+	entries := projects.Entries()
+	if len(entries) == 0 {
+		return "", false
+	}
+	return entries[0].Dir, true
+}
+
+// boardBranchReachable reports whether a handoff branch resolves on this machine
+// (local ref or origin) — a board-context fix leaves its branch local on the
+// machine that produced it (SC-652). A 15s timeout bounds the git probe.
+func boardBranchReachable(ctx context.Context, projects *daemon.ProjectRegistry, branch string) bool {
+	dir, ok := boardProjectDir(projects)
+	if !ok {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return gitrepo.BranchReachable(probeCtx, dir, branch)
+}
+
+// boardCommitsPresent reports whether every named commit is reachable from
+// branch on this machine — the gate that keeps a handoff from naming SHAs no
+// machine could see (735). Any absent commit fails the check. A 15s timeout
+// bounds the git probes.
+func boardCommitsPresent(ctx context.Context, projects *daemon.ProjectRegistry, branch string, commits []string) bool {
+	dir, ok := boardProjectDir(projects)
+	if !ok {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	for _, sha := range commits {
+		if !gitrepo.CommitReachable(probeCtx, dir, branch, sha) {
+			return false
+		}
+	}
+	return true
 }
 
 // forgeDeployer implements daemon.Deployer: push + PR, the CI gate, the merge
@@ -1425,7 +1552,10 @@ type forgeDeployer struct {
 func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest) (daemon.PRResult, error) {
 	// Push first: a failed push must surface as deploy-failed BEFORE any PR is
 	// opened, so we never leave a half-created PR pointing at an unpushed branch.
-	if err := gitrepo.Push(ctx, req.WorkspaceDir, req.Branch); err != nil {
+	// When the branch already exists on origin (a re-push after a rebase/retry) a
+	// plain push is rejected on a diverged tip, so lease-push against the recorded
+	// remote SHA — advancing the remote without clobbering a concurrent push (735).
+	if err := p.pushBranch(ctx, req.WorkspaceDir, req.Branch); err != nil {
 		return daemon.PRResult{}, err
 	}
 
@@ -1446,6 +1576,69 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 		return daemon.PRResult{}, errors.WrapWithDetails(err, "creating pull request", "repo", repo, "head", req.Branch)
 	}
 	return daemon.PRResult{URL: pr.URL, Number: pr.Number}, nil
+}
+
+// pushBranch pushes branch to origin, lease-pushing against the current remote
+// tip when the branch already exists there (a re-push after a rebase) and plain-
+// pushing a brand-new branch. A lease push advances a diverged remote without
+// overwriting a concurrent push; a plain push of a fresh branch has no remote tip
+// to lease against.
+func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) error {
+	if !gitrepo.BranchExistsRemote(ctx, dir, branch) {
+		return gitrepo.Push(ctx, dir, branch)
+	}
+	remoteSHA, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+	if err != nil {
+		return err
+	}
+	return gitrepo.PushWithLease(ctx, dir, branch, remoteSHA)
+}
+
+// EnsureMergeable makes the handoff branch current with the base before the
+// deploy attempts the merge: it fetches the base, and when the branch does not
+// already contain the base tip it rebases the branch onto origin/<base>,
+// re-pushes (lease when the branch is on origin), and re-verifies. A rebase error
+// is a real conflict the mechanical path cannot resolve — the deploy must fail
+// loudly rather than merge blind (735).
+func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) error {
+	dir, branch := req.WorkspaceDir, req.Branch
+	base := gitrepo.DefaultBranch(ctx, dir)
+	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
+		return err
+	}
+	originBase := "origin/" + base
+	// Already current: the branch contains the base tip, so its PR is mergeable
+	// without touching it.
+	if gitrepo.IsAncestor(ctx, dir, originBase, branch) {
+		return nil
+	}
+	// Record the remote tip so the post-rebase push can lease against it — only
+	// meaningful when the branch is already on origin.
+	var remoteSHA string
+	onOrigin := gitrepo.BranchExistsRemote(ctx, dir, branch)
+	if onOrigin {
+		sha, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+		if err != nil {
+			return err
+		}
+		remoteSHA = sha
+	}
+	if err := gitrepo.Rebase(ctx, dir, originBase, branch); err != nil {
+		return err
+	}
+	if onOrigin {
+		if err := gitrepo.PushWithLease(ctx, dir, branch, remoteSHA); err != nil {
+			return err
+		}
+	} else if err := gitrepo.Push(ctx, dir, branch); err != nil {
+		return err
+	}
+	// A clean rebase that still does not contain the base tip means the branch
+	// could not be made mergeable — surface it rather than merge into a conflict.
+	if !gitrepo.IsAncestor(ctx, dir, originBase, branch) {
+		return errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
+	}
+	return nil
 }
 
 func (p forgeDeployer) PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error) {
@@ -1580,7 +1773,7 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) fu
 // and the forge publisher against the resolved project dir. Shared by the
 // board-transition and board-fix closures so both routes drive the exact same
 // engine.
-func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) (daemon.BoardTransitionDeps, error) {
+func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) (daemon.BoardTransitionDeps, error) {
 	entries := reg.Entries()
 	if len(entries) == 0 {
 		return daemon.BoardTransitionDeps{}, errors.WithDetails("no project registered for board transition")
@@ -1593,7 +1786,7 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 	}
 	return daemon.BoardTransitionDeps{
 		Commenter: commenter,
-		Launcher:  dockerAgentLauncher{},
+		Launcher:  dockerAgentLauncher{daemonID: daemonID},
 		Deployer:  forgeDeployer{resolver: resolver, lookup: lookup},
 		CloseTicket: func(pmKey string) error {
 			transitioner, err := resolvePMTransitioner(entry.Dir, lookup, resolver)
@@ -1604,6 +1797,7 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		},
 		WorkspaceDir: entry.Dir,
 		ConfigDir:    entry.Dir,
+		DaemonID:     daemonID,
 		Logger:       logger,
 	}, nil
 }
@@ -1611,9 +1805,9 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 // boardTransitionerFunc builds the daemon's BoardTransitioner closure: it
 // resolves the PM commenter by role per request and applies the transition with
 // the Docker launcher and forge publisher against the resolved project dir.
-func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) func(daemon.BoardTransitionRequest) error {
+func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardTransitionRequest) error {
 	return func(req daemon.BoardTransitionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
 		if err != nil {
 			return err
 		}
@@ -1626,9 +1820,9 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 // (planning gate skipped — autofix triages, plans and fixes in one run).
 // boardOptionerFunc builds the daemon's BoardOptioner closure: it records a
 // chosen option and relaunches the block's stage with the choice injected.
-func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) func(daemon.BoardOptionRequest) error {
+func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardOptionRequest) error {
 	return func(req daemon.BoardOptionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
 		if err != nil {
 			return err
 		}
@@ -1636,9 +1830,9 @@ func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, lo
 	}
 }
 
-func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) func(daemon.BoardFixRequest) error {
+func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardFixRequest) error {
 	return func(req daemon.BoardFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
 		if err != nil {
 			return err
 		}
@@ -1786,9 +1980,8 @@ func (r hostClaudeIdeationRunner) Run(ctx context.Context, resumeID, prompt stri
 		if ctx.Err() != nil {
 			return daemon.IdeationTurn{}, errors.WrapWithDetails(ctx.Err(), "ideation agent turn timed out")
 		}
-		var ee *exec.ExitError
 		detail := ""
-		if goerrors.As(err, &ee) {
+		if ee, ok := goerrors.AsType[*exec.ExitError](err); ok {
 			detail = strings.TrimSpace(string(ee.Stderr))
 		}
 		return daemon.IdeationTurn{}, errors.WrapWithDetails(err, "running ideation agent turn", "stderr", detail)
@@ -2020,6 +2213,16 @@ func (s *dockerAgentSweeper) DeleteAgent(ctx context.Context, name string) error
 		return err
 	}
 	defer func() { _ = docker.Close() }()
+
+	// The zombie sweep reaps a run that is gone/unresponsive: mark it StatusFailed
+	// before teardown so stopReason records outcome.json Reason:"reaped" (correct
+	// diagnosis) — never a spurious "completed". No handoff was posted, so the
+	// worktree is preserved for forensics regardless (SC-731). Best-effort: a
+	// missing meta just means it was already torn down.
+	if meta, readErr := agent.ReadMeta(name); readErr == nil && meta.Status != agent.StatusFailed {
+		meta.Status = agent.StatusFailed
+		_ = agent.WriteMeta(meta)
+	}
 
 	mgr := &agent.Manager{Docker: docker}
 	return mgr.Delete(ctx, name)

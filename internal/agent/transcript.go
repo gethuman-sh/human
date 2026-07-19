@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/devcontainer"
@@ -26,7 +25,8 @@ func containerTranscriptPath(remoteUser string) string {
 // and extracts it into destDir. It is best-effort: a missing path or copy error
 // is returned wrapped, but callers treat copy-out as non-fatal — the container
 // removal must still proceed. Extraction is hardened against path traversal:
-// entries that would escape destDir are skipped.
+// non-local entry names are skipped and every filesystem operation goes through
+// an os.Root bound to destDir, so containment is kernel-enforced.
 func CopyTranscript(ctx context.Context, docker devcontainer.DockerClient, containerID, remoteUser, destDir string) error {
 	srcPath := containerTranscriptPath(remoteUser)
 	rc, err := docker.CopyFromContainer(ctx, containerID, srcPath)
@@ -44,6 +44,11 @@ func CopyTranscript(ctx context.Context, docker devcontainer.DockerClient, conta
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return errors.WrapWithDetails(err, "creating transcript directory", "dir", destDir)
 	}
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return errors.WrapWithDetails(err, "opening transcript directory root", "dir", destDir)
+	}
+	defer func() { _ = root.Close() }()
 
 	tr := tar.NewReader(rc)
 	for {
@@ -54,7 +59,7 @@ func CopyTranscript(ctx context.Context, docker devcontainer.DockerClient, conta
 		if err != nil {
 			return errors.WrapWithDetails(err, "reading transcript archive")
 		}
-		if err := extractTarEntry(tr, hdr, destDir); err != nil {
+		if err := extractTarEntry(tr, hdr, root); err != nil {
 			return err
 		}
 	}
@@ -77,37 +82,39 @@ func closeOnContextDone(ctx context.Context, c io.Closer) (stop func()) {
 	return func() { close(done) }
 }
 
-// extractTarEntry writes one tar entry under destDir, rejecting any name that
-// would escape destDir (path traversal).
-func extractTarEntry(tr *tar.Reader, hdr *tar.Header, destDir string) error {
+// extractTarEntry writes one tar entry through the os.Root bound to the
+// destination, so escaping it — via .. segments or any symlink encountered on
+// the way — fails at the kernel, not on a string check. Non-local names
+// (including absolute ones; docker tars are always relative) are skipped
+// rather than trusted.
+func extractTarEntry(tr *tar.Reader, hdr *tar.Header, root *os.Root) error {
 	clean := filepath.Clean(hdr.Name)
-	target := filepath.Join(destDir, clean)
-	// The joined target must remain within destDir; anything else is a traversal
-	// attempt and is skipped rather than trusted.
-	if target != destDir && !strings.HasPrefix(target, destDir+string(os.PathSeparator)) {
+	if !filepath.IsLocal(clean) {
 		return nil
 	}
 
 	switch hdr.Typeflag {
 	case tar.TypeDir:
-		if err := os.MkdirAll(target, 0o700); err != nil {
-			return errors.WrapWithDetails(err, "creating transcript subdir", "dir", target)
+		if err := root.MkdirAll(clean, 0o700); err != nil {
+			return errors.WrapWithDetails(err, "creating transcript subdir", "dir", clean)
 		}
 	case tar.TypeReg:
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return errors.WrapWithDetails(err, "creating transcript parent", "dir", filepath.Dir(target))
+		if parent := filepath.Dir(clean); parent != "." {
+			if err := root.MkdirAll(parent, 0o700); err != nil {
+				return errors.WrapWithDetails(err, "creating transcript parent", "dir", parent)
+			}
 		}
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) // #nosec G304 -- target validated to stay within destDir above
+		f, err := root.OpenFile(clean, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 		if err != nil {
-			return errors.WrapWithDetails(err, "creating transcript file", "path", target)
+			return errors.WrapWithDetails(err, "creating transcript file", "path", clean)
 		}
 		// Bound the copy so a hostile archive cannot fill the disk via one entry.
 		if _, err := io.Copy(f, io.LimitReader(tr, maxTranscriptFileBytes)); err != nil {
 			_ = f.Close()
-			return errors.WrapWithDetails(err, "writing transcript file", "path", target)
+			return errors.WrapWithDetails(err, "writing transcript file", "path", clean)
 		}
 		if err := f.Close(); err != nil {
-			return errors.WrapWithDetails(err, "closing transcript file", "path", target)
+			return errors.WrapWithDetails(err, "closing transcript file", "path", clean)
 		}
 	}
 	return nil

@@ -259,7 +259,7 @@ func isTextFile(path string) bool {
 
 	buf := make([]byte, 8192)
 	n, _ := f.Read(buf)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if buf[i] == 0 {
 			return false
 		}

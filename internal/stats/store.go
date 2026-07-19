@@ -208,6 +208,32 @@ func (s *StatsStore) QueryByEventName(ctx context.Context, since, until time.Tim
 	return result, rows.Err()
 }
 
+// ToolOutcomeCounts is the ok/error split of tool calls in a range.
+type ToolOutcomeCounts struct {
+	OK    int `json:"ok"`
+	Error int `json:"error"`
+}
+
+// QueryToolOutcomes returns the count of tool_events with a NULL error_type
+// (ok) versus a non-NULL error_type (error) in [since, until]. InsertEvent
+// writes error_type NULL when the error string is empty, so IS NULL is exactly
+// the success predicate.
+func (s *StatsStore) QueryToolOutcomes(ctx context.Context, since, until time.Time) (ToolOutcomeCounts, error) {
+	var ok, errCount sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			SUM(CASE WHEN error_type IS NULL THEN 1 ELSE 0 END),
+			SUM(CASE WHEN error_type IS NOT NULL THEN 1 ELSE 0 END)
+		FROM tool_events
+		WHERE timestamp >= ? AND timestamp <= ?
+	`, since.UTC().Format("2006-01-02 15:04:05"), until.UTC().Format("2006-01-02 15:04:05")).Scan(&ok, &errCount)
+	if err != nil {
+		return ToolOutcomeCounts{}, errors.WrapWithDetails(err, "query tool outcomes")
+	}
+	// SUM over zero matching rows is NULL, not 0, so coalesce here.
+	return ToolOutcomeCounts{OK: int(ok.Int64), Error: int(errCount.Int64)}, nil
+}
+
 // QueryTotal returns the total event count for the given time range.
 func (s *StatsStore) QueryTotal(ctx context.Context, since, until time.Time) (int, error) {
 	var count int

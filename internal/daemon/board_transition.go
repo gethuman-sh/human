@@ -27,6 +27,12 @@ type AgentLauncher interface {
 type Deployer interface {
 	PushAndCreatePR(ctx context.Context, req PRRequest) (PRResult, error)
 	PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error)
+	// EnsureMergeable makes the handoff branch current with the base before the
+	// merge is attempted: it verifies the PR is mergeable against current main
+	// and, when it is not, rebases the branch, re-pushes (lease), and re-verifies.
+	// A returned error is a real conflict the mechanical path cannot resolve — the
+	// deploy must NOT attempt the merge blind, but fail loudly instead.
+	EnsureMergeable(ctx context.Context, req PRRequest) error
 	MergePullRequest(ctx context.Context, workspaceDir string, number int) error
 	DeleteRemoteBranch(ctx context.Context, workspaceDir, branch string) error
 }
@@ -72,6 +78,10 @@ type BoardTransitionDeps struct {
 	CloseTicket  func(pmKey string) error
 	WorkspaceDir string
 	ConfigDir    string
+	// DaemonID stamps this daemon's identity on every marker it posts. Empty
+	// leaves markers un-stamped (StampDaemon no-ops), so an un-provisioned
+	// daemon still functions.
+	DaemonID string
 	// Logger records best-effort post-merge failures (e.g. a failed automated
 	// close). The zero value is a safe no-op writer, so an un-wired path stays
 	// valid without a logger.
@@ -167,12 +177,23 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 			"/human-execute "+dispatchKey(req.PMKey, card))
 	}
 
-	// Deploy retry: the same sanctioned in-place relaunch for a failed deploy
-	// pipeline — without it a failed deploy (e.g. a transient forge/CI error,
-	// or a config gap fixed after the fact) is a dead end, since the done
-	// stage has no forward neighbor to re-enter through. card.Branch survives
-	// from the original [human:ready-for-review] marker, so the retry has
-	// everything runDoneStage needs.
+	// Review retry: a stage-failed review is otherwise a dead end. The rework
+	// re-drop keys on a DONE verification with a failing verdict, and a
+	// [human:review-failed] card (state failed) matches neither it nor any
+	// forward move — so a failed binding gate (missing branch, unreachable
+	// commits) could never be retried. Relaunch the review in place, re-bound to
+	// the same handoff (SC-695). A RUNNING review is caught by the idempotency
+	// guard above.
+	if isReviewRetry(req.To, card) {
+		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
+			reviewPrompt(dispatchKey(req.PMKey, card), card))
+	}
+
+	// Deploy retry: a card sitting on a failed deploy, re-dropped on Deploy, must
+	// re-run the deploy pipeline — the freshness stage rebases the already-reviewed
+	// branch and re-attempts the merge. Without this the forward-only rule below
+	// rejects the same-stage move and a conflicted deploy is a dead end that can
+	// only be escaped by re-implementing already-reviewed work (735).
 	if isDeployRetry(req.To, card) {
 		return d.runDoneStage(ctx, req, card)
 	}
@@ -214,7 +235,7 @@ func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTr
 			"/human-execute "+dispatchKey(req.PMKey, card))
 	case BoardVerification:
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			"/human-review "+dispatchKey(req.PMKey, card))
+			reviewPrompt(dispatchKey(req.PMKey, card), card))
 	case BoardDoneStage:
 		return d.runDoneStage(ctx, req, card)
 	default:
@@ -270,13 +291,13 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 // launch failure it posts the stage's *-failed marker so the board reflects the
 // error rather than leaving a stuck spinner.
 func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string) error {
-	if _, err := d.Commenter.AddComment(ctx, pmKey, startedHeader); err != nil {
+	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(startedHeader, d.DaemonID)); err != nil {
 		return errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
 	}
 	name := agentNameFor(pmKey, stage)
 	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
 		failBody := failedHeaderFor(stage) + "\n" + errors.CauseChain(err)
-		_, _ = d.Commenter.AddComment(ctx, pmKey, failBody)
+		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(failBody, d.DaemonID))
 		return errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
 	}
 	return nil
@@ -295,10 +316,10 @@ var startDeploy = func(d BoardTransitionDeps, req BoardTransitionRequest, card B
 func (d BoardTransitionDeps) runDoneStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) error {
 	if card.Branch == "" {
 		body := DeployFailedHeader + "\nno branch recorded on ready-for-review handoff"
-		_, _ = d.Commenter.AddComment(ctx, req.PMKey, body)
+		_, _ = d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(body, d.DaemonID))
 		return errors.WithDetails("no branch recorded for deploy", "pm", req.PMKey)
 	}
-	if _, err := d.Commenter.AddComment(ctx, req.PMKey, DeployStartedHeader); err != nil {
+	if _, err := d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(DeployStartedHeader, d.DaemonID)); err != nil {
 		return errors.WrapWithDetails(err, "posting deploy-started marker", "pm", req.PMKey)
 	}
 	startDeploy(d, req, card)
@@ -337,6 +358,18 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
 		return
 	}
+	// Freshness stage: own the branch's mergeability BEFORE attempting the merge.
+	// When main has advanced past the branch point the forge would reject the
+	// merge (GitHub 405) and the card would dead-end; rebasing and re-pushing here
+	// turns that terminal failure into a mechanical, human-free recovery. A real
+	// conflict surfaces as a loud deploy-failed instead of a blind merge attempt.
+	if err := d.Deployer.EnsureMergeable(ctx, PRRequest{
+		WorkspaceDir: d.WorkspaceDir,
+		Branch:       card.Branch,
+	}); err != nil {
+		d.deployFailed(req.PMKey, res.URL, "branch could not be made mergeable: "+err.Error())
+		return
+	}
 	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
 		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
 		return
@@ -347,7 +380,7 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 	// board's Fix column (the frontend only drops a card once the ticket leaves
 	// the tracker's open list), so the operator must see it and close by hand.
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, card.Branch)
-	_, _ = d.Commenter.AddComment(ctx, req.PMKey, DeployedHeader+"\npr: "+res.URL)
+	_, _ = d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
 	d.closeTicketBestEffort(req.PMKey)
 }
 
@@ -375,7 +408,7 @@ func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
 	defer cancel()
 	body := CloseFailedHeader + "\ndeployed, but the automated close of " + pmKey +
 		" failed: " + errors.CauseChain(err) + "\nclose this ticket manually to clear the card."
-	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
 }
 
 // waitForChecks blocks until the PR's CI verdict is conclusive. Passing
@@ -411,7 +444,7 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) {
 	if prURL != "" {
 		body += "\npr: " + prURL
 	}
-	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
 }
 
 // dispatchKey resolves the key an agent is dispatched on: the engineering
@@ -422,6 +455,33 @@ func dispatchKey(pmKey string, card BoardCard) string {
 		return card.EngineeringKey
 	}
 	return pmKey
+}
+
+// reviewPrompt builds the /human-review dispatch, threading the handoff branch
+// and commits as an authoritative binding. The reviewer verifies the
+// checked-out code IS this branch and these commits before reviewing, and pins
+// its verdict to the dispatched key — so it can never review a stale HEAD and
+// post on an unrelated ticket (SC-695). Flags are appended only when present so
+// pre-binding handoffs (branch-less/commit-less) still dispatch cleanly.
+func reviewPrompt(key string, card BoardCard) string {
+	prompt := "/human-review " + key
+	if card.Branch != "" {
+		prompt += " --branch=" + card.Branch
+	}
+	if card.Commits != "" {
+		prompt += " --commits=" + card.Commits
+	}
+	return prompt
+}
+
+// isReviewRetry mirrors isBuildRetry/isPlanningRetry for the verification stage:
+// a failed review is relaunched in place. Failed-state only — a running review
+// is protected by the idempotency guard, and a DONE verification with a failing
+// verdict takes the rework path instead (SC-695).
+func isReviewRetry(to BoardStage, card BoardCard) bool {
+	return to == BoardVerification &&
+		card.Stage == BoardVerification &&
+		card.State == BoardFailed
 }
 
 // isReworkTransition reports the one allowed backward move: re-running the
@@ -453,10 +513,11 @@ func isBuildRetry(to BoardStage, card BoardCard) bool {
 		card.State == BoardFailed
 }
 
-// isDeployRetry mirrors isPlanningRetry/isBuildRetry for the deploy stage:
-// failed deploys only — a running deploy is protected by the idempotency
-// guard above. Applies to both tickets and bugs, which share this same
-// verification->done transition (SC-296's deployGate serializes either).
+// isDeployRetry reports the deploy-stage twin of isBuildRetry: relaunching the
+// deploy pipeline on a card whose deploy failed. Failed-state only — a running
+// deploy is protected by ApplyTransition's idempotency guard. The retry rebases
+// and re-deploys the already-reviewed branch rather than re-implementing it, so
+// a conflicted deploy is never a dead end (735).
 func isDeployRetry(to BoardStage, card BoardCard) bool {
 	return to == BoardDoneStage &&
 		card.Stage == BoardDoneStage &&

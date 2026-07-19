@@ -56,13 +56,15 @@ human <TRACKER> issue comment list <TICKET_KEY>
    engineering: <ENG_KEY>
    branch: <current-branch>
    commits: <short-shas>
+   daemon: <daemon-id>
    ```
    Build the values:
    - `<current-branch>` from `git rev-parse --abbrev-ref HEAD`.
    - `<short-shas>` from `git log --grep=<KEY> --format='%h' HEAD` (comma-separated), grepping the key(s) the commits reference.
    - If multiple engineering tickets were executed in this run, list them all comma-separated under `engineering:` and union their commit SHAs.
    - Single-tracker topology (no engineering ticket): OMIT the `engineering:` line entirely — the reviewer works from the PM key the comment sits on.
-   Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`. If `human-done` failed, do NOT post the handoff — leave the work in progress and report the failures so the user can fix them and re-run.
+   - `<daemon-id>` is the value of the `HUMAN_DAEMON_ID` env var, so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1). OMIT the `daemon:` line entirely when `HUMAN_DAEMON_ID` is unset or empty (e.g. a hand-run outside the daemon).
+   The `branch:` and `commits:` lines ARE the review binding: the daemon threads them into the reviewer's dispatch, which checks the code out and verifies it before reviewing, then posts its verdict on the dispatched key alone — the dispatched key is fixed for a run and is never re-derived from the reviewed diff. Get these two lines right (accurate branch, complete SHAs) so the reviewer binds to exactly this work. Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`. If `human-done` failed, do NOT post the handoff — leave the work in progress and report the failures so the user can fix them and re-run.
 7. **Summarize** what was done: files created, files modified, done verdict, link/key of the PM comment that was posted (or note that it was skipped because done failed).
 
 ## Principles

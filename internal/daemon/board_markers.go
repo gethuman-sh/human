@@ -137,6 +137,33 @@ var stageRank = map[BoardStage]int{
 	BoardDoneStage:      5,
 }
 
+// DaemonLinePrefix is the marker-body line carrying the posting daemon's id.
+// It is appended AFTER the marker's content lines and is invisible to
+// ClassifyMarker (which matches only the leading header), mirroring the
+// existing pr:/branch:/commits: line convention.
+const DaemonLinePrefix = "daemon:"
+
+// StampDaemon appends a "daemon: <id>" line to a marker body. An empty id
+// returns the body unchanged, so an un-provisioned daemon still posts a valid
+// marker.
+func StampDaemon(body, daemonID string) string {
+	if strings.TrimSpace(daemonID) == "" {
+		return body
+	}
+	return strings.TrimRight(body, "\n") + "\n" + DaemonLinePrefix + " " + daemonID
+}
+
+// ParseDaemonID returns the daemon id stamped on a marker body, or "" when the
+// body carries no daemon: line (older markers, or agent posts before rule 1).
+func ParseDaemonID(body string) string {
+	for line := range strings.SplitSeq(strings.TrimSpace(body), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), DaemonLinePrefix); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
 // ClassifyMarker reports the stage and state a comment body represents and
 // whether it is a recognized board marker at all. A body is only a marker when
 // it STARTS with a known header (after trimming), so a quoted header in the

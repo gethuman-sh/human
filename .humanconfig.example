@@ -82,3 +82,17 @@ policies:
   confirm:
     - transition:Done   # log a warning before marking tickets as done
     - create            # log a warning before creating new tickets
+
+# Persistent build caches for agent containers (explicit opt-in, no
+# autodetection). Each entry becomes a named Docker volume
+# (human-cache-<name>) mounted at the given container path, so consecutive
+# agent runs build warm instead of re-downloading and recompiling everything.
+# Clean up with: docker volume rm human-cache-<name>
+caches:
+  - name: go-build
+    path: /home/vscode/.cache/go-build   # go env GOCACHE for the container user
+  - name: go-mod
+    path: /go/pkg/mod                    # go env GOMODCACHE
+  # A Node project would declare npm instead:
+  # - name: npm
+  #   path: /home/vscode/.npm

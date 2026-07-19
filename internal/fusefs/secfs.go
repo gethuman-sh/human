@@ -160,10 +160,7 @@ func (h *redactedFileHandle) Read(_ context.Context, dest []byte, off int64) (fu
 	if off >= int64(len(h.data)) {
 		return fuse.ReadResultData(nil), fs.OK
 	}
-	end := off + int64(len(dest))
-	if end > int64(len(h.data)) {
-		end = int64(len(h.data))
-	}
+	end := min(off+int64(len(dest)), int64(len(h.data)))
 	return fuse.ReadResultData(h.data[off:end]), fs.OK
 }
 

@@ -47,6 +47,47 @@ func TestParseEngineeringKeysFromHandoff(t *testing.T) {
 	}
 }
 
+func TestParseCommitsFromHandoff(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "happy path multiple commits with whitespace",
+			body: "[human:ready-for-review]\nengineering: HUM-89\nbranch: main\ncommits: abc123,  def456 , 789abc",
+			want: []string{"abc123", "def456", "789abc"},
+		},
+		{
+			name: "single commit",
+			body: "[human:ready-for-review]\nbranch: main\ncommits: 2037e40",
+			want: []string{"2037e40"},
+		},
+		{
+			name: "body must start with header so quoted references don't trigger",
+			body: "> [human:ready-for-review]\n> commits: abc123",
+			want: nil,
+		},
+		{
+			name: "header present but commits line missing",
+			body: "[human:ready-for-review]\nbranch: main",
+			want: nil,
+		},
+		{
+			name: "not a handoff",
+			body: "Looks good to me!",
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseCommitsFromHandoff(tt.body)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestParsePRFromHandoff(t *testing.T) {
 	tests := []struct {
 		name string

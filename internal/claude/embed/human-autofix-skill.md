@@ -140,7 +140,7 @@ Only after a DONE verdict.
 
 ### 7.1 Post the review handoff
 
-Post the review handoff comment on the bug (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically. The format is fixed so it can be parsed across trackers; `<short-shas>` come from `git log --grep=<WORK_KEY> --format='%h' HEAD` (comma-separated). In single-tracker topology OMIT the `engineering:` line entirely — the reviewer works from the bug key the comment sits on:
+Post the review handoff comment on the bug (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically. The format is fixed so it can be parsed across trackers; `<short-shas>` come from `git log --grep=<WORK_KEY> --format='%h' HEAD` (comma-separated). In single-tracker topology OMIT the `engineering:` line entirely — the reviewer works from the bug key the comment sits on. Append a `daemon: <daemon-id>` line carrying the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1); OMIT the `daemon:` line entirely when `HUMAN_DAEMON_ID` is unset or empty:
 
 ```bash
 human <tracker> issue comment add <BUG_KEY> "$(cat <<'HANDOFF_EOF'
@@ -148,11 +148,12 @@ human <tracker> issue comment add <BUG_KEY> "$(cat <<'HANDOFF_EOF'
 engineering: <ENG_KEY>
 branch: autofix/<work-key>
 commits: <short-shas>
+daemon: <daemon-id>
 HANDOFF_EOF
 )"
 ```
 
-Standalone only (`<BOARD_CONTEXT>` false): make sure the branch is pushed (Step 5 pushes it; verify with `git ls-remote --heads origin autofix/<work-key>`). When `<BOARD_CONTEXT>` is true the branch is intentionally local (the bind-mounted host repo where Deploy picks it up) — do NOT run `git ls-remote` and do NOT push. If the handoff comment cannot be posted, STOP with an honest status report — **do not report success**.
+Standalone only (`<BOARD_CONTEXT>` false): make sure the branch is pushed (Step 5 pushes it) AND that every SHA on the `commits:` line exists on the remote branch — a handoff must never name commits that live nowhere but the local checkout. Verify the branch with `git ls-remote --heads origin autofix/<work-key>`, then verify each named SHA is present on the remote tip with `git merge-base --is-ancestor <sha> origin/autofix/<work-key>` (non-zero exit = the SHA is not pushed; push again before posting the handoff). When `<BOARD_CONTEXT>` is true the branch is intentionally local (the bind-mounted host repo where Deploy picks it up) — do NOT run `git ls-remote` and do NOT push. If the handoff comment cannot be posted, STOP with an honest status report — **do not report success**.
 
 **Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, STOP after this handoff (report per Step 9) — do NOT run push-verification, Steps 7.2–7.3 (review), or Step 8 (deploy), which require credentials the board container lacks. The daemon chains the review and the Deploy button ships it.
 
@@ -168,7 +169,7 @@ human <tracker> issue comment add <BUG_KEY> "[human:review-started]"
 Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria.")
 ```
 
-The reviewer writes `.human/reviews/<work-key>.md`; the first line under its `## Summary` is the verdict — `pass`, `pass with notes`, or `fail`. Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
+The reviewer writes `.human/reviews/<work-key>.md`; the first line under its `## Summary` is the outcome — `pass`, `pass with notes`, `fail`, or `unreviewable: <reason>` (the code could not be obtained — e.g. the branch is unreachable or no commits reference the key). Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The `[human:review-complete]` comment below is only for reviews that examined code; an `unreviewable` outcome is handled by the 7.3 gate instead. The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
 
 ```bash
 human <tracker> issue comment add <BUG_KEY> "$(cat <<'REVIEW_EOF'
@@ -188,6 +189,7 @@ REVIEW_EOF
 ### 7.3 Review gate
 
 - **pass** or **pass with notes** — continue to Step 8.
+- **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the **human-bug-fixer** and do NOT post `[human:review-complete] verdict: fail` (that would badge the card "review found problems" and point a rework run at phantom findings). Instead post `[human:review-failed]` on the bug ticket naming the unreachable ref (`[human:review-failed]` on the first line, the reachability reason on the next), then STOP (report per Step 9). No PR is merged. The card shows an honest, retryable stage failure. The board-context 7.1 stop is unchanged.
 - **fail** — feed the reviewer's findings back once: re-dispatch the **human-bug-fixer** (Step 5) with the review findings appended to the prompt, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). If the second verdict still fails, STOP honestly: the `[human:ready-for-review]` handoff stays standing for a human, and NO pull request is merged.
 
 ## Step 8 — Phase 6: Deploy — end with a merged PR
@@ -197,6 +199,7 @@ Only after a passing review. This is the board's deploy pipeline (push → PR �
 1. Post the started marker: `human <tracker> issue comment add <BUG_KEY> "[human:deploy-started]"`.
 2. Open the pull request with `human pr create --head autofix/<work-key> --title "[<BUG_KEY>] [<ENG_KEY>] <short summary>" --body ...` (single-tracker: only `[<BUG_KEY>]`). The body carries Summary / Verdict / Tests and the ticket key(s). If no forge is configured in `.humanconfig` and the origin remote is GitHub, fall back to `gh pr create` — never report success without a PR. Capture `<PR_URL>` and the PR number.
 3. Gate on CI: `gh pr checks <number> --watch` (or the forge's equivalent). A failing gate → post `[human:deploy-failed]` with the reason on `<BUG_KEY>` and STOP — do NOT merge red.
+3a. Own branch freshness before the merge: `git fetch origin main`, then `git merge-base --is-ancestor origin/main autofix/<work-key>`. A zero exit means the branch already contains the current mainline — proceed to merge. A non-zero exit means main advanced past the branch point and a blind merge would hit GitHub's 405 "merge conflicts": rebase the already-reviewed branch mechanically with `git rebase origin/main autofix/<work-key>`, and on a clean rebase re-push with `git push --force-with-lease origin autofix/<work-key>` and re-run the CI gate (item 3). If the rebase reports a conflict, `git rebase --abort`, post `[human:deploy-failed]` with the reason on `<BUG_KEY>` and STOP — do NOT merge, and do NOT re-implement the already-reviewed work (a mechanical rebase is all a stale branch needs).
 4. Merge and clean up: `gh pr merge <number> --merge --delete-branch`. If the merge is blocked (required approvals, branch protection), post `[human:deploy-failed]` with the reason and STOP honestly — the PR stays open for a human.
 5. Record success: `human <tracker> issue comment add <BUG_KEY> "[human:deployed]"` with a second line `pr: <PR_URL>`, then move the ticket to its done-type status (`human <tracker> issue statuses <BUG_KEY>`, then `human <tracker> issue status <BUG_KEY> "<done-status>"`). In split topology close `<ENG_KEY>` the same way.
 

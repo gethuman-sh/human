@@ -11,6 +11,11 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
+// alwaysReachable is the test predicate for reconcile passes that are not
+// exercising the reachability gate: every handoff branch resolves on this
+// machine, matching the fixer-and-reviewer-share-a-machine invariant.
+func alwaysReachable(string) bool { return true }
+
 // An orphaned handoff — a [human:ready-for-review] with no subsequent review
 // marker — is exactly the card the live fix→review chain missed on restart, so
 // the reconcile pass must launch its review.
@@ -20,7 +25,7 @@ func TestReconcileOrphanedHandoffs_LaunchesReviewForOrphan(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
 	}}
 	var chained []string
-	n := reconcileOrphanedHandoffs(cards, func(pmKey string) error {
+	n := reconcileOrphanedHandoffs(cards, alwaysReachable, nil, func(pmKey string) error {
 		chained = append(chained, pmKey)
 		return nil
 	}, zerolog.Nop())
@@ -41,7 +46,7 @@ func TestReconcileOrphanedHandoffs_SkipsWhenReviewStarted(t *testing.T) {
 		},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(cards, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(cards, alwaysReachable, nil, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -58,7 +63,7 @@ func TestReconcileOrphanedHandoffs_SkipsWhenReviewComplete(t *testing.T) {
 		},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(cards, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(cards, alwaysReachable, nil, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -72,10 +77,80 @@ func TestReconcileOrphanedHandoffs_SkipsRunningBuild(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", time.Unix(1, 0))},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(cards, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(cards, alwaysReachable, nil, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
+}
+
+// A board-context fix leaves its branch local on the machine that produced it;
+// a daemon on any other machine cannot resolve that branch, so its reconcile
+// pass must NOT chain a review it could never satisfy — it leaves the handoff
+// for a daemon that can reach the branch (SC-652).
+func TestReconcileOrphanedHandoffs_SkipsUnreachableBranch(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: autofix/sc-1", time.Unix(1, 0))},
+	}}
+	unreachable := func(string) bool { return false }
+	called := false
+	n := reconcileOrphanedHandoffs(cards, unreachable, nil, func(string) error { called = true; return nil }, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.False(t, called)
+}
+
+// The gate probes the handoff's own branch: reconcile must hand the reachability
+// predicate the exact branch parsed from the ready-for-review marker.
+func TestReconcileOrphanedHandoffs_PassesHandoffBranchToProbe(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: autofix/sc-1", time.Unix(1, 0))},
+	}}
+	var probed string
+	reachable := func(branch string) bool { probed = branch; return true }
+	n := reconcileOrphanedHandoffs(cards, reachable, nil, func(string) error { return nil }, zerolog.Nop())
+
+	assert.Equal(t, 1, n)
+	assert.Equal(t, "autofix/sc-1", probed)
+}
+
+// A handoff that names commits the branch does not contain (a retry that never
+// pushed its work, 735) must be skipped-and-left on the durable reconcile pass —
+// a periodic scan must never red a card another machine can legitimately serve.
+func TestReconcileOrphanedHandoffs_SkipsPhantomCommits(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0))},
+	}}
+	var probedBranch string
+	var probedCommits []string
+	commitsPresent := func(branch string, commits []string) bool {
+		probedBranch, probedCommits = branch, commits
+		return false
+	}
+	called := false
+	n := reconcileOrphanedHandoffs(cards, alwaysReachable, commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.False(t, called, "a phantom-commit handoff must not chain a review")
+	assert.Equal(t, "feat/x", probedBranch)
+	assert.Equal(t, []string{"abc123"}, probedCommits)
+}
+
+// A handoff whose named commits ARE present on the branch chains normally —
+// the phantom-commit gate must not block a legitimate handoff.
+func TestReconcileOrphanedHandoffs_ChainsWhenCommitsPresent(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0))},
+	}}
+	commitsPresent := func(string, []string) bool { return true }
+	called := false
+	n := reconcileOrphanedHandoffs(cards, alwaysReachable, commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
+
+	assert.Equal(t, 1, n)
+	assert.True(t, called)
 }
 
 // This is the bug: with a fresh watcher (empty HookEventStore, no live exit
@@ -92,11 +167,10 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	chained := make(chan string, 1)
 	chain := func(pmKey string) error { chained <- pmKey; return nil }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, chain, time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, chain, time.Hour, zerolog.Nop())
 
 	select {
 	case pmKey := <-chained:

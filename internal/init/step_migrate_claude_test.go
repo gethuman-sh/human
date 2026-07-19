@@ -180,9 +180,7 @@ func TestCopyDirWithRewrite(t *testing.T) {
 
 func TestClaudeMigrateStep_NoClaudeData(t *testing.T) {
 	tmp := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
-	require.NoError(t, os.Chdir(tmp))
+	t.Chdir(tmp)
 
 	step := &claudeMigrateStep{
 		prompter:  &mockMigratePrompter{confirmMigrate: true, containerPath: "/workspaces/test"},
@@ -198,13 +196,11 @@ func TestClaudeMigrateStep_NoClaudeData(t *testing.T) {
 
 func TestClaudeMigrateStep_UserDeclines(t *testing.T) {
 	tmp := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	// Create a project dir so migration is offered.
 	projDir := filepath.Join(tmp, "myproject")
 	require.NoError(t, os.MkdirAll(projDir, 0o755))
-	require.NoError(t, os.Chdir(projDir))
+	t.Chdir(projDir)
 
 	claudeDir := filepath.Join(tmp, ".claude")
 	key := EncodePath(projDir)
@@ -230,8 +226,6 @@ func TestClaudeMigrateStep_UserDeclines(t *testing.T) {
 
 func TestClaudeMigrateStep_FullMigration(t *testing.T) {
 	tmp := t.TempDir()
-	origDir, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	// Set up host project.
 	projDir := filepath.Join(tmp, "myproject")
@@ -240,7 +234,7 @@ func TestClaudeMigrateStep_FullMigration(t *testing.T) {
 	if real, err := filepath.EvalSymlinks(projDir); err == nil {
 		projDir = real
 	}
-	require.NoError(t, os.Chdir(projDir))
+	t.Chdir(projDir)
 
 	claudeDir := filepath.Join(tmp, ".claude")
 	oldKey := EncodePath(projDir)

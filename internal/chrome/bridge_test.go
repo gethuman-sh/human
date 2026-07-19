@@ -1,7 +1,6 @@
 package chrome
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -51,8 +50,7 @@ func TestBridge_HappyPath(t *testing.T) {
 
 	// Create bridge with a temp socket dir.
 	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	bridge := &Bridge{
 		Dialer:  DefaultDialer{},
@@ -107,8 +105,7 @@ func TestBridge_AuthRejection(t *testing.T) {
 	}()
 
 	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	bridge := &Bridge{
 		Dialer:  DefaultDialer{},
@@ -150,8 +147,7 @@ func TestBridge_AuthRejection(t *testing.T) {
 
 func TestBridge_DialFailure(t *testing.T) {
 	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	bridge := &Bridge{
 		Dialer:  DefaultDialer{},

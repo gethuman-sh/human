@@ -5,8 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	humanerrors "github.com/gethuman-sh/human/errors"
 )
@@ -20,12 +19,12 @@ func dialConnectionError(t *testing.T) error {
 	t.Helper()
 	// 127.0.0.1:1 is in the reserved low-port range with nothing listening, so
 	// the dial fails fast with a connection error.
-	cli, err := client.NewClientWithOpts(client.WithHost("tcp://127.0.0.1:1"))
+	cli, err := client.New(client.WithHost("tcp://127.0.0.1:1"))
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
 	t.Cleanup(func() { _ = cli.Close() })
-	_, err = cli.ContainerList(context.Background(), container.ListOptions{})
+	_, err = cli.ContainerList(context.Background(), client.ContainerListOptions{})
 	if err == nil {
 		t.Fatal("expected a connection error dialing a closed port")
 	}

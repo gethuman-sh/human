@@ -278,10 +278,10 @@ func TestPendingConfirmStore_concurrentAccess(t *testing.T) {
 
 	// Writers submit then resolve their own entries with a distinct
 	// approver PID so the self-approval guard does not reject them.
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for i := range iterations {
 				id := fmt.Sprintf("w%d-i%d", workerID, i)
 				store.Submit(&PendingConfirmation{
 					ID:        id,
@@ -296,10 +296,10 @@ func TestPendingConfirmStore_concurrentAccess(t *testing.T) {
 	}
 
 	// Readers walk the store via Snapshot, Get and Len.
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for i := range iterations {
 				_ = store.Snapshot()
 				_, _ = store.Get(fmt.Sprintf("w%d-i%d", workerID, i))
 				_ = store.Len()

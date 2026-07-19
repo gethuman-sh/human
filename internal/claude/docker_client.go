@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/gethuman-sh/human/internal/dockerhost"
 )
@@ -21,11 +21,13 @@ import (
 // resolution is shared with devcontainer.NewDockerClient via
 // internal/dockerhost so the two never diverge.
 func NewEngineDockerClient() (DockerClient, error) {
-	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	// API-version negotiation is the moby client's default, so no explicit
+	// option is needed for it anymore.
+	opts := []client.Opt{client.FromEnv}
 	if host := dockerhost.Resolve().Host; host != "" {
 		opts = append(opts, client.WithHost(host))
 	}
-	cli, err := client.NewClientWithOpts(opts...)
+	cli, err := client.New(opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -37,12 +39,12 @@ type engineDockerClient struct {
 }
 
 func (e *engineDockerClient) ListContainers(ctx context.Context) ([]ContainerInfo, error) {
-	list, err := e.cli.ContainerList(ctx, container.ListOptions{})
+	list, err := e.cli.ContainerList(ctx, client.ContainerListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	infos := make([]ContainerInfo, 0, len(list))
-	for _, c := range list {
+	infos := make([]ContainerInfo, 0, len(list.Items))
+	for _, c := range list.Items {
 		name := ""
 		if len(c.Names) > 0 {
 			// Docker container names start with "/".
@@ -57,17 +59,17 @@ func (e *engineDockerClient) ListContainers(ctx context.Context) ([]ContainerInf
 }
 
 func (e *engineDockerClient) Exec(ctx context.Context, containerID string, cmd []string) (int, io.Reader, error) {
-	execCfg := container.ExecOptions{
+	execCfg := client.ExecCreateOptions{
 		Cmd:          cmd,
 		AttachStdout: true,
 		AttachStderr: true,
 	}
-	resp, err := e.cli.ContainerExecCreate(ctx, containerID, execCfg)
+	resp, err := e.cli.ExecCreate(ctx, containerID, execCfg)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	attach, err := e.cli.ContainerExecAttach(ctx, resp.ID, container.ExecStartOptions{})
+	attach, err := e.cli.ExecAttach(ctx, resp.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return 0, nil, err
 	}
@@ -81,7 +83,7 @@ func (e *engineDockerClient) Exec(ctx context.Context, containerID string, cmd [
 		return 0, nil, err
 	}
 
-	inspect, err := e.cli.ContainerExecInspect(ctx, resp.ID)
+	inspect, err := e.cli.ExecInspect(ctx, resp.ID, client.ExecInspectOptions{})
 	if err != nil {
 		return 0, nil, err
 	}
@@ -90,7 +92,8 @@ func (e *engineDockerClient) Exec(ctx context.Context, containerID string, cmd [
 }
 
 func (e *engineDockerClient) ContainerStats(ctx context.Context, containerID string) (*MemoryInfo, error) {
-	resp, err := e.cli.ContainerStatsOneShot(ctx, containerID)
+	// The zero Stream option is the one-shot sample ContainerStatsOneShot took.
+	resp, err := e.cli.ContainerStats(ctx, containerID, client.ContainerStatsOptions{})
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func TestAgentExecution_PersistsOutputAndTranscript(t *testing.T) {
 	t.Cleanup(mgr.teeWG.Wait)
 	ctx := context.Background()
 
-	exe, err := mgr.execClaudeDetached(ctx, "container-xyz", "vscode", "", StartOpts{
+	exe, err := mgr.execClaudeDetached(ctx, "container-xyz", "vscode", "", "", StartOpts{
 		Name: "reg", Prompt: "do it", Model: "opus",
 	})
 	if err != nil {
@@ -173,10 +174,5 @@ func readTree(t *testing.T, root string) string {
 }
 
 func containsArg(argv []string, want string) bool {
-	for _, a := range argv {
-		if a == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(argv, want)
 }

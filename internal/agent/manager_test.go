@@ -21,6 +21,10 @@ type mockDockerClient struct {
 
 	stopCalls   []string
 	removeCalls []string
+
+	// execCmds records the argv of every ExecCreate call so tests can assert the
+	// exact claude invocation (e.g. that SendMessage injects --continue).
+	execCmds [][]string
 }
 
 func (m *mockDockerClient) ImageBuild(_ context.Context, _ io.Reader, _ devcontainer.ImageBuildOptions) (io.ReadCloser, error) {
@@ -74,7 +78,10 @@ func (m *mockDockerClient) CopyToContainer(_ context.Context, _, _ string, _ io.
 func (m *mockDockerClient) CopyFromContainer(_ context.Context, _, _ string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
-func (m *mockDockerClient) ExecCreate(_ context.Context, _ string, _ []string, _ devcontainer.ExecOptions) (string, error) {
+func (m *mockDockerClient) ExecCreate(_ context.Context, _ string, cmd []string, _ devcontainer.ExecOptions) (string, error) {
+	m.mu.Lock()
+	m.execCmds = append(m.execCmds, cmd)
+	m.mu.Unlock()
 	return "exec-1", nil
 }
 func (m *mockDockerClient) ExecAttach(_ context.Context, _ string) (devcontainer.ExecAttachResponse, error) {
@@ -512,5 +519,123 @@ func TestStartInvalidName(t *testing.T) {
 	_, err := mgr.Start(context.Background(), StartOpts{Name: "-invalid"})
 	if err == nil {
 		t.Error("expected error for invalid agent name")
+	}
+}
+
+// writeRunningMeta persists a running-agent meta into a temp HOME so SendMessage
+// can read it back.
+func writeRunningMeta(t *testing.T, name, containerID string) {
+	t.Helper()
+	if err := WriteMeta(Meta{
+		Name:        name,
+		ContainerID: containerID,
+		Status:      StatusRunning,
+		CreatedAt:   time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteMeta: %v", err)
+	}
+}
+
+func TestSendMessage_success(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	agentLogsDirOverride = tmp
+	t.Cleanup(func() { agentLogsDirOverride = "" })
+
+	writeRunningMeta(t, "chatty", "container-1")
+
+	mock := &mockDockerClient{inspectRunning: true}
+	mgr := &Manager{Docker: mock}
+	t.Cleanup(mgr.teeWG.Wait)
+
+	if err := mgr.SendMessage(context.Background(), "chatty", "keep going"); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	// A new execution was recorded and the meta now points at it.
+	execs, err := ListExecutions("chatty")
+	if err != nil {
+		t.Fatalf("ListExecutions: %v", err)
+	}
+	if len(execs) != 1 {
+		t.Fatalf("expected 1 execution, got %d", len(execs))
+	}
+	meta, err := ReadMeta("chatty")
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+	if meta.ExecutionID == "" {
+		t.Error("expected meta.ExecutionID to be set to the follow-up run")
+	}
+}
+
+func TestSendMessage_notRunning(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	if err := WriteMeta(Meta{
+		Name: "idle", ContainerID: "c", Status: StatusStopped, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteMeta: %v", err)
+	}
+
+	mgr := &Manager{Docker: &mockDockerClient{inspectRunning: true}}
+	err := mgr.SendMessage(context.Background(), "idle", "hi")
+	if err == nil || !strings.Contains(err.Error(), "agent is not running") {
+		t.Fatalf("expected not-running error, got %v", err)
+	}
+}
+
+func TestSendMessage_containerDead(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	writeRunningMeta(t, "ghost", "gone")
+
+	// Meta says running but the container is not alive.
+	mgr := &Manager{Docker: &mockDockerClient{inspectRunning: false}}
+	err := mgr.SendMessage(context.Background(), "ghost", "hi")
+	if err == nil || !strings.Contains(err.Error(), "agent is not running") {
+		t.Fatalf("expected not-running error, got %v", err)
+	}
+}
+
+func TestSendMessage_emptyMessage(t *testing.T) {
+	mgr := &Manager{Docker: &mockDockerClient{inspectRunning: true}}
+	err := mgr.SendMessage(context.Background(), "any", "")
+	if err == nil || !strings.Contains(err.Error(), "must not be empty") {
+		t.Fatalf("expected empty-message error, got %v", err)
+	}
+}
+
+func TestSendMessage_unknownAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	mgr := &Manager{Docker: &mockDockerClient{inspectRunning: true}}
+	if err := mgr.SendMessage(context.Background(), "nope", "hi"); err == nil {
+		t.Fatal("expected error reading missing meta, got nil")
+	}
+}
+
+func TestExecClaudeDetached_continueFlag(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	agentLogsDirOverride = tmp
+	t.Cleanup(func() { agentLogsDirOverride = "" })
+
+	mock := &mockDockerClient{inspectRunning: true}
+	mgr := &Manager{Docker: mock}
+	t.Cleanup(mgr.teeWG.Wait)
+
+	opts := StartOpts{Name: "flagged", Prompt: "resume this", SkipPerms: true}
+	if _, err := mgr.execClaudeDetached(context.Background(), "c", "vscode", "", "", opts, "--continue"); err != nil {
+		t.Fatalf("execClaudeDetached: %v", err)
+	}
+
+	if len(mock.execCmds) != 1 {
+		t.Fatalf("expected 1 exec, got %d", len(mock.execCmds))
+	}
+	got := mock.execCmds[0]
+	want := []string{"claude", "--dangerously-skip-permissions", "--continue", "-p", "resume this"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("argv = %v, want %v", got, want)
 	}
 }

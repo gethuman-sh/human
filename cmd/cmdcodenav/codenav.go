@@ -804,7 +804,7 @@ func gitDiffHunks(root string) ([]diffHunk, error) {
 	}
 	var hunks []diffHunk
 	cur := ""
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		switch {
 		case strings.HasPrefix(line, "+++ "):
 			p := strings.TrimPrefix(strings.TrimPrefix(line, "+++ "), "b/")
@@ -824,7 +824,7 @@ func gitDiffHunks(root string) ([]diffHunk, error) {
 
 // parseHunkRange extracts the new-file line range from "@@ -a,b +c,d @@".
 func parseHunkRange(h string) (lo, hi int) {
-	for _, f := range strings.Fields(h) {
+	for f := range strings.FieldsSeq(h) {
 		if !strings.HasPrefix(f, "+") {
 			continue
 		}

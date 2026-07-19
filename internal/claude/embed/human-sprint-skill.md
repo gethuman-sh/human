@@ -174,6 +174,10 @@ Delegate to the **human-reviewer** agent:
 Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>")
 ```
 
+The first line under the review's `## Summary` is the outcome: `pass`, `pass with notes`, `fail`, or `unreviewable: <reason>`.
+
+**Unreviewable escape.** If the reviewer returns `unreviewable`, the code could not be obtained (unreachable branch, or no commits referencing the key) — nothing was reviewed. Do NOT present it as "the review found issues" and do NOT enter the fix/re-review loop: there are no findings. Post `[human:review-failed]` on the PM ticket naming the unreachable ref (header on the first line, the reachability reason on the next), tell the user how to make the code reachable (push the branch / commit with the ticket key), then re-run the reviewer once the code is reachable.
+
 Present the review results to the user.
 
 If the review finds issues, ask the user via `AskUserQuestion`: "The review found the following issues: <list issues>. Should we: (A) Fix the issues and re-review, or (B) Accept as-is?"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -202,12 +203,7 @@ func (i Issue) IsBug() bool {
 	if isBugToken(i.Type) {
 		return true
 	}
-	for _, l := range i.Labels {
-		if isBugToken(l) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(i.Labels, isBugToken)
 }
 
 func isBugToken(s string) bool {
@@ -235,10 +231,8 @@ func CreateLabels(i *Issue) []string {
 	if !isBugToken(i.Type) {
 		return i.Labels
 	}
-	for _, l := range i.Labels {
-		if isBugToken(l) {
-			return i.Labels
-		}
+	if slices.ContainsFunc(i.Labels, isBugToken) {
+		return i.Labels
 	}
 	return append(append([]string{}, i.Labels...), BugLabel)
 }
@@ -353,6 +347,34 @@ func (inst Instance) InferRole() string {
 		return "pm"
 	}
 	return ""
+}
+
+// ValidateTopology reports a divergence between the topology a config DECLARES
+// and the topology its RESOLVABLE credentials can actually run. declared is the
+// set of tracker statuses from DiagnoseTrackers (config view); resolvedEngineering
+// reports whether any instance whose role resolves to "engineering" actually
+// loaded (credentials present).
+//
+// Returns a non-nil error when any tracker declares role: engineering in config
+// but did not resolve — that is the exact silent split->single fallback SC-660
+// rule 7 forbids: the same config would run split topology on a machine holding
+// the token and single-tracker on one that does not.
+func ValidateTopology(declared []TrackerStatus, resolvedEngineering bool) error {
+	declaresEngineering := false
+	for _, s := range declared {
+		if s.Role == "engineering" {
+			declaresEngineering = true
+			break
+		}
+	}
+	if declaresEngineering && !resolvedEngineering {
+		return errors.WithDetails(
+			"config declares an engineering-role tracker but its credentials did not resolve; "+
+				"this would silently run single-tracker topology here and split topology elsewhere — "+
+				"fix the engineering tracker's token or remove its role: engineering declaration",
+			"declared", "engineering", "resolved", "false")
+	}
+	return nil
 }
 
 // Write interfaces (future — not implemented yet).

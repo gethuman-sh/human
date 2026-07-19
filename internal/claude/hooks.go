@@ -54,7 +54,7 @@ func InstallHooks(w io.Writer, fw FileWriter) error {
 }
 
 func mergeHooksIntoSettings(w io.Writer, fw FileWriter, path string) error {
-	settings := make(map[string]interface{})
+	settings := make(map[string]any)
 
 	data, err := fw.ReadFile(path)
 	if err == nil {
@@ -68,9 +68,9 @@ func mergeHooksIntoSettings(w io.Writer, fw FileWriter, path string) error {
 		return errors.WrapWithDetails(err, "reading settings.json", "path", path)
 	}
 
-	hooks, _ := settings["hooks"].(map[string]interface{})
+	hooks, _ := settings["hooks"].(map[string]any)
 	if hooks == nil {
-		hooks = make(map[string]interface{})
+		hooks = make(map[string]any)
 	}
 
 	changed := false
@@ -108,18 +108,18 @@ func mergeHooksIntoSettings(w io.Writer, fw FileWriter, path string) error {
 
 // addHookCommand registers a command for an event if that exact command is not
 // already present. Returns true if a new matcher was added.
-func addHookCommand(hooks map[string]interface{}, eventName, command string, async bool, matcher string) bool {
-	matchers, _ := hooks[eventName].([]interface{})
+func addHookCommand(hooks map[string]any, eventName, command string, async bool, matcher string) bool {
+	matchers, _ := hooks[eventName].([]any)
 
 	// Check if this command is already registered for the event.
 	for _, m := range matchers {
-		matcherObj, ok := m.(map[string]interface{})
+		matcherObj, ok := m.(map[string]any)
 		if !ok {
 			continue
 		}
-		hookList, _ := matcherObj["hooks"].([]interface{})
+		hookList, _ := matcherObj["hooks"].([]any)
 		for _, h := range hookList {
-			hookDef, ok := h.(map[string]interface{})
+			hookDef, ok := h.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -129,7 +129,7 @@ func addHookCommand(hooks map[string]interface{}, eventName, command string, asy
 		}
 	}
 
-	hookDef := map[string]interface{}{
+	hookDef := map[string]any{
 		"type":    "command",
 		"command": command,
 	}
@@ -137,9 +137,9 @@ func addHookCommand(hooks map[string]interface{}, eventName, command string, asy
 		hookDef["async"] = true
 	}
 
-	newMatcher := map[string]interface{}{
+	newMatcher := map[string]any{
 		"matcher": matcher,
-		"hooks":   []interface{}{hookDef},
+		"hooks":   []any{hookDef},
 	}
 	hooks[eventName] = append(matchers, newMatcher)
 	return true

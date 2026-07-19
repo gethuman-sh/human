@@ -10,3 +10,4 @@ Spins up an isolated, reproducible container from your project's `devcontainer.j
 - Mounts your project source into the container
 - Connects the container to the human daemon
 - Runs commands inside the running container
+- Mounts project-declared cache volumes into every container it creates: the `caches:` section of `.humanconfig` names persistent Docker volumes (`human-cache-<name>`) and their container paths, so consecutive agent runs build warm — explicit opt-in per project, any ecosystem is a config entry, invalid entries degrade to a cold start with a warning, cleanup via `docker volume rm human-cache-<name>`

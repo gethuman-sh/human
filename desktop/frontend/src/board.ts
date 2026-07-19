@@ -17,8 +17,8 @@ import {
   toggleTheme,
   trail,
 } from "./fancy.js";
-import { initPermissions, PermissionRequest } from "./permissions.js";
-import { initMockupsView, showMockups, setPendingMockupSlug, MockupSet } from "./mockupsview.js";
+import { initPermissions, type PermissionRequest } from "./permissions.js";
+import { initMockupsView, showMockups, setPendingMockupSlug, type MockupSet } from "./mockupsview.js";
 import {
   initSettingsView,
   showSettings,
@@ -26,20 +26,31 @@ import {
   saveSetting,
   setPaletteOpener,
   setActiveSection,
-  SettingsData,
+  type SettingsData,
 } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
+import {
+  initStatsView,
+  showStats,
+  startStatsPoll,
+  stopStatsPoll,
+} from "./statsview.js";
+import type { StatsOverview } from "./statsview.js";
 import {
   QUEUES,
   QUEUE_TRANSITION_TO,
   queueOf,
   isReworkable,
+  isReviewRetryable,
   forwardDropAllowed,
   verdictFailed,
   badgeInfo,
+  sortByHandOrder,
+  insertKeyAt,
+  boardStateFromPayload,
 } from "./board-queue.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
-import { initProjectsView, showProjectsOverview, RecentProject } from "./projectsview.js";
+import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
 
 interface Card {
   key: string;
@@ -66,6 +77,9 @@ interface Card {
   // Defect ticket (bug label or bug issue type): rendered in the Bugs pane
   // instead of the workflow board's columns.
   bug?: boolean;
+  // Ticket the user parked off the board (right-click → Hide). Local view
+  // preference; filtered out unless revealed via the header's Unhide toggle.
+  hidden?: boolean;
   mockupSlug?: string;
   mockupState?: string; // "ready" | "creating"
   // The card's open decision block: a stage ended in a fork and a human must
@@ -78,6 +92,9 @@ interface BoardData {
   cards: Card[];
   dockerAvailable: boolean;
   error?: string;
+  // Hand-sorted ticket order per queue column (top first); cards absent from
+  // their queue's list render after it in fetch order.
+  columnOrder?: Record<string, string[]>;
 }
 
 interface IdeationMsg {
@@ -228,6 +245,8 @@ interface AppBindings {
   ChooseOption(pmKey: string, optionID: string): Promise<void>;
   CloseTicket(pmKey: string): Promise<void>;
   SetIdeaColumn(pmKey: string, col: number): Promise<void>;
+  SetColumnOrder(queue: string, keys: string[]): Promise<void>;
+  SetCardHidden(pmKey: string, hidden: boolean): Promise<void>;
   DaemonStatus(): Promise<boolean>;
   StartIdeation(seed: string, mode: string, restart: boolean, evolveKey: string, evolveLabels: string[]): Promise<IdeationView>;
   CreateIdea(title: string): Promise<void>;
@@ -251,6 +270,7 @@ interface AppBindings {
   BrowseForProjectDir(): Promise<string>;
   OpenProject(dir: string): Promise<RecentProject>;
   SwitchProject(): Promise<void>;
+  Stats(range: string): Promise<StatsOverview>;
 }
 
 // This file is a module (see the trailing `export {}`) so the global
@@ -331,6 +351,14 @@ const QUEUE_VERB: Record<string, string> = {
 let current: BoardData = { cards: [], dockerAvailable: true, error: "" };
 let dragging: { key: string; title: string; stage: string } | null = null;
 
+// showHidden reveals user-hidden cards (marked with an "H" pill) instead of
+// filtering them out. Session-local so the board always starts clean.
+let showHidden = false;
+
+function cardVisible(card: Card): boolean {
+  return !card.hidden || showHidden;
+}
+
 // Two-phase load state. boardLoading covers the first fetch before any titles
 // exist (the board shows a centered spinner). stagesLoading covers the window
 // after titles render but before the comment scan resolves each card's real
@@ -401,9 +429,15 @@ function renderCard(card: Card): HTMLElement {
   if (card.engineeringKey) meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
   if (card.prURL) meta.push(`<a href="${escapeAttr(card.prURL)}" target="_blank">PR</a>`);
 
+  // The H pill marks a hidden card while it is revealed via the header's
+  // Unhide toggle — without it, revealed and normal cards would be
+  // indistinguishable and re-hiding would feel like cards vanishing at random.
+  const hiddenPill = card.hidden
+    ? `<span class="hidden-pill" title="Hidden ticket — shown via Unhide">H</span>`
+    : "";
   el.innerHTML = `
     <div class="card-key">${escapeHtml(card.key)}</div>
-    <div class="card-title" title="${escapeAttr(card.title)}">${escapeHtml(card.title)}</div>
+    <div class="card-title" title="${escapeAttr(card.title)}">${hiddenPill}${escapeHtml(card.title)}</div>
     <div class="card-meta">${meta.join("")}</div>
     ${card.error ? `<div class="card-error">${escapeHtml(card.error)}</div>` : ""}
   `;
@@ -501,6 +535,25 @@ function showCardMenu(card: Card, x: number, y: number): void {
     menu.appendChild(retryBuild);
   }
 
+  // A failed review was a dead end: the rework re-drop requires a DONE
+  // verification with a failing verdict, so a review that failed its binding
+  // gate (missing branch, unreachable commits) had no gesture to try again
+  // (SC-695). Mirrors Retry build — relaunch runs an agent in place, same Docker
+  // gate; the daemon re-derives the stage and re-binds the handoff.
+  if (!card.bug && isReviewRetryable(card)) {
+    const retryReview = document.createElement("button");
+    retryReview.type = "button";
+    retryReview.className = "context-menu-item";
+    retryReview.textContent = "Retry review";
+    retryReview.disabled = !current.dockerAvailable;
+    if (retryReview.disabled) retryReview.title = "Docker required";
+    retryReview.addEventListener("click", () => {
+      menu.remove();
+      void transition(card.key, card.title, "verification", "verification");
+    });
+    menu.appendChild(retryReview);
+  }
+
   // A failed deploy is otherwise a dead end: the Deploy zone only accepts
   // stage "verification" (SC-297's isReadyToDeploy), and a deploy failure
   // parks the card at stage "done"/state "failed" with no forward neighbor
@@ -550,6 +603,18 @@ function showCardMenu(card: Card, x: number, y: number): void {
     menu.appendChild(mockItem);
   }
 
+  // Hiding is view hygiene, not ticket lifecycle: parked noise disappears
+  // from the board while the ticket on the tracker stays untouched.
+  const hideItem = document.createElement("button");
+  hideItem.type = "button";
+  hideItem.className = "context-menu-item";
+  hideItem.textContent = card.hidden ? "Unhide ticket" : "Hide ticket";
+  hideItem.addEventListener("click", () => {
+    menu.remove();
+    toggleCardHidden(card);
+  });
+  menu.appendChild(hideItem);
+
   const closeItem = document.createElement("button");
   closeItem.type = "button";
   closeItem.className = "context-menu-item danger";
@@ -588,8 +653,10 @@ function renderColumn(queue: string): HTMLElement {
   col.className = "column";
   col.dataset.stage = queue;
 
-  // Bug tickets live in the Bugs pane, never in the workflow columns.
-  const cards = current.cards.filter((c) => queueOf(c) === queue && !c.bug);
+  // Bug tickets live in the Bugs pane, never in the workflow columns; hidden
+  // tickets only render while revealed. The saved hand order sorts what's left.
+  const cards = current.cards.filter((c) => queueOf(c) === queue && !c.bug && cardVisible(c));
+  sortByHandOrder(cards, current.columnOrder?.[queue]);
 
   const header = document.createElement("div");
   header.className = "column-header";
@@ -608,12 +675,11 @@ function renderColumn(queue: string): HTMLElement {
   body.className = "column-body";
   for (const card of cards) body.appendChild(renderCard(card));
 
-  if (queue === "product" || QUEUE_TRANSITION_TO[queue] !== undefined) {
-    // Drop targets are the queues a drag can act on: product (idea promotion)
-    // and the transition-launching queues. Ready to Deploy is deliberately
-    // NOT a target — cards arrive there only by passing review.
-    markQueueTarget(body, queue);
-  }
+  // Every column is at least a same-column sort target; product additionally
+  // accepts idea promotion and the transition queues launch stages. Dropping
+  // INTO Ready to Deploy stays impossible (dropAllowed gates it) — cards
+  // arrive there only by passing review, but sorting within it is fine.
+  markQueueTarget(body, queue);
 
   col.appendChild(body);
   return col;
@@ -631,7 +697,7 @@ function renderIdeaSpace(): HTMLElement {
   space.className = "idea-space";
   space.dataset.stage = "ideas";
 
-  const ideas = current.cards.filter((c) => queueOf(c) === "ideas" && !c.bug);
+  const ideas = current.cards.filter((c) => queueOf(c) === "ideas" && !c.bug && cardVisible(c));
 
   const grid = document.createElement("div");
   grid.className = "idea-space-grid";
@@ -758,7 +824,7 @@ function renderBugs(): void {
   const scrollByStage = captureColumnScroll(host);
   host.innerHTML = "";
 
-  const bugs = current.cards.filter((c) => c.bug);
+  const bugs = current.cards.filter((c) => c.bug && cardVisible(c));
   const gridBugs = bugs.filter((c) => bugAreaOf(c) === "grid");
   const fixBugs = bugs.filter((c) => bugAreaOf(c) !== "grid");
   const ready = bugs.filter(isReadyToDeploy);
@@ -1054,7 +1120,13 @@ function dropAllowed(target: HTMLElement): boolean {
     if (!card.bug || !current.dockerAvailable) return false;
     return bugAreaOf(card) === "grid" || isReworkable(card);
   }
-  const toQueue = target.dataset.dropQueue || "";
+  const toQueue = target.dataset.dropQueue ?? "";
+  // A drop back into the card's own column is a local reorder — it launches
+  // nothing, so neither the Docker gate nor forward-adjacency applies.
+  if (!card.bug && toQueue === queueOf(card)) return true;
+  // Ready to Deploy is never a transition target — cards earn their way in by
+  // passing review; only the same-column sort above may drop here.
+  if (toQueue === "deploy") return false;
   // forwardDropAllowed owns forward-adjacency, the Code rework re-drop, and the
   // Engineering->Code plan-ready gate; targetEnabled keeps the local Docker gate.
   return forwardDropAllowed(card, toQueue) && targetEnabled(toQueue);
@@ -1071,6 +1143,17 @@ function setHoverTarget(target: HTMLElement | null): void {
   const ok = dropAllowed(target);
   target.classList.toggle("drop-ok", ok);
   target.classList.toggle("drop-reject", !ok);
+  // The overlay verb must state what the drop DOES: a same-column drop sorts,
+  // it never launches, so the transition verb would lie ("Build it" on a card
+  // already in Code). Recomputed on every hover since the same body serves both.
+  const drag = dragging;
+  if (ok && target.dataset.drop === "queue" && drag) {
+    const card = current.cards.find((c) => c.key === drag.key);
+    const sorting = !!card && target.dataset.dropQueue === queueOf(card);
+    const verb = sorting ? "Sort here" : QUEUE_VERB[target.dataset.dropQueue ?? ""];
+    if (verb) target.dataset.verb = verb;
+    else delete target.dataset.verb;
+  }
 }
 
 function makeDragGhost(card: { key: string; title: string }): HTMLElement {
@@ -1208,7 +1291,14 @@ function performDrop(
     void fixBug(info.key, info.title);
     return;
   }
-  const toQueue = target.dataset.dropQueue || "";
+  const toQueue = target.dataset.dropQueue ?? "";
+  const dropped = current.cards.find((c) => c.key === info.key);
+  if (dropped && !dropped.bug && toQueue === queueOf(dropped)) {
+    // A drop into the card's own column sorts it — mirrors the idea-space
+    // local reorder, never a transition.
+    reorderWithinQueue(toQueue, info.key, pt.y);
+    return;
+  }
   if (toQueue === "product" && info.stage === "ideas") {
     // Promotion is a conversation, not a stage transition: the evolve-mode
     // ideation session rewrites the ticket in place and removes the idea
@@ -1216,10 +1306,40 @@ function performDrop(
     void promoteIdea(info.key);
     return;
   }
-  const to = QUEUE_TRANSITION_TO[toQueue] || "";
+  const to = QUEUE_TRANSITION_TO[toQueue] ?? "";
   if (!to) return;
   celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: false });
   void transition(info.key, info.title, info.stage, to);
+}
+
+// reorderWithinQueue persists a same-column drop as the queue's new hand
+// order, read from the live DOM so the dragged card lands exactly where the
+// pointer released among the cards the user was looking at. Optimistic like
+// SetIdeaColumn: render from the new order immediately, snap back via
+// reconcile only if the write fails. Hidden cards are absent from the DOM and
+// so from the saved list — they simply re-append after it when revealed.
+function reorderWithinQueue(queue: string, key: string, dropY: number): void {
+  const body = document.querySelector<HTMLElement>(`.column[data-stage="${queue}"] .column-body`);
+  if (!body) return;
+  const resting: string[] = [];
+  const midpoints: number[] = [];
+  for (const el of body.querySelectorAll<HTMLElement>(".card")) {
+    const k = el.dataset.key ?? "";
+    if (!k || k === key) continue;
+    const r = el.getBoundingClientRect();
+    resting.push(k);
+    midpoints.push(r.top + r.height / 2);
+  }
+  const keys = insertKeyAt(resting, midpoints, key, dropY);
+  if (!current.columnOrder) current.columnOrder = {};
+  current.columnOrder[queue] = keys;
+  render();
+  void go()
+    .SetColumnOrder(queue, keys)
+    .catch((err) => {
+      showError(errMessage(err));
+      void reconcile();
+    });
 }
 
 // promoteIdea opens the ideation panel in evolve mode, seeded with the idea
@@ -1241,7 +1361,7 @@ async function promoteIdea(key: string): Promise<void> {
   }
 
   let seed = card.title;
-  if (card.description) seed += "\n\n" + card.description;
+  if (card.description) seed += `\n\n${card.description}`;
 
   const panel = document.getElementById("ideation-panel");
   if (panel) panel.classList.remove("hidden");
@@ -1444,11 +1564,57 @@ function render(): void {
   // The detail panel lives outside #board, so the rebuild above never touches
   // it — it only needs its card data refreshed from the new board state.
   refreshTicketDetail();
+  updateHideToggle();
 }
 
 function showError(msg: string): void {
   current.error = msg;
   render();
+}
+
+// toggleCardHidden parks a ticket off the board or restores it. Optimistic
+// like SetIdeaColumn: flip and render immediately, snap back via reconcile
+// only if the write fails.
+function toggleCardHidden(card: Card): void {
+  card.hidden = !card.hidden;
+  render();
+  void go()
+    .SetCardHidden(card.key, !!card.hidden)
+    .catch((err) => {
+      showError(errMessage(err));
+      void reconcile();
+    });
+}
+
+// updateHideToggle keeps the header's Unhide/Hide button in sync: present only
+// while hidden tickets exist (labeled with the count), toggling whether they
+// render with their H pill or stay filtered out. When the last hidden ticket
+// is unhidden the reveal state resets, so the button never sticks around dead.
+function updateHideToggle(): void {
+  const header = document.getElementById("app-header");
+  if (!header) return;
+  let btn = document.getElementById("hide-toggle") as HTMLButtonElement | null;
+  const hiddenCount = current.cards.filter((c) => c.hidden).length;
+  if (hiddenCount === 0) {
+    showHidden = false;
+    btn?.remove();
+    return;
+  }
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "hide-toggle";
+    btn.type = "button";
+    btn.className = "hide-toggle";
+    btn.addEventListener("click", () => {
+      showHidden = !showHidden;
+      render();
+    });
+    header.appendChild(btn);
+  }
+  btn.textContent = showHidden ? `Hide hidden (${hiddenCount})` : `Unhide (${hiddenCount})`;
+  btn.title = showHidden
+    ? "Conceal the revealed hidden tickets again"
+    : "Reveal hidden tickets (marked with an H pill)";
 }
 
 function renderDaemonStatus(): void {
@@ -1502,13 +1668,9 @@ async function initialLoad(): Promise<void> {
   render();
   try {
     const quick = await go().CardsQuick();
-    current = {
-      cards: quick.cards || [],
-      dockerAvailable: !!quick.dockerAvailable,
-      // Suppress the quick-phase error: the full reconcile surfaces it, and
-      // clearing it here avoids a banner that flickers away a moment later.
-      error: "",
-    };
+    // Suppress the quick-phase error: the full reconcile surfaces it, and
+    // clearing it here avoids a banner that flickers away a moment later.
+    current = boardStateFromPayload(quick, true);
     boardLoading = false;
     stagesLoading = true;
     render();
@@ -1535,11 +1697,7 @@ async function reconcile(): Promise<void> {
   try {
     const data = await go().Cards();
     if (epoch !== reconcileEpoch) return;
-    current = {
-      cards: data.cards || [],
-      dockerAvailable: !!data.dockerAvailable,
-      error: data.error || "",
-    };
+    current = boardStateFromPayload(data);
   } catch (err) {
     if (epoch !== reconcileEpoch) return;
     current = { cards: [], dockerAvailable: false, error: errMessage(err) };
@@ -1626,14 +1784,14 @@ function errMessage(err: unknown): string {
 }
 
 function escapeHtml(s: unknown): string {
-  return String(s == null ? "" : s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function escapeAttr(s: unknown): string {
-  return escapeHtml(s).replace(/"/g, "&quot;");
+  return escapeHtml(s).replaceAll('"', "&quot;");
 }
 
 // --- Ideation chat panel -----------------------------------------------
@@ -1732,11 +1890,11 @@ function renderIdeationDraft(): void {
   // user edits on every poll tick).
   if (titleInput && titleInput.dataset.sessionId !== ideation.sessionId) {
     titleInput.value = ideation.draft.title;
-    titleInput.dataset.sessionId = ideation.sessionId || "";
+    titleInput.dataset.sessionId = ideation.sessionId ?? "";
   }
   if (descInput && descInput.dataset.sessionId !== ideation.sessionId) {
     descInput.value = ideation.draft.description;
-    descInput.dataset.sessionId = ideation.sessionId || "";
+    descInput.dataset.sessionId = ideation.sessionId ?? "";
   }
 }
 
@@ -1757,7 +1915,7 @@ function renderIdeation(): void {
       statusLine.textContent = ideation.error || "Ideation session failed";
       statusLine.classList.add("error");
     } else if (ideation.state === "done") {
-      statusLine.textContent = "Created " + (ideation.createdKey || "");
+      statusLine.textContent = `Created ${ideation.createdKey ?? ""}`;
     } else {
       statusLine.classList.add("hidden");
     }
@@ -1808,7 +1966,7 @@ const chosenOptions = new Map<string, { signature: string; optionID: string }>()
 // optionsSignature identifies one decision block by its content, so stale
 // re-offers of a consumed block are distinguishable from a genuinely new one.
 function optionsSignature(options: { id: string; label: string }[] | undefined): string {
-  return (options ?? []).map((o) => o.id + ":" + o.label).join("|");
+  return (options ?? []).map((o) => `${o.id}:${o.label}`).join("|");
 }
 
 // liveOptions returns the card's options with the session's consumed block
@@ -2173,7 +2331,7 @@ async function maybeOfferStartProject(): Promise<void> {
   }
   // A failed probe (info.error) means "don't offer", never a broken app.
   if (info.error || !info.emptyProject) return;
-  wizardTemplates = info.templates || [];
+  wizardTemplates = info.templates ?? [];
   if (wizardTemplates.length === 0) return;
   openStartWizard();
 }
@@ -2370,8 +2528,8 @@ async function pollAgents(): Promise<void> {
 }
 
 function formatTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1_000) return (n / 1e3).toFixed(1) + "K";
+  if (n >= 1_000_000) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1e3).toFixed(1)}K`;
   return String(n);
 }
 
@@ -2459,7 +2617,7 @@ function renderAgentRow(a: AgentInstance): string {
   if (elapsed) chips.push(`<span class="agent-chip">${elapsed}</span>`);
   if (a.slug) chips.push(`<span class="agent-chip slug">${escapeHtml(a.slug)}</span>`);
   const ctx = a.errorType || a.blockedTool || a.currentTool;
-  if (ctx) chips.push(`<span class="agent-chip ctx">${escapeHtml(a.errorType ? a.errorType : a.blockedTool ? "⚠ " + a.blockedTool : "[" + a.currentTool + "]")}</span>`);
+  if (ctx) chips.push(`<span class="agent-chip ctx">${escapeHtml(a.errorType ? a.errorType : a.blockedTool ? `⚠ ${a.blockedTool}` : `[${a.currentTool}]`)}</span>`);
 
   const rowClass = a.status === "blocked" ? "agent-row blocked" : "agent-row";
   return `<div class="${rowClass}">
@@ -2528,14 +2686,12 @@ function featureSig(doc: FeatureDoc): string {
     gs
       .map(
         (g) =>
-          g.group +
-          "|" +
-          (g.features ?? []).map((f) => f.name + ":" + f.description + (f.recent ? "*" : "")).join(",") +
-          "|" +
-          walk(g.groups),
+          `${g.group}|${(g.features ?? [])
+            .map((f) => `${f.name}:${f.description}${f.recent ? "*" : ""}`)
+            .join(",")}|${walk(g.groups)}`,
       )
       .join(";");
-  return (doc.product ?? "") + "¦" + (doc.tagline ?? "") + "¦" + walk(doc.groups);
+  return `${doc.product ?? ""}¦${doc.tagline ?? ""}¦${walk(doc.groups)}`;
 }
 
 function stopFeaturesPoll(): void {
@@ -2595,7 +2751,7 @@ async function onGenerateFeatures(): Promise<void> {
     await go().GenerateFeatures();
   } catch (err) {
     featuresGenerating = false;
-    featuresNote = "Couldn't start generation: " + errMessage(err);
+    featuresNote = `Couldn't start generation: ${errMessage(err)}`;
     renderFeatures(currentFeatureDoc);
     return;
   }
@@ -2691,18 +2847,29 @@ function selectView(view: string): void {
   const features = document.getElementById("features");
   const mockups = document.getElementById("mockups");
   const settings = document.getElementById("settings");
+  const stats = document.getElementById("stats");
   board?.classList.toggle("hidden", view !== "board");
   bugs?.classList.toggle("hidden", view !== "bugs");
   agents?.classList.toggle("hidden", view !== "agents");
   features?.classList.toggle("hidden", view !== "features");
   mockups?.classList.toggle("hidden", view !== "mockups");
   settings?.classList.toggle("hidden", view !== "settings");
+  stats?.classList.toggle("hidden", view !== "stats");
 
   if (view === "agents") {
     void pollAgents(); // immediate fetch so the view isn't blank until the first tick
     startAgentsPoll();
   } else {
     stopAgentsPoll();
+  }
+
+  // Stats polls only while active (like agents): the network panel is live, so a
+  // slow poll keeps it fresh; leaving the view stops the poll.
+  if (view === "stats") {
+    void showStats();
+    startStatsPoll();
+  } else {
+    stopStatsPoll();
   }
 
   // The features doc is static — load it once on first activation, then leave
@@ -2773,6 +2940,7 @@ function init(): void {
       showOverviewScreen();
     })();
   });
+  initStatsView(() => go());
   initPalette({ index: settingsIndex, refresh: showSettings, save: saveSetting });
   setPaletteOpener(() => openPalette());
   // The daemon status line deep-links to its home: Settings → Daemon shows
