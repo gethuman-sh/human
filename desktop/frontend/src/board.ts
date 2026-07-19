@@ -67,6 +67,7 @@ import { buildDeployControl } from "./board-deploy.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
+import { runGuardedAction } from "./board-actions.js";
 
 interface Card {
   key: string;
@@ -1022,17 +1023,26 @@ function renderFixSection(host: HTMLElement, section: FixSection): void {
 // the reconcile corrects any lie.
 async function fixBug(key: string, title: string): Promise<void> {
   const card = current.cards.find((c) => c.key === key);
+  const prevStage = card?.stage;
+  const prevState = card?.state;
   if (card) {
     card.stage = "implementation";
     card.state = "running";
     render();
   }
-  try {
-    await go().FixBug(key, title);
-  } catch (err) {
-    showError(errMessage(err));
-  }
-  await reconcile();
+  await runGuardedAction(
+    () => go().FixBug(key, title),
+    (err) => {
+      // Revert the optimistic move so a failed launch doesn't leave the card
+      // looking like it's running when it never started (SC-637).
+      if (card && prevStage !== undefined && prevState !== undefined) {
+        card.stage = prevStage;
+        card.state = prevState;
+      }
+      showError(errMessage(err));
+    },
+    reconcile,
+  );
 }
 
 // fixSecurity launches the security-fix pipeline on one security ticket — the
@@ -1247,17 +1257,35 @@ async function startFindsecurity(): Promise<void> {
 async function deployReady(side: DeploySide): Promise<void> {
   const ready = deployableCards(current.cards, side);
   if (ready.length === 0) return;
+  const prior = new Map(ready.map((c) => [c.key, { stage: c.stage, state: c.state }]));
   for (const card of ready) {
     card.stage = "done";
     card.state = "running";
   }
   render();
+  let hadError = false;
   for (const card of ready) {
     try {
       await go().Transition(card.key, card.title, "verification", "done");
     } catch (err) {
+      hadError = true;
+      // Revert only this card's optimistic move — cards that already
+      // transitioned successfully keep their optimistic "running" state.
+      const prev = prior.get(card.key);
+      if (prev) {
+        card.stage = prev.stage;
+        card.state = prev.state;
+      }
       showError(errMessage(err));
     }
+  }
+  if (hadError) {
+    // A reconcile here would overwrite the just-shown failure with the
+    // (empty) fetch error, wiping the banner in the same cycle it appeared
+    // (SC-637). Successfully-transitioned cards resync on the next natural
+    // board:changed event or reconcile instead.
+    render();
+    return;
   }
   await reconcile();
 }
@@ -1536,20 +1564,29 @@ function performDrop(
 ): void {
   if (target.dataset.drop === "idea") {
     // A local reorder, not a stage transition: move the card optimistically so
-    // the drop feels instant, then persist. On a write failure the reconcile
-    // snaps the card back to its saved column rather than lying about it.
+    // the drop feels instant, then persist. On a write failure we revert the
+    // column ourselves and show the error — a reconcile here would overwrite
+    // current.error with the (empty) fetch error before it's readable (SC-637).
     const col = Number(target.dataset.ideaCol);
     const card = current.cards.find((c) => c.key === info.key);
+    const prevCol = card?.ideaColumn;
     if (card) {
       card.ideaColumn = col;
       render();
     }
-    void go()
-      .SetIdeaColumn(info.key, col)
-      .catch((err) => {
+    void runGuardedAction(
+      () => go().SetIdeaColumn(info.key, col),
+      (err) => {
+        if (card) {
+          card.ideaColumn = prevCol;
+          render();
+        }
         showError(errMessage(err));
-        void reconcile();
-      });
+      },
+      // No reconcile on success: the daemon issues no board:changed event for
+      // a local-only ideaColumn write (unchanged from today's behavior).
+      async () => {},
+    );
     return;
   }
   if (target.dataset.drop === "deploy") {
@@ -1664,17 +1701,26 @@ async function promoteIdea(key: string): Promise<void> {
 
 async function transition(key: string, title: string, from: string, to: string): Promise<void> {
   const card = current.cards.find((c) => c.key === key);
+  const prevStage = card?.stage;
+  const prevState = card?.state;
   if (card) {
     card.stage = to;
     card.state = "running";
     render();
   }
-  try {
-    await go().Transition(key, title, from, to);
-  } catch (err) {
-    showError(errMessage(err));
-  }
-  await reconcile();
+  await runGuardedAction(
+    () => go().Transition(key, title, from, to),
+    (err) => {
+      // Revert the optimistic move so a failed launch doesn't leave the card
+      // looking like it's running or already moved (SC-637).
+      if (card && prevStage !== undefined && prevState !== undefined) {
+        card.stage = prevStage;
+        card.state = prevState;
+      }
+      showError(errMessage(err));
+    },
+    reconcile,
+  );
 }
 
 // requestClose confirms in-app (never the OS dialog) before closing, so a stray
@@ -1689,24 +1735,27 @@ async function requestClose(key: string, title: string): Promise<void> {
 }
 
 async function closeTicket(key: string): Promise<void> {
-  try {
-    await go().CloseTicket(key);
-  } catch (err) {
-    // Leave the board untouched so the banner survives — a reconcile here
-    // would overwrite current.error with the (empty) fetch error and the
-    // failure would flash away unseen.
-    showError(errMessage(err));
-    return;
-  }
-  // The daemon confirmed the transition, so the card leaves the board
-  // immediately — the full refetch below takes seconds (per-ticket comment
-  // scan) and waiting for it reads as "close did nothing". Bumping the epoch
-  // invalidates any fetch already in flight, whose pre-close snapshot would
-  // resurrect the card.
-  reconcileEpoch++;
-  current.cards = current.cards.filter((c) => c.key !== key);
-  render();
-  await reconcile();
+  await runGuardedAction(
+    () => go().CloseTicket(key),
+    (err) => {
+      // Leave the board untouched so the banner survives — a reconcile here
+      // would overwrite current.error with the (empty) fetch error and the
+      // failure would flash away unseen (SC-637 guard, now shared via
+      // runGuardedAction).
+      showError(errMessage(err));
+    },
+    async () => {
+      // The daemon confirmed the close, so the card leaves the board
+      // immediately — the full refetch below takes seconds (per-ticket
+      // comment scan) and waiting for it reads as "close did nothing".
+      // Bumping the epoch invalidates any fetch already in flight, whose
+      // pre-close snapshot would resurrect the card.
+      reconcileEpoch++;
+      current.cards = current.cards.filter((c) => c.key !== key);
+      render();
+      await reconcile();
+    },
+  );
 }
 
 // applyPermissionDecision optimistically reflects an approved permission
@@ -1731,12 +1780,11 @@ function applyPermissionDecision(req: PermissionRequest, approved: boolean): voi
 // immediate reconcile picks up the daemon-written link so the menu reads
 // "Creating mocks…" on the next right-click.
 async function createMocks(card: Card): Promise<void> {
-  try {
-    await go().CreateMocks(card.key, card.title, card.description ?? "");
-  } catch (err) {
-    showError(errMessage(err));
-  }
-  await reconcile();
+  await runGuardedAction(
+    () => go().CreateMocks(card.key, card.title, card.description ?? ""),
+    (err) => showError(errMessage(err)),
+    reconcile,
+  );
 }
 
 // confirmDialog renders a small modal overlay and resolves true/false on the
