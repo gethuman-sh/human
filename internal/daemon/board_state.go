@@ -14,8 +14,13 @@ type BoardCard struct {
 	State          BoardState `json:"state"`
 	EngineeringKey string     `json:"engineering_key,omitempty"`
 	Branch         string     `json:"branch,omitempty"`
-	PRURL          string     `json:"pr_url,omitempty"`
-	Error          string     `json:"error,omitempty"`
+	// Commits is the `commits:` line of the latest [human:ready-for-review]
+	// handoff — the exact SHAs under review. It rides the card so the daemon can
+	// hard-bind a dispatched reviewer to the handed-off work rather than letting
+	// it free-associate from whatever HEAD its worktree sits on (SC-695).
+	Commits string `json:"commits,omitempty"`
+	PRURL   string `json:"pr_url,omitempty"`
+	Error   string `json:"error,omitempty"`
 	// HasPlan reports a [human:plan] comment on the ticket — the plan lives
 	// here instead of on a separate engineering ticket (single-tracker
 	// topology).
@@ -94,6 +99,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
+	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
 	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
 	card.PRURL = latestPrefixedLine(comments, DeployedHeader, "pr:")
 	if card.PRURL == "" {

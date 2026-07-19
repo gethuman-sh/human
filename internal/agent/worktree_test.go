@@ -204,7 +204,8 @@ func stubWorktreeRemove(t *testing.T) *[][2]string {
 	return &calls
 }
 
-// A completed run's private worktree is removed at the stop choke point.
+// A run that posted its handoff (success) has its private worktree removed at
+// the stop choke point — the work is safely committed on its branch.
 func TestStopLocked_CompletedRemovesWorktree(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	calls := stubWorktreeRemove(t)
@@ -212,7 +213,7 @@ func TestStopLocked_CompletedRemovesWorktree(t *testing.T) {
 	if err := WriteMeta(Meta{
 		Name: "wt-done", ContainerID: "cid", ContainerName: ContainerName("wt-done"),
 		Status: StatusStopped, ProjectDir: "/proj", Worktree: "/wt/wt-done-abc",
-		CreatedAt: time.Now(),
+		Handoff: true, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatalf("WriteMeta: %v", err)
 	}
@@ -223,6 +224,57 @@ func TestStopLocked_CompletedRemovesWorktree(t *testing.T) {
 	}
 	if len(*calls) != 1 || (*calls)[0] != [2]string{"/proj", "/wt/wt-done-abc"} {
 		t.Fatalf("WorktreeRemove calls = %v, want one (/proj, /wt/wt-done-abc)", *calls)
+	}
+}
+
+// Regression for SC-731: a run that exits WITHOUT posting a handoff (clean exit
+// 0, no commit — the data-loss case) must KEEP its worktree for forensics, not
+// delete the only copy of the uncommitted work. Before the fix stopLocked
+// removed the worktree whenever stopReason=="completed", which every
+// no-handoff run is, destroying the work.
+func TestStopLocked_NoHandoffKeepsWorktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	calls := stubWorktreeRemove(t)
+
+	if err := WriteMeta(Meta{
+		Name: "wt-nohandoff", ContainerID: "cid", ContainerName: ContainerName("wt-nohandoff"),
+		Status: StatusStopped, ProjectDir: "/proj", Worktree: "/wt/wt-nohandoff-abc",
+		Handoff: false, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteMeta: %v", err)
+	}
+
+	mgr := &Manager{Docker: &mockDockerClient{}}
+	if err := mgr.Stop(context.Background(), "wt-nohandoff"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("WorktreeRemove calls = %v, want none for a no-handoff run (work must be preserved)", *calls)
+	}
+}
+
+// SC-731: MarkHandoff flips the meta's Handoff flag (the worktree-reclaim
+// gate), is idempotent, and is a silent no-op when the meta is missing.
+func TestMarkHandoff(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// No-op on a missing meta: must not panic or create anything.
+	MarkHandoff("ghost")
+	if _, err := ReadMeta("ghost"); err == nil {
+		t.Fatal("MarkHandoff must not create a meta for a missing agent")
+	}
+
+	if err := WriteMeta(Meta{Name: "hoff", Status: StatusStopped, CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("WriteMeta: %v", err)
+	}
+	MarkHandoff("hoff")
+	MarkHandoff("hoff") // idempotent
+	got, err := ReadMeta("hoff")
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+	if !got.Handoff {
+		t.Fatal("MarkHandoff did not set Handoff=true")
 	}
 }
 

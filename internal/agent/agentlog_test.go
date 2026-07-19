@@ -43,7 +43,7 @@ func TestExecClaudeDetached_WritesLaunchRecord(t *testing.T) {
 	// The tee goroutine creates output.log asynchronously; without this wait
 	// it races the TempDir RemoveAll and cleanup fails with ENOTEMPTY.
 	t.Cleanup(mgr.teeWG.Wait)
-	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", "", StartOpts{
 		Name: "a", Prompt: "P", Model: "opus",
 	})
 	if err != nil {
@@ -79,7 +79,7 @@ func (m *teeMock) ExecAttach(_ context.Context, _ string) (devcontainer.ExecAtta
 func TestTeeExecOutput_DemuxesStdoutAndStderr(t *testing.T) {
 	withLogRoot(t)
 	mgr := &Manager{Docker: &teeMock{}}
-	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{Name: "tee", Prompt: "p"})
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", "", StartOpts{Name: "tee", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("execClaudeDetached: %v", err)
 	}
@@ -109,7 +109,7 @@ func (m *inspectTeeMock) ExecInspect(_ context.Context, _ string) (devcontainer.
 func TestTeeExecOutput_AppendsExitCodeTrailer(t *testing.T) {
 	withLogRoot(t)
 	mgr := &Manager{Docker: &inspectTeeMock{}}
-	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{Name: "tee", Prompt: "p"})
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", "", StartOpts{Name: "tee", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("execClaudeDetached: %v", err)
 	}
@@ -135,7 +135,7 @@ func (m *inspectErrTeeMock) ExecInspect(_ context.Context, _ string) (devcontain
 func TestTeeExecOutput_InspectErrorOmitsTrailer(t *testing.T) {
 	withLogRoot(t)
 	mgr := &Manager{Docker: &inspectErrTeeMock{}}
-	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", StartOpts{Name: "tee", Prompt: "p"})
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", "", StartOpts{Name: "tee", Prompt: "p"})
 	if err != nil {
 		t.Fatalf("execClaudeDetached: %v", err)
 	}
@@ -217,16 +217,17 @@ func TestPruneExecutions_RemovesKeptWorktree(t *testing.T) {
 	if err := os.MkdirAll(wt, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var removed []string
+	var removed [][2]string
 	prev := gitrepo.WorktreeRemove
-	gitrepo.WorktreeRemove = func(_ context.Context, _, path string) error {
-		removed = append(removed, path)
+	gitrepo.WorktreeRemove = func(_ context.Context, repo, path string) error {
+		removed = append(removed, [2]string{repo, path})
 		return nil
 	}
 	t.Cleanup(func() { gitrepo.WorktreeRemove = prev })
 
+	repo := filepath.Join(t.TempDir(), "shared-repo")
 	if _, err := NewExecution(LaunchRecord{
-		ID: "stale", Agent: "a", StartedAt: time.Now().Add(-100 * 24 * time.Hour), Worktree: wt,
+		ID: "stale", Agent: "a", StartedAt: time.Now().Add(-100 * 24 * time.Hour), Worktree: wt, RepoDir: repo,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -238,8 +239,10 @@ func TestPruneExecutions_RemovesKeptWorktree(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("want 1 pruned, got %d", n)
 	}
-	if len(removed) != 1 || removed[0] != wt {
-		t.Fatalf("WorktreeRemove = %v, want [%s]", removed, wt)
+	// SC-731 sibling: the parent repo must be the first operand — passing the
+	// worktree as both is a no-op that leaks the tree from the repo's registry.
+	if len(removed) != 1 || removed[0] != [2]string{repo, wt} {
+		t.Fatalf("WorktreeRemove = %v, want [(%s, %s)]", removed, repo, wt)
 	}
 	if _, statErr := os.Stat(wt); !os.IsNotExist(statErr) {
 		t.Fatalf("kept worktree dir should be gone, stat err = %v", statErr)

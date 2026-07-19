@@ -452,9 +452,13 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		defer cancel()
 		return gitrepo.BranchReachable(probeCtx, entries[0].Dir, branch)
 	}
+	// A cleanly finished stage is the only thing that authorizes reclaiming the
+	// run's private worktree; every other exit keeps the work for forensics
+	// (SC-731). MarkHandoff is best-effort/idempotent.
+	onHandoff := func(agentName string) { agent.MarkHandoff(agentName) }
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, branchReachable, diagnoseFailure, ds.daemonID, logger)
+		chainReview, branchReachable, diagnoseFailure, onHandoff, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
@@ -2100,6 +2104,16 @@ func (s *dockerAgentSweeper) DeleteAgent(ctx context.Context, name string) error
 		return err
 	}
 	defer func() { _ = docker.Close() }()
+
+	// The zombie sweep reaps a run that is gone/unresponsive: mark it StatusFailed
+	// before teardown so stopReason records outcome.json Reason:"reaped" (correct
+	// diagnosis) — never a spurious "completed". No handoff was posted, so the
+	// worktree is preserved for forensics regardless (SC-731). Best-effort: a
+	// missing meta just means it was already torn down.
+	if meta, readErr := agent.ReadMeta(name); readErr == nil && meta.Status != agent.StatusFailed {
+		meta.Status = agent.StatusFailed
+		_ = agent.WriteMeta(meta)
+	}
 
 	mgr := &agent.Manager{Docker: docker}
 	return mgr.Delete(ctx, name)
