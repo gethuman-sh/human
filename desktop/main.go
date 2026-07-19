@@ -50,7 +50,9 @@ func main() {
 // startup stores the lifecycle context and starts the daemon subscription
 // bridge. It mirrors the TUI exactly: subscribe once, and on every daemon change
 // event emit a "board:changed" event to the frontend, which re-calls Cards().
-// There is intentionally no independent polling loop.
+// There is intentionally no Go-side polling loop; the frontend keeps a slow
+// safety-net re-fetch (board.ts BOARD_SAFETY_POLL_MS) solely so tracker edits
+// made outside human — which produce no daemon event — still surface.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	go a.subscribe(ctx)

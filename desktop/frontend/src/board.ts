@@ -331,6 +331,12 @@ let stagesLoading = false;
 // rounded up slightly so the poll never races the retry loop.
 const DAEMON_POLL_MS = 3000;
 
+// Safety net for edits made directly in the tracker's web UI: those produce no
+// daemon event, so without a slow re-fetch they stay invisible until an
+// unrelated event fires. Event-driven refresh remains the primary path; this
+// only bounds the staleness window.
+const BOARD_SAFETY_POLL_MS = 90_000;
+
 let daemonReachable = false;
 
 function go(): AppBindings {
@@ -2657,6 +2663,11 @@ function init(): void {
   void initialLoad();
   void pollDaemonStatus();
   setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
+  setInterval(() => {
+    // Only when the daemon is reachable: a dead daemon already shows its
+    // banner, and polling into it would just churn the error state.
+    if (daemonReachable) void reconcile();
+  }, BOARD_SAFETY_POLL_MS);
 
   wireRail();
   initFancy();
