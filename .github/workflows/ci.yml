@@ -52,7 +52,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go tool gosec ./...
-      - run: ./scripts/govulncheck.sh
+      - run: go tool govulncheck ./...
       - run: go tool gitleaks git -v
 
   build:
