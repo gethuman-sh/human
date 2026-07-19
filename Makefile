@@ -1,4 +1,4 @@
-.PHONY: all build fmt fmt-check install test check-test test-integration coverage coverage-check fuzz lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package
+.PHONY: all build fmt fmt-check install test check-test test-integration coverage coverage-check fuzz lint lint-deep sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package
 
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
@@ -56,12 +56,18 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzSanitizeFTSQuery -fuzztime=30s ./internal/index/...
 	go test -run=^$$ -fuzz=FuzzPeekClientHello -fuzztime=30s ./internal/proxy/...
 
+# Local lint is the lean hot-loop gate: golangci-lint's default set already
+# includes govet and the full staticcheck suite, so the standalone tools would
+# run the same analyses twice. nilaway (the slowest analyzer here) is enforced
+# by the CI lint job instead — agents and developers run `make check` several
+# times per change and must not pay it every time. `make lint-deep` runs the
+# full set locally when chasing a nil-panic before pushing.
 lint:
-	go vet ./...
-	go tool staticcheck ./...
 	go tool golangci-lint run ./...
-	go tool nilaway ./...
 	go tool gocyclo -over 15 .
+
+lint-deep: lint
+	go tool nilaway ./...
 
 sec:
 	# .claude/worktrees holds agent worktrees — stale snapshots there must not
