@@ -41,6 +41,15 @@ type ReconcileLister func(ctx context.Context) ([]ReconcileCard, error)
 // convention for optional deps.
 type BranchReachable func(branch string) bool
 
+// CommitsPresent reports whether every named commit is reachable from branch on
+// THIS machine (local ref or origin/<branch>). It layers on BranchReachable: a
+// handoff must not merely name a branch this machine can resolve, but a branch
+// that actually CONTAINS the commits it binds a review/deploy against — a
+// retry's handoff naming SHAs that were never pushed anywhere is the failure it
+// guards (735). A nil predicate disables the gate, matching the package's "nil
+// disables" convention for optional deps.
+type CommitsPresent func(branch string, commits []string) bool
+
 // RunBoardReconcile is the durable counterpart to RunBoardFailureWatch's live
 // fix→review chain. The live chain fires only on the one-shot Stop/SessionEnd
 // hook event; if the daemon restarts or the hook is lost, that trigger is gone
@@ -52,7 +61,7 @@ type BranchReachable func(branch string) bool
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
@@ -62,14 +71,14 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable
 	// Recover a restart-orphaned handoff immediately, before the first wait. The
 	// jitter applies only to subsequent cycles, so a restart-orphan is never made
 	// to wait a full interval.
-	reconcileOnce(ctx, listCards, reachable, chainReview, logger)
+	reconcileOnce(ctx, listCards, reachable, commitsPresent, chainReview, logger)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
-			reconcileOnce(ctx, listCards, reachable, chainReview, logger)
+			reconcileOnce(ctx, listCards, reachable, commitsPresent, chainReview, logger)
 		}
 	}
 }
@@ -92,13 +101,13 @@ func jitteredInterval(d time.Duration, fraction float64) time.Duration {
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, chainReview func(pmKey string) error, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, chainReview func(pmKey string) error, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
 		return
 	}
-	if n := reconcileOrphanedHandoffs(cards, reachable, chainReview, logger); n > 0 {
+	if n := reconcileOrphanedHandoffs(cards, reachable, commitsPresent, chainReview, logger); n > 0 {
 		logger.Info().Int("launched", n).Msg("board reconcile: chained review for orphaned handoffs")
 	}
 }
@@ -124,7 +133,7 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 // another machine skips that handoff and leaves it for one that can reach the
 // branch — never starting a review it could never satisfy (SC-652). Returns the
 // number of reviews launched.
-func reconcileOrphanedHandoffs(cards []ReconcileCard, reachable BranchReachable, chainReview func(pmKey string) error, logger zerolog.Logger) int {
+func reconcileOrphanedHandoffs(cards []ReconcileCard, reachable BranchReachable, commitsPresent CommitsPresent, chainReview func(pmKey string) error, logger zerolog.Logger) int {
 	launched := 0
 	for _, card := range cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
@@ -138,6 +147,15 @@ func reconcileOrphanedHandoffs(cards []ReconcileCard, reachable BranchReachable,
 		if reachable != nil && !reachable(derived.Branch) {
 			logger.Debug().Str("pm", card.Key).Str("branch", derived.Branch).
 				Msg("board reconcile: handoff branch unreachable on this machine, leaving for a daemon that can reach it")
+			continue
+		}
+		// Skip-and-leave on a phantom-commit handoff: the durable reconcile pass is
+		// a periodic scan that must not red a card another machine can legitimately
+		// serve, so an unverifiable handoff is left rather than failed (735). The
+		// loud failure lives on the live chain (board_failure.go).
+		if handoffNamesPhantomCommits(card.Comments, derived.Branch, commitsPresent) {
+			logger.Warn().Str("pm", card.Key).Str("branch", derived.Branch).
+				Msg("board reconcile: handoff names commits absent from branch on this machine, leaving it")
 			continue
 		}
 		if err := chainReview(card.Key); err != nil {

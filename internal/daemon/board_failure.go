@@ -46,7 +46,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // resolved marker). It is the success signal that authorizes reclaiming the
 // run's private worktree — every other exit KEEPS the worktree so uncommitted
 // work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), daemonID string, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), daemonID string, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -76,7 +76,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, diagnose, onHandoff, daemonID, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, commitsPresent, diagnose, onHandoff, daemonID, logger)
 			}
 		}
 	}
@@ -86,7 +86,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), daemonID string, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), daemonID string, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
@@ -111,19 +111,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 			onHandoff(agentName)
 		}
 		if stage == BoardImplementation && chainReview != nil {
-			// Only chain a review for a branch this machine can resolve; a
-			// board-context fix leaves its branch local on the machine that produced
-			// it, so a daemon elsewhere must leave the handoff for one that can reach
-			// it rather than start a review that can never check out the code (SC-652).
-			branch := latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
-			if reachable != nil && !reachable(branch) {
-				logger.Debug().Str("pm", pmKey).Str("branch", branch).
-					Msg("board chain: handoff branch unreachable on this machine, leaving for a daemon that can reach it")
-				return
-			}
-			if err := chainReview(pmKey); err != nil {
-				logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot start review after build")
-			}
+			chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
 		}
 		return
 	}
@@ -148,6 +136,50 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
 	}
+}
+
+// chainReviewAfterBuild flows a cleanly finished build into its review, guarding
+// the chain twice: the handoff branch must resolve on this machine, and (when a
+// commit gate is wired) the handoff's named commits must actually be present on
+// that branch. Pulled out of handleBoardAgentExit so the exit handler stays a
+// thin stage dispatcher and the chain's gates read as one unit.
+func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, daemonID string, logger zerolog.Logger) {
+	// Only chain a review for a branch this machine can resolve; a board-context
+	// fix leaves its branch local on the machine that produced it, so a daemon
+	// elsewhere must leave the handoff for one that can reach it rather than start
+	// a review that can never check out the code (SC-652).
+	branch := latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
+	if reachable != nil && !reachable(branch) {
+		logger.Debug().Str("pm", pmKey).Str("branch", branch).
+			Msg("board chain: handoff branch unreachable on this machine, leaving for a daemon that can reach it")
+		return
+	}
+	// Fail loudly on a phantom-commit handoff: a handoff naming commits absent from
+	// the branch would bind a review/deploy against SHAs the branch never contained
+	// (a retry that never pushed its work, 735). On the live chain a red card is the
+	// loud failure the ticket asks for — re-run the fix rather than review nothing.
+	if handoffNamesPhantomCommits(comments, branch, commitsPresent) {
+		body := ImplementationFailedHeader +
+			"\nhandoff names commits absent from branch " + branch + " on this machine — re-run the fix"
+		if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+			logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post phantom-commit failure")
+		}
+		return
+	}
+	if err := chainReview(pmKey); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot start review after build")
+	}
+}
+
+// handoffNamesPhantomCommits reports whether the latest handoff names at least
+// one commit that is not present on branch on this machine. A nil gate or a
+// handoff with no commits line is never phantom.
+func handoffNamesPhantomCommits(comments []tracker.Comment, branch string, commitsPresent CommitsPresent) bool {
+	if commitsPresent == nil {
+		return false
+	}
+	commits := ParseCommitsFromHandoff(latestHandoffBody(comments))
+	return len(commits) > 0 && !commitsPresent(branch, commits)
 }
 
 // failureMarkerBody composes the failed marker's body: a one-line headline

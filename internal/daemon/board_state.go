@@ -230,6 +230,27 @@ func latestPrefixedLine(comments []tracker.Comment, header, prefix string) strin
 	return value
 }
 
+// latestHandoffBody returns the full body of the latest [human:ready-for-review]
+// handoff comment, or "" when none is present. Callers parse it for the branch
+// and commit SHAs a review or deploy binds against — reading the whole body once
+// rather than re-scanning per field.
+func latestHandoffBody(comments []tracker.Comment) string {
+	var body string
+	var haveLatest bool
+	var latest tracker.Comment
+	for _, c := range comments {
+		if !strings.HasPrefix(strings.TrimSpace(c.Body), ReadyForReviewHeader) {
+			continue
+		}
+		if !haveLatest || c.Created.After(latest.Created) {
+			latest = c
+			haveLatest = true
+			body = c.Body
+		}
+	}
+	return body
+}
+
 // parsePrefixedLine returns the trimmed value following the first line that
 // begins with prefix (e.g. "engineering:"), or "" when absent.
 func parsePrefixedLine(body, prefix string) string {

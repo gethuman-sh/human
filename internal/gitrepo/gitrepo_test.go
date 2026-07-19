@@ -221,6 +221,198 @@ func TestBranchReachable_neither(t *testing.T) {
 	}
 }
 
+func TestFetch_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := Fetch(context.Background(), "/repo", "main"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "fetch", "origin", "main"})
+}
+
+func TestFetch_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("network down")
+	})
+	if err := Fetch(context.Background(), "/repo", "main"); err == nil {
+		t.Fatal("expected error when fetch fails")
+	}
+}
+
+func TestIsAncestor_TrueFalse(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if !IsAncestor(context.Background(), "/repo", "origin/main", "feat/x") {
+		t.Error("IsAncestor = false, want true when git exits 0")
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "merge-base", "--is-ancestor", "origin/main", "feat/x"})
+
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("exit status 1")
+	})
+	if IsAncestor(context.Background(), "/repo", "origin/main", "feat/x") {
+		t.Error("IsAncestor = true, want false when git reports not-an-ancestor")
+	}
+}
+
+func TestRevParse_success(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return []byte("deadbeefcafe\n"), nil
+	})
+	sha, err := RevParse(context.Background(), "/repo", "origin/feat/x")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sha != "deadbeefcafe" {
+		t.Errorf("sha = %q, want trimmed SHA", sha)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "rev-parse", "origin/feat/x"})
+}
+
+func TestRevParse_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("unknown revision")
+	})
+	if _, err := RevParse(context.Background(), "/repo", "nope"); err == nil {
+		t.Fatal("expected error when rev-parse fails")
+	}
+}
+
+func TestRebase_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := Rebase(context.Background(), "/repo", "origin/main", "feat/x"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "rebase", "origin/main", "feat/x"})
+}
+
+func TestRebase_conflictAborts(t *testing.T) {
+	var calls [][]string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		// The rebase itself fails; the abort (a later call) must still run.
+		if len(args) >= 3 && args[2] == "rebase" && (len(args) < 4 || args[3] != "--abort") {
+			return nil, errors.New("conflict")
+		}
+		return nil, nil
+	})
+	if err := Rebase(context.Background(), "/repo", "origin/main", "feat/x"); err == nil {
+		t.Fatal("expected error on rebase conflict")
+	}
+	var sawAbort bool
+	for _, c := range calls {
+		if len(c) >= 4 && c[2] == "rebase" && c[3] == "--abort" {
+			sawAbort = true
+		}
+	}
+	if !sawAbort {
+		t.Error("rebase conflict must abort the in-progress rebase")
+	}
+}
+
+func TestPushWithLease_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := PushWithLease(context.Background(), "/repo", "feat/x", "abc123"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "push", "--force-with-lease=feat/x:abc123", "origin", "feat/x"})
+}
+
+func TestPushWithLease_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("stale info")
+	})
+	if err := PushWithLease(context.Background(), "/repo", "feat/x", "abc123"); err == nil {
+		t.Fatal("expected error when the lease is stale")
+	}
+}
+
+func TestCommitReachable_localRef(t *testing.T) {
+	var lastArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		lastArgs = args
+		// The local rev-parse verify resolves, so the ref is the branch itself.
+		if len(args) > 2 && args[2] == "rev-parse" && contains(args, "--verify") {
+			return []byte("deadbeef\n"), nil
+		}
+		return nil, nil
+	})
+	if !CommitReachable(context.Background(), "/repo", "feat/x", "abc123") {
+		t.Error("CommitReachable = false, want true when the commit is an ancestor of the local branch")
+	}
+	assertArgs(t, lastArgs, []string{"-C", "/repo", "merge-base", "--is-ancestor", "abc123", "feat/x"})
+}
+
+func TestCommitReachable_originRef(t *testing.T) {
+	var lastArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		lastArgs = args
+		// No local ref: rev-parse verify fails, so the check falls to origin/<branch>.
+		if len(args) > 2 && args[2] == "rev-parse" && contains(args, "--verify") {
+			return nil, errors.New("no such ref")
+		}
+		return nil, nil
+	})
+	if !CommitReachable(context.Background(), "/repo", "feat/x", "abc123") {
+		t.Error("CommitReachable = false, want true when reachable from origin/<branch>")
+	}
+	assertArgs(t, lastArgs, []string{"-C", "/repo", "merge-base", "--is-ancestor", "abc123", "origin/feat/x"})
+}
+
+func TestCommitReachable_absent(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[2] == "rev-parse" && contains(args, "--verify") {
+			return []byte("deadbeef\n"), nil
+		}
+		return nil, errors.New("exit status 1")
+	})
+	if CommitReachable(context.Background(), "/repo", "feat/x", "abc123") {
+		t.Error("CommitReachable = true, want false when the commit is not reachable")
+	}
+}
+
+func TestCommitReachable_emptyInputs(t *testing.T) {
+	called := false
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	})
+	if CommitReachable(context.Background(), "/repo", "", "abc") {
+		t.Error("CommitReachable = true, want false for empty branch")
+	}
+	if CommitReachable(context.Background(), "/repo", "feat/x", "") {
+		t.Error("CommitReachable = true, want false for empty sha")
+	}
+	if called {
+		t.Error("git must not be invoked for empty inputs")
+	}
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestWorktreeAdd_argv(t *testing.T) {
 	var gotArgs []string
 	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
