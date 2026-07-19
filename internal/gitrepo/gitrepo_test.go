@@ -134,6 +134,93 @@ func TestIsRepo_TrueFalse(t *testing.T) {
 	}
 }
 
+func TestBranchExistsLocal_true(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return []byte("deadbeef\n"), nil
+	})
+	if !BranchExistsLocal(context.Background(), "/repo", "autofix/sc-1") {
+		t.Error("BranchExistsLocal = false, want true when the ref resolves")
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "rev-parse", "--verify", "--quiet", "refs/heads/autofix/sc-1"})
+}
+
+func TestBranchExistsLocal_absent(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("exit status 1")
+	})
+	if BranchExistsLocal(context.Background(), "/repo", "autofix/sc-1") {
+		t.Error("BranchExistsLocal = true, want false when git reports no such ref")
+	}
+}
+
+func TestBranchExistsLocal_emptyBranch(t *testing.T) {
+	called := false
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	})
+	if BranchExistsLocal(context.Background(), "/repo", "") {
+		t.Error("BranchExistsLocal = true, want false for an empty branch")
+	}
+	if called {
+		t.Error("git must not be invoked for an empty branch")
+	}
+}
+
+func TestBranchExistsRemote_true(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return []byte("deadbeef\trefs/heads/autofix/sc-1\n"), nil
+	})
+	if !BranchExistsRemote(context.Background(), "/repo", "autofix/sc-1") {
+		t.Error("BranchExistsRemote = false, want true when origin has the branch")
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "ls-remote", "--heads", "origin", "autofix/sc-1"})
+}
+
+func TestBranchExistsRemote_absentEmptyOutput(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("\n"), nil
+	})
+	if BranchExistsRemote(context.Background(), "/repo", "autofix/sc-1") {
+		t.Error("BranchExistsRemote = true, want false when ls-remote yields no ref")
+	}
+}
+
+func TestBranchReachable_localOnly(t *testing.T) {
+	var calls int
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls++
+		// The local probe resolves, so ls-remote must never be consulted.
+		if len(args) > 3 && args[2] == "ls-remote" {
+			t.Errorf("ls-remote consulted after a local hit: %v", args)
+		}
+		return []byte("deadbeef\n"), nil
+	})
+	if !BranchReachable(context.Background(), "/repo", "autofix/sc-1") {
+		t.Error("BranchReachable = false, want true when the branch is local")
+	}
+	if calls != 1 {
+		t.Errorf("git invoked %d times, want 1 (local hit short-circuits)", calls)
+	}
+}
+
+func TestBranchReachable_neither(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		// Local rev-parse fails; remote ls-remote returns no ref.
+		if len(args) > 3 && args[2] == "rev-parse" {
+			return nil, errors.New("exit status 1")
+		}
+		return nil, nil
+	})
+	if BranchReachable(context.Background(), "/repo", "autofix/sc-1") {
+		t.Error("BranchReachable = true, want false when neither local nor origin has the branch")
+	}
+}
+
 func TestWorktreeAdd_argv(t *testing.T) {
 	var gotArgs []string
 	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {

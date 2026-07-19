@@ -41,7 +41,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // commenterFor resolves the PM-role commenter lazily (per event) so the watcher
 // holds no tracker handle across its lifetime; the PM commenter MUST be
 // resolved by role, never by key prefix (both trackers may share a name).
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, diagnose BoardFailureDiagnoser, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -71,7 +71,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, diagnose, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, diagnose, logger)
 			}
 		}
 	}
@@ -81,7 +81,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, diagnose BoardFailureDiagnoser, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, diagnose BoardFailureDiagnoser, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
@@ -101,6 +101,16 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	_, state := latestStageState(comments, stage)
 	if state == BoardDone {
 		if stage == BoardImplementation && chainReview != nil {
+			// Only chain a review for a branch this machine can resolve; a
+			// board-context fix leaves its branch local on the machine that produced
+			// it, so a daemon elsewhere must leave the handoff for one that can reach
+			// it rather than start a review that can never check out the code (SC-652).
+			branch := latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
+			if reachable != nil && !reachable(branch) {
+				logger.Debug().Str("pm", pmKey).Str("branch", branch).
+					Msg("board chain: handoff branch unreachable on this machine, leaving for a daemon that can reach it")
+				return
+			}
 			if err := chainReview(pmKey); err != nil {
 				logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot start review after build")
 			}

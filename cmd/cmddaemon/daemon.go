@@ -416,15 +416,31 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		d := agent.DiagnoseFailure(agentName, hookErrorType)
 		return daemon.FailureDiagnosis{Headline: d.Headline, Detail: d.Detail}
 	}
+	// A daemon only chains a review for a handoff branch it can resolve on its
+	// own machine — a board-context fix leaves its branch local on the machine
+	// that produced it, so a daemon elsewhere leaves the handoff for one that can
+	// reach it (SC-652). The board operates on the single registered project.
+	branchReachable := func(branch string) bool {
+		if ds.srv.Projects == nil {
+			return false
+		}
+		entries := ds.srv.Projects.Entries()
+		if len(entries) == 0 {
+			return false
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return gitrepo.BranchReachable(probeCtx, entries[0].Dir, branch)
+	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, diagnoseFailure, logger)
+		chainReview, branchReachable, diagnoseFailure, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
 	go daemon.RunBoardReconcile(ctx,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, daemon.BoardReconcileInterval, logger)
+		branchReachable, chainReview, daemon.BoardReconcileInterval, logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }

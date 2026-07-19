@@ -71,6 +71,40 @@ var IsRepo = func(ctx context.Context, dir string) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
+// BranchExistsLocal reports whether branch exists as a local ref in the
+// repository at dir (running `git -C <dir> rev-parse --verify --quiet
+// refs/heads/<branch>`). An empty branch is never a ref, so it short-circuits to
+// false without invoking git. Package var so callers can stub git access in tests.
+var BranchExistsLocal = func(ctx context.Context, dir, branch string) bool {
+	if branch == "" {
+		return false
+	}
+	_, err := runner(ctx, "git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	return err == nil
+}
+
+// BranchExistsRemote reports whether branch exists on the origin remote of the
+// repository at dir (running `git -C <dir> ls-remote --heads origin <branch>`).
+// ls-remote exits zero with empty output when the branch is absent, so a ref is
+// present only when the output is non-empty. An empty branch short-circuits to
+// false. Package var so callers can stub git access in tests.
+var BranchExistsRemote = func(ctx context.Context, dir, branch string) bool {
+	if branch == "" {
+		return false
+	}
+	out, err := runner(ctx, "git", "-C", dir, "ls-remote", "--heads", "origin", branch)
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+// BranchReachable reports whether branch resolves on THIS machine for the
+// repository at dir — as a local ref or on origin. The local check comes first so
+// a branch left local (a board-context fix on the machine that produced it) is
+// reachable without a network round-trip; once the branch is pushed, the remote
+// check also passes. Package var so callers can stub git access in tests.
+var BranchReachable = func(ctx context.Context, dir, branch string) bool {
+	return BranchExistsLocal(ctx, dir, branch) || BranchExistsRemote(ctx, dir, branch)
+}
+
 // WorktreeAdd creates a detached private worktree at worktreePath rooted at base
 // (running `git -C <repoDir> worktree add --detach <worktreePath> <base>`). The
 // worktree shares repoDir's object DB, so branches created inside it are visible

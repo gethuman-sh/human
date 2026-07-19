@@ -26,6 +26,15 @@ type ReconcileCard struct {
 // stays pure and testable.
 type ReconcileLister func(ctx context.Context) ([]ReconcileCard, error)
 
+// BranchReachable reports whether a handoff branch resolves on THIS machine —
+// as a local ref or on origin. A board-context fix leaves its branch local on
+// the machine that produced it, so a daemon on another machine cannot serve a
+// review for it; gating the review chain on reachability leaves such a handoff
+// for a daemon that can reach the branch. A nil predicate disables the gate
+// (every branch treated as reachable), matching the package's "nil disables"
+// convention for optional deps.
+type BranchReachable func(branch string) bool
+
 // RunBoardReconcile is the durable counterpart to RunBoardFailureWatch's live
 // fix→review chain. The live chain fires only on the one-shot Stop/SessionEnd
 // hook event; if the daemon restarts or the hook is lost, that trigger is gone
@@ -37,7 +46,7 @@ type ReconcileLister func(ctx context.Context) ([]ReconcileCard, error)
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
@@ -45,7 +54,7 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, chainRevi
 	logger.Info().Msg("board reconcile started")
 
 	// Recover a restart-orphaned handoff immediately, before the first tick.
-	reconcileOnce(ctx, listCards, chainReview, logger)
+	reconcileOnce(ctx, listCards, reachable, chainReview, logger)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -55,20 +64,20 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, chainRevi
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			reconcileOnce(ctx, listCards, chainReview, logger)
+			reconcileOnce(ctx, listCards, reachable, chainReview, logger)
 		}
 	}
 }
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, chainReview func(pmKey string) error, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, chainReview func(pmKey string) error, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
 		return
 	}
-	if n := reconcileOrphanedHandoffs(cards, chainReview, logger); n > 0 {
+	if n := reconcileOrphanedHandoffs(cards, reachable, chainReview, logger); n > 0 {
 		logger.Info().Int("launched", n).Msg("board reconcile: chained review for orphaned handoffs")
 	}
 }
@@ -86,13 +95,28 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, chainReview f
 // verification-running guard. And ApplyTransition re-loads live comments and
 // no-ops when the target stage already has a running marker, so even if the
 // live hook event and a reconcile tick race, the second call is a no-op at the
-// transition layer — the two can never double-launch a review. Returns the
+// transition layer — the two can never double-launch a review.
+//
+// A reachability gate guards the chain: a review is chained only for a handoff
+// whose branch this machine can resolve (local ref or on origin). A board-context
+// fix leaves its branch local on the machine that produced it, so a daemon on
+// another machine skips that handoff and leaves it for one that can reach the
+// branch — never starting a review it could never satisfy (SC-652). Returns the
 // number of reviews launched.
-func reconcileOrphanedHandoffs(cards []ReconcileCard, chainReview func(pmKey string) error, logger zerolog.Logger) int {
+func reconcileOrphanedHandoffs(cards []ReconcileCard, reachable BranchReachable, chainReview func(pmKey string) error, logger zerolog.Logger) int {
 	launched := 0
 	for _, card := range cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
 		if derived.Stage != BoardImplementation || derived.State != BoardDone {
+			continue
+		}
+		// A daemon only chains a review for a branch it can actually resolve on
+		// this machine; a handoff branch left local on another machine is left for
+		// a daemon that can reach it, rather than starting a review that can never
+		// check out the code (SC-652).
+		if reachable != nil && !reachable(derived.Branch) {
+			logger.Debug().Str("pm", card.Key).Str("branch", derived.Branch).
+				Msg("board reconcile: handoff branch unreachable on this machine, leaving for a daemon that can reach it")
 			continue
 		}
 		if err := chainReview(card.Key); err != nil {
