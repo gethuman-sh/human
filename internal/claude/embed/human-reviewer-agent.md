@@ -34,14 +34,14 @@ human <TRACKER> issue comment list <TICKET_KEY>
 
 1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured). The implementation plan is either the ticket description (split topology: separate engineering ticket) or a `[human:plan]` comment on the ticket — read it back with `human plan show <key>`. Use it as additional context for what was intended.
 2. **Resolve the code under review.** Check whether HEAD is detached: `git symbolic-ref -q HEAD` (exits non-zero when detached). Board runs execute in an isolated worktree detached at the DEFAULT branch — the fix commits are NOT there; they live on the branch named in the ticket's latest `[human:ready-for-review]` comment (`branch:` line, read via `human <tracker> issue comment list <key>`).
-   - **Detached HEAD + a handoff naming a branch**: check it out with `git checkout --detach <branch>` (detach avoids "already checked out in another worktree" collisions) before doing anything else. If that branch does not exist, STOP and report "handoff branch `<branch>` not found" as the review outcome — do not review the default branch and call the work missing.
+   - **Detached HEAD + a handoff naming a branch**: check it out with `git checkout --detach <branch>` (detach avoids "already checked out in another worktree" collisions) before doing anything else. If that branch does not exist, STOP and report the `## Summary` as `unreviewable: handoff branch <branch> not found — no code was reviewed`. This is a stage failure, not a review verdict: the code could not be obtained, so there is nothing to pass or fail. Never review the default branch as a fallback, and never emit a `fail` — the calling skill translates `unreviewable` into a `[human:review-failed]` stage failure, not a fail verdict.
    - **On a named branch** (a user invoked the review on their own checkout): review the current branch as-is; never switch a user's checkout.
 3. **Find the ticket's commits.** Locate every commit on the current branch whose message references the ticket key. Run:
    ```sh
    git log --format=%H --grep=<KEY> HEAD
    ```
    This catches all common formats (`SC-57`, `[SC-57]`, `Issue SC-57`) because the ticket key itself is the substring being matched. If the ticket key is purely numeric (e.g. `123` from a `#123` reference), use the full reference form to avoid false positives: `git log --format=%H --grep='#<KEY>\b' --extended-regexp HEAD`.
-   - **If zero commits match**, do NOT fall back to a branch diff. Stop and report: "No commits referencing `<KEY>` found on this branch. Either the work has not been committed yet, or commits are missing the ticket reference." This is a real finding, not an error, because traceability from ticket to commit is a project rule.
+   - **If zero commits match**, do NOT fall back to a branch diff. Stop and report the `## Summary` as `unreviewable: no commits referencing <KEY> are reachable on <branch> — no code was reviewed`. Either the work has not been committed yet, or commits are missing the ticket reference — in both cases the code under review could not be obtained, so this is a stage failure (`unreviewable`), NOT a `fail` verdict. The calling skill translates it into a `[human:review-failed]` stage failure.
    - **If uncommitted changes exist** (`git status --porcelain` is non-empty), note them in a separate "Uncommitted work" section in the review but do not include them in the acceptance criteria evaluation. They have not been claimed against this ticket yet.
 4. **Build the review diff.** Concatenate the diffs of just the matched commits, in chronological order:
    ```sh
@@ -70,7 +70,14 @@ Write the review in this structure:
 # Review: <TICKET_KEY>
 
 ## Summary
-<one-line verdict: pass, pass with notes, or fail>
+<one-line outcome, exactly one of:
+ - `pass`
+ - `pass with notes`
+ - `fail` — ONLY when the code was examined and found wanting
+ - `unreviewable: <reachability reason>` — the code could NOT be obtained
+   (handoff branch missing, or zero commits referencing the key reachable);
+   nothing was reviewed. The calling skill translates this into a
+   `[human:review-failed]` stage failure, never a fail verdict.>
 
 ## Reviewed commits
 <list of commit hashes (short form) and their subject lines, in chronological order. These are the commits whose messages reference <TICKET_KEY>. The diff under review is the union of these commits, NOT the full branch.>

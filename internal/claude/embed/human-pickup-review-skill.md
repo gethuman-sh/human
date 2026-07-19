@@ -36,12 +36,20 @@ Your job: parse that comment, run the `human-reviewer` agent against each review
    ```
    Each run writes `.human/reviews/<review_key_lowercased>.md`.
 
-5. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the verdict (`pass`, `pass with notes`, or `fail`). Roll them up into an overall verdict:
+5. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the outcome (`pass`, `pass with notes`, `fail`, or `unreviewable: <reason>`). If ANY reviewed key's Summary starts with `unreviewable`, the reviewer could not obtain that code — skip the pass/notes/fail roll-up entirely and go to the unreviewable branch of step 6. Otherwise roll them up into an overall verdict:
    - all pass → `pass`
    - any pass-with-notes, no fails → `pass with notes`
    - any fail → `fail`
 
-6. **Post the follow-up comment on the PM ticket.** The comment is the canonical record of the review — it must carry the reviewer's full findings inline so a reader (and the board detail panel) sees what was found without opening any local file. The `.human/reviews/<key>.md` files remain as working artifacts, not the source of truth. Use this format:
+6. **Post the follow-up comment on the PM ticket.**
+
+   **Unreviewable escape (leading branch).** If any reviewed key was `unreviewable`, do NOT post `[human:review-complete]` and do NOT dispatch any rework — nothing was reviewed, so a verdict would be a lie. Post `[human:review-failed]` instead, naming the unreachable ref(s) per affected key so the board renders an honest, retryable stage failure, then STOP:
+   ```
+   [human:review-failed]
+   <REVIEW_KEY>: <reachability reason — e.g. handoff branch feat/x not found — no code was reviewed>
+   ```
+   Post it with `human <pm-tracker> issue comment add <PM_KEY> "<body>"`, tell the user how to make the code reachable (push the branch / commit with the ticket key), and STOP — do not run the pass/notes/fail posting below.
+ The comment is the canonical record of the review — it must carry the reviewer's full findings inline so a reader (and the board detail panel) sees what was found without opening any local file. The `.human/reviews/<key>.md` files remain as working artifacts, not the source of truth. Use this format:
    ```
    [human:review-complete]
    verdict: <overall-verdict>

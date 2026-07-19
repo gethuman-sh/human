@@ -550,6 +550,39 @@ func TestApplyTransitionReworkRejectedWithoutFailedVerdict(t *testing.T) {
 	assert.Zero(t, l.calls)
 }
 
+func TestReviewFailedDerivesToVerificationFailed(t *testing.T) {
+	// A [human:review-failed] marker (the honest channel for "could not obtain
+	// the code") reds the verification stage WITHOUT recording a verdict — so
+	// the rework path, which keys on a failed verdict on a DONE card, never
+	// fires against phantom findings (ticket 653).
+	comments := []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-failed]\nhandoff branch feat/x not found — no code was reviewed", time.Unix(2, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardVerification, card.Stage)
+	assert.Equal(t, BoardFailed, card.State)
+	assert.Empty(t, card.Verdict, "review-failed is a stage failure, not a review verdict")
+	assert.False(t, isReworkTransition(BoardImplementation, card),
+		"a review-failed card must not qualify for the rework-to-implementation path")
+}
+
+func TestApplyTransitionReviewFailedDoesNotDispatchFixer(t *testing.T) {
+	// Dropping a review-failed card toward Implementation must not launch a
+	// fixer against findings that do not exist: the honest failure is retryable
+	// in place (re-run the review), not a rework trigger (ticket 653).
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-failed]\nhandoff branch feat/x not found — no code was reviewed", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardImplementation})
+	require.Error(t, err)
+	assert.Zero(t, l.calls, "no fixer may be dispatched for an unreviewable stage failure")
+	assert.NotContains(t, c.added, ImplementationStartedHeader)
+}
+
 func TestApplyTransitionDeployBlockedByFailedVerdict(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{
 		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
