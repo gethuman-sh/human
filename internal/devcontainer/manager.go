@@ -641,7 +641,7 @@ func (m *Manager) loadCacheVolumes(projectDir string, out io.Writer) []CacheVolu
 			valid = append(valid, c)
 			continue
 		}
-		_, _ = fmt.Fprintf(out, "Warning: ignoring invalid cache volume %q (need a docker-safe name and an absolute path)\n", c.Name)
+		_, _ = fmt.Fprintf(out, "Warning: ignoring invalid cache volume %q (need a docker-safe name and an absolute path)\n", c.Name) // #nosec G705 -- CLI terminal output, not web
 	}
 	return valid
 }
