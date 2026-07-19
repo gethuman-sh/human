@@ -37,6 +37,10 @@ body {
   height: 100%;
 }
 
+.app-shell.hidden {
+  display: none;
+}
+
 .app-main {
   flex: 1;
   min-width: 0;
