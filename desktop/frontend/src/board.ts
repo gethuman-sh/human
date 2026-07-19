@@ -30,6 +30,13 @@ import {
 } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import {
+  initStatsView,
+  showStats,
+  startStatsPoll,
+  stopStatsPoll,
+  StatsOverview,
+} from "./statsview.js";
+import {
   QUEUES,
   QUEUE_TRANSITION_TO,
   queueOf,
@@ -249,6 +256,7 @@ interface AppBindings {
   MockupSets(): Promise<MockupSet[]>;
   Settings(): Promise<SettingsData>;
   SaveSetting(path: string, valueJSON: string): Promise<SettingsData>;
+  Stats(range: string): Promise<StatsOverview>;
 }
 
 // This file is a module (see the trailing `export {}`) so the global
@@ -2740,18 +2748,29 @@ function selectView(view: string): void {
   const features = document.getElementById("features");
   const mockups = document.getElementById("mockups");
   const settings = document.getElementById("settings");
+  const stats = document.getElementById("stats");
   board?.classList.toggle("hidden", view !== "board");
   bugs?.classList.toggle("hidden", view !== "bugs");
   agents?.classList.toggle("hidden", view !== "agents");
   features?.classList.toggle("hidden", view !== "features");
   mockups?.classList.toggle("hidden", view !== "mockups");
   settings?.classList.toggle("hidden", view !== "settings");
+  stats?.classList.toggle("hidden", view !== "stats");
 
   if (view === "agents") {
     void pollAgents(); // immediate fetch so the view isn't blank until the first tick
     startAgentsPoll();
   } else {
     stopAgentsPoll();
+  }
+
+  // Stats polls only while active (like agents): the network panel is live, so a
+  // slow poll keeps it fresh; leaving the view stops the poll.
+  if (view === "stats") {
+    void showStats();
+    startStatsPoll();
+  } else {
+    stopStatsPoll();
   }
 
   // The features doc is static — load it once on first activation, then leave
@@ -2811,6 +2830,7 @@ function init(): void {
   initPermissions(() => go(), applyPermissionDecision);
   initMockupsView(() => go());
   initSettingsView(() => go());
+  initStatsView(() => go());
   initPalette({ index: settingsIndex, refresh: showSettings, save: saveSetting });
   setPaletteOpener(() => openPalette());
   // The daemon status line deep-links to its home: Settings → Daemon shows
