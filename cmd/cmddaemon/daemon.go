@@ -441,16 +441,14 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// that produced it, so a daemon elsewhere leaves the handoff for one that can
 	// reach it (SC-652). The board operates on the single registered project.
 	branchReachable := func(branch string) bool {
-		if ds.srv.Projects == nil {
-			return false
-		}
-		entries := ds.srv.Projects.Entries()
-		if len(entries) == 0 {
-			return false
-		}
-		probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		return gitrepo.BranchReachable(probeCtx, entries[0].Dir, branch)
+		return boardBranchReachable(ctx, ds.srv.Projects, branch)
+	}
+	// A handoff must name commits the branch actually contains — a retry that never
+	// pushed its work named SHAs no machine could see (735). This gate verifies
+	// every named commit is reachable from the branch on this machine (local ref or
+	// origin/<branch>); any absent commit fails the check.
+	commitsPresent := func(branch string, commits []string) bool {
+		return boardCommitsPresent(ctx, ds.srv.Projects, branch, commits)
 	}
 	// A cleanly finished stage is the only thing that authorizes reclaiming the
 	// run's private worktree; every other exit keeps the work for forensics
@@ -458,13 +456,13 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	onHandoff := func(agentName string) { agent.MarkHandoff(agentName) }
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, branchReachable, diagnoseFailure, onHandoff, ds.daemonID, logger)
+		chainReview, branchReachable, commitsPresent, diagnoseFailure, onHandoff, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
 	go daemon.RunBoardReconcile(ctx,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
-		branchReachable, chainReview, daemon.BoardReconcileInterval, logger)
+		branchReachable, commitsPresent, chainReview, daemon.BoardReconcileInterval, logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }
@@ -1497,6 +1495,51 @@ func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace
 	return err
 }
 
+// boardProjectDir resolves the single registered project's directory, the repo
+// the board's git probes run against. ok is false when no project is registered.
+func boardProjectDir(projects *daemon.ProjectRegistry) (string, bool) {
+	if projects == nil {
+		return "", false
+	}
+	entries := projects.Entries()
+	if len(entries) == 0 {
+		return "", false
+	}
+	return entries[0].Dir, true
+}
+
+// boardBranchReachable reports whether a handoff branch resolves on this machine
+// (local ref or origin) — a board-context fix leaves its branch local on the
+// machine that produced it (SC-652). A 15s timeout bounds the git probe.
+func boardBranchReachable(ctx context.Context, projects *daemon.ProjectRegistry, branch string) bool {
+	dir, ok := boardProjectDir(projects)
+	if !ok {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return gitrepo.BranchReachable(probeCtx, dir, branch)
+}
+
+// boardCommitsPresent reports whether every named commit is reachable from
+// branch on this machine — the gate that keeps a handoff from naming SHAs no
+// machine could see (735). Any absent commit fails the check. A 15s timeout
+// bounds the git probes.
+func boardCommitsPresent(ctx context.Context, projects *daemon.ProjectRegistry, branch string, commits []string) bool {
+	dir, ok := boardProjectDir(projects)
+	if !ok {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	for _, sha := range commits {
+		if !gitrepo.CommitReachable(probeCtx, dir, branch, sha) {
+			return false
+		}
+	}
+	return true
+}
+
 // forgeDeployer implements daemon.Deployer: push + PR, the CI gate, the merge
 // and branch cleanup, all on the workspace's forge. It resolves the forge by
 // role/kind from the configured instances rather than by key prefix, per call,
@@ -1509,7 +1552,10 @@ type forgeDeployer struct {
 func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest) (daemon.PRResult, error) {
 	// Push first: a failed push must surface as deploy-failed BEFORE any PR is
 	// opened, so we never leave a half-created PR pointing at an unpushed branch.
-	if err := gitrepo.Push(ctx, req.WorkspaceDir, req.Branch); err != nil {
+	// When the branch already exists on origin (a re-push after a rebase/retry) a
+	// plain push is rejected on a diverged tip, so lease-push against the recorded
+	// remote SHA — advancing the remote without clobbering a concurrent push (735).
+	if err := p.pushBranch(ctx, req.WorkspaceDir, req.Branch); err != nil {
 		return daemon.PRResult{}, err
 	}
 
@@ -1530,6 +1576,69 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 		return daemon.PRResult{}, errors.WrapWithDetails(err, "creating pull request", "repo", repo, "head", req.Branch)
 	}
 	return daemon.PRResult{URL: pr.URL, Number: pr.Number}, nil
+}
+
+// pushBranch pushes branch to origin, lease-pushing against the current remote
+// tip when the branch already exists there (a re-push after a rebase) and plain-
+// pushing a brand-new branch. A lease push advances a diverged remote without
+// overwriting a concurrent push; a plain push of a fresh branch has no remote tip
+// to lease against.
+func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) error {
+	if !gitrepo.BranchExistsRemote(ctx, dir, branch) {
+		return gitrepo.Push(ctx, dir, branch)
+	}
+	remoteSHA, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+	if err != nil {
+		return err
+	}
+	return gitrepo.PushWithLease(ctx, dir, branch, remoteSHA)
+}
+
+// EnsureMergeable makes the handoff branch current with the base before the
+// deploy attempts the merge: it fetches the base, and when the branch does not
+// already contain the base tip it rebases the branch onto origin/<base>,
+// re-pushes (lease when the branch is on origin), and re-verifies. A rebase error
+// is a real conflict the mechanical path cannot resolve — the deploy must fail
+// loudly rather than merge blind (735).
+func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) error {
+	dir, branch := req.WorkspaceDir, req.Branch
+	base := gitrepo.DefaultBranch(ctx, dir)
+	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
+		return err
+	}
+	originBase := "origin/" + base
+	// Already current: the branch contains the base tip, so its PR is mergeable
+	// without touching it.
+	if gitrepo.IsAncestor(ctx, dir, originBase, branch) {
+		return nil
+	}
+	// Record the remote tip so the post-rebase push can lease against it — only
+	// meaningful when the branch is already on origin.
+	var remoteSHA string
+	onOrigin := gitrepo.BranchExistsRemote(ctx, dir, branch)
+	if onOrigin {
+		sha, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+		if err != nil {
+			return err
+		}
+		remoteSHA = sha
+	}
+	if err := gitrepo.Rebase(ctx, dir, originBase, branch); err != nil {
+		return err
+	}
+	if onOrigin {
+		if err := gitrepo.PushWithLease(ctx, dir, branch, remoteSHA); err != nil {
+			return err
+		}
+	} else if err := gitrepo.Push(ctx, dir, branch); err != nil {
+		return err
+	}
+	// A clean rebase that still does not contain the base tip means the branch
+	// could not be made mergeable — surface it rather than merge into a conflict.
+	if !gitrepo.IsAncestor(ctx, dir, originBase, branch) {
+		return errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
+	}
+	return nil
 }
 
 func (p forgeDeployer) PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error) {
