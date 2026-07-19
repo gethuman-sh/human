@@ -142,6 +142,39 @@ func TestCopyTranscript_RejectsTraversal(t *testing.T) {
 	}
 }
 
+// SC-627: absolute entry names are non-local and skipped outright (they were
+// previously re-rooted under destDir; docker tars are always relative, so
+// nothing real is lost — this pins the deliberate behavioral delta).
+func TestCopyTranscript_SkipsAbsoluteEntry(t *testing.T) {
+	dest := t.TempDir()
+	docker := &copyMock{archive: func() io.ReadCloser {
+		return tarArchive(map[string]string{"/abs.txt": "DATA"})
+	}}
+	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", dest); err != nil {
+		t.Fatalf("CopyTranscript should skip absolute entries, not error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "abs.txt")); err == nil {
+		t.Fatal("absolute entry must not be extracted")
+	}
+}
+
+func TestCopyTranscript_TopLevelFile(t *testing.T) {
+	dest := t.TempDir()
+	docker := &copyMock{archive: func() io.ReadCloser {
+		return tarArchive(map[string]string{"file.jsonl": "TOP"})
+	}}
+	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", dest); err != nil {
+		t.Fatalf("CopyTranscript: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dest, "file.jsonl"))
+	if err != nil {
+		t.Fatalf("read extracted: %v", err)
+	}
+	if string(data) != "TOP" {
+		t.Fatalf("contents = %q", string(data))
+	}
+}
+
 func TestStopLocked_CopiesTranscriptBeforeRemove(t *testing.T) {
 	tmp := withLogRoot(t)
 	t.Setenv("HOME", tmp)
