@@ -37,6 +37,10 @@ type UpOptions struct {
 	// shared-checkout and non-git workspaces, whose .git travels with the
 	// source mount itself.
 	GitDir string
+
+	// cacheVolumes is populated by Up from the project's .humanconfig caches
+	// section — callers never set it directly.
+	cacheVolumes []CacheVolume
 }
 
 // Up creates and starts a devcontainer. If the container already exists and is
@@ -52,6 +56,11 @@ func (m *Manager) Up(ctx context.Context, opts UpOptions) (*Meta, error) {
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "resolving project directory")
 	}
+
+	// Project-declared cache volumes ride every container of this project so
+	// consecutive runs build warm (SC-783). Loaded here so both the agent and
+	// direct devcontainer paths get them.
+	opts.cacheVolumes = m.loadCacheVolumes(projectDir, out)
 
 	// 1. Find and parse devcontainer.json.
 	configPath, err := FindConfig(projectDir)
@@ -118,7 +127,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	}
 	// Docker bind mounts require absolute paths.
 	sourceDir, _ = filepath.Abs(sourceDir)
-	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, imageName, workspaceDir, hash, opts.DaemonInfo, opts.GitDir)
+	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, imageName, workspaceDir, hash, opts.DaemonInfo, opts.GitDir, opts.cacheVolumes)
 	ParseRunArgs(cfg.RunArgs, &createOpts, m.Logger)
 
 	_, _ = fmt.Fprintf(out, "Creating container %s...\n", containerName)
@@ -129,6 +138,12 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 
 	if err := m.Docker.ContainerStart(ctx, containerID); err != nil {
 		return nil, errors.WrapWithDetails(err, "starting container", "id", containerID)
+	}
+
+	if err := m.prepareCacheVolumes(ctx, containerID, remoteUser, opts.cacheVolumes); err != nil {
+		// A cache that cannot be made writable must only cost the warm start,
+		// never the run — the build falls back to an in-container cold cache.
+		_, _ = fmt.Fprintf(out, "Warning: cache volumes not writable, continuing cold: %v\n", err)
 	}
 
 	// Features are already baked into the image by EnsureImage.
@@ -265,7 +280,7 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 
 // buildCreateOptions creates ContainerCreateOptions from the devcontainer config.
 // configDir is the directory containing .devcontainer/devcontainer.json (may differ from projectDir).
-func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, configDir, containerName, imageName, workspaceDir, hash string, daemonInfo *daemon.DaemonInfo, gitDir string) ContainerCreateOptions {
+func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, configDir, containerName, imageName, workspaceDir, hash string, daemonInfo *daemon.DaemonInfo, gitDir string, caches []CacheVolume) ContainerCreateOptions {
 	env := make([]string, 0)
 	for k, v := range cfg.ContainerEnv {
 		env = append(env, k+"="+v)
@@ -287,6 +302,12 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 
 	binds := []string{
 		projectDir + ":" + workspaceDir,
+	}
+
+	// Project-declared persistent caches: a bind whose source is not a path is
+	// a named volume, which Docker auto-creates on first use — no extra API.
+	for _, c := range caches {
+		binds = append(binds, c.VolumeName()+":"+c.Path)
 	}
 
 	// A worktree workspace resolves git through the parent repo's .git, which
@@ -603,4 +624,44 @@ func runHostCommand(cmd any, projectDir string) error {
 	default:
 		return nil
 	}
+}
+
+// loadCacheVolumes reads the project's declared cache volumes, dropping
+// invalid entries with a warning — a bad declaration costs the warm start,
+// never the launch.
+func (m *Manager) loadCacheVolumes(projectDir string, out io.Writer) []CacheVolume {
+	all, err := LoadCaches(projectDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "Warning: ignoring caches config: %v\n", err)
+		return nil
+	}
+	var valid []CacheVolume
+	for _, c := range all {
+		if c.Valid() {
+			valid = append(valid, c)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Warning: ignoring invalid cache volume %q (need a docker-safe name and an absolute path)\n", c.Name) // #nosec G705 -- CLI terminal output, not web
+	}
+	return valid
+}
+
+// prepareCacheVolumes makes freshly created cache volumes writable for the
+// remote user: Docker creates an empty named volume root-owned, so a non-root
+// container's first run could not write its cache. Only the volume roots are
+// chowned (non-recursive) — everything below is created by the remote user
+// afterwards, so the top-level fix is sufficient and idempotent across runs.
+func (m *Manager) prepareCacheVolumes(ctx context.Context, containerID, remoteUser string, caches []CacheVolume) error {
+	if len(caches) == 0 || remoteUser == "" || remoteUser == "root" {
+		return nil
+	}
+	paths := make([]string, 0, len(caches))
+	for _, c := range caches {
+		paths = append(paths, c.Path)
+	}
+	// Discrete argv (no shell) so paths never need quoting.
+	if err := execInContainer(ctx, m.Docker, containerID, "root", append([]string{"mkdir", "-p"}, paths...), nil, m.Logger); err != nil {
+		return err
+	}
+	return execInContainer(ctx, m.Docker, containerID, "root", append([]string{"chown", remoteUser}, paths...), nil, m.Logger)
 }

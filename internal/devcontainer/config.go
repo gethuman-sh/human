@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
@@ -24,6 +25,44 @@ func LoadHumanConfig(dir string) (*HumanConfig, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// CacheVolume is one project-declared persistent cache: a named Docker volume
+// mounted at a fixed container path so consecutive agent runs build warm. The
+// declaration is deliberately explicit — no ecosystem autodetection — so a new
+// platform (npm, cargo, …) is a config entry, not a code change (SC-783).
+type CacheVolume struct {
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
+}
+
+// VolumeName returns the Docker named-volume identifier for this cache. The
+// human-cache- prefix namespaces the volumes for discovery and cleanup
+// (`docker volume rm human-cache-<name>`); volumes are shared across projects
+// by design — build caches are content-addressed, the same trade a developer
+// machine makes.
+func (c CacheVolume) VolumeName() string { return "human-cache-" + c.Name }
+
+// validCacheName rejects anything Docker would not accept as a volume name —
+// crucially any '/', which would silently turn the bind source into a host
+// path mount instead of a named volume.
+var validCacheName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// Valid reports whether the declaration is usable: a Docker-safe volume name
+// and an absolute container path. Invalid entries are skipped with a warning
+// rather than failing the launch — a bad cache declaration must only cost the
+// warm start, never the run.
+func (c CacheVolume) Valid() bool {
+	return validCacheName.MatchString(c.Name) && strings.HasPrefix(c.Path, "/")
+}
+
+// LoadCaches reads the top-level caches section from .humanconfig.
+func LoadCaches(dir string) ([]CacheVolume, error) {
+	var caches []CacheVolume
+	if err := config.UnmarshalSection(dir, "caches", &caches); err != nil {
+		return nil, err
+	}
+	return caches, nil
 }
 
 // DevcontainerConfig represents a parsed devcontainer.json.
