@@ -13,7 +13,7 @@ import { initPermissions } from "./permissions.js";
 import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsview.js";
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, badgeInfo, sortByHandOrder, insertKeyAt, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, badgeInfo, sortByHandOrder, insertKeyAt, boardStateFromPayload, } from "./board-queue.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
@@ -1320,13 +1320,9 @@ async function initialLoad() {
     render();
     try {
         const quick = await go().CardsQuick();
-        current = {
-            cards: quick.cards || [],
-            dockerAvailable: !!quick.dockerAvailable,
-            // Suppress the quick-phase error: the full reconcile surfaces it, and
-            // clearing it here avoids a banner that flickers away a moment later.
-            error: "",
-        };
+        // Suppress the quick-phase error: the full reconcile surfaces it, and
+        // clearing it here avoids a banner that flickers away a moment later.
+        current = boardStateFromPayload(quick, true);
         boardLoading = false;
         stagesLoading = true;
         render();
@@ -1353,11 +1349,7 @@ async function reconcile() {
         const data = await go().Cards();
         if (epoch !== reconcileEpoch)
             return;
-        current = {
-            cards: data.cards || [],
-            dockerAvailable: !!data.dockerAvailable,
-            error: data.error || "",
-        };
+        current = boardStateFromPayload(data);
     }
     catch (err) {
         if (epoch !== reconcileEpoch)
