@@ -35,6 +35,15 @@ export function queueOf(card) {
 export function isReworkable(card) {
     return card.stage === "verification" && card.state === "done" && (verdictFailed(card.verdict) || !card.branch);
 }
+// isReviewRetryable reports a stage-failed review — a [human:review-failed] card
+// (verification/failed). It is a dead end on the board otherwise: the rework
+// re-drop needs a DONE verification with a failing verdict, so a failed binding
+// gate (missing branch, unreachable commits) has no gesture to try again.
+// Mirrors isReworkable; surfaced as the "Retry review" context-menu action so a
+// failed review is retryable in place, like failed plans and builds (SC-695).
+export function isReviewRetryable(card) {
+    return card.stage === "verification" && card.state === "failed";
+}
 // Live badge text while a stage runs; builds and their chained reviews both
 // live in the Code lane, deploys in Ready to Deploy.
 export const RUNNING_LABELS = {

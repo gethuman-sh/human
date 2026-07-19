@@ -41,6 +41,7 @@ import {
   QUEUE_TRANSITION_TO,
   queueOf,
   isReworkable,
+  isReviewRetryable,
   forwardDropAllowed,
   verdictFailed,
   badgeInfo,
@@ -517,6 +518,25 @@ function showCardMenu(card: Card, x: number, y: number): void {
       void transition(card.key, card.title, "planning", "implementation");
     });
     menu.appendChild(retryBuild);
+  }
+
+  // A failed review was a dead end: the rework re-drop requires a DONE
+  // verification with a failing verdict, so a review that failed its binding
+  // gate (missing branch, unreachable commits) had no gesture to try again
+  // (SC-695). Mirrors Retry build — relaunch runs an agent in place, same Docker
+  // gate; the daemon re-derives the stage and re-binds the handoff.
+  if (!card.bug && isReviewRetryable(card)) {
+    const retryReview = document.createElement("button");
+    retryReview.type = "button";
+    retryReview.className = "context-menu-item";
+    retryReview.textContent = "Retry review";
+    retryReview.disabled = !current.dockerAvailable;
+    if (retryReview.disabled) retryReview.title = "Docker required";
+    retryReview.addEventListener("click", () => {
+      menu.remove();
+      void transition(card.key, card.title, "verification", "verification");
+    });
+    menu.appendChild(retryReview);
   }
 
   // Mockups belong to the product conversation: the item appears only in the

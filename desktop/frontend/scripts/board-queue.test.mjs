@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, forwardDropAllowed, planReady, badgeInfo, sortByHandOrder, insertKeyAt, boardStateFromPayload } from "../build/board-queue.js";
+import { queueOf, forwardDropAllowed, planReady, badgeInfo, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable } from "../build/board-queue.js";
 
 // SC-355 regression: a running or failed planning card must render in the
 // Engineering column where the user dropped it — not snap back to Product.
@@ -42,6 +42,17 @@ test("failed planning card is retry-eligible but not code-droppable", () => {
   const failed = { stage: "planning", state: "failed" };
   assert.equal(planReady(failed), false, "failed plan must not be plan-ready");
   assert.equal(forwardDropAllowed(failed, "building"), false, "failed plan must not drop into Code");
+});
+
+// SC-695: a stage-failed review is retryable in place — the "Retry review"
+// affordance mirrors "Retry plan"/"Retry build". Only verification/failed
+// qualifies; a done review (rework path), a running review, and a failed build
+// must NOT offer it.
+test("isReviewRetryable is true only for verification/failed (SC-695)", () => {
+  assert.equal(isReviewRetryable({ stage: "verification", state: "failed" }), true);
+  assert.equal(isReviewRetryable({ stage: "verification", state: "done", verdict: "fail", branch: "b" }), false);
+  assert.equal(isReviewRetryable({ stage: "verification", state: "running" }), false);
+  assert.equal(isReviewRetryable({ stage: "implementation", state: "failed" }), false);
 });
 
 // SC-429 regression: "fix complete, review not started" (stage=implementation,
