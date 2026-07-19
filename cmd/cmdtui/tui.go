@@ -1391,10 +1391,7 @@ func renderModelBars(b *strings.Builder, summary *claude.UsageSummary, w int) {
 	sort.Strings(models)
 
 	// Bar width: total width - indent(4) - label(12) - stats(~30) - padding(4)
-	barWidth := max(w-50, 10)
-	if barWidth > 50 {
-		barWidth = 50
-	}
+	barWidth := min(max(w-50, 10), 50)
 
 	for _, name := range models {
 		mu := summary.Models[name]
@@ -2392,10 +2389,9 @@ func byHourToValues(buckets []stats.TimeBucket, since, until time.Time) []int {
 	// Compute the number of hour slots in the window.
 	sinceHour := since.UTC().Truncate(time.Hour)
 	untilHour := until.UTC().Truncate(time.Hour)
-	hours := max(int(untilHour.Sub(sinceHour)/time.Hour)+1, 1)
-	if hours > 168 { // safety cap at 1 week
-		hours = 168
-	}
+	hours := min(max(int(untilHour.Sub(sinceHour)/time.Hour)+1, 1),
+		// safety cap at 1 week
+		168)
 
 	values := make([]int, hours)
 

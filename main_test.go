@@ -799,13 +799,10 @@ func TestRunTrackerList_defaultDir(t *testing.T) {
 	// When Dir is empty, defaults to "." — use a clean temp dir to avoid
 	// picking up a real .humanconfig from the repo root.
 	dir := t.TempDir()
-	origDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(dir))
-	t.Cleanup(func() { _ = os.Chdir(origDir) })
+	t.Chdir(dir)
 
 	var buf bytes.Buffer
-	err = cmdtracker.RunTrackerList(&buf, "", false, cmdutil.LoadAllInstances)
+	err := cmdtracker.RunTrackerList(&buf, "", false, cmdutil.LoadAllInstances)
 	require.NoError(t, err)
 	// Output should contain something (either trackers or empty)
 	assert.True(t, strings.Contains(buf.String(), "//") || strings.Contains(buf.String(), "[]"))
