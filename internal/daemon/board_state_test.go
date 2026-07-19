@@ -95,6 +95,9 @@ func TestDeriveBoardCard(t *testing.T) {
 		assert.Equal(t, BoardDone, card.State)
 		assert.Equal(t, "feat/x", card.Branch)
 		assert.Equal(t, "HUM-9", card.EngineeringKey)
+		// SC-695: the handoff commits must ride the card so the daemon can bind
+		// the reviewer to the exact SHAs handed off, not the reviewed HEAD.
+		assert.Equal(t, "abc", card.Commits)
 	})
 
 	t.Run("implementation-failed records error", func(t *testing.T) {

@@ -167,6 +167,18 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 			"/human-execute "+dispatchKey(req.PMKey, card))
 	}
 
+	// Review retry: a stage-failed review is otherwise a dead end. The rework
+	// re-drop keys on a DONE verification with a failing verdict, and a
+	// [human:review-failed] card (state failed) matches neither it nor any
+	// forward move — so a failed binding gate (missing branch, unreachable
+	// commits) could never be retried. Relaunch the review in place, re-bound to
+	// the same handoff (SC-695). A RUNNING review is caught by the idempotency
+	// guard above.
+	if isReviewRetry(req.To, card) {
+		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
+			reviewPrompt(dispatchKey(req.PMKey, card), card))
+	}
+
 	// Forward-only, single-next-stage: the target must be exactly one rank
 	// above the current derived stage.
 	if stageRank[req.To] != stageRank[card.Stage]+1 {
@@ -204,7 +216,7 @@ func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTr
 			"/human-execute "+dispatchKey(req.PMKey, card))
 	case BoardVerification:
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			"/human-review "+dispatchKey(req.PMKey, card))
+			reviewPrompt(dispatchKey(req.PMKey, card), card))
 	case BoardDoneStage:
 		return d.runDoneStage(ctx, req, card)
 	default:
@@ -412,6 +424,33 @@ func dispatchKey(pmKey string, card BoardCard) string {
 		return card.EngineeringKey
 	}
 	return pmKey
+}
+
+// reviewPrompt builds the /human-review dispatch, threading the handoff branch
+// and commits as an authoritative binding. The reviewer verifies the
+// checked-out code IS this branch and these commits before reviewing, and pins
+// its verdict to the dispatched key — so it can never review a stale HEAD and
+// post on an unrelated ticket (SC-695). Flags are appended only when present so
+// pre-binding handoffs (branch-less/commit-less) still dispatch cleanly.
+func reviewPrompt(key string, card BoardCard) string {
+	prompt := "/human-review " + key
+	if card.Branch != "" {
+		prompt += " --branch=" + card.Branch
+	}
+	if card.Commits != "" {
+		prompt += " --commits=" + card.Commits
+	}
+	return prompt
+}
+
+// isReviewRetry mirrors isBuildRetry/isPlanningRetry for the verification stage:
+// a failed review is relaunched in place. Failed-state only — a running review
+// is protected by the idempotency guard, and a DONE verification with a failing
+// verdict takes the rework path instead (SC-695).
+func isReviewRetry(to BoardStage, card BoardCard) bool {
+	return to == BoardVerification &&
+		card.Stage == BoardVerification &&
+		card.State == BoardFailed
 }
 
 // isReworkTransition reports the one allowed backward move: re-running the
