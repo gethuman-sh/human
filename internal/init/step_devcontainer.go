@@ -227,18 +227,18 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 		},
 	}
 
-	// Only bind-mount the CA and point NODE_EXTRA_CA_CERTS at it when a real
-	// PEM certificate exists on the authoring host. Emitting the mount for a
-	// missing source makes Docker fabricate an empty directory, and Node's PEM
-	// parse then fails on every run.
-	if caPresent {
-		cfg.Mounts = []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"}
-	}
-
 	switch {
 	case proxy && intercept:
 		cfg.CapAdd = []string{"NET_ADMIN"}
 		if caPresent {
+			// The CA bind-mount and its consumer (NODE_EXTRA_CA_CERTS +
+			// update-ca-certificates) share one condition: the cert only has
+			// meaning when MITM intercept is on. Mounting it for no-proxy or
+			// proxy-without-intercept left a stray, unused certificate in the
+			// container. caPresent still guards it — emitting the mount for a
+			// missing source makes Docker fabricate an empty directory, and
+			// Node's PEM parse then fails on every run.
+			cfg.Mounts = []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"}
 			cfg.RemoteEnv["NODE_EXTRA_CA_CERTS"] = "/home/vscode/.human/ca.crt"
 			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
 		} else {
