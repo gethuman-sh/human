@@ -61,7 +61,7 @@ function host() {
     return document.getElementById("settings");
 }
 function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 function firstSection() {
     return data?.doc?.values[0]?.section ?? "";

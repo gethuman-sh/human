@@ -15,6 +15,7 @@ import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteO
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, forwardDropAllowed, verdictFailed, badgeInfo, sortByHandOrder, insertKeyAt, } from "./board-queue.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
+export {};
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
 // webview (WebKitGTK swallows the new-window request), so every external
@@ -93,7 +94,7 @@ const DAEMON_POLL_MS = 3000;
 // daemon event, so without a slow re-fetch they stay invisible until an
 // unrelated event fires. Event-driven refresh remains the primary path; this
 // only bounds the staleness window.
-const BOARD_SAFETY_POLL_MS = 90000;
+const BOARD_SAFETY_POLL_MS = 90_000;
 let daemonReachable = false;
 function go() {
     const app = window.go?.main?.App;
@@ -786,7 +787,7 @@ function dropAllowed(target) {
             return false;
         return bugAreaOf(card) === "grid" || isReworkable(card);
     }
-    const toQueue = target.dataset.dropQueue || "";
+    const toQueue = target.dataset.dropQueue ?? "";
     // A drop back into the card's own column is a local reorder — it launches
     // nothing, so neither the Docker gate nor forward-adjacency applies.
     if (!card.bug && toQueue === queueOf(card))
@@ -818,7 +819,7 @@ function setHoverTarget(target) {
     if (ok && target.dataset.drop === "queue" && drag) {
         const card = current.cards.find((c) => c.key === drag.key);
         const sorting = !!card && target.dataset.dropQueue === queueOf(card);
-        const verb = sorting ? "Sort here" : QUEUE_VERB[target.dataset.dropQueue || ""];
+        const verb = sorting ? "Sort here" : QUEUE_VERB[target.dataset.dropQueue ?? ""];
         if (verb)
             target.dataset.verb = verb;
         else
@@ -954,7 +955,7 @@ function performDrop(target, info, pt) {
         void fixBug(info.key, info.title);
         return;
     }
-    const toQueue = target.dataset.dropQueue || "";
+    const toQueue = target.dataset.dropQueue ?? "";
     const dropped = current.cards.find((c) => c.key === info.key);
     if (dropped && !dropped.bug && toQueue === queueOf(dropped)) {
         // A drop into the card's own column sorts it — mirrors the idea-space
@@ -969,7 +970,7 @@ function performDrop(target, info, pt) {
         void promoteIdea(info.key);
         return;
     }
-    const to = QUEUE_TRANSITION_TO[toQueue] || "";
+    const to = QUEUE_TRANSITION_TO[toQueue] ?? "";
     if (!to)
         return;
     celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: false });
@@ -987,8 +988,8 @@ function reorderWithinQueue(queue, key, dropY) {
         return;
     const resting = [];
     const midpoints = [];
-    for (const el of Array.from(body.querySelectorAll(".card"))) {
-        const k = el.dataset.key || "";
+    for (const el of body.querySelectorAll(".card")) {
+        const k = el.dataset.key ?? "";
         if (!k || k === key)
             continue;
         const r = el.getBoundingClientRect();
@@ -1022,7 +1023,7 @@ async function promoteIdea(key) {
     }
     let seed = card.title;
     if (card.description)
-        seed += "\n\n" + card.description;
+        seed += `\n\n${card.description}`;
     const panel = document.getElementById("ideation-panel");
     if (panel)
         panel.classList.remove("hidden");
@@ -1321,7 +1322,7 @@ async function initialLoad() {
     try {
         const quick = await go().CardsQuick();
         current = {
-            cards: quick.cards || [],
+            cards: quick.cards ?? [],
             dockerAvailable: !!quick.dockerAvailable,
             // Suppress the quick-phase error: the full reconcile surfaces it, and
             // clearing it here avoids a banner that flickers away a moment later.
@@ -1354,9 +1355,9 @@ async function reconcile() {
         if (epoch !== reconcileEpoch)
             return;
         current = {
-            cards: data.cards || [],
+            cards: data.cards ?? [],
             dockerAvailable: !!data.dockerAvailable,
-            error: data.error || "",
+            error: data.error ?? "",
         };
     }
     catch (err) {
@@ -1389,13 +1390,13 @@ function errMessage(err) {
     return String(err);
 }
 function escapeHtml(s) {
-    return String(s == null ? "" : s)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+    return String(s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
 }
 function escapeAttr(s) {
-    return escapeHtml(s).replace(/"/g, "&quot;");
+    return escapeHtml(s).replaceAll('"', "&quot;");
 }
 // --- Ideation chat panel -----------------------------------------------
 //
@@ -1489,11 +1490,11 @@ function renderIdeationDraft() {
     // user edits on every poll tick).
     if (titleInput && titleInput.dataset.sessionId !== ideation.sessionId) {
         titleInput.value = ideation.draft.title;
-        titleInput.dataset.sessionId = ideation.sessionId || "";
+        titleInput.dataset.sessionId = ideation.sessionId ?? "";
     }
     if (descInput && descInput.dataset.sessionId !== ideation.sessionId) {
         descInput.value = ideation.draft.description;
-        descInput.dataset.sessionId = ideation.sessionId || "";
+        descInput.dataset.sessionId = ideation.sessionId ?? "";
     }
 }
 function renderIdeation() {
@@ -1515,7 +1516,7 @@ function renderIdeation() {
             statusLine.classList.add("error");
         }
         else if (ideation.state === "done") {
-            statusLine.textContent = "Created " + (ideation.createdKey || "");
+            statusLine.textContent = `Created ${ideation.createdKey ?? ""}`;
         }
         else {
             statusLine.classList.add("hidden");
@@ -1562,7 +1563,7 @@ const chosenOptions = new Map();
 // optionsSignature identifies one decision block by its content, so stale
 // re-offers of a consumed block are distinguishable from a genuinely new one.
 function optionsSignature(options) {
-    return (options ?? []).map((o) => o.id + ":" + o.label).join("|");
+    return (options ?? []).map((o) => `${o.id}:${o.label}`).join("|");
 }
 // liveOptions returns the card's options with the session's consumed block
 // suppressed — and retires the suppression once the server catches up or a
@@ -1921,7 +1922,7 @@ async function maybeOfferStartProject() {
     // A failed probe (info.error) means "don't offer", never a broken app.
     if (info.error || !info.emptyProject)
         return;
-    wizardTemplates = info.templates || [];
+    wizardTemplates = info.templates ?? [];
     if (wizardTemplates.length === 0)
         return;
     openStartWizard();
@@ -2110,10 +2111,10 @@ async function pollAgents() {
     renderAgents();
 }
 function formatTokens(n) {
-    if (n >= 1000000)
-        return (n / 1e6).toFixed(1) + "M";
-    if (n >= 1000)
-        return (n / 1e3).toFixed(1) + "K";
+    if (n >= 1_000_000)
+        return `${(n / 1e6).toFixed(1)}M`;
+    if (n >= 1_000)
+        return `${(n / 1e3).toFixed(1)}K`;
     return String(n);
 }
 // formatElapsedUnix mirrors the TUI's formatElapsed: seconds under a minute,
@@ -2212,7 +2213,7 @@ function renderAgentRow(a) {
         chips.push(`<span class="agent-chip slug">${escapeHtml(a.slug)}</span>`);
     const ctx = a.errorType || a.blockedTool || a.currentTool;
     if (ctx)
-        chips.push(`<span class="agent-chip ctx">${escapeHtml(a.errorType ? a.errorType : a.blockedTool ? "⚠ " + a.blockedTool : "[" + a.currentTool + "]")}</span>`);
+        chips.push(`<span class="agent-chip ctx">${escapeHtml(a.errorType ? a.errorType : a.blockedTool ? `⚠ ${a.blockedTool}` : `[${a.currentTool}]`)}</span>`);
     const rowClass = a.status === "blocked" ? "agent-row blocked" : "agent-row";
     return `<div class="${rowClass}">
     <div class="agent-head">
@@ -2275,13 +2276,11 @@ function featureSig(doc) {
     if (!doc.exists)
         return "«sent»";
     const walk = (gs = []) => gs
-        .map((g) => g.group +
-        "|" +
-        (g.features ?? []).map((f) => f.name + ":" + f.description + (f.recent ? "*" : "")).join(",") +
-        "|" +
-        walk(g.groups))
+        .map((g) => `${g.group}|${(g.features ?? [])
+        .map((f) => `${f.name}:${f.description}${f.recent ? "*" : ""}`)
+        .join(",")}|${walk(g.groups)}`)
         .join(";");
-    return (doc.product ?? "") + "¦" + (doc.tagline ?? "") + "¦" + walk(doc.groups);
+    return `${doc.product ?? ""}¦${doc.tagline ?? ""}¦${walk(doc.groups)}`;
 }
 function stopFeaturesPoll() {
     if (featuresPollTimer !== undefined) {
@@ -2341,7 +2340,7 @@ async function onGenerateFeatures() {
     }
     catch (err) {
         featuresGenerating = false;
-        featuresNote = "Couldn't start generation: " + errMessage(err);
+        featuresNote = `Couldn't start generation: ${errMessage(err)}`;
         renderFeatures(currentFeatureDoc);
         return;
     }
