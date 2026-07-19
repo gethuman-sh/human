@@ -148,6 +148,34 @@ export function forwardDropAllowed(card: QueueCard, toQueue: string): boolean {
   return true;
 }
 
+// sortByHandOrder sorts cards by a saved hand-sorted key list: listed cards
+// first in list order, unlisted cards after in their existing (fetch) order.
+// In place, relying on Array.prototype.sort's stability for the tail.
+export function sortByHandOrder<T extends { key: string }>(cards: T[], order: string[] | undefined): T[] {
+  if (!order || order.length === 0) return cards;
+  const pos = new Map(order.map((k, i) => [k, i]));
+  return cards.sort(
+    (a, b) => (pos.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (pos.get(b.key) ?? Number.MAX_SAFE_INTEGER),
+  );
+}
+
+// insertKeyAt rebuilds a column's hand-sorted key list after a same-column
+// drop: the dragged key lands before the first resting card whose vertical
+// midpoint is below the drop point, or last when the drop was below them all.
+export function insertKeyAt(restingKeys: string[], midpoints: number[], dragged: string, dropY: number): string[] {
+  const keys: string[] = [];
+  let inserted = false;
+  restingKeys.forEach((k, i) => {
+    if (!inserted && dropY < midpoints[i]) {
+      keys.push(dragged);
+      inserted = true;
+    }
+    keys.push(k);
+  });
+  if (!inserted) keys.push(dragged);
+  return keys;
+}
+
 export function queueIndex(queue: string): number {
   return (QUEUES as readonly string[]).indexOf(queue);
 }
