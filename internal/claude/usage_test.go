@@ -575,3 +575,86 @@ func TestModelUsageTotal(t *testing.T) {
 		t.Errorf("ModelUsage.Total() = %d, want %d", got, want)
 	}
 }
+
+// countingWalker records how many times WalkJSONL is invoked so a test can prove
+// a scan reads the tree exactly once (rather than the two walks it replaces).
+type countingWalker struct {
+	lines [][]byte
+	calls int
+}
+
+func (c *countingWalker) WalkJSONL(_ string, fn func(line []byte) error) error {
+	c.calls++
+	for _, l := range c.lines {
+		if err := fn(l); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ScanTokens folds CalculateUsage's current-window totals and TokensByHour's
+// per-hour buckets into a single JSONL pass. This guards that the fold reads the
+// tree exactly once and that its two products still match the two functions it
+// replaces on the daemon's hot path.
+func TestScanTokens_singlePassMatchesSeparateWalks(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	winStart := WindowStart(now) // 10:00 for this now
+	since := now.Add(-24 * time.Hour)
+
+	inWindow := makeLine(t, "assistant", "claude-opus-4-8", winStart.Add(time.Hour), 100, 200, 50, 30)  // 11:00: in window & in range
+	inRangeOnly := makeLine(t, "assistant", "claude-opus-4-8", winStart.Add(-time.Hour), 7, 3, 1, 2)    // 09:00: in range, before window
+	nonAssistant := makeLine(t, "user", "claude-opus-4-8", winStart.Add(time.Hour), 999, 999, 999, 999) // filtered out entirely
+
+	lines := [][]byte{inWindow, inRangeOnly, nonAssistant}
+
+	cw := &countingWalker{lines: lines}
+	scan, err := ScanTokens(cw, "/fake", since, now, now)
+	if err != nil {
+		t.Fatalf("ScanTokens: %v", err)
+	}
+	if cw.calls != 1 {
+		t.Errorf("ScanTokens walked the tree %d times, want a single pass", cw.calls)
+	}
+
+	// Window totals must match CalculateUsage over the same lines.
+	summary, err := CalculateUsage(fakeWalker{lines: lines}, "/fake", now)
+	if err != nil {
+		t.Fatalf("CalculateUsage: %v", err)
+	}
+	var wantFresh, wantCacheRead int
+	for _, mu := range summary.Models {
+		if mu == nil {
+			continue
+		}
+		wantFresh += mu.InputTokens + mu.OutputTokens + mu.CacheCreate
+		wantCacheRead += mu.CacheRead
+	}
+	if scan.WindowFresh != wantFresh {
+		t.Errorf("WindowFresh = %d, want %d (matching CalculateUsage)", scan.WindowFresh, wantFresh)
+	}
+	if scan.WindowCacheRead != wantCacheRead {
+		t.Errorf("WindowCacheRead = %d, want %d (matching CalculateUsage)", scan.WindowCacheRead, wantCacheRead)
+	}
+
+	// Per-hour buckets must match TokensByHour over the same lines: two buckets,
+	// ascending (09:00 then 11:00).
+	wantBuckets, err := TokensByHour(fakeWalker{lines: lines}, "/fake", since, now)
+	if err != nil {
+		t.Fatalf("TokensByHour: %v", err)
+	}
+	if len(wantBuckets) != 2 {
+		t.Fatalf("test setup: expected 2 buckets from TokensByHour, got %d", len(wantBuckets))
+	}
+	if len(scan.PerHour) != len(wantBuckets) {
+		t.Fatalf("PerHour has %d buckets, want %d", len(scan.PerHour), len(wantBuckets))
+	}
+	for i := range wantBuckets {
+		if scan.PerHour[i] != wantBuckets[i] {
+			t.Errorf("PerHour[%d] = %+v, want %+v (matching TokensByHour)", i, scan.PerHour[i], wantBuckets[i])
+		}
+	}
+	if scan.PerHour[0].Bucket >= scan.PerHour[1].Bucket {
+		t.Errorf("PerHour not ascending: %q then %q", scan.PerHour[0].Bucket, scan.PerHour[1].Bucket)
+	}
+}

@@ -230,6 +230,71 @@ func TokensByHour(walker DirWalker, root string, since, until time.Time) ([]Toke
 	return out, nil
 }
 
+// TokenScan is the product of a single JSONL pass that answers both questions the
+// board's token panel asks: the current 5h window's fresh/cache split (the
+// headline) and the per-hour buckets over the selected range (the panel). It
+// exists so the daemon's hot path reads the tree once instead of twice.
+type TokenScan struct {
+	WindowFresh     int               // Input+Output+CacheCreate in the current 5h window
+	WindowCacheRead int               // CacheRead in the current 5h window
+	PerHour         []TokenHourBucket // per-hour buckets in [since, until], ascending
+}
+
+// ScanTokens folds CalculateUsage's current-window totals and TokensByHour's
+// per-hour bucketing into a single WalkJSONL pass. Both apply the same
+// assistant-usage filter over the same tree; only the two time windows differ —
+// the 5h headline window (derived from now) and the range window [since, until].
+// Reading the tree once halves the filesystem work per uncached daemon request.
+// CalculateUsage and TokensByHour stay in place for CollectInstanceUsage/CLI.
+func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (TokenScan, error) {
+	winStart := WindowStart(now)
+	winEnd := WindowEnd(winStart)
+	buckets := make(map[string]*TokenHourBucket)
+	var scan TokenScan
+
+	err := walker.WalkJSONL(root, func(line []byte) error {
+		var entry jsonlLine
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return nil // skip malformed lines
+		}
+		if entry.Type != "assistant" || entry.Message.Usage == nil {
+			return nil
+		}
+		u := entry.Message.Usage
+
+		// Headline: the current 5h window. Mirrors CalculateUsage's fresh split
+		// (input+output+cache-create billed as work; cache reads kept apart).
+		if !entry.Timestamp.Before(winStart) && entry.Timestamp.Before(winEnd) {
+			scan.WindowFresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
+			scan.WindowCacheRead += u.CacheReadInputTokens
+		}
+
+		// Panel: per-hour buckets over [since, until]. A fixed-width
+		// "YYYY-MM-DD HH:00" key sorts lexically == chronologically.
+		if !entry.Timestamp.Before(since) && !entry.Timestamp.After(until) {
+			key := entry.Timestamp.UTC().Truncate(time.Hour).Format("2006-01-02 15:00")
+			b := buckets[key]
+			if b == nil {
+				b = &TokenHourBucket{Bucket: key}
+				buckets[key] = b
+			}
+			b.Fresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
+			b.CacheRead += u.CacheReadInputTokens
+		}
+		return nil
+	})
+	if err != nil {
+		return TokenScan{}, errors.WrapWithDetails(err, "scanning JSONL for token scan", "root", root)
+	}
+
+	scan.PerHour = make([]TokenHourBucket, 0, len(buckets))
+	for _, b := range buckets {
+		scan.PerHour = append(scan.PerHour, *b)
+	}
+	sort.Slice(scan.PerHour, func(i, j int) bool { return scan.PerHour[i].Bucket < scan.PerHour[j].Bucket })
+	return scan, nil
+}
+
 func formatBytes(b uint64) string {
 	const (
 		gib = 1024 * 1024 * 1024
