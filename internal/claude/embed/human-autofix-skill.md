@@ -168,7 +168,7 @@ human <tracker> issue comment add <BUG_KEY> "[human:review-started]"
 Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria.")
 ```
 
-The reviewer writes `.human/reviews/<work-key>.md`; the first line under its `## Summary` is the verdict — `pass`, `pass with notes`, or `fail`. Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
+The reviewer writes `.human/reviews/<work-key>.md`; the first line under its `## Summary` is the outcome — `pass`, `pass with notes`, `fail`, or `unreviewable: <reason>` (the code could not be obtained — e.g. the branch is unreachable or no commits reference the key). Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The `[human:review-complete]` comment below is only for reviews that examined code; an `unreviewable` outcome is handled by the 7.3 gate instead. The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
 
 ```bash
 human <tracker> issue comment add <BUG_KEY> "$(cat <<'REVIEW_EOF'
@@ -188,6 +188,7 @@ REVIEW_EOF
 ### 7.3 Review gate
 
 - **pass** or **pass with notes** — continue to Step 8.
+- **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the **human-bug-fixer** and do NOT post `[human:review-complete] verdict: fail` (that would badge the card "review found problems" and point a rework run at phantom findings). Instead post `[human:review-failed]` on the bug ticket naming the unreachable ref (`[human:review-failed]` on the first line, the reachability reason on the next), then STOP (report per Step 9). No PR is merged. The card shows an honest, retryable stage failure. The board-context 7.1 stop is unchanged.
 - **fail** — feed the reviewer's findings back once: re-dispatch the **human-bug-fixer** (Step 5) with the review findings appended to the prompt, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). If the second verdict still fails, STOP honestly: the `[human:ready-for-review]` handoff stays standing for a human, and NO pull request is merged.
 
 ## Step 8 — Phase 6: Deploy — end with a merged PR

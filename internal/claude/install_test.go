@@ -59,6 +59,44 @@ func (m *mockFileWriter) ReadFile(name string) ([]byte, error) {
 	return data, nil
 }
 
+// TestReviewPathPromptsDocumentUnreviewableEscape locks the contract that every
+// review-path prompt gives "could not obtain the code" an honest, retryable
+// channel: the reviewer agent must name the `unreviewable` outcome, and every
+// calling skill must translate it into the daemon's `[human:review-failed]`
+// stage-failure marker rather than a `verdict: fail`. Without this, a review
+// that never saw the code badges "review found problems" and dispatches rework
+// against phantom findings (ticket 653).
+func TestReviewPathPromptsDocumentUnreviewableEscape(t *testing.T) {
+	// Skills must both recognise the reviewer's unreviewable outcome and route
+	// it to the review-failed stage-failure marker.
+	skills := []string{
+		"human-review-skill.md",
+		"human-pickup-review-skill.md",
+		"human-autofix-skill.md",
+		"human-sprint-skill.md",
+	}
+	for _, name := range skills {
+		t.Run(name, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join("embed", name))
+			require.NoError(t, err)
+			content := string(body)
+			assert.Contains(t, content, "unreviewable",
+				"%s must recognise the reviewer's unreviewable outcome", name)
+			assert.Contains(t, content, "[human:review-failed]",
+				"%s must route unreviewable to the review-failed stage-failure marker", name)
+		})
+	}
+
+	// The reviewer agent must offer `unreviewable` as a distinct outcome (never
+	// collapse an unreachable branch or zero-commit case into a fail verdict).
+	t.Run("human-reviewer-agent.md", func(t *testing.T) {
+		body, err := os.ReadFile(filepath.Join("embed", "human-reviewer-agent.md"))
+		require.NoError(t, err)
+		assert.Contains(t, string(body), "unreviewable",
+			"reviewer agent must offer unreviewable as a distinct outcome")
+	})
+}
+
 func TestInstall_CreatesNewFiles(t *testing.T) {
 	fw := newMockFileWriter()
 	var buf bytes.Buffer
