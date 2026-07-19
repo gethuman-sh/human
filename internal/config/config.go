@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/viper"
@@ -34,6 +35,26 @@ func ReadProjectName(dir string) string {
 		return ""
 	}
 	return v.GetString("project")
+}
+
+// ConfigFileNames are the accepted project-config filenames, in the order
+// viper's readConfig probes them via SetConfigName. Exported so callers that
+// only need to check for a config file's presence (e.g. the desktop app's
+// project picker) don't duplicate this list.
+var ConfigFileNames = []string{".humanconfig.yaml", ".humanconfig.yml", ".humanconfig"}
+
+// HasConfigFile reports whether dir directly contains one of the accepted
+// .humanconfig filenames. Unlike readConfig it does not parse the file or
+// search ancestor directories — it is a cheap existence check for callers
+// (the desktop app's "open project" picker) that must validate a
+// user-chosen directory before treating it as a project root.
+func HasConfigFile(dir string) bool {
+	for _, name := range ConfigFileNames {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // readConfig creates a viper instance and reads the .humanconfig file from

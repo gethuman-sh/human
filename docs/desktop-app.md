@@ -94,6 +94,8 @@ Equivalent dev-loop command: `wails dev` (or `make desktop-dev`, if defined).
 Any ticket that touches `desktop/` must state its verification this way:
 
 > Build and smoke-test via `wails build` (`make desktop`) or `wails dev` — never plain `go build ./desktop/`. A plain `go build` links but panics at runtime (see above); a green `go build`/`go test ./desktop/...` is not evidence the app works. Acceptance requires launching the produced `.app` and confirming the window opens and the dashboard attaches to the running daemon.
+>
+> Additionally, for any change touching project lifecycle: quit the daemon (`human daemon stop`), relaunch the app, and confirm the Projects Overview screen appears (or the last project auto-loads if its directory still exists); pick a project and confirm the board loads; click **Switch Project** and confirm it stops the daemon and returns to the Projects Overview.
 
 ## Regression guard
 

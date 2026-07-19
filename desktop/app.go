@@ -25,6 +25,7 @@ import (
 	"github.com/gethuman-sh/human/internal/boardprefs"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/ideaspace"
+	"github.com/gethuman-sh/human/internal/recentprojects"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -46,6 +47,10 @@ type App struct {
 	// I/O rather than a daemon route: this is UI preference state that must
 	// never touch the ticket, in line with the credential-only rationale above.
 	ideas *ideaspace.Store
+	// recents holds the Projects Overview's most-recently-opened list. Same
+	// local-file rationale as ideas: which projects were opened, and in what
+	// order, is desktop-workspace state, never tracker or daemon state.
+	recents *recentprojects.Store
 	// prefs holds the board view preferences (per-column card order, hidden
 	// tickets) — the same local-only rationale as ideas.
 	prefs *boardprefs.Store
@@ -55,8 +60,9 @@ type App struct {
 // startup, so there is nothing to wire here.
 func NewApp() *App {
 	return &App{
-		ideas: ideaspace.NewStore(ideaspace.DefaultPath()),
-		prefs: boardprefs.NewStore(boardprefs.DefaultPath()),
+		ideas:   ideaspace.NewStore(ideaspace.DefaultPath()),
+		recents: recentprojects.NewStore(recentprojects.DefaultPath()),
+		prefs:   boardprefs.NewStore(boardprefs.DefaultPath()),
 	}
 }
 

@@ -84,6 +84,26 @@ func TestReadProjectName_missingFile(t *testing.T) {
 	assert.Equal(t, "", name)
 }
 
+func TestHasConfigFile_found(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("project: infra\n"), 0o644))
+
+	assert.True(t, HasConfigFile(dir))
+}
+
+func TestHasConfigFile_missing(t *testing.T) {
+	dir := t.TempDir()
+
+	assert.False(t, HasConfigFile(dir))
+}
+
+func TestHasConfigFile_altExtension(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig"), []byte("project: infra\n"), 0o644))
+
+	assert.True(t, HasConfigFile(dir))
+}
+
 func TestUnmarshalSection_missingSectionReturnsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	yaml := `jiras:

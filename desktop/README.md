@@ -31,6 +31,11 @@ daemon ships on the wire — the frontend never re-derives a stage.
 - Hot-apply vs restart: tracker/knowledge/messaging edits take effect on the next daemon request (config is re-read per request); only `vault.*` and the top-level `project` need a daemon restart, and those fields carry a `restart` badge.
 - Secrets are write-only: `1pw://` vault references display verbatim (they are pointers, not secrets), literal tokens display as a masked placeholder the daemon refuses to accept back, so a stored secret can never round-trip out of — or accidentally back into — the file. The visual theme stays outside settings: it is client-side localStorage, toggled with F8.
 
+## Projects
+
+- On launch, the app loads the board for whatever project the daemon is already serving (unchanged). If no daemon is running, it auto-starts the daemon for the last-opened project (recorded locally at `~/.human/recentprojects.json`, `internal/recentprojects`) when that directory still exists; otherwise it shows a **Projects Overview** screen listing up to the 10 most recently opened projects plus an "Open other directory…" picker (native OS dialog or a manual path) for any directory containing a `.humanconfig.yaml`.
+- A **Switch Project** control is always visible in the header. Activating it stops the running daemon and returns to the Projects Overview; picking a project stops any running daemon, starts the chosen project's daemon (via the `human` CLI, which must be installed on PATH — see `internal/daemon`'s `ResolveCLIPath`), and reloads the board with no restart.
+
 ## Architecture
 
 - `app.go` — the Go backend bound into the webview. It talks ONLY to the daemon client (`daemon.GetTrackerIssues` / `daemon.BoardTransition` / `daemon.Subscribe`); credential handling, PM-role resolution and the destructive-confirm bypass all live in the daemon.
