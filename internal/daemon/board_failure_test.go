@@ -52,7 +52,7 @@ func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -80,7 +80,7 @@ func TestRunBoardFailureWatch_ReusedNameSecondIncompleteExitPostsAgain(t *testin
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	// First exit of the reused name posts a failed marker.
@@ -115,7 +115,7 @@ func TestRunBoardFailureWatch_ReusedNameSecondCleanBuildChainsAgain(t *testing.T
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
@@ -145,7 +145,7 @@ func TestRunBoardFailureWatch_NoPostWhenStageDone(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -168,7 +168,7 @@ func TestHandleBoardAgentExit_MalformedName(t *testing.T) {
 		return &syncCommenter{}, nil
 	}
 	// A name that does not parse must short-circuit before resolving a commenter.
-	handleBoardAgentExit(context.Background(), "board-", commenterFor, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-", "", commenterFor, nil, nil, zerolog.Nop())
 	assert.False(t, called)
 }
 
@@ -177,7 +177,7 @@ func TestHandleBoardAgentExit_CommenterError(t *testing.T) {
 		return nil, assertErr{}
 	}
 	// Must not panic when the commenter cannot be resolved.
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", commenterFor, nil, zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, zerolog.Nop())
 }
 
 type assertErr struct{}
@@ -195,7 +195,7 @@ func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
@@ -220,7 +220,7 @@ func TestRunBoardFailureWatch_NoChainForOtherStages(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -246,7 +246,7 @@ func TestRunBoardFailureWatch_SyntheticStopFailurePostsImplementationFailed(t *t
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	// The reap-synthesized event carries no SessionID — only name + time.
@@ -281,7 +281,7 @@ func TestRunBoardFailureWatch_NoFixNeededIsCleanStop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
@@ -317,7 +317,7 @@ func TestRunBoardFailureWatch_UndeterminedIsCleanStop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
@@ -357,7 +357,7 @@ func TestRunBoardFailureWatch_NothingToDoIsCleanStop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, chain, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
@@ -375,6 +375,99 @@ func TestRunBoardFailureWatch_NothingToDoIsCleanStop(t *testing.T) {
 	c.mu.Unlock()
 }
 
+// SC-620: the failed marker's body is headline-first — the card badge/tooltip
+// reads exactly the first non-header line via failureReason — followed by the
+// diagnosis detail block for the detail pane.
+func TestHandleBoardAgentExit_UsesDiagnoserHeadlineAndDetail(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	diag := func(agentName, errorType string) FailureDiagnosis {
+		assert.Equal(t, "board-SC-1-implementation", agentName)
+		return FailureDiagnosis{
+			Headline: "claude exited with code 1: API Error",
+			Detail:   "agent: board-SC-1-implementation\n\nlast output:\n~~~\nboom\n~~~",
+		}
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, nil, diag, zerolog.Nop())
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	body := c.added[0]
+	want := ImplementationFailedHeader + "\nclaude exited with code 1: API Error\n\nagent: board-SC-1-implementation\n\nlast output:\n~~~\nboom\n~~~"
+	assert.Equal(t, want, body)
+	// Contract pin: the card's one-line error is exactly the headline.
+	assert.Equal(t, "claude exited with code 1: API Error", failureReason(body))
+}
+
+func TestHandleBoardAgentExit_NilDiagnoserFallsBackToGeneric(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, zerolog.Nop())
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.Equal(t, PlanningFailedHeader+"\n"+genericStageFailure, c.added[0])
+}
+
+func TestHandleBoardAgentExit_EmptyHeadlineFallsBackToGeneric(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	diag := func(string, string) FailureDiagnosis { return FailureDiagnosis{} }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, diag, zerolog.Nop())
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.Equal(t, PlanningFailedHeader+"\n"+genericStageFailure, c.added[0])
+}
+
+// The watch loop must hand the hook event's error type to the diagnoser —
+// a rate-limit stop is diagnosed from the event, not the artifacts.
+func TestRunBoardFailureWatch_PassesErrorTypeToDiagnoser(t *testing.T) {
+	store := NewHookEventStore()
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
+		addCh:    make(chan string, 4),
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	gotErrorType := make(chan string, 1)
+	diag := func(_, errorType string) FailureDiagnosis {
+		gotErrorType <- errorType
+		return FailureDiagnosis{Headline: "Claude hit a rate limit and stopped"}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, diag, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "StopFailure", AgentName: "board-SC-1-planning", ErrorType: "rate_limit", Timestamp: time.Now()})
+
+	select {
+	case et := <-gotErrorType:
+		assert.Equal(t, "rate_limit", et)
+	case <-time.After(2 * time.Second):
+		t.Fatal("diagnoser never received the event's error type")
+	}
+	select {
+	case body := <-c.addCh:
+		assert.Contains(t, body, "rate limit")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the diagnosed failed marker")
+	}
+}
+
 func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 	store := NewHookEventStore()
 	c := &syncCommenter{addCh: make(chan string, 4)}
@@ -382,7 +475,7 @@ func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go RunBoardFailureWatch(ctx, store, commenterFor, nil, zerolog.Nop())
+	go RunBoardFailureWatch(ctx, store, commenterFor, nil, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "some-other-agent", Timestamp: time.Now()})

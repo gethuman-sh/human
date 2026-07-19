@@ -409,9 +409,15 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			To:    daemon.BoardVerification,
 		})
 	}
+	// The diagnoser reads the dead run's persisted artifacts so the failed
+	// marker says what actually broke instead of the generic stage line.
+	diagnoseFailure := func(agentName, hookErrorType string) daemon.FailureDiagnosis {
+		d := agent.DiagnoseFailure(agentName, hookErrorType)
+		return daemon.FailureDiagnosis{Headline: d.Headline, Detail: d.Detail}
+	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, logger)
+		chainReview, diagnoseFailure, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).

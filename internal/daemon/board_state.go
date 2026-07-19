@@ -121,6 +121,20 @@ func failureReason(body string) string {
 	return firstLine(trimmed)
 }
 
+// failureBody returns everything after a *-failed marker's header line — the
+// full diagnosis (headline plus markdown detail) for surfaces that can render
+// more than one line. Falls back to failureReason so a reason-less marker
+// still shows something.
+func failureBody(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if idx := strings.IndexByte(trimmed, '\n'); idx >= 0 {
+		if rest := strings.TrimSpace(trimmed[idx+1:]); rest != "" {
+			return rest
+		}
+	}
+	return failureReason(body)
+}
+
 // latestStateInStage resolves the stage's state from its newest marker and
 // returns that marker's comment so a failure message can be extracted.
 func latestStateInStage(comments []tracker.Comment, stage BoardStage) (BoardState, tracker.Comment) {
