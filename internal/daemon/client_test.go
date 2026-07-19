@@ -366,7 +366,7 @@ func TestHandleOAuthCallback_ReadError(t *testing.T) {
 
 func TestNewConfirmID_Unique(t *testing.T) {
 	seen := make(map[string]bool)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		id := newConfirmID()
 		assert.True(t, strings.HasPrefix(id, "c-"))
 		assert.False(t, seen[id], "confirm IDs must be unique")

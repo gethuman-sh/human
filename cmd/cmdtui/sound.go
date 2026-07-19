@@ -17,7 +17,7 @@ const soundPlayerTimeout = 5 * time.Second
 
 // soundPlayerSlots caps concurrent in-flight player invocations so
 // rapid state transitions cannot spawn an unbounded goroutine pool.
-var soundPlayerSlots int32
+var soundPlayerSlots atomic.Int32
 
 const maxSoundPlayerSlots = 2
 
@@ -26,12 +26,12 @@ const maxSoundPlayerSlots = 2
 // kills hung playback processes and a small semaphore drops extra
 // invocations rather than queueing goroutines.
 func playNotificationSound() {
-	if atomic.AddInt32(&soundPlayerSlots, 1) > maxSoundPlayerSlots {
-		atomic.AddInt32(&soundPlayerSlots, -1)
+	if soundPlayerSlots.Add(1) > maxSoundPlayerSlots {
+		soundPlayerSlots.Add(-1)
 		return
 	}
 	go func() {
-		defer atomic.AddInt32(&soundPlayerSlots, -1)
+		defer soundPlayerSlots.Add(-1)
 		name, args := notificationCommand()
 		if name == "" {
 			return

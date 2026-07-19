@@ -51,7 +51,7 @@ function scoreAgainst(text, q) {
         const found = lower.indexOf(ch, ti);
         if (found < 0)
             return null;
-        const prev = positions[positions.length - 1];
+        const prev = positions.at(-1);
         if (prev !== undefined && found === prev + 1)
             score += 3; // contiguous run
         if (found === 0 || lower[found - 1] === "." || lower[found - 1] === " ")
@@ -82,7 +82,7 @@ function hits() {
     return out.slice(0, MAX_HITS);
 }
 function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 function markPath(path, positions) {
     if (positions.length === 0)
@@ -191,7 +191,7 @@ function renderEditor(v) {
             ? "comma-separated"
             : "";
     return (`<div class="palette-editor">` +
-        `<div class="palette-editor-label">${escapeHtml(v.label)}${v.description ? " — " + escapeHtml(v.description) : ""}</div>` +
+        `<div class="palette-editor-label">${escapeHtml(v.label)}${v.description ? ` — ${escapeHtml(v.description)}` : ""}</div>` +
         `<input id="palette-editor-input" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(raw)}" placeholder="${escapeHtml(placeholder)}" />` +
         `<div id="palette-editor-msg" class="palette-editor-hint">↵ save · esc back</div>` +
         `</div>`);

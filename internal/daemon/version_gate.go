@@ -65,7 +65,7 @@ func leadingInt(s string) (int, bool) {
 }
 
 func semverLess(a, b [3]int) bool {
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if a[i] != b[i] {
 			return a[i] < b[i]
 		}

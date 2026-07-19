@@ -147,7 +147,7 @@ func TestDiagnoseFailure_TailIsRedactedAndCapped(t *testing.T) {
 	withInstantDiagnosis(t)
 	home, _ := os.UserHomeDir()
 	var b strings.Builder
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		fmt.Fprintf(&b, "line %d\n", i)
 	}
 	b.WriteString("pushing with ghp_abcdefghijklmnopqrstuv123456 done\n")

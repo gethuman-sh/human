@@ -25,14 +25,14 @@ func ParseEngineeringKeysFromHandoff(body string) []string {
 	if !strings.HasPrefix(trimmed, ReadyForReviewHeader) {
 		return nil
 	}
-	for _, line := range strings.Split(trimmed, "\n") {
+	for line := range strings.SplitSeq(trimmed, "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "engineering:")
 		if !ok {
 			continue
 		}
 		var keys []string
-		for _, k := range strings.Split(rest, ",") {
+		for k := range strings.SplitSeq(rest, ",") {
 			if k = strings.TrimSpace(k); k != "" {
 				keys = append(keys, k)
 			}
@@ -51,7 +51,7 @@ func ParsePRFromHandoff(body string) string {
 	if !strings.HasPrefix(trimmed, ReadyForReviewHeader) {
 		return ""
 	}
-	for _, line := range strings.Split(trimmed, "\n") {
+	for line := range strings.SplitSeq(trimmed, "\n") {
 		line = strings.TrimSpace(line)
 		if rest, ok := strings.CutPrefix(line, "pr:"); ok {
 			return strings.TrimSpace(rest)

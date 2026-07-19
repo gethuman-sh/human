@@ -54,11 +54,11 @@ func parseRules(rules []string) []policyRule {
 		if r == "" {
 			continue
 		}
-		idx := strings.IndexByte(r, ':')
+		before, after, ok := strings.Cut(r, ":")
 		var pr policyRule
-		if idx >= 0 {
-			pr.operation = strings.ToLower(r[:idx])
-			pr.argument = strings.ToLower(r[idx+1:])
+		if ok {
+			pr.operation = strings.ToLower(before)
+			pr.argument = strings.ToLower(after)
 		} else {
 			pr.operation = strings.ToLower(r)
 		}

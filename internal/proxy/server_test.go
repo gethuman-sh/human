@@ -39,8 +39,7 @@ func TestServer_allowedConnectionForwards(t *testing.T) {
 		_, _ = conn.Write([]byte("UPSTREAM_OK"))
 	}()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv := &Server{
 		Addr:   "127.0.0.1:0",
@@ -84,8 +83,7 @@ func TestServer_blockedConnectionResets(t *testing.T) {
 	policy, err := NewPolicy(ModeAllow, []string{"allowed.example.com"})
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	dialed := make(chan struct{}, 1)
 
@@ -137,8 +135,7 @@ func TestServer_noSNIBlocks(t *testing.T) {
 	policy, err := NewPolicy(ModeAllow, []string{"*.example.com"})
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv := &Server{
 		Addr:   "127.0.0.1:0",
@@ -175,8 +172,7 @@ func TestServer_noSNIBlocks(t *testing.T) {
 func TestServer_blockAllPolicy(t *testing.T) {
 	policy := BlockAllPolicy()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv := &Server{
 		Addr:   "127.0.0.1:0",
@@ -228,8 +224,7 @@ func TestServer_ActiveConns(t *testing.T) {
 		_ = conn.Close()
 	}()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv := &Server{
 		Addr:   "127.0.0.1:0",
@@ -291,8 +286,7 @@ func TestServer_interceptedConnectionMITM(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv := &Server{
 		Addr:        "127.0.0.1:0",
@@ -356,8 +350,7 @@ func TestServer_realTLSClientHello(t *testing.T) {
 		_ = conn.Close()
 	}()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	srv := &Server{
 		Addr:   "127.0.0.1:0",

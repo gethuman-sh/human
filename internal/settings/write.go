@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"gopkg.in/yaml.v3"
 
@@ -163,12 +164,7 @@ func coerceInt(value any) (int64, bool) {
 }
 
 func contains(list []string, s string) bool {
-	for _, it := range list {
-		if it == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, s)
 }
 
 // loadRoot parses the file into a document node, synthesizing an empty

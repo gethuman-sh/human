@@ -103,11 +103,11 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
     return {
       cls: "decision",
       text: "decision needed",
-      title: "The review offers " + card.options.length + " ways forward — open the card to choose",
+      title: `The review offers ${card.options.length} ways forward — open the card to choose`,
     };
   }
   if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
-    return { cls: "warning", text: "⚠ review found problems", title: "Review verdict: " + (card.verdict ?? "") };
+    return { cls: "warning", text: "⚠ review found problems", title: `Review verdict: ${card.verdict ?? ""}` };
   }
   if (card.stage === "verification" && card.state === "done" && !card.branch) {
     // A passed review with no recorded branch has nothing to ship — deploying

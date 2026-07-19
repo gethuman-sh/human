@@ -48,7 +48,7 @@ func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
 	var stage BoardStage
 	var context string
 	var opts []BoardOption
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "["):

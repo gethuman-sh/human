@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,8 +121,8 @@ func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 // parseExitTrailer finds the tee's exit trailer in the scanned lines, newest
 // first, and returns the recorded exit code.
 func parseExitTrailer(lines []string) (int, bool) {
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(stripANSI(lines[i]))
+	for _, line := range slices.Backward(lines) {
+		line := strings.TrimSpace(stripANSI(line))
 		if !strings.HasPrefix(line, execExitTrailerPrefix) {
 			continue
 		}
@@ -147,8 +148,8 @@ var errorLineRes = []*regexp.Regexp{
 // lastErrorLine returns the last line of the scan window that looks like an
 // error, skipping the exit trailer itself.
 func lastErrorLine(lines []string) string {
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(stripANSI(lines[i]))
+	for _, line := range slices.Backward(lines) {
+		line := strings.TrimSpace(stripANSI(line))
 		if line == "" || strings.HasPrefix(line, execExitTrailerPrefix) {
 			continue
 		}
@@ -285,7 +286,7 @@ var secretShapeRes = []*regexp.Regexp{
 // convention the daemon documents. Matching whole underscore-segments (not
 // substrings) keeps PATH out while catching GITHUB_PAT.
 func isSecretEnvName(name string) bool {
-	for _, seg := range strings.Split(strings.ToUpper(name), "_") {
+	for seg := range strings.SplitSeq(strings.ToUpper(name), "_") {
 		switch seg {
 		case "TOKEN", "SECRET", "KEY", "PASSWORD", "PASSWD", "PAT", "CREDENTIAL", "CREDENTIALS", "APIKEY":
 			return true

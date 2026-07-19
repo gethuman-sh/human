@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -173,10 +174,5 @@ func readTree(t *testing.T, root string) string {
 }
 
 func containsArg(argv []string, want string) bool {
-	for _, a := range argv {
-		if a == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(argv, want)
 }

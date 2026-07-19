@@ -1,5 +1,7 @@
 package telegram
 
+import "slices"
+
 // Chat type constants as returned by the Telegram Bot API in the Chat.Type
 // field. See https://core.telegram.org/bots/api#chat.
 const (
@@ -70,10 +72,5 @@ func IsAllowed(user *User, chat Chat, allowedUsers, allowedChats []int64) (bool,
 }
 
 func containsInt64(haystack []int64, needle int64) bool {
-	for _, v := range haystack {
-		if v == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }

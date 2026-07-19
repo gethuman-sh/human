@@ -18,7 +18,7 @@ export interface DetailOption {
 // escapeText is a minimal HTML escaper for the option labels/context, which
 // come from ticket comments (agent-written, but still untrusted text).
 function escapeText(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 // buildOptionsSection renders a card's open decision block: the one-line

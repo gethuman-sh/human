@@ -47,7 +47,7 @@ func CauseChain(err error) string {
 	return b.String()
 }
 
-func WithDetails(message string, details ...interface{}) error {
+func WithDetails(message string, details ...any) error {
 	args := extractArgs(message, details)
 	return goerrors.WithDetails(
 		goerrors.Errorf(message, args...),
@@ -55,7 +55,7 @@ func WithDetails(message string, details ...interface{}) error {
 	)
 }
 
-func WrapWithDetails(err error, message string, details ...interface{}) error {
+func WrapWithDetails(err error, message string, details ...any) error {
 	args := extractArgs(message, details)
 	return goerrors.WithDetails(
 		goerrors.Wrapf(err, message, args...),
@@ -67,9 +67,9 @@ func WrapWithDetails(err error, message string, details ...interface{}) error {
 // walking past causer wraps that tozd's own AllDetails halts at. First writer
 // wins so an outer wrap's value shadows an inner one on key collision, matching
 // tozd's within-scope merge semantics.
-func AllDetails(err error) map[string]interface{} {
-	res := make(map[string]interface{})
-	type detailer interface{ Details() map[string]interface{} }
+func AllDetails(err error) map[string]any {
+	res := make(map[string]any)
+	type detailer interface{ Details() map[string]any }
 	for e := err; e != nil; e = stderrors.Unwrap(e) {
 		d, ok := e.(detailer)
 		if !ok {
@@ -92,8 +92,8 @@ func isFormatVerb(c byte) bool {
 	return false
 }
 
-func extractArgs(message string, details []interface{}) []interface{} {
-	var args []interface{}
+func extractArgs(message string, details []any) []any {
+	var args []any
 	for i := 1; i < len(details); i += 2 {
 		args = append(args, details[i])
 	}

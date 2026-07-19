@@ -126,12 +126,12 @@ func TestParseConfig_LifecycleCommands(t *testing.T) {
 	}
 
 	// Array command.
-	if arr, ok := cfg.OnCreateCommand.([]interface{}); !ok || len(arr) != 2 {
+	if arr, ok := cfg.OnCreateCommand.([]any); !ok || len(arr) != 2 {
 		t.Errorf("onCreateCommand = %v", cfg.OnCreateCommand)
 	}
 
 	// Map command (parallel).
-	if m, ok := cfg.PostCreateCommand.(map[string]interface{}); !ok || len(m) != 2 {
+	if m, ok := cfg.PostCreateCommand.(map[string]any); !ok || len(m) != 2 {
 		t.Errorf("postCreateCommand = %v", cfg.PostCreateCommand)
 	}
 }
@@ -229,7 +229,7 @@ func TestResolveVariables_MountStrings(t *testing.T) {
 	t.Setenv("HOME", "/home/testuser")
 
 	cfg := &DevcontainerConfig{
-		Mounts: []interface{}{
+		Mounts: []any{
 			"source=${localEnv:HOME}/.human/ca.crt,target=/tmp/ca.crt,type=bind",
 			42, // non-string entries should be left alone
 		},

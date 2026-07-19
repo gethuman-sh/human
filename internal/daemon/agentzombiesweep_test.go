@@ -298,7 +298,7 @@ func TestSweepZombieAgents_ReapsAfterPersistentCheckError(t *testing.T) {
 	onReaped := func(name string) { reaped = append(reaped, name) }
 
 	sweep := newZombieSweep()
-	for i := 0; i < zombieMaxProcessCheckFailures; i++ {
+	for range zombieMaxProcessCheckFailures {
 		sweep.sweepZombieAgents(context.Background(), s, onReaped, zerolog.Nop())
 		assert.Empty(t, s.deleted, "must not reap before threshold")
 	}
@@ -322,7 +322,7 @@ func TestSweepZombieAgents_ResetsCounterOnSuccess(t *testing.T) {
 	assert.Empty(t, s.deleted)
 
 	delete(s.processErr, "c1")
-	for i := 0; i < zombieMaxProcessCheckFailures+2; i++ {
+	for range zombieMaxProcessCheckFailures + 2 {
 		sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 	}
 	assert.Empty(t, s.deleted, "healthy process must never be reaped")
@@ -341,7 +341,7 @@ func TestSweepZombieAgents_SparesIdleUnderPersistentCheckError(t *testing.T) {
 		processErr: map[string]error{"c1": assertErr{}},
 	}
 	sweep := newZombieSweep()
-	for i := 0; i < zombieMaxProcessCheckFailures+3; i++ {
+	for range zombieMaxProcessCheckFailures + 3 {
 		sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 	}
 	assert.Empty(t, s.deleted, "idle agent never seen with claude must survive even a broken liveness check")
