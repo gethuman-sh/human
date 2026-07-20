@@ -16,6 +16,7 @@ import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
 import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, forwardDropAllowed, verdictFailed, badgeInfo, sortByHandOrder, insertKeyAt, boardStateFromPayload, } from "./board-queue.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
+import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 export {};
 // openExternal routes a URL to the system browser via the Wails runtime.
@@ -1649,10 +1650,7 @@ function renderIdeation() {
     const form = document.getElementById("ideation-form");
     const input = document.getElementById("ideation-input");
     const send = document.getElementById("ideation-send");
-    const inputEnabled = ideation.state === "awaiting_reply" ||
-        ideation.state === "none" ||
-        ideation.state === "done" ||
-        ideation.state === "error";
+    const inputEnabled = ideationInputEnabled(ideation.state);
     // The draft-review form takes over the panel's bottom area while
     // awaiting_approval; the free-text form must not be reachable there.
     if (form)
@@ -1940,6 +1938,13 @@ async function pollIdeation() {
         stopIdeationPoll();
         return;
     }
+    if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
+        // Terminal transition: the PM ticket was created — closeIdeation() hides the
+        // panel, stops the poll, and resets the mode picker. The daemon's board:changed
+        // event surfaces the new card (SC-859).
+        closeIdeation();
+        return;
+    }
     renderIdeation();
     if (ideation.state !== "thinking") {
         stopIdeationPoll();
@@ -1979,6 +1984,13 @@ async function sendIdeationReply(text) {
         stopIdeationPoll();
         return;
     }
+    if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
+        // Terminal transition: the PM ticket was created — closeIdeation() hides the
+        // panel, stops the poll, and resets the mode picker. The daemon's board:changed
+        // event surfaces the new card (SC-859).
+        closeIdeation();
+        return;
+    }
     renderIdeation();
     if (ideation.state !== "thinking") {
         stopIdeationPoll();
@@ -2009,6 +2021,13 @@ async function approveIdeation() {
     catch (err) {
         renderIdeationError(errMessage(err));
         stopIdeationPoll();
+        return;
+    }
+    if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
+        // Terminal transition: the PM ticket was created — closeIdeation() hides the
+        // panel, stops the poll, and resets the mode picker. The daemon's board:changed
+        // event surfaces the new card (SC-859).
+        closeIdeation();
         return;
     }
     renderIdeation();
