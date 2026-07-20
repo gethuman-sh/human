@@ -120,6 +120,37 @@ func TestDeriveBoardCard(t *testing.T) {
 		assert.Equal(t, "claude exited with code 1: API Error", card.Error)
 	})
 
+	t.Run("SC-910 newer marker in earlier stage supersedes furthest-stage failure", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt("[human:deploy-failed]\nmerge conflict on main", t0),
+			cmt("[human:implementation-started]", t1),
+		}
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+		assert.NotEqual(t, BoardFailed, card.State)
+		assert.Empty(t, card.Error)
+		assert.Equal(t, BoardImplementation, card.Stage)
+		assert.Equal(t, BoardRunning, card.State)
+	})
+
+	t.Run("SC-910 lone failure with no newer marker still reds", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt("[human:deploy-failed]\nmerge conflict on main", t0),
+		}
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardFailed, card.State)
+		assert.Equal(t, "merge conflict on main", card.Error)
+	})
+
+	t.Run("SC-910 genuine failure as newest marker stays failed", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt("[human:implementation-started]", t0),
+			cmt("[human:implementation-failed]\ncompile error", t1),
+		}
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardFailed, card.State)
+		assert.Equal(t, "compile error", card.Error)
+	})
+
 	t.Run("full chain ending pr-pushed", func(t *testing.T) {
 		comments := []tracker.Comment{
 			cmt("[human:plan-ready]\nengineering: HUM-9", t0),
