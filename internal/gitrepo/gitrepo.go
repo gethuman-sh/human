@@ -292,3 +292,80 @@ var CurrentBranch = func(ctx context.Context, dir string) (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// prefixedKeyPattern and numericRefPattern are the fixed extraction grammar
+// for ticket keys in commit subjects: bracketed-or-bare PREFIX-N keys and #N
+// numeric references.
+var (
+	prefixedKeyPattern = regexp.MustCompile(`\[?([A-Z]{2,}-[0-9]+)\]?`)
+	numericRefPattern  = regexp.MustCompile(`#([0-9]+)`)
+)
+
+// TicketKeys extracts the ticket keys referenced by commits touching paths
+// (all history when paths is empty): prefixed keys first, then numeric ones,
+// each deduped in order of first appearance (newest commit first). Package var
+// so callers can stub git access in tests.
+var TicketKeys = func(ctx context.Context, dir string, paths []string) ([]string, error) {
+	args := []string{"-C", dir, "log", "--format=%s"}
+	if len(paths) > 0 {
+		args = append(append(args, "--"), paths...)
+	}
+	out, err := runner(ctx, "git", args...)
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "listing commit subjects", "dir", dir)
+	}
+	var prefixed, numeric []string
+	seen := map[string]bool{}
+	for _, subject := range strings.Split(string(out), "\n") {
+		for _, m := range prefixedKeyPattern.FindAllStringSubmatch(subject, -1) {
+			if !seen[m[1]] {
+				seen[m[1]] = true
+				prefixed = append(prefixed, m[1])
+			}
+		}
+		for _, m := range numericRefPattern.FindAllStringSubmatch(subject, -1) {
+			if !seen[m[1]] {
+				seen[m[1]] = true
+				numeric = append(numeric, m[1])
+			}
+		}
+	}
+	return append(prefixed, numeric...), nil
+}
+
+// LatestTag resolves the recency boundary tag: the nearest reachable tag,
+// else the newest tag by creation date, else "" (caller falls back to a time
+// window). Package var so callers can stub git access in tests.
+var LatestTag = func(ctx context.Context, dir string) string {
+	if out, err := runner(ctx, "git", "-C", dir, "describe", "--tags", "--abbrev=0"); err == nil {
+		if tag := strings.TrimSpace(string(out)); tag != "" {
+			return tag
+		}
+	}
+	if out, err := runner(ctx, "git", "-C", dir, "tag", "--sort=-creatordate"); err == nil {
+		if lines := strings.Fields(strings.TrimSpace(string(out))); len(lines) > 0 {
+			return lines[0]
+		}
+	}
+	return ""
+}
+
+// TouchedSince reports whether any commit after boundary touches paths.
+// boundary is a ref (tag) for ref..HEAD, or empty for the fixed 30-day
+// fallback window. Package var so callers can stub git access in tests.
+var TouchedSince = func(ctx context.Context, dir, boundary string, paths []string) (bool, error) {
+	args := []string{"-C", dir, "log", "--format=%H", "-1"}
+	if boundary != "" {
+		args = append(args, boundary+"..HEAD")
+	} else {
+		args = append(args, "--since=30 days ago")
+	}
+	if len(paths) > 0 {
+		args = append(append(args, "--"), paths...)
+	}
+	out, err := runner(ctx, "git", args...)
+	if err != nil {
+		return false, errors.WrapWithDetails(err, "checking recent commits", "dir", dir, "boundary", boundary)
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}

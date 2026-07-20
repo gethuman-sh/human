@@ -573,3 +573,110 @@ func TestCurrentBranch_error(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestTicketKeys_prefixedFirstDeduped(t *testing.T) {
+	out := "[SC-881] Offer move\nFix typo #42 and #42 again\n[HUM-59] [SC-79] Add validation\nPlain subject\n"
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte(out), nil
+	})
+	keys, err := TicketKeys(context.Background(), ".", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"SC-881", "HUM-59", "SC-79", "42"}
+	if len(keys) != len(want) {
+		t.Fatalf("keys = %v, want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Errorf("keys[%d] = %q, want %q", i, keys[i], want[i])
+		}
+	}
+}
+
+func TestTicketKeys_pathsAppendedAfterSeparator(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte(""), nil
+	})
+	_, err := TicketKeys(context.Background(), ".", []string{"internal/tracker"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "-- internal/tracker") {
+		t.Errorf("args = %v, want path after --", gotArgs)
+	}
+}
+
+func TestLatestTag_describeWins(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[2] == "describe" {
+			return []byte("v0.21.0\n"), nil
+		}
+		return []byte("v0.99.0\n"), nil
+	})
+	if tag := LatestTag(context.Background(), "."); tag != "v0.21.0" {
+		t.Errorf("tag = %q", tag)
+	}
+}
+
+func TestLatestTag_fallbackToNewestByDate(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[2] == "describe" {
+			return nil, errors.New("no tags reachable")
+		}
+		return []byte("v0.20.0\nv0.19.0\n"), nil
+	})
+	if tag := LatestTag(context.Background(), "."); tag != "v0.20.0" {
+		t.Errorf("tag = %q", tag)
+	}
+}
+
+func TestLatestTag_none(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("no tags")
+	})
+	if tag := LatestTag(context.Background(), "."); tag != "" {
+		t.Errorf("tag = %q, want empty", tag)
+	}
+}
+
+func TestTouchedSince_refRange(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte("abc123\n"), nil
+	})
+	touched, err := TouchedSince(context.Background(), ".", "v0.21.0", []string{"cmd"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !touched {
+		t.Error("touched = false, want true")
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "v0.21.0..HEAD") {
+		t.Errorf("args = %v", gotArgs)
+	}
+}
+
+func TestTouchedSince_sinceFallbackAndUntouched(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte("\n"), nil
+	})
+	touched, err := TouchedSince(context.Background(), ".", "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if touched {
+		t.Error("touched = true, want false")
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "--since=30 days ago") {
+		t.Errorf("args = %v", gotArgs)
+	}
+}

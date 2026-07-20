@@ -44,8 +44,76 @@ func BuildCommitsCmd() *cobra.Command {
 		},
 	}
 
-	commitsCmd.AddCommand(forCmd, prefixCmd)
+	keysCmd := &cobra.Command{
+		Use:   "keys [PATH...]",
+		Short: "List ticket keys referenced by commits touching the paths (prefixed keys first, deduped)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return RunCommitKeys(cmd.Context(), cmd.OutOrStdout(), ".", args)
+		},
+	}
+
+	var recencyRef string
+	touchedCmd := &cobra.Command{
+		Use:   "touched [PATH...]",
+		Short: "Report whether the paths changed since the recency boundary (latest tag, else 30 days)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return RunCommitsTouched(cmd.Context(), cmd.OutOrStdout(), ".", recencyRef, args)
+		},
+	}
+	touchedCmd.Flags().StringVar(&recencyRef, "ref", "", "Boundary ref (default: resolved recency boundary)")
+
+	recencyCmd := &cobra.Command{
+		Use:   "recency",
+		Short: "Print the resolved recency boundary: latest tag, or the 30-day fallback window",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return RunCommitsRecency(cmd.Context(), cmd.OutOrStdout(), ".")
+		},
+	}
+
+	commitsCmd.AddCommand(forCmd, prefixCmd, keysCmd, touchedCmd, recencyCmd)
 	return commitsCmd
+}
+
+// RunCommitKeys prints the ticket keys referenced by commits touching paths.
+func RunCommitKeys(ctx context.Context, out io.Writer, dir string, paths []string) error {
+	keys, err := gitrepo.TicketKeys(ctx, dir, paths)
+	if err != nil {
+		return err
+	}
+	if keys == nil {
+		keys = []string{}
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(keys)
+}
+
+// RunCommitsRecency prints the resolved recency boundary as JSON: {"tag": ...}
+// when a tag exists, {"since": "30 days ago"} otherwise.
+func RunCommitsRecency(ctx context.Context, out io.Writer, dir string) error {
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	if tag := gitrepo.LatestTag(ctx, dir); tag != "" {
+		return enc.Encode(map[string]string{"tag": tag})
+	}
+	return enc.Encode(map[string]string{"since": "30 days ago"})
+}
+
+// RunCommitsTouched prints true/false: did any commit after the boundary touch
+// the paths. An explicit --ref wins; otherwise the resolved recency boundary
+// applies.
+func RunCommitsTouched(ctx context.Context, out io.Writer, dir, ref string, paths []string) error {
+	boundary := ref
+	if boundary == "" {
+		boundary = gitrepo.LatestTag(ctx, dir)
+	}
+	touched, err := gitrepo.TouchedSince(ctx, dir, boundary, paths)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, touched)
+	return err
 }
 
 // RunCommitsFor lists commits referencing key in the repository at dir.
