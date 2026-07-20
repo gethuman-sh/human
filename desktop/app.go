@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/board"
 	"github.com/gethuman-sh/human/internal/boardprefs"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/ideaspace"
@@ -145,8 +146,10 @@ func (a *App) Cards() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments(), cardMockups(), a.prefs.Snapshot())
-	a.pruneIdeaSpace(data)
-	a.pruneBoardPrefs(data)
+	board.PrunePrefs(results,
+		board.PruneTarget{Store: a.prefs, Keep: boardPrefsKeep(data)},
+		board.PruneTarget{Store: a.ideas, Keep: ideaSpaceKeep(data)},
+	)
 	return data, nil
 }
 
@@ -206,22 +209,17 @@ func (a *App) GetIssueDetail(trackerKind, trackerName, key string) (IssueDetail,
 	}, nil
 }
 
-// pruneIdeaSpace drops idea-space placements for tickets that are no longer
-// idea cards (promoted or closed). Only a fully successful full fetch may
-// prune — a transient tracker error must not wipe saved placements — and a
-// prune failure is ignored: a stale entry is harmless, the board renders from
-// current idea cards regardless.
-func (a *App) pruneIdeaSpace(data BoardData) {
-	if data.Error != "" {
-		return
-	}
+// ideaSpaceKeep is the set of ticket keys still occupying the idea space
+// (idea-stage cards). board.PrunePrefs drops idea placements outside it — but
+// only on a trustworthy fetch (see board.CanPrune).
+func ideaSpaceKeep(data BoardData) map[string]struct{} {
 	keys := make(map[string]struct{})
 	for _, card := range data.Cards {
 		if card.Stage == string(daemon.BoardIdeas) {
 			keys[card.Key] = struct{}{}
 		}
 	}
-	_ = a.ideas.PruneExcept(keys)
+	return keys
 }
 
 // SetIdeaColumn persists the idea-space placement for one ticket. Purely
@@ -242,19 +240,15 @@ func (a *App) SetCardHidden(pmKey string, hidden bool) error {
 	return a.prefs.SetHidden(pmKey, hidden)
 }
 
-// pruneBoardPrefs drops order slots and hidden flags for tickets that are no
-// longer on the board. Same contract as pruneIdeaSpace: only a fully
-// successful full fetch may prune, and a prune failure is ignored — a stale
-// entry is harmless.
-func (a *App) pruneBoardPrefs(data BoardData) {
-	if data.Error != "" {
-		return
-	}
+// boardPrefsKeep is the set of every ticket key currently on the board.
+// board.PrunePrefs drops order slots and hidden flags outside it — but only on a
+// trustworthy fetch (see board.CanPrune).
+func boardPrefsKeep(data BoardData) map[string]struct{} {
 	keys := make(map[string]struct{}, len(data.Cards))
 	for _, card := range data.Cards {
 		keys[card.Key] = struct{}{}
 	}
-	_ = a.prefs.PruneExcept(keys)
+	return keys
 }
 
 // CardsQuick fetches issue titles only — skipping the per-ticket comment scan
@@ -284,7 +278,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 // marker-less decision so the quick pass and full pass agree on what to show.
 func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs) BoardData {
 	data := BoardData{DockerAvailable: dockerAvailable, ColumnOrder: prefs.Columns}
-	pm, ok := firstPMResult(results)
+	pm, ok := board.FirstPMResult(results)
 	if !ok {
 		// No PM-role tracker configured yet: render five empty columns rather
 		// than erroring, matching the "zero PM issues" requirement.
@@ -619,17 +613,4 @@ func ideationView(st daemon.IdeationStatus) IdeationView {
 		view.Messages = append(view.Messages, IdeationMsg{Role: m.Role, Text: m.Text})
 	}
 	return view
-}
-
-// firstPMResult returns the first PM-role tracker result. v1 supports a single
-// PM project; selecting by role (not key prefix) mirrors the daemon's own
-// role-based resolution and avoids the name-collision mis-routing described in
-// AD-4.
-func firstPMResult(results []daemon.TrackerIssuesResult) (daemon.TrackerIssuesResult, bool) {
-	for _, r := range results {
-		if r.TrackerRole == "pm" {
-			return r, true
-		}
-	}
-	return daemon.TrackerIssuesResult{}, false
 }
