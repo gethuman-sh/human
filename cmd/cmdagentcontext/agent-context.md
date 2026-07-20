@@ -3,7 +3,7 @@
 The `human` CLI is available here. Prefer its tools over ad-hoc approaches.
 
 ## Navigate code — use this instead of grep or reading whole files
-Run `human codenav index .` once per repo, then:
+When a `human` daemon is running it serves a shared, always-fresh code index — no `index` step, works the same on the host, in any worktree, and inside any agent container. Just query:
 - `human codenav def <name>` — go-to-definition (`--outline` for signature + location only)
 - `human codenav refs <name>` — find references (with enclosing symbol + line)
 - `human codenav callers <qname>` / `callees <qname>` — call graph
@@ -12,7 +12,7 @@ Run `human codenav index .` once per repo, then:
 - `human codenav search <query>` — full-text search (`--symbols` for names)
 - `human codenav overview` / `outline <file>` — cold-start a codebase
 
-If a codenav command errors, run `human codenav <sub> --help` and retry — do not fall back to grep.
+If a codenav query says the repo is not indexed, the daemon is still building the shared index — retry shortly (or, with no daemon, run `human codenav index .`); do not fall back to grep.
 
 ## Read and track work
 - `human get <KEY>` — fetch an issue (auto-detects the tracker from the key)
