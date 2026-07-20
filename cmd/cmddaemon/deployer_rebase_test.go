@@ -121,7 +121,7 @@ func TestEnsureMergeable_rebasesInEphemeralWorktreeNotWorkspace(t *testing.T) {
 	if err := ensureMergeable(t, s); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !s.sawCall("worktree-add "+rebaseTestWorkspace+" staletip") {
+	if !s.sawCall("worktree-add " + rebaseTestWorkspace + " staletip") {
 		t.Errorf("expected detached worktree at the origin tip, calls: %v", s.calls)
 	}
 	if s.worktreePath == rebaseTestWorkspace || s.worktreePath == "" {
@@ -159,7 +159,7 @@ func TestEnsureMergeable_localOnlyBranchPushesPlain(t *testing.T) {
 	if err := ensureMergeable(t, s); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !s.sawCall("worktree-add "+rebaseTestWorkspace+" localtip") {
+	if !s.sawCall("worktree-add " + rebaseTestWorkspace + " localtip") {
 		t.Errorf("local-only branch must rebase from the local tip, calls: %v", s.calls)
 	}
 	if !s.sawCall("push-head " + s.worktreePath + " autofix/999") {
