@@ -176,3 +176,38 @@ export function queueIndex(queue) {
 export function isNextQueue(fromQueue, toQueue) {
     return queueIndex(toQueue) === queueIndex(fromQueue) + 1;
 }
+// --- Deploy controls (shared by the board's Deploy zone and the Bugs Deploy
+// button) -----------------------------------------------------------------
+//
+// The two Deploy controls are one abstraction with two panes: the same
+// readiness gate, the same count/disabled affordance, and (via buildDeployControl
+// in board-deploy.ts) the same drop-and-click wiring. Keeping the DOM-free half
+// here lets it be unit-tested directly and gives isReadyToDeploy a single home.
+// isReadyToDeploy reports a card resting in Ready to Deploy on a passed review
+// of a recorded branch — the only cards a Deploy control accepts. Without a
+// branch there is nothing to ship: deploying can only fail, so the card must
+// never be offered (SC-297).
+export function isReadyToDeploy(card) {
+    return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict) && !!card.branch;
+}
+// deployableCards is the click's payload: every ready card in the control's pane
+// — feature cards on the board, bug cards in the Bugs pane. The same predicate
+// gates the single-card drop, so click and drop can never disagree on what is
+// shippable.
+export function deployableCards(cards, side) {
+    const wantBug = side === "bugs";
+    return cards.filter((c) => !!c.bug === wantBug && isReadyToDeploy(c));
+}
+// deployControlView derives the affordance both controls show from the live card
+// list: a count-labelled Deploy caption, disabled with a pane-specific tooltip
+// when nothing is ready, enabled with a "ship every…" tooltip otherwise.
+export function deployControlView(cards, side) {
+    const count = deployableCards(cards, side).length;
+    const noun = side === "bugs" ? "fixed bug" : "ready-to-deploy card";
+    return {
+        count,
+        disabled: count === 0,
+        label: `Deploy${count ? ` (${count})` : ""}`,
+        tooltip: count === 0 ? `No ${noun}s to deploy yet` : `Ship every ${noun}`,
+    };
+}

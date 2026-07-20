@@ -331,11 +331,21 @@ body {
 .deploy-zone {
   border: 2px dashed var(--col-border);
   border-radius: 8px;
+  /* A <button> now (click ships every ready card), so reset the native chrome
+     back to the drop-zone look it shares with .bug-deploy. */
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 0;
   color: var(--muted);
+}
+
+.deploy-zone:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .deploy-zone-label {
@@ -402,9 +412,9 @@ body {
   border: 2px solid #ff1744;
 }
 
-/* The terminal Deploy control: a button, not a drop zone — fixed bugs ship in
-   one click. Styled after .deploy-zone so both panes end on the same visual
-   full stop. */
+/* The terminal Deploy control: click ships every fixed bug, and a single ready
+   bug can be dropped on it too (849). Styled after .deploy-zone so both panes
+   end on the same visual full stop. */
 .bug-deploy {
   border: 2px dashed var(--col-border);
   border-radius: 8px;
@@ -427,6 +437,19 @@ body {
 .bug-deploy:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Drag-hover feedback for a single bug dropped on the control, mirroring the
+   board's .deploy-zone.drop-ok / .drop-reject rules. */
+.bug-deploy.drop-ok {
+  border-color: var(--done);
+  color: var(--done);
+  background: var(--drop-ok);
+}
+
+.bug-deploy.drop-reject {
+  border-color: var(--failed);
+  background: var(--drop-reject);
 }
 
 /* In-app confirmation modal (used before closing a ticket). Sits above the

@@ -8,6 +8,10 @@ export interface QueueCard {
   state: string;
   verdict?: string;
   branch?: string;
+  // Defect ticket: a bug card lives in the Bugs pane, a feature card on the
+  // board. The Deploy selectors split on it so each control ships only its own
+  // pane's ready cards.
+  bug?: boolean;
   options?: { id: string; label: string }[];
 }
 
@@ -220,4 +224,57 @@ export function queueIndex(queue: string): number {
 
 export function isNextQueue(fromQueue: string, toQueue: string): boolean {
   return queueIndex(toQueue) === queueIndex(fromQueue) + 1;
+}
+
+// --- Deploy controls (shared by the board's Deploy zone and the Bugs Deploy
+// button) -----------------------------------------------------------------
+//
+// The two Deploy controls are one abstraction with two panes: the same
+// readiness gate, the same count/disabled affordance, and (via buildDeployControl
+// in board-deploy.ts) the same drop-and-click wiring. Keeping the DOM-free half
+// here lets it be unit-tested directly and gives isReadyToDeploy a single home.
+
+// isReadyToDeploy reports a card resting in Ready to Deploy on a passed review
+// of a recorded branch — the only cards a Deploy control accepts. Without a
+// branch there is nothing to ship: deploying can only fail, so the card must
+// never be offered (SC-297).
+export function isReadyToDeploy(card: QueueCard): boolean {
+  return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict) && !!card.branch;
+}
+
+// DeploySide names the pane a Deploy control belongs to: the board's feature
+// workflow, or the Bugs pane. It selects which ready cards the control ships.
+export type DeploySide = "features" | "bugs";
+
+// deployableCards is the click's payload: every ready card in the control's pane
+// — feature cards on the board, bug cards in the Bugs pane. The same predicate
+// gates the single-card drop, so click and drop can never disagree on what is
+// shippable.
+export function deployableCards<C extends QueueCard>(cards: C[], side: DeploySide): C[] {
+  const wantBug = side === "bugs";
+  return cards.filter((c) => !!c.bug === wantBug && isReadyToDeploy(c));
+}
+
+// DeployControlView is the DOM-free description a Deploy control renders: how
+// many cards a click would ship, whether it is disabled, its caption, and the
+// tooltip explaining the disabled state.
+export interface DeployControlView {
+  count: number;
+  disabled: boolean;
+  label: string;
+  tooltip: string;
+}
+
+// deployControlView derives the affordance both controls show from the live card
+// list: a count-labelled Deploy caption, disabled with a pane-specific tooltip
+// when nothing is ready, enabled with a "ship every…" tooltip otherwise.
+export function deployControlView(cards: QueueCard[], side: DeploySide): DeployControlView {
+  const count = deployableCards(cards, side).length;
+  const noun = side === "bugs" ? "fixed bug" : "ready-to-deploy card";
+  return {
+    count,
+    disabled: count === 0,
+    label: `Deploy${count ? ` (${count})` : ""}`,
+    tooltip: count === 0 ? `No ${noun}s to deploy yet` : `Ship every ${noun}`,
+  };
 }
