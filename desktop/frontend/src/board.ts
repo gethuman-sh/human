@@ -50,6 +50,7 @@ import {
   boardStateFromPayload,
 } from "./board-queue.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
+import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
 
 interface Card {
@@ -1928,11 +1929,7 @@ function renderIdeation(): void {
   const form = document.getElementById("ideation-form");
   const input = document.getElementById("ideation-input") as HTMLInputElement | null;
   const send = document.getElementById("ideation-send") as HTMLButtonElement | null;
-  const inputEnabled =
-    ideation.state === "awaiting_reply" ||
-    ideation.state === "none" ||
-    ideation.state === "done" ||
-    ideation.state === "error";
+  const inputEnabled = ideationInputEnabled(ideation.state);
   // The draft-review form takes over the panel's bottom area while
   // awaiting_approval; the free-text form must not be reachable there.
   if (form) form.classList.toggle("hidden", ideation.state === "awaiting_approval");
@@ -2218,6 +2215,13 @@ async function pollIdeation(): Promise<void> {
     stopIdeationPoll();
     return;
   }
+  if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
+    // Terminal transition: the PM ticket was created — closeIdeation() hides the
+    // panel, stops the poll, and resets the mode picker. The daemon's board:changed
+    // event surfaces the new card (SC-859).
+    closeIdeation();
+    return;
+  }
   renderIdeation();
   if (ideation.state !== "thinking") {
     stopIdeationPoll();
@@ -2258,6 +2262,13 @@ async function sendIdeationReply(text: string): Promise<void> {
     stopIdeationPoll();
     return;
   }
+  if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
+    // Terminal transition: the PM ticket was created — closeIdeation() hides the
+    // panel, stops the poll, and resets the mode picker. The daemon's board:changed
+    // event surfaces the new card (SC-859).
+    closeIdeation();
+    return;
+  }
   renderIdeation();
   if (ideation.state !== "thinking") {
     stopIdeationPoll();
@@ -2288,6 +2299,13 @@ async function approveIdeation(): Promise<void> {
   } catch (err) {
     renderIdeationError(errMessage(err));
     stopIdeationPoll();
+    return;
+  }
+  if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
+    // Terminal transition: the PM ticket was created — closeIdeation() hides the
+    // panel, stops the poll, and resets the mode picker. The daemon's board:changed
+    // event surfaces the new card (SC-859).
+    closeIdeation();
     return;
   }
   renderIdeation();
