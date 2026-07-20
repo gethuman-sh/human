@@ -33,6 +33,11 @@ type Deployer interface {
 	// A returned error is a real conflict the mechanical path cannot resolve — the
 	// deploy must NOT attempt the merge blind, but fail loudly instead.
 	EnsureMergeable(ctx context.Context, req PRRequest) error
+	// PullRequestMergeable reports the forge's own end-state (three-way) merge
+	// verdict for the PR. It is the fallback signal when the mechanical rebase in
+	// EnsureMergeable conflicts on an intermediate commit the end-state merge
+	// never sees (SC-804).
+	PullRequestMergeable(ctx context.Context, workspaceDir string, number int) (bool, error)
 	MergePullRequest(ctx context.Context, workspaceDir string, number int) error
 	DeleteRemoteBranch(ctx context.Context, workspaceDir, branch string) error
 }
@@ -367,8 +372,14 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 		WorkspaceDir: d.WorkspaceDir,
 		Branch:       card.Branch,
 	}); err != nil {
-		d.deployFailed(req.PMKey, res.URL, "branch could not be made mergeable: "+err.Error())
-		return
+		// A rebase is strictly stronger than the forge's three-way end-state
+		// merge: it can conflict on an intermediate commit the merge never sees.
+		// Consult the forge's mergeable verdict and the green CI on the
+		// (rebase-aborted, unchanged) tip before redding the card (SC-804).
+		if !d.forgeMergeableFallback(ctx, res) {
+			d.deployFailed(req.PMKey, res.URL, "branch could not be made mergeable: "+err.Error())
+			return
+		}
 	}
 	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
 		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
@@ -382,6 +393,19 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, card.Branch)
 	_, _ = d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
 	d.closeTicketBestEffort(req.PMKey)
+}
+
+// forgeMergeableFallback reports whether the deploy may proceed to the merge
+// despite a failed mechanical rebase: true only when the forge reports the PR
+// mergeable AND CI is green on the tip. Any read error is treated as "do not
+// proceed" so the card reds rather than merging on an unknown state (SC-804).
+func (d BoardTransitionDeps) forgeMergeableFallback(ctx context.Context, res PRResult) bool {
+	mergeable, err := d.Deployer.PullRequestMergeable(ctx, d.WorkspaceDir, res.Number)
+	if err != nil || !mergeable {
+		return false
+	}
+	state, err := d.Deployer.PullRequestChecks(ctx, d.WorkspaceDir, res.Number)
+	return err == nil && state == forge.ChecksPassing
 }
 
 // closeTicketBestEffort runs the automated post-merge close. It never fails the
