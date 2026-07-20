@@ -40,6 +40,11 @@ type Deployer interface {
 	PullRequestMergeable(ctx context.Context, workspaceDir string, number int) (bool, error)
 	MergePullRequest(ctx context.Context, workspaceDir string, number int) error
 	DeleteRemoteBranch(ctx context.Context, workspaceDir, branch string) error
+	// BranchMerged reports whether the branch's work is already contained in the
+	// base branch (an ancestor of origin/<base>). A re-run Deploy on a finished
+	// card must short-circuit to a clean no-op rather than open a doomed PR the
+	// forge rejects 422 "No commits between" (SC-911).
+	BranchMerged(ctx context.Context, workspaceDir, branch string) bool
 }
 
 // PRRequest carries everything needed to push a branch and open its PR.
@@ -359,6 +364,19 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 	defer deployGate.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, deployTimeout)
 	defer cancel()
+
+	// Already-merged carve-out: a re-run Deploy on a card whose branch is already
+	// on the base has nothing to ship. Opening a PR would draw the forge's 422
+	// "No commits between" and red a card that is genuinely finished — so
+	// short-circuit to the terminal success path (deployed/done, ticket closed).
+	// This mirrors the "already done, stop cleanly" carve-outs Planning and
+	// Implementation already carry (SC-911).
+	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, card.Branch) {
+		_, _ = d.Commenter.AddComment(ctx, req.PMKey,
+			StampDaemon(DeployedHeader+"\nalready merged into the base branch; no new PR opened", d.DaemonID))
+		d.closeTicketBestEffort(req.PMKey)
+		return
+	}
 
 	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,

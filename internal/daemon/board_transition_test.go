@@ -84,6 +84,9 @@ type fakeDeployer struct {
 	// EnsureMergeable conflicts on an intermediate commit (SC-804).
 	mergeable    bool
 	mergeableErr error
+	// alreadyMerged models a branch whose work is already on the base: the deploy
+	// must short-circuit to a clean no-op instead of opening a doomed PR (SC-911).
+	alreadyMerged bool
 }
 
 func (f *fakeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResult, error) {
@@ -132,6 +135,10 @@ func (f *fakeDeployer) MergePullRequest(_ context.Context, _ string, _ int) erro
 func (f *fakeDeployer) DeleteRemoteBranch(_ context.Context, _, branch string) error {
 	f.deleted = append(f.deleted, branch)
 	return nil
+}
+
+func (f *fakeDeployer) BranchMerged(_ context.Context, _, _ string) bool {
+	return f.alreadyMerged
 }
 
 func newDeps(c *fakeCommenter, l *fakeLauncher, p *fakeDeployer) BoardTransitionDeps {
@@ -375,6 +382,46 @@ func TestApplyTransitionDeploySuccess(t *testing.T) {
 	assert.Equal(t, "SC-1", closed)
 	assert.Contains(t, c.added, DeployStartedHeader)
 	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/7")
+}
+
+// TestApplyTransitionDeployAlreadyMerged is the SC-911 regression: re-running
+// Deploy on a card whose branch is already on main must be a clean no-op —
+// never open a PR (which the forge rejects 422 "No commits between main and
+// <branch>", redding a finished card), and instead end deployed/done and close
+// the ticket. On the pre-fix deploy() (which calls PushAndCreatePR
+// unconditionally) the branch reds; this test fails there.
+func TestApplyTransitionDeployAlreadyMerged(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nengineering: HUM-9\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{alreadyMerged: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	var closed string
+	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	// The already-merged short-circuit must skip the forge entirely.
+	assert.Zero(t, p.call, "an already-merged branch must never open a PR")
+	assert.Zero(t, p.merged, "an already-merged branch must never re-merge")
+	assert.Empty(t, p.deleted)
+	// The card ends deployed/done (green) and the ticket is closed.
+	assert.Equal(t, "SC-1", closed)
+	var deployed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployedHeader) {
+			deployed = b
+		}
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader),
+			"an already-merged branch must never dead-end on deploy-failed: %q", b)
+	}
+	require.NotEmpty(t, deployed, "expected a deployed marker for the no-op")
+	stage, state, ok := ClassifyMarker(deployed)
+	require.True(t, ok, "the deployed marker must classify as a stage transition")
+	assert.Equal(t, BoardDoneStage, stage)
+	assert.Equal(t, BoardDone, state)
 }
 
 func TestApplyTransitionDeployCloseFails(t *testing.T) {
@@ -969,6 +1016,8 @@ func (f *gateProbeDeployer) PullRequestMergeable(_ context.Context, _ string, _ 
 func (f *gateProbeDeployer) MergePullRequest(_ context.Context, _ string, _ int) error { return nil }
 
 func (f *gateProbeDeployer) DeleteRemoteBranch(_ context.Context, _, _ string) error { return nil }
+
+func (f *gateProbeDeployer) BranchMerged(_ context.Context, _, _ string) bool { return false }
 
 func TestDeploysQueueOneAtATime(t *testing.T) {
 	// Regression (SC-296): the Deploy button ships every ready fix at once.
