@@ -911,10 +911,60 @@ func TestIsLocalSubcommand(t *testing.T) {
 		// Tracker-forwarded commands should stay forwarded even with space flags.
 		{[]string{"--tracker", "work", "jira", "issue", "get", "KAN-1"}, false},
 		{[]string{"--tracker", "work", "linear", "issues", "list"}, false},
+		// codenav query verbs forward to the daemon's shared index; index/rm and
+		// impact --diff stay local (need the caller's own filesystem).
+		{[]string{"codenav", "refs", "X"}, false},
+		{[]string{"codenav", "def", "Foo"}, false},
+		{[]string{"codenav"}, true},
+		{[]string{"codenav", "index", "."}, true},
+		{[]string{"codenav", "rm", "p"}, true},
+		{[]string{"codenav", "impact", "--diff"}, true},
+		{[]string{"codenav", "impact", "Foo"}, false},
 	}
 	for _, tt := range tests {
 		got := isLocalSubcommand(tt.args)
 		assert.Equal(t, tt.want, got, "isLocalSubcommand(%v)", tt.args)
+	}
+}
+
+func TestCodenavVerb(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantVerb string
+		wantDiff bool
+	}{
+		{"query", []string{"codenav", "def", "Foo"}, "def", false},
+		{"impactDiff", []string{"codenav", "impact", "--diff"}, "impact", true},
+		{"withGlobalValueFlag", []string{"--tracker", "work", "codenav", "refs", "Bar"}, "refs", false},
+		{"bareCodenav", []string{"codenav"}, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verb, hasDiff := codenavVerb(tt.args)
+			assert.Equal(t, tt.wantVerb, verb)
+			assert.Equal(t, tt.wantDiff, hasDiff)
+		})
+	}
+}
+
+func TestCodenavRunsLocally(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"forwardsQuery", []string{"codenav", "def", "Foo"}, false},
+		{"localIndex", []string{"codenav", "index", "."}, true},
+		{"localRm", []string{"codenav", "rm", "p"}, true},
+		{"bareCodenavLocal", []string{"codenav"}, true},
+		{"impactDiffLocal", []string{"codenav", "impact", "--diff"}, true},
+		{"impactQnameForwarded", []string{"codenav", "impact", "Foo"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, codenavRunsLocally(tt.args))
+		})
 	}
 }
 

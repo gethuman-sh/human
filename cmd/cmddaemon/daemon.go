@@ -27,6 +27,7 @@ import (
 	"github.com/gethuman-sh/human/internal/chrome"
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/codenav"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
@@ -257,6 +258,11 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	auditStore, auditWriter := initAuditStore(ctx, logger)
 
 	go runMaintenanceLoop(ctx, logger, confirmStore, statsStore, auditStore)
+
+	// Keep the shared code-navigation index fresh so every agent, worktree, and
+	// the developer's CLI query one daemon-owned index instead of each rebuilding
+	// it (SC-781).
+	go runCodenavIndexLoop(ctx, projectRegistry, codenav.DefaultDBPath(), logger)
 
 	doctor := daemon.NewDoctorRunner(buildDoctorChecks(projectRegistry, vaultResolver, doctorPersistence{
 		stats:    statsStore != nil,
