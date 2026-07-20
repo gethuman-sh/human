@@ -8,4 +8,6 @@ Lets `human` read facts about the git repository you are working in, so it can f
 - Feeds forge and project detection automatically
 - Lists the commits referencing a ticket key in any accepted reference format (`human commits for KEY`), excluding merge-PR commits
 - Prints the canonical bracket-style commit-message prefix for a ticket (`human commits prefix PM_KEY [ENG_KEY]`)
+- Extracts the ticket keys referenced by commits touching given paths (`human commits keys [PATH...]`)
+- Resolves the recency boundary — latest tag, else a 30-day window — and whether paths changed since it (`human commits recency`, `human commits touched`)
 - Reports a clear error when no remote

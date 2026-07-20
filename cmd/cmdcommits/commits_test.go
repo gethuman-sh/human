@@ -107,3 +107,77 @@ func TestBuildCommitsCmd_Subcommands(t *testing.T) {
 	assert.Contains(t, uses, "for KEY")
 	assert.Contains(t, uses, "prefix KEY [ENGINEERING_KEY]")
 }
+
+func TestRunCommitKeys_JSON(t *testing.T) {
+	prev := gitrepo.TicketKeys
+	gitrepo.TicketKeys = func(_ context.Context, _ string, paths []string) ([]string, error) {
+		assert.Equal(t, []string{"internal/tracker"}, paths)
+		return []string{"SC-881", "42"}, nil
+	}
+	t.Cleanup(func() { gitrepo.TicketKeys = prev })
+
+	var buf bytes.Buffer
+	err := RunCommitKeys(context.Background(), &buf, ".", []string{"internal/tracker"})
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), `"SC-881"`)
+	assert.Contains(t, buf.String(), `"42"`)
+}
+
+func TestRunCommitKeys_emptyIsArray(t *testing.T) {
+	prev := gitrepo.TicketKeys
+	gitrepo.TicketKeys = func(context.Context, string, []string) ([]string, error) { return nil, nil }
+	t.Cleanup(func() { gitrepo.TicketKeys = prev })
+
+	var buf bytes.Buffer
+	require.NoError(t, RunCommitKeys(context.Background(), &buf, ".", nil))
+	assert.Equal(t, "[]\n", buf.String())
+}
+
+func TestRunCommitsRecency_tagAndFallback(t *testing.T) {
+	prev := gitrepo.LatestTag
+	t.Cleanup(func() { gitrepo.LatestTag = prev })
+
+	gitrepo.LatestTag = func(context.Context, string) string { return "v0.21.0" }
+	var buf bytes.Buffer
+	require.NoError(t, RunCommitsRecency(context.Background(), &buf, "."))
+	assert.Contains(t, buf.String(), `"tag": "v0.21.0"`)
+
+	gitrepo.LatestTag = func(context.Context, string) string { return "" }
+	buf.Reset()
+	require.NoError(t, RunCommitsRecency(context.Background(), &buf, "."))
+	assert.Contains(t, buf.String(), `"since": "30 days ago"`)
+}
+
+func TestRunCommitsTouched_usesResolvedBoundary(t *testing.T) {
+	prevTag, prevTouched := gitrepo.LatestTag, gitrepo.TouchedSince
+	t.Cleanup(func() { gitrepo.LatestTag, gitrepo.TouchedSince = prevTag, prevTouched })
+
+	gitrepo.LatestTag = func(context.Context, string) string { return "v1.0.0" }
+	var gotBoundary string
+	gitrepo.TouchedSince = func(_ context.Context, _, boundary string, _ []string) (bool, error) {
+		gotBoundary = boundary
+		return true, nil
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, RunCommitsTouched(context.Background(), &buf, ".", "", []string{"cmd"}))
+	assert.Equal(t, "v1.0.0", gotBoundary)
+	assert.Equal(t, "true\n", buf.String())
+}
+
+func TestRunCommitsTouched_explicitRefWins(t *testing.T) {
+	prevTag, prevTouched := gitrepo.LatestTag, gitrepo.TouchedSince
+	t.Cleanup(func() { gitrepo.LatestTag, gitrepo.TouchedSince = prevTag, prevTouched })
+
+	gitrepo.LatestTag = func(context.Context, string) string { return "v1.0.0" }
+	var gotBoundary string
+	gitrepo.TouchedSince = func(_ context.Context, _, boundary string, _ []string) (bool, error) {
+		gotBoundary = boundary
+		return false, nil
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, RunCommitsTouched(context.Background(), &buf, ".", "v0.9.0", nil))
+	assert.Equal(t, "v0.9.0", gotBoundary)
+	assert.Equal(t, "false\n", buf.String())
+}
