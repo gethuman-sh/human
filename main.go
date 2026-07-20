@@ -29,6 +29,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
 	"github.com/gethuman-sh/human/cmd/cmdindex"
 	"github.com/gethuman-sh/human/cmd/cmdinit"
+	"github.com/gethuman-sh/human/cmd/cmdmarker"
 	"github.com/gethuman-sh/human/cmd/cmdnotion"
 	"github.com/gethuman-sh/human/cmd/cmdping"
 	"github.com/gethuman-sh/human/cmd/cmdplan"
@@ -223,6 +224,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	commitsCmd := cmdcommits.BuildCommitsCmd()
 	commitsCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(commitsCmd)
+
+	markerCmd := cmdmarker.BuildMarkerCmd(autoDeps)
+	markerCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(markerCmd)
 
 	// --- Provider commands (dynamic registration) ---
 	providers := []string{"jira", "github", "gitlab", "linear", "azuredevops", "shortcut", "clickup"}
