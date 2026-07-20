@@ -22,7 +22,6 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/codenav"
 	"github.com/gethuman-sh/human/internal/codenav/graph"
-	"github.com/gethuman-sh/human/internal/codenav/index"
 	"github.com/gethuman-sh/human/internal/codenav/query"
 	"github.com/gethuman-sh/human/internal/codenav/store"
 )
@@ -154,45 +153,16 @@ func buildIndexCmd() *cobra.Command {
 			}
 			defer func() { _ = st.Close() }()
 
-			scan := index.RepoScan{Project: proj, Root: root}
-			backends := index.PickFor(scan)
-			if len(backends) == 0 {
-				return errors.WithDetails("no indexer matched the repository", "root", root)
-			}
-
-			// Skip work when the source is byte-for-byte unchanged since last index.
-			sig := index.SourceSignature(scan)
-			if !full {
-				if old, _ := st.ProjectSig(proj); old != "" && old == sig {
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%q unchanged since last index; skipping (use --full to force)\n", proj)
-					return nil
-				}
-			}
-			w, err := st.NewWriter(proj, root)
+			res, err := codenav.IndexProject(context.Background(), st, proj, root, full)
 			if err != nil {
 				return err
 			}
-			start := time.Now()
-			for _, ix := range backends {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "indexing %s with %s backend…\n", proj, ix.Name())
-				if err := ix.Index(context.Background(), scan, w); err != nil {
-					_ = w.Rollback()
-					return err
-				}
+			if res.Skipped {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%q unchanged since last index; skipping (use --full to force)\n", proj)
+				return nil
 			}
-			if err := w.Commit(gitRev(root)); err != nil {
-				return err
-			}
-			if err := st.SetProjectSig(proj, sig); err != nil {
-				return err
-			}
-			projs, _ := st.ListProjects()
-			for _, p := range projs {
-				if p.Name == proj {
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "indexed %q: %d symbols, %d edges, %d files in %s\n",
-						proj, p.Symbols, p.Edges, p.Files, time.Since(start).Round(time.Millisecond))
-				}
-			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "indexed %q: %d symbols, %d edges, %d files in %s\n",
+				proj, res.Info.Symbols, res.Info.Edges, res.Info.Files, res.Elapsed.Round(time.Millisecond))
 			return nil
 		},
 	}
@@ -846,13 +816,4 @@ func parseHunkRange(h string) (lo, hi int) {
 		return c, c + d - 1
 	}
 	return 0, 0
-}
-
-// gitRev returns the HEAD sha for root, or "" if not a git repo.
-func gitRev(root string) string {
-	out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output() // #nosec G204 -- fixed git argv against a known repo root
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
