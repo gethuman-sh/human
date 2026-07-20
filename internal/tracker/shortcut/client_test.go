@@ -254,6 +254,40 @@ func TestGetIssue_invalidKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid story ID")
 }
 
+// A key in the tool's own SC-nnn display form must reach the same story
+// endpoint as the bare numeric key: parseStoryID strips the SC- prefix so
+// GetIssue("SC-879") hits /api/v3/stories/879.
+func TestGetIssue_shortcutDisplayKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/stories/879":
+			assert.Equal(t, http.MethodGet, r.Method)
+			_, _ = fmt.Fprint(w, `{
+				"id": 879,
+				"name": "Display key story",
+				"story_type": "feature",
+				"workflow_state_id": 500
+			}`)
+
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[
+				{"id":500,"name":"In Progress","type":"started"}
+			]}]`)
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	issue, err := client.GetIssue(context.Background(), "SC-879")
+
+	require.NoError(t, err)
+	assert.Equal(t, "879", issue.Key)
+	assert.Equal(t, "Display key story", issue.Title)
+}
+
 func TestCreateIssue_happy(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
