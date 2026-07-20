@@ -210,6 +210,18 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	autoStatusCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoStatusCmd)
 
+	autoDoneCmd := cmdauto.BuildAutoDoneCmd(autoDeps)
+	autoDoneCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoDoneCmd)
+
+	autoCloseCmd := cmdauto.BuildAutoCloseCmd(autoDeps)
+	autoCloseCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoCloseCmd)
+
+	autoIdeaCmd := cmdauto.BuildAutoIdeaCmd(autoDeps)
+	autoIdeaCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoIdeaCmd)
+
 	autoLinkCmd := cmdauto.BuildAutoLinkCmd(autoDeps)
 	autoLinkCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoLinkCmd)
