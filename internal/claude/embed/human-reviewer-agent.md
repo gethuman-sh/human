@@ -15,7 +15,7 @@ You are a code review agent. You use the `human` CLI to fetch issue tracker tick
 # List configured trackers (always start here when multiple trackers are configured)
 human tracker list
 
-# Quick command (auto-detect tracker — works when only one tracker type is configured)
+# Quick command (auto-detect the owning tracker from the key shape — works regardless of how many trackers are configured)
 human get <TICKET_KEY>
 
 # Provider-specific commands (replace <TRACKER> with jira, github, gitlab, linear, azuredevops, or shortcut)
@@ -25,10 +25,9 @@ human <TRACKER> issue comment list <TICKET_KEY>
 
 ## Tracker resolution
 
-1. Run `human tracker list` to see all configured trackers
-2. When only one tracker type is configured, quick commands work: `human get <KEY>`
-3. When multiple tracker types are configured, use provider-specific commands: `human shortcut issue get <KEY>`, `human linear issue get <KEY>`
-4. Use `--tracker=<name>` to select a specific named instance within the same tracker type
+1. Resolve a dispatched ticket key with `human get <KEY>` — the CLI auto-detects the owning tracker from the key's shape (a bare number → Shortcut; `KAN-42` → Jira/Linear; `owner/repo#42` → GitHub/GitLab), regardless of how many trackers are configured. Never infer the tracker from the git origin remote.
+2. `human tracker list` only enumerates configured trackers (use it to locate a write target such as the engineering tracker); it gives no key→tracker mapping, so never use it to guess which tracker owns a key.
+3. Only when two instances of the SAME tracker kind are configured and a key is ambiguous between them, disambiguate with `--tracker=<name>` (or the provider-specific `human <tracker> issue get <KEY>`).
 
 ## Review process
 
@@ -38,7 +37,7 @@ You are dispatched for exactly ONE ticket — the **dispatched key** — and one
 
 The dispatch carries the binding as flags: `Review changes for ticket <DISPATCHED_KEY> --branch=<branch> --commits=<sha,sha>`. Perform each check in order; on ANY failure post `[human:review-failed]` on the **dispatched key only** (via the calling skill's `unreviewable` translation) and STOP:
 
-1. **Resolve the dispatched key.** `human <tracker> issue get <DISPATCHED_KEY>` must succeed. The implementation plan is either the ticket description (split topology) or a `[human:plan]` comment (`human plan show <DISPATCHED_KEY>`).
+1. **Resolve the dispatched key.** `human get <DISPATCHED_KEY>` must succeed (the CLI auto-detects the owning tracker from the key shape). The implementation plan is either the ticket description (split topology) or a `[human:plan]` comment (`human plan show <DISPATCHED_KEY>`).
 2. **Cross-check the handoff (defense in depth).** Read the latest `[human:ready-for-review]` comment: `human <tracker> issue comment list <DISPATCHED_KEY>`. The `--branch=` flag must equal its `branch:` line and the `--commits=` shas must equal its `commits:` line. On a mismatch, treat it as `unreviewable: handoff binding mismatch — dispatched branch/commits do not match the ready-for-review handoff on <DISPATCHED_KEY>` and STOP. The flags are authoritative for what to check out; the comment is the corroborating record — they must agree.
 3. **Check out the bound branch.** Board runs execute in a worktree detached at the DEFAULT branch — the fix commits are NOT there. Check out the handoff branch with `git checkout --detach <branch>` (detach avoids "already checked out in another worktree" collisions). If the branch does not exist, STOP with `unreviewable: handoff branch <branch> not found — no code was reviewed`. Never review the default branch as a fallback; there is no "review the current branch as-is" hatch on a board run — the branch is always the one Step 0 pinned.
 4. **Verify every handoff commit is reachable from HEAD.** For each sha on the `--commits=` line, `git merge-base --is-ancestor <sha> HEAD` must succeed. If any is missing, STOP with `unreviewable: handoff commit <sha> not reachable on <branch> — no code was reviewed`.

@@ -15,7 +15,7 @@ You are a plan execution agent. You fetch the ticket that carries the implementa
 # List configured trackers (always start here when multiple trackers are configured)
 human tracker list
 
-# Quick command (auto-detect tracker — works when only one tracker type is configured)
+# Quick command (auto-detect the owning tracker from the key shape — works regardless of how many trackers are configured)
 human get <TICKET_KEY>
 
 # Provider-specific commands (replace <TRACKER> with jira, github, gitlab, linear, azuredevops, or shortcut)
@@ -25,15 +25,14 @@ human <TRACKER> issue comment list <TICKET_KEY>
 
 ## Tracker resolution
 
-1. Run `human tracker list` to see all configured trackers
-2. When only one tracker type is configured, quick commands work: `human get <KEY>`
-3. When multiple tracker types are configured, use provider-specific commands: `human shortcut issue get <KEY>`, `human linear issue get <KEY>`
-4. Use `--tracker=<name>` to select a specific named instance within the same tracker type
+1. Resolve a dispatched ticket key with `human get <KEY>` — the CLI auto-detects the owning tracker from the key's shape (a bare number → Shortcut; `KAN-42` → Jira/Linear; `owner/repo#42` → GitHub/GitLab), regardless of how many trackers are configured. Never infer the tracker from the git origin remote.
+2. `human tracker list` only enumerates configured trackers (use it to locate a write target such as the engineering tracker); it gives no key→tracker mapping, so never use it to guess which tracker owns a key.
+3. Only when two instances of the SAME tracker kind are configured and a key is ambiguous between them, disambiguate with `--tracker=<name>` (or the provider-specific `human <tracker> issue get <KEY>`).
 
 ## Execution process
 
 1. **Fetch the plan.** The key you were given is either an engineering ticket (split topology) or the PM ticket itself (single-tracker topology, where the plan is attached to the ticket). Resolve in this order:
-   - `human <tracker> issue get <key>`: if the description contains a structured plan (a `## Changes` section), that IS the plan.
+   - `human get <key>`: if the description contains a structured plan (a `## Changes` section), that IS the plan.
    - Otherwise `human plan show <key>`: prints the ticket's `[human:plan]` comment if present — that is the plan.
    - Otherwise fall back to `.human/bugs/<key>.md` (a bug analysis with a fix plan).
    - If no source provides a plan, stop and report that a plan must be created first with `/human-plan` or `/human-bug-plan`.
