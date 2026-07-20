@@ -1603,9 +1603,13 @@ func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) error
 // EnsureMergeable makes the handoff branch current with the base before the
 // deploy attempts the merge: it fetches the base, and when the branch does not
 // already contain the base tip it rebases the branch onto origin/<base>,
-// re-pushes (lease when the branch is on origin), and re-verifies. A rebase error
-// is a real conflict the mechanical path cannot resolve — the deploy must fail
-// loudly rather than merge blind (735).
+// re-pushes (lease when the branch is on origin), and re-verifies. The rebase
+// runs in an ephemeral detached worktree, never in the live workspace checkout:
+// git refuses to rebase in a dirty worktree, so ANY uncommitted user change
+// would fail every deploy — and a rebase that did run would check the handoff
+// branch out under the user (SC-1000). A rebase error is a real conflict the
+// mechanical path cannot resolve — the deploy must fail loudly rather than
+// merge blind (735).
 func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) error {
 	dir, branch := req.WorkspaceDir, req.Branch
 	base := gitrepo.DefaultBranch(ctx, dir)
@@ -1613,38 +1617,77 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 		return err
 	}
 	originBase := "origin/" + base
-	// Already current: the branch contains the base tip, so its PR is mergeable
-	// without touching it.
-	if gitrepo.IsAncestor(ctx, dir, originBase, branch) {
-		return nil
-	}
-	// Record the remote tip so the post-rebase push can lease against it — only
-	// meaningful when the branch is already on origin.
-	var remoteSHA string
-	onOrigin := gitrepo.BranchExistsRemote(ctx, dir, branch)
-	if onOrigin {
-		sha, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
-		if err != nil {
-			return err
-		}
-		remoteSHA = sha
-	}
-	if err := gitrepo.Rebase(ctx, dir, originBase, branch); err != nil {
+	tip, onOrigin, err := branchTip(ctx, dir, branch)
+	if err != nil {
 		return err
 	}
+	// Already current: the branch contains the base tip, so its PR is mergeable
+	// without touching it.
+	if gitrepo.IsAncestor(ctx, dir, originBase, tip) {
+		return nil
+	}
+	wt, cleanup, err := addEphemeralWorktree(ctx, dir, tip)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := gitrepo.RebaseHead(ctx, wt, originBase); err != nil {
+		return err
+	}
+	newTip, err := gitrepo.RevParse(ctx, wt, "HEAD")
+	if err != nil {
+		return err
+	}
+	// The worktree rebased a detached HEAD, so publishing is a refspec push of
+	// the worktree's HEAD — the branch itself is never checked out anywhere.
+	// Lease against the recorded pre-rebase tip when the branch is on origin so
+	// a concurrent push is refused, not clobbered.
 	if onOrigin {
-		if err := gitrepo.PushWithLease(ctx, dir, branch, remoteSHA); err != nil {
+		if err := gitrepo.PushHeadWithLease(ctx, wt, branch, tip); err != nil {
 			return err
 		}
-	} else if err := gitrepo.Push(ctx, dir, branch); err != nil {
+	} else if err := gitrepo.PushHead(ctx, wt, branch); err != nil {
 		return err
 	}
 	// A clean rebase that still does not contain the base tip means the branch
 	// could not be made mergeable — surface it rather than merge into a conflict.
-	if !gitrepo.IsAncestor(ctx, dir, originBase, branch) {
+	if !gitrepo.IsAncestor(ctx, dir, originBase, newTip) {
 		return errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
 	}
 	return nil
+}
+
+// branchTip resolves the commit the freshness rebase starts from, preferring
+// the origin ref: the deploy serves the PR (which lives on origin), and the
+// local ref may lag a prior deploy's rebase — the ephemeral-worktree rebase
+// publishes to origin without rewriting local branches. The origin ref is
+// fetched first so the recorded tip is the actual remote state, not a stale
+// tracking ref.
+func branchTip(ctx context.Context, dir, branch string) (sha string, onOrigin bool, err error) {
+	if gitrepo.BranchExistsRemote(ctx, dir, branch) {
+		if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
+			return "", true, err
+		}
+		sha, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+		return sha, true, err
+	}
+	sha, err = gitrepo.RevParse(ctx, dir, branch)
+	return sha, false, err
+}
+
+// addEphemeralWorktree creates a throwaway detached worktree at tip, sharing
+// dir's object DB, and returns its path plus a cleanup that removes it. The
+// rebase result's objects survive removal in the shared DB.
+func addEphemeralWorktree(ctx context.Context, dir, tip string) (string, func(), error) {
+	wt, err := os.MkdirTemp("", "human-deploy-rebase-")
+	if err != nil {
+		return "", nil, errors.WrapWithDetails(err, "creating ephemeral rebase worktree dir")
+	}
+	if err := gitrepo.WorktreeAdd(ctx, dir, wt, tip); err != nil {
+		_ = os.RemoveAll(wt)
+		return "", nil, err
+	}
+	return wt, func() { _ = gitrepo.WorktreeRemove(ctx, dir, wt) }, nil
 }
 
 func (p forgeDeployer) PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error) {

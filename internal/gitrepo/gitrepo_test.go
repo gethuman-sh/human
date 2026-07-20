@@ -286,42 +286,6 @@ func TestRevParse_error(t *testing.T) {
 	}
 }
 
-func TestRebase_argv(t *testing.T) {
-	var gotArgs []string
-	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
-		gotArgs = append([]string{name}, args...)
-		return nil, nil
-	})
-	if err := Rebase(context.Background(), "/repo", "origin/main", "feat/x"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "rebase", "origin/main", "feat/x"})
-}
-
-func TestRebase_conflictAborts(t *testing.T) {
-	var calls [][]string
-	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
-		calls = append(calls, args)
-		// The rebase itself fails; the abort (a later call) must still run.
-		if len(args) >= 3 && args[2] == "rebase" && (len(args) < 4 || args[3] != "--abort") {
-			return nil, errors.New("conflict")
-		}
-		return nil, nil
-	})
-	if err := Rebase(context.Background(), "/repo", "origin/main", "feat/x"); err == nil {
-		t.Fatal("expected error on rebase conflict")
-	}
-	var sawAbort bool
-	for _, c := range calls {
-		if len(c) >= 4 && c[2] == "rebase" && c[3] == "--abort" {
-			sawAbort = true
-		}
-	}
-	if !sawAbort {
-		t.Error("rebase conflict must abort the in-progress rebase")
-	}
-}
-
 func TestPushWithLease_argv(t *testing.T) {
 	var gotArgs []string
 	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -452,5 +416,76 @@ func TestWorktreeRemove_error(t *testing.T) {
 	})
 	if err := WorktreeRemove(context.Background(), "/repo", "/wt"); err == nil {
 		t.Fatal("expected error when worktree remove fails")
+	}
+}
+
+func TestRebaseHead_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := RebaseHead(context.Background(), "/wt", "origin/main"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt", "rebase", "origin/main"})
+}
+
+func TestRebaseHead_conflictAborts(t *testing.T) {
+	var calls [][]string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		if len(args) >= 3 && args[2] == "rebase" && (len(args) < 4 || args[3] != "--abort") {
+			return nil, errors.New("conflict")
+		}
+		return nil, nil
+	})
+	if err := RebaseHead(context.Background(), "/wt", "origin/main"); err == nil {
+		t.Fatal("expected error on rebase conflict")
+	}
+	var sawAbort bool
+	for _, c := range calls {
+		if len(c) >= 4 && c[2] == "rebase" && c[3] == "--abort" {
+			sawAbort = true
+		}
+	}
+	if !sawAbort {
+		t.Error("rebase conflict must abort the in-progress rebase")
+	}
+}
+
+func TestPushHead_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := PushHead(context.Background(), "/wt", "feat/x"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt", "push", "origin", "HEAD:refs/heads/feat/x"})
+}
+
+func TestPushHeadWithLease_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := PushHeadWithLease(context.Background(), "/wt", "feat/x", "cafe12"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt", "push", "--force-with-lease=feat/x:cafe12", "origin", "HEAD:refs/heads/feat/x"})
+}
+
+func TestPushHead_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("rejected")
+	})
+	if err := PushHead(context.Background(), "/wt", "feat/x"); err == nil {
+		t.Fatal("expected error when push fails")
+	}
+	if err := PushHeadWithLease(context.Background(), "/wt", "feat/x", "cafe12"); err == nil {
+		t.Fatal("expected error when lease push fails")
 	}
 }
