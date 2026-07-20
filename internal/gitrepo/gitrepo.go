@@ -79,18 +79,46 @@ var RevParse = func(ctx context.Context, dir, rev string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Rebase replays branch onto base in the repository at dir (running
-// `git -C <dir> rebase <base> <branch>`). On failure it aborts the in-progress
-// rebase so the worktree is never left mid-rebase for the next pipeline step;
-// the returned error signals a real conflict the mechanical path cannot resolve.
-// Package var so callers can stub git access in tests.
-var Rebase = func(ctx context.Context, dir, base, branch string) error {
-	if _, err := runner(ctx, "git", "-C", dir, "rebase", base, branch); err != nil {
+// RebaseHead replays the current (detached) HEAD of the worktree at dir onto
+// base (running `git -C <dir> rebase <base>`). The deploy's freshness rebase
+// runs through this in an ephemeral detached worktree so the live workspace
+// checkout — whose dirty state would refuse the rebase and whose HEAD must
+// never be hijacked — is not involved (SC-1000). On failure it aborts the
+// in-progress rebase so the worktree is never left mid-rebase; the returned
+// error signals a real conflict the mechanical path cannot resolve. Package var
+// so callers can stub git access in tests.
+var RebaseHead = func(ctx context.Context, dir, base string) error {
+	if _, err := runner(ctx, "git", "-C", dir, "rebase", base); err != nil {
 		// Leaving a half-applied rebase would strand the worktree; abort so a
 		// retry starts from a clean state. The abort's own error is irrelevant —
 		// the conflict is the failure we report.
 		_, _ = runner(ctx, "git", "-C", dir, "rebase", "--abort")
-		return errors.WrapWithDetails(err, "rebasing branch onto base", "dir", dir, "base", base, "branch", branch)
+		return errors.WrapWithDetails(err, "rebasing branch onto base", "dir", dir, "base", base)
+	}
+	return nil
+}
+
+// PushHead pushes the current HEAD of the worktree at dir to refs/heads/<branch>
+// on origin (running `git -C <dir> push origin HEAD:refs/heads/<branch>`),
+// publishing a detached rebase result without ever checking the branch out.
+// Package var so callers can stub git access in tests.
+var PushHead = func(ctx context.Context, dir, branch string) error {
+	if _, err := runner(ctx, "git", "-C", dir, "push", "origin", "HEAD:refs/heads/"+branch); err != nil {
+		return errors.WrapWithDetails(err, "pushing HEAD to origin branch", "dir", dir, "branch", branch)
+	}
+	return nil
+}
+
+// PushHeadWithLease force-pushes the current HEAD of the worktree at dir to
+// refs/heads/<branch> on origin only if the remote tip still matches
+// expectedRemoteSHA. Like PushWithLease, the lease is what lets a rebased tip
+// advance a diverged remote WITHOUT clobbering a concurrent push; like
+// PushHead, the refspec form publishes a detached HEAD without a branch
+// checkout. Package var so callers can stub git access in tests.
+var PushHeadWithLease = func(ctx context.Context, dir, branch, expectedRemoteSHA string) error {
+	lease := "--force-with-lease=" + branch + ":" + expectedRemoteSHA
+	if _, err := runner(ctx, "git", "-C", dir, "push", lease, "origin", "HEAD:refs/heads/"+branch); err != nil {
+		return errors.WrapWithDetails(err, "lease-pushing HEAD to origin branch", "dir", dir, "branch", branch, "expected", expectedRemoteSHA)
 	}
 	return nil
 }
