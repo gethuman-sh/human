@@ -25,6 +25,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdcodenav"
 	"github.com/gethuman-sh/human/cmd/cmdcommits"
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
+	"github.com/gethuman-sh/human/cmd/cmddeploy"
 	"github.com/gethuman-sh/human/cmd/cmddoctor"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
 	"github.com/gethuman-sh/human/cmd/cmdhandoff"
@@ -250,6 +251,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	pipelineCmd := cmdpipeline.BuildPipelineCmd()
 	pipelineCmd.GroupID = "utility"
 	rootCmd.AddCommand(pipelineCmd)
+
+	deployCmd := cmddeploy.BuildDeployCmd(autoDeps)
+	deployCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(deployCmd)
 
 	// --- Provider commands (dynamic registration) ---
 	providers := []string{"jira", "github", "gitlab", "linear", "azuredevops", "shortcut", "clickup"}

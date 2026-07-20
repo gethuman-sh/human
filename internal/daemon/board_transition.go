@@ -379,6 +379,17 @@ var deployGate sync.Mutex
 // the clock starts when the deploy leaves the queue, so a queued deploy never
 // pays for its predecessors' CI waits.
 func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequest, card BoardCard) {
+	// The board reads the outcome from the posted markers; the returned error
+	// exists for CLI callers that need an exit code.
+	_ = d.DeployBranch(ctx, req.PMKey, req.PMTitle, doneBody(req.PMKey, card), card.Branch)
+}
+
+// DeployBranch runs the deterministic deploy gate for pmKey's branch: the
+// already-merged short-circuit, push + PR, the CI gate, the freshness rebase,
+// the merge, branch cleanup, markers, and the ticket close. Failures are both
+// posted as deploy-failed markers (the board's channel) and returned (the CLI's
+// channel).
+func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prBody, branch string) error {
 	deployGate.Lock()
 	defer deployGate.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, deployTimeout)
@@ -390,26 +401,24 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 	// short-circuit to the terminal success path (deployed/done, ticket closed).
 	// This mirrors the "already done, stop cleanly" carve-outs Planning and
 	// Implementation already carry (SC-911).
-	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, card.Branch) {
-		_, _ = d.Commenter.AddComment(ctx, req.PMKey,
+	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
+		_, _ = d.Commenter.AddComment(ctx, pmKey,
 			StampDaemon(DeployedHeader+"\nalready merged into the base branch; no new PR opened", d.DaemonID))
-		d.closeTicketBestEffort(req.PMKey)
-		return
+		d.closeTicketBestEffort(pmKey)
+		return nil
 	}
 
 	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,
-		Branch:       card.Branch,
-		Title:        req.PMTitle,
-		Body:         doneBody(req.PMKey, card),
+		Branch:       branch,
+		Title:        title,
+		Body:         prBody,
 	})
 	if err != nil {
-		d.deployFailed(req.PMKey, "", errors.CauseChain(err))
-		return
+		return d.deployFailed(pmKey, "", errors.CauseChain(err))
 	}
 	if err := d.waitForChecks(ctx, res); err != nil {
-		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
-		return
+		return d.deployFailed(pmKey, res.URL, errors.CauseChain(err))
 	}
 	// Freshness stage: own the branch's mergeability BEFORE attempting the merge.
 	// When main has advanced past the branch point the forge would reject the
@@ -418,29 +427,28 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 	// conflict surfaces as a loud deploy-failed instead of a blind merge attempt.
 	if err := d.Deployer.EnsureMergeable(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,
-		Branch:       card.Branch,
+		Branch:       branch,
 	}); err != nil {
 		// A rebase is strictly stronger than the forge's three-way end-state
 		// merge: it can conflict on an intermediate commit the merge never sees.
 		// Consult the forge's mergeable verdict and the green CI on the
 		// (rebase-aborted, unchanged) tip before redding the card (SC-804).
 		if !d.forgeMergeableFallback(ctx, res) {
-			d.deployFailed(req.PMKey, res.URL, "branch could not be made mergeable: "+err.Error())
-			return
+			return d.deployFailed(pmKey, res.URL, "branch could not be made mergeable: "+err.Error())
 		}
 	}
 	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
-		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
-		return
+		return d.deployFailed(pmKey, res.URL, errors.CauseChain(err))
 	}
 	// Past the merge the work IS shipped: branch cleanup and the ticket close
 	// are best-effort and must never turn the card red. Best-effort here means
 	// recorded-and-surfaced, not silent: a failed close leaves the card in the
 	// board's Fix column (the frontend only drops a card once the ticket leaves
 	// the tracker's open list), so the operator must see it and close by hand.
-	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, card.Branch)
-	_, _ = d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
-	d.closeTicketBestEffort(req.PMKey)
+	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, branch)
+	_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
+	d.closeTicketBestEffort(pmKey)
+	return nil
 }
 
 // forgeMergeableFallback reports whether the deploy may proceed to the merge
@@ -509,7 +517,7 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 
 // deployFailed posts the failure marker on its own context: the pipeline's
 // context may already be cancelled (timeout), and the marker must still land.
-func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) {
+func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
 	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	body := DeployFailedHeader + "\n" + reason
@@ -517,6 +525,7 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) {
 		body += "\npr: " + prURL
 	}
 	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
+	return errors.WithDetails("deploy failed: "+reason, "pm", pmKey, "pr", prURL)
 }
 
 // dispatchKey resolves the key an agent is dispatched on: the engineering

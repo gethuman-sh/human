@@ -2316,3 +2316,10 @@ func (s *dockerAgentSweeper) DeleteAgent(ctx context.Context, name string) error
 	mgr := &agent.Manager{Docker: docker}
 	return mgr.Delete(ctx, name)
 }
+
+// NewForgeDeployer returns the production Deployer — push + PR, CI gate,
+// freshness rebase, merge — shared by the board's Deploy stage and the
+// human deploy CLI command, so there is exactly one deploy implementation.
+func NewForgeDeployer(resolver *vault.Resolver, lookup config.EnvLookup) daemon.Deployer {
+	return forgeDeployer{resolver: resolver, lookup: lookup}
+}
