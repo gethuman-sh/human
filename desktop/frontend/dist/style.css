@@ -996,9 +996,31 @@ body {
 }
 
 .ideation-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 12px;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* Done-state forward action (SC-881): right-aligned so the status text and
+   the ticket's next move read as one line, never a second dead-end row. */
+.ideation-move-feature {
+  margin-left: auto;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ideation-move-feature:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .ideation-status.hidden {

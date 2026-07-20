@@ -1898,6 +1898,42 @@ function renderIdeationDraft(): void {
   }
 }
 
+// Keys whose "Move to feature" was already triggered this session: the board
+// snapshot can lag the transition for a poll tick or two, and the guard keeps
+// the button from re-arming (and double-launching an agent) in that window.
+const ideationMovedKeys = new Set<string>();
+
+// renderIdeationDone fills the done-state status line. The created ticket is a
+// Product-backlog card, but the panel used to dead-end at "Created SC-XXX"
+// with no way to act on it (SC-881) — so the line carries a right-aligned
+// "Move to feature" action that launches the same backlog→planning transition
+// a drag onto the Engineering backlog would, for both chat and guided modes.
+function renderIdeationDone(statusLine: HTMLElement): void {
+  const key = ideation.createdKey ?? "";
+  statusLine.textContent = `Created ${key}`;
+  if (!key) return;
+
+  const card = current.cards.find((c) => c.key === key);
+  // Once the ticket has left the backlog — via this button or a board drag —
+  // the move is spent; showing it armed again would offer a second launch.
+  const moved = ideationMovedKeys.has(key) || (card !== undefined && card.stage !== "backlog");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "ideation-move-feature";
+  btn.textContent = moved ? "Moved to feature" : "Move to feature";
+  btn.disabled = moved || !current.dockerAvailable;
+  if (!moved && !current.dockerAvailable) {
+    btn.title = "Docker is required to launch the planning agent";
+  }
+  btn.onclick = () => {
+    if (ideationMovedKeys.has(key)) return;
+    ideationMovedKeys.add(key);
+    renderIdeation();
+    void transition(key, card?.title ?? "", card?.stage ?? "backlog", "planning");
+  };
+  statusLine.appendChild(btn);
+}
+
 function renderIdeation(): void {
   const transcript = document.getElementById("ideation-transcript");
   if (!transcript) return;
@@ -1915,7 +1951,7 @@ function renderIdeation(): void {
       statusLine.textContent = ideation.error || "Ideation session failed";
       statusLine.classList.add("error");
     } else if (ideation.state === "done") {
-      statusLine.textContent = `Created ${ideation.createdKey ?? ""}`;
+      renderIdeationDone(statusLine);
     } else {
       statusLine.classList.add("hidden");
     }
