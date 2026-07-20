@@ -163,14 +163,17 @@ func lastErrorLine(lines []string) string {
 }
 
 // headlineFor implements the interpretation table, most-specific signal first:
-// the hook's own error type beats artifact inference, a reap beats exit codes
-// (the reaped process's code is the killer's, not the cause), known exit codes
-// beat the error-line heuristic.
+// the hook's own error type beats artifact inference, a reap beats only a
+// nonzero (killed) exit code — the reaped process's code is the killer's, not
+// the cause — but a recorded clean exit (code 0) is direct evidence of a
+// normal self-termination and overrides the reap, known exit codes beat the
+// error-line heuristic.
 func headlineFor(hookErrorType string, reaped bool, exitCode int, haveExit bool, errLine string) string {
 	if h := hookHeadline(hookErrorType); h != "" {
 		return h
 	}
-	if reaped {
+	cleanExit := haveExit && exitCode == 0
+	if reaped && !cleanExit {
 		return "agent process died and was reaped (crashed or killed; daemon restart or container death)"
 	}
 	if haveExit {
@@ -201,7 +204,7 @@ func exitHeadline(code int, errLine string) string {
 		if errLine != "" {
 			return "agent finished without posting the stage handoff: " + errLine
 		}
-		return genericFailureHeadline
+		return "agent finished without posting the stage handoff"
 	case 124:
 		return "agent process timed out (exit 124)"
 	case 137:

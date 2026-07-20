@@ -79,6 +79,40 @@ func TestDiagnoseFailure_Reaped(t *testing.T) {
 	}
 }
 
+// A run stamped "reaped" by the zombie sweep but carrying a recorded clean exit
+// (code 0) self-terminated normally — it must not be reported as a crash/kill.
+func TestHeadlineFor_ReapedButCleanExit(t *testing.T) {
+	got := headlineFor("", true, 0, true, "")
+	want := "agent finished without posting the stage handoff"
+	if got != want {
+		t.Fatalf("headline = %q, want %q", got, want)
+	}
+}
+
+// A reap still beats a nonzero (killed) exit code — the reaped process's code is
+// the killer's, not the cause.
+func TestHeadlineFor_ReapedNonzeroExitStaysReaped(t *testing.T) {
+	if got := headlineFor("", true, 137, true, ""); !strings.Contains(got, "reaped") {
+		t.Fatalf("headline = %q, want it to contain %q", got, "reaped")
+	}
+}
+
+// End-to-end: a reaped outcome plus a clean-exit trailer in output.log resolves
+// to the handoff-missing headline, never the reaped-crash wording.
+func TestDiagnoseFailure_ReapedWithCleanExitTrailer(t *testing.T) {
+	withLogRoot(t)
+	withInstantDiagnosis(t)
+	newRunFixture(t, "board-SC-878-planning", "all quiet\n"+execExitTrailerPrefix+"0\n",
+		&OutcomeRecord{Reason: "reaped", EndedAt: time.Now()})
+	d := DiagnoseFailure("board-SC-878-planning", "")
+	if d.Headline != "agent finished without posting the stage handoff" {
+		t.Fatalf("headline = %q", d.Headline)
+	}
+	if strings.Contains(d.Headline, "reaped") {
+		t.Fatalf("headline unexpectedly reaped: %q", d.Headline)
+	}
+}
+
 func TestDiagnoseFailure_Exit137(t *testing.T) {
 	withLogRoot(t)
 	withInstantDiagnosis(t)
@@ -120,12 +154,12 @@ func TestDiagnoseFailure_ExitZeroWithErrorLine(t *testing.T) {
 	}
 }
 
-func TestDiagnoseFailure_ExitZeroNoErrorLineIsGeneric(t *testing.T) {
+func TestDiagnoseFailure_ExitZeroNoErrorLineIsHandoffMissing(t *testing.T) {
 	withLogRoot(t)
 	withInstantDiagnosis(t)
 	newRunFixture(t, "board-SC-6-planning", "all quiet\n"+execExitTrailerPrefix+"0\n", nil)
 	d := DiagnoseFailure("board-SC-6-planning", "")
-	if d.Headline != genericFailureHeadline {
+	if d.Headline != "agent finished without posting the stage handoff" {
 		t.Fatalf("headline = %q", d.Headline)
 	}
 }
