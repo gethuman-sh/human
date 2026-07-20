@@ -151,7 +151,7 @@ func checkClaudeAuth(reg *daemon.ProjectRegistry) (bool, string) {
 	var expired []string
 	for _, entry := range reg.Entries() {
 		path := filepath.Join(entry.Dir, ".devcontainer", "claude", ".credentials.json")
-		raw, err := os.ReadFile(path)
+		raw, err := os.ReadFile(path) // #nosec G304 -- path is built from the daemon's own project registry dirs, not external input
 		if err != nil {
 			continue // fail-open: no host store here, nothing to verify
 		}
