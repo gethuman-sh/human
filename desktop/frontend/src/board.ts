@@ -43,12 +43,16 @@ import {
   isReworkable,
   isReviewRetryable,
   forwardDropAllowed,
-  verdictFailed,
   badgeInfo,
   sortByHandOrder,
   insertKeyAt,
   boardStateFromPayload,
+  isReadyToDeploy,
+  deployableCards,
+  deployControlView,
 } from "./board-queue.js";
+import type { DeploySide } from "./board-queue.js";
+import { buildDeployControl } from "./board-deploy.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
@@ -746,16 +750,14 @@ function renderIdeaSpace(): HTMLElement {
   return space;
 }
 
-// renderDeployZone builds the terminal drop target at the board's right edge.
-// It is deliberately NOT a column — no card ever rests "in Deploy"; dropping
-// a reviewed card here ships it (merge after CI, ticket closed) and the card
-// leaves the board.
-function renderDeployZone(): HTMLElement {
-  const zone = document.createElement("section");
-  zone.className = "deploy-zone";
-  zone.dataset.drop = "deploy";
-  zone.innerHTML = `<span class="deploy-zone-label">Deploy</span>`;
-  return zone;
+// renderDeployControl builds a pane's Deploy control through the shared builder:
+// a single widget that both accepts a dropped ready card (ships just that one)
+// and, on click, ships every deployable card in the pane. It is deliberately NOT
+// a column — no card ever rests "in Deploy"; a shipped card leaves the board.
+function renderDeployControl(side: DeploySide): HTMLElement {
+  const view = deployControlView(current.cards, side);
+  const className = side === "bugs" ? "bug-deploy" : "deploy-zone";
+  return buildDeployControl(view, { className, onClick: () => void deployReady(side) });
 }
 
 // --- Bugs pane ----------------------------------------------------------
@@ -828,7 +830,6 @@ function renderBugs(): void {
   const bugs = current.cards.filter((c) => c.bug && cardVisible(c));
   const gridBugs = bugs.filter((c) => bugAreaOf(c) === "grid");
   const fixBugs = bugs.filter((c) => bugAreaOf(c) !== "grid");
-  const ready = bugs.filter(isReadyToDeploy);
 
   const gridCol = document.createElement("section");
   gridCol.className = "column bug-grid-col";
@@ -860,17 +861,9 @@ function renderBugs(): void {
   for (const card of fixBugs) fixBody.appendChild(renderBugCard(card));
   fixCol.appendChild(fixBody);
 
-  const deploy = document.createElement("button");
-  deploy.type = "button";
-  deploy.className = "bug-deploy";
-  deploy.disabled = ready.length === 0;
-  deploy.title = ready.length === 0 ? "No fixed bugs to deploy yet" : "Ship every fixed bug";
-  deploy.innerHTML = `<span class="deploy-zone-label">Deploy${ready.length ? ` (${ready.length})` : ""}</span>`;
-  deploy.addEventListener("click", () => void deployFixedBugs());
-
   host.appendChild(gridCol);
   host.appendChild(fixCol);
-  host.appendChild(deploy);
+  host.appendChild(renderDeployControl("bugs"));
   restoreColumnScroll(host, scrollByStage);
 }
 
@@ -966,12 +959,13 @@ async function createBug(title: string, description: string): Promise<void> {
   await reconcile();
 }
 
-// deployFixedBugs ships every review-passed bug. The click is the consent —
-// same rule as the board's Deploy drop — and CI still gates each merge
+// deployReady ships every review-passed card in a pane at once — the Deploy
+// click for both the board (features) and the Bugs pane. The click is the
+// consent — same rule as the Deploy drop — and CI still gates each merge
 // server-side. Transitions run sequentially with one reconcile at the end so a
-// multi-bug ship does not race itself.
-async function deployFixedBugs(): Promise<void> {
-  const ready = current.cards.filter((c) => c.bug && isReadyToDeploy(c));
+// multi-card ship does not race itself.
+async function deployReady(side: DeploySide): Promise<void> {
+  const ready = deployableCards(current.cards, side);
   if (ready.length === 0) return;
   for (const card of ready) {
     card.stage = "done";
@@ -1086,14 +1080,6 @@ function markQueueTarget(el: HTMLElement, queue: string): void {
 function dropTargetAt(x: number, y: number): HTMLElement | null {
   const el = document.elementFromPoint(x, y) as HTMLElement | null;
   return el ? (el.closest("[data-drop]") as HTMLElement | null) : null;
-}
-
-// isReadyToDeploy reports a card resting in Ready to Deploy on a passed
-// review of a recorded branch — the only cards the Deploy zone accepts.
-// Without a branch there is nothing to ship: deploying can only fail, so the
-// card must never be offered (SC-297).
-function isReadyToDeploy(card: Card): boolean {
-  return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict) && !!card.branch;
 }
 
 // dropAllowed reports whether the dragged card may drop on target. Queue
@@ -1549,7 +1535,7 @@ function render(): void {
     for (const queue of QUEUES) {
       board.appendChild(queue === "ideas" ? renderIdeaSpace() : renderColumn(queue));
     }
-    board.appendChild(renderDeployZone());
+    board.appendChild(renderDeployControl("features"));
     restoreColumnScroll(board, scrollByStage);
   }
   // The Bugs pane renders from the same card list, so every reconcile keeps
