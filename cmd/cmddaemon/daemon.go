@@ -1752,6 +1752,19 @@ func (p forgeDeployer) DeleteRemoteBranch(ctx context.Context, workspaceDir, bra
 	return deleter.DeleteBranch(ctx, repo, branch)
 }
 
+// BranchMerged reports whether the branch is already contained in the base
+// branch. It fetches the base first (like EnsureMergeable) so the ancestor test
+// runs against the current remote tip, then checks whether branch is an ancestor
+// of origin/<base>. A fetch error returns false — fall through to the normal
+// deploy path rather than skip a ship on a transient network blip (SC-911).
+func (p forgeDeployer) BranchMerged(ctx context.Context, workspaceDir, branch string) bool {
+	base := gitrepo.DefaultBranch(ctx, workspaceDir)
+	if err := gitrepo.Fetch(ctx, workspaceDir, base); err != nil {
+		return false
+	}
+	return gitrepo.IsAncestor(ctx, workspaceDir, branch, "origin/"+base)
+}
+
 // resolveForge finds the configured instance that carries a forge capability
 // for the workspace and resolves the "owner/repo" from origin.
 func resolveForge(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (forge.Creator, string, error) {
