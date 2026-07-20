@@ -8,3 +8,4 @@ The `[human:*]` marker comments are how pipeline stages hand work to each other 
 - Enforces required fields and head-token enums for known types at post time
 - Accepts unknown marker types so new pipeline stages need no CLI release
 - Latest-wins semantics: a re-posted marker supersedes older ones without history edits
+- Review handoffs get dedicated commands (`human handoff post|show KEY`): branch, commits, and daemon id are derived from git and the environment, and posting verifies every commit is reachable on the branch
