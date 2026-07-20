@@ -280,3 +280,15 @@ var CommitsFor = func(ctx context.Context, dir, key string) ([]Commit, error) {
 	}
 	return commits, nil
 }
+
+// CurrentBranch returns the checked-out branch name of the repository at dir
+// (running `git -C <dir> rev-parse --abbrev-ref HEAD`). A detached HEAD yields
+// "HEAD", which callers should treat as "no branch". Package var so callers can
+// stub git access in tests.
+var CurrentBranch = func(ctx context.Context, dir string) (string, error) {
+	out, err := runner(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", errors.WrapWithDetails(err, "reading current branch", "dir", dir)
+	}
+	return strings.TrimSpace(string(out)), nil
+}

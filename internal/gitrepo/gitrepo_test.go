@@ -551,3 +551,25 @@ func TestKeyRefPattern_numericVsPrefixed(t *testing.T) {
 		t.Errorf("prefixed pattern %q must not carry the numeric hash form", pre)
 	}
 }
+
+func TestCurrentBranch(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		return []byte("feature/x\n"), nil
+	})
+	branch, err := CurrentBranch(context.Background(), ".")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if branch != "feature/x" {
+		t.Errorf("branch = %q", branch)
+	}
+}
+
+func TestCurrentBranch_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("exit status 128")
+	})
+	if _, err := CurrentBranch(context.Background(), "."); err == nil {
+		t.Fatal("expected error")
+	}
+}
