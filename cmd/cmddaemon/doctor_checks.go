@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gethuman-sh/human/internal/codenav"
+	"github.com/gethuman-sh/human/internal/codenav/store"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -38,6 +40,9 @@ func buildDoctorChecks(reg *daemon.ProjectRegistry, resolver *vault.Resolver, pe
 		}},
 		{ID: "agent-skills", Name: "agent skills", Run: func(context.Context) (bool, string) {
 			return checkAgentSkills(reg)
+		}},
+		{ID: "codenav-index", Name: "code navigation index", Run: func(context.Context) (bool, string) {
+			return checkCodenavIndex(reg, codenav.DefaultDBPath())
 		}},
 		{ID: "persistence", Name: "daemon persistence", Run: func(context.Context) (bool, string) {
 			return checkPersistence(persist)
@@ -117,6 +122,36 @@ func checkAgentSkills(reg *daemon.ProjectRegistry) (bool, string) {
 		return false, "no agent skills under " + strings.Join(missing, ", ") + " — run 'human install --agent claude' there"
 	}
 	return true, "skills present"
+}
+
+// checkCodenavIndex reports the shared code-navigation index's coverage. A
+// still-warming project is reported ok=true (the daemon's background loop will
+// catch up, and a missing index must degrade gracefully, not block launches);
+// only an unreadable database is a genuine fault. Not a launch-critical check.
+func checkCodenavIndex(reg *daemon.ProjectRegistry, dbPath string) (bool, string) {
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return false, "cannot open codenav index at " + dbPath + ": " + err.Error()
+	}
+	defer func() { _ = st.Close() }()
+	projs, err := st.ListProjects()
+	if err != nil {
+		return false, "cannot read codenav index: " + err.Error()
+	}
+	indexed := make(map[string]bool, len(projs))
+	for _, p := range projs {
+		indexed[p.Name] = true
+	}
+	var missing []string
+	for _, e := range reg.Entries() {
+		if !indexed[e.Name] {
+			missing = append(missing, e.Name)
+		}
+	}
+	if len(missing) > 0 {
+		return true, "not yet indexed: " + strings.Join(missing, ", ") + " — indexing runs in the background"
+	}
+	return true, fmt.Sprintf("%d project(s) indexed", len(projs))
 }
 
 // checkPersistence reports durable stores that failed to open: the daemon
