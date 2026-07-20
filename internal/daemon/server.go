@@ -1240,10 +1240,14 @@ func confirmAuditArgs(pc PendingConfirmation) []string {
 // (the desktop LED asks every few seconds; probes should run far less often).
 const doctorCacheAge = 2 * time.Minute
 
-// launchCriticalChecks are the doctor checks a board agent launch cannot
+// LaunchCriticalChecks are the doctor checks a board agent launch cannot
 // survive without: launching anyway would burn a full agent run to rediscover
 // a failure the doctor already knows, and the card would blame the ticket.
-var launchCriticalChecks = []string{"docker", "agent-skills"}
+// claude-auth joins docker and agent-skills so a daemon with an expired Claude
+// session neither claims nor chains board work (SC-912). Exported so the
+// autonomous stage gate (BoardTransitionDeps.LaunchGate) builds its blocker set
+// from the same source of truth as the synchronous launch-refusal path.
+var LaunchCriticalChecks = []string{"docker", "agent-skills", "claude-auth"}
 
 // handleDoctor returns the substrate health checks as JSON. "refresh" as an
 // argument forces a live run instead of the poller cache.
@@ -1266,7 +1270,7 @@ func (s *Server) handleDoctor(conn net.Conn, args []string) {
 // is failing, naming the check's own diagnosis. Infrastructure failures must
 // be attributed to infrastructure, never to the ticket.
 func (s *Server) launchBlockedByDoctor() error {
-	blockers := s.Doctor.Blockers(context.Background(), launchCriticalChecks)
+	blockers := s.Doctor.Blockers(context.Background(), LaunchCriticalChecks)
 	if len(blockers) == 0 {
 		return nil
 	}

@@ -91,6 +91,12 @@ type BoardTransitionDeps struct {
 	// close). The zero value is a safe no-op writer, so an un-wired path stays
 	// valid without a logger.
 	Logger zerolog.Logger
+	// LaunchGate reports the launch-critical doctor checks currently failing on
+	// this daemon's host (docker, agent-skills, claude-auth). When it returns a
+	// non-empty slice the stage launcher neither claims nor launches — it silently
+	// leaves the work for a healthy daemon, and the failure surfaces only on this
+	// host (doctor / rail LED), never as a ticket marker (SC-912). nil disables.
+	LaunchGate func(ctx context.Context) []DoctorCheck
 }
 
 // sanitizeRe drops characters that are invalid in an agent name (alphanumeric,
@@ -296,6 +302,19 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 // launch failure it posts the stage's *-failed marker so the board reflects the
 // error rather than leaving a stuck spinner.
 func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string) error {
+	// Launch gate: a daemon whose host fails a launch-critical doctor check
+	// (docker, agent-skills, claude-auth) cannot serve this stage. Refuse before
+	// the claim so NO [human:claim] is posted — the work is left unclaimed for a
+	// healthy daemon and the failure surfaces only on this host, never as a ticket
+	// marker (SC-912). Returning nil is a silent skip-and-leave, not an error.
+	if d.LaunchGate != nil {
+		if blockers := d.LaunchGate(ctx); len(blockers) > 0 {
+			d.Logger.Warn().
+				Str("pm", pmKey).Str("stage", string(stage)).Str("check", blockers[0].ID).
+				Msg("board stage launch skipped: launch-critical doctor check failing; leaving work for a healthy daemon")
+			return nil
+		}
+	}
 	// Claim before start: with several daemons on one board, arbitrate who
 	// launches this stage so the work is picked up exactly once (SC-660 rule 2).
 	// A loser backs off silently — not an error — leaving the started marker and

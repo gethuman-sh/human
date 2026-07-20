@@ -269,6 +269,14 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		audit:    auditStore != nil,
 		confirms: confirmDB != nil,
 	}))
+	// launchGate lets the autonomous stage launcher refuse work when this host
+	// fails a launch-critical doctor check (docker, agent-skills, claude-auth): it
+	// leaves the handoff for a healthy daemon rather than claiming and failing it
+	// (SC-912). Built from the same LaunchCriticalChecks the synchronous refusal
+	// path uses; Blockers is nil-safe, so a doctor-less daemon disables cleanly.
+	launchGate := func(ctx context.Context) []daemon.DoctorCheck {
+		return doctor.Blockers(ctx, daemon.LaunchCriticalChecks)
+	}
 
 	srv := &daemon.Server{
 		Addr:              addr,
@@ -293,9 +301,9 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AuditStore:        auditStore,
 		AgentCleaner:      &dockerAgentCleaner{},
 		VaultResolver:     vaultResolver,
-		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger),
-		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger),
-		BoardOptioner:     boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger),
+		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BoardOptioner:     boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
 		BugCreator:        bugCreatorFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
@@ -424,7 +432,13 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			Timestamp: time.Now().UTC(),
 		})
 	}, logger)
-	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger)
+	// The auto-review chain runs through the same launch gate: a daemon that
+	// cannot serve a review must leave the ready-for-review handoff unclaimed for
+	// one that can, not claim and fail it (SC-912). Doctor.Blockers is nil-safe.
+	reviewLaunchGate := func(ctx context.Context) []daemon.DoctorCheck {
+		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchCriticalChecks)
+	}
+	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by
 	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
@@ -1834,7 +1848,7 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) fu
 // and the forge publisher against the resolved project dir. Shared by the
 // board-transition and board-fix closures so both routes drive the exact same
 // engine.
-func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) (daemon.BoardTransitionDeps, error) {
+func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) (daemon.BoardTransitionDeps, error) {
 	entries := reg.Entries()
 	if len(entries) == 0 {
 		return daemon.BoardTransitionDeps{}, errors.WithDetails("no project registered for board transition")
@@ -1860,15 +1874,16 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		ConfigDir:    entry.Dir,
 		DaemonID:     daemonID,
 		Logger:       logger,
+		LaunchGate:   launchGate,
 	}, nil
 }
 
 // boardTransitionerFunc builds the daemon's BoardTransitioner closure: it
 // resolves the PM commenter by role per request and applies the transition with
 // the Docker launcher and forge publisher against the resolved project dir.
-func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardTransitionRequest) error {
+func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardTransitionRequest) error {
 	return func(req daemon.BoardTransitionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -1881,9 +1896,9 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 // (planning gate skipped — autofix triages, plans and fixes in one run).
 // boardOptionerFunc builds the daemon's BoardOptioner closure: it records a
 // chosen option and relaunches the block's stage with the choice injected.
-func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardOptionRequest) error {
+func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardOptionRequest) error {
 	return func(req daemon.BoardOptionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -1891,9 +1906,9 @@ func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, da
 	}
 }
 
-func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardFixRequest) error {
+func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardFixRequest) error {
 	return func(req daemon.BoardFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
