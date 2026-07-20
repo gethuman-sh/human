@@ -12,4 +12,5 @@
 - Assign an issue to a user
 - Edit an issue's title and description
 - Auto-detects the right tracker from a key
+- Resolves tracker roles and topology (`human tracker topology`): which tracker is PM, which is engineering, single vs split
 - Guards deletes and edits with safe-mode policies

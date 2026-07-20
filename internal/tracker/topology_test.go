@@ -46,3 +46,67 @@ func TestDiagnoseTrackers_capturesRole(t *testing.T) {
 	require.NotNil(t, found, "expected linear/eng in results")
 	assert.Equal(t, "engineering", found.Role)
 }
+
+func TestResolveTopology_splitOnExplicitEngineering(t *testing.T) {
+	instances := []Instance{
+		{Name: "board", Kind: "shortcut"},
+		{Name: "eng", Kind: "linear", Role: "engineering"},
+	}
+	top := ResolveTopology(instances)
+	assert.Equal(t, "split", top.Mode)
+	require.NotNil(t, top.PM)
+	assert.Equal(t, "board", top.PM.Name)
+	require.NotNil(t, top.Engineering)
+	assert.Equal(t, "eng", top.Engineering.Name)
+}
+
+func TestResolveTopology_singleWithoutEngineeringRole(t *testing.T) {
+	instances := []Instance{
+		{Name: "board", Kind: "shortcut"},
+		{Name: "issues", Kind: "linear"},
+	}
+	top := ResolveTopology(instances)
+	assert.Equal(t, "single", top.Mode)
+	require.NotNil(t, top.PM)
+	assert.Equal(t, "board", top.PM.Name)
+	assert.Nil(t, top.Engineering)
+}
+
+func TestResolveTopology_pmFallbackToSoleTracker(t *testing.T) {
+	instances := []Instance{{Name: "only", Kind: "jira"}}
+	top := ResolveTopology(instances)
+	assert.Equal(t, "single", top.Mode)
+	require.NotNil(t, top.PM)
+	assert.Equal(t, "only", top.PM.Name)
+}
+
+func TestResolveTopology_pmAmbiguousStaysNil(t *testing.T) {
+	instances := []Instance{
+		{Name: "a", Kind: "jira"},
+		{Name: "b", Kind: "linear"},
+	}
+	top := ResolveTopology(instances)
+	assert.Equal(t, "single", top.Mode)
+	assert.Nil(t, top.PM)
+}
+
+func TestResolveTopology_firstRoleWins(t *testing.T) {
+	instances := []Instance{
+		{Name: "pm1", Kind: "shortcut"},
+		{Name: "pm2", Kind: "shortcut"},
+		{Name: "eng1", Kind: "linear", Role: "engineering"},
+		{Name: "eng2", Kind: "github", Role: "engineering"},
+	}
+	top := ResolveTopology(instances)
+	require.NotNil(t, top.PM)
+	require.NotNil(t, top.Engineering)
+	assert.Equal(t, "pm1", top.PM.Name)
+	assert.Equal(t, "eng1", top.Engineering.Name)
+}
+
+func TestResolveTopology_empty(t *testing.T) {
+	top := ResolveTopology(nil)
+	assert.Equal(t, "single", top.Mode)
+	assert.Nil(t, top.PM)
+	assert.Nil(t, top.Engineering)
+}
