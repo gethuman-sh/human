@@ -24,6 +24,14 @@ var jiraLinearIssueRe = regexp.MustCompile(`^[A-Z][A-Z0-9]+-\d+$`)
 // numericRe matches purely numeric keys like "123" (Shortcut).
 var numericRe = regexp.MustCompile(`^\d+$`)
 
+// shortcutDisplayRe matches Shortcut's own printed display form "SC-nnn"
+// (case-insensitive) — the key the tool emits in commits, markers and PR
+// titles. Its shape also matches jiraLinearIssueRe, so shortcut is offered as
+// an extra candidate rather than replacing jira/linear; ambiguity is resolved
+// by the FindTracker probe. The SC- prefix is Shortcut's fixed universal
+// display prefix, so it is hardcoded rather than configured per workspace.
+var shortcutDisplayRe = regexp.MustCompile(`^(?i:sc)-\d+$`)
+
 // azureDevOpsRe matches Azure DevOps work item keys like "Project/42".
 var azureDevOpsRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*/\d+$`)
 
@@ -52,7 +60,7 @@ func DetectCandidateKinds(key string) []string {
 		kinds = append(kinds, "github", "gitlab")
 	}
 
-	if numericRe.MatchString(key) {
+	if numericRe.MatchString(key) || shortcutDisplayRe.MatchString(key) {
 		kinds = append(kinds, "shortcut")
 	}
 
@@ -69,6 +77,12 @@ func DetectCandidateKinds(key string) []string {
 func ExtractProject(key string) string {
 	if idx := strings.LastIndex(key, "#"); idx >= 0 {
 		return key[:idx]
+	}
+	// SC-nnn carries no project prefix (the "SC" is a display marker, not a
+	// project). Check before jiraLinearIssueRe, whose shape it shares, so it is
+	// not mistaken for a "SC" project.
+	if shortcutDisplayRe.MatchString(key) {
+		return ""
 	}
 	if jiraLinearIssueRe.MatchString(key) {
 		return key[:strings.LastIndex(key, "-")]
@@ -161,7 +175,8 @@ func probeInstances(ctx context.Context, key string, instances []Instance) (*Fin
 // The ordering must agree with DetectCandidateKinds: "Project/42" is a
 // valid Azure DevOps key AND a valid github/gitlab repo shape, so
 // azuredevops has to be checked first, otherwise callers relying on
-// DetectKind route Azure keys to GitHub.
+// DetectKind route Azure keys to GitHub. "SC-nnn" is Shortcut's own
+// unambiguous display form and resolves to "shortcut".
 func DetectKind(key string) string {
 	if key == "" {
 		return ""
@@ -171,6 +186,9 @@ func DetectKind(key string) string {
 	}
 	if githubIssueRe.MatchString(key) || githubRepoRe.MatchString(key) {
 		return "github"
+	}
+	if shortcutDisplayRe.MatchString(key) {
+		return "shortcut"
 	}
 	return ""
 }
