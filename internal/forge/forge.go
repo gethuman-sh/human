@@ -54,6 +54,13 @@ type Merger interface {
 	MergePullRequest(ctx context.Context, repo string, number int) error
 }
 
+// MergeReader reports the forge's own verdict on whether a pull request can be
+// merged into its base (the end-state three-way merge). It is consulted as a
+// fallback when a stronger local rebase conflicts on an intermediate commit.
+type MergeReader interface {
+	PullRequestMergeable(ctx context.Context, repo string, number int) (bool, error)
+}
+
 // BranchDeleter deletes a remote branch, used to clean up a pull request's
 // source branch after merging.
 type BranchDeleter interface {

@@ -73,6 +73,11 @@ type fakeDeployer struct {
 	// mergeUntil models GitHub's 405 on a stale branch: MergePullRequest fails
 	// with a merge-conflict error until EnsureMergeable has run, then succeeds.
 	mergeUntil bool
+	// mergeable is the forge's own end-state merge verdict reported by
+	// PullRequestMergeable — the fallback signal when the mechanical rebase in
+	// EnsureMergeable conflicts on an intermediate commit (SC-804).
+	mergeable    bool
+	mergeableErr error
 }
 
 func (f *fakeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResult, error) {
@@ -99,6 +104,13 @@ func (f *fakeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (fo
 func (f *fakeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) error {
 	f.ensured++
 	return f.ensureErr
+}
+
+func (f *fakeDeployer) PullRequestMergeable(_ context.Context, _ string, _ int) (bool, error) {
+	if f.mergeableErr != nil {
+		return false, f.mergeableErr
+	}
+	return f.mergeable, nil
 }
 
 func (f *fakeDeployer) MergePullRequest(_ context.Context, _ string, _ int) error {
@@ -490,9 +502,10 @@ func TestApplyTransitionDeployRebasesStaleBranch(t *testing.T) {
 	}
 }
 
-// TestApplyTransitionDeployEnsureMergeableConflict covers a genuine rebase
-// conflict: EnsureMergeable fails, the deploy must NOT attempt the merge and
-// must red the card with a mergeability reason.
+// TestApplyTransitionDeployEnsureMergeableConflict covers a genuine end-state
+// conflict: the mechanical rebase in EnsureMergeable fails AND the forge itself
+// declines the merge (mergeable false). The deploy must NOT attempt the merge
+// and must red the card with a mergeability reason (SC-804).
 func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
 	syncDeploy(t)
 	c := &fakeCommenter{comments: []tracker.Comment{
@@ -500,7 +513,8 @@ func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
 		cmt("[human:review-complete]", time.Unix(2, 0)),
 	}}
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
-		checks: []forge.ChecksState{forge.ChecksPassing}, ensureErr: errors.New("rebase hit a conflict")}
+		checks:    []forge.ChecksState{forge.ChecksPassing},
+		ensureErr: errors.New("rebase hit a conflict"), mergeable: false}
 	deps := newDeps(c, &fakeLauncher{}, p)
 	err := deps.ApplyTransition(context.Background(),
 		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
@@ -516,6 +530,37 @@ func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
 	require.NotEmpty(t, failed)
 	assert.Contains(t, failed, "branch could not be made mergeable")
 	assert.Contains(t, failed, "rebase hit a conflict")
+}
+
+// TestApplyTransitionDeployRebaseConflictForgeMergeableFallback is the SC-804
+// regression: the mechanical rebase in EnsureMergeable conflicts on an
+// intermediate commit the forge's end-state three-way merge never sees, yet the
+// forge reports the PR mergeable and CI is green on the (rebase-aborted,
+// unchanged) tip. The deploy must fall back to the forge verdict and proceed to
+// the real merge instead of redding the card. On the pre-fix deploy() (which
+// reds on any EnsureMergeable error) the card reds and no merge happens — this
+// test fails there.
+func TestApplyTransitionDeployRebaseConflictForgeMergeableFallback(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/14", Number: 14},
+		checks:    []forge.ChecksState{forge.ChecksPassing},
+		ensureErr: errors.New("rebasing branch onto base"), mergeable: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.ensured, "the freshness stage must still run once")
+	assert.Equal(t, 1, p.merged, "a forge-mergeable, green-CI PR must merge despite the rebase conflict")
+	assert.Equal(t, []string{"feat/x"}, p.deleted)
+	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/14")
+	for _, b := range c.added {
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader),
+			"a forge-mergeable PR must merge, never dead-end on deploy-failed: %q", b)
+	}
 }
 
 // TestIsDeployRetry pins the retry predicate: a failed done stage re-dropped on
@@ -910,6 +955,10 @@ func (f *gateProbeDeployer) PullRequestChecks(_ context.Context, _ string, _ int
 }
 
 func (f *gateProbeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) error { return nil }
+
+func (f *gateProbeDeployer) PullRequestMergeable(_ context.Context, _ string, _ int) (bool, error) {
+	return true, nil
+}
 
 func (f *gateProbeDeployer) MergePullRequest(_ context.Context, _ string, _ int) error { return nil }
 

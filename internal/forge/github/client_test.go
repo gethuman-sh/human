@@ -118,6 +118,35 @@ func TestPullRequestChecks_verdicts(t *testing.T) {
 	}
 }
 
+func TestPullRequestMergeable_verdicts(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"mergeable true", `{"mergeable":true}`, true},
+		{"mergeable false", `{"mergeable":false}`, false},
+		// GitHub returns null while it computes the value asynchronously — treat
+		// it as not mergeable so a caller never merges on an unknown state.
+		{"mergeable null", `{"mergeable":null}`, false},
+		{"mergeable absent", `{}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "/repos/octocat/hello-world/pulls/7", r.URL.Path)
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			defer srv.Close()
+			client := New(srv.URL, "ghp_test")
+			mergeable, err := client.PullRequestMergeable(context.Background(), "octocat/hello-world", 7)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, mergeable)
+		})
+	}
+}
+
 func TestMergePullRequest_happy(t *testing.T) {
 	var gotBody mergeRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

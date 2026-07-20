@@ -17,6 +17,9 @@ type pullGetResponse struct {
 	Head struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
+	// Mergeable is GitHub's end-state merge verdict. It is null while GitHub
+	// computes it asynchronously; a nil pointer is treated as not-yet-mergeable.
+	Mergeable *bool `json:"mergeable"`
 }
 
 type checkRunsResponse struct {

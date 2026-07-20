@@ -172,6 +172,27 @@ func (c *Client) pullHeadSHA(ctx context.Context, owner, repo string, number int
 	return pull.Head.SHA, nil
 }
 
+// PullRequestMergeable implements forge.MergeReader. GitHub computes the
+// mergeable flag asynchronously and returns null until it is ready; a null
+// value is reported as not mergeable so a caller never merges on an unknown
+// state.
+func (c *Client) PullRequestMergeable(ctx context.Context, repoName string, number int) (bool, error) {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return false, err
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	resp, err := c.api.Do(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return false, err
+	}
+	var pull pullGetResponse
+	if err := apiclient.DecodeJSON(resp, &pull, "number", number); err != nil {
+		return false, err
+	}
+	return pull.Mergeable != nil && *pull.Mergeable, nil
+}
+
 // MergePullRequest implements forge.Merger with a merge commit, preserving the
 // branch's individual commits (and their ticket references) on the mainline.
 func (c *Client) MergePullRequest(ctx context.Context, repoName string, number int) error {

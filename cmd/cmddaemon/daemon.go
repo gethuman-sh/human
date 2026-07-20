@@ -1653,6 +1653,18 @@ func (p forgeDeployer) PullRequestChecks(ctx context.Context, workspaceDir strin
 	return checker.PullRequestChecks(ctx, repo, number)
 }
 
+func (p forgeDeployer) PullRequestMergeable(ctx context.Context, workspaceDir string, number int) (bool, error) {
+	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
+	if err != nil {
+		return false, err
+	}
+	reader, ok := creator.(forge.MergeReader)
+	if !ok {
+		return false, errors.WithDetails("forge does not support reading mergeability", "repo", repo)
+	}
+	return reader.PullRequestMergeable(ctx, repo, number)
+}
+
 func (p forgeDeployer) MergePullRequest(ctx context.Context, workspaceDir string, number int) error {
 	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
 	if err != nil {
