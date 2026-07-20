@@ -508,7 +508,6 @@ var localSubcommands = map[string]bool{
 	"init":          true,
 	"usage":         true,
 	"index":         true,
-	"codenav":       true,
 	"agent-context": true,
 	"tui":           true,
 	"doctor":        true,
@@ -547,9 +546,60 @@ func isLocalSubcommand(args []string) bool {
 			}
 			continue
 		}
+		if a == "codenav" {
+			return codenavRunsLocally(args)
+		}
 		return localSubcommands[a]
 	}
 	return false
+}
+
+// codenavRunsLocally decides whether a `human codenav …` invocation must run
+// against the caller's own filesystem instead of the daemon's shared index.
+// `index`/`rm` manage the local index and `impact --diff` needs the caller's
+// uncommitted working changes, which live only in the caller's worktree; every
+// other verb is a pure index query and is forwarded so all callers share one
+// daemon-kept index.
+func codenavRunsLocally(args []string) bool {
+	verb, hasDiff := codenavVerb(args)
+	switch verb {
+	case "", "index", "rm":
+		return true
+	case "impact":
+		return hasDiff
+	default:
+		return false
+	}
+}
+
+// codenavVerb extracts the codenav subcommand (first positional after
+// "codenav") and whether --diff is present, skipping value-taking global flags
+// so a flag value is never mistaken for the verb.
+func codenavVerb(args []string) (verb string, hasDiff bool) {
+	seenCodenav := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--diff" {
+			hasDiff = true
+			continue
+		}
+		if len(a) > 0 && a[0] == '-' {
+			if globalValueFlags[a] && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		if !seenCodenav {
+			if a == "codenav" {
+				seenCodenav = true
+			}
+			continue
+		}
+		if verb == "" {
+			verb = a
+		}
+	}
+	return verb, hasDiff
 }
 
 // --- update notices ---
