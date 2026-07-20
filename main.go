@@ -23,6 +23,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdbrowser"
 	"github.com/gethuman-sh/human/cmd/cmdclickup"
 	"github.com/gethuman-sh/human/cmd/cmdcodenav"
+	"github.com/gethuman-sh/human/cmd/cmdcommits"
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
 	"github.com/gethuman-sh/human/cmd/cmddoctor"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
@@ -218,6 +219,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	planCmd := cmdplan.BuildPlanCmd(autoDeps)
 	planCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(planCmd)
+
+	commitsCmd := cmdcommits.BuildCommitsCmd()
+	commitsCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(commitsCmd)
 
 	// --- Provider commands (dynamic registration) ---
 	providers := []string{"jira", "github", "gitlab", "linear", "azuredevops", "shortcut", "clickup"}
@@ -504,6 +509,7 @@ func resolveEventName(data []byte, structVal string) string {
 var localSubcommands = map[string]bool{
 	"daemon":        true,
 	"chrome-bridge": true,
+	"commits":       true,
 	"install":       true,
 	"init":          true,
 	"usage":         true,

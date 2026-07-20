@@ -6,4 +6,6 @@ Lets `human` read facts about the git repository you are working in, so it can f
 - Works on the current directory by default
 - Targets any repository by path
 - Feeds forge and project detection automatically
+- Lists the commits referencing a ticket key in any accepted reference format (`human commits for KEY`), excluding merge-PR commits
+- Prints the canonical bracket-style commit-message prefix for a ticket (`human commits prefix PM_KEY [ENG_KEY]`)
 - Reports a clear error when no remote

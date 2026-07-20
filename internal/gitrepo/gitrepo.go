@@ -6,6 +6,7 @@ package gitrepo
 import (
 	"context"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
@@ -233,4 +234,49 @@ var WorktreeRemove = func(ctx context.Context, repoDir, worktreePath string) err
 		return errors.WrapWithDetails(err, "removing git worktree", "repo", repoDir, "worktree", worktreePath)
 	}
 	return nil
+}
+
+// Commit is one commit that references a ticket key, as returned by CommitsFor.
+type Commit struct {
+	SHA      string `json:"sha"`
+	ShortSHA string `json:"short"`
+	Subject  string `json:"subject"`
+}
+
+// keyRefPattern builds the extended-regexp grep pattern matching every accepted
+// commit-message reference form for key (the .githooks/commit-msg grammar):
+// bracket style ([SC-57]), "Issue SC-57" / "Issue #123", and guarded bare or
+// path-style occurrences (owner/repo#42, MyProject/42). Guards keep a numeric
+// key from matching inside longer numbers and a prefixed key from matching
+// inside longer keys (SC-5 must not match SC-57).
+func keyRefPattern(key string) string {
+	esc := regexp.QuoteMeta(key)
+	if regexp.MustCompile(`^[0-9]+$`).MatchString(key) {
+		return `\[#?` + esc + `\]|(^|[^0-9])#` + esc + `([^0-9]|$)|Issue #?` + esc + `([^0-9]|$)|/` + esc + `([^0-9]|$)`
+	}
+	return `\[` + esc + `\]|Issue ` + esc + `([^0-9]|$)|(^|[^A-Za-z0-9-])` + esc + `([^0-9]|$)`
+}
+
+// CommitsFor lists the commits on HEAD whose message references key in any
+// accepted reference format, newest first, excluding merge-PR commits — the
+// exact discovery agents otherwise hand-roll with git log --grep incantations.
+// Package var so callers can stub git access in tests.
+var CommitsFor = func(ctx context.Context, dir, key string) ([]Commit, error) {
+	out, err := runner(ctx, "git", "-C", dir, "log", "--extended-regexp",
+		"--grep="+keyRefPattern(key), "--format=%H%x1f%h%x1f%s", "HEAD")
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "listing commits for key", "dir", dir, "key", key)
+	}
+	var commits []Commit
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\x1f", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if strings.HasPrefix(parts[2], "Merge pull request") {
+			continue
+		}
+		commits = append(commits, Commit{SHA: parts[0], ShortSHA: parts[1], Subject: parts[2]})
+	}
+	return commits, nil
 }

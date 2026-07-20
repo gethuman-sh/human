@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -487,5 +488,66 @@ func TestPushHead_error(t *testing.T) {
 	}
 	if err := PushHeadWithLease(context.Background(), "/wt", "feat/x", "cafe12"); err == nil {
 		t.Fatal("expected error when lease push fails")
+	}
+}
+
+func TestCommitsFor_parsesAndFiltersMerges(t *testing.T) {
+	out := "aaa1\x1fa1\x1f[SC-57] Add validation\n" +
+		"bbb2\x1fb2\x1fMerge pull request #12 from x/y\n" +
+		"ccc3\x1fc3\x1fIssue SC-57 follow-up\n"
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return []byte(out), nil
+	})
+
+	commits, err := CommitsFor(context.Background(), "/repo", "SC-57")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("commits = %d, want 2 (merge PR filtered)", len(commits))
+	}
+	if commits[0].SHA != "aaa1" || commits[0].ShortSHA != "a1" || commits[0].Subject != "[SC-57] Add validation" {
+		t.Errorf("first commit = %+v", commits[0])
+	}
+	if gotArgs[0] != "git" || gotArgs[3] != "log" {
+		t.Errorf("args = %v", gotArgs)
+	}
+}
+
+func TestCommitsFor_emptyOutput(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("\n"), nil
+	})
+	commits, err := CommitsFor(context.Background(), ".", "42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(commits) != 0 {
+		t.Errorf("commits = %v, want none", commits)
+	}
+}
+
+func TestCommitsFor_gitError(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("exit status 128")
+	})
+	if _, err := CommitsFor(context.Background(), ".", "SC-57"); err == nil {
+		t.Fatal("expected error when git fails")
+	}
+}
+
+func TestKeyRefPattern_numericVsPrefixed(t *testing.T) {
+	num := keyRefPattern("42")
+	if want := `\[#?42\]`; !strings.Contains(num, want) {
+		t.Errorf("numeric pattern %q missing %q", num, want)
+	}
+	pre := keyRefPattern("SC-57")
+	if want := `\[SC-57\]`; !strings.Contains(pre, want) {
+		t.Errorf("prefixed pattern %q missing %q", pre, want)
+	}
+	if strings.Contains(pre, `#?SC-57\]`) {
+		t.Errorf("prefixed pattern %q must not carry the numeric hash form", pre)
 	}
 }
