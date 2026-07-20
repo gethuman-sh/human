@@ -33,6 +33,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdmarker"
 	"github.com/gethuman-sh/human/cmd/cmdnotion"
 	"github.com/gethuman-sh/human/cmd/cmdping"
+	"github.com/gethuman-sh/human/cmd/cmdpipeline"
 	"github.com/gethuman-sh/human/cmd/cmdplan"
 	"github.com/gethuman-sh/human/cmd/cmdprovider"
 	"github.com/gethuman-sh/human/cmd/cmdproxy"
@@ -245,6 +246,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	handoffCmd := cmdhandoff.BuildHandoffCmd(autoDeps)
 	handoffCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(handoffCmd)
+
+	pipelineCmd := cmdpipeline.BuildPipelineCmd()
+	pipelineCmd.GroupID = "utility"
+	rootCmd.AddCommand(pipelineCmd)
 
 	// --- Provider commands (dynamic registration) ---
 	providers := []string{"jira", "github", "gitlab", "linear", "azuredevops", "shortcut", "clickup"}
@@ -532,6 +537,7 @@ var localSubcommands = map[string]bool{
 	"daemon":        true,
 	"chrome-bridge": true,
 	"commits":       true,
+	"pipeline":      true,
 	"install":       true,
 	"init":          true,
 	"usage":         true,

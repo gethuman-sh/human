@@ -100,6 +100,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 - [Issue Trackers](internal/tracker/README.md) — Jira, Linear, GitHub, GitLab, Shortcut, Azure DevOps, ClickUp
 - [Code Forges](internal/forge/README.md) — open pull requests (GitHub)
 - [Marker Protocol](internal/marker/README.md) — post/read the structured `[human:*]` pipeline handoff comments
+- [Pipeline Runtime](internal/pipeline/README.md) — shared state, race-free finding IDs, and cleanup for multi-agent scans
 
 **Docs, design & analytics**
 
