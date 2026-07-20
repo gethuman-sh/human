@@ -296,6 +296,17 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 // launch failure it posts the stage's *-failed marker so the board reflects the
 // error rather than leaving a stuck spinner.
 func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string) error {
+	// Claim before start: with several daemons on one board, arbitrate who
+	// launches this stage so the work is picked up exactly once (SC-660 rule 2).
+	// A loser backs off silently — not an error — leaving the started marker and
+	// the launch to the winning daemon.
+	won, err := d.winClaim(ctx, pmKey, stage)
+	if err != nil {
+		return err
+	}
+	if !won {
+		return nil
+	}
 	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(startedHeader, d.DaemonID)); err != nil {
 		return errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
 	}

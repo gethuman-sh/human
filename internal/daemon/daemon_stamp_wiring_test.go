@@ -24,9 +24,14 @@ func TestStartAgentStage_stampsStartedMarker(t *testing.T) {
 		BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardPlanning})
 	require.NoError(t, err)
 
-	require.Len(t, c.added, 1)
-	assert.Contains(t, c.added[0], PlanningStartedHeader)
+	// A provisioned daemon claims the stage before starting it (SC-660 rule 2),
+	// so the thread carries the stamped claim followed by the stamped started
+	// marker.
+	require.Len(t, c.added, 2)
+	assert.Contains(t, c.added[0], ClaimHeader)
 	assert.Equal(t, "d1", ParseDaemonID(c.added[0]))
+	assert.Contains(t, c.added[1], PlanningStartedHeader)
+	assert.Equal(t, "d1", ParseDaemonID(c.added[1]))
 }
 
 // The failure watcher's *-failed marker is stamped too, so a crash is attributed
