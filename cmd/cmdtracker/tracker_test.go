@@ -465,3 +465,64 @@ func TestRunTrackerList_MapsInstanceFields(t *testing.T) {
 	assert.Contains(t, out, `"user": "usr1"`)
 	assert.Contains(t, out, `"description": "d1"`)
 }
+
+// --- Topology ---
+
+func TestRunTrackerTopology_SplitJSON(t *testing.T) {
+	instances := []tracker.Instance{
+		{Name: "board", Kind: "shortcut"},
+		{Name: "eng", Kind: "linear", Role: "engineering"},
+	}
+	var buf bytes.Buffer
+	err := RunTrackerTopology(&buf, ".", false, loaderOK(instances))
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, `"topology": "split"`)
+	assert.Contains(t, out, `"name": "board"`)
+	assert.Contains(t, out, `"name": "eng"`)
+}
+
+func TestRunTrackerTopology_SingleOmitsEngineering(t *testing.T) {
+	instances := []tracker.Instance{{Name: "board", Kind: "shortcut"}}
+	var buf bytes.Buffer
+	err := RunTrackerTopology(&buf, ".", false, loaderOK(instances))
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, `"topology": "single"`)
+	assert.NotContains(t, out, `"engineering"`)
+}
+
+func TestRunTrackerTopology_Table(t *testing.T) {
+	instances := []tracker.Instance{
+		{Name: "board", Kind: "shortcut"},
+		{Name: "eng", Kind: "linear", Role: "engineering"},
+	}
+	var buf bytes.Buffer
+	err := RunTrackerTopology(&buf, ".", true, loaderOK(instances))
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "TOPOLOGY")
+	assert.Contains(t, out, "split")
+	assert.Contains(t, out, "board (shortcut)")
+	assert.Contains(t, out, "eng (linear)")
+}
+
+func TestRunTrackerTopology_TableAmbiguousPM(t *testing.T) {
+	instances := []tracker.Instance{
+		{Name: "a", Kind: "jira"},
+		{Name: "b", Kind: "linear"},
+	}
+	var buf bytes.Buffer
+	err := RunTrackerTopology(&buf, ".", true, loaderOK(instances))
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "ambiguous")
+}
+
+func TestRunTrackerTopology_LoaderError(t *testing.T) {
+	var buf bytes.Buffer
+	err := RunTrackerTopology(&buf, ".", false, loaderErr(errors.WithDetails("load failed", "reason", "boom")))
+	require.Error(t, err)
+}

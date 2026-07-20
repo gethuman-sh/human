@@ -57,7 +57,17 @@ func BuildTrackerCmd(loader func(string) ([]tracker.Instance, error)) *cobra.Com
 	}
 	findCmd.Flags().BoolVar(&findTable, "table", false, "Output as human-readable table instead of JSON")
 
-	trackerCmd.AddCommand(listCmd, findCmd)
+	var topologyTable bool
+	topologyCmd := &cobra.Command{
+		Use:   "topology",
+		Short: "Resolve tracker roles: PM tracker, engineering tracker, single vs split topology",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return RunTrackerTopology(cmd.OutOrStdout(), ".", topologyTable, loader)
+		},
+	}
+	topologyCmd.Flags().BoolVar(&topologyTable, "table", false, "Output as human-readable table instead of JSON")
+
+	trackerCmd.AddCommand(listCmd, findCmd, topologyCmd)
 	return trackerCmd
 }
 
@@ -80,6 +90,57 @@ func RunTrackerList(out io.Writer, dir string, table bool, loader func(string) (
 		return PrintTrackerTable(out, entries)
 	}
 	return PrintTrackerJSON(out, entries)
+}
+
+// TopologyResult is the JSON output structure for tracker topology.
+type TopologyResult struct {
+	Topology    string        `json:"topology"`
+	PM          *TrackerEntry `json:"pm,omitempty"`
+	Engineering *TrackerEntry `json:"engineering,omitempty"`
+}
+
+// RunTrackerTopology resolves and prints the tracker topology so agents stop
+// re-deriving it from the tracker list.
+func RunTrackerTopology(out io.Writer, dir string, table bool, loader func(string) ([]tracker.Instance, error)) error {
+	if dir == "" {
+		dir = "."
+	}
+	instances, err := loader(dir)
+	if err != nil {
+		return err
+	}
+
+	top := tracker.ResolveTopology(instances)
+	result := TopologyResult{Topology: top.Mode, PM: toEntry(top.PM), Engineering: toEntry(top.Engineering)}
+
+	if table {
+		return PrintTopologyTable(out, result)
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(result)
+}
+
+func toEntry(inst *tracker.Instance) *TrackerEntry {
+	if inst == nil {
+		return nil
+	}
+	return &TrackerEntry{Name: inst.Name, Type: inst.Kind, URL: inst.URL, User: inst.User, Role: inst.InferRole(), Description: inst.Description}
+}
+
+// PrintTopologyTable prints a topology result as a table.
+func PrintTopologyTable(out io.Writer, result TopologyResult) error {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintf(w, "TOPOLOGY\t%s\n", result.Topology)
+	if result.PM != nil {
+		_, _ = fmt.Fprintf(w, "PM\t%s (%s)\n", result.PM.Name, result.PM.Type)
+	} else {
+		_, _ = fmt.Fprintln(w, "PM\t(ambiguous — declare role: pm in .humanconfig)")
+	}
+	if result.Engineering != nil {
+		_, _ = fmt.Fprintf(w, "ENGINEERING\t%s (%s)\n", result.Engineering.Name, result.Engineering.Type)
+	}
+	return w.Flush()
 }
 
 // RunTrackerFind finds which tracker owns a key.
