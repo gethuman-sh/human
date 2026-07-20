@@ -75,6 +75,26 @@ func TestFailureReason_fullDiagnosisBodyKept(t *testing.T) {
 	assert.NotContains(t, got, ImplementationFailedHeader)
 }
 
+func TestFailureReason_supersededByNewerMarker(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		{Body: DeployFailedHeader + "\nmerge conflict on main", Created: t0},
+		{Body: ImplementationStartedHeader, Created: t1},
+	}
+	assert.Empty(t, latestFailureReason(comments))
+}
+
+func TestFailureReason_newestFailureKept(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		{Body: ImplementationStartedHeader, Created: t0},
+		{Body: ImplementationFailedHeader + "\ncompile error", Created: t1},
+	}
+	assert.Equal(t, "compile error", latestFailureReason(comments))
+}
+
 func TestBuildIssueDetailExtras_allThree(t *testing.T) {
 	comments := []tracker.Comment{
 		{Body: ReviewCompleteHeader + "\n## Findings\nreview text", Created: time.Now()},

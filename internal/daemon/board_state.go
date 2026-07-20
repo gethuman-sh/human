@@ -96,6 +96,17 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	// Second pass: within the furthest stage, the latest marker decides state.
 	state, latest := latestStateInStage(comments, furthest)
 
+	// A furthest-stage failure is authoritative only while it is the ticket's
+	// newest marker. A strictly-newer marker anywhere — a re-implementation
+	// restarting from an earlier stage (ticket 881) or a later deploy — retires
+	// the stale red; the card follows the ticket's current activity rather than a
+	// terminal failure the pipeline already moved past (SC-910).
+	if state == BoardFailed {
+		if newest, newestStage, newestState, ok := latestMarkerOverall(comments); ok && newest.Created.After(latest.Created) {
+			furthest, state, latest = newestStage, newestState, newest
+		}
+	}
+
 	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
@@ -159,6 +170,28 @@ func latestStateInStage(comments []tracker.Comment, stage BoardStage) (BoardStat
 		}
 	}
 	return state, latest
+}
+
+// latestMarkerOverall returns the newest board marker across ALL stages — its
+// comment, stage, and state — and whether any marker exists. Recency is global
+// (by Created), so a re-implementation restarted in an earlier stage or a later
+// deploy is seen even when the furthest stage's own newest marker is a stale
+// failure (SC-910).
+func latestMarkerOverall(comments []tracker.Comment) (tracker.Comment, BoardStage, BoardState, bool) {
+	var latest tracker.Comment
+	var stage BoardStage
+	var state BoardState
+	var have bool
+	for _, c := range comments {
+		st, s, ok := ClassifyMarker(c.Body)
+		if !ok {
+			continue
+		}
+		if !have || c.Created.After(latest.Created) {
+			latest, stage, state, have = c, st, s, true
+		}
+	}
+	return latest, stage, state, have
 }
 
 // latestPlanComment returns the body of the newest [human:plan] comment with
