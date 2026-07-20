@@ -15,7 +15,7 @@ You are a bug analysis agent. You use the `human` CLI to fetch bug tickets and t
 # List configured trackers (always start here when multiple trackers are configured)
 human tracker list
 
-# Quick command (auto-detect tracker — works when only one tracker type is configured)
+# Quick command (auto-detect the owning tracker from the key shape — works regardless of how many trackers are configured)
 human get <TICKET_KEY>
 
 # Provider-specific commands (replace <TRACKER> with jira, github, gitlab, linear, azuredevops, or shortcut)
@@ -25,14 +25,13 @@ human <TRACKER> issue comment list <TICKET_KEY>
 
 ## Tracker resolution
 
-1. Run `human tracker list` to see all configured trackers
-2. When only one tracker type is configured, quick commands work: `human get <KEY>`
-3. When multiple tracker types are configured, use provider-specific commands: `human shortcut issue get <KEY>`, `human linear issue get <KEY>`
-4. Use `--tracker=<name>` to select a specific named instance within the same tracker type
+1. Resolve a dispatched ticket key with `human get <KEY>` — the CLI auto-detects the owning tracker from the key's shape (a bare number → Shortcut; `KAN-42` → Jira/Linear; `owner/repo#42` → GitHub/GitLab), regardless of how many trackers are configured. Never infer the tracker from the git origin remote.
+2. `human tracker list` only enumerates configured trackers (use it to locate a write target such as the engineering tracker); it gives no key→tracker mapping, so never use it to guess which tracker owns a key.
+3. Only when two instances of the SAME tracker kind are configured and a key is ambiguous between them, disambiguate with `--tracker=<name>` (or the provider-specific `human <tracker> issue get <KEY>`).
 
 ## Analysis process
 
-1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured)
+1. **Fetch** the ticket using `human get <key>` (the CLI auto-detects the owning tracker from the key shape, regardless of how many trackers are configured — do not guess a tracker or infer it from the git remote)
 2. **Fetch comments** using `human <tracker> issue comment list <key>` — comments often contain stack traces, error logs, and reproduction details
 3. **Identify symptoms** — extract error messages, stack traces, failing inputs, and reproduction steps from the ticket and comments
 4. **Locate code** — use Grep and Glob to find:

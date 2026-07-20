@@ -286,6 +286,7 @@ func TestDetectCandidateKinds(t *testing.T) {
 		// Lowercase "sc-157" does not match the uppercase-only jira/linear regex,
 		// so it resolves unambiguously to shortcut alone.
 		{name: "shortcut display key lowercase", key: "sc-157", want: []string{"shortcut"}},
+		{name: "bare numeric is shortcut-only, not github", key: "157", want: []string{"shortcut"}},
 		{name: "empty", key: "", want: nil},
 		{name: "unknown", key: "!!!invalid!!!", want: nil},
 		{name: "lowercase not jira", key: "kan-42", want: nil},

@@ -18,7 +18,7 @@ Follow these steps in order.
 
 ## Step 1 — Parse argument
 
-`$ARGUMENTS` is the bug ticket key — the PM ticket — optionally followed by `--board`. Take the first non-flag token as `<BUG_KEY>`. Resolve its tracker with `human tracker list` (or just use `human get <BUG_KEY>` when only one tracker type is configured). Call the tracker `<tracker>`.
+`$ARGUMENTS` is the bug ticket key — the PM ticket — optionally followed by `--board`. Take the first non-flag token as `<BUG_KEY>`. Resolve the bug ticket with `human get <BUG_KEY>` — the CLI auto-detects the owning tracker from the key shape, regardless of how many trackers are configured; `human tracker list` only enumerates trackers and must not be used to guess a key's owner. Call the tracker `<tracker>`.
 
 If `$ARGUMENTS` contains `--board`, set `<BOARD_CONTEXT>` = true, otherwise false. `<BOARD_CONTEXT>` is the daemon's **mechanical** board signal: the container holds no push/PR credentials and a board run must stop at the review handoff — it must never push, open, or merge a PR. The daemon's Deploy stage owns push → PR → CI → merge on the host against the bind-mounted repo. Branch on `<BOARD_CONTEXT>` wherever the deploy path would push or ship (do not rely on the agent noticing the `HUMAN_AGENT_NAME` env var).
 
