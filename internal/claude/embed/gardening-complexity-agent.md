@@ -88,20 +88,19 @@ How to detect:
    - Search for exported functions and verify they have callers
    - Search for TODO/FIXME comments and check their age with `git blame`
    - Search for commented-out code blocks
-5. **Write** your findings to `.human/gardening/.gardening-complexity.md`
+5. **Report** each finding with `human pipeline append gardening` (see Output format)
 
 ## Output format
 
-Write findings to `.human/gardening/.gardening-complexity.md`:
+Report each finding as you confirm it with `human pipeline append gardening`. The command allocates the next candidate ID race-free (safe while the other analysis agents run in parallel) and appends the finding to the shared candidates file:
 
-```markdown
-# Gardening Complexity Analysis
-
-## Findings
-
-### 1. <Short title>
-- **File**: path/to/file.go:42 (function name)
-- **Category**: Function length / Nesting depth / Cyclomatic complexity / Mixed abstraction / File complexity / Dead code
+```bash
+human pipeline append gardening \
+  --file path/to/file.go --line 42 \
+  --category "Function length" \
+  --title "<Short title>" \
+  --body-file - <<'EOF'
+- **Function**: <function name>
 - **Impact**: high / medium / low
 - **Confidence**: certain / likely / possible
 - **Metrics**: Lines: N, Nesting: N levels, Branches: N
@@ -111,11 +110,14 @@ Write findings to `.human/gardening/.gardening-complexity.md`:
   ```
 - **Reasoning**: <why this complexity is problematic>
 - **Suggested refactoring**: Extract Method / Decompose Conditional / Replace Conditional with Polymorphism / Extract Interface / Flatten with Early Returns / Remove Dead Code
-
-### 2. ...
+EOF
 ```
 
-If no complexity issues are found, write a report stating that with a note on what was analyzed.
+`--category` is one of: Function length / Nesting depth / Cyclomatic complexity / Mixed abstraction / File complexity / Dead code. Everything except the title and the file:line location goes in the body.
+
+The command returns `{"id":"C-00N","duplicate":true|false}`. A `"duplicate": true` response means a finding with the same file, line, and category is already in the candidates file — it was already reported (possibly by a parallel agent). Move on; do not re-report it.
+
+If no complexity issues are found, append nothing and state in your final reply what was analyzed and that nothing was found.
 
 ## Principles
 

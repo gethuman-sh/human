@@ -9,10 +9,10 @@ Scan this codebase for security vulnerabilities using an iterative agent pipelin
 
 ## Phase 1: Attack Surface Mapping
 
-Create the output directory, then run the surface mapper:
+Initialize the pipeline (creates `.human/security/` and prints the candidates/state paths), then run the surface mapper:
 
 ```bash
-mkdir -p .human/security
+human pipeline init security
 ```
 
 ```
@@ -21,20 +21,13 @@ Task(subagent_type="security-surface", prompt="Map the attack surface of this co
 
 Wait for the surface mapper to finish before proceeding.
 
-## Phase 2: Initialize candidates file
+## Phase 2: Initialize pipeline state
 
-Create the empty candidates file and state file:
+The candidates file is managed by `human pipeline append` — do not create it by hand. Just seed the shared state:
 
 ```bash
-echo "# Security Candidates" > .human/security/.security-candidates.md
-echo "" >> .human/security/.security-candidates.md
-cat > .human/security/.security-state.md << 'EOF'
-# Security State
-- iterations: 0
-- last_new_candidates: -1
-- total_candidates: 0
-- status: running
-EOF
+human pipeline state set security iterations 0
+human pipeline state set security status running
 ```
 
 ## Phase 3: Iterative Specialized Scanning
@@ -43,62 +36,47 @@ Repeat the following iteration block. Stop when an iteration finds zero new cand
 
 ### Iteration step
 
-Generate a timestamp for this iteration:
+Determine the iteration number and snapshot the candidate count before the round:
 
 ```bash
-ITER_TS=$(date +"%Y-%m-%d %H:%M:%S")
-ITER_NUM=$(grep "^- iterations:" .human/security/.security-state.md | awk '{print $NF}')
+ITER_NUM=$(human pipeline state get security iterations)
 ITER_NUM=$((ITER_NUM + 1))
-echo "Starting iteration $ITER_NUM at $ITER_TS"
+BEFORE=$(human pipeline count security)
+echo "Starting iteration $ITER_NUM with $BEFORE existing candidates"
 ```
 
 Launch all 5 scanning agents **in a single message** so they run in parallel:
 
 ```
-Task(subagent_type="security-injection", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for injection and input validation vulnerabilities. Append NEW findings only (skip anything already in candidates) to .human/security/.security-candidates.md. Write the count of new findings to .human/security/.security-injection-count")
+Task(subagent_type="security-injection", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for injection and input validation vulnerabilities. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-auth", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for authentication, authorization, and session management vulnerabilities. Append NEW findings only (skip anything already in candidates) to .human/security/.security-candidates.md. Write the count of new findings to .human/security/.security-auth-count")
+Task(subagent_type="security-auth", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for authentication, authorization, and session management vulnerabilities. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-secrets", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Scan the codebase and git history for leaked secrets, hardcoded credentials, and weak cryptography. Append NEW findings only (skip anything already in candidates) to .human/security/.security-candidates.md. Write the count of new findings to .human/security/.security-secrets-count")
+Task(subagent_type="security-secrets", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Scan the codebase and git history for leaked secrets, hardcoded credentials, and weak cryptography. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-deps", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Audit dependencies for known vulnerabilities and supply chain risks. Append NEW findings only (skip anything already in candidates) to .human/security/.security-candidates.md. Write the count of new findings to .human/security/.security-deps-count")
+Task(subagent_type="security-deps", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Audit dependencies for known vulnerabilities and supply chain risks. Report each new finding via `human pipeline append security` as described in your output format.")
 
-Task(subagent_type="security-infra", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze configuration files, Dockerfiles, CI pipelines, and infrastructure settings for security misconfigurations. Append NEW findings only (skip anything already in candidates) to .human/security/.security-candidates.md. Write the count of new findings to .human/security/.security-infra-count")
+Task(subagent_type="security-infra", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze configuration files, Dockerfiles, CI pipelines, and infrastructure settings for security misconfigurations. Report each new finding via `human pipeline append security` as described in your output format.")
 ```
 
 Wait for all 5 agents to finish.
 
 ### Check convergence
 
-Read the count files and sum new candidates:
+Compare the candidate count against the pre-round snapshot (`human pipeline append` deduplicates, so the count only grows for genuinely new findings):
 
 ```bash
-INJECTION=$(cat .human/security/.security-injection-count 2>/dev/null || echo 0)
-AUTH=$(cat .human/security/.security-auth-count 2>/dev/null || echo 0)
-SECRETS=$(cat .human/security/.security-secrets-count 2>/dev/null || echo 0)
-DEPS=$(cat .human/security/.security-deps-count 2>/dev/null || echo 0)
-INFRA=$(cat .human/security/.security-infra-count 2>/dev/null || echo 0)
-NEW_TOTAL=$((INJECTION + AUTH + SECRETS + DEPS + INFRA))
-TOTAL=$(grep -c "^### C-" .human/security/.security-candidates.md 2>/dev/null || echo 0)
-echo "Iteration $ITER_NUM: $NEW_TOTAL new candidates ($INJECTION injection, $AUTH auth, $SECRETS secrets, $DEPS deps, $INFRA infra). Total: $TOTAL"
+AFTER=$(human pipeline count security)
+NEW_TOTAL=$((AFTER - BEFORE))
+echo "Iteration $ITER_NUM: $NEW_TOTAL new candidates. Total: $AFTER"
 ```
 
-Update the state file:
+Update the shared state:
 
 ```bash
-cat > .human/security/.security-state.md << EOF
-# Security State
-- iterations: $ITER_NUM
-- last_new_candidates: $NEW_TOTAL
-- total_candidates: $TOTAL
-- status: running
-EOF
-```
-
-Clean up count files for next iteration:
-
-```bash
-rm -f .human/security/.security-injection-count .human/security/.security-auth-count .human/security/.security-secrets-count .human/security/.security-deps-count .human/security/.security-infra-count
+human pipeline state set security iterations $ITER_NUM
+human pipeline state set security last_new_candidates $NEW_TOTAL
+human pipeline state set security total_candidates $AFTER
 ```
 
 **Decision point:**
@@ -110,7 +88,7 @@ rm -f .human/security/.security-injection-count .human/security/.security-auth-c
 Update state:
 
 ```bash
-sed -i 's/status: running/status: chains/' .human/security/.security-state.md
+human pipeline state set security status chains
 ```
 
 Run the attack chain agent to connect individual findings into exploitable paths:
@@ -126,7 +104,7 @@ Wait for the chain analysis to finish before proceeding.
 Update state:
 
 ```bash
-sed -i 's/status: chains/status: triaging/' .human/security/.security-state.md
+human pipeline state set security status triaging
 ```
 
 Run the triage agent to validate, deduplicate, and produce the final report:

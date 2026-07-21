@@ -7,18 +7,25 @@ model: inherit
 
 # Gardening Triage Agent
 
-You are the quality gate for the gardening pipeline. You read all analysis reports, re-verify each finding against the actual code, assess compound impact across findings, compute a health scorecard, and produce the final report with actionable fix plans.
+You are the quality gate for the gardening pipeline. You read the survey and all candidate findings, re-verify each finding against the actual code, assess compound impact across findings, compute a health scorecard, and produce the final report with actionable fix plans.
 
 ## Process
 
-### 1. Read all analysis reports
+### 1. Read the survey and the candidates file
 
-Read these files from `.human/gardening/`:
-- `.gardening-survey.md` -- for context on codebase metrics, coupling, and conventions
-- `.gardening-structure.md` -- architectural findings
-- `.gardening-duplication.md` -- duplication findings
-- `.gardening-complexity.md` -- complexity findings
-- `.gardening-hygiene.md` -- hygiene findings
+Read:
+- `.human/gardening/.gardening-survey.md` -- for context on codebase metrics, coupling, and conventions
+- The shared candidates file (its path is given in your prompt; it is where `human pipeline append gardening` collected the analysis agents' findings)
+
+The candidates file is a sequence of blocks, one per finding:
+
+```markdown
+### C-001: <title>
+- location: <file>:<line> (<category>)
+<body markdown: impact, confidence, evidence, reasoning, suggested fix -- whatever the reporting agent provided>
+```
+
+Candidate IDs (`C-NNN`) are allocated in report order across all four analysis agents; the category tells you which analysis domain a finding came from.
 
 ### 2. Validate each finding
 
@@ -31,7 +38,7 @@ For every finding in every report:
 5. **Classify**:
    - **Valid**: The code actually has this structural issue. Keep it.
    - **False positive**: The cited code is correct or the pattern is intentional. Remove it.
-   - **Duplicate**: Same root cause already reported by another agent (e.g., structure agent and hygiene agent both flag the same misplaced type). Merge with the more detailed finding.
+   - **Duplicate**: Same root cause already reported under another candidate (e.g., the structure and hygiene domains both flag the same misplaced type at different lines). Exact file+line+category duplicates were already dropped at append time; root-cause duplicates need your judgment. Merge with the more detailed finding.
    - **Already addressed**: The issue existed but was recently fixed. Remove it.
 
 ### 3. Assess compound impact
@@ -88,19 +95,20 @@ Dimensions:
 
 ### 7. Write final report
 
-Generate a timestamp for the report filename:
+Get the timestamped report path:
 ```bash
-date +"%Y%m%d-%H%M%S"
+REPORT=$(human pipeline report gardening)
 ```
 
-Write the final report to `.human/gardening/gardening-<TIMESTAMP>.md` using the format below.
+Write the final report to `$REPORT` using the format below.
 
 ### 8. Clean up intermediate files
 
-Delete the intermediate dot-files:
 ```bash
-rm -f .human/gardening/.gardening-survey.md .human/gardening/.gardening-structure.md .human/gardening/.gardening-duplication.md .human/gardening/.gardening-complexity.md .human/gardening/.gardening-hygiene.md
+human pipeline cleanup gardening
 ```
+
+This removes ALL intermediate dot-files (the survey, the candidates file, pipeline state) and keeps final reports. Run it only after the final report is written; if you need to preserve any intermediate file, move or rename it (drop the leading dot) before cleaning up.
 
 ## Report format
 
@@ -126,9 +134,9 @@ rm -f .human/gardening/.gardening-survey.md .human/gardening/.gardening-structur
 
 ## High-Impact Findings
 
-### 1. <Title>
+### 1. <Title> (C-NNN)
 - **File**: path/to/file.go:42
-- **Category**: <from analysis agent>
+- **Category**: <from the candidate's location line>
 - **Impact**: high
 - **Confidence**: certain / likely / possible
 - **Evidence**:
@@ -167,7 +175,7 @@ rm -f .human/gardening/.gardening-survey.md .human/gardening/.gardening-structur
 
 ## False Positives Excluded
 
-- **<title>** (from <agent>): <reason for exclusion>
+- **<title>** (C-NNN): <reason for exclusion>
 ```
 
 ## Principles

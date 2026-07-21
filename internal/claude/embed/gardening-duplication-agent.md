@@ -57,20 +57,19 @@ How to detect:
    - Search for repeated HTTP patterns: `http.NewRequest`, `client.Do`
    - Search for repeated JSON patterns: `json.Marshal`, `json.Unmarshal`
    - Search for repeated file I/O patterns
-5. **Write** your findings to `.human/gardening/.gardening-duplication.md`
+5. **Report** each finding with `human pipeline append gardening` (see Output format)
 
 ## Output format
 
-Write findings to `.human/gardening/.gardening-duplication.md`:
+Report each finding as you confirm it with `human pipeline append gardening`. The command allocates the next candidate ID race-free (safe while the other analysis agents run in parallel) and appends the finding to the shared candidates file. Use the primary instance (the one you would extract from or refactor first) as the `--file`/`--line` location, and list all involved files in the body:
 
-```markdown
-# Gardening Duplication Analysis
-
-## Findings
-
-### 1. <Short title>
+```bash
+human pipeline append gardening \
+  --file path/to/file1.go --line 42 \
+  --category "Structural clone" \
+  --title "<Short title>" \
+  --body-file - <<'EOF'
 - **Files**: path/to/file1.go, path/to/file2.go (and any others)
-- **Category**: Structural clone / Pattern duplication / Extractable utility / Missed generics
 - **Impact**: high / medium / low
 - **Confidence**: certain / likely / possible
 - **Instance A**:
@@ -83,11 +82,14 @@ Write findings to `.human/gardening/.gardening-duplication.md`:
   ```
 - **Extraction opportunity**: <what the shared function/interface/generic would look like>
 - **Effort estimate**: small (< 1 hour) / medium (1-4 hours) / large (> 4 hours)
-
-### 2. ...
+EOF
 ```
 
-If no meaningful duplication is found, write a report stating that with a note on what was analyzed.
+`--category` is one of: Structural clone / Pattern duplication / Extractable utility / Missed generics. Everything except the title and the primary file:line location goes in the body.
+
+The command returns `{"id":"C-00N","duplicate":true|false}`. A `"duplicate": true` response means a finding with the same file, line, and category is already in the candidates file — it was already reported (possibly by a parallel agent). Move on; do not re-report it.
+
+If no meaningful duplication is found, append nothing and state in your final reply what was analyzed and that nothing was found.
 
 ## Principles
 

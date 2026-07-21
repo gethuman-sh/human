@@ -39,7 +39,15 @@ implementation detail its audience does not care about, it does not belong.
 ```bash
 # Best-effort ticket title enrichment (skip silently on failure)
 human get <TICKET_KEY>
+
+# Ticket keys referenced by commits touching the paths (JSON list, prefixed keys first, deduped, newest first)
+human commits keys <path> [<path> ...]
+
+# Did the paths change since the recency boundary? Prints true/false.
+human commits touched <path> [<path> ...] [--ref <override>]
 ```
+
+`human commits keys` and `human commits touched` run locally against the repo — no daemon needed.
 
 ## Process
 
@@ -83,17 +91,15 @@ human get <TICKET_KEY>
    they'd recognize ("Idempotent webhook delivery with signed payloads") — which is their benefit.
    Either way, avoid restating the implementation ("Filter outbound traffic by domain").
 
-7. **Map tickets to each feature.** For each leaf feature, inspect the commits that touched its
-   paths (for a consolidated capability, union all merged paths):
+7. **Map tickets to each feature.** For each leaf feature, get the ticket keys referenced by the
+   commits that touched its paths (for a consolidated capability, union all merged paths):
 
    ```bash
-   git log --format=%s -- <path> [<path> ...]
+   human commits keys <path> [<path> ...]
    ```
 
-   Extract ticket keys from those commit subjects with these patterns (dedupe, keep PM keys first):
-   - Bracketed / bare project keys: `[SC-148]`, `SC-148`, `HUM-153`, `Issue HUM-30` → regex
-     `\[?([A-Z]{2,}-[0-9]+)\]?`
-   - GitHub-style numeric refs: `#42` → `#([0-9]+)`
+   The command returns a JSON list already deduped, prefixed (PM) keys first, newest first — no
+   regex extraction needed.
 
    Then **prune to what is meaningful** — a long ticket dump obscures rather than informs:
    - **Drop repo-wide sweep tickets.** A key that touches a large share of features is a mechanical
@@ -108,17 +114,19 @@ human get <TICKET_KEY>
    Set the feature's `tickets` to the pruned, capped list. Omit `tickets` entirely when there are
    none. Optionally confirm a key exists via `human get <KEY>` (best-effort; never block on it).
 
-8. **Mark recent features.** Using the recency boundary from the inventory, a feature is `recent`
-   when any commit touching its paths is at/after the boundary:
+8. **Mark recent features.** A feature is `recent` when its paths changed since the recency
+   boundary:
 
    ```bash
-   # tag boundary
-   git log --oneline <TAG>..HEAD -- <path> [<path> ...]
-   # or date boundary
-   git log --oneline --since='30 days ago' -- <path> [<path> ...]
+   human commits touched <path> [<path> ...]
    ```
 
-   Set `"recent": true` on those features; omit `recent` otherwise (never write `false`).
+   The command prints `true` or `false`. With no `--ref` it resolves the same latest-tag /
+   30-day boundary the inventory records; if the inventory carries a recency **override**, pass
+   it as `--ref <override>`.
+
+   Set `"recent": true` on features that print `true`; omit `recent` otherwise (never write
+   `false`).
 
 9. **Write `FEATURE.json`** at the repository root. A group has a `group` title and may carry
    `features` and/or nested `groups`; the example shows the pillar › area › feature shape:

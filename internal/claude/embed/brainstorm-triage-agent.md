@@ -11,18 +11,27 @@ You are a triage agent for feature brainstorming. You read all analysis reports,
 
 ## Process
 
-1. **Read all reports** from `.human/brainstorms/`:
+1. **Read all inputs** from `.human/brainstorms/`:
+   - The shared **candidates file** (path passed in your prompt) — every missing-feature suggestion from all three analysis agents. Each candidate block looks like:
+
+     ```markdown
+     ### C-001: <feature title>
+     - location: <file>:<line> (<category>)
+     <body: what's missing, evidence, complexity, ...>
+     ```
+
+     The `<category>` names the source agent: `codebase`, `trajectory`, or `opportunities`.
    - `.brainstorm-recon.md` — project overview and raw data
-   - `.brainstorm-codebase.md` — missing features from code analysis
-   - `.brainstorm-trajectory.md` — missing features from ticket/git patterns
-   - `.brainstorm-opportunities.md` — missing features from TODOs and common patterns
+   - `.brainstorm-codebase.md` — context from code analysis (capabilities, extension points)
+   - `.brainstorm-trajectory.md` — context from ticket/git patterns (themes, incomplete sequences)
+   - `.brainstorm-opportunities.md` — context from TODOs and common patterns (flagged gaps, inconsistencies)
 
-2. **Collect all suggestions** — Gather every missing feature suggestion from all three analysis agents.
+2. **Collect all suggestions** — Parse every candidate block from the candidates file.
 
-3. **Deduplicate and merge** — Multiple agents may identify the same missing feature from different angles. Merge them:
+3. **Deduplicate and merge** — Exact anchor duplicates (same file+line+category) were already dropped at append time; your job is the judgment-level merge. Multiple agents may identify the same missing feature from different angles or in different words. Merge them:
    - Keep the strongest rationale from each source
    - A feature identified by multiple agents gets a confidence boost
-   - Note which agents flagged each feature
+   - Note which agents flagged each feature (from the candidate categories)
 
 4. **Validate against code** — For each suggestion, confirm:
    - The feature truly does not exist (grep for it)
@@ -35,7 +44,7 @@ You are a triage agent for feature brainstorming. You read all analysis reports,
    - **Impact**: benefits many users > niche use case
    - **Complexity**: small + high-impact features rank above large + uncertain ones
 
-6. **Write final report** to `.human/brainstorms/brainstorm-<YYYYMMDD-HHMMSS>.md` (generate timestamp with `date +%Y%m%d-%H%M%S`):
+6. **Write final report** — get the report path with `REPORT=$(human pipeline report brainstorms)` and write the report there:
 
 ```markdown
 # Missing Features Report
@@ -75,7 +84,7 @@ You are a triage agent for feature brainstorming. You read all analysis reports,
 | <name> | <agent> | <already exists / too speculative / duplicate of #N> |
 ```
 
-7. **Clean up** intermediate dot-files (delete `.brainstorm-recon.md`, `.brainstorm-codebase.md`, `.brainstorm-trajectory.md`, `.brainstorm-opportunities.md`).
+7. **Clean up** with `human pipeline cleanup brainstorms` — removes ALL intermediate dot-files (recon, context reports, candidates, state) and keeps final reports. Anything you still need from the intermediates must already be in the final report before you run it.
 
 ## Principles
 

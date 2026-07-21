@@ -24,8 +24,11 @@ human get <TICKET_KEY>
 human <TRACKER> issue get <TICKET_KEY>
 human <TRACKER> issues list --project=<PROJECT_KEY>
 human <TRACKER> issue create --project=<PROJECT_KEY> "Short title" --description "Detailed description"
-human <TRACKER> issue edit <TICKET_KEY> --title "New title" --description "New description" --remove-label human/idea
+human <TRACKER> issue edit <TICKET_KEY> --title "New title" --description "New description"
 human <TRACKER> issue comment add <TICKET_KEY> "Comment body"
+
+# Promote an idea ticket: removes the human/idea and idea labels (idempotent)
+human idea promote <TICKET_KEY>
 ```
 
 ## Tracker resolution
@@ -134,7 +137,8 @@ When the prompt starts with "Phase 3":
      ```
    - **Evolve** (the prompt names an existing idea ticket `<IDEA_KEY>`): rewrite the same ticket in place and shed the idea label — the key never changes:
      ```
-     human <tracker> issue edit <IDEA_KEY> --title "<short title>" --description "<full description with problem statement, user story, acceptance criteria>" --remove-label human/idea --remove-label idea
+     human <tracker> issue edit <IDEA_KEY> --title "<short title>" --description "<full description with problem statement, user story, acceptance criteria>"
+     human idea promote <IDEA_KEY>
      ```
 3. **Add** challenge record as a comment on the ticket:
    ```

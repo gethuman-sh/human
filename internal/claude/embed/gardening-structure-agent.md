@@ -66,20 +66,18 @@ How to detect:
 4. **Also Grep** beyond your assigned files for cross-package patterns:
    - Search for import paths to understand dependency relationships
    - Search for type references across package boundaries
-5. **Write** your findings to `.human/gardening/.gardening-structure.md`
+5. **Report** each finding with `human pipeline append gardening` (see Output format)
 
 ## Output format
 
-Write findings to `.human/gardening/.gardening-structure.md`:
+Report each finding as you confirm it with `human pipeline append gardening`. The command allocates the next candidate ID race-free (safe while the other analysis agents run in parallel) and appends the finding to the shared candidates file:
 
-```markdown
-# Gardening Structure Analysis
-
-## Findings
-
-### 1. <Short title>
-- **File**: path/to/file.go
-- **Category**: Boundary violation / Leaky abstraction / God package / Missing abstraction / Architectural drift
+```bash
+human pipeline append gardening \
+  --file path/to/file.go --line 42 \
+  --category "Leaky abstraction" \
+  --title "<Short title>" \
+  --body-file - <<'EOF'
 - **Impact**: high / medium / low
 - **Confidence**: certain / likely / possible
 - **Evidence**:
@@ -88,11 +86,14 @@ Write findings to `.human/gardening/.gardening-structure.md`:
   ```
 - **Reasoning**: <why this is a structural issue, how it affects maintainability>
 - **Suggested fix**: <specific refactoring to resolve the issue>
-
-### 2. ...
+EOF
 ```
 
-If no structural issues are found, write a report stating that with a note on what was analyzed.
+`--category` is one of: Boundary violation / Leaky abstraction / God package / Missing abstraction / Architectural drift. Everything except the title and the file:line location goes in the body. Structural findings are often package-level — use the file and line of the most representative declaration (the misplaced type, the leaky interface method) as the location.
+
+The command returns `{"id":"C-00N","duplicate":true|false}`. A `"duplicate": true` response means a finding with the same file, line, and category is already in the candidates file — it was already reported (possibly by a parallel agent). Move on; do not re-report it.
+
+If no structural issues are found, append nothing and state in your final reply what was analyzed and that nothing was found.
 
 ## Principles
 
