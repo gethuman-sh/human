@@ -60,13 +60,14 @@ Only once all four checks pass do you review. The dispatched key is the post tar
    human commits for <KEY> | jq -r 'reverse | .[].sha' | xargs -I{} git show --format= {}
    ```
    This is the diff to evaluate against the acceptance criteria. Branch-relative diffs (`git diff main...HEAD`) are no longer used, because they include unrelated work that happens to share the branch.
-5. **Evaluate** the ticket-scoped diff against each acceptance criterion from the ticket.
-6. **Flag** missing criteria, unaddressed edge cases, and scope creep beyond the ticket. For this review type, "scope creep" means changes inside the ticket's commits that go beyond the ticket, NOT unrelated commits on the branch (those are simply excluded from the diff and out of scope for this review).
-7. **Write** the review to `.human/reviews/<key>.md` where `<key>` is the ticket key lowercased (e.g. `KAN-1` → `kan-1.md`). Create the directory first with `mkdir -p .human/reviews`. Include the list of commit hashes that were reviewed, so the reader can reproduce the diff.
+5. **Trust the recorded verification evidence.** Look for a `[human:bug-verify]` (or `[human:done]`) comment on the ticket whose `## Evidence` block records a green full-suite `result:` on a `commit:` that equals the HEAD Step 0 checked out (`git rev-parse HEAD` on the detached bound branch). When it matches, do NOT re-run the full suite — cite that evidence as the suite result. Re-run ONLY the specific tests your own findings put in doubt (e.g. a file you flag as under-tested). When no such evidence exists, or its `commit:` differs from the reviewed HEAD, run the full suite yourself — the "one green full-suite run before deploy" guarantee must hold.
+6. **Evaluate** the ticket-scoped diff against each acceptance criterion from the ticket.
+7. **Flag** missing criteria, unaddressed edge cases, and scope creep beyond the ticket. For this review type, "scope creep" means changes inside the ticket's commits that go beyond the ticket, NOT unrelated commits on the branch (those are simply excluded from the diff and out of scope for this review).
+8. **Write** the review to `.human/reviews/<key>.md` where `<key>` is the ticket key lowercased (e.g. `KAN-1` → `kan-1.md`). Create the directory first with `mkdir -p .human/reviews`. Include the list of commit hashes that were reviewed, so the reader can reproduce the diff.
 
 ## Principles
 
-- Run tests before claiming the implementation passes acceptance criteria.
+- Do not re-run the full suite when a `[human:bug-verify]`/`[human:done]` Evidence block records a green full-suite pass on the reviewed commit (the HEAD Step 0 checked out); cite it and re-run only what your findings put in doubt. Run the full suite yourself only when no commit-matching evidence exists.
 - Cite specific files and line numbers for every finding.
 - Do not claim criteria are met without evidence from the diff.
 - Distinguish "not implemented" from "implemented differently than expected."
@@ -115,7 +116,7 @@ Write the review in this structure:
 <only include this section if `git status --porcelain` was non-empty when the review ran. List the uncommitted files. These were excluded from the criteria evaluation because they are not yet attributed to the ticket.>
 
 ## Test Results
-<output of test run, or note that tests were not found>
+<either "trusted recorded full-suite evidence: <command> PASS on <commit>" (cite the bug-verify Evidence block), plus any targeted re-runs your findings prompted; or the output of the full suite you ran because no matching evidence existed>
 ```
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Return the structured review so the calling skill can present it.

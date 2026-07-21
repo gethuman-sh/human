@@ -31,7 +31,7 @@ Use `human tracker list` first when multiple trackers are configured.
 
 1. **Read the plan** — fetch the ticket that carries it (`human get <WORK_KEY>`): the description of the engineering ticket in split topology, or the `[human:plan]` comment on the bug ticket itself (`human plan show <WORK_KEY>`) in single-tracker topology. It states the intended fix and its test plan.
 2. **Confirm the regression test** — locate the test added for this bug. Verify it genuinely covers the bug: it must **fail without the fix and pass with it**. Prove the "fails before" direction (e.g. temporarily revert the fix hunk, or `git stash` the product change, run the test, see it fail, then restore) rather than assuming it.
-3. **Run the full suite** — `make check` (or the project's `make test` / `go test ./...` / `npm test`). It must be green. If tests fail, the fix is NOT DONE.
+3. **Run the ONE authoritative full suite** — this is the single full-suite pass of the whole fix (SC-782): run `make check` (or the project's full gate / `make test` / `go test ./...` / `npm test`). It must be green. Capture the exact command and its result verbatim; you will record it as evidence the reviewer trusts instead of re-running the suite. If tests fail, the fix is NOT DONE.
 4. **Check the root cause** — confirm the change addresses the documented cause, not just the symptom, and is scoped to the bug (no unrelated changes).
 5. **Record the verdict** — post the marker on the **bug ticket** with `human marker post <BUG_KEY> bug-verify --head <DONE|"NOT DONE"> --body-file -` (body in the format below) and return the verdict word to the caller.
 
@@ -42,6 +42,8 @@ Use `human tracker list` first when multiple trackers are configured.
 - [ ] The fix addresses the root cause, not the symptom
 - [ ] No unrelated changes (scope check)
 - [ ] Commits reference the ticket trail: `human commits for <key>` lists the commits attributed to a key, and `human commits prefix <BUG_KEY> [<ENG_KEY>]` prints the required prefix — **both** keys in split topology, the single bug key otherwise
+
+The full suite is run exactly once here — the fixer used the fast tier and the reviewer trusts this recorded Evidence; do not expect (or require) a prior full-suite run.
 
 ## Principles
 
@@ -55,6 +57,12 @@ Post this comment on the bug ticket (and return the verdict word):
 
 ```bash
 human marker post <BUG_KEY> bug-verify --head <DONE|"NOT DONE"> --body-file - <<'EOF'
+## Evidence
+branch: <branch under verification, from `git rev-parse --abbrev-ref HEAD`>
+commit: <HEAD sha, from `git rev-parse HEAD`>
+command: <the exact full-suite command run, e.g. `make check`>
+result: <PASS/FAIL + one-line summary of the run>
+
 ## Regression test
 <test name + evidence it fails before / passes after>
 
