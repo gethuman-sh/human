@@ -13,6 +13,9 @@ export interface QueueCard {
   // pane's ready cards.
   bug?: boolean;
   options?: { id: string; label: string }[];
+  // RFC3339 time the newest marker of the card's current stage landed; feeds
+  // the Engineering-backlog age badge. Absent for cards with no derived stage.
+  stageEnteredAt?: string;
 }
 
 export const QUEUES = ["ideas", "product", "engineering", "building", "deploy"] as const;
@@ -52,6 +55,44 @@ export function queueOf(card: QueueCard): string {
 
 export function isReworkable(card: QueueCard): boolean {
   return card.stage === "verification" && card.state === "done" && (verdictFailed(card.verdict) || !card.branch);
+}
+
+// ageDays converts a card's stage timestamp into whole days elapsed, or null
+// when the timestamp is absent or unparseable.
+export function ageDays(stageEnteredAt: string | undefined, now: Date): number | null {
+  if (!stageEnteredAt) return null;
+  const t = Date.parse(stageEnteredAt);
+  if (Number.isNaN(t)) return null;
+  const days = Math.floor((now.getTime() - t) / 86_400_000);
+  return days >= 0 ? days : null;
+}
+
+// Age escalation thresholds: a plan is presumed fresh for a week, suspect for
+// a second week, and stale after that — the badge color escalates so rotting
+// Engineering-backlog work is visible without reading numbers.
+const AGE_WARN_DAYS = 7;
+const AGE_HOT_DAYS = 14;
+
+// ageBadge describes the "<n>d" pill for a card sitting planned in the
+// Engineering backlog. Only done-state planning cards get one — a running
+// plan shows the spinner badge and a failed one its error; under a day the
+// pill is suppressed rather than shouting "0d" at fresh plans.
+export function ageBadge(card: QueueCard, now: Date): { text: string; cls: string } | null {
+  if (card.bug || card.stage !== "planning" || card.state !== "done") return null;
+  const days = ageDays(card.stageEnteredAt, now);
+  if (days === null || days < 1) return null;
+  let cls = "age";
+  if (days >= AGE_HOT_DAYS) cls = "age hot";
+  else if (days >= AGE_WARN_DAYS) cls = "age warn";
+  return { text: `${days}d`, cls };
+}
+
+// isReplannable reports a card whose finished plan can be regenerated in
+// place: a feature ticket sitting planned in the Engineering backlog. The
+// codebase may have moved since the plan landed; replanning posts a fresh
+// [human:plan] that supersedes the old one (latest wins).
+export function isReplannable(card: QueueCard): boolean {
+  return !card.bug && card.stage === "planning" && card.state === "done";
 }
 
 // isReviewRetryable reports a stage-failed review — a [human:review-failed] card

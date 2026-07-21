@@ -749,6 +749,22 @@ body {
   font-weight: 600;
 }
 
+/* Age of a finished plan sitting in the Engineering backlog. Muted while
+   fresh; escalates amber then red as the plan's code context rots, so stale
+   work is visible without reading the number. */
+.badge.age {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.badge.age.warn {
+  color: var(--running);
+}
+
+.badge.age.hot {
+  color: var(--failed);
+}
+
 /* Right-click card menu: administrative actions that are not pipeline
    transitions (close ticket, open in tracker). */
 .context-menu {

@@ -42,6 +42,8 @@ import {
   queueOf,
   isReworkable,
   isReviewRetryable,
+  ageBadge,
+  isReplannable,
   forwardDropAllowed,
   badgeInfo,
   sortByHandOrder,
@@ -76,6 +78,9 @@ interface Card {
   trackerKind?: string;
   error?: string;
   verdict?: string;
+  // RFC3339 time the newest marker of the card's current stage landed; feeds
+  // the Engineering-backlog age badge.
+  stageEnteredAt?: string;
   // Idea-space sub-column (0 loosest … 4 most concrete) for Ideas-stage cards.
   // Locally persisted preference; absent means leftmost.
   ideaColumn?: number;
@@ -431,6 +436,13 @@ function renderCard(card: Card): HTMLElement {
   }
   const b = badge(card);
   if (b) meta.push(b);
+  // Age pill: how long the finished plan has been sitting in the Engineering
+  // backlog — color escalates so rotting plans are visible at a glance.
+  const age = ageBadge(card, new Date());
+  if (age) {
+    const planned = card.stageEnteredAt ? new Date(card.stageEnteredAt).toLocaleDateString() : "";
+    meta.push(`<span class="badge ${age.cls}" title="${escapeAttr("planned " + planned)}">${escapeHtml(age.text)}</span>`);
+  }
   if (card.engineeringKey) meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
   if (card.prURL) meta.push(`<a href="${escapeAttr(card.prURL)}" target="_blank">PR</a>`);
 
@@ -520,6 +532,24 @@ function showCardMenu(card: Card, x: number, y: number): void {
       void transition(card.key, card.title, "backlog", "planning");
     });
     menu.appendChild(retryPlan);
+  }
+
+  // A finished plan can rot while the ticket waits in the Engineering
+  // backlog — code moves on, the plan doesn't. Replan relaunches /human-plan
+  // in place; the fresh plan comment supersedes the old one (latest wins).
+  // Same wire shape as Retry plan: from is inert for validation.
+  if (isReplannable(card)) {
+    const replanItem = document.createElement("button");
+    replanItem.type = "button";
+    replanItem.className = "context-menu-item";
+    replanItem.textContent = "Replan";
+    replanItem.disabled = !current.dockerAvailable;
+    if (replanItem.disabled) replanItem.title = "Docker required";
+    replanItem.addEventListener("click", () => {
+      menu.remove();
+      void transition(card.key, card.title, "backlog", "planning");
+    });
+    menu.appendChild(replanItem);
   }
 
   // A failed build is otherwise a dead end on the workflow board: the rework

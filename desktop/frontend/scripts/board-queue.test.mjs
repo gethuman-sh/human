@@ -171,3 +171,40 @@ test("insertKeyAt places dragged key by drop midpoint", () => {
   assert.deepEqual(insertKeyAt(resting, mids, "X", 999), ["A", "B", "C", "X"]);
   assert.deepEqual(insertKeyAt([], [], "X", 10), ["X"]);
 });
+
+// --- Engineering-backlog age badge + Replan gating ---
+
+test("ageDays: absent, unparseable, negative, and whole-day conversion", async () => {
+  const { ageDays } = await import("../build/board-queue.js");
+  const now = new Date("2026-07-21T12:00:00Z");
+  assert.equal(ageDays(undefined, now), null);
+  assert.equal(ageDays("not-a-date", now), null);
+  assert.equal(ageDays("2026-07-22T12:00:00Z", now), null, "future timestamps yield null, not negative days");
+  assert.equal(ageDays("2026-07-21T02:00:00Z", now), 0);
+  assert.equal(ageDays("2026-07-14T12:00:00Z", now), 7);
+});
+
+test("ageBadge: only done-state planning feature cards, from 1 day up", async () => {
+  const { ageBadge } = await import("../build/board-queue.js");
+  const now = new Date("2026-07-21T12:00:00Z");
+  const daysAgo = (n) => new Date(now.getTime() - n * 86_400_000).toISOString();
+
+  assert.equal(ageBadge({ stage: "planning", state: "done", stageEnteredAt: daysAgo(0) }, now), null, "under a day: no 0d noise");
+  assert.deepEqual(ageBadge({ stage: "planning", state: "done", stageEnteredAt: daysAgo(3) }, now), { text: "3d", cls: "age" });
+  assert.deepEqual(ageBadge({ stage: "planning", state: "done", stageEnteredAt: daysAgo(7) }, now), { text: "7d", cls: "age warn" });
+  assert.deepEqual(ageBadge({ stage: "planning", state: "done", stageEnteredAt: daysAgo(14) }, now), { text: "14d", cls: "age hot" });
+
+  assert.equal(ageBadge({ stage: "planning", state: "running", stageEnteredAt: daysAgo(3) }, now), null, "running plans show the spinner instead");
+  assert.equal(ageBadge({ stage: "implementation", state: "done", stageEnteredAt: daysAgo(3) }, now), null, "only the Engineering backlog ages");
+  assert.equal(ageBadge({ stage: "planning", state: "done", bug: true, stageEnteredAt: daysAgo(3) }, now), null, "bug cards live in the Bugs pane");
+  assert.equal(ageBadge({ stage: "planning", state: "done" }, now), null, "no timestamp, no badge");
+});
+
+test("isReplannable: planned feature cards only", async () => {
+  const { isReplannable } = await import("../build/board-queue.js");
+  assert.equal(isReplannable({ stage: "planning", state: "done" }), true);
+  assert.equal(isReplannable({ stage: "planning", state: "failed" }), false, "failed plans get Retry plan, not Replan");
+  assert.equal(isReplannable({ stage: "planning", state: "running" }), false);
+  assert.equal(isReplannable({ stage: "implementation", state: "done" }), false);
+  assert.equal(isReplannable({ stage: "planning", state: "done", bug: true }), false);
+});

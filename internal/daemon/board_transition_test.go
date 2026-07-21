@@ -1153,3 +1153,35 @@ func TestApplyTransitionDeployCIFailureHeadline(t *testing.T) {
 	assert.Contains(t, headline, "fix the failing checks")
 	assert.Contains(t, headline, "re-run Deploy")
 }
+
+func TestApplyTransitionReplansDonePlanning(t *testing.T) {
+	// A finished plan sitting in the Engineering backlog can rot while the
+	// codebase moves on. The Replan gesture relaunches planning in place; the
+	// fresh plan supersedes the old one by the plan layer's latest-wins rule.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:planning-started]", time.Unix(1, 0)),
+		cmt("[human:plan-ready]", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardPlanning})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-plan SC-1", l.prompt)
+	require.Len(t, c.added, 1)
+	assert.Equal(t, PlanningStartedHeader, c.added[0])
+}
+
+func TestApplyTransitionReplanRejectedBeyondPlanning(t *testing.T) {
+	// Replan is scoped to the Engineering backlog: a card already in
+	// implementation keeps the forward-only rule for To=planning.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:plan-ready]", time.Unix(1, 0)),
+		cmt("[human:implementation-started]", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardPlanning})
+	require.Error(t, err)
+	assert.Zero(t, l.calls)
+}
