@@ -83,10 +83,10 @@ human <tracker> issue create --project=<PROJECT> "Short title derived from the i
 
 ## Step 3.5 — Resolve topology
 
-Run `human tracker list` and check where the plan will live:
+Run `human tracker topology` and check where the plan will live:
 
-- **Split topology** — a tracker with `"role": "engineering"` exists and is a DIFFERENT tracker than the PM ticket's: the plan becomes a separate engineering ticket there. Ask the user via `AskUserQuestion` only if the tracker or project is ambiguous: "Which tracker should the engineering ticket be created on? (e.g. linear, jira, github, gitlab, azuredevops, shortcut)" and "What project should the ticket be created in? (e.g. 'HUM' for Linear, 'myorg/myrepo' for GitHub)". Store the answers as `<ENG_TRACKER>` and `<ENG_PROJECT>`.
-- **Single-tracker topology** — no engineering-role tracker, or it is the same tracker as the PM ticket: no second ticket is created. The plan will be attached to the PM ticket itself as a `[human:plan]` comment; skip the questions.
+- **Split topology** — the output says `"topology": "split"`: the plan becomes a separate engineering ticket on the tracker named in the output's `engineering` entry. Store that tracker as `<ENG_TRACKER>`. Ask the user via `AskUserQuestion` only if the project is ambiguous: "What project should the ticket be created in? (e.g. 'HUM' for Linear, 'myorg/myrepo' for GitHub)". Store the answer as `<ENG_PROJECT>`.
+- **Single-tracker topology** — the output says `"topology": "single"` (no `engineering` entry): no second ticket is created. The plan will be attached to the PM ticket itself as a `[human:plan]` comment; skip the questions.
 
 ## Step 4 — Phase 2: Plan (attaches the plan where topology says)
 
@@ -128,12 +128,9 @@ Store the engineering ticket key as `<ENG_TICKET_KEY>`. Then update the ticket d
 **Single-tracker topology** — post the plan verbatim as a `[human:plan]` marker comment on the PM ticket (no second ticket; the description stays product language):
 
 ```bash
-human <PM_TRACKER> issue comment add <PM_TICKET_KEY> "$(cat <<'PLAN_EOF'
-[human:plan]
-
+human marker post <PM_TICKET_KEY> plan --body-file - <<'PLAN_EOF'
 <FINAL_PLAN_CONTENT>
 PLAN_EOF
-)"
 ```
 
 Verify with `human plan show <PM_TICKET_KEY>` — it must print the plan back. The plan header needs no `**Engineering ticket**:` line, and commits reference only the PM key. Set `<WORK_KEY>` to `<PM_TICKET_KEY>`.
@@ -176,7 +173,7 @@ Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY
 
 The first line under the review's `## Summary` is the outcome: `pass`, `pass with notes`, `fail`, or `unreviewable: <reason>`.
 
-**Unreviewable escape.** If the reviewer returns `unreviewable`, the code could not be obtained (unreachable branch, or no commits referencing the key) — nothing was reviewed. Do NOT present it as "the review found issues" and do NOT enter the fix/re-review loop: there are no findings. Post `[human:review-failed]` on the PM ticket naming the unreachable ref (header on the first line, the reachability reason on the next), tell the user how to make the code reachable (push the branch / commit with the ticket key), then re-run the reviewer once the code is reachable.
+**Unreviewable escape.** If the reviewer returns `unreviewable`, the code could not be obtained (unreachable branch, or no commits referencing the key) — nothing was reviewed. Do NOT present it as "the review found issues" and do NOT enter the fix/re-review loop: there are no findings. Post the `[human:review-failed]` stage-failure marker on the PM ticket — `human marker post <PM_TICKET_KEY> review-failed --field "reason=<the reachability reason, naming the unreachable ref>"` — tell the user how to make the code reachable (push the branch / commit with the ticket key), then re-run the reviewer once the code is reachable.
 
 Present the review results to the user.
 

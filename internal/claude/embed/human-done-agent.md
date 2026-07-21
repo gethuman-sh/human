@@ -21,6 +21,10 @@ human get <TICKET_KEY>
 # Provider-specific commands (replace <TRACKER> with jira, github, gitlab, linear, azuredevops, or shortcut)
 human <TRACKER> issue get <TICKET_KEY>
 human <TRACKER> issue comment list <TICKET_KEY>
+
+# Commits referencing a key (any accepted reference format), and the canonical subject prefix
+human commits for <TICKET_KEY>
+human commits prefix <PM_KEY> [<ENG_KEY>]
 ```
 
 ## Tracker resolution
@@ -45,7 +49,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
 - [ ] No unrelated changes (scope check)
 - [ ] Edge cases from the ticket handled
 - [ ] Plan tasks completed (if plan exists)
-- [ ] Every commit message references the ticket trail: in split topology **both** the PM ticket key and the engineering ticket key (e.g. `[SC-79] [HUM-59] ...`), preserving the PM → engineering → commit trail; in single-tracker topology the single evolving ticket's key (e.g. `[SC-79] ...`)
+- [ ] Every commit message references the ticket trail: `human commits for <key>` lists the commits attributed to a key, and `human commits prefix <PM_KEY> [<ENG_KEY>]` prints the required subject prefix (e.g. `[SC-79] [HUM-59]` in split topology, preserving the PM → engineering → commit trail; `[SC-79]` in single-tracker topology)
 
 ## Principles
 
