@@ -433,6 +433,25 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			Timestamp: time.Now().UTC(),
 		})
 	}, logger)
+	// Hold a systemd suspend block while agents run so an auto-suspending
+	// desktop cannot freeze Docker and the pipeline mid-run (SC-262). Off by
+	// default; the toggle is re-read each tick so a settings-UI change applies
+	// without a restart.
+	go daemon.RunSleepInhibitor(ctx, &dockerAgentSweeper{}, logindInhibitor{},
+		func() bool {
+			cfg, err := daemon.LoadPowerConfig(".")
+			if err != nil {
+				logger.Warn().Err(err).Msg("sleep inhibitor: cannot read power config; treating as disabled")
+				return false
+			}
+			return cfg.InhibitSleep
+		},
+		daemon.SleepInhibitInterval, logger)
+	if inhibitCfg, _ := daemon.LoadPowerConfig("."); inhibitCfg.InhibitSleep {
+		_, _ = fmt.Fprintln(out, "Sleep inhibition: enabled (suspend deferred while agents run)")
+	} else {
+		_, _ = fmt.Fprintln(out, "Sleep inhibition: disabled")
+	}
 	// The auto-review chain runs through the same launch gate: a daemon that
 	// cannot serve a review must leave the ready-for-review handoff unclaimed for
 	// one that can, not claim and fail it (SC-912). Doctor.Blockers is nil-safe.

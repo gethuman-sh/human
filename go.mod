@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/docker/cli v29.6.1+incompatible
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/go-containerregistry v0.21.7
 	github.com/hanwen/go-fuse/v2 v2.10.1
 	github.com/microcosm-cc/bluemonday v1.0.27
@@ -277,7 +278,6 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-xmlfmt/xmlfmt v1.1.3 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/godoc-lint/godoc-lint v0.11.2 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
