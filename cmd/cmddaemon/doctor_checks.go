@@ -130,11 +130,14 @@ func checkAgentSkills(reg *daemon.ProjectRegistry) (bool, string) {
 }
 
 // claudeCreds is the slice of the Claude credential file the auth check reads:
-// the OAuth session's expiry. Only expiresAt matters — a present session whose
-// deadline has passed is the reported failure mode (SC-912).
+// the OAuth session's expiry and whether a refresh token exists. An expired
+// ACCESS token alone is the normal resting state between agent runs — Claude
+// Code refreshes it on launch — so only an expired token WITHOUT a refresh
+// token is a dead session the user must fix (SC-912).
 type claudeCreds struct {
 	ClaudeAiOauth struct {
-		ExpiresAt int64 `json:"expiresAt"`
+		ExpiresAt    int64  `json:"expiresAt"`
+		RefreshToken string `json:"refreshToken"` // #nosec G117 -- read for presence only; the value is never logged, compared, or persisted
 	} `json:"claudeAiOauth"`
 }
 
@@ -143,7 +146,9 @@ type claudeCreds struct {
 // The in-container Claude store is bind-mounted from the host at
 // <entry.Dir>/.devcontainer/claude/ → ~/.claude, so the probe reads the host
 // copy of .credentials.json. It is fail-open by design: only a present,
-// parseable session carrying an expiresAt in the past is a failure. An absent,
+// parseable session that is past its expiresAt AND has no refresh token is a
+// failure — with a refresh token the next launched Claude renews the access
+// token itself, so an expired access token between runs is healthy. An absent,
 // unreadable, unparseable, or expiresAt-less file degrades to pre-fix behaviour
 // (ok=true) so a path/schema mismatch never blocks a healthy daemon.
 func checkClaudeAuth(reg *daemon.ProjectRegistry) (bool, string) {
@@ -162,13 +167,19 @@ func checkClaudeAuth(reg *daemon.ProjectRegistry) (bool, string) {
 		if creds.ClaudeAiOauth.ExpiresAt == 0 {
 			continue // fail-open: no expiry recorded → cannot judge freshness
 		}
+		// An expired ACCESS token with a refresh token present is the normal
+		// resting state between agent runs — the next launched Claude refreshes
+		// it silently. Only a session that can no longer refresh is dead.
+		if creds.ClaudeAiOauth.RefreshToken != "" {
+			continue
+		}
 		if creds.ClaudeAiOauth.ExpiresAt <= nowMS {
 			expired = append(expired, entry.Dir)
 		}
 	}
 	if len(expired) > 0 {
 		return false, "Claude session expired for " + strings.Join(expired, ", ") +
-			" — re-authenticate Claude on this host (run 'claude' and sign in); the daemon will resume picking up board work once the session is fresh"
+			" — sign in to the project's container credential store: run 'human agent start reauth --interactive' in the project, /login inside it, then 'human agent stop reauth'; the daemon resumes picking up board work once the session is fresh"
 	}
 	return true, "session valid"
 }
