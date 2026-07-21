@@ -10,6 +10,8 @@ import (
 	"context"
 	"net/url"
 	"strings"
+
+	"github.com/gethuman-sh/human/errors"
 )
 
 // PullRequest carries both the request to open a pull request and the created
@@ -29,6 +31,54 @@ type PullRequest struct {
 // Creator opens a pull request on a code-forge host.
 type Creator interface {
 	CreatePullRequest(ctx context.Context, pr *PullRequest) (*PullRequest, error)
+}
+
+// PullRequestFinder locates an already-open pull request for a head branch, so
+// a retry can adopt it instead of drawing the forge's 422 "a pull request
+// already exists". Returns (nil, nil) when no open PR exists for the head —
+// distinguishing "none found" from an actual lookup error (SC-989).
+type PullRequestFinder interface {
+	FindOpenPullRequest(ctx context.Context, repo, head string) (*PullRequest, error)
+}
+
+// AdoptOrCreatePullRequest makes opening a pull request idempotent w.r.t. the
+// head branch: when the forge can find an existing open PR for spec.Head it is
+// adopted (returned as-is) rather than re-created, so a deploy retry after a
+// partial failure behaves like a first attempt (SC-989). When the forge cannot
+// find PRs (no PullRequestFinder) it falls back to a plain create. A create
+// that still 422s — the lease-push/create race where the pre-create lookup
+// missed a just-opened PR — triggers one re-query that adopts the now-visible
+// PR; any other create error propagates.
+func AdoptOrCreatePullRequest(ctx context.Context, c Creator, spec *PullRequest) (*PullRequest, error) {
+	finder, canFind := c.(PullRequestFinder)
+	if canFind {
+		existing, err := finder.FindOpenPullRequest(ctx, spec.Repo, spec.Head)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return existing, nil
+		}
+	}
+	created, err := c.CreatePullRequest(ctx, spec)
+	if err == nil {
+		return created, nil
+	}
+	if canFind && isAlreadyExists(err) {
+		existing, findErr := finder.FindOpenPullRequest(ctx, spec.Repo, spec.Head)
+		if findErr == nil && existing != nil {
+			return existing, nil
+		}
+	}
+	return nil, err
+}
+
+// isAlreadyExists reports whether err is the forge's 422 response, read from the
+// structured statusCode detail the API client stamps on non-2xx errors rather
+// than from the human-readable message.
+func isAlreadyExists(err error) bool {
+	code, ok := errors.AllDetails(err)["statusCode"].(int)
+	return ok && code == 422
 }
 
 // ChecksState summarizes the CI verdict on a pull request head. It collapses

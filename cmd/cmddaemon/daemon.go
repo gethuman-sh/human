@@ -1586,7 +1586,7 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 	}
 
 	base := gitrepo.DefaultBranch(ctx, req.WorkspaceDir)
-	pr, err := creator.CreatePullRequest(ctx, &forge.PullRequest{
+	pr, err := forge.AdoptOrCreatePullRequest(ctx, creator, &forge.PullRequest{
 		Repo:  repo,
 		Base:  base,
 		Head:  req.Branch,
@@ -1594,7 +1594,7 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 		Body:  req.Body,
 	})
 	if err != nil {
-		return daemon.PRResult{}, errors.WrapWithDetails(err, "creating pull request", "repo", repo, "head", req.Branch)
+		return daemon.PRResult{}, errors.WrapWithDetails(err, "opening pull request", "repo", repo, "head", req.Branch)
 	}
 	return daemon.PRResult{URL: pr.URL, Number: pr.Number}, nil
 }

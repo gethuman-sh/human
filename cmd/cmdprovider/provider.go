@@ -398,7 +398,7 @@ func RunCreateIssue(ctx context.Context, p tracker.Provider, out io.Writer, proj
 
 // RunCreatePullRequest opens a pull request on a code forge and prints the URL.
 func RunCreatePullRequest(ctx context.Context, f forge.Creator, out io.Writer, repo, base, head, title, body string) error {
-	pr, err := f.CreatePullRequest(ctx, &forge.PullRequest{
+	pr, err := forge.AdoptOrCreatePullRequest(ctx, f, &forge.PullRequest{
 		Repo:  repo,
 		Base:  base,
 		Head:  head,

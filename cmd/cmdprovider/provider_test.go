@@ -859,6 +859,12 @@ func TestBuildProviderCommands_NonForgeKindHasNoPRCommand(t *testing.T) {
 func TestPRCreate_DefaultsRepoFromOrigin(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/repos/gethuman-sh/human/pulls", r.URL.Path)
+		// The adopt-or-create path first queries for an existing open PR (GET);
+		// with none open it falls through to the create (POST). See SC-989.
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"number":9,"title":"Fix","html_url":"https://github.com/gethuman-sh/human/pull/9"}`))
 	}))
