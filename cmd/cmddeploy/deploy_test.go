@@ -26,8 +26,8 @@ func (s *stubProvider) ListIssues(context.Context, tracker.ListOptions) ([]track
 func (s *stubProvider) GetIssue(context.Context, string) (*tracker.Issue, error) {
 	return s.issue, nil
 }
-func (s *stubProvider) CreateIssue(context.Context, *tracker.Issue) (*tracker.Issue, error) {
-	return nil, nil
+func (s *stubProvider) CreateIssue(_ context.Context, issue *tracker.Issue) (*tracker.Issue, error) {
+	return issue, nil
 }
 func (s *stubProvider) ListComments(context.Context, string) ([]tracker.Comment, error) {
 	return s.comments, nil
