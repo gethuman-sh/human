@@ -97,6 +97,11 @@ func (s *rebaseGitStubs) sawCall(prefix string) bool {
 const rebaseTestWorkspace = "/live/checkout"
 
 func ensureMergeable(t *testing.T, s *rebaseGitStubs) error {
+	_, err := ensureMergeableRebased(t, s)
+	return err
+}
+
+func ensureMergeableRebased(t *testing.T, s *rebaseGitStubs) (bool, error) {
 	t.Helper()
 	s.t = t
 	s.install()
@@ -230,9 +235,12 @@ func TestEnsureMergeable_realGit_dirtyWorkspaceUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := forgeDeployer{}.EnsureMergeable(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
+	rebased, err := forgeDeployer{}.EnsureMergeable(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
 	if err != nil {
 		t.Fatalf("EnsureMergeable on a dirty workspace must succeed, got: %v", err)
+	}
+	if !rebased {
+		t.Error("a stale branch that was rebased and re-pushed must report rebased=true")
 	}
 
 	// The published branch contains the advanced base.
