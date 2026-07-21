@@ -105,6 +105,14 @@ func TestSetValueSingletonSection(t *testing.T) {
 	assert.Equal(t, "1password", m["provider"])
 }
 
+func TestSetValuePowerInhibitSleepRoundTrip(t *testing.T) {
+	dir := writeFixture(t, ".humanconfig.yaml", fixtureConfig)
+	require.NoError(t, SetValue(dir, "power.inhibit_sleep", true))
+	var m map[string]any
+	require.NoError(t, config.UnmarshalSection(dir, "power", &m))
+	assert.Equal(t, true, m["inhibit_sleep"])
+}
+
 func TestSetValueEditsExtensionlessInPlace(t *testing.T) {
 	dir := writeFixture(t, ".humanconfig", fixtureConfig)
 	require.NoError(t, SetValue(dir, "vault.account", "changed"))

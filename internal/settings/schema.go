@@ -178,6 +178,10 @@ func buildRegistry() []SectionDef {
 				{Section: "devcontainer", Label: "Devcontainer", Fields: []Field{
 					{Key: "configdir", Label: "Config dir", Type: TypeString, Description: "Devcontainer config directory"},
 				}},
+				{Section: "power", Label: "Power", Fields: []Field{
+					{Key: "inhibit_sleep", Label: "Inhibit sleep while agents run", Type: TypeBool,
+						Description: "Hold a systemd suspend block while any agent runs so an auto-suspending desktop cannot freeze the factory (Linux/systemd only)"},
+				}},
 				{Section: "caches", Label: "Cache volumes", Kind: "cache", IsList: true, Fields: []Field{
 					{Key: "name", Label: "Name", Type: TypeString, Description: "Named volume suffix (mounted as human-cache-<name>)"},
 					{Key: "path", Label: "Container path", Type: TypeString, Description: "Absolute path inside agent containers to keep warm across runs"},
