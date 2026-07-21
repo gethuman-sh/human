@@ -19,7 +19,7 @@ A ticket is **one artifact that evolves in place** through maturity stages (kind
 
 1. **idea** — a raw thought, captured as a real ticket carrying the `human/idea` label (bare `idea` also classifies). Title-only is fine.
 2. **pm** — promotion: the ideation agent rewrites title/description into product language and removes the idea label. Same key forever; PM ticket descriptions stay product language, no implementation detail.
-3. **planned** — the engineering plan attaches to the ticket as a `[human:plan]` marker comment (full markdown; read it back with `human plan show <KEY>`). Re-planning posts a new plan comment; the latest wins.
+3. **planned** — the engineering plan attaches to the ticket as a `[human:plan]` marker comment (full markdown; attach with `human marker post <KEY> plan --body-file -`, read it back with `human plan show <KEY>`). Re-planning posts a new plan comment; the latest wins.
 
 **Topology rule:** whether planning ALSO creates a separate engineering ticket depends on the tracker config. Single-tracker is the default: unless a tracker carries an **explicit** `role: engineering` in `.humanconfig`, there is no second ticket — the plan comment on the ticket is the plan, and commits reference the one key. Split topology is opt-in: give a tracker an explicit `role: engineering` and planning then creates an engineering ticket on it whose description is the plan, with traceability running PM ticket → engineering ticket → git commits (reference the PM ticket in the engineering ticket, and both in commit messages). Role is never inferred from the tracker kind for the engineering side — a bare `linears:` entry with no `role:` stays single-tracker.
 
@@ -27,7 +27,7 @@ A ticket is **one artifact that evolves in place** through maturity stages (kind
 
 When an engineer (human or AI agent) finishes coding an engineering ticket and `human-done` passes, the handoff to a reviewer goes via a structured comment on the **PM ticket**. This is tracker-agnostic (works on every backend `human` supports) and requires no custom tracker status.
 
-Handoff comment body, posted on the PM ticket:
+Post it with `human handoff post <PM_KEY> [--engineering <KEYS>]` — the command derives the branch (current git branch), the commits (short SHAs referencing the work keys), and the daemon id, then verifies every commit is reachable on the branch before posting. Read it back with `human handoff show <PM_KEY>`. The posted body:
 
 ```
 [human:ready-for-review]
@@ -38,9 +38,9 @@ commits: 2037e40, 64bb370
 
 - `engineering:` is comma-separated — one PM ticket can spawn multiple engineering tickets. **Single-tracker topology omits this line entirely**: the review target is the PM ticket the comment sits on.
 - `branch:` is the branch the commits live on.
-- `commits:` is the short SHAs attributed to the referenced keys via `git log --grep=<KEY>`.
+- `commits:` is the short SHAs attributed to the referenced keys (what `human commits for <KEY>` returns).
 
-The `human-executor` agent posts this comment automatically as its final step. A reviewer (today: another user runs `/human-pickup-review <PM_KEY>`; future: daemon polling) parses the block, runs `human-reviewer` against each engineering key (or against the PM key when the `engineering:` line is absent), and posts a `[human:review-complete]` follow-up comment on the same PM ticket with the verdict.
+The `human-executor` agent posts this comment automatically as its final step. A reviewer (today: another user runs `/human-pickup-review <PM_KEY>`; future: daemon polling) reads the binding via `human handoff show`, runs `human-reviewer` against each engineering key (or against the PM key when the `engineering:` line is absent), and posts a `[human:review-complete]` follow-up marker (`human marker post`) on the same PM ticket with the verdict.
 
 The TUI marks engineering tickets whose PM ticket carries an unresolved `[human:ready-for-review]` comment with an `(R)` annotation in the tracker view.
 
@@ -138,7 +138,7 @@ For accessing Github **ALWAYS** use 'gh'
 
 When asked to commit, go through changes and create atomar commits that have one connected change each.
 
-Every commit message **must** contain an issue reference, **unless** the commit touches only documentation (`README.md`, `CLAUDE.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, or anything under `docs/`). Any commit that touches code or config — including a mixed docs+code commit — still needs a ref. Accepted formats: `Issue #123`, `Issue HUM-30`, `[SC-57]`, `octocat/repo#42`, `MyProject/42`. A `commit-msg` hook enforces this — activate with `make hooks`.
+Every commit message **must** contain an issue reference, **unless** the commit touches only documentation (`README.md`, `CLAUDE.md`, `LICENSE`, `CHANGELOG.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, or anything under `docs/`). Any commit that touches code or config — including a mixed docs+code commit — still needs a ref. Accepted formats: `Issue #123`, `Issue HUM-30`, `[SC-57]`, `octocat/repo#42`, `MyProject/42`. Get the canonical subject prefix with `human commits prefix <PM_KEY> [<ENG_KEY>]`; find a ticket's commits with `human commits for <KEY>`. A `commit-msg` hook enforces this — activate with `make hooks`.
 
 When a change was implemented from an engineering ticket that traces back to a PM ticket (split topology), the commit message **must reference both**: the PM ticket and the engineering ticket (e.g. `[SC-79] [HUM-59] Add validation`). This preserves the full PM → engineering → commit trail; the two tickets usually live on different trackers (e.g. Shortcut PM + Linear engineering) — the format is the same regardless. In single-tracker topology there is one evolving ticket and every commit references that single key (e.g. `[SC-79] Add validation`).
 
