@@ -20,6 +20,8 @@ type pullGetResponse struct {
 	// Mergeable is GitHub's end-state merge verdict. It is null while GitHub
 	// computes it asynchronously; a nil pointer is treated as not-yet-mergeable.
 	Mergeable *bool `json:"mergeable"`
+	// Merged reports whether the PR has already been merged into its base.
+	Merged bool `json:"merged"`
 }
 
 type checkRunsResponse struct {

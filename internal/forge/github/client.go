@@ -18,6 +18,7 @@ var (
 	_ forge.Forge         = (*Client)(nil)
 	_ forge.ChecksReader  = (*Client)(nil)
 	_ forge.Merger        = (*Client)(nil)
+	_ forge.MergedReader  = (*Client)(nil)
 	_ forge.BranchDeleter = (*Client)(nil)
 )
 
@@ -191,6 +192,26 @@ func (c *Client) PullRequestMergeable(ctx context.Context, repoName string, numb
 		return false, err
 	}
 	return pull.Mergeable != nil && *pull.Mergeable, nil
+}
+
+// PullRequestMerged implements forge.MergedReader via the pulls GET endpoint's
+// top-level "merged" flag — true once the PR has landed on its base, whether
+// merged by the deploy pipeline or by hand.
+func (c *Client) PullRequestMerged(ctx context.Context, repoName string, number int) (bool, error) {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return false, err
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	resp, err := c.api.Do(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return false, err
+	}
+	var pull pullGetResponse
+	if err := apiclient.DecodeJSON(resp, &pull, "number", number); err != nil {
+		return false, err
+	}
+	return pull.Merged, nil
 }
 
 // MergePullRequest implements forge.Merger with a merge commit, preserving the

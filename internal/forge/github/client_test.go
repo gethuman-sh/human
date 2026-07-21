@@ -206,3 +206,29 @@ func TestCreatePullRequest_httpError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "returned")
 }
+
+func TestPullRequestMerged_verdicts(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"merged true", `{"merged":true}`, true},
+		{"merged false", `{"merged":false}`, false},
+		{"merged absent", `{}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "/repos/octocat/hello-world/pulls/7", r.URL.Path)
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			defer srv.Close()
+			client := New(srv.URL, "ghp_test")
+			merged, err := client.PullRequestMerged(context.Background(), "octocat/hello-world", 7)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, merged)
+		})
+	}
+}
