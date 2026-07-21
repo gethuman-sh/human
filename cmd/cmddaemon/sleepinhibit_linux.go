@@ -38,6 +38,11 @@ func (logindInhibitor) Acquire(who, why string) (func() error, error) {
 	if err := call.Store(&fd); err != nil {
 		return nil, errors.WrapWithDetails(err, "reading logind inhibitor fd")
 	}
+	// A negative fd would wrap to a huge value in the uintptr conversion; reject
+	// it before converting (also satisfies gosec G115).
+	if fd < 0 {
+		return nil, errors.WithDetails("logind returned an invalid inhibitor fd")
+	}
 	f := os.NewFile(uintptr(fd), "logind-sleep-inhibitor")
 	if f == nil {
 		return nil, errors.WithDetails("logind returned an invalid inhibitor fd")
