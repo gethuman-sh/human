@@ -91,6 +91,10 @@ type Server struct {
 	// FEATURE.json) for the registered project. nil disables the
 	// features-generate route.
 	FeaturesGenerator func() error
+	// FindbugsRunner launches the human-findbugs sweep (multi-agent bug hunt
+	// that files surviving findings as bug tickets) in the registered project's
+	// devcontainer. nil disables the findbugs-start route.
+	FindbugsRunner func() error
 	// MockupsCreator launches the human-mockups skill for one PM ticket and
 	// records the ticket→mockup-set link. nil disables the create-mocks route.
 	MockupsCreator func(req CreateMocksRequest) error
@@ -408,6 +412,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"idea-create":         func() { s.handleIdeaCreate(conn, args[1:]) },
 		"bug-create":          func() { s.handleBugCreate(conn, args[1:]) },
 		"features-generate":   func() { s.handleFeaturesGenerate(conn) },
+		"findbugs-start":      func() { s.handleFindbugsStart(conn) },
 		"create-mocks":        func() { s.handleCreateMocks(conn, args[1:]) },
 		"config-get":          func() { s.handleConfigGet(conn, projectDir) },
 		"config-set":          func() { s.handleConfigSet(conn, args[1:], projectDir) },
@@ -683,6 +688,26 @@ func (s *Server) handleFeaturesGenerate(conn net.Conn) {
 		return
 	}
 	if err := s.FeaturesGenerator(); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	s.pokeBoard()
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleFindbugsStart launches the human-findbugs sweep via the injected
+// FindbugsRunner. Like features-generate it is a dedicated non-destructive route
+// (the Findbugs button press is the user's consent) that takes no argument — the
+// daemon resolves the project directory itself — and returns as soon as the agent
+// is launched, not when the sweep finishes.
+func (s *Server) handleFindbugsStart(conn net.Conn) {
+	if s.FindbugsRunner == nil {
+		s.writeError(conn, "findbugs sweep not available", 1)
+		return
+	}
+	if err := s.FindbugsRunner(); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
