@@ -206,7 +206,13 @@ func (s *Server) handleConn(conn net.Conn) {
 	// client must get one clear "upgrade" error, not a cryptic mid-handshake
 	// failure after the daemon already acted (e.g. queued a permission
 	// prompt it can never redeem).
-	if !clientVersionSupported(req.Version) {
+	if !clientSupported(req.Version, req.Protocol) {
+		if req.Protocol > 0 {
+			s.writeError(conn, fmt.Sprintf(
+				"client speaks wire protocol %d but this daemon serves >= %d — upgrade the human CLI (see docs/protocol.md)",
+				req.Protocol, MinProtocol), 1)
+			return
+		}
 		s.writeError(conn, fmt.Sprintf(
 			"client version %q is older than this daemon supports (need >= %s) — upgrade the human CLI so client and daemon speak the same protocol",
 			req.Version, MinClientVersion), 1)

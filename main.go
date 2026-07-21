@@ -798,6 +798,15 @@ func main() {
 	printUpdateNotice(version)
 
 	if addr != "" && !isLocalSubcommand(args) {
+		// Symmetric half of the version gate: refuse a too-old daemon with one
+		// clear error before any request, instead of a cryptic unknown-command
+		// failure after forwarding.
+		if info, infoErr := daemon.ReadInfo(); infoErr == nil {
+			if protoErr := daemon.DaemonProtocolError(info); protoErr != nil {
+				errors.LogError(protoErr).Msg("daemon too old for this client")
+				os.Exit(1)
+			}
+		}
 		exitCode, err := daemon.RunRemote(addr, token, args, version)
 		if err != nil {
 			errors.LogError(err).Msg("remote execution failed")
