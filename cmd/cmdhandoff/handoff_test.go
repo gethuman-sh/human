@@ -11,6 +11,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/gitrepo"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -72,6 +73,42 @@ func TestRunHandoffPost_derivesEverything(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, p.added, 1)
 	assert.Equal(t, "[human:ready-for-review]\nbranch: autofix/sc-1\ncommits: aaa, bbb", p.added[0])
+}
+
+func TestRunHandoffPost_withNotes(t *testing.T) {
+	stubGit(t, "autofix/sc-1", map[string][]gitrepo.Commit{
+		"SC-1": {{ShortSHA: "aaa"}},
+	}, map[string]bool{"aaa": true})
+	p := &stubProvider{}
+	var buf bytes.Buffer
+
+	opts := PostOptions{Verify: true, Notes: "Open items: retry flake"}
+	err := RunHandoffPost(context.Background(), p, &buf, ".", "SC-1", opts)
+	require.NoError(t, err)
+	require.Len(t, p.added, 1)
+	assert.Equal(t,
+		"[human:ready-for-review]\nbranch: autofix/sc-1\ncommits: aaa\n\nOpen items: retry flake",
+		p.added[0])
+
+	m, ok := marker.ParseBody(p.added[0])
+	require.True(t, ok)
+	assert.Equal(t, "autofix/sc-1", m.Fields["branch"])
+	assert.Equal(t, "aaa", m.Fields["commits"])
+	assert.Equal(t, "Open items: retry flake", m.Body)
+}
+
+func TestRunHandoffPost_emptyNotesOmitsBody(t *testing.T) {
+	stubGit(t, "autofix/sc-1", map[string][]gitrepo.Commit{
+		"SC-1": {{ShortSHA: "aaa"}},
+	}, map[string]bool{"aaa": true})
+	p := &stubProvider{}
+	var buf bytes.Buffer
+
+	opts := PostOptions{Verify: true, Notes: ""}
+	err := RunHandoffPost(context.Background(), p, &buf, ".", "SC-1", opts)
+	require.NoError(t, err)
+	require.Len(t, p.added, 1)
+	assert.Equal(t, "[human:ready-for-review]\nbranch: autofix/sc-1\ncommits: aaa", p.added[0])
 }
 
 func TestRunHandoffPost_splitTopologyFieldsAndDaemon(t *testing.T) {
