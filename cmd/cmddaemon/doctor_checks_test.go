@@ -17,13 +17,17 @@ import (
 // expiry (epoch-ms) under a temp project dir and returns a registry over it. A
 // zero expiry writes no expiresAt field, exercising the missing-expiry path.
 func claudeAuthRegistry(t *testing.T, expiresAtMS int64) *daemon.ProjectRegistry {
+	return claudeAuthRegistryRefresh(t, expiresAtMS, "")
+}
+
+func claudeAuthRegistryRefresh(t *testing.T, expiresAtMS int64, refreshToken string) *daemon.ProjectRegistry {
 	t.Helper()
 	dir := t.TempDir()
 	credDir := filepath.Join(dir, ".devcontainer", "claude")
 	require.NoError(t, os.MkdirAll(credDir, 0o755))
 	body := `{"claudeAiOauth":{}}`
 	if expiresAtMS != 0 {
-		body = fmt.Sprintf(`{"claudeAiOauth":{"expiresAt":%d}}`, expiresAtMS)
+		body = fmt.Sprintf(`{"claudeAiOauth":{"expiresAt":%d,"refreshToken":%q}}`, expiresAtMS, refreshToken)
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(credDir, ".credentials.json"), []byte(body), 0o600))
 	reg, err := daemon.NewProjectRegistry([]string{dir})
@@ -65,7 +69,7 @@ func TestCheckClaudeAuth_expired(t *testing.T) {
 	reg := claudeAuthRegistry(t, time.Now().Add(-time.Hour).UnixMilli())
 	ok, detail := checkClaudeAuth(reg)
 	assert.False(t, ok)
-	assert.Contains(t, detail, "re-authenticate Claude")
+	assert.Contains(t, detail, "container credential store")
 }
 
 // A session whose expiresAt is in the future is fresh — the daemon may serve work.
@@ -91,4 +95,14 @@ func TestCheckClaudeAuth_missingExpiryFailsOpen(t *testing.T) {
 	reg := claudeAuthRegistry(t, 0)
 	ok, _ := checkClaudeAuth(reg)
 	assert.True(t, ok)
+}
+
+// An expired ACCESS token with a refresh token present is the normal resting
+// state between agent runs — the next launched Claude renews it. The check
+// must not block launches (the "but Claude IS authenticated" false positive).
+func TestCheckClaudeAuth_expiredAccessTokenWithRefreshTokenIsHealthy(t *testing.T) {
+	reg := claudeAuthRegistryRefresh(t, time.Now().Add(-time.Hour).UnixMilli(), "rt-present")
+	ok, detail := checkClaudeAuth(reg)
+	assert.True(t, ok)
+	assert.Equal(t, "session valid", detail)
 }
