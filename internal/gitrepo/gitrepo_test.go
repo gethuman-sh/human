@@ -511,7 +511,7 @@ func TestCommitsFor_parsesAndFiltersMerges(t *testing.T) {
 	if commits[0].SHA != "aaa1" || commits[0].ShortSHA != "a1" || commits[0].Subject != "[SC-57] Add validation" {
 		t.Errorf("first commit = %+v", commits[0])
 	}
-	if gotArgs[0] != "git" || gotArgs[3] != "log" {
+	if len(gotArgs) < 4 || gotArgs[0] != "git" || gotArgs[3] != "log" {
 		t.Errorf("args = %v", gotArgs)
 	}
 }

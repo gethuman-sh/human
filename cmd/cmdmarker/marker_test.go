@@ -30,8 +30,8 @@ func (s *stubProvider) ListIssues(context.Context, tracker.ListOptions) ([]track
 	return nil, nil
 }
 func (s *stubProvider) GetIssue(context.Context, string) (*tracker.Issue, error) { return nil, nil }
-func (s *stubProvider) CreateIssue(context.Context, *tracker.Issue) (*tracker.Issue, error) {
-	return nil, nil
+func (s *stubProvider) CreateIssue(_ context.Context, issue *tracker.Issue) (*tracker.Issue, error) {
+	return issue, nil
 }
 func (s *stubProvider) ListComments(_ context.Context, key string) ([]tracker.Comment, error) {
 	s.listedKeys = append(s.listedKeys, key)

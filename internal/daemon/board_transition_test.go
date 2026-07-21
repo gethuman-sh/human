@@ -595,7 +595,7 @@ func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
 	require.NotEmpty(t, failed)
 	// The marker's first line is the card badge: it must tell the user the next
 	// step, with the raw cause following in the detail block.
-	headline := strings.SplitN(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n", 2)[0]
+	headline, _, _ := strings.Cut(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n")
 	assert.Contains(t, headline, "resolve the conflict on feat/x")
 	assert.Contains(t, headline, "re-run Deploy")
 	assert.Contains(t, failed, "rebase hit a conflict")
@@ -1123,7 +1123,7 @@ func TestApplyTransitionDeployRecomputeStaysUnmergeable(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, failed)
-	headline := strings.SplitN(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n", 2)[0]
+	headline, _, _ := strings.Cut(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n")
 	assert.Contains(t, headline, "open the PR to see why")
 	assert.Contains(t, headline, "re-run Deploy")
 }
@@ -1149,7 +1149,7 @@ func TestApplyTransitionDeployCIFailureHeadline(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, failed)
-	headline := strings.SplitN(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n", 2)[0]
+	headline, _, _ := strings.Cut(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n")
 	assert.Contains(t, headline, "fix the failing checks")
 	assert.Contains(t, headline, "re-run Deploy")
 }

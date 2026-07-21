@@ -27,8 +27,8 @@ func (s *semanticStub) ListIssues(context.Context, tracker.ListOptions) ([]track
 	return nil, nil
 }
 func (s *semanticStub) GetIssue(context.Context, string) (*tracker.Issue, error) { return nil, nil }
-func (s *semanticStub) CreateIssue(context.Context, *tracker.Issue) (*tracker.Issue, error) {
-	return nil, nil
+func (s *semanticStub) CreateIssue(_ context.Context, issue *tracker.Issue) (*tracker.Issue, error) {
+	return issue, nil
 }
 func (s *semanticStub) ListComments(context.Context, string) ([]tracker.Comment, error) {
 	return nil, nil
