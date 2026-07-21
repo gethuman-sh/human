@@ -49,15 +49,15 @@ func (s *stubProvider) ListStatuses(context.Context, string) ([]tracker.Status, 
 
 func stubGit(t *testing.T, branch string, commitsByKey map[string][]gitrepo.Commit, reachable map[string]bool) {
 	t.Helper()
-	prevBranch, prevCommits, prevReach, prevFetch := gitrepo.CurrentBranch, gitrepo.CommitsFor, gitrepo.CommitReachable, gitrepo.Fetch
+	prevBranch, prevCommits, prevReach, prevFetch := gitrepo.CurrentBranch, gitrepo.CommitsForRev, gitrepo.CommitReachable, gitrepo.Fetch
 	gitrepo.CurrentBranch = func(context.Context, string) (string, error) { return branch, nil }
-	gitrepo.CommitsFor = func(_ context.Context, _, key string) ([]gitrepo.Commit, error) {
+	gitrepo.CommitsForRev = func(_ context.Context, _, key, _ string) ([]gitrepo.Commit, error) {
 		return commitsByKey[key], nil
 	}
 	gitrepo.CommitReachable = func(_ context.Context, _, _, sha string) bool { return reachable[sha] }
 	gitrepo.Fetch = func(context.Context, string, string) error { return nil }
 	t.Cleanup(func() {
-		gitrepo.CurrentBranch, gitrepo.CommitsFor, gitrepo.CommitReachable, gitrepo.Fetch = prevBranch, prevCommits, prevReach, prevFetch
+		gitrepo.CurrentBranch, gitrepo.CommitsForRev, gitrepo.CommitReachable, gitrepo.Fetch = prevBranch, prevCommits, prevReach, prevFetch
 	})
 }
 
@@ -188,4 +188,27 @@ func TestSplitList(t *testing.T) {
 	assert.Nil(t, splitList("  "))
 	assert.Equal(t, []string{"a", "b"}, splitList("a, b"))
 	assert.Equal(t, []string{"a"}, splitList("a,"))
+}
+
+func TestRunHandoffPost_derivesCommitsFromBranchNotHead(t *testing.T) {
+	// The 1087 deadlock: the caller's checkout sits on main while the work
+	// lives on the branch — derivation must anchor at the handed-off branch.
+	var gotRev string
+	prevBranch, prevCommits, prevReach, prevFetch := gitrepo.CurrentBranch, gitrepo.CommitsForRev, gitrepo.CommitReachable, gitrepo.Fetch
+	gitrepo.CurrentBranch = func(context.Context, string) (string, error) { return "main", nil }
+	gitrepo.CommitsForRev = func(_ context.Context, _, _, rev string) ([]gitrepo.Commit, error) {
+		gotRev = rev
+		return []gitrepo.Commit{{ShortSHA: "abc"}}, nil
+	}
+	gitrepo.CommitReachable = func(context.Context, string, string, string) bool { return true }
+	gitrepo.Fetch = func(context.Context, string, string) error { return nil }
+	t.Cleanup(func() {
+		gitrepo.CurrentBranch, gitrepo.CommitsForRev, gitrepo.CommitReachable, gitrepo.Fetch = prevBranch, prevCommits, prevReach, prevFetch
+	})
+
+	p := &stubProvider{}
+	var buf bytes.Buffer
+	err := RunHandoffPost(context.Background(), p, &buf, ".", "SC-1", PostOptions{Branch: "feat/sc-1", Verify: true})
+	require.NoError(t, err)
+	assert.Equal(t, "feat/sc-1", gotRev)
 }

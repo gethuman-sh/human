@@ -119,7 +119,7 @@ func RunHandoffPost(ctx context.Context, p tracker.Provider, out io.Writer, dir,
 
 	commits := opts.Commits
 	if len(commits) == 0 {
-		derived, err := deriveCommits(ctx, dir, key, opts.Engineering)
+		derived, err := deriveCommits(ctx, dir, key, branch, opts.Engineering)
 		if err != nil {
 			return err
 		}
@@ -180,8 +180,10 @@ func RunHandoffShow(ctx context.Context, p tracker.Provider, out io.Writer, key 
 
 // deriveCommits collects the short SHAs referencing the work keys (the
 // engineering keys in split topology, the ticket itself otherwise), oldest
-// first so the handoff reads in commit order.
-func deriveCommits(ctx context.Context, dir, key string, engineering []string) ([]string, error) {
+// first so the handoff reads in commit order. Discovery is anchored at the
+// handed-off BRANCH, not HEAD — in a board workspace the caller's checkout
+// usually sits on main while the work lives on the branch (the 1087 deadlock).
+func deriveCommits(ctx context.Context, dir, key, branch string, engineering []string) ([]string, error) {
 	workKeys := engineering
 	if len(workKeys) == 0 {
 		workKeys = []string{key}
@@ -189,7 +191,7 @@ func deriveCommits(ctx context.Context, dir, key string, engineering []string) (
 	var shas []string
 	seen := map[string]bool{}
 	for _, workKey := range workKeys {
-		found, err := gitrepo.CommitsFor(ctx, dir, workKey)
+		found, err := gitrepo.CommitsForRev(ctx, dir, workKey, branch)
 		if err != nil {
 			return nil, err
 		}

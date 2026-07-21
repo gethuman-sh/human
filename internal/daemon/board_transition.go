@@ -178,8 +178,8 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	// findings, and the resulting handoff chains into a fresh review.
 	if isReworkTransition(req.To, card) {
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			"/human-execute "+dispatchKey(req.PMKey, card)+
-				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first")
+			executePrompt(dispatchKey(req.PMKey, card),
+				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first"))
 	}
 
 	// Planning retry: a failed planning run is relaunched in place. The retry
@@ -199,7 +199,7 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	// executor picks it up.
 	if isBuildRetry(req.To, card) {
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			"/human-execute "+dispatchKey(req.PMKey, card))
+			executePrompt(dispatchKey(req.PMKey, card), ""))
 	}
 
 	// Review retry: a stage-failed review is otherwise a dead end. The rework
@@ -257,7 +257,7 @@ func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTr
 			"/human-plan "+req.PMKey)
 	case BoardImplementation:
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			"/human-execute "+dispatchKey(req.PMKey, card))
+			executePrompt(dispatchKey(req.PMKey, card), ""))
 	case BoardVerification:
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
 			reviewPrompt(dispatchKey(req.PMKey, card), card))
@@ -596,6 +596,16 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
 	}
 	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
 	return errors.WithDetails("deploy failed: "+reason, "pm", pmKey, "pr", prURL)
+}
+
+// executePrompt builds the implementation-stage dispatch. The BOARD CONTEXT
+// trailer mirrors the bug path's fixer dispatch: a board container holds no
+// push credentials and no user — an executor that pauses to ask permission
+// burns the whole run and fails the stage with nothing posted (the 1087
+// deadlock, three runs in a row).
+func executePrompt(key, extra string) string {
+	return "/human-execute " + key + extra +
+		" BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. There is no user to ask: never end the run with a question — post the review handoff (human handoff post with --branch) or report the failure."
 }
 
 // dispatchKey resolves the key an agent is dispatched on: the engineering
