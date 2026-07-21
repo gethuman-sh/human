@@ -50,6 +50,17 @@ type BranchReachable func(branch string) bool
 // disables" convention for optional deps.
 type CommitsPresent func(branch string, commits []string) bool
 
+// PRMergedProbe reports whether the pull request identified by prURL has been
+// merged on the forge — the "confirmed shipped" signal for an out-of-band
+// manual merge that posted no marker (SC-910). A nil probe disables the
+// shipped-confirmation pass (the package's "nil disables" convention).
+type PRMergedProbe func(ctx context.Context, prURL string) (bool, error)
+
+// DeployedPoster posts a [human:deployed] marker (carrying the pr: line) on the
+// PM ticket so DeriveBoardCard's supersession guard retires the stale
+// deploy-failed red. A nil poster disables the shipped-confirmation pass.
+type DeployedPoster func(ctx context.Context, pmKey, prURL string) error
+
 // RunBoardReconcile is the durable counterpart to RunBoardFailureWatch's live
 // fix→review chain. The live chain fires only on the one-shot Stop/SessionEnd
 // hook event; if the daemon restarts or the hook is lost, that trigger is gone
@@ -61,7 +72,7 @@ type CommitsPresent func(branch string, commits []string) bool
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
@@ -71,14 +82,14 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable
 	// Recover a restart-orphaned handoff immediately, before the first wait. The
 	// jitter applies only to subsequent cycles, so a restart-orphan is never made
 	// to wait a full interval.
-	reconcileOnce(ctx, listCards, reachable, commitsPresent, chainReview, logger)
+	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, chainReview, logger)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
-			reconcileOnce(ctx, listCards, reachable, commitsPresent, chainReview, logger)
+			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, chainReview, logger)
 		}
 	}
 }
@@ -101,7 +112,7 @@ func jitteredInterval(d time.Duration, fraction float64) time.Duration {
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, chainReview func(pmKey string) error, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, chainReview func(pmKey string) error, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
@@ -110,6 +121,49 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 	if n := reconcileOrphanedHandoffs(cards, reachable, commitsPresent, chainReview, logger); n > 0 {
 		logger.Info().Int("launched", n).Msg("board reconcile: chained review for orphaned handoffs")
 	}
+	if n := reconcileShippedFailures(ctx, cards, mergedProbe, postDeployed, logger); n > 0 {
+		logger.Info().Int("cleared", n).Msg("board reconcile: confirmed shipped, cleared stale deploy-failed red")
+	}
+}
+
+// reconcileShippedFailures clears the 695-class stale red: a done-stage card
+// whose newest marker is a deploy-failure but whose PR the forge reports merged
+// (an out-of-band manual merge posted no marker). For each such card it posts a
+// [human:deployed] marker; DeriveBoardCard's existing supersession guard then
+// retires the failure on the next derivation. Reuses DeriveBoardCard verbatim so
+// detection can never disagree with the board's rendered state. nil deps disable
+// the pass. Returns the number of cards cleared.
+func reconcileShippedFailures(ctx context.Context, cards []ReconcileCard, mergedProbe PRMergedProbe, postDeployed DeployedPoster, logger zerolog.Logger) int {
+	if mergedProbe == nil || postDeployed == nil {
+		return 0
+	}
+	cleared := 0
+	for _, card := range cards {
+		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
+		// Only a done-stage failure that names a PR can be confirmed shipped: the
+		// out-of-band merge posts no marker, so the forge's merged flag is the only
+		// evidence the work landed.
+		if derived.State != BoardFailed || derived.Stage != BoardDoneStage || derived.PRURL == "" {
+			continue
+		}
+		merged, err := mergedProbe(ctx, derived.PRURL)
+		if err != nil {
+			logger.Warn().Err(err).Str("pm", card.Key).Str("pr", derived.PRURL).
+				Msg("board reconcile: cannot probe PR merge status, leaving card as-is")
+			continue
+		}
+		if !merged {
+			// A genuinely-open failure must stay red — never clear on unknown state.
+			continue
+		}
+		if err := postDeployed(ctx, card.Key, derived.PRURL); err != nil {
+			logger.Warn().Err(err).Str("pm", card.Key).
+				Msg("board reconcile: cannot post deployed marker for shipped PR")
+			continue
+		}
+		cleared++
+	}
+	return cleared
 }
 
 // reconcileOrphanedHandoffs launches the missed review for every card whose

@@ -170,7 +170,7 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, chain, time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, chain, time.Hour, zerolog.Nop())
 
 	select {
 	case pmKey := <-chained:
@@ -178,4 +178,69 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected the startup reconcile pass to recover the orphaned handoff")
 	}
+}
+
+// A lone [human:deploy-failed] whose PR was merged out-of-band (manual merge,
+// no follow-up marker) must be confirmed-shipped by the forge probe: reconcile
+// posts a [human:deployed] marker so the existing supersession guard clears the
+// stale red. This is the 695-class bug (SC-910).
+func TestReconcileShippedFailures_MergedPRClearsRed(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt("[human:deploy-failed]\nmerge conflict on main\npr: https://github.com/o/r/pull/7", time.Unix(1, 0)),
+		},
+	}}
+	var postedKey, postedURL string
+	merged := func(_ context.Context, prURL string) (bool, error) { return true, nil }
+	post := func(_ context.Context, pmKey, prURL string) error {
+		postedKey, postedURL = pmKey, prURL
+		return nil
+	}
+	n := reconcileShippedFailures(context.Background(), cards, merged, post, zerolog.Nop())
+
+	assert.Equal(t, 1, n)
+	assert.Equal(t, "SC-1", postedKey)
+	assert.Equal(t, "https://github.com/o/r/pull/7", postedURL)
+}
+
+// The forge reporting the PR NOT merged leaves the card red — a genuine open
+// failure must not be silently cleared.
+func TestReconcileShippedFailures_UnmergedPRLeftRed(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt("[human:deploy-failed]\nmerge conflict on main\npr: https://github.com/o/r/pull/7", time.Unix(1, 0)),
+		},
+	}}
+	posted := false
+	merged := func(_ context.Context, _ string) (bool, error) { return false, nil }
+	post := func(_ context.Context, _, _ string) error { posted = true; return nil }
+	n := reconcileShippedFailures(context.Background(), cards, merged, post, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.False(t, posted)
+}
+
+// A failed card with no PR URL (e.g. a pre-PR deploy-failed) has nothing to
+// probe and is skipped — never posts, never errors.
+func TestReconcileShippedFailures_NoPRURLSkipped(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:deploy-failed]\nno branch recorded", time.Unix(1, 0))},
+	}}
+	probed := false
+	merged := func(_ context.Context, _ string) (bool, error) { probed = true; return true, nil }
+	post := func(_ context.Context, _, _ string) error { return nil }
+	n := reconcileShippedFailures(context.Background(), cards, merged, post, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.False(t, probed)
+}
+
+// nil deps disable the step (the package's "nil disables" convention).
+func TestReconcileShippedFailures_NilDepsDisabled(t *testing.T) {
+	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
+		cmt("[human:deploy-failed]\nx\npr: https://github.com/o/r/pull/7", time.Unix(1, 0))}}}
+	assert.Equal(t, 0, reconcileShippedFailures(context.Background(), cards, nil, nil, zerolog.Nop()))
 }

@@ -151,6 +151,15 @@ func TestDeriveBoardCard(t *testing.T) {
 		assert.Equal(t, "compile error", card.Error)
 	})
 
+	t.Run("SC-910 deploy-failed carrying a pr line exposes PRURL", func(t *testing.T) {
+		comments := []tracker.Comment{
+			cmt("[human:deploy-failed]\nmerge conflict on main\npr: https://github.com/o/r/pull/7", t0),
+		}
+		card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardFailed, card.State)
+		assert.Equal(t, "https://github.com/o/r/pull/7", card.PRURL)
+	})
+
 	t.Run("full chain ending pr-pushed", func(t *testing.T) {
 		comments := []tracker.Comment{
 			cmt("[human:plan-ready]\nengineering: HUM-9", t0),

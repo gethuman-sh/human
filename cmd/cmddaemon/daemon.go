@@ -481,9 +481,24 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
+	// Confirm-shipped probe (SC-910): a done-stage deploy-failure whose PR the
+	// forge reports merged is cleared by posting a [human:deployed] marker.
+	prMerged := func(probeCtx context.Context, prURL string) (bool, error) {
+		return boardPRMerged(probeCtx, ds.srv.Projects, ds.vaultResolver, prURL)
+	}
+	postDeployed := func(postCtx context.Context, pmKey, prURL string) error {
+		commenter, err := boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver)()
+		if err != nil {
+			return err
+		}
+		_, err = commenter.AddComment(postCtx, pmKey,
+			daemon.StampDaemon(daemon.DeployedHeader+"\npr: "+prURL, ds.daemonID))
+		return err
+	}
 	go daemon.RunBoardReconcile(ctx,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
-		branchReachable, commitsPresent, chainReview, daemon.BoardReconcileInterval, logger)
+		branchReachable, commitsPresent, prMerged, postDeployed,
+		chainReview, daemon.BoardReconcileInterval, logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }
@@ -1795,6 +1810,31 @@ func resolveForge(dir string, lookup config.EnvLookup, resolver *vault.Resolver)
 		return nil, "", errors.WithDetails("could not parse git origin remote", "remote", raw)
 	}
 	return creator, repo, nil
+}
+
+// boardPRMerged reports whether the PR at prURL has been merged on the
+// workspace's forge. A forge that cannot read merge status, or a URL with no
+// parseable number, returns (false, err) so the reconcile pass leaves the card
+// untouched rather than clearing a red on an unknown state (SC-910).
+func boardPRMerged(ctx context.Context, projects *daemon.ProjectRegistry, resolver *vault.Resolver, prURL string) (bool, error) {
+	entries := projects.Entries()
+	if len(entries) == 0 {
+		return false, errors.WithDetails("no project registered for board reconcile")
+	}
+	number, ok := forge.PullRequestNumberFromURL(prURL)
+	if !ok {
+		return false, errors.WithDetails("could not parse pull request number", "pr", prURL)
+	}
+	entry := entries[0]
+	creator, repo, err := resolveForge(entry.Dir, entry.EnvLookup(), resolver)
+	if err != nil {
+		return false, err
+	}
+	reader, ok := creator.(forge.MergedReader)
+	if !ok {
+		return false, errors.WithDetails("forge does not support reading merge status", "repo", repo)
+	}
+	return reader.PullRequestMerged(ctx, repo, number)
 }
 
 // resolvePMCommenter resolves the PM-role tracker.Commenter for a workspace.

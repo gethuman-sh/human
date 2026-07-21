@@ -65,3 +65,24 @@ func TestParseRemoteURL(t *testing.T) {
 		})
 	}
 }
+
+func TestPullRequestNumberFromURL(t *testing.T) {
+	tests := []struct {
+		raw    string
+		wantN  int
+		wantOK bool
+	}{
+		{"https://github.com/o/r/pull/42", 42, true},
+		{"https://github.com/o/r/pull/42/", 42, true},
+		{"https://github.com/o/r/pull/0", 0, false},
+		{"https://github.com/o/r/pull/abc", 0, false},
+		{"", 0, false},
+		{"not-a-url", 0, false},
+	}
+	for _, tc := range tests {
+		n, ok := PullRequestNumberFromURL(tc.raw)
+		if n != tc.wantN || ok != tc.wantOK {
+			t.Errorf("PullRequestNumberFromURL(%q) = (%d,%v), want (%d,%v)", tc.raw, n, ok, tc.wantN, tc.wantOK)
+		}
+	}
+}

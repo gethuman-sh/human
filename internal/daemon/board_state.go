@@ -118,6 +118,12 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		// pr-pushed marker.
 		card.PRURL = latestPrefixedLine(comments, PRPushedHeader, "pr:")
 	}
+	if card.PRURL == "" {
+		// A deploy that failed AFTER opening the PR (the 695 merge-conflict case)
+		// records the PR on its deploy-failed marker. Surface it so the reconcile
+		// pass can confirm-shipped an out-of-band manual merge (SC-910).
+		card.PRURL = latestPrefixedLine(comments, DeployFailedHeader, "pr:")
+	}
 	if state == BoardFailed {
 		card.Error = failureReason(latest.Body)
 	}

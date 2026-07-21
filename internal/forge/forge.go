@@ -9,6 +9,7 @@ package forge
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
@@ -111,6 +112,15 @@ type MergeReader interface {
 	PullRequestMergeable(ctx context.Context, repo string, number int) (bool, error)
 }
 
+// MergedReader reports whether a pull request has ALREADY been merged into its
+// base — the "confirmed shipped" signal. Distinct from MergeReader, which
+// reports whether a still-open PR CAN be merged: this answers whether the merge
+// already happened, including an out-of-band manual merge no marker recorded
+// (SC-910).
+type MergedReader interface {
+	PullRequestMerged(ctx context.Context, repo string, number int) (bool, error)
+}
+
 // BranchDeleter deletes a remote branch, used to clean up a pull request's
 // source branch after merging.
 type BranchDeleter interface {
@@ -193,6 +203,22 @@ func ParseRemoteURL(raw string) (host, repo string, ok bool) {
 		return "", "", false
 	}
 	return host, repo, true
+}
+
+// PullRequestNumberFromURL extracts the trailing pull-request number from a
+// forge PR URL such as https://github.com/owner/repo/pull/42. It returns
+// ok=false for any URL whose final path segment is not a positive integer.
+func PullRequestNumberFromURL(prURL string) (int, bool) {
+	trimmed := strings.TrimRight(strings.TrimSpace(prURL), "/")
+	idx := strings.LastIndex(trimmed, "/")
+	if idx < 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(trimmed[idx+1:])
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // normalizeRepoPath trims slashes and a trailing ".git" from a remote path.
