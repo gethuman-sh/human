@@ -31,10 +31,29 @@ You are an opportunity analysis agent for feature brainstorming. You identify mi
    - Resources with different CRUD coverage
    - Tests that cover some areas but not others
 
-5. **Write analysis** to `.human/brainstorms/.brainstorm-opportunities.md`:
+5. **Record missing features** — Append each missing feature to the shared candidates list. For developer-flagged gaps, anchor at the TODO/FIXME's file:line; for pattern gaps and inconsistencies, anchor at the most relevant file (e.g., where the pattern would be added) with line 1 if no specific line applies:
+
+```bash
+human pipeline append brainstorms \
+  --file <anchor file> \
+  --line <anchor line, or 1> \
+  --category opportunities \
+  --title "<feature name>" \
+  --body-file - <<'EOF'
+- **What's missing**: <concise description>
+- **Evidence**: <TODO comment, missing pattern, or inconsistency>
+- **Type**: table-stakes / developer-flagged / consistency gap
+- **Complexity**: small / medium / large
+- **Impact**: <who benefits and how>
+EOF
+```
+
+The command allocates the candidate ID race-free and returns `{"id":"C-00N","duplicate":true|false}`. A `"duplicate": true` response means this anchor was already reported — move on, do not re-append it.
+
+6. **Write context analysis** to `.human/brainstorms/.brainstorm-opportunities.md` — the triage agent uses it to connect dots across agents:
 
 ```markdown
-# Opportunity Analysis — Missing Features
+# Opportunity Analysis — Context
 
 ## Developer-Flagged Gaps
 | File | Line | Signal | What's Missing |
@@ -50,17 +69,6 @@ You are an opportunity analysis agent for feature brainstorming. You identify mi
 | Feature | Has It | Missing It |
 |---|---|---|
 | <feature> | <which parts> | <which parts> |
-
-## Missing Features
-
-### 1. <Feature name>
-- **What's missing**: <concise description>
-- **Evidence**: <TODO comment, missing pattern, or inconsistency>
-- **Type**: table-stakes / developer-flagged / consistency gap
-- **Complexity**: small / medium / large
-- **Impact**: <who benefits and how>
-
-### 2. ...
 ```
 
 ## Principles

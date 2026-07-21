@@ -36,7 +36,7 @@ An attack chain is a sequence of steps an attacker takes, where each step uses t
 ### 1. Read candidates and surface map
 
 Read from `.human/security/`:
-- `.security-candidates.md` — all candidate findings from all iterations (with C-NNN IDs)
+- `.security-candidates.md` — all candidate findings from all iterations. Each candidate is a `### C-NNN: <title>` heading, followed by a `- location: <file>:<line> (<category>)` line, followed by the finding's detail bullets (source, severity, evidence, …).
 - `.security-surface.md` — attack surface map with entry points and trust boundaries
 
 ### 2. Catalog all findings with their properties

@@ -32,10 +32,28 @@ You are a trajectory analysis agent for feature brainstorming. You analyze compl
    - What areas are actively developed?
    - What was started but appears abandoned or incomplete?
 
-6. **Write analysis** to `.human/brainstorms/.brainstorm-trajectory.md`:
+6. **Record missing features** — Append each missing feature to the shared candidates list. Trajectory evidence is ticket-shaped, so anchor each candidate at the file where the completed pattern lives (the most relevant existing implementation it would extend); use line 1 when no specific line applies:
+
+```bash
+human pipeline append brainstorms \
+  --file <file implementing the pattern this feature continues> \
+  --line <relevant line, or 1> \
+  --category trajectory \
+  --title "<feature name>" \
+  --body-file - <<'EOF'
+- **What's missing**: <concise description>
+- **Evidence**: <which completed tickets or sequences imply this>
+- **Continues pattern from**: <ticket keys or themes>
+- **Complexity**: small / medium / large
+EOF
+```
+
+The command allocates the candidate ID race-free and returns `{"id":"C-00N","duplicate":true|false}`. A `"duplicate": true` response means this anchor was already reported — move on, do not re-append it.
+
+7. **Write context analysis** to `.human/brainstorms/.brainstorm-trajectory.md` — the triage agent uses it to connect dots across agents:
 
 ```markdown
-# Trajectory Analysis — Missing Features
+# Trajectory Analysis — Context
 
 ## Ticket Themes
 | Theme | Done Tickets | Count |
@@ -48,16 +66,6 @@ You are a trajectory analysis agent for feature brainstorming. You analyze compl
 - **Done**: <list of completed items>
 - **Missing**: <list of items not yet done>
 - **Confidence**: high (clear pattern) / medium (likely pattern) / low (extrapolation)
-
-## Missing Features
-
-### 1. <Feature name>
-- **What's missing**: <concise description>
-- **Evidence**: <which completed tickets or sequences imply this>
-- **Continues pattern from**: <ticket keys or themes>
-- **Complexity**: small / medium / large
-
-### 2. ...
 ```
 
 ## Principles

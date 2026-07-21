@@ -31,10 +31,29 @@ You are a codebase analysis agent for feature brainstorming. You analyze what th
    - What patterns are applied to some features but not others?
    - What would be easy to add given the current abstractions?
 
-5. **Write analysis** to `.human/brainstorms/.brainstorm-codebase.md`:
+5. **Record missing features** — Append each missing feature to the shared candidates list:
+
+```bash
+human pipeline append brainstorms \
+  --file <most relevant file to modify or extend> \
+  --line <line of the strongest code evidence, or 1 if none applies> \
+  --category codebase \
+  --title "<feature name>" \
+  --body-file - <<'EOF'
+- **What's missing**: <concise description>
+- **Evidence in code**: <interface, pattern, or partial implementation that shows this is missing>
+- **Architecture fit**: <how it maps to existing abstractions — easy / moderate / requires new abstractions>
+- **Key files to modify**: <list>
+- **Complexity**: small / medium / large
+EOF
+```
+
+The command allocates the candidate ID race-free and returns `{"id":"C-00N","duplicate":true|false}`. A `"duplicate": true` response means this anchor was already reported — move on, do not re-append it.
+
+6. **Write context analysis** to `.human/brainstorms/.brainstorm-codebase.md` — the triage agent uses it to connect dots across agents:
 
 ```markdown
-# Codebase Analysis — Missing Features
+# Codebase Analysis — Context
 
 ## Core Capabilities
 | Capability | Key Files | Description |
@@ -45,17 +64,6 @@ You are a codebase analysis agent for feature brainstorming. You analyze what th
 | Extension Point | Current Implementations | Potential Additions |
 |---|---|---|
 | <interface/pattern> | <what exists> | <what could be added> |
-
-## Missing Features
-
-### 1. <Feature name>
-- **What's missing**: <concise description>
-- **Evidence in code**: <interface, pattern, or partial implementation that shows this is missing>
-- **Architecture fit**: <how it maps to existing abstractions — easy / moderate / requires new abstractions>
-- **Key files to modify**: <list>
-- **Complexity**: small / medium / large
-
-### 2. ...
 ```
 
 ## Principles
