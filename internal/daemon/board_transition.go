@@ -32,7 +32,10 @@ type Deployer interface {
 	// and, when it is not, rebases the branch, re-pushes (lease), and re-verifies.
 	// A returned error is a real conflict the mechanical path cannot resolve — the
 	// deploy must NOT attempt the merge blind, but fail loudly instead.
-	EnsureMergeable(ctx context.Context, req PRRequest) error
+	// rebased reports whether the branch was rewritten and re-pushed: the forge
+	// then recomputes the PR's mergeability asynchronously, and merging inside
+	// that window draws a spurious 405 — the caller must wait it out first.
+	EnsureMergeable(ctx context.Context, req PRRequest) (rebased bool, err error)
 	// PullRequestMergeable reports the forge's own end-state (three-way) merge
 	// verdict for the PR. It is the fallback signal when the mechanical rebase in
 	// EnsureMergeable conflicts on an intermediate commit the end-state merge
@@ -66,6 +69,12 @@ type PRResult struct {
 var (
 	deployCheckInterval = 30 * time.Second
 	deployTimeout       = 45 * time.Minute
+	// Mergeability-recompute pacing: after a freshness rebase re-pushes the
+	// branch, the forge recomputes the PR's mergeability asynchronously and the
+	// merge endpoint 405s until it settles (ticket 910's deploy hit exactly
+	// this). The poll waits for a definitive verdict before merging.
+	mergeablePollInterval = 3 * time.Second
+	mergeablePollTimeout  = 60 * time.Second
 )
 
 // BoardTransitionRequest is the wire request for advancing a card one stage.
@@ -415,30 +424,46 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		Body:         prBody,
 	})
 	if err != nil {
-		return d.deployFailed(pmKey, "", errors.CauseChain(err))
+		return d.deployFailed(pmKey, "", deployReason(
+			"could not push "+branch+" and open its pull request — check the branch and forge access, then re-run Deploy",
+			err))
 	}
 	if err := d.waitForChecks(ctx, res); err != nil {
-		return d.deployFailed(pmKey, res.URL, errors.CauseChain(err))
+		return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
 	}
 	// Freshness stage: own the branch's mergeability BEFORE attempting the merge.
 	// When main has advanced past the branch point the forge would reject the
 	// merge (GitHub 405) and the card would dead-end; rebasing and re-pushing here
 	// turns that terminal failure into a mechanical, human-free recovery. A real
 	// conflict surfaces as a loud deploy-failed instead of a blind merge attempt.
-	if err := d.Deployer.EnsureMergeable(ctx, PRRequest{
+	rebased, ensureErr := d.Deployer.EnsureMergeable(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,
 		Branch:       branch,
-	}); err != nil {
+	})
+	if ensureErr != nil {
 		// A rebase is strictly stronger than the forge's three-way end-state
 		// merge: it can conflict on an intermediate commit the merge never sees.
 		// Consult the forge's mergeable verdict and the green CI on the
 		// (rebase-aborted, unchanged) tip before redding the card (SC-804).
 		if !d.forgeMergeableFallback(ctx, res) {
-			return d.deployFailed(pmKey, res.URL, "branch could not be made mergeable: "+err.Error())
+			return d.deployFailed(pmKey, res.URL, deployReason(
+				"the branch conflicts with the base — resolve the conflict on "+branch+" (rebase it onto the base branch), then re-run Deploy",
+				ensureErr))
+		}
+	}
+	if rebased {
+		// The re-push invalidated the forge's cached mergeability; merging
+		// before the recompute settles draws a spurious 405 on a clean branch.
+		if err := d.awaitMergeable(ctx, res.Number); err != nil {
+			return d.deployFailed(pmKey, res.URL, deployReason(
+				"the forge still reports the pull request unmergeable after the freshness rebase — open the PR to see why, then re-run Deploy",
+				err))
 		}
 	}
 	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
-		return d.deployFailed(pmKey, res.URL, errors.CauseChain(err))
+		return d.deployFailed(pmKey, res.URL, deployReason(
+			"the forge refused the merge — open the PR to see why, then re-run Deploy",
+			err))
 	}
 	// Past the merge the work IS shipped: branch cleanup and the ticket close
 	// are best-effort and must never turn the card red. Best-effort here means
@@ -449,6 +474,51 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
 	d.closeTicketBestEffort(pmKey)
 	return nil
+}
+
+// failureReason renders a deploy-failed marker body per the marker-body
+// convention: an actionable headline first (the card badge/tooltip shows
+// exactly that line — it must tell the user what to do next), then the raw
+// cause as the detail block for the detail pane.
+func deployReason(headline string, cause error) string {
+	if cause == nil {
+		return headline
+	}
+	return headline + "\n\n" + errors.CauseChain(cause)
+}
+
+// ciFailureHeadline maps the CI gate's two failure modes to their next step.
+func ciFailureHeadline(err error) string {
+	if strings.Contains(err.Error(), "timed out") {
+		return "CI did not finish within the deploy window — check the PR's checks, then re-run Deploy"
+	}
+	return "CI checks failed on the pull request — fix the failing checks, then re-run Deploy"
+}
+
+// awaitMergeable waits for the forge's asynchronous mergeability recompute to
+// settle after a freshness-rebase re-push. Read errors and a false verdict
+// both retry — the recompute window routinely yields either — until the
+// timeout, which is the point where "still computing" and "genuinely
+// unmergeable" can no longer be told apart.
+func (d BoardTransitionDeps) awaitMergeable(ctx context.Context, number int) error {
+	deadline := time.Now().Add(mergeablePollTimeout)
+	for {
+		mergeable, err := d.Deployer.PullRequestMergeable(ctx, d.WorkspaceDir, number)
+		if err == nil && mergeable {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return err
+			}
+			return errors.WithDetails("forge reports the pull request unmergeable", "pr", number)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(mergeablePollInterval):
+		}
+	}
 }
 
 // forgeMergeableFallback reports whether the deploy may proceed to the merge

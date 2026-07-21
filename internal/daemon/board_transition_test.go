@@ -76,6 +76,9 @@ type fakeDeployer struct {
 	// ensured counts EnsureMergeable calls so a test can assert the freshness
 	// stage ran exactly once before the merge.
 	ensured int
+	// rebased is EnsureMergeable's report that it rewrote and re-pushed the
+	// branch — the deploy must then wait out the forge's mergeability recompute.
+	rebased bool
 	// mergeUntil models GitHub's 405 on a stale branch: MergePullRequest fails
 	// with a merge-conflict error until EnsureMergeable has run, then succeeds.
 	mergeUntil bool
@@ -84,6 +87,11 @@ type fakeDeployer struct {
 	// EnsureMergeable conflicts on an intermediate commit (SC-804).
 	mergeable    bool
 	mergeableErr error
+	// mergeableAfter models the forge's asynchronous mergeability recompute
+	// after a re-push: PullRequestMergeable reports false until it has been
+	// polled this many times, then true. Zero disables (verdict = mergeable).
+	mergeableAfter int
+	mergeableCalls int
 	// alreadyMerged models a branch whose work is already on the base: the deploy
 	// must short-circuit to a clean no-op instead of opening a doomed PR (SC-911).
 	alreadyMerged bool
@@ -110,14 +118,18 @@ func (f *fakeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (fo
 	return f.checks[i], nil
 }
 
-func (f *fakeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) error {
+func (f *fakeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (bool, error) {
 	f.ensured++
-	return f.ensureErr
+	return f.rebased, f.ensureErr
 }
 
 func (f *fakeDeployer) PullRequestMergeable(_ context.Context, _ string, _ int) (bool, error) {
+	f.mergeableCalls++
 	if f.mergeableErr != nil {
 		return false, f.mergeableErr
+	}
+	if f.mergeableAfter > 0 {
+		return f.mergeableCalls >= f.mergeableAfter, nil
 	}
 	return f.mergeable, nil
 }
@@ -581,7 +593,11 @@ func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, failed)
-	assert.Contains(t, failed, "branch could not be made mergeable")
+	// The marker's first line is the card badge: it must tell the user the next
+	// step, with the raw cause following in the detail block.
+	headline := strings.SplitN(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n", 2)[0]
+	assert.Contains(t, headline, "resolve the conflict on feat/x")
+	assert.Contains(t, headline, "re-run Deploy")
 	assert.Contains(t, failed, "rebase hit a conflict")
 }
 
@@ -1007,7 +1023,9 @@ func (f *gateProbeDeployer) PullRequestChecks(_ context.Context, _ string, _ int
 	return forge.ChecksPassing, nil
 }
 
-func (f *gateProbeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) error { return nil }
+func (f *gateProbeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (bool, error) {
+	return false, nil
+}
 
 func (f *gateProbeDeployer) PullRequestMergeable(_ context.Context, _ string, _ int) (bool, error) {
 	return true, nil
@@ -1047,4 +1065,91 @@ func TestDeploysQueueOneAtATime(t *testing.T) {
 	close(f.release)
 	assert.NotEqual(t, first, <-f.started, "the queued deploy must run after the first lands")
 	done.Wait()
+}
+
+// TestApplyTransitionDeployWaitsOutMergeabilityRecompute covers the race that
+// redded ticket 910's card: after the freshness rebase re-pushes the branch,
+// the forge recomputes mergeability asynchronously and the merge endpoint 405s
+// until it settles. A deploy that rebased must poll the verdict and merge only
+// once it turns true — never fail on the transient window.
+func TestApplyTransitionDeployWaitsOutMergeabilityRecompute(t *testing.T) {
+	syncDeploy(t)
+	origInterval, origTimeout := mergeablePollInterval, mergeablePollTimeout
+	mergeablePollInterval, mergeablePollTimeout = time.Millisecond, time.Second
+	t.Cleanup(func() { mergeablePollInterval, mergeablePollTimeout = origInterval, origTimeout })
+
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/14", Number: 14},
+		checks:  []forge.ChecksState{forge.ChecksPassing},
+		rebased: true, mergeableAfter: 3}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.merged, "merge must proceed once the recompute settles")
+	assert.GreaterOrEqual(t, p.mergeableCalls, 3, "the verdict must be polled through the recompute window")
+	for _, b := range c.added {
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader), "transient recompute must not red the card: %s", b)
+	}
+}
+
+// TestApplyTransitionDeployRecomputeStaysUnmergeable: when the verdict never
+// turns true, the failure marker must lead with an actionable headline.
+func TestApplyTransitionDeployRecomputeStaysUnmergeable(t *testing.T) {
+	syncDeploy(t)
+	origInterval, origTimeout := mergeablePollInterval, mergeablePollTimeout
+	mergeablePollInterval, mergeablePollTimeout = time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { mergeablePollInterval, mergeablePollTimeout = origInterval, origTimeout })
+
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/15", Number: 15},
+		checks:  []forge.ChecksState{forge.ChecksPassing},
+		rebased: true, mergeable: false}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Zero(t, p.merged)
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	headline := strings.SplitN(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n", 2)[0]
+	assert.Contains(t, headline, "open the PR to see why")
+	assert.Contains(t, headline, "re-run Deploy")
+}
+
+// TestApplyTransitionDeployCIFailureHeadline: a failing CI gate must red the
+// card with a fix-the-checks instruction, not a raw error chain.
+func TestApplyTransitionDeployCIFailureHeadline(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/16", Number: 16},
+		checks: []forge.ChecksState{forge.ChecksFailing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	headline := strings.SplitN(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n", 2)[0]
+	assert.Contains(t, headline, "fix the failing checks")
+	assert.Contains(t, headline, "re-run Deploy")
 }

@@ -1625,33 +1625,33 @@ func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) error
 // branch out under the user (SC-1000). A rebase error is a real conflict the
 // mechanical path cannot resolve — the deploy must fail loudly rather than
 // merge blind (735).
-func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) error {
+func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) (bool, error) {
 	dir, branch := req.WorkspaceDir, req.Branch
 	base := gitrepo.DefaultBranch(ctx, dir)
 	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
-		return err
+		return false, err
 	}
 	originBase := "origin/" + base
 	tip, onOrigin, err := branchTip(ctx, dir, branch)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Already current: the branch contains the base tip, so its PR is mergeable
 	// without touching it.
 	if gitrepo.IsAncestor(ctx, dir, originBase, tip) {
-		return nil
+		return false, nil
 	}
 	wt, cleanup, err := addEphemeralWorktree(ctx, dir, tip)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer cleanup()
 	if err := gitrepo.RebaseHead(ctx, wt, originBase); err != nil {
-		return err
+		return false, err
 	}
 	newTip, err := gitrepo.RevParse(ctx, wt, "HEAD")
 	if err != nil {
-		return err
+		return false, err
 	}
 	// The worktree rebased a detached HEAD, so publishing is a refspec push of
 	// the worktree's HEAD — the branch itself is never checked out anywhere.
@@ -1659,17 +1659,17 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 	// a concurrent push is refused, not clobbered.
 	if onOrigin {
 		if err := gitrepo.PushHeadWithLease(ctx, wt, branch, tip); err != nil {
-			return err
+			return false, err
 		}
 	} else if err := gitrepo.PushHead(ctx, wt, branch); err != nil {
-		return err
+		return false, err
 	}
 	// A clean rebase that still does not contain the base tip means the branch
 	// could not be made mergeable — surface it rather than merge into a conflict.
 	if !gitrepo.IsAncestor(ctx, dir, originBase, newTip) {
-		return errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
+		return true, errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
 	}
-	return nil
+	return true, nil
 }
 
 // branchTip resolves the commit the freshness rebase starts from, preferring
