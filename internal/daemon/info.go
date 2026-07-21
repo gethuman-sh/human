@@ -41,6 +41,10 @@ type DaemonInfo struct {
 	// omitempty preserves backward-compatibility with daemon.json files
 	// written by older builds that do not emit this field.
 	Version string `json:"version,omitempty"`
+	// Protocol advertises the wire protocol the daemon speaks so clients can
+	// refuse a too-old daemon with one clear error instead of a cryptic
+	// unknown-command failure. Zero (older daemon.json) disables that check.
+	Protocol int `json:"protocol,omitempty"`
 	// DaemonID is the stable, non-secret identifier this daemon stamps on every
 	// marker it posts, so a teammate can tell which machine's bot acted.
 	// omitempty keeps daemon.json written by older builds unmarshalling cleanly.

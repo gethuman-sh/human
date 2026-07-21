@@ -65,7 +65,11 @@ type IssueDetailFetch struct {
 
 // Request is sent from the client to the daemon (one JSON line per connection).
 type Request struct {
-	Version   string            `json:"version"`
+	Version string `json:"version"`
+	// Protocol is the wire protocol the client speaks (the Protocol constant
+	// of its build). Zero means a pre-handshake client; the daemon then falls
+	// back to the legacy version-string gate.
+	Protocol  int               `json:"protocol,omitempty"`
 	Token     string            `json:"token"`
 	Args      []string          `json:"args"`
 	Env       map[string]string `json:"env,omitempty"`

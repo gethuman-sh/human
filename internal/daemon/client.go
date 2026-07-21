@@ -64,6 +64,7 @@ func runRemoteOnce(addr, token string, args []string, version, confirmID string)
 
 	req := Request{
 		Version:   version,
+		Protocol:  Protocol,
 		Token:     token,
 		Args:      args,
 		Env:       env,
@@ -167,6 +168,7 @@ func RunRemoteCapture(addr, token string, args []string) ([]byte, error) {
 	cwd, _ := os.Getwd()
 	req := Request{
 		Version:   ClientVersion,
+		Protocol:  Protocol,
 		Token:     token,
 		Args:      args,
 		ClientPID: os.Getpid(),
@@ -584,6 +586,7 @@ func Subscribe(addr, token string) (<-chan SubscribeEvent, func(), error) {
 	cwd, _ := os.Getwd()
 	req := Request{
 		Version:   ClientVersion,
+		Protocol:  Protocol,
 		Token:     token,
 		Args:      []string{"subscribe"},
 		ClientPID: os.Getpid(),

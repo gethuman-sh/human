@@ -201,6 +201,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		Token:      token,
 		PID:        os.Getpid(),
 		Version:    version,
+		Protocol:   daemon.Protocol,
 		DaemonID:   daemonID,
 		Projects:   projectInfos,
 	}
