@@ -111,3 +111,16 @@ func TestBuildIssueDetailExtras_emptyComments(t *testing.T) {
 	extras := BuildIssueDetailExtras(nil)
 	assert.Equal(t, IssueDetailExtras{}, extras)
 }
+
+// Once reconcile posts [human:deployed] for a confirmed-shipped PR, the detail
+// pane's failure reason clears via the same supersession guard as the card
+// (SC-910, 695 class).
+func TestFailureReason_clearedByDeployedMarker(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		{Body: DeployFailedHeader + "\nmerge conflict on main\npr: https://github.com/o/r/pull/7", Created: t0},
+		{Body: DeployedHeader + "\npr: https://github.com/o/r/pull/7", Created: t1},
+	}
+	assert.Empty(t, latestFailureReason(comments))
+}
