@@ -48,59 +48,82 @@ func RunSleepInhibitor(
 
 	logger.Info().Msg("sleep inhibitor started")
 
+	loop := &sleepInhibitLoop{
+		lister:    lister,
+		inhibitor: inhibitor,
+		enabled:   enabled,
+		logger:    logger,
+	}
+	defer loop.releaseIfHeld()
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
-	var release func() error // non-nil while the block is held
-	var loggedFailure bool   // suppresses repeat error spam within one failure streak
-
-	releaseIfHeld := func() {
-		if release == nil {
-			return
-		}
-		if err := release(); err != nil {
-			logger.Warn().Err(err).Msg("releasing sleep inhibitor failed")
-		}
-		release = nil
-		logger.Info().Msg("released sleep inhibitor: no agents running")
-	}
-
-	defer releaseIfHeld()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !enabled() {
-				releaseIfHeld()
-				loggedFailure = false
-				continue
-			}
-			agents, err := lister.RunningAgents()
-			if err != nil {
-				// Keep whatever block we currently hold: a transient list
-				// error must not release protection out from under a live run.
-				logger.Warn().Err(err).Msg("sleep inhibitor: cannot list running agents")
-				continue
-			}
-			running := len(agents) > 0
-			switch {
-			case running && release == nil:
-				r, aerr := inhibitor.Acquire("human", "human agents running — deferring suspend")
-				if aerr != nil {
-					if !loggedFailure {
-						logger.Error().Err(aerr).Msg("could not acquire sleep inhibitor — agent runs are exposed to system suspend")
-						loggedFailure = true
-					}
-					continue
-				}
-				release = r
-				loggedFailure = false
-				logger.Info().Int("agents", len(agents)).Msg("acquired sleep inhibitor: agents running")
-			case !running && release != nil:
-				releaseIfHeld()
-			}
+			loop.tick()
 		}
 	}
+}
+
+// sleepInhibitLoop carries the block-held / failure-logged state between ticks
+// so the per-tick decision logic can live in small named functions.
+type sleepInhibitLoop struct {
+	lister    RunningAgentLister
+	inhibitor SleepInhibitor
+	enabled   func() bool
+	logger    zerolog.Logger
+
+	release       func() error // non-nil while the block is held
+	loggedFailure bool         // suppresses repeat error spam within one failure streak
+}
+
+func (l *sleepInhibitLoop) tick() {
+	if !l.enabled() {
+		l.releaseIfHeld()
+		l.loggedFailure = false
+		return
+	}
+	agents, err := l.lister.RunningAgents()
+	if err != nil {
+		// Keep whatever block we currently hold: a transient list error must
+		// not release protection out from under a live run.
+		l.logger.Warn().Err(err).Msg("sleep inhibitor: cannot list running agents")
+		return
+	}
+	running := len(agents) > 0
+	switch {
+	case running && l.release == nil:
+		l.acquire(len(agents))
+	case !running && l.release != nil:
+		l.releaseIfHeld()
+	}
+}
+
+func (l *sleepInhibitLoop) acquire(agentCount int) {
+	release, err := l.inhibitor.Acquire("human", "human agents running — deferring suspend")
+	if err != nil {
+		if !l.loggedFailure {
+			l.logger.Error().Err(err).Msg("could not acquire sleep inhibitor — agent runs are exposed to system suspend")
+			l.loggedFailure = true
+		}
+		return
+	}
+	l.release = release
+	l.loggedFailure = false
+	l.logger.Info().Int("agents", agentCount).Msg("acquired sleep inhibitor: agents running")
+}
+
+func (l *sleepInhibitLoop) releaseIfHeld() {
+	if l.release == nil {
+		return
+	}
+	if err := l.release(); err != nil {
+		l.logger.Warn().Err(err).Msg("releasing sleep inhibitor failed")
+	}
+	l.release = nil
+	l.logger.Info().Msg("released sleep inhibitor: no agents running")
 }
