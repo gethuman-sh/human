@@ -233,7 +233,8 @@ func TestApplyTransitionRetriesFailedBuild(t *testing.T) {
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
 	require.NoError(t, err)
 	assert.Equal(t, 1, l.calls)
-	assert.Equal(t, "/human-execute SC-1", l.prompt)
+	assert.Contains(t, l.prompt, "/human-execute SC-1")
+	assert.Contains(t, l.prompt, "BOARD CONTEXT", "headless dispatch must carry the no-push, no-questions rules")
 	assert.Equal(t, "board-SC-1-implementation", l.name)
 	require.Len(t, c.added, 1)
 	assert.Equal(t, ImplementationStartedHeader, c.added[0])
@@ -282,7 +283,8 @@ func TestApplyTransitionPlanningToImplementation(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
 	require.NoError(t, err)
-	assert.Equal(t, "/human-execute HUM-9", l.prompt)
+	assert.Contains(t, l.prompt, "/human-execute HUM-9")
+	assert.Contains(t, l.prompt, "BOARD CONTEXT", "headless dispatch must carry the no-push, no-questions rules")
 	assert.Contains(t, c.added, ImplementationStartedHeader)
 }
 
@@ -759,7 +761,8 @@ func TestApplyTransitionImplementationWithoutEngineeringKey(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
 	require.NoError(t, err)
-	assert.Equal(t, "/human-execute SC-1", l.prompt)
+	assert.Contains(t, l.prompt, "/human-execute SC-1")
+	assert.Contains(t, l.prompt, "BOARD CONTEXT", "headless dispatch must carry the no-push, no-questions rules")
 }
 
 func TestApplyTransitionVerificationWithoutEngineeringKey(t *testing.T) {

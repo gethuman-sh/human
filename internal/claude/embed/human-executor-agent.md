@@ -51,10 +51,12 @@ human <TRACKER> issue comment list <TICKET_KEY>
    ```
 6. **Hand off for review.** If the human-done verdict is pass, post the structured handoff comment on the **PM ticket** so a separate reviewer (today: another `human` user runs `/human-pickup-review`; later: the daemon polls for it) can pick the work up:
    ```bash
-   human handoff post <PM_KEY> --engineering <ENG_KEY>
+   human handoff post <PM_KEY> --branch <feature-branch> --engineering <ENG_KEY>
    ```
+   - Always pass `--branch` explicitly with the branch you committed on — commit derivation anchors at that branch, so the command works no matter which ref the workspace happens to have checked out.
    - Single-tracker topology (no engineering ticket): omit `--engineering` entirely — the reviewer works from the PM key the comment sits on.
    - If multiple engineering tickets were executed in this run, pass them all: `--engineering <K1>,<K2>` (the command unions their commit SHAs).
+   - **Board context** (the dispatch prompt contains "BOARD CONTEXT"): do NOT push — the container holds no push credentials and the daemon's Deploy stage ships the local branch. A local-only branch is a VALID handoff: the reachability check accepts local refs. Post the handoff and stop; never end the run asking whether to push — there is no user, and an unanswered question fails the stage.
    The command derives the rest — `branch:` from the current git branch, `commits:` from the commits referencing the work key(s), `daemon:` from the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1; the line is omitted when the var is unset) — then verifies every SHA is reachable on the branch (fetching origin first) and refuses to post otherwise. The posted comment looks like:
    ```
    [human:ready-for-review]

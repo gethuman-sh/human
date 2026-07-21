@@ -680,3 +680,18 @@ func TestTouchedSince_sinceFallbackAndUntouched(t *testing.T) {
 		t.Errorf("args = %v", gotArgs)
 	}
 }
+
+func TestCommitsForRev_anchorsAtGivenRev(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte(""), nil
+	})
+	_, err := CommitsForRev(context.Background(), ".", "SC-1", "feat/branch")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotArgs[len(gotArgs)-1] != "feat/branch" {
+		t.Errorf("args = %v, want rev anchor feat/branch", gotArgs)
+	}
+}

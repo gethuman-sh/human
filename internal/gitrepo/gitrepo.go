@@ -262,8 +262,16 @@ func keyRefPattern(key string) string {
 // exact discovery agents otherwise hand-roll with git log --grep incantations.
 // Package var so callers can stub git access in tests.
 var CommitsFor = func(ctx context.Context, dir, key string) ([]Commit, error) {
+	return CommitsForRev(ctx, dir, key, "HEAD")
+}
+
+// CommitsForRev is CommitsFor anchored at an explicit rev instead of HEAD —
+// the review handoff derives commits from the handed-off BRANCH, which in a
+// board workspace is usually not the checked-out ref. Package var so callers
+// can stub git access in tests.
+var CommitsForRev = func(ctx context.Context, dir, key, rev string) ([]Commit, error) {
 	out, err := runner(ctx, "git", "-C", dir, "log", "--extended-regexp",
-		"--grep="+keyRefPattern(key), "--format=%H%x1f%h%x1f%s", "HEAD")
+		"--grep="+keyRefPattern(key), "--format=%H%x1f%h%x1f%s", rev)
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "listing commits for key", "dir", dir, "key", key)
 	}
