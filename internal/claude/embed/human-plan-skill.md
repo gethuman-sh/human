@@ -52,11 +52,7 @@ If the planner returned an `ALREADY IMPLEMENTED: <evidence>` verdict instead of 
 - Post the terminal `[human:nothing-to-do]` marker on the PM ticket, carrying the planner's evidence (name the merged PR/commit) so the board surfaces the card as "already shipped" (resolved), not red:
 
 ```bash
-human <pm-tracker> issue comment add <PM_KEY> "$(cat <<'EOF'
-[human:nothing-to-do]
-evidence: <the planner's ALREADY IMPLEMENTED evidence — merged PR/commit>
-EOF
-)"
+human marker post <PM_KEY> nothing-to-do --field "evidence=<the planner's ALREADY IMPLEMENTED evidence — merged PR/commit>"
 ```
 
 - STOP. Skip Phases 4-6 entirely. In board context this is mandatory: the workflow board's failure watcher treats `[human:nothing-to-do]` as a clean stop (resolved, no retry loop), whereas a missing `[human:plan-ready]` after a normal exit is misread as a crash and re-planned forever.
@@ -76,10 +72,10 @@ Only proceed to ticket creation once you are confident the plan will work.
 
 ## Phase 5: Attach the plan (topology decides where)
 
-Run `human tracker list` and check the topology:
+Run `human tracker topology`:
 
-- **Split topology** — a tracker with `"role": "engineering"` exists and is a DIFFERENT tracker than the PM ticket's: create a separate engineering ticket there (steps below).
-- **Single-tracker topology** — no engineering-role tracker, or it is the same tracker as the PM ticket: do NOT create a second ticket. The plan lives on the PM ticket itself as a `[human:plan]` comment (Phase 5b).
+- **Split topology** — the output says `"topology": "split"` and its `engineering` entry names the tracker for the engineering ticket: create a separate engineering ticket there (steps below).
+- **Single-tracker topology** — the output says `"topology": "single"` (no `engineering` entry): do NOT create a second ticket. The plan lives on the PM ticket itself as a `[human:plan]` comment (Phase 5b).
 
 ### Phase 5a: Split topology — create the engineering ticket
 
@@ -103,12 +99,9 @@ Then fetch the ticket back and verify the description matches the updated plan c
 Post the plan verbatim as a `[human:plan]` marker comment on the PM ticket (the ticket description stays product language; the plan is a stage artifact and lives in the comment stream):
 
 ```bash
-human <pm-tracker> issue comment add <PM_KEY> "$(cat <<'PLAN_EOF'
-[human:plan]
-
+human marker post <PM_KEY> plan --body-file - <<'PLAN_EOF'
 <FINAL_PLAN_CONTENT>
 PLAN_EOF
-)"
 ```
 
 Verify with `human plan show <PM_KEY>` — it must print the plan back. Re-planning posts a new `[human:plan]` comment; the latest wins, never edit old ones. In this topology the plan header needs no `**Engineering ticket**:` line, and commits reference only the PM key.
@@ -119,18 +112,24 @@ Post a structured marker comment on the **PM ticket** so the workflow board can 
 
 - Split topology (engineering ticket created):
 
+```bash
+human marker post <PM_KEY> plan-ready --field engineering=<ENG_KEY>
+```
+
+which renders as:
+
 ```
 [human:plan-ready]
 engineering: <ENG_KEY>
 ```
 
-- Single-tracker topology (plan attached as comment) — no `engineering:` line; the board dispatches Implementation on the PM key itself:
+- Single-tracker topology (plan attached as comment) — no `engineering:` field; the board dispatches Implementation on the PM key itself:
 
-```
-[human:plan-ready]
+```bash
+human marker post <PM_KEY> plan-ready
 ```
 
-Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`, where `<pm-tracker>` is the PM tracker resolved from `human tracker list` (the one with `"role": "pm"`), and `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
+`<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
 
 ## After completion
 

@@ -211,6 +211,31 @@ func TestStartAgentStage_claimWinnerLaunches(t *testing.T) {
 	assert.Contains(t, c.added[1], ImplementationStartedHeader)
 }
 
+// A daemon whose host fails a launch-critical doctor check (here: an expired
+// Claude session) must neither claim nor launch the stage: no [human:claim], no
+// started marker, no failed marker — the handoff is left unclaimed for a healthy
+// daemon and the failure surfaces only on this host (SC-912).
+func TestStartAgentStage_launchGateSkipsClaimAndLaunch(t *testing.T) {
+	c := &fakeCommenter{
+		comments: []tracker.Comment{
+			cmt("[human:plan-ready]", time.Now().Add(-time.Minute)),
+		},
+	}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	deps.DaemonID = "d1"
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "session expired"}}
+	}
+
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
+	require.NoError(t, err, "a launch-gated stage leaves the work silently, not an error")
+
+	assert.Zero(t, l.calls, "gated daemon must not launch")
+	assert.Empty(t, c.added, "gated daemon must post no claim, started, or failed marker")
+}
+
 // ClassifyMarker must ignore a claim marker: it is content, not a stage
 // transition, so it never moves a card (must stay out of orderedMarkerSpecs).
 func TestClaimMarker_notClassified(t *testing.T) {

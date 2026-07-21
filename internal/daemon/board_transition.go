@@ -32,7 +32,10 @@ type Deployer interface {
 	// and, when it is not, rebases the branch, re-pushes (lease), and re-verifies.
 	// A returned error is a real conflict the mechanical path cannot resolve — the
 	// deploy must NOT attempt the merge blind, but fail loudly instead.
-	EnsureMergeable(ctx context.Context, req PRRequest) error
+	// rebased reports whether the branch was rewritten and re-pushed: the forge
+	// then recomputes the PR's mergeability asynchronously, and merging inside
+	// that window draws a spurious 405 — the caller must wait it out first.
+	EnsureMergeable(ctx context.Context, req PRRequest) (rebased bool, err error)
 	// PullRequestMergeable reports the forge's own end-state (three-way) merge
 	// verdict for the PR. It is the fallback signal when the mechanical rebase in
 	// EnsureMergeable conflicts on an intermediate commit the end-state merge
@@ -40,6 +43,11 @@ type Deployer interface {
 	PullRequestMergeable(ctx context.Context, workspaceDir string, number int) (bool, error)
 	MergePullRequest(ctx context.Context, workspaceDir string, number int) error
 	DeleteRemoteBranch(ctx context.Context, workspaceDir, branch string) error
+	// BranchMerged reports whether the branch's work is already contained in the
+	// base branch (an ancestor of origin/<base>). A re-run Deploy on a finished
+	// card must short-circuit to a clean no-op rather than open a doomed PR the
+	// forge rejects 422 "No commits between" (SC-911).
+	BranchMerged(ctx context.Context, workspaceDir, branch string) bool
 }
 
 // PRRequest carries everything needed to push a branch and open its PR.
@@ -61,6 +69,12 @@ type PRResult struct {
 var (
 	deployCheckInterval = 30 * time.Second
 	deployTimeout       = 45 * time.Minute
+	// Mergeability-recompute pacing: after a freshness rebase re-pushes the
+	// branch, the forge recomputes the PR's mergeability asynchronously and the
+	// merge endpoint 405s until it settles (ticket 910's deploy hit exactly
+	// this). The poll waits for a definitive verdict before merging.
+	mergeablePollInterval = 3 * time.Second
+	mergeablePollTimeout  = 60 * time.Second
 )
 
 // BoardTransitionRequest is the wire request for advancing a card one stage.
@@ -91,6 +105,12 @@ type BoardTransitionDeps struct {
 	// close). The zero value is a safe no-op writer, so an un-wired path stays
 	// valid without a logger.
 	Logger zerolog.Logger
+	// LaunchGate reports the launch-critical doctor checks currently failing on
+	// this daemon's host (docker, agent-skills, claude-auth). When it returns a
+	// non-empty slice the stage launcher neither claims nor launches — it silently
+	// leaves the work for a healthy daemon, and the failure surfaces only on this
+	// host (doctor / rail LED), never as a ticket marker (SC-912). nil disables.
+	LaunchGate func(ctx context.Context) []DoctorCheck
 }
 
 // sanitizeRe drops characters that are invalid in an agent name (alphanumeric,
@@ -296,6 +316,19 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 // launch failure it posts the stage's *-failed marker so the board reflects the
 // error rather than leaving a stuck spinner.
 func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string) error {
+	// Launch gate: a daemon whose host fails a launch-critical doctor check
+	// (docker, agent-skills, claude-auth) cannot serve this stage. Refuse before
+	// the claim so NO [human:claim] is posted — the work is left unclaimed for a
+	// healthy daemon and the failure surfaces only on this host, never as a ticket
+	// marker (SC-912). Returning nil is a silent skip-and-leave, not an error.
+	if d.LaunchGate != nil {
+		if blockers := d.LaunchGate(ctx); len(blockers) > 0 {
+			d.Logger.Warn().
+				Str("pm", pmKey).Str("stage", string(stage)).Str("check", blockers[0].ID).
+				Msg("board stage launch skipped: launch-critical doctor check failing; leaving work for a healthy daemon")
+			return nil
+		}
+	}
 	// Claim before start: with several daemons on one board, arbitrate who
 	// launches this stage so the work is picked up exactly once (SC-660 rule 2).
 	// A loser backs off silently — not an error — leaving the started marker and
@@ -355,55 +388,137 @@ var deployGate sync.Mutex
 // the clock starts when the deploy leaves the queue, so a queued deploy never
 // pays for its predecessors' CI waits.
 func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequest, card BoardCard) {
+	// The board reads the outcome from the posted markers; the returned error
+	// exists for CLI callers that need an exit code.
+	_ = d.DeployBranch(ctx, req.PMKey, req.PMTitle, doneBody(req.PMKey, card), card.Branch)
+}
+
+// DeployBranch runs the deterministic deploy gate for pmKey's branch: the
+// already-merged short-circuit, push + PR, the CI gate, the freshness rebase,
+// the merge, branch cleanup, markers, and the ticket close. Failures are both
+// posted as deploy-failed markers (the board's channel) and returned (the CLI's
+// channel).
+func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prBody, branch string) error {
 	deployGate.Lock()
 	defer deployGate.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, deployTimeout)
 	defer cancel()
 
+	// Already-merged carve-out: a re-run Deploy on a card whose branch is already
+	// on the base has nothing to ship. Opening a PR would draw the forge's 422
+	// "No commits between" and red a card that is genuinely finished — so
+	// short-circuit to the terminal success path (deployed/done, ticket closed).
+	// This mirrors the "already done, stop cleanly" carve-outs Planning and
+	// Implementation already carry (SC-911).
+	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
+		_, _ = d.Commenter.AddComment(ctx, pmKey,
+			StampDaemon(DeployedHeader+"\nalready merged into the base branch; no new PR opened", d.DaemonID))
+		d.closeTicketBestEffort(pmKey)
+		return nil
+	}
+
 	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,
-		Branch:       card.Branch,
-		Title:        req.PMTitle,
-		Body:         doneBody(req.PMKey, card),
+		Branch:       branch,
+		Title:        title,
+		Body:         prBody,
 	})
 	if err != nil {
-		d.deployFailed(req.PMKey, "", errors.CauseChain(err))
-		return
+		return d.deployFailed(pmKey, "", deployReason(
+			"could not push "+branch+" and open its pull request — check the branch and forge access, then re-run Deploy",
+			err))
 	}
 	if err := d.waitForChecks(ctx, res); err != nil {
-		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
-		return
+		return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
 	}
 	// Freshness stage: own the branch's mergeability BEFORE attempting the merge.
 	// When main has advanced past the branch point the forge would reject the
 	// merge (GitHub 405) and the card would dead-end; rebasing and re-pushing here
 	// turns that terminal failure into a mechanical, human-free recovery. A real
 	// conflict surfaces as a loud deploy-failed instead of a blind merge attempt.
-	if err := d.Deployer.EnsureMergeable(ctx, PRRequest{
+	rebased, ensureErr := d.Deployer.EnsureMergeable(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,
-		Branch:       card.Branch,
-	}); err != nil {
+		Branch:       branch,
+	})
+	if ensureErr != nil {
 		// A rebase is strictly stronger than the forge's three-way end-state
 		// merge: it can conflict on an intermediate commit the merge never sees.
 		// Consult the forge's mergeable verdict and the green CI on the
 		// (rebase-aborted, unchanged) tip before redding the card (SC-804).
 		if !d.forgeMergeableFallback(ctx, res) {
-			d.deployFailed(req.PMKey, res.URL, "branch could not be made mergeable: "+err.Error())
-			return
+			return d.deployFailed(pmKey, res.URL, deployReason(
+				"the branch conflicts with the base — resolve the conflict on "+branch+" (rebase it onto the base branch), then re-run Deploy",
+				ensureErr))
+		}
+	}
+	if rebased {
+		// The re-push invalidated the forge's cached mergeability; merging
+		// before the recompute settles draws a spurious 405 on a clean branch.
+		if err := d.awaitMergeable(ctx, res.Number); err != nil {
+			return d.deployFailed(pmKey, res.URL, deployReason(
+				"the forge still reports the pull request unmergeable after the freshness rebase — open the PR to see why, then re-run Deploy",
+				err))
 		}
 	}
 	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
-		d.deployFailed(req.PMKey, res.URL, errors.CauseChain(err))
-		return
+		return d.deployFailed(pmKey, res.URL, deployReason(
+			"the forge refused the merge — open the PR to see why, then re-run Deploy",
+			err))
 	}
 	// Past the merge the work IS shipped: branch cleanup and the ticket close
 	// are best-effort and must never turn the card red. Best-effort here means
 	// recorded-and-surfaced, not silent: a failed close leaves the card in the
 	// board's Fix column (the frontend only drops a card once the ticket leaves
 	// the tracker's open list), so the operator must see it and close by hand.
-	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, card.Branch)
-	_, _ = d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
-	d.closeTicketBestEffort(req.PMKey)
+	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, branch)
+	_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
+	d.closeTicketBestEffort(pmKey)
+	return nil
+}
+
+// failureReason renders a deploy-failed marker body per the marker-body
+// convention: an actionable headline first (the card badge/tooltip shows
+// exactly that line — it must tell the user what to do next), then the raw
+// cause as the detail block for the detail pane.
+func deployReason(headline string, cause error) string {
+	if cause == nil {
+		return headline
+	}
+	return headline + "\n\n" + errors.CauseChain(cause)
+}
+
+// ciFailureHeadline maps the CI gate's two failure modes to their next step.
+func ciFailureHeadline(err error) string {
+	if strings.Contains(err.Error(), "timed out") {
+		return "CI did not finish within the deploy window — check the PR's checks, then re-run Deploy"
+	}
+	return "CI checks failed on the pull request — fix the failing checks, then re-run Deploy"
+}
+
+// awaitMergeable waits for the forge's asynchronous mergeability recompute to
+// settle after a freshness-rebase re-push. Read errors and a false verdict
+// both retry — the recompute window routinely yields either — until the
+// timeout, which is the point where "still computing" and "genuinely
+// unmergeable" can no longer be told apart.
+func (d BoardTransitionDeps) awaitMergeable(ctx context.Context, number int) error {
+	deadline := time.Now().Add(mergeablePollTimeout)
+	for {
+		mergeable, err := d.Deployer.PullRequestMergeable(ctx, d.WorkspaceDir, number)
+		if err == nil && mergeable {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return err
+			}
+			return errors.WithDetails("forge reports the pull request unmergeable", "pr", number)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(mergeablePollInterval):
+		}
+	}
 }
 
 // forgeMergeableFallback reports whether the deploy may proceed to the merge
@@ -472,7 +587,7 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 
 // deployFailed posts the failure marker on its own context: the pipeline's
 // context may already be cancelled (timeout), and the marker must still land.
-func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) {
+func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
 	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	body := DeployFailedHeader + "\n" + reason
@@ -480,6 +595,7 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) {
 		body += "\npr: " + prURL
 	}
 	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
+	return errors.WithDetails("deploy failed: "+reason, "pm", pmKey, "pr", prURL)
 }
 
 // dispatchKey resolves the key an agent is dispatched on: the engineering

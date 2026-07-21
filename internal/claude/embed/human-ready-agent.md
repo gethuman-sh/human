@@ -15,7 +15,7 @@ You are a ticket readiness agent. You use the `human` CLI to fetch issue tracker
 # List configured trackers (always start here when multiple trackers are configured)
 human tracker list
 
-# Quick command (auto-detect tracker — works when only one tracker type is configured)
+# Quick command (auto-detect the owning tracker from the key shape — works regardless of how many trackers are configured)
 human get <TICKET_KEY>
 
 # Provider-specific command (replace <TRACKER> with jira, github, gitlab, linear, azuredevops, shortcut, or clickup)
@@ -27,11 +27,10 @@ human <TRACKER> issue edit <TICKET_KEY> --description "<NEW_DESCRIPTION>"
 
 ## Tracker resolution
 
-1. Run `human tracker list` to see all configured trackers
-2. When only one tracker type is configured, quick commands work: `human get <KEY>`
-3. When multiple tracker types are configured, use provider-specific commands: `human shortcut issue get <KEY>`, `human linear issue get <KEY>`
-4. Use `--tracker=<name>` to select a specific named instance within the same tracker type
-5. **Remember** which tracker you resolved — you will need it for the edit command too
+1. Resolve a dispatched ticket key with `human get <KEY>` — the CLI auto-detects the owning tracker from the key's shape (a bare number → Shortcut; `KAN-42` → Jira/Linear; `owner/repo#42` → GitHub/GitLab), regardless of how many trackers are configured. Never infer the tracker from the git origin remote.
+2. `human tracker list` only enumerates configured trackers (use it to locate a write target such as the engineering tracker); it gives no key→tracker mapping, so never use it to guess which tracker owns a key.
+3. Only when two instances of the SAME tracker kind are configured and a key is ambiguous between them, disambiguate with `--tracker=<name>` (or the provider-specific `human <tracker> issue get <KEY>`).
+4. **Remember** which tracker you resolved — you will need it for the edit command too
 
 ## Definition of Ready checklist
 
@@ -46,7 +45,7 @@ Evaluate the ticket against each criterion below. For each one, mark it as **pre
 
 ## Phase 1: Evaluate
 
-1. **Fetch** the ticket using `human <tracker> issue get <key>` (use `human tracker list` to find the right tracker; or `human get <key>` if only one tracker type is configured)
+1. **Fetch** the ticket using `human get <key>` (the CLI auto-detects the owning tracker from the key shape, regardless of how many trackers are configured — do not guess a tracker or infer it from the git remote)
 2. **Evaluate** the ticket against each of the six Definition of Ready criteria
 3. **Return** a structured report in the following format:
 

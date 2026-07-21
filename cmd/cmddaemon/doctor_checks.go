@@ -2,10 +2,12 @@ package cmddaemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gethuman-sh/human/internal/codenav"
 	"github.com/gethuman-sh/human/internal/codenav/store"
@@ -40,6 +42,9 @@ func buildDoctorChecks(reg *daemon.ProjectRegistry, resolver *vault.Resolver, pe
 		}},
 		{ID: "agent-skills", Name: "agent skills", Run: func(context.Context) (bool, string) {
 			return checkAgentSkills(reg)
+		}},
+		{ID: "claude-auth", Name: "Claude authentication", Run: func(context.Context) (bool, string) {
+			return checkClaudeAuth(reg)
 		}},
 		{ID: "codenav-index", Name: "code navigation index", Run: func(context.Context) (bool, string) {
 			return checkCodenavIndex(reg, codenav.DefaultDBPath())
@@ -122,6 +127,50 @@ func checkAgentSkills(reg *daemon.ProjectRegistry) (bool, string) {
 		return false, "no agent skills under " + strings.Join(missing, ", ") + " — run 'human install --agent claude' there"
 	}
 	return true, "skills present"
+}
+
+// claudeCreds is the slice of the Claude credential file the auth check reads:
+// the OAuth session's expiry. Only expiresAt matters — a present session whose
+// deadline has passed is the reported failure mode (SC-912).
+type claudeCreds struct {
+	ClaudeAiOauth struct {
+		ExpiresAt int64 `json:"expiresAt"`
+	} `json:"claudeAiOauth"`
+}
+
+// checkClaudeAuth catches SC-912: a daemon whose Claude OAuth session expired
+// still competes for board work and fails every pickup ~15s in at agent auth.
+// The in-container Claude store is bind-mounted from the host at
+// <entry.Dir>/.devcontainer/claude/ → ~/.claude, so the probe reads the host
+// copy of .credentials.json. It is fail-open by design: only a present,
+// parseable session carrying an expiresAt in the past is a failure. An absent,
+// unreadable, unparseable, or expiresAt-less file degrades to pre-fix behaviour
+// (ok=true) so a path/schema mismatch never blocks a healthy daemon.
+func checkClaudeAuth(reg *daemon.ProjectRegistry) (bool, string) {
+	nowMS := time.Now().UnixMilli()
+	var expired []string
+	for _, entry := range reg.Entries() {
+		path := filepath.Join(entry.Dir, ".devcontainer", "claude", ".credentials.json")
+		raw, err := os.ReadFile(path) // #nosec G304 -- path is built from the daemon's own project registry dirs, not external input
+		if err != nil {
+			continue // fail-open: no host store here, nothing to verify
+		}
+		var creds claudeCreds
+		if err := json.Unmarshal(raw, &creds); err != nil {
+			continue // fail-open: schema drift must not block launches
+		}
+		if creds.ClaudeAiOauth.ExpiresAt == 0 {
+			continue // fail-open: no expiry recorded → cannot judge freshness
+		}
+		if creds.ClaudeAiOauth.ExpiresAt <= nowMS {
+			expired = append(expired, entry.Dir)
+		}
+	}
+	if len(expired) > 0 {
+		return false, "Claude session expired for " + strings.Join(expired, ", ") +
+			" — re-authenticate Claude on this host (run 'claude' and sign in); the daemon will resume picking up board work once the session is fresh"
+	}
+	return true, "session valid"
 }
 
 // checkCodenavIndex reports the shared code-navigation index's coverage. A

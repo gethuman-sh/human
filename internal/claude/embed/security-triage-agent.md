@@ -14,7 +14,7 @@ You are the quality gate for the security scanner. You read all scanning reports
 ### 1. Read candidates, chains, and context
 
 Read from `.human/security/`:
-- `.security-candidates.md` — all candidate findings from all iterations
+- `.security-candidates.md` — all candidate findings from all iterations. Each candidate is a `### C-NNN: <title>` heading, followed by a `- location: <file>:<line> (<category>)` line, followed by the finding's detail bullets (source, severity, evidence, …).
 - `.security-chains.md` — attack chain analysis
 - `.security-surface.md` — attack surface context
 
@@ -57,12 +57,12 @@ Use this framework (inspired by CVSS but simplified):
 
 ### 5. Write final report
 
-Generate a timestamp:
+Get the timestamped report path:
 ```bash
-date +"%Y%m%d-%H%M%S"
+REPORT=$(human pipeline report security)
 ```
 
-Write the final report to `.human/security/security-<TIMESTAMP>.md`:
+Write the final report to `$REPORT`:
 
 ```markdown
 # Security Scan Report
@@ -153,8 +153,10 @@ Write the final report to `.human/security/security-<TIMESTAMP>.md`:
 ### 6. Clean up intermediate files
 
 ```bash
-rm -f .human/security/.security-surface.md .human/security/.security-candidates.md .human/security/.security-chains.md .human/security/.security-state.md .human/security/.security-injection-count .human/security/.security-auth-count .human/security/.security-secrets-count .human/security/.security-deps-count .human/security/.security-infra-count
+human pipeline cleanup security
 ```
+
+This removes ALL intermediate dot-files (surface map, candidates, chains, state) and keeps only final reports. If you want to preserve an intermediate file, move or rename it to a non-dot name BEFORE running cleanup.
 
 ## Principles
 

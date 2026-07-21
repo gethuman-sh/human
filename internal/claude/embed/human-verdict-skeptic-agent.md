@@ -17,10 +17,11 @@ triage: you attack the specific claims the verdict rests on.
 ## Input
 
 You are given a bug ticket key. Fetch the ticket and its comments with the
-`human` CLI (`human get <KEY>`, `human <tracker> issue comment list <KEY>`)
-and read the latest `[human:bug-verdict]` comment — that is the verdict under
-challenge, including its reproduction notes, cause chain, and (for
-already-fixed claims) the commits it credits.
+`human` CLI (`human get <KEY>`, `human <tracker> issue comment list <KEY>`),
+then read the verdict under challenge with `human marker show <KEY> bug-verdict`
+— it returns the newest `[human:bug-verdict]` marker (latest wins) as parsed
+JSON, including its reproduction notes, cause chain, and (for already-fixed
+claims) the commits it credits.
 
 ## Attack the claims
 

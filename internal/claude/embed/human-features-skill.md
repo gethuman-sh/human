@@ -16,10 +16,10 @@ When omitted, "recent" means *changed since the latest release tag* (fallback: l
 
 ## Phase 0: Resolve trackers
 
-Run `human tracker list` to see configured trackers. Note the tracker with `"role": "pm"`
-(product tickets, e.g. Shortcut) and the one with `"role": "engineering"` (e.g. Linear) — the
-synthesis agent uses them to enrich ticket references. If the command fails or no trackers are
-configured, continue anyway: ticket mapping falls back to keys parsed from commit messages.
+Run `human tracker topology`. It returns JSON with the `pm` tracker and, in split topology, the
+`engineering` tracker (omitted in single mode) — the synthesis agent uses them to enrich ticket
+references. If no trackers are configured, continue anyway: ticket mapping falls back to keys
+taken from commit history.
 
 ## Phase 1: Reconnaissance
 

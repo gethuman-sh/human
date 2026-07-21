@@ -9,11 +9,13 @@ Analyze this codebase for structural debt, duplication, complexity hotspots, and
 
 ## Phase 1: Survey
 
-Create the output directory, then run the survey agent:
+Initialize the pipeline, then run the survey agent:
 
 ```bash
-mkdir -p .human/gardening
+human pipeline init gardening
 ```
+
+This creates `.human/gardening/` and prints the pipeline paths (`root`, `candidates`, `state`). Note the `candidates` path — you pass it to the triage agent in Phase 3.
 
 ```
 Task(subagent_type="gardening-survey", prompt="Survey this codebase for health analysis. Write your survey report to .human/gardening/.gardening-survey.md")
@@ -26,23 +28,25 @@ Wait for the survey agent to finish before proceeding.
 Launch all 4 analysis agents **in a single message** so they run in parallel:
 
 ```
-Task(subagent_type="gardening-structure", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for architectural imbalances, misplaced types, and leaky abstractions. Write findings to .human/gardening/.gardening-structure.md")
+Task(subagent_type="gardening-structure", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for architectural imbalances, misplaced types, and leaky abstractions. Report each finding with `human pipeline append gardening`")
 
-Task(subagent_type="gardening-duplication", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for structural clones, repeated patterns, and extractable utilities. Write findings to .human/gardening/.gardening-duplication.md")
+Task(subagent_type="gardening-duplication", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for structural clones, repeated patterns, and extractable utilities. Report each finding with `human pipeline append gardening`")
 
-Task(subagent_type="gardening-complexity", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for long functions, deep nesting, cyclomatic complexity, and dead code. Write findings to .human/gardening/.gardening-complexity.md")
+Task(subagent_type="gardening-complexity", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for long functions, deep nesting, cyclomatic complexity, and dead code. Report each finding with `human pipeline append gardening`")
 
-Task(subagent_type="gardening-hygiene", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for naming inconsistencies, test health issues, dependency problems, and convention violations. Write findings to .human/gardening/.gardening-hygiene.md")
+Task(subagent_type="gardening-hygiene", prompt="Read the survey report at .human/gardening/.gardening-survey.md, then analyze the codebase for naming inconsistencies, test health issues, dependency problems, and convention violations. Report each finding with `human pipeline append gardening`")
 ```
+
+The append command writes all findings into the shared candidates file race-free, so the agents can run in parallel without coordinating.
 
 Wait for all 4 agents to finish before proceeding.
 
 ## Phase 3: Triage
 
-Run the triage agent to validate, assess compound impact, and produce the final report with health scorecard:
+Check how many candidates the analysis agents reported with `human pipeline count gardening`, then run the triage agent to validate, assess compound impact, and produce the final report with health scorecard:
 
 ```
-Task(subagent_type="gardening-triage", prompt="Read all reports from .human/gardening/.gardening-*.md. Validate every finding against actual code, assess compound impact, compute health scorecard grades, and write the final gardening report to .human/gardening/")
+Task(subagent_type="gardening-triage", prompt="Read the survey report at .human/gardening/.gardening-survey.md and all candidate findings from the candidates file at <candidates path from `human pipeline init gardening`>. Validate every finding against actual code, assess compound impact, compute health scorecard grades, and write the final gardening report to the path from `human pipeline report gardening`")
 ```
 
 ## Phase 4: Create Ticket
@@ -50,7 +54,7 @@ Task(subagent_type="gardening-triage", prompt="Read all reports from .human/gard
 After the triage report is complete:
 
 1. Read the final gardening report from `.human/gardening/gardening-*.md` (the one just written by triage).
-2. Resolve the destination from `human tracker list`: in split topology (a tracker with `"role": "engineering"` distinct from the PM tracker) the gardening ticket belongs on the engineering tracker; in single-tracker topology it goes on the one tracker, which carries the whole ticket lifecycle. If the tracker or project is ambiguous, ask the user via `AskUserQuestion`: "Which tracker and project should the gardening ticket be created on? (e.g., 'linear --project=HUM' or 'github --project=myorg/myrepo')"
+2. Resolve the destination with `human tracker topology`: in split topology the gardening ticket belongs on the `engineering` tracker; in single mode (no `engineering` entry in the output) it goes on the `pm` tracker, which carries the whole ticket lifecycle. If the project is ambiguous, ask the user via `AskUserQuestion`: "Which tracker and project should the gardening ticket be created on? (e.g., 'linear --project=HUM' or 'github --project=myorg/myrepo')"
 3. Create the ticket with:
    - **Title**: "Codebase gardening: <N> findings (<health summary>)" — e.g., "Codebase gardening: 12 findings (3 high, 5 medium, 4 low)"
    - **Description**: The full gardening report content (health scorecard, findings, fix plans, recommended order)

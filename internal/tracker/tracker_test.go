@@ -169,6 +169,13 @@ func TestDetectKind_empty(t *testing.T) {
 	assert.Equal(t, "", DetectKind(""))
 }
 
+// SC-nnn is unambiguously Shortcut's own display format, so DetectKind must
+// name it rather than falling through to "".
+func TestDetectKind_shortcutDisplayKey(t *testing.T) {
+	assert.Equal(t, "shortcut", DetectKind("SC-879"))
+	assert.Equal(t, "shortcut", DetectKind("sc-1"))
+}
+
 // --- Key-hint resolution tests ---
 
 func TestResolve_keyHintSelectsGitHub(t *testing.T) {
@@ -272,6 +279,14 @@ func TestDetectCandidateKinds(t *testing.T) {
 		{name: "github repo", key: "octocat/repo", want: []string{"github", "gitlab"}},
 		{name: "azure devops", key: "Project/42", want: []string{"azuredevops"}},
 		{name: "numeric shortcut", key: "123", want: []string{"shortcut"}},
+		// SC-nnn is the form the tool prints everywhere; its shape also matches
+		// the jira/linear regex, so shortcut is added as an extra candidate and
+		// the FindTracker probe disambiguates.
+		{name: "shortcut display key", key: "SC-879", want: []string{"jira", "linear", "shortcut"}},
+		// Lowercase "sc-157" does not match the uppercase-only jira/linear regex,
+		// so it resolves unambiguously to shortcut alone.
+		{name: "shortcut display key lowercase", key: "sc-157", want: []string{"shortcut"}},
+		{name: "bare numeric is shortcut-only, not github", key: "157", want: []string{"shortcut"}},
 		{name: "empty", key: "", want: nil},
 		{name: "unknown", key: "!!!invalid!!!", want: nil},
 		{name: "lowercase not jira", key: "kan-42", want: nil},
@@ -299,6 +314,9 @@ func TestExtractProject(t *testing.T) {
 		{name: "github repo", key: "octocat/repo", want: "octocat/repo"},
 		{name: "azure devops", key: "Project/42", want: "Project"},
 		{name: "shortcut numeric", key: "123", want: ""},
+		// SC-nnn carries no project prefix — it must not yield "SC" the way a
+		// jira/linear key yields its project, or the resolved key would be wrong.
+		{name: "shortcut display key", key: "SC-879", want: ""},
 		{name: "unknown", key: "???", want: ""},
 	}
 
@@ -345,6 +363,23 @@ func TestFindTracker_ambiguousProbeSucceeds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "linear", result.Provider)
 	assert.Equal(t, "KAN", result.Project)
+}
+
+// A key in the tool's own SC-nnn display form must resolve to the configured
+// Shortcut workspace: the shape is ambiguous (jira/linear/shortcut), Jira's
+// probe fails, and Shortcut's succeeds — so FindTracker lands on shortcut with
+// no project prefix and the key kept verbatim.
+func TestFindTracker_shortcutDisplayKey(t *testing.T) {
+	instances := []Instance{
+		{Name: "work", Kind: "jira", Provider: fakeProvider{getIssueErr: fmt.Errorf("not found")}},
+		{Name: "board", Kind: "shortcut", Provider: fakeProvider{}}, // succeeds
+	}
+
+	result, err := FindTracker(context.Background(), "SC-879", instances)
+	require.NoError(t, err)
+	assert.Equal(t, "shortcut", result.Provider)
+	assert.Equal(t, "", result.Project)
+	assert.Equal(t, "SC-879", result.Key)
 }
 
 func TestFindTracker_ambiguousProbeAllFail(t *testing.T) {

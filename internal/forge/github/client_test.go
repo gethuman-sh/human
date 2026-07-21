@@ -63,6 +63,47 @@ func TestCreatePullRequest_invalidRepo(t *testing.T) {
 	assert.Contains(t, err.Error(), "owner/repo")
 }
 
+func TestFindOpenPullRequest_found(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/repos/octocat/hello-world/pulls", r.URL.Path)
+		assert.Equal(t, "octocat:autofix/989", r.URL.Query().Get("head"))
+		assert.Equal(t, "open", r.URL.Query().Get("state"))
+
+		_, _ = fmt.Fprint(w, `[{"number":42,"title":"Fix login","html_url":"https://github.com/octocat/hello-world/pull/42","state":"open","head":{"ref":"autofix/989"}}]`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	pr, err := client.FindOpenPullRequest(context.Background(), "octocat/hello-world", "autofix/989")
+
+	require.NoError(t, err)
+	require.NotNil(t, pr)
+	assert.Equal(t, 42, pr.Number)
+	assert.Equal(t, "https://github.com/octocat/hello-world/pull/42", pr.URL)
+	assert.Equal(t, "Fix login", pr.Title)
+}
+
+func TestFindOpenPullRequest_none(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `[]`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	pr, err := client.FindOpenPullRequest(context.Background(), "octocat/hello-world", "autofix/989")
+
+	require.NoError(t, err)
+	assert.Nil(t, pr)
+}
+
+func TestFindOpenPullRequest_invalidRepo(t *testing.T) {
+	client := New("https://api.github.com", "ghp_test")
+	_, err := client.FindOpenPullRequest(context.Background(), "no-slash", "autofix/989")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "owner/repo")
+}
+
 // checksServer serves the three endpoints PullRequestChecks touches with
 // canned check-run and combined-status payloads.
 func checksServer(t *testing.T, checkRuns, combined string) *httptest.Server {

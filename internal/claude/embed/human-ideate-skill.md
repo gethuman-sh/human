@@ -32,7 +32,7 @@ Follow these steps in order:
 
 8. **Ask** the user to confirm or adjust the scope using `AskUserQuestion`: "The recommendation is to [Expand/Hold/Reduce] scope. Do you agree, or would you prefer a different scope direction?"
 
-9. **Resolve PM tracker**: Run `human tracker list` and pick the tracker with `"role": "pm"`. Use its `type` as the tracker and its first configured project. If no tracker has role `pm`, fall back to asking the user via `AskUserQuestion`.
+9. **Resolve PM tracker**: Run `human tracker topology` and use its `pm` entry: the entry's `type` as the tracker and its first configured project.
 
 10. **Phase 3 -- Create ticket**: Delegate to the **human-ideator** agent with the scope decision, tracker, and project:
 

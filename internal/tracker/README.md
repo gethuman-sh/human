@@ -9,7 +9,10 @@
 - Read and add comments on an issue
 - Link two related issues ("relates to"; on GitHub, recorded as a cross-reference comment)
 - Move an issue to a new status
+- Finish or close an issue semantically (`human done KEY`, `human close KEY`) — the done/closed-type status is picked from the workflow, no status name needed
+- Promote an idea ticket (`human idea promote KEY`) — strips the `human/idea`/`idea` labels, keeping key and history
 - Assign an issue to a user
 - Edit an issue's title and description
 - Auto-detects the right tracker from a key
+- Resolves tracker roles and topology (`human tracker topology`): which tracker is PM, which is engineering, single vs split
 - Guards deletes and edits with safe-mode policies

@@ -17,23 +17,25 @@ A rough idea may already exist as a ticket: quick-captured ideas are real ticket
 # List configured trackers (always start here when multiple trackers are configured)
 human tracker list
 
-# Quick command (auto-detect tracker — works when only one tracker type is configured)
+# Quick command (auto-detect the owning tracker from the key shape — works regardless of how many trackers are configured)
 human get <TICKET_KEY>
 
 # Provider-specific commands (replace <TRACKER> with jira, github, gitlab, linear, azuredevops, or shortcut)
 human <TRACKER> issue get <TICKET_KEY>
 human <TRACKER> issues list --project=<PROJECT_KEY>
 human <TRACKER> issue create --project=<PROJECT_KEY> "Short title" --description "Detailed description"
-human <TRACKER> issue edit <TICKET_KEY> --title "New title" --description "New description" --remove-label human/idea
+human <TRACKER> issue edit <TICKET_KEY> --title "New title" --description "New description"
 human <TRACKER> issue comment add <TICKET_KEY> "Comment body"
+
+# Promote an idea ticket: removes the human/idea and idea labels (idempotent)
+human idea promote <TICKET_KEY>
 ```
 
 ## Tracker resolution
 
-1. Run `human tracker list` to see all configured trackers
-2. When only one tracker type is configured, quick commands work: `human get <KEY>`
-3. When multiple tracker types are configured, use provider-specific commands: `human shortcut issue get <KEY>`, `human linear issue get <KEY>`
-4. Use `--tracker=<name>` to select a specific named instance within the same tracker type
+1. Resolve a dispatched ticket key with `human get <KEY>` — the CLI auto-detects the owning tracker from the key's shape (a bare number → Shortcut; `KAN-42` → Jira/Linear; `owner/repo#42` → GitHub/GitLab), regardless of how many trackers are configured. Never infer the tracker from the git origin remote.
+2. `human tracker list` only enumerates configured trackers (use it to locate a write target such as the engineering tracker); it gives no key→tracker mapping, so never use it to guess which tracker owns a key.
+3. Only when two instances of the SAME tracker kind are configured and a key is ambiguous between them, disambiguate with `--tracker=<name>` (or the provider-specific `human <tracker> issue get <KEY>`).
 
 ## Decision principles
 
@@ -135,7 +137,8 @@ When the prompt starts with "Phase 3":
      ```
    - **Evolve** (the prompt names an existing idea ticket `<IDEA_KEY>`): rewrite the same ticket in place and shed the idea label — the key never changes:
      ```
-     human <tracker> issue edit <IDEA_KEY> --title "<short title>" --description "<full description with problem statement, user story, acceptance criteria>" --remove-label human/idea --remove-label idea
+     human <tracker> issue edit <IDEA_KEY> --title "<short title>" --description "<full description with problem statement, user story, acceptance criteria>"
+     human idea promote <IDEA_KEY>
      ```
 3. **Add** challenge record as a comment on the ticket:
    ```

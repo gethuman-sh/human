@@ -70,3 +70,58 @@ func TestServer_VersionGate_RunsAfterAuth(t *testing.T) {
 	resp := sendRequest(t, addr, Request{Version: "0.20.0", Token: "wrong", Args: []string{"echo", "hello"}})
 	assert.Contains(t, resp.Stderr, "authentication failed")
 }
+
+func TestClientSupported_ProtocolGate(t *testing.T) {
+	// A client advertising a protocol gets the integer gate: at or above
+	// MinProtocol passes regardless of its version string; below is rejected.
+	assert.True(t, clientSupported("0.19.0", MinProtocol))
+	assert.True(t, clientSupported("", MinProtocol+5), "newer clients pass; their own MinDaemonProtocol guards the other direction")
+	if MinProtocol > 1 {
+		assert.False(t, clientSupported("99.0.0", MinProtocol-1), "a too-old protocol is rejected even with a high version string")
+	}
+
+	// Protocol zero = pre-handshake client → legacy version-string gate.
+	assert.True(t, clientSupported("dev", 0))
+	assert.True(t, clientSupported(MinClientVersion, 0))
+	assert.False(t, clientSupported("0.20.0", 0))
+}
+
+func TestServer_ProtocolGate_AcceptsAndRejects(t *testing.T) {
+	token := "test-token"
+	addr, _, store := startTestServerWithConfirm(t, token)
+
+	ok := sendRequest(t, addr, Request{Version: "0.1.0", Protocol: MinProtocol, Token: token, Args: []string{"echo", "hello"}})
+	assert.Equal(t, 0, ok.ExitCode, "stderr: %s", ok.Stderr)
+
+	if MinProtocol > 1 {
+		tooOld := sendRequest(t, addr, Request{Version: "99.0.0", Protocol: MinProtocol - 1, Token: token, ClientPID: 1111, Args: []string{"jira", "issue", "delete", "KAN-1"}})
+		assert.Equal(t, 1, tooOld.ExitCode)
+		assert.Contains(t, tooOld.Stderr, "wire protocol")
+		assert.Equal(t, 0, store.Len(), "protocol-stale client must not create queue entries")
+	}
+}
+
+func TestDaemonProtocolError(t *testing.T) {
+	// Daemons predating protocol advertising pass — refusing them would
+	// strand every client during the transition.
+	assert.NoError(t, DaemonProtocolError(DaemonInfo{Protocol: 0}))
+	assert.NoError(t, DaemonProtocolError(DaemonInfo{Protocol: MinDaemonProtocol}))
+	assert.NoError(t, DaemonProtocolError(DaemonInfo{Protocol: MinDaemonProtocol + 3}))
+
+	err := DaemonProtocolError(DaemonInfo{Protocol: MinDaemonProtocol - 1})
+	if MinDaemonProtocol > 1 {
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rebuild and restart the daemon")
+	} else {
+		// MinDaemonProtocol 1 means "protocol 0" is the only lower value, and
+		// zero is the transition carve-out above — nothing to reject yet.
+		assert.NoError(t, err)
+	}
+}
+
+func TestProtocolConstants_Sane(t *testing.T) {
+	// The compatibility floors can never exceed what this build speaks.
+	assert.LessOrEqual(t, MinProtocol, Protocol)
+	assert.LessOrEqual(t, MinDaemonProtocol, Protocol)
+	assert.GreaterOrEqual(t, MinProtocol, 1)
+}

@@ -23,13 +23,18 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdbrowser"
 	"github.com/gethuman-sh/human/cmd/cmdclickup"
 	"github.com/gethuman-sh/human/cmd/cmdcodenav"
+	"github.com/gethuman-sh/human/cmd/cmdcommits"
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
+	"github.com/gethuman-sh/human/cmd/cmddeploy"
 	"github.com/gethuman-sh/human/cmd/cmddoctor"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
+	"github.com/gethuman-sh/human/cmd/cmdhandoff"
 	"github.com/gethuman-sh/human/cmd/cmdindex"
 	"github.com/gethuman-sh/human/cmd/cmdinit"
+	"github.com/gethuman-sh/human/cmd/cmdmarker"
 	"github.com/gethuman-sh/human/cmd/cmdnotion"
 	"github.com/gethuman-sh/human/cmd/cmdping"
+	"github.com/gethuman-sh/human/cmd/cmdpipeline"
 	"github.com/gethuman-sh/human/cmd/cmdplan"
 	"github.com/gethuman-sh/human/cmd/cmdprovider"
 	"github.com/gethuman-sh/human/cmd/cmdproxy"
@@ -207,6 +212,18 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	autoStatusCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoStatusCmd)
 
+	autoDoneCmd := cmdauto.BuildAutoDoneCmd(autoDeps)
+	autoDoneCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoDoneCmd)
+
+	autoCloseCmd := cmdauto.BuildAutoCloseCmd(autoDeps)
+	autoCloseCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoCloseCmd)
+
+	autoIdeaCmd := cmdauto.BuildAutoIdeaCmd(autoDeps)
+	autoIdeaCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoIdeaCmd)
+
 	autoLinkCmd := cmdauto.BuildAutoLinkCmd(autoDeps)
 	autoLinkCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoLinkCmd)
@@ -218,6 +235,26 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	planCmd := cmdplan.BuildPlanCmd(autoDeps)
 	planCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(planCmd)
+
+	commitsCmd := cmdcommits.BuildCommitsCmd()
+	commitsCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(commitsCmd)
+
+	markerCmd := cmdmarker.BuildMarkerCmd(autoDeps)
+	markerCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(markerCmd)
+
+	handoffCmd := cmdhandoff.BuildHandoffCmd(autoDeps)
+	handoffCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(handoffCmd)
+
+	pipelineCmd := cmdpipeline.BuildPipelineCmd()
+	pipelineCmd.GroupID = "utility"
+	rootCmd.AddCommand(pipelineCmd)
+
+	deployCmd := cmddeploy.BuildDeployCmd(autoDeps)
+	deployCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(deployCmd)
 
 	// --- Provider commands (dynamic registration) ---
 	providers := []string{"jira", "github", "gitlab", "linear", "azuredevops", "shortcut", "clickup"}
@@ -504,6 +541,8 @@ func resolveEventName(data []byte, structVal string) string {
 var localSubcommands = map[string]bool{
 	"daemon":        true,
 	"chrome-bridge": true,
+	"commits":       true,
+	"pipeline":      true,
 	"install":       true,
 	"init":          true,
 	"usage":         true,
@@ -759,6 +798,15 @@ func main() {
 	printUpdateNotice(version)
 
 	if addr != "" && !isLocalSubcommand(args) {
+		// Symmetric half of the version gate: refuse a too-old daemon with one
+		// clear error before any request, instead of a cryptic unknown-command
+		// failure after forwarding.
+		if info, infoErr := daemon.ReadInfo(); infoErr == nil {
+			if protoErr := daemon.DaemonProtocolError(info); protoErr != nil {
+				errors.LogError(protoErr).Msg("daemon too old for this client")
+				os.Exit(1)
+			}
+		}
 		exitCode, err := daemon.RunRemote(addr, token, args, version)
 		if err != nil {
 			errors.LogError(err).Msg("remote execution failed")

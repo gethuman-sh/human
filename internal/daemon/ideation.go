@@ -468,6 +468,13 @@ func (e *IdeationEngine) createTicket(sessID, title, description string) {
 		e.sess.errMsg = errors.WrapWithDetails(err, "creating PM ticket from ideation", "project", project).Error()
 		return
 	}
+	if created == nil {
+		// A provider must return the created issue on success, but a broken
+		// one failing that contract must surface as an error, not a panic.
+		e.sess.state = IdeationError
+		e.sess.errMsg = "tracker returned no issue for the created ticket"
+		return
+	}
 	e.sess.state = IdeationDone
 	e.sess.createdKey = created.Key
 	e.sess.createdURL = created.URL

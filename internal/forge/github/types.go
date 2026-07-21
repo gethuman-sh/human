@@ -44,3 +44,15 @@ type mergeResponse struct {
 	Merged  bool   `json:"merged"`
 	Message string `json:"message"`
 }
+
+// pullListItem is one element of the GitHub list-pulls response used to adopt
+// an existing open PR for a head branch (SC-989).
+type pullListItem struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	HTMLURL string `json:"html_url"`
+	State   string `json:"state"`
+	Head    struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+}

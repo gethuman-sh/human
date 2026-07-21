@@ -15,56 +15,54 @@ commits: 2037e40, 64bb370
 
 The `engineering:` line is present only in split topology (separate engineering tracker). In single-tracker topology it is absent — the review target is the PM ticket the comment sits on.
 
-Your job: parse that comment, run the `human-reviewer` agent against each review key (each engineering key, or the PM key itself when the `engineering:` line is absent), then post a follow-up comment on the PM ticket summarising the outcome.
+Your job: read that handoff, run the `human-reviewer` agent against each review key (each engineering key, or the PM key itself when the `engineering:` line is absent), then post a follow-up comment on the PM ticket summarising the outcome.
 
 ## Steps
 
-1. **Resolve the PM ticket.** `$ARGUMENTS` is the PM ticket key (e.g. `SC-79`). Run `human tracker list` to find its tracker. Use the tracker marked with `role: pm` — if roles are not set, pick the tracker whose kind matches the key prefix (`SC-…` → Shortcut, `KAN-…`/issue-in-project → Jira, etc.).
+1. **Resolve the PM ticket.** `$ARGUMENTS` is the PM ticket key (e.g. `SC-79`). `human get <PM_KEY>` must succeed — the CLI auto-detects the owning tracker from the key shape; there is no tracker to pick by hand.
 
-2. **Read the latest handoff comment.** Run `human <pm-tracker> issue comment list <PM_KEY>`. Scan comments newest-first for a body starting with `[human:ready-for-review]`. If none is found, stop and report: `No ready-for-review handoff on <PM_KEY>`. Do not guess.
+2. **Read the handoff.** Run `human handoff show <PM_KEY>` — it returns the newest `[human:ready-for-review]` handoff parsed as JSON:
+   - `engineering` — the engineering ticket keys. May be absent (single-tracker topology): the review keys are then just `<PM_KEY>` itself.
+   - `branch` — the branch the reviewer should be on.
+   - `commits` — short SHAs, for cross-checking.
 
-3. **Parse the block.** Extract:
-   - `engineering:` — comma-separated engineering ticket keys. May be absent (single-tracker topology): the review keys are then just `<PM_KEY>` itself.
-   - `branch:` — the branch the reviewer should be on.
-   - `commits:` — short SHAs, for cross-checking.
+   If the command reports no handoff, stop and report: `No ready-for-review handoff on <PM_KEY>`. Do not guess.
 
-   Do NOT proceed against a branch that disagrees with `branch:`. The reviewer's Step 0 binding gate checks out the handoff branch itself and returns `unreviewable` on any mismatch — never review "the current branch as-is" hoping it is close enough, and never post a verdict for code that is not the handed-off branch.
+   Do NOT proceed against a branch that disagrees with `branch`. The reviewer's Step 0 binding gate checks out the handoff branch itself and returns `unreviewable` on any mismatch — never review "the current branch as-is" hoping it is close enough, and never post a verdict for code that is not the handed-off branch.
 
-4. **Run the reviewer per review key, bound to the handoff.** For each key in `engineering:` (or for `<PM_KEY>` when the line is absent), invoke the existing reviewer agent via the Task tool, threading the parsed `branch:`/`commits:` as the binding so the agent verifies the checkout before reviewing:
+3. **Run the reviewer per review key, bound to the handoff.** For each key in `engineering` (or for `<PM_KEY>` when it is absent), invoke the existing reviewer agent via the Task tool, threading the handoff's `branch`/`commits` as the binding so the agent verifies the checkout before reviewing:
    ```
    Task(subagent_type="human-reviewer", prompt="Review changes for ticket <REVIEW_KEY> --branch=<branch> --commits=<commits>")
    ```
    Each run writes `.human/reviews/<review_key_lowercased>.md`. Review ONLY the keys named in this handoff, and post markers ONLY on `<PM_KEY>` — never on any ticket the handoff does not name.
 
-5. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the outcome (`pass`, `pass with notes`, `fail`, or `unreviewable: <reason>`). If ANY reviewed key's Summary starts with `unreviewable`, the reviewer could not obtain that code — skip the pass/notes/fail roll-up entirely and go to the unreviewable branch of step 6. Otherwise roll them up into an overall verdict:
+4. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the outcome (`pass`, `pass with notes`, `fail`, or `unreviewable: <reason>`). If ANY reviewed key's Summary starts with `unreviewable`, the reviewer could not obtain that code — skip the pass/notes/fail roll-up entirely and go to the unreviewable branch of step 5. Otherwise roll them up into an overall verdict:
    - all pass → `pass`
    - any pass-with-notes, no fails → `pass with notes`
    - any fail → `fail`
 
-6. **Post the follow-up comment on the PM ticket.**
+5. **Post the follow-up comment on the PM ticket.**
 
-   **Unreviewable escape (leading branch).** If any reviewed key was `unreviewable`, do NOT post `[human:review-complete]` and do NOT dispatch any rework — nothing was reviewed, so a verdict would be a lie. Post `[human:review-failed]` instead, naming the unreachable ref(s) per affected key so the board renders an honest, retryable stage failure, then STOP:
+   **Unreviewable escape (leading branch).** If any reviewed key was `unreviewable`, do NOT post `[human:review-complete]` and do NOT dispatch any rework — nothing was reviewed, so a verdict would be a lie. Post `[human:review-failed]` instead, naming the unreachable ref(s) per affected key so the board renders an honest, retryable stage failure:
+   ```bash
+   human marker post <PM_KEY> review-failed --field reason="<REVIEW_KEY>: <reachability reason — e.g. handoff branch feat/x not found — no code was reviewed>"
    ```
-   [human:review-failed]
-   <REVIEW_KEY>: <reachability reason — e.g. handoff branch feat/x not found — no code was reviewed>
-   ```
-   Post it with `human <pm-tracker> issue comment add <PM_KEY> "<body>"`, tell the user how to make the code reachable (push the branch / commit with the ticket key), and STOP — do not run the pass/notes/fail posting below.
- The comment is the canonical record of the review — it must carry the reviewer's full findings inline so a reader (and the board detail panel) sees what was found without opening any local file. The `.human/reviews/<key>.md` files remain as working artifacts, not the source of truth. Use this format:
-   ```
-   [human:review-complete]
-   verdict: <overall-verdict>
-   reviews:
-     <REVIEW_KEY_1>: <verdict> — .human/reviews/<review_key_1>.md
-     <REVIEW_KEY_2>: <verdict> — .human/reviews/<review_key_2>.md
-
+   With several affected keys, pass one `reason` value with embedded newlines — one `<REVIEW_KEY>: <reason>` line each; continuation lines are indented automatically. Tell the user how to make the code reachable (push the branch / commit with the ticket key), and STOP — do not run the pass/notes/fail posting below.
+ The comment is the canonical record of the review — it must carry the reviewer's full findings inline so a reader (and the board detail panel) sees what was found without opening any local file. The `.human/reviews/<key>.md` files remain as working artifacts, not the source of truth. Post it with:
+   ```bash
+   human marker post <PM_KEY> review-complete \
+     --field verdict="<overall-verdict>" \
+     --field reviews="<REVIEW_KEY_1>: <verdict> — .human/reviews/<review_key_1>.md\n<REVIEW_KEY_2>: <verdict> — .human/reviews/<review_key_2>.md" \
+     --body-file - <<'FINDINGS_EOF'
    ## Findings
    <the full findings for each reviewed key, inlined from the reviewer's output:
     what was checked, every issue found (or "no issues"), and any notes — the
     substance of each .human/reviews/<key>.md, not just a pointer to it>
+   FINDINGS_EOF
    ```
-   Post it with `human <pm-tracker> issue comment add <PM_KEY> "<body>"`. The `[human:review-complete]` header mirrors the handoff header so future tooling can close the loop (e.g. auto-transition the reviewed tickets to Done when all reviews pass), and the inlined `## Findings` section makes the on-ticket comment the complete review record.
+   The rendered `[human:review-complete]` header mirrors the handoff header so future tooling can close the loop (e.g. auto-transition the reviewed tickets to Done when all reviews pass), and the inlined `## Findings` section makes the on-ticket comment the complete review record.
 
-7. **Report to the user.** Summarise in plain text: which tickets were reviewed, the overall verdict, and where each review lives.
+6. **Report to the user.** Summarise in plain text: which tickets were reviewed, the overall verdict, and where each review lives.
 
 ## Principles
 

@@ -77,20 +77,18 @@ How to detect:
    - For conventions: Grep for `fmt.Errorf`, `errors.New`, provider types in tracker package
    - For stale artifacts: Grep for commented code blocks and TODOs
 3. **Read** specific files for context when Grep results are ambiguous
-4. **Write** your findings to `.human/gardening/.gardening-hygiene.md`
+4. **Report** each finding with `human pipeline append gardening` (see Output format)
 
 ## Output format
 
-Write findings to `.human/gardening/.gardening-hygiene.md`:
+Report each finding as you confirm it with `human pipeline append gardening`. The command allocates the next candidate ID race-free (safe while the other analysis agents run in parallel) and appends the finding to the shared candidates file:
 
-```markdown
-# Gardening Hygiene Analysis
-
-## Findings
-
-### 1. <Short title>
-- **File**: path/to/file.go:42
-- **Category**: Naming inconsistency / Test health / Dependency issue / Convention violation / Stale artifact
+```bash
+human pipeline append gardening \
+  --file path/to/file.go --line 42 \
+  --category "Naming inconsistency" \
+  --title "<Short title>" \
+  --body-file - <<'EOF'
 - **Impact**: high / medium / low
 - **Confidence**: certain / likely / possible
 - **Evidence**:
@@ -99,11 +97,14 @@ Write findings to `.human/gardening/.gardening-hygiene.md`:
   ```
 - **Reasoning**: <why this is a hygiene issue>
 - **Suggested fix**: <specific action to resolve>
-
-### 2. ...
+EOF
 ```
 
-If no hygiene issues are found, write a report stating that with a note on what was analyzed.
+`--category` is one of: Naming inconsistency / Test health / Dependency issue / Convention violation / Stale artifact. Everything except the title and the file:line location goes in the body. For a codebase-wide issue (e.g. a naming split across packages), use the file and line of the most representative occurrence and list the other occurrences in the body.
+
+The command returns `{"id":"C-00N","duplicate":true|false}`. A `"duplicate": true` response means a finding with the same file, line, and category is already in the candidates file — it was already reported (possibly by a parallel agent). Move on; do not re-report it.
+
+If no hygiene issues are found, append nothing and state in your final reply what was analyzed and that nothing was found.
 
 ## Principles
 

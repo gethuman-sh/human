@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	_ forge.Forge         = (*Client)(nil)
-	_ forge.ChecksReader  = (*Client)(nil)
-	_ forge.Merger        = (*Client)(nil)
-	_ forge.MergedReader  = (*Client)(nil)
-	_ forge.BranchDeleter = (*Client)(nil)
+	_ forge.Forge             = (*Client)(nil)
+	_ forge.ChecksReader      = (*Client)(nil)
+	_ forge.Merger            = (*Client)(nil)
+	_ forge.MergedReader      = (*Client)(nil)
+	_ forge.BranchDeleter     = (*Client)(nil)
+	_ forge.PullRequestFinder = (*Client)(nil)
 )
 
 // Client is a GitHub REST API client scoped to code-forge (pull request)
@@ -85,6 +86,42 @@ func (c *Client) CreatePullRequest(ctx context.Context, pr *forge.PullRequest) (
 		Number: result.Number,
 		URL:    result.HTMLURL,
 	}, nil
+}
+
+// FindOpenPullRequest implements forge.PullRequestFinder. GitHub's list-pulls
+// endpoint filters by head as "owner:branch"; with state=open it returns the
+// live PR for the branch (at most one), which a deploy retry adopts instead of
+// re-creating (SC-989). No match returns (nil, nil).
+func (c *Client) FindOpenPullRequest(ctx context.Context, repoName, head string) (*forge.PullRequest, error) {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return nil, err
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo))
+	query := url.Values{}
+	// GitHub filters list-pulls by head as "owner:branch".
+	query.Set("head", owner+":"+head)
+	query.Set("state", "open")
+	resp, err := c.api.Do(ctx, http.MethodGet, path, query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var list []pullListItem
+	if err := apiclient.DecodeJSON(resp, &list, "repo", repoName, "head", head); err != nil {
+		return nil, err
+	}
+	for _, item := range list {
+		if item.State == "open" && item.Head.Ref == head {
+			return &forge.PullRequest{
+				Repo:   repoName,
+				Head:   head,
+				Title:  item.Title,
+				Number: item.Number,
+				URL:    item.HTMLURL,
+			}, nil
+		}
+	}
+	return nil, nil
 }
 
 // PullRequestChecks implements forge.ChecksReader. GitHub reports CI through

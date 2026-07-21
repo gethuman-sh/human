@@ -806,9 +806,17 @@ func normalizeStoryType(t string) string {
 	return ""
 }
 
-// parseStoryID parses a string story ID into an int64.
+// parseStoryID parses a string story ID into an int64. It accepts both the bare
+// numeric key and the tool's own "SC-nnn" display form (case-insensitive), so
+// every entry point that funnels through here — Get/Edit/Comment/Link — resolves
+// keys copied out of commits, markers and PR titles. The original key is kept in
+// the error so a bad "SC-abc" still reports what the caller passed.
 func parseStoryID(key string) (int64, error) {
-	id, err := strconv.ParseInt(key, 10, 64)
+	numeric := key
+	if len(key) > 3 && strings.EqualFold(key[:3], "sc-") {
+		numeric = key[3:]
+	}
+	id, err := strconv.ParseInt(numeric, 10, 64)
 	if err != nil || id <= 0 {
 		return 0, errors.WithDetails("invalid story ID, expected numeric key", "key", key)
 	}

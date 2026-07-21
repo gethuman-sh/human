@@ -14,8 +14,10 @@ You are the quality gate for the bug scanner. You read all accumulated candidate
 ### 1. Read candidates and context
 
 Read these files from `.human/bugs/`:
-- `.findbugs-candidates.md` — all candidate findings from all iterations
+- `.bugs-candidates.md` — all candidate findings from all iterations
 - `.findbugs-recon.md` — for context on technologies and codebase structure
+
+Each candidate in `.bugs-candidates.md` is a block appended by `human pipeline append`: a `### C-NNN: <title>` heading, then a `- location: <file>:<line> (<category>)` line, then the reporting agent's body markdown (source, severity, confidence, evidence, reasoning, suggested fix).
 
 ### 2. Validate each finding
 
@@ -44,12 +46,13 @@ For each validated finding, assign severity based on:
 
 ### 4. Write final report
 
-Generate a timestamp for the report filename:
+Get the timestamped report path and the iteration count:
 ```bash
-date +"%Y%m%d-%H%M%S"
+REPORT=$(human pipeline report bugs)
+ITERATIONS=$(human pipeline state get bugs iterations)
 ```
 
-Write the final report to `.human/bugs/findbugs-<TIMESTAMP>.md`:
+Write the final report to `$REPORT`:
 
 ```markdown
 # Bug Scan Report
@@ -58,7 +61,7 @@ Write the final report to `.human/bugs/findbugs-<TIMESTAMP>.md`:
 **Codebase**: <project name from git remote or directory name>
 **Technologies**: <from recon report>
 **Files scanned**: <from recon report>
-**Iterations**: <number of analysis iterations that ran>
+**Iterations**: <$ITERATIONS — the number of analysis iterations that ran>
 **Bugs found**: N (X critical, Y high, Z medium, W low)
 
 ## Critical
@@ -106,11 +109,13 @@ Write the final report to `.human/bugs/findbugs-<TIMESTAMP>.md`:
 
 ### 5. Clean up intermediate files
 
-Delete all intermediate files:
+After the report is written, remove the intermediate files:
 
 ```bash
-rm -f .human/bugs/.findbugs-recon.md .human/bugs/.findbugs-candidates.md .human/bugs/.findbugs-state.md .human/bugs/.findbugs-logic-count .human/bugs/.findbugs-errors-count .human/bugs/.findbugs-concurrency-count .human/bugs/.findbugs-api-count
+human pipeline cleanup bugs
 ```
+
+This deletes ALL dot-files in `.human/bugs/` (recon report, candidates, state) and keeps final reports — run it only after the report exists.
 
 ## Principles
 

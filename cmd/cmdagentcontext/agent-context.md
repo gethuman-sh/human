@@ -18,7 +18,14 @@ If a codenav query says the repo is not indexed, the daemon is still building th
 - `human get <KEY>` — fetch an issue (auto-detects the tracker from the key)
 - `human list` / `human search "<query>"` — list or search issues across trackers
 - `human <tracker> issue create|edit|status|comment …` — create and update tickets (a separate engineering ticket in split topology; otherwise the one evolving ticket carries idea, plan, and review)
-- `human plan show <KEY>` — print the ticket's engineering plan from its `[human:plan]` comment
+- `human tracker topology` — which tracker is PM, which is engineering, single vs split; never re-derive this from the tracker list
+- `human done <KEY>` / `human close <KEY>` — finish or close a ticket without knowing the workflow's status names
+- `human plan show <KEY>` — print the ticket's engineering plan; attach one with `human marker post <KEY> plan --body-file -`
+
+## Pipeline protocol — use these instead of hand-building comments or git incantations
+- `human marker post|show|list <KEY> [TYPE]` — post/read the structured `[human:*]` handoff comments (plan, review verdicts, deploy results); validated, latest-wins
+- `human handoff post <KEY>` / `handoff show <KEY>` — the ready-for-review handoff; post derives branch/commits/daemon and verifies the commits are pushed
+- `human commits for <KEY>` — the commits referencing a ticket; `human commits prefix <PM> [<ENG>]` — the canonical commit-subject prefix
 
 ## Pull product context
 - `human notion search "<query>"` — docs, specs, notes
@@ -27,3 +34,4 @@ If a codenav query says the repo is not indexed, the daemon is still building th
 
 ## Ship
 - `human pr create --head <branch> --title "…" --body "…"` — open a PR (forge and repo derived from the git origin remote)
+- `human deploy <KEY>` — the whole deploy gate: PR, CI wait, rebase if stale, merge, markers, ticket close; a branch already merged into the base is a clean success

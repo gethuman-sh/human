@@ -201,6 +201,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		Token:      token,
 		PID:        os.Getpid(),
 		Version:    version,
+		Protocol:   daemon.Protocol,
 		DaemonID:   daemonID,
 		Projects:   projectInfos,
 	}
@@ -269,6 +270,14 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		audit:    auditStore != nil,
 		confirms: confirmDB != nil,
 	}))
+	// launchGate lets the autonomous stage launcher refuse work when this host
+	// fails a launch-critical doctor check (docker, agent-skills, claude-auth): it
+	// leaves the handoff for a healthy daemon rather than claiming and failing it
+	// (SC-912). Built from the same LaunchCriticalChecks the synchronous refusal
+	// path uses; Blockers is nil-safe, so a doctor-less daemon disables cleanly.
+	launchGate := func(ctx context.Context) []daemon.DoctorCheck {
+		return doctor.Blockers(ctx, daemon.LaunchCriticalChecks)
+	}
 
 	srv := &daemon.Server{
 		Addr:              addr,
@@ -293,9 +302,9 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AuditStore:        auditStore,
 		AgentCleaner:      &dockerAgentCleaner{},
 		VaultResolver:     vaultResolver,
-		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger),
-		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger),
-		BoardOptioner:     boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger),
+		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BoardOptioner:     boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
 		BugCreator:        bugCreatorFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
@@ -424,7 +433,13 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			Timestamp: time.Now().UTC(),
 		})
 	}, logger)
-	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger)
+	// The auto-review chain runs through the same launch gate: a daemon that
+	// cannot serve a review must leave the ready-for-review handoff unclaimed for
+	// one that can, not claim and fail it (SC-912). Doctor.Blockers is nil-safe.
+	reviewLaunchGate := func(ctx context.Context) []daemon.DoctorCheck {
+		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchCriticalChecks)
+	}
+	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by
 	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
@@ -1586,7 +1601,7 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 	}
 
 	base := gitrepo.DefaultBranch(ctx, req.WorkspaceDir)
-	pr, err := creator.CreatePullRequest(ctx, &forge.PullRequest{
+	pr, err := forge.AdoptOrCreatePullRequest(ctx, creator, &forge.PullRequest{
 		Repo:  repo,
 		Base:  base,
 		Head:  req.Branch,
@@ -1594,7 +1609,7 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 		Body:  req.Body,
 	})
 	if err != nil {
-		return daemon.PRResult{}, errors.WrapWithDetails(err, "creating pull request", "repo", repo, "head", req.Branch)
+		return daemon.PRResult{}, errors.WrapWithDetails(err, "opening pull request", "repo", repo, "head", req.Branch)
 	}
 	return daemon.PRResult{URL: pr.URL, Number: pr.Number}, nil
 }
@@ -1618,48 +1633,91 @@ func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) error
 // EnsureMergeable makes the handoff branch current with the base before the
 // deploy attempts the merge: it fetches the base, and when the branch does not
 // already contain the base tip it rebases the branch onto origin/<base>,
-// re-pushes (lease when the branch is on origin), and re-verifies. A rebase error
-// is a real conflict the mechanical path cannot resolve — the deploy must fail
-// loudly rather than merge blind (735).
-func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) error {
+// re-pushes (lease when the branch is on origin), and re-verifies. The rebase
+// runs in an ephemeral detached worktree, never in the live workspace checkout:
+// git refuses to rebase in a dirty worktree, so ANY uncommitted user change
+// would fail every deploy — and a rebase that did run would check the handoff
+// branch out under the user (SC-1000). A rebase error is a real conflict the
+// mechanical path cannot resolve — the deploy must fail loudly rather than
+// merge blind (735).
+func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) (bool, error) {
 	dir, branch := req.WorkspaceDir, req.Branch
 	base := gitrepo.DefaultBranch(ctx, dir)
 	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
-		return err
+		return false, err
 	}
 	originBase := "origin/" + base
+	tip, onOrigin, err := branchTip(ctx, dir, branch)
+	if err != nil {
+		return false, err
+	}
 	// Already current: the branch contains the base tip, so its PR is mergeable
 	// without touching it.
-	if gitrepo.IsAncestor(ctx, dir, originBase, branch) {
-		return nil
+	if gitrepo.IsAncestor(ctx, dir, originBase, tip) {
+		return false, nil
 	}
-	// Record the remote tip so the post-rebase push can lease against it — only
-	// meaningful when the branch is already on origin.
-	var remoteSHA string
-	onOrigin := gitrepo.BranchExistsRemote(ctx, dir, branch)
+	wt, cleanup, err := addEphemeralWorktree(ctx, dir, tip)
+	if err != nil {
+		return false, err
+	}
+	defer cleanup()
+	if err := gitrepo.RebaseHead(ctx, wt, originBase); err != nil {
+		return false, err
+	}
+	newTip, err := gitrepo.RevParse(ctx, wt, "HEAD")
+	if err != nil {
+		return false, err
+	}
+	// The worktree rebased a detached HEAD, so publishing is a refspec push of
+	// the worktree's HEAD — the branch itself is never checked out anywhere.
+	// Lease against the recorded pre-rebase tip when the branch is on origin so
+	// a concurrent push is refused, not clobbered.
 	if onOrigin {
-		sha, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
-		if err != nil {
-			return err
+		if err := gitrepo.PushHeadWithLease(ctx, wt, branch, tip); err != nil {
+			return false, err
 		}
-		remoteSHA = sha
-	}
-	if err := gitrepo.Rebase(ctx, dir, originBase, branch); err != nil {
-		return err
-	}
-	if onOrigin {
-		if err := gitrepo.PushWithLease(ctx, dir, branch, remoteSHA); err != nil {
-			return err
-		}
-	} else if err := gitrepo.Push(ctx, dir, branch); err != nil {
-		return err
+	} else if err := gitrepo.PushHead(ctx, wt, branch); err != nil {
+		return false, err
 	}
 	// A clean rebase that still does not contain the base tip means the branch
 	// could not be made mergeable — surface it rather than merge into a conflict.
-	if !gitrepo.IsAncestor(ctx, dir, originBase, branch) {
-		return errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
+	if !gitrepo.IsAncestor(ctx, dir, originBase, newTip) {
+		return true, errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
 	}
-	return nil
+	return true, nil
+}
+
+// branchTip resolves the commit the freshness rebase starts from, preferring
+// the origin ref: the deploy serves the PR (which lives on origin), and the
+// local ref may lag a prior deploy's rebase — the ephemeral-worktree rebase
+// publishes to origin without rewriting local branches. The origin ref is
+// fetched first so the recorded tip is the actual remote state, not a stale
+// tracking ref.
+func branchTip(ctx context.Context, dir, branch string) (sha string, onOrigin bool, err error) {
+	if gitrepo.BranchExistsRemote(ctx, dir, branch) {
+		if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
+			return "", true, err
+		}
+		sha, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+		return sha, true, err
+	}
+	sha, err = gitrepo.RevParse(ctx, dir, branch)
+	return sha, false, err
+}
+
+// addEphemeralWorktree creates a throwaway detached worktree at tip, sharing
+// dir's object DB, and returns its path plus a cleanup that removes it. The
+// rebase result's objects survive removal in the shared DB.
+func addEphemeralWorktree(ctx context.Context, dir, tip string) (string, func(), error) {
+	wt, err := os.MkdirTemp("", "human-deploy-rebase-")
+	if err != nil {
+		return "", nil, errors.WrapWithDetails(err, "creating ephemeral rebase worktree dir")
+	}
+	if err := gitrepo.WorktreeAdd(ctx, dir, wt, tip); err != nil {
+		_ = os.RemoveAll(wt)
+		return "", nil, err
+	}
+	return wt, func() { _ = gitrepo.WorktreeRemove(ctx, dir, wt) }, nil
 }
 
 func (p forgeDeployer) PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error) {
@@ -1708,6 +1766,19 @@ func (p forgeDeployer) DeleteRemoteBranch(ctx context.Context, workspaceDir, bra
 		return errors.WithDetails("forge does not support deleting branches", "repo", repo)
 	}
 	return deleter.DeleteBranch(ctx, repo, branch)
+}
+
+// BranchMerged reports whether the branch is already contained in the base
+// branch. It fetches the base first (like EnsureMergeable) so the ancestor test
+// runs against the current remote tip, then checks whether branch is an ancestor
+// of origin/<base>. A fetch error returns false — fall through to the normal
+// deploy path rather than skip a ship on a transient network blip (SC-911).
+func (p forgeDeployer) BranchMerged(ctx context.Context, workspaceDir, branch string) bool {
+	base := gitrepo.DefaultBranch(ctx, workspaceDir)
+	if err := gitrepo.Fetch(ctx, workspaceDir, base); err != nil {
+		return false
+	}
+	return gitrepo.IsAncestor(ctx, workspaceDir, branch, "origin/"+base)
 }
 
 // resolveForge finds the configured instance that carries a forge capability
@@ -1831,7 +1902,7 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) fu
 // and the forge publisher against the resolved project dir. Shared by the
 // board-transition and board-fix closures so both routes drive the exact same
 // engine.
-func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) (daemon.BoardTransitionDeps, error) {
+func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) (daemon.BoardTransitionDeps, error) {
 	entries := reg.Entries()
 	if len(entries) == 0 {
 		return daemon.BoardTransitionDeps{}, errors.WithDetails("no project registered for board transition")
@@ -1857,15 +1928,16 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		ConfigDir:    entry.Dir,
 		DaemonID:     daemonID,
 		Logger:       logger,
+		LaunchGate:   launchGate,
 	}, nil
 }
 
 // boardTransitionerFunc builds the daemon's BoardTransitioner closure: it
 // resolves the PM commenter by role per request and applies the transition with
 // the Docker launcher and forge publisher against the resolved project dir.
-func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardTransitionRequest) error {
+func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardTransitionRequest) error {
 	return func(req daemon.BoardTransitionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -1878,9 +1950,9 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 // (planning gate skipped — autofix triages, plans and fixes in one run).
 // boardOptionerFunc builds the daemon's BoardOptioner closure: it records a
 // chosen option and relaunches the block's stage with the choice injected.
-func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardOptionRequest) error {
+func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardOptionRequest) error {
 	return func(req daemon.BoardOptionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -1888,9 +1960,9 @@ func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, da
 	}
 }
 
-func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) func(daemon.BoardFixRequest) error {
+func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardFixRequest) error {
 	return func(req daemon.BoardFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger)
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -2284,4 +2356,11 @@ func (s *dockerAgentSweeper) DeleteAgent(ctx context.Context, name string) error
 
 	mgr := &agent.Manager{Docker: docker}
 	return mgr.Delete(ctx, name)
+}
+
+// NewForgeDeployer returns the production Deployer — push + PR, CI gate,
+// freshness rebase, merge — shared by the board's Deploy stage and the
+// human deploy CLI command, so there is exactly one deploy implementation.
+func NewForgeDeployer(resolver *vault.Resolver, lookup config.EnvLookup) daemon.Deployer {
+	return forgeDeployer{resolver: resolver, lookup: lookup}
 }

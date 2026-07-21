@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -286,42 +287,6 @@ func TestRevParse_error(t *testing.T) {
 	}
 }
 
-func TestRebase_argv(t *testing.T) {
-	var gotArgs []string
-	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
-		gotArgs = append([]string{name}, args...)
-		return nil, nil
-	})
-	if err := Rebase(context.Background(), "/repo", "origin/main", "feat/x"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "rebase", "origin/main", "feat/x"})
-}
-
-func TestRebase_conflictAborts(t *testing.T) {
-	var calls [][]string
-	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
-		calls = append(calls, args)
-		// The rebase itself fails; the abort (a later call) must still run.
-		if len(args) >= 3 && args[2] == "rebase" && (len(args) < 4 || args[3] != "--abort") {
-			return nil, errors.New("conflict")
-		}
-		return nil, nil
-	})
-	if err := Rebase(context.Background(), "/repo", "origin/main", "feat/x"); err == nil {
-		t.Fatal("expected error on rebase conflict")
-	}
-	var sawAbort bool
-	for _, c := range calls {
-		if len(c) >= 4 && c[2] == "rebase" && c[3] == "--abort" {
-			sawAbort = true
-		}
-	}
-	if !sawAbort {
-		t.Error("rebase conflict must abort the in-progress rebase")
-	}
-}
-
 func TestPushWithLease_argv(t *testing.T) {
 	var gotArgs []string
 	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -452,5 +417,266 @@ func TestWorktreeRemove_error(t *testing.T) {
 	})
 	if err := WorktreeRemove(context.Background(), "/repo", "/wt"); err == nil {
 		t.Fatal("expected error when worktree remove fails")
+	}
+}
+
+func TestRebaseHead_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := RebaseHead(context.Background(), "/wt", "origin/main"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt", "rebase", "origin/main"})
+}
+
+func TestRebaseHead_conflictAborts(t *testing.T) {
+	var calls [][]string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		if len(args) >= 3 && args[2] == "rebase" && (len(args) < 4 || args[3] != "--abort") {
+			return nil, errors.New("conflict")
+		}
+		return nil, nil
+	})
+	if err := RebaseHead(context.Background(), "/wt", "origin/main"); err == nil {
+		t.Fatal("expected error on rebase conflict")
+	}
+	var sawAbort bool
+	for _, c := range calls {
+		if len(c) >= 4 && c[2] == "rebase" && c[3] == "--abort" {
+			sawAbort = true
+		}
+	}
+	if !sawAbort {
+		t.Error("rebase conflict must abort the in-progress rebase")
+	}
+}
+
+func TestPushHead_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := PushHead(context.Background(), "/wt", "feat/x"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt", "push", "origin", "HEAD:refs/heads/feat/x"})
+}
+
+func TestPushHeadWithLease_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := PushHeadWithLease(context.Background(), "/wt", "feat/x", "cafe12"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt", "push", "--force-with-lease=feat/x:cafe12", "origin", "HEAD:refs/heads/feat/x"})
+}
+
+func TestPushHead_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("rejected")
+	})
+	if err := PushHead(context.Background(), "/wt", "feat/x"); err == nil {
+		t.Fatal("expected error when push fails")
+	}
+	if err := PushHeadWithLease(context.Background(), "/wt", "feat/x", "cafe12"); err == nil {
+		t.Fatal("expected error when lease push fails")
+	}
+}
+
+func TestCommitsFor_parsesAndFiltersMerges(t *testing.T) {
+	out := "aaa1\x1fa1\x1f[SC-57] Add validation\n" +
+		"bbb2\x1fb2\x1fMerge pull request #12 from x/y\n" +
+		"ccc3\x1fc3\x1fIssue SC-57 follow-up\n"
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return []byte(out), nil
+	})
+
+	commits, err := CommitsFor(context.Background(), "/repo", "SC-57")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("commits = %d, want 2 (merge PR filtered)", len(commits))
+	}
+	if commits[0].SHA != "aaa1" || commits[0].ShortSHA != "a1" || commits[0].Subject != "[SC-57] Add validation" {
+		t.Errorf("first commit = %+v", commits[0])
+	}
+	if len(gotArgs) < 4 || gotArgs[0] != "git" || gotArgs[3] != "log" {
+		t.Errorf("args = %v", gotArgs)
+	}
+}
+
+func TestCommitsFor_emptyOutput(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte("\n"), nil
+	})
+	commits, err := CommitsFor(context.Background(), ".", "42")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(commits) != 0 {
+		t.Errorf("commits = %v, want none", commits)
+	}
+}
+
+func TestCommitsFor_gitError(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("exit status 128")
+	})
+	if _, err := CommitsFor(context.Background(), ".", "SC-57"); err == nil {
+		t.Fatal("expected error when git fails")
+	}
+}
+
+func TestKeyRefPattern_numericVsPrefixed(t *testing.T) {
+	num := keyRefPattern("42")
+	if want := `\[#?42\]`; !strings.Contains(num, want) {
+		t.Errorf("numeric pattern %q missing %q", num, want)
+	}
+	pre := keyRefPattern("SC-57")
+	if want := `\[SC-57\]`; !strings.Contains(pre, want) {
+		t.Errorf("prefixed pattern %q missing %q", pre, want)
+	}
+	if strings.Contains(pre, `#?SC-57\]`) {
+		t.Errorf("prefixed pattern %q must not carry the numeric hash form", pre)
+	}
+}
+
+func TestCurrentBranch(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		return []byte("feature/x\n"), nil
+	})
+	branch, err := CurrentBranch(context.Background(), ".")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if branch != "feature/x" {
+		t.Errorf("branch = %q", branch)
+	}
+}
+
+func TestCurrentBranch_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("exit status 128")
+	})
+	if _, err := CurrentBranch(context.Background(), "."); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestTicketKeys_prefixedFirstDeduped(t *testing.T) {
+	out := "[SC-881] Offer move\nFix typo #42 and #42 again\n[HUM-59] [SC-79] Add validation\nPlain subject\n"
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return []byte(out), nil
+	})
+	keys, err := TicketKeys(context.Background(), ".", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"SC-881", "HUM-59", "SC-79", "42"}
+	if len(keys) != len(want) {
+		t.Fatalf("keys = %v, want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Errorf("keys[%d] = %q, want %q", i, keys[i], want[i])
+		}
+	}
+}
+
+func TestTicketKeys_pathsAppendedAfterSeparator(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte(""), nil
+	})
+	_, err := TicketKeys(context.Background(), ".", []string{"internal/tracker"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "-- internal/tracker") {
+		t.Errorf("args = %v, want path after --", gotArgs)
+	}
+}
+
+func TestLatestTag_describeWins(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[2] == "describe" {
+			return []byte("v0.21.0\n"), nil
+		}
+		return []byte("v0.99.0\n"), nil
+	})
+	if tag := LatestTag(context.Background(), "."); tag != "v0.21.0" {
+		t.Errorf("tag = %q", tag)
+	}
+}
+
+func TestLatestTag_fallbackToNewestByDate(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if args[2] == "describe" {
+			return nil, errors.New("no tags reachable")
+		}
+		return []byte("v0.20.0\nv0.19.0\n"), nil
+	})
+	if tag := LatestTag(context.Background(), "."); tag != "v0.20.0" {
+		t.Errorf("tag = %q", tag)
+	}
+}
+
+func TestLatestTag_none(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("no tags")
+	})
+	if tag := LatestTag(context.Background(), "."); tag != "" {
+		t.Errorf("tag = %q, want empty", tag)
+	}
+}
+
+func TestTouchedSince_refRange(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte("abc123\n"), nil
+	})
+	touched, err := TouchedSince(context.Background(), ".", "v0.21.0", []string{"cmd"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !touched {
+		t.Error("touched = false, want true")
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "v0.21.0..HEAD") {
+		t.Errorf("args = %v", gotArgs)
+	}
+}
+
+func TestTouchedSince_sinceFallbackAndUntouched(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte("\n"), nil
+	})
+	touched, err := TouchedSince(context.Background(), ".", "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if touched {
+		t.Error("touched = true, want false")
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "--since=30 days ago") {
+		t.Errorf("args = %v", gotArgs)
 	}
 }

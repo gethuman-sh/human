@@ -42,11 +42,9 @@ does the product framing.
 
 4. **Determine the recency boundary** — This marks which features count as "recently changed":
    - If the prompt carries a recency override, record it verbatim (a tag, a date, or a duration).
-   - Otherwise find the latest release tag: `git describe --tags --abbrev=0` (or
-     `git tag --sort=-creatordate | head -1`). If a tag exists, the boundary is
-     `git log <tag>..HEAD` — commits after the last release.
-   - If there are no tags, fall back to the last 30 days (`--since='30 days ago'`).
-   Record the resolved boundary (the ref or date) explicitly so synthesis can reuse it.
+   - Otherwise run `human commits recency` — it resolves the boundary and prints JSON:
+     `{"tag":"v0.19.0"}` (latest release tag) or `{"since":"30 days ago"}` (no tags).
+   Record the resolved boundary (the tag or date) explicitly so synthesis can reuse it.
 
 5. **Collect recent git history** — Run `git log --oneline -50` to show recent development
    direction, and note commit-message ticket-reference conventions you observe (e.g. `[SC-148]`,
@@ -68,7 +66,7 @@ does the product framing.
 - Total capabilities: <N> (user-facing: <N>, plumbing: <N>)
 
 ## Recency boundary
-- <e.g. "since tag v0.19.0 (git log v0.19.0..HEAD)" or "last 30 days (no tags)">
+- <the override verbatim, or the `human commits recency` result: e.g. "tag v0.19.0" or "last 30 days (no tags)">
 
 ## Capability inventory
 | Capability | One-line description | Paths | Kind |
