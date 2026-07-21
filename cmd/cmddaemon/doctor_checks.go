@@ -137,7 +137,7 @@ func checkAgentSkills(reg *daemon.ProjectRegistry) (bool, string) {
 type claudeCreds struct {
 	ClaudeAiOauth struct {
 		ExpiresAt    int64  `json:"expiresAt"`
-		RefreshToken string `json:"refreshToken"`
+		RefreshToken string `json:"refreshToken"` // #nosec G117 -- read for presence only; the value is never logged, compared, or persisted
 	} `json:"claudeAiOauth"`
 }
 
