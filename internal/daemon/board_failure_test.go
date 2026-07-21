@@ -232,6 +232,76 @@ func TestHandleBoardAgentExit_PresentCommitsChainReview(t *testing.T) {
 	assert.Empty(t, c.added, "a legitimate handoff must post no failure marker")
 }
 
+// SC-782 merged verification stage: the autofix implementation container now
+// runs the review in-place. When it already posted a [human:review-complete]
+// (pass verdict) marker, the daemon must NOT launch a second cold review
+// container — that recorded outcome already accounts for the review.
+func TestHandleBoardAgentExit_InContainerReviewCompleteDoesNotChain(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+			cmt(ReviewCompleteHeader+"\nverdict: pass", time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var chained bool
+	chain := func(string) error { chained = true; return nil }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, alwaysReachable, nil, nil, nil, "", zerolog.Nop())
+
+	assert.False(t, chained, "an in-container review-complete must not chain a second review")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Empty(t, c.added, "a completed in-container review must post no new marker")
+}
+
+// SC-782: an in-container review that completed with a FAIL verdict is the
+// rework signal, already recorded. The daemon must not chain a second review
+// and must not post any new marker.
+func TestHandleBoardAgentExit_InContainerReviewFailedDoesNotChain(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+			cmt(ReviewCompleteHeader+"\nverdict: fail", time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var chained bool
+	chain := func(string) error { chained = true; return nil }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, alwaysReachable, nil, nil, nil, "", zerolog.Nop())
+
+	assert.False(t, chained, "an in-container review-complete (fail verdict) must not chain a second review")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Empty(t, c.added, "the fail verdict is the recorded rework signal — post no new marker")
+}
+
+// SC-782: the implementation container died AFTER [human:review-started] but
+// before the review completed. The daemon must surface a retryable
+// [human:review-failed] instead of leaving the card spinning on a verification
+// stage no agent owns — and must not chain a second cold review container.
+func TestHandleBoardAgentExit_MidReviewCrashPostsReviewFailed(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+			cmt(ReviewStartedHeader, time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var chained bool
+	chain := func(string) error { chained = true; return nil }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, alwaysReachable, nil, nil, nil, "", zerolog.Nop())
+
+	assert.False(t, chained, "a mid-review crash must not chain a second review")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.True(t, strings.HasPrefix(c.added[0], ReviewFailedHeader),
+		"a mid-review crash must post a retryable review-failed marker, got %q", c.added[0])
+}
+
 func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := NewHookEventStore()

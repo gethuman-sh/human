@@ -111,6 +111,26 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 			onHandoff(agentName)
 		}
 		if stage == BoardImplementation && chainReview != nil {
+			// SC-782 merged verification stage: the autofix implementation container
+			// now runs the review in-place (warm workspace, one container startup).
+			// If it already posted a verification-stage marker, the review is
+			// accounted for here — launching a second, cold review container would
+			// re-run the whole suite. Branch on what that marker says:
+			if vOK, vState := latestStageState(comments, BoardVerification); vOK {
+				// review-complete (pass OR fail verdict) is a recorded outcome the
+				// board acts on; a review-failed marker is already retryable. Either
+				// way, do not chain a second review.
+				if vState == BoardRunning {
+					// The container died AFTER [human:review-started] but before the
+					// review completed: surface a retryable review failure instead of
+					// leaving the card spinning on a verification stage no agent owns.
+					body := ReviewFailedHeader + "\nreview agent exited before completing the in-container review — retry the review"
+					if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+						logger.Warn().Err(err).Str("pm", pmKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
+					}
+				}
+				return
+			}
 			chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
 		}
 		return
