@@ -39,7 +39,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
 2. **Parse ticket keys** from the plan header:
    - `**PM ticket**: <PM_KEY>` — the original PM ticket (e.g. `SC-79`)
    - `**Engineering ticket**: <ENG_KEY>` — present only in split topology
-   Record what exists. Commits reference **both** keys when both exist so the PM → engineering → commit trail is preserved; when the plan lives on the PM ticket itself there is only one key and commits reference it alone. If the plan came from a `[human:plan]` comment without header lines, the key you were given IS the PM key. If no PM key can be determined, stop and ask the user before making commits.
+   Record what exists. Get the canonical commit-subject prefix with `human commits prefix <PM_KEY> [<ENG_KEY>]` (pass the engineering key only when one exists; it prints e.g. `[SC-79] [HUM-59]`) and start every commit subject with it — that preserves the PM → engineering → commit trail. If the plan came from a `[human:plan]` comment without header lines, the key you were given IS the PM key. If no PM key can be determined, stop and ask the user before making commits.
 3. **Parse** the plan's changes section into ordered tasks
 4. **Execute** each task sequentially:
    - Read the target file before modifying it
@@ -49,7 +49,13 @@ human <TRACKER> issue comment list <TICKET_KEY>
    ```
    Task(subagent_type="human-done", prompt="Evaluate whether ticket <ENG_KEY> is done")
    ```
-6. **Hand off for review.** If the human-done verdict is pass, post a structured handoff comment on the **PM ticket** so a separate reviewer (today: another `human` user runs `/human-pickup-review`; later: the daemon polls for it) can pick the work up. The format is fixed so it can be parsed unambiguously across trackers:
+6. **Hand off for review.** If the human-done verdict is pass, post the structured handoff comment on the **PM ticket** so a separate reviewer (today: another `human` user runs `/human-pickup-review`; later: the daemon polls for it) can pick the work up:
+   ```bash
+   human handoff post <PM_KEY> --engineering <ENG_KEY>
+   ```
+   - Single-tracker topology (no engineering ticket): omit `--engineering` entirely — the reviewer works from the PM key the comment sits on.
+   - If multiple engineering tickets were executed in this run, pass them all: `--engineering <K1>,<K2>` (the command unions their commit SHAs).
+   The command derives the rest — `branch:` from the current git branch, `commits:` from the commits referencing the work key(s), `daemon:` from the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1; the line is omitted when the var is unset) — then verifies every SHA is reachable on the branch (fetching origin first) and refuses to post otherwise. The posted comment looks like:
    ```
    [human:ready-for-review]
    engineering: <ENG_KEY>
@@ -57,13 +63,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
    commits: <short-shas>
    daemon: <daemon-id>
    ```
-   Build the values:
-   - `<current-branch>` from `git rev-parse --abbrev-ref HEAD`.
-   - `<short-shas>` from `git log --grep=<KEY> --format='%h' HEAD` (comma-separated), grepping the key(s) the commits reference.
-   - If multiple engineering tickets were executed in this run, list them all comma-separated under `engineering:` and union their commit SHAs.
-   - Single-tracker topology (no engineering ticket): OMIT the `engineering:` line entirely — the reviewer works from the PM key the comment sits on.
-   - `<daemon-id>` is the value of the `HUMAN_DAEMON_ID` env var, so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1). OMIT the `daemon:` line entirely when `HUMAN_DAEMON_ID` is unset or empty (e.g. a hand-run outside the daemon).
-   The `branch:` and `commits:` lines ARE the review binding: the daemon threads them into the reviewer's dispatch, which checks the code out and verifies it before reviewing, then posts its verdict on the dispatched key alone — the dispatched key is fixed for a run and is never re-derived from the reviewed diff. Get these two lines right (accurate branch, complete SHAs) so the reviewer binds to exactly this work. Post it with `human <pm-tracker> issue comment add <PM_KEY> "<comment-body>"`. If `human-done` failed, do NOT post the handoff — leave the work in progress and report the failures so the user can fix them and re-run.
+   The `branch:` and `commits:` lines ARE the review binding: the daemon threads them into the reviewer's dispatch, which checks the code out and verifies it before reviewing, then posts its verdict on the dispatched key alone — the dispatched key is fixed for a run and is never re-derived from the reviewed diff. If `human-done` failed, do NOT post the handoff — leave the work in progress and report the failures so the user can fix them and re-run.
 7. **Summarize** what was done: files created, files modified, done verdict, link/key of the PM comment that was posted (or note that it was skipped because done failed).
 
 ## Principles
@@ -72,7 +72,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
 - Follow the plan's order. Do not skip steps or reorder without cause.
 - If a plan step is ambiguous, read the surrounding code to resolve the ambiguity rather than guessing.
 - Run tests after completing all changes to catch regressions early.
-- Preserve the ticket trail throughout. Split topology: every commit references **both** the PM and engineering keys (e.g. `[SC-79] [HUM-59] Add validation for email field`) — the two keys usually live on different trackers, the format is the same regardless. Single-tracker topology: there is one key and every commit references it (e.g. `[SC-79] Add validation for email field`).
+- Preserve the ticket trail throughout. Prefix every commit subject with the output of `human commits prefix <PM_KEY> [<ENG_KEY>]` (e.g. `[SC-79] [HUM-59] Add validation for email field` in split topology, `[SC-79] Add validation for email field` in single-tracker topology) — the two keys usually live on different trackers, the format is the same regardless.
 - **Boil the Lake**: When the complete implementation costs minutes more than a partial one, do the complete thing. Handle all edge cases, all error paths, all related tests. Completeness is cheap with AI — do not leave known gaps for follow-up tickets.
 - **User Sovereignty**: Recommend, do not decide. When a plan step has multiple valid approaches or a judgment call, present both sides with trade-offs and let the user choose. Never silently make opinionated choices on the user's behalf.
 

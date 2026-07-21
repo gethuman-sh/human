@@ -10,7 +10,7 @@ Point this skill at a bug ticket and it runs the full bug-fix pipeline autonomou
 
 The run does **not** end at the review handoff: exactly like the kanban flow — where a clean build chains straight into its review and Deploy ships it — the skill chains the fix into a review by the **human-reviewer** agent and, when the verdict is a pass, drives the same deploy pipeline the board's Deploy stage runs (push → PR → CI gate → merge → close). A failing review or a red CI gate stops the run honestly with the handoff left standing for a human.
 
-**Board-context exception**: when `<BOARD_CONTEXT>` is true (the skill was launched with `--board`; the `HUMAN_AGENT_NAME` env var starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The daemon already chains the review on agent exit and the Bugs pane's Deploy button owns shipping, and the container holds no push/PR credentials — end at the handoff (Step 7.1) and skip the push-verification and Steps 7.2–8 entirely, or the review would run twice and the credential-less push would fail the run.
+**Board-context exception**: when `<BOARD_CONTEXT>` is true (the skill was launched with `--board`; the `HUMAN_AGENT_NAME` env var starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The daemon already chains the review on agent exit and the Bugs pane's Deploy button owns shipping, and the container holds no push/PR credentials — end at the handoff (Step 7.1) and skip Steps 7.2–8 entirely, or the review would run twice and the credential-less push would fail the run.
 
 This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — reach a verdict and act on it (SC-86: "no further input"). Every run ends in exactly one verdict: **confirmed**, **not-a-bug**, or **undetermined**.
 
@@ -48,20 +48,20 @@ Task(subagent_type="human-verdict-skeptic", prompt="Challenge the latest bug-ver
 Read its `verdict-challenge:` line:
 
 - **UPHELD** — the verdict stands; act on it:
-  - **not-a-bug** — reclassify or close the ticket: discover statuses with `human <tracker> issue statuses <BUG_KEY>`, then move it with `human <tracker> issue status <BUG_KEY> "<closed-or-wontdo-status>"`. Make **no code changes**. Post the terminal marker `[human:no-fix-needed]` with `verdict: not-a-bug` on `<BUG_KEY>`, then Report and STOP.
-  - **undetermined** — make **no code changes**. Leave the ticket open for a human. Post the terminal marker `[human:no-fix-needed]` with `verdict: undetermined` on `<BUG_KEY>`, then Report and STOP.
-- **REFUTED** — the bug is real after all. Post the skeptic's evidence as a comment on `<BUG_KEY>`:
+  - **not-a-bug** — close the ticket with `human close <BUG_KEY>` (closed-type status, falling back to done-type when the workflow has none). Make **no code changes**. Post the terminal marker with `human marker post <BUG_KEY> no-fix-needed --field verdict=not-a-bug --field challenge=upheld`, then Report and STOP.
+  - **undetermined** — make **no code changes**. Leave the ticket open for a human. Post the terminal marker with `human marker post <BUG_KEY> no-fix-needed --field verdict=undetermined --field challenge=upheld`, then Report and STOP.
+- **REFUTED** — the bug is real after all. Post the skeptic's evidence as a confirmed verdict on `<BUG_KEY>`:
 
-  ```
-  [human:bug-verdict] confirmed
-
+  ```bash
+  human marker post <BUG_KEY> bug-verdict --head confirmed --body-file - <<'EOF'
   ## Verdict overturned on adversarial challenge
   <the skeptic's refutation: reproduction, missing commit, or contradicting output>
+  EOF
   ```
 
   Then **continue to Step 4 as a confirmed bug**, using the skeptic's reproduction as the reproduction. Do NOT close anything, do NOT post `[human:no-fix-needed]`. The challenge runs ONCE — a refuted verdict never loops back through triage.
 
-The `[human:no-fix-needed]` marker is **mandatory in board context**: the autofix pipeline runs under the board implementation-stage agent name, whose failure watcher treats any exit with no `[human:ready-for-review]` handoff as a crash and would loop forever re-triaging. This terminal marker signals the clean, resolved stop (ticket 405). Body format:
+The `[human:no-fix-needed]` marker is **mandatory in board context**: the autofix pipeline runs under the board implementation-stage agent name, whose failure watcher treats any exit with no `[human:ready-for-review]` handoff as a crash and would loop forever re-triaging. This terminal marker signals the clean, resolved stop (ticket 405). The `human marker post` call above renders:
 
 ```
 [human:no-fix-needed]
@@ -71,9 +71,9 @@ challenge: upheld
 
 ## Step 4 — Phase 2: Plan (topology decides where it lives)
 
-1. Resolve the topology: from `human tracker list`, look for a tracker whose role is `engineering` that is a DIFFERENT tracker than the bug ticket's.
-   - **Split topology** — it exists: note it and its first project (e.g. Linear project `HUM`) as `<ENG_TRACKER>` and `<ENG_PROJECT>`. The plan becomes a separate engineering ticket.
-   - **Single-tracker topology** — no such tracker: the plan becomes a `[human:plan]` comment on the bug ticket itself; no second ticket.
+1. Resolve the topology with `human tracker topology` — it returns `{"topology":"single"|"split","pm":{...},"engineering":{...}}` (`engineering` omitted in single mode).
+   - **Split topology** — note the engineering tracker's name and its first project (e.g. Linear project `HUM`) as `<ENG_TRACKER>` and `<ENG_PROJECT>`. The plan becomes a separate engineering ticket.
+   - **Single-tracker topology** — the plan becomes a `[human:plan]` comment on the bug ticket itself; no second ticket.
 2. Delegate to the **human-planner** agent, seeding it with the triage root cause:
 
 ```
@@ -98,12 +98,9 @@ Capture `<ENG_KEY>`, then update its description so the `**Engineering ticket**:
 **Single-tracker topology** — post the plan as a `[human:plan]` comment on the bug ticket:
 
 ```bash
-human <tracker> issue comment add <BUG_KEY> "$(cat <<'PLAN_EOF'
-[human:plan]
-
+human marker post <BUG_KEY> plan --body-file - <<'PLAN_EOF'
 <PLAN_CONTENT>
 PLAN_EOF
-)"
 ```
 
 Verify with `human plan show <BUG_KEY>` — the fixer and verify agents read the plan the same way. Commits reference only `<BUG_KEY>`. Set `<WORK_KEY>` to `<BUG_KEY>`.
@@ -122,7 +119,7 @@ Otherwise (standalone, `<BOARD_CONTEXT>` false) dispatch the existing push promp
 Task(subagent_type="human-bug-fixer", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch and push it.")
 ```
 
-It creates branch `autofix/<work-key>` (the key lowercased), writes a regression test that **fails** because of the bug, implements the root-cause fix, confirms the suite is green, commits referencing the ticket trail (both keys in split topology, the single bug key otherwise), and returns the branch name. In a standalone run it pushes the branch; in board context it leaves the branch local (the bind-mounted host repo) and returns its name without pushing. If it reports it could not reach a green build/test, STOP and report — do not open a PR.
+It creates branch `autofix/<work-key>` (the key lowercased), writes a regression test that **fails** because of the bug, implements the root-cause fix, confirms the suite is green, commits with subjects starting with the `human commits prefix <BUG_KEY> [<ENG_KEY>]` prefix (e.g. `[SC-79] [HUM-59]` in split topology, `[SC-79]` otherwise), and returns the branch name. In a standalone run it pushes the branch; in board context it leaves the branch local (the bind-mounted host repo) and returns its name without pushing. If it reports it could not reach a green build/test, STOP and report — do not open a PR.
 
 ## Step 6 — Phase 4: Verify (done gate)
 
@@ -140,29 +137,33 @@ Only after a DONE verdict.
 
 ### 7.1 Post the review handoff
 
-Post the review handoff comment on the bug (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically. The format is fixed so it can be parsed across trackers; `<short-shas>` come from `git log --grep=<WORK_KEY> --format='%h' HEAD` (comma-separated). In single-tracker topology OMIT the `engineering:` line entirely — the reviewer works from the bug key the comment sits on. Append a `daemon: <daemon-id>` line carrying the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1); OMIT the `daemon:` line entirely when `HUMAN_DAEMON_ID` is unset or empty:
+Post the review handoff on the bug (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically:
 
 ```bash
-human <tracker> issue comment add <BUG_KEY> "$(cat <<'HANDOFF_EOF'
+human handoff post <BUG_KEY> --engineering <ENG_KEY> --branch autofix/<work-key>   # split topology
+human handoff post <BUG_KEY> --branch autofix/<work-key>                           # single-tracker: omit --engineering
+```
+
+The explicit `--branch` pins the fix branch even when the orchestrating checkout sits elsewhere. The command derives the rest — `commits:` from the commits referencing `<WORK_KEY>`, `daemon:` from the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1; the line is omitted when the var is unset) — then verifies every SHA is reachable on the branch (fetching origin first) and refuses to post otherwise, so a handoff can never name commits that live nowhere. The posted comment looks like:
+
+```
 [human:ready-for-review]
 engineering: <ENG_KEY>
 branch: autofix/<work-key>
 commits: <short-shas>
 daemon: <daemon-id>
-HANDOFF_EOF
-)"
 ```
 
-Standalone only (`<BOARD_CONTEXT>` false): make sure the branch is pushed (Step 5 pushes it) AND that every SHA on the `commits:` line exists on the remote branch — a handoff must never name commits that live nowhere but the local checkout. Verify the branch with `git ls-remote --heads origin autofix/<work-key>`, then verify each named SHA is present on the remote tip with `git merge-base --is-ancestor <sha> origin/autofix/<work-key>` (non-zero exit = the SHA is not pushed; push again before posting the handoff). When `<BOARD_CONTEXT>` is true the branch is intentionally local (the bind-mounted host repo where Deploy picks it up) — do NOT run `git ls-remote` and do NOT push. If the handoff comment cannot be posted, STOP with an honest status report — **do not report success**.
+When `<BOARD_CONTEXT>` is true the branch is intentionally local (the bind-mounted host repo where Deploy picks it up) — do NOT push. If the handoff cannot be posted (non-zero exit), STOP with an honest status report — **do not report success**.
 
-**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, STOP after this handoff (report per Step 9) — do NOT run push-verification, Steps 7.2–7.3 (review), or Step 8 (deploy), which require credentials the board container lacks. The daemon chains the review and the Deploy button ships it.
+**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, STOP after this handoff (report per Step 9) — do NOT run Steps 7.2–7.3 (review) or Step 8 (deploy), which require credentials the board container lacks. The daemon chains the review and the Deploy button ships it.
 
 ### 7.2 Review by the reviewer agent
 
 Chain straight into the review, like the kanban flow chains a clean build. Post the started marker, then dispatch the reviewer:
 
 ```bash
-human <tracker> issue comment add <BUG_KEY> "[human:review-started]"
+human marker post <BUG_KEY> review-started
 ```
 
 ```
@@ -172,45 +173,44 @@ Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY
 The reviewer writes `.human/reviews/<work-key>.md`; the first line under its `## Summary` is the outcome — `pass`, `pass with notes`, `fail`, or `unreviewable: <reason>` (the code could not be obtained — e.g. the branch is unreachable or no commits reference the key). Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The `[human:review-complete]` comment below is only for reviews that examined code; an `unreviewable` outcome is handled by the 7.3 gate instead. The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
 
 ```bash
-human <tracker> issue comment add <BUG_KEY> "$(cat <<'REVIEW_EOF'
-[human:review-complete]
-verdict: <verdict>
-reviews:
-  <WORK_KEY>: <verdict> — .human/reviews/<work-key>.md
-
+human marker post <BUG_KEY> review-complete \
+  --field verdict="<verdict>" \
+  --field reviews="<WORK_KEY>: <verdict> — .human/reviews/<work-key>.md" \
+  --body-file - <<'REVIEW_EOF'
 ## Findings
 <the reviewer's full findings, inlined: what was checked, every issue found
  (or "no issues"), and any notes — the substance of .human/reviews/<work-key>.md,
  not just a pointer to it>
 REVIEW_EOF
-)"
 ```
 
 ### 7.3 Review gate
 
 - **pass** or **pass with notes** — continue to Step 8.
-- **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the **human-bug-fixer** and do NOT post `[human:review-complete] verdict: fail` (that would badge the card "review found problems" and point a rework run at phantom findings). Instead post `[human:review-failed]` on the bug ticket naming the unreachable ref (`[human:review-failed]` on the first line, the reachability reason on the next), then STOP (report per Step 9). No PR is merged. The card shows an honest, retryable stage failure. The board-context 7.1 stop is unchanged.
+- **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the **human-bug-fixer** and do NOT post `[human:review-complete] verdict: fail` (that would badge the card "review found problems" and point a rework run at phantom findings). Instead post `[human:review-failed]` on the bug ticket naming the unreachable ref — `human marker post <BUG_KEY> review-failed --field reason="<reachability reason>"` — then STOP (report per Step 9). No PR is merged. The card shows an honest, retryable stage failure. The board-context 7.1 stop is unchanged.
 - **fail** — feed the reviewer's findings back once: re-dispatch the **human-bug-fixer** (Step 5) with the review findings appended to the prompt, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). If the second verdict still fails, STOP honestly: the `[human:ready-for-review]` handoff stays standing for a human, and NO pull request is merged.
 
 ## Step 8 — Phase 6: Deploy — end with a merged PR
 
 Only after a passing review. This is the board's deploy pipeline (push → PR → CI gate → merge → close) driven from the skill:
 
-1. Post the started marker: `human <tracker> issue comment add <BUG_KEY> "[human:deploy-started]"`.
-2. Open the pull request with `human pr create --head autofix/<work-key> --title "[<BUG_KEY>] [<ENG_KEY>] <short summary>" --body ...` (single-tracker: only `[<BUG_KEY>]`). The body carries Summary / Verdict / Tests and the ticket key(s). If no forge is configured in `.humanconfig` and the origin remote is GitHub, fall back to `gh pr create` — never report success without a PR. Capture `<PR_URL>` and the PR number.
-3. Gate on CI: `gh pr checks <number> --watch` (or the forge's equivalent). A failing gate → post `[human:deploy-failed]` with the reason on `<BUG_KEY>` and STOP — do NOT merge red.
-3a. Own branch freshness before the merge: `git fetch origin main`, then `git merge-base --is-ancestor origin/main autofix/<work-key>`. A zero exit means the branch already contains the current mainline — proceed to merge. A non-zero exit means main advanced past the branch point and a blind merge would hit GitHub's 405 "merge conflicts": rebase the already-reviewed branch mechanically with `git rebase origin/main autofix/<work-key>`, and on a clean rebase re-push with `git push --force-with-lease origin autofix/<work-key>` and re-run the CI gate (item 3). If the rebase reports a conflict, `git rebase --abort`, post `[human:deploy-failed]` with the reason on `<BUG_KEY>` and STOP — do NOT merge, and do NOT re-implement the already-reviewed work (a mechanical rebase is all a stale branch needs).
-4. Merge and clean up: `gh pr merge <number> --merge --delete-branch`. If the merge is blocked (required approvals, branch protection), post `[human:deploy-failed]` with the reason and STOP honestly — the PR stays open for a human.
-5. Record success: `human <tracker> issue comment add <BUG_KEY> "[human:deployed]"` with a second line `pr: <PR_URL>`, then move the ticket to its done-type status (`human <tracker> issue statuses <BUG_KEY>`, then `human <tracker> issue status <BUG_KEY> "<done-status>"`). In split topology close `<ENG_KEY>` the same way.
+1. Post the started marker: `human marker post <BUG_KEY> deploy-started` (`human deploy` does not post this itself).
+2. Run the deploy gate:
+
+   ```bash
+   human deploy <BUG_KEY> --branch autofix/<work-key> --title "[<BUG_KEY>] [<ENG_KEY>] <short summary>"
+   ```
+
+   (single-tracker: only `[<BUG_KEY>]` in the title; `--branch` defaults to the ticket's newest review-handoff branch and `--title` to the ticket title). The command owns the whole gate: push + PR, the CI wait (blocks up to 45 minutes), rebase-if-stale with a lease push, merge, remote-branch cleanup, the `[human:deployed]` marker with its `pr:` line, and the ticket close. A branch already merged into the base is a clean success. On any failure it posts `[human:deploy-failed]` with the reason on `<BUG_KEY>` and exits non-zero — STOP honestly; do NOT merge by hand and do NOT re-implement the already-reviewed work; the PR (if opened) stays open for a human.
+3. In split topology, close `<ENG_KEY>` as well: `human done <ENG_KEY>`.
+4. For the Step 9 report, read `<PR_URL>` from the deployed marker if needed: `human marker show <BUG_KEY> deployed`.
 
 ## Step 9 — Run summary: ticket comment, then report
 
 Once a fix was attempted (Step 4 ran), the ticket must carry a plain-language account of the run — a person catching up later should not have to reconstruct it from markers and agent artifacts. Post it at EVERY terminal point after Step 4: the board-context stop after the handoff (7.1), a shipped fix (Step 8), and every honest STOP (fixer could not go green, verify not DONE, review failed twice, deploy gate red). Runs that end at the verdict gate (Step 3) post nothing here — the triage verdict comment already tells that story.
 
 ```bash
-human <tracker> issue comment add <BUG_KEY> "$(cat <<'SUMMARY_EOF'
-[human:fix-summary]
-
+human marker post <BUG_KEY> fix-summary --body-file - <<'SUMMARY_EOF'
 ## What happened
 <2–4 sentences, plain language: what the bug turned out to be and what the fix does. Written for the reporter, not an engineer.>
 
@@ -228,9 +228,8 @@ human <tracker> issue comment add <BUG_KEY> "$(cat <<'SUMMARY_EOF'
 <the story of the run when it was not straight: a re-dispatched triage, a first verify that came back not-DONE, review findings that were addressed, infrastructure trouble. If the run went straight through, say exactly that: "Nothing notable — triage, fix, verify, and review went through on the first pass.">
 
 ## Where it ended
-<board: handoff posted, the Deploy button ships it | standalone: PR merged, ticket moved to <done-status> | stopped at <step>: what a human needs to do next>
+<board: handoff posted, the Deploy button ships it | standalone: PR merged, ticket closed by the deploy gate | stopped at <step>: what a human needs to do next>
 SUMMARY_EOF
-)"
 ```
 
 Fill every section from what actually happened in THIS run — never leave template placeholders in the posted comment. If posting the summary fails, still produce the final report below.
@@ -247,7 +246,7 @@ Verdict: confirmed — review: <verdict> — shipped
 - Branch:     autofix/<work-key>
 - Review:     [human:review-complete] verdict: <verdict> on <BUG_KEY>
 - PR:         <PR_URL> — merged, branch deleted
-- Ticket:     moved to <done-status>
+- Ticket:     closed by the deploy gate (`human deploy`)
 ```
 
 For a board-context run (exception in Step 7.1) or a failed review/deploy gate, report where the pipeline stopped, which marker records it, and what a human needs to do next.
