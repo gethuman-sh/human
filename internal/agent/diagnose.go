@@ -245,6 +245,9 @@ func detailFor(exe *Execution, outcome *OutcomeRecord, exitCode int, haveExit bo
 // fenceSafeTail sanitizes and caps the quoted tail: last diagnoseTailLines
 // lines, each length-capped, secret-scrubbed, and never itself a ~ fence line.
 func fenceSafeTail(scan []string) []string {
+	// Drop the shutdown suffix (exit trailer + trailing blank/ANSI-only lines)
+	// before choosing the window, so it cannot evict the agent's real last words.
+	scan = scan[:len(scan)-trailingNoiseLen(scan)]
 	if len(scan) > diagnoseTailLines {
 		scan = scan[len(scan)-diagnoseTailLines:]
 	}
@@ -257,6 +260,22 @@ func fenceSafeTail(scan []string) []string {
 		out = append(out, truncateRunes(sanitizeForTracker(l), diagnoseMaxLineLen))
 	}
 	return out
+}
+
+// trailingNoiseLen counts the suffix of lines that carry no agent message —
+// the tee's exit trailer and blank/ANSI-only shutdown lines — walking backward
+// and stopping at the first line with real content. The trailer stays in the
+// wider scan for exit-code and error-line parsing; only the quoted tail drops it.
+func trailingNoiseLen(scan []string) int {
+	n := 0
+	for _, l := range slices.Backward(scan) {
+		t := strings.TrimSpace(stripANSI(l))
+		if t != "" && !strings.HasPrefix(t, execExitTrailerPrefix) {
+			break
+		}
+		n++
+	}
+	return n
 }
 
 // runDuration prefers the recorded outcome duration; a run without an outcome
