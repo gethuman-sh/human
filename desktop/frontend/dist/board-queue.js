@@ -35,6 +35,46 @@ export function queueOf(card) {
 export function isReworkable(card) {
     return card.stage === "verification" && card.state === "done" && (verdictFailed(card.verdict) || !card.branch);
 }
+// ageDays converts a card's stage timestamp into whole days elapsed, or null
+// when the timestamp is absent or unparseable.
+export function ageDays(stageEnteredAt, now) {
+    if (!stageEnteredAt)
+        return null;
+    const t = Date.parse(stageEnteredAt);
+    if (Number.isNaN(t))
+        return null;
+    const days = Math.floor((now.getTime() - t) / 86_400_000);
+    return days >= 0 ? days : null;
+}
+// Age escalation thresholds: a plan is presumed fresh for a week, suspect for
+// a second week, and stale after that — the badge color escalates so rotting
+// Engineering-backlog work is visible without reading numbers.
+const AGE_WARN_DAYS = 7;
+const AGE_HOT_DAYS = 14;
+// ageBadge describes the "<n>d" pill for a card sitting planned in the
+// Engineering backlog. Only done-state planning cards get one — a running
+// plan shows the spinner badge and a failed one its error; under a day the
+// pill is suppressed rather than shouting "0d" at fresh plans.
+export function ageBadge(card, now) {
+    if (card.bug || card.stage !== "planning" || card.state !== "done")
+        return null;
+    const days = ageDays(card.stageEnteredAt, now);
+    if (days === null || days < 1)
+        return null;
+    let cls = "age";
+    if (days >= AGE_HOT_DAYS)
+        cls = "age hot";
+    else if (days >= AGE_WARN_DAYS)
+        cls = "age warn";
+    return { text: `${days}d`, cls };
+}
+// isReplannable reports a card whose finished plan can be regenerated in
+// place: a feature ticket sitting planned in the Engineering backlog. The
+// codebase may have moved since the plan landed; replanning posts a fresh
+// [human:plan] that supersedes the old one (latest wins).
+export function isReplannable(card) {
+    return !card.bug && card.stage === "planning" && card.state === "done";
+}
 // isReviewRetryable reports a stage-failed review — a [human:review-failed] card
 // (verification/failed). It is a dead end on the board otherwise: the rework
 // re-drop needs a DONE verification with a failing verdict, so a failed binding

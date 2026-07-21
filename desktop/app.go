@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/board"
@@ -83,6 +84,10 @@ type Card struct {
 	// Verdict is the latest review's verdict line; a failing verdict pins the
 	// card in the Code lane with a warning instead of letting it advance.
 	Verdict string `json:"verdict,omitempty"`
+	// StageEnteredAt is when the newest marker of the card's current stage
+	// landed (RFC3339); the board's age badge renders how long the card has
+	// been sitting. Empty when the card has no derived stage yet.
+	StageEnteredAt string `json:"stageEnteredAt,omitempty"`
 	// Labels and Description feed the Ideas→Backlog promotion: labels tell
 	// the evolve session which idea labels to remove, the description seeds
 	// the ideation conversation alongside the title.
@@ -334,6 +339,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			PRURL:          card.PRURL,
 			Error:          card.Error,
 			Verdict:        card.Verdict,
+			StageEnteredAt: formatStageTime(card.StageEnteredAt),
 			Labels:         issue.Labels,
 			Description:    issue.Description,
 			Assignee:       issue.Assignee,
@@ -349,6 +355,15 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 		})
 	}
 	return data
+}
+
+// formatStageTime renders a marker time for the frontend, empty when the card
+// has no derived stage timestamp (e.g. the quick-fetch path).
+func formatStageTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 // DaemonStatus reports whether the human daemon is currently reachable. The

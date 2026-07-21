@@ -647,12 +647,16 @@ func isReworkTransition(to BoardStage, card BoardCard) bool {
 }
 
 // isPlanningRetry reports the second sanctioned non-forward move: relaunching
-// planning on a card whose planning run failed. Failed-state only — a running
-// planning card is protected by ApplyTransition's idempotency guard (SC-355).
+// planning on a card sitting in the planning stage. Failed state is the retry
+// case (SC-355); done state is the replan case — a finished plan whose code
+// context drifted while the ticket waited in the Engineering backlog gets a
+// fresh plan, which supersedes the old one by the plan layer's latest-wins
+// rule. A running planning card is protected by ApplyTransition's idempotency
+// guard either way.
 func isPlanningRetry(to BoardStage, card BoardCard) bool {
 	return to == BoardPlanning &&
 		card.Stage == BoardPlanning &&
-		card.State == BoardFailed
+		(card.State == BoardFailed || card.State == BoardDone)
 }
 
 // isBuildRetry mirrors isPlanningRetry for the implementation stage: failed

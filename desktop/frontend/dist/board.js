@@ -14,7 +14,7 @@ import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsvie
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, forwardDropAllowed, badgeInfo, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, } from "./board-queue.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
@@ -146,6 +146,13 @@ function renderCard(card) {
     const b = badge(card);
     if (b)
         meta.push(b);
+    // Age pill: how long the finished plan has been sitting in the Engineering
+    // backlog — color escalates so rotting plans are visible at a glance.
+    const age = ageBadge(card, new Date());
+    if (age) {
+        const planned = card.stageEnteredAt ? new Date(card.stageEnteredAt).toLocaleDateString() : "";
+        meta.push(`<span class="badge ${age.cls}" title="${escapeAttr("planned " + planned)}">${escapeHtml(age.text)}</span>`);
+    }
     if (card.engineeringKey)
         meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
     if (card.prURL)
@@ -232,6 +239,24 @@ function showCardMenu(card, x, y) {
             void transition(card.key, card.title, "backlog", "planning");
         });
         menu.appendChild(retryPlan);
+    }
+    // A finished plan can rot while the ticket waits in the Engineering
+    // backlog — code moves on, the plan doesn't. Replan relaunches /human-plan
+    // in place; the fresh plan comment supersedes the old one (latest wins).
+    // Same wire shape as Retry plan: from is inert for validation.
+    if (isReplannable(card)) {
+        const replanItem = document.createElement("button");
+        replanItem.type = "button";
+        replanItem.className = "context-menu-item";
+        replanItem.textContent = "Replan";
+        replanItem.disabled = !current.dockerAvailable;
+        if (replanItem.disabled)
+            replanItem.title = "Docker required";
+        replanItem.addEventListener("click", () => {
+            menu.remove();
+            void transition(card.key, card.title, "backlog", "planning");
+        });
+        menu.appendChild(replanItem);
     }
     // A failed build is otherwise a dead end on the workflow board: the rework
     // re-drop requires a failed REVIEW verdict and Retry fix is bug-pane-only

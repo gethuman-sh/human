@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"strings"
+	"time"
 
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -38,6 +39,10 @@ type BoardCard struct {
 	Options        []BoardOption `json:"options,omitempty"`
 	OptionsContext string        `json:"options_context,omitempty"`
 	OptionsStage   BoardStage    `json:"options_stage,omitempty"`
+	// StageEnteredAt is the Created time of the newest marker in the card's
+	// current stage — for a plan-done card, when the current plan landed. The
+	// board renders it as an age badge so work rotting in a queue is visible.
+	StageEnteredAt time.Time `json:"stage_entered_at,omitzero"`
 }
 
 // VerdictFailed reports whether a review verdict blocks the card from moving
@@ -107,7 +112,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		}
 	}
 
-	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan}
+	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, StageEnteredAt: latest.Created}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")

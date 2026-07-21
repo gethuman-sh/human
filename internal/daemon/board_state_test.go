@@ -269,3 +269,17 @@ func TestLatestPlanComment(t *testing.T) {
 		assert.False(t, ok)
 	})
 }
+
+func TestDeriveBoardCard_stageEnteredAt(t *testing.T) {
+	planned := time.Unix(5000, 0)
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt("[human:planning-started]", time.Unix(1000, 0)),
+		cmt("[human:plan-ready]", planned),
+	}, tracker.CategoryUnstarted, false)
+	// The newest marker in the current stage stamps the card: for a plan-done
+	// card that is when the current plan landed, which the age badge renders.
+	assert.Equal(t, planned, card.StageEnteredAt)
+
+	backlog := DeriveBoardCard(nil, tracker.CategoryUnstarted, false)
+	assert.True(t, backlog.StageEnteredAt.IsZero(), "a no-marker backlog card carries no stage time")
+}
