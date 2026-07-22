@@ -57,6 +57,23 @@ human marker post <PM_KEY> nothing-to-do --field "evidence=<the planner's ALREAD
 
 - STOP. Skip Phases 4-6 entirely. In board context this is mandatory: the workflow board's failure watcher treats `[human:nothing-to-do]` as a clean stop (resolved, no retry loop), whereas a missing `[human:plan-ready]` after a normal exit is misread as a crash and re-planned forever.
 
+## Phase 3b: Decision-required terminal (up-front human fork)
+
+If the planner returned a `DECISION REQUIRED:` verdict instead of a plan — the plan hinges on a product/UX or ambiguity fork only a human can settle — do NOT invent a plan and do NOT proceed to implementation with the decision baked in as a mid-run gate (that is the stranded-run failure this guards against). Surface the fork as an up-front `[human:options]` decision block on the PM ticket and STOP:
+
+- Do NOT run the verification phases, attach any plan, or post `[human:plan-ready]`.
+- Post the options block with stage `planning`, so the human's pick re-runs planning with the decision recorded. Map the verdict's first line to `context`, and each `N:` line to a `--field N=`:
+
+```bash
+human marker post <PM_KEY> options \
+  --field stage=planning \
+  --field context="<the DECISION REQUIRED one-liner>" \
+  --field 1="<first option>" \
+  --field 2="<second option>"
+```
+
+- STOP. Skip Phases 4-6 entirely. The board renders the options and waits; when the human picks, the daemon relaunches `/human-plan <PM_KEY>` with the choice injected as a `[human:option-chosen]` comment, and the planner then produces a fully autonomous, gate-free plan for that direction. In board context this is mandatory: posting the options block (not a plan-ready) is what lets planning pause cleanly instead of dispatching implementation into a decision no one is present to make.
+
 ## Phase 4: Confidence check
 
 After finalizing the plan, review it yourself end-to-end:
@@ -67,6 +84,7 @@ After finalizing the plan, review it yourself end-to-end:
    - Fix every gap, wrong assumption, or ambiguity in the plan now.
    - Re-verify the fixes against docs and code.
    - Repeat until you are confident the plan is correct and complete.
+4. Scan the finalized plan for any mid-execution human gate — a step that waits for sign-off, approval, confirmation, or a user decision. There must be none. If the plan can only proceed past such a step with human input, that decision belonged up front: discard the plan and re-run planning so the planner emits the `DECISION REQUIRED:` terminal instead (Phase 3b).
 
 Only proceed to ticket creation once you are confident the plan will work.
 

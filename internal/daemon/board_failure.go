@@ -135,18 +135,20 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 		}
 		return
 	}
-	// A stage's second clean ending: a terminal BoardResolved marker with no
-	// handoff. Implementation reaches it when triage concludes no fix is warranted
-	// ([human:no-fix-needed], ticket 405); planning reaches it when the work is
-	// already merged so there is nothing left to plan ([human:nothing-to-do],
-	// ticket 454). The gate is stage-agnostic on purpose: BoardResolved is only
-	// ever produced by these terminal markers, never by a crash, so any stage that
-	// reaches it is a clean stop — scoping this carve-out to Implementation is
-	// exactly what let the same defect class ship again on Planning. Surface the
-	// card as resolved, not red, and do not chain (there is no branch to review).
-	if state == BoardResolved {
-		// A terminal resolved marker (no-fix-needed / nothing-to-do) is a clean
-		// stop with no work to lose: reclaim the worktree like a handoff.
+	// Two more clean endings, neither a crash, both reclaimed like a handoff with
+	// NO failed marker:
+	//   1. A terminal BoardResolved marker with no handoff — implementation reaches
+	//      it when triage concludes no fix is warranted ([human:no-fix-needed],
+	//      ticket 405); planning when the work is already merged so there is nothing
+	//      left to plan ([human:nothing-to-do], ticket 454). Stage-agnostic on
+	//      purpose: BoardResolved is only ever produced by these terminal markers,
+	//      never by a crash, so any stage that reaches it is a clean stop — scoping
+	//      this to Implementation is what let the same defect class ship again on
+	//      Planning.
+	//   2. An open [human:options] block for the stage's OWN stage — a deliberate
+	//      up-front human decision (see stagePausedOnOptions). Posting a *-failed
+	//      here would red the card and loop re-planning forever (SC-751).
+	if state == BoardResolved || stagePausedOnOptions(comments, stage) {
 		if onHandoff != nil {
 			onHandoff(agentName)
 		}
@@ -156,6 +158,25 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
 	}
+}
+
+// stagePausedOnOptions reports whether the exiting stage left an open
+// [human:options] block naming its OWN stage — a deliberate up-front pause for a
+// human decision, not a crash. The block stays open until the human picks
+// (ApplyOption then relaunches this same stage with the choice injected).
+// Posting a *-failed marker for such an exit would red the card and loop
+// re-planning forever — the planning twin of the stranded-run class SC-731 fixed
+// for worktrees (SC-751). openOptionsBlock's consumption rules guarantee the
+// block belongs to THIS run: a later stage-started marker would have closed it.
+// The check is stage-precise so an unrelated other-stage block never suppresses
+// a real crash.
+func stagePausedOnOptions(comments []tracker.Comment, stage BoardStage) bool {
+	block, ok := openOptionsBlock(comments)
+	if !ok {
+		return false
+	}
+	optStage, _, _ := parseOptionsBlock(block.Body)
+	return optStage == stage
 }
 
 // chainReviewAfterBuild flows a cleanly finished build into its review, guarding

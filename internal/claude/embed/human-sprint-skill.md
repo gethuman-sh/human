@@ -98,6 +98,8 @@ Delegate to the **human-planner** agent to create the plan. The planner returns 
 Task(subagent_type="human-planner", prompt="Create an implementation plan for the idea described in .human/ideation/<slug>.md. The PM ticket is <PM_TICKET_KEY> on <PM_TRACKER>. Return the complete plan as your output. Do not write any files or create any tickets.")
 ```
 
+If the planner returns a `DECISION REQUIRED:` verdict instead of a plan, it hit a genuine product/UX or ambiguity fork. Because a human is present here, surface the fork directly via `AskUserQuestion` (one option per `N:` line), then re-run the planner with the chosen direction appended to its prompt (e.g. `… The human chose: <chosen option>.`). Loop until the planner returns a plan. Do NOT attach a plan or proceed to execution while a `DECISION REQUIRED:` verdict is outstanding.
+
 Capture the output as `<PLAN_CONTENT>`.
 
 ### Step 4b: Verify (parallel)

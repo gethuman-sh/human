@@ -528,6 +528,74 @@ func TestRunBoardFailureWatch_NothingToDoIsCleanStop(t *testing.T) {
 	})
 }
 
+// SC-751: planning has a third legitimate ending — the planner hit a genuine
+// human fork, posted an up-front [human:options] block (stage: planning) and
+// exited without a plan. That open same-stage options block is a clean pause,
+// not a crash: the block stays open until the human picks (ApplyOption then
+// relaunches planning with the choice injected). The watcher must post NO
+// planning-failed marker, or the card would red and re-plan forever — the
+// planning twin of the stranded-run class SC-731 fixed for worktrees.
+func TestRunBoardFailureWatch_OpenPlanningOptionsIsCleanPause(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{
+				cmt(PlanningStartedHeader, time.Unix(1, 0)),
+				cmt("[human:options]\nstage: planning\ncontext: pick storage\n1: sqlite\n2: files", time.Unix(2, 0)),
+			},
+			addCh: make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, alwaysReachable, nil, nil, nil, "", zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
+
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+
+		select {
+		case body := <-c.addCh:
+			t.Fatalf("an open same-stage options block is a clean pause — must post no failed marker, got: %q", body)
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		c.mu.Lock()
+		require.Empty(t, c.added)
+		c.mu.Unlock()
+	})
+}
+
+// SC-751: the clean-pause guard is stage-precise. An open options block naming
+// a DIFFERENT stage (implementation) does not belong to this planning run, so a
+// planning agent that crashed while such a block is open must still surface a
+// real planning-failed marker — the guard must not swallow unrelated crashes.
+func TestRunBoardFailureWatch_OpenOptionsForOtherStageStillFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &syncCommenter{
+			comments: []tracker.Comment{
+				cmt(PlanningStartedHeader, time.Unix(1, 0)),
+				cmt("[human:options]\nstage: implementation\ncontext: x\n1: a\n2: b", time.Unix(2, 0)),
+			},
+			addCh: make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, nil, alwaysReachable, nil, nil, nil, "", zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
+
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-planning", Timestamp: time.Now()})
+
+		select {
+		case body := <-c.addCh:
+			assert.Contains(t, body, PlanningFailedHeader)
+		case <-time.After(2 * time.Second):
+			t.Fatal("an options block for another stage must not suppress a real planning crash")
+		}
+	})
+}
+
 // SC-620: the failed marker's body is headline-first — the card badge/tooltip
 // reads exactly the first non-header line via failureReason — followed by the
 // diagnosis detail block for the detail pane.
