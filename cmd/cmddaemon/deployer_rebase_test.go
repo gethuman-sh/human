@@ -259,3 +259,75 @@ func TestEnsureMergeable_realGit_dirtyWorkspaceUntouched(t *testing.T) {
 		t.Errorf("uncommitted user edit was disturbed: %q (err %v)", content, err)
 	}
 }
+
+// TestEnsureMergeable_realGit_rebaseSelfContainedIdentity proves the freshness
+// rebase carries its own committer identity and does not depend on an ambient
+// git identity (SC-1135). The pipeline agents run in an ephemeral/headless
+// checkout with no global git config, so a `git rebase` that replays a commit
+// with no configured identity dies with "please tell me who you are" — which
+// surfaced as a spurious red suite that failed a correct fix. Here every
+// ambient identity source is neutralized (empty GIT_CONFIG_GLOBAL,
+// GIT_CONFIG_NOSYSTEM=1); only runGit's inline `-c` identity keeps the setup
+// commits working, so the internal rebase is the sole invocation exercised for
+// identity. Before the fix the internal rebase fails; after it, the stale branch
+// is rebased onto the advanced base and published.
+func TestEnsureMergeable_realGit_rebaseSelfContainedIdentity(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+
+	// Neutralize every ambient git identity source: an empty global config file
+	// and no system config. The internal rebase must supply its own identity.
+	emptyGlobal := filepath.Join(root, "empty-gitconfig")
+	if err := os.WriteFile(emptyGlobal, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", emptyGlobal)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	origin := filepath.Join(root, "origin.git")
+	runGit(t, root, "init", "--bare", "-b", "main", origin)
+	ws := filepath.Join(root, "ws")
+	runGit(t, root, "clone", origin, ws)
+
+	// Base commit on main.
+	if err := os.WriteFile(filepath.Join(ws, "a.txt"), []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, ws, "add", "a.txt")
+	runGit(t, ws, "commit", "-m", "base")
+	runGit(t, ws, "push", "-u", "origin", "main")
+
+	// Handoff branch with its own commit, pushed, then main advances past it so
+	// the deploy must replay the branch commit onto the advanced base.
+	runGit(t, ws, "checkout", "-b", "autofix/x")
+	if err := os.WriteFile(filepath.Join(ws, "fix.txt"), []byte("fix\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, ws, "add", "fix.txt")
+	runGit(t, ws, "commit", "-m", "fix")
+	runGit(t, ws, "push", "origin", "autofix/x")
+	runGit(t, ws, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(ws, "b.txt"), []byte("two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, ws, "add", "b.txt")
+	runGit(t, ws, "commit", "-m", "advance")
+	runGit(t, ws, "push", "origin", "main")
+
+	rebased, err := forgeDeployer{}.EnsureMergeable(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
+	if err != nil {
+		t.Fatalf("EnsureMergeable must not depend on an ambient git identity, got: %v", err)
+	}
+	if !rebased {
+		t.Error("a stale branch that was rebased and re-pushed must report rebased=true")
+	}
+
+	// The published branch contains the advanced base tip.
+	runGit(t, ws, "fetch", "origin")
+	mainTip := runGit(t, ws, "rev-parse", "origin/main")
+	if out, e := exec.Command("git", "-C", ws, "merge-base", "--is-ancestor", mainTip, "origin/autofix/x").CombinedOutput(); e != nil {
+		t.Errorf("origin/autofix/x must contain the base tip after the deploy rebase: %s", out)
+	}
+}

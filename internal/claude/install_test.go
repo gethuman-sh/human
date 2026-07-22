@@ -97,6 +97,40 @@ func TestReviewPathPromptsDocumentUnreviewableEscape(t *testing.T) {
 	})
 }
 
+// TestDoneGatePromptsClassifyRedSuites locks the SC-1135 guarantee that the
+// done-gate prompts no longer treat any red suite as an automatic NOT DONE.
+// A correct fix was failed because an unrelated, pre-existing real-git test
+// went red inside the agent's dirty shared checkout; the prompts must instead
+// re-classify a red suite in a clean isolated worktree and surface an unrelated,
+// pre-existing failure as a non-blocking flag rather than a blocking verdict.
+func TestDoneGatePromptsClassifyRedSuites(t *testing.T) {
+	t.Run("human-bug-verify-agent.md", func(t *testing.T) {
+		body, err := os.ReadFile(filepath.Join("embed", "human-bug-verify-agent.md"))
+		require.NoError(t, err)
+		content := string(body)
+		assert.Contains(t, content, "git worktree add --detach",
+			"bug-verify must classify a red suite in a clean isolated worktree")
+		assert.Contains(t, content, "non-blocking flag",
+			"bug-verify must surface an unrelated pre-existing failure as a non-blocking flag")
+		assert.Contains(t, content, "clean",
+			"bug-verify must run the baseline classification on a clean checkout")
+		assert.NotContains(t, content, "If tests fail, it is NOT DONE. No exceptions.",
+			"bug-verify must no longer treat any red suite as an unconditional NOT DONE")
+	})
+
+	t.Run("human-done-agent.md", func(t *testing.T) {
+		body, err := os.ReadFile(filepath.Join("embed", "human-done-agent.md"))
+		require.NoError(t, err)
+		content := string(body)
+		assert.Contains(t, content, "git worktree add --detach",
+			"done agent must classify a red suite in a clean isolated worktree")
+		assert.Contains(t, content, "non-blocking flag",
+			"done agent must surface an unrelated pre-existing failure as a non-blocking flag")
+		assert.NotContains(t, content, "If tests fail, the ticket is not done. No exceptions.",
+			"done agent must no longer treat any red suite as an unconditional NOT DONE")
+	})
+}
+
 func TestInstall_CreatesNewFiles(t *testing.T) {
 	fw := newMockFileWriter()
 	var buf bytes.Buffer

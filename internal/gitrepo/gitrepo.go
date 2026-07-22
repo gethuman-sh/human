@@ -88,8 +88,19 @@ var RevParse = func(ctx context.Context, dir, rev string) (string, error) {
 // in-progress rebase so the worktree is never left mid-rebase; the returned
 // error signals a real conflict the mechanical path cannot resolve. Package var
 // so callers can stub git access in tests.
+//
+// The replay carries an explicit committer identity via inline `-c` config
+// (SC-1135): the pipeline runs this in a headless/ephemeral worktree that has no
+// global git identity, so a plain `git rebase` that re-commits the replayed
+// commits would die with "please tell me who you are" — an environmental
+// failure that used to surface as a spurious red suite and fail a correct fix.
+// The identity is set only on the replay invocation, never on `--abort` (which
+// commits nothing).
 var RebaseHead = func(ctx context.Context, dir, base string) error {
-	if _, err := runner(ctx, "git", "-C", dir, "rebase", base); err != nil {
+	if _, err := runner(ctx, "git", "-C", dir,
+		"-c", "user.name=human",
+		"-c", "user.email=human@users.noreply.gethuman.sh",
+		"rebase", base); err != nil {
 		// Leaving a half-applied rebase would strand the worktree; abort so a
 		// retry starts from a clean state. The abort's own error is irrelevant —
 		// the conflict is the failure we report.

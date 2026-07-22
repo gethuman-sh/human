@@ -429,14 +429,42 @@ func TestRebaseHead_argv(t *testing.T) {
 	if err := RebaseHead(context.Background(), "/wt", "origin/main"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertArgs(t, gotArgs, []string{"git", "-C", "/wt", "rebase", "origin/main"})
+	// The replay carries an explicit committer identity so a headless worktree
+	// with no global git config can still re-commit the replayed commits (SC-1135).
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt",
+		"-c", "user.name=human",
+		"-c", "user.email=human@users.noreply.gethuman.sh",
+		"rebase", "origin/main"})
+}
+
+// isRebaseCall reports whether args is the rebase-replay invocation (contains a
+// bare "rebase" token not followed by "--abort"); isAbortCall detects the
+// follow-up `rebase --abort`. Scanning for the token — rather than a fixed index
+// — keeps these robust against the inline `-c` identity flags the replay now
+// carries (SC-1135).
+func isRebaseCall(args []string) bool {
+	for i, a := range args {
+		if a == "rebase" {
+			return i+1 >= len(args) || args[i+1] != "--abort"
+		}
+	}
+	return false
+}
+
+func isAbortCall(args []string) bool {
+	for i, a := range args {
+		if a == "rebase" && i+1 < len(args) && args[i+1] == "--abort" {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRebaseHead_conflictAborts(t *testing.T) {
 	var calls [][]string
 	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		calls = append(calls, args)
-		if len(args) >= 3 && args[2] == "rebase" && (len(args) < 4 || args[3] != "--abort") {
+		if isRebaseCall(args) {
 			return nil, errors.New("conflict")
 		}
 		return nil, nil
@@ -446,7 +474,7 @@ func TestRebaseHead_conflictAborts(t *testing.T) {
 	}
 	var sawAbort bool
 	for _, c := range calls {
-		if len(c) >= 4 && c[2] == "rebase" && c[3] == "--abort" {
+		if isAbortCall(c) {
 			sawAbort = true
 		}
 	}
