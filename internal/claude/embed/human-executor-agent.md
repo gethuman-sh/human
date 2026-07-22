@@ -68,6 +68,10 @@ human <TRACKER> issue comment list <TICKET_KEY>
    The `branch:` and `commits:` lines ARE the review binding: the daemon threads them into the reviewer's dispatch, which checks the code out and verifies it before reviewing, then posts its verdict on the dispatched key alone — the dispatched key is fixed for a run and is never re-derived from the reviewed diff. If `human-done` failed, do NOT post the handoff — leave the work in progress and report the failures so the user can fix them and re-run.
 7. **Summarize** what was done: files created, files modified, done verdict, link/key of the PM comment that was posted (or note that it was skipped because done failed).
 
+## Completion invariant
+
+A run never ends with the card in a non-terminal state AND no live agent. The only acceptable ends are (a) deployed/closed, or (b) an explicit needs-human marker that names the specific unresolved blocker — never a silent frozen card. A transient tool failure (e.g. a racy merge 405 while the forge reconciles fresh checks) is NOT terminal: the deploy tool runs a bounded recovery ladder and retries it internally, so do not treat the first tool failure as the end of the job. Only a `[human:deploy-failed]` posted after that ladder is exhausted — with the named blocker — is a legitimate terminal needs-human end state; when you see it, STOP honestly (do not merge by hand, do not re-implement the reviewed work) rather than leaving the card stuck.
+
 ## Principles
 
 - Read code before changing it. Never modify a file you haven't read.
