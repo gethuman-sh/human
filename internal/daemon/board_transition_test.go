@@ -82,6 +82,19 @@ type fakeDeployer struct {
 	// mergeUntil models GitHub's 405 on a stale branch: MergePullRequest fails
 	// with a merge-conflict error until EnsureMergeable has run, then succeeds.
 	mergeUntil bool
+	// checksPassed counts how many times PullRequestChecks settled on Passing —
+	// the pre-rebase CI gate is one, the post-rebase re-gate the second (SC-1184).
+	checksPassed int
+	// mergeBlockedUntilRegate models the SC-1184 race: the freshness rebase's
+	// re-push triggers fresh CI on the new head, and the forge 405s the merge
+	// ("Pull Request is not mergeable", state unstable) until that fresh CI has
+	// been re-gated. MergePullRequest returns the transient 405 until
+	// PullRequestChecks has settled on Passing a second time.
+	mergeBlockedUntilRegate bool
+	// mergeTransientUntil models a purely transient 405: the forge refuses the
+	// merge ("not mergeable") for this many attempts, then accepts it — it
+	// exercises the bounded-backoff merge retry independent of the CI re-gate.
+	mergeTransientUntil int
 	// mergeable is the forge's own end-state merge verdict reported by
 	// PullRequestMergeable — the fallback signal when the mechanical rebase in
 	// EnsureMergeable conflicts on an intermediate commit (SC-804).
@@ -115,7 +128,11 @@ func (f *fakeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (fo
 		i = len(f.checks) - 1
 	}
 	f.checkCall++
-	return f.checks[i], nil
+	state := f.checks[i]
+	if state == forge.ChecksPassing {
+		f.checksPassed++
+	}
+	return state, nil
 }
 
 func (f *fakeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (bool, error) {
@@ -140,6 +157,16 @@ func (f *fakeDeployer) MergePullRequest(_ context.Context, _ string, _ int) erro
 	// stage (EnsureMergeable) has rebased and re-pushed it.
 	if f.mergeUntil && f.ensured == 0 {
 		return errors.New("Pull Request has merge conflicts")
+	}
+	// The freshness rebase re-triggered CI on the new head; the forge 405s the
+	// merge until that fresh CI has been re-gated to Passing a second time.
+	if f.mergeBlockedUntilRegate && f.checksPassed < 2 {
+		return errors.New(`405 Pull Request is not mergeable`)
+	}
+	// A purely transient racy refusal: the forge reports the head not-mergeable
+	// for a beat after the re-push, then accepts the merge.
+	if f.merged <= f.mergeTransientUntil {
+		return errors.New(`405 Pull Request is not mergeable`)
 	}
 	return f.mergeErr
 }
@@ -1128,6 +1155,112 @@ func TestApplyTransitionDeployRecomputeStaysUnmergeable(t *testing.T) {
 	require.NotEmpty(t, failed)
 	headline, _, _ := strings.Cut(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n")
 	assert.Contains(t, headline, "open the PR to see why")
+	assert.Contains(t, headline, "re-run Deploy")
+}
+
+// TestApplyTransitionDeployReGatesCIAfterRebase is the SC-1184 regression: the
+// freshness rebase force-pushes a new head, re-triggering CI. On the new head
+// GitHub reports mergeable_state unstable and 405s the merge while those fresh
+// checks are still in_progress. The deploy must re-gate CI on the rebased head
+// (waitForChecks) before attempting the merge — not merge on the stale green.
+// The pre-fix rebased block polls only mergeability, never re-runs the CI gate,
+// so it merges into the fresh-CI window, draws the 405, and reds the card: this
+// test fails there.
+func TestApplyTransitionDeployReGatesCIAfterRebase(t *testing.T) {
+	syncDeploy(t)
+	origInterval, origTimeout := mergeablePollInterval, mergeablePollTimeout
+	mergeablePollInterval, mergeablePollTimeout = time.Millisecond, time.Second
+	t.Cleanup(func() { mergeablePollInterval, mergeablePollTimeout = origInterval, origTimeout })
+
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	// Pre-rebase CI is green, then the rebase re-pushes a new head whose fresh CI
+	// is in_progress (pending) before it settles green. The forge 405s the merge
+	// until that fresh CI is re-gated.
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/17", Number: 17},
+		checks: []forge.ChecksState{
+			forge.ChecksPassing,
+			forge.ChecksPending, forge.ChecksPending, forge.ChecksPassing,
+		},
+		rebased: true, mergeable: true, mergeBlockedUntilRegate: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	// The fresh CI on the rebased head must be re-gated: more than the single
+	// pre-rebase poll, and settled on Passing at least twice.
+	assert.GreaterOrEqual(t, p.checkCall, 4, "CI must be re-gated on the rebased head, not merged on stale green")
+	assert.GreaterOrEqual(t, p.checksPassed, 2, "the fresh CI on the rebased head must reconclude green before the merge")
+	assert.Equal(t, 1, p.merged, "the merge fires once, after the fresh CI re-gate")
+	assert.Equal(t, []string{"feat/x"}, p.deleted)
+	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/17")
+	for _, b := range c.added {
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader),
+			"a rebased head must re-gate CI and merge, never dead-end on the fresh-CI 405: %q", b)
+	}
+}
+
+// TestApplyTransitionDeployRetriesTransientMergeRefusal covers the second half
+// of the SC-1184 fix: a transient 405 "not mergeable" (the forge reporting the
+// head unstable/behind for a beat) must be ridden out with bounded backoff, not
+// treated as terminal. Here CI is green and the branch is current, yet the first
+// two merge attempts 405 before the forge accepts the merge.
+func TestApplyTransitionDeployRetriesTransientMergeRefusal(t *testing.T) {
+	syncDeploy(t)
+	origInterval, origTimeout := mergeRetryInterval, mergeRetryTimeout
+	mergeRetryInterval, mergeRetryTimeout = time.Millisecond, time.Second
+	t.Cleanup(func() { mergeRetryInterval, mergeRetryTimeout = origInterval, origTimeout })
+
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/18", Number: 18},
+		checks: []forge.ChecksState{forge.ChecksPassing}, mergeTransientUntil: 2}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Equal(t, 3, p.merged, "the merge must retry through the transient 405 until it lands")
+	assert.Equal(t, []string{"feat/x"}, p.deleted)
+	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/18")
+	for _, b := range c.added {
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader),
+			"a transient merge refusal must be retried, never dead-end the card: %q", b)
+	}
+}
+
+// TestApplyTransitionDeployTransientMergeRefusalTimesOut pins the bound: a 405
+// that never clears is not retried forever — once the retry window elapses the
+// card reds with the merge-refused headline.
+func TestApplyTransitionDeployTransientMergeRefusalTimesOut(t *testing.T) {
+	syncDeploy(t)
+	origInterval, origTimeout := mergeRetryInterval, mergeRetryTimeout
+	mergeRetryInterval, mergeRetryTimeout = time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { mergeRetryInterval, mergeRetryTimeout = origInterval, origTimeout })
+
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/19", Number: 19},
+		checks: []forge.ChecksState{forge.ChecksPassing}, mergeErr: errors.New("405 Pull Request is not mergeable")}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Empty(t, p.deleted, "an unmerged branch must not be deleted")
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	headline, _, _ := strings.Cut(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n")
+	assert.Contains(t, headline, "the forge refused the merge")
 	assert.Contains(t, headline, "re-run Deploy")
 }
 
