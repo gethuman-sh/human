@@ -98,6 +98,21 @@ func TestRunCommitPrefix_AlreadyBracketed(t *testing.T) {
 	assert.Equal(t, "[SC-79] [HUM-59]\n", buf.String())
 }
 
+func TestRunCommitPrefix_BareNumericKeyCanonicalized(t *testing.T) {
+	// The board/pipeline passes bare numeric keys internally; the prefix must
+	// resolve them to the canonical "SC-nnn" form so agent commits stay
+	// attributable and hook-compliant (SC-1134).
+	var buf bytes.Buffer
+	require.NoError(t, RunCommitPrefix(&buf, []string{"1117"}))
+	assert.Equal(t, "[SC-1117]\n", buf.String())
+}
+
+func TestRunCommitPrefix_BareNumericInBrackets(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, RunCommitPrefix(&buf, []string{"[1117]"}))
+	assert.Equal(t, "[SC-1117]\n", buf.String())
+}
+
 func TestBuildCommitsCmd_Subcommands(t *testing.T) {
 	cmd := BuildCommitsCmd()
 	uses := make([]string, 0, len(cmd.Commands()))

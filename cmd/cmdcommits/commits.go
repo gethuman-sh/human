@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/internal/gitrepo"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // BuildCommitsCmd creates the "commits" command with for and prefix subcommands.
@@ -139,12 +140,10 @@ func RunCommitsFor(ctx context.Context, out io.Writer, dir, key string, table bo
 func RunCommitPrefix(out io.Writer, keys []string) error {
 	parts := make([]string, len(keys))
 	for i, key := range keys {
-		trimmed := strings.TrimSpace(key)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			parts[i] = trimmed
-			continue
-		}
-		parts[i] = "[" + trimmed + "]"
+		// Canonicalize before bracketing so a bare numeric key (the form the
+		// board passes internally) resolves to the tracker-attributable
+		// reference rather than an orphaned "[1117]" (SC-1134).
+		parts[i] = "[" + tracker.CanonicalCommitKey(key) + "]"
 	}
 	_, err := fmt.Fprintln(out, strings.Join(parts, " "))
 	return err
