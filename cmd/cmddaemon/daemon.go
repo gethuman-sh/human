@@ -26,6 +26,7 @@ import (
 	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/agentstate"
 	"github.com/gethuman-sh/human/internal/audit"
+	"github.com/gethuman-sh/human/internal/botidentity"
 	"github.com/gethuman-sh/human/internal/chrome"
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
@@ -1894,7 +1895,11 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 		return false, err
 	}
 	defer cleanup()
-	if err := gitrepo.RebaseHead(ctx, wt, originBase); err != nil {
+	id, loadErr := botidentity.Load(dir)
+	if loadErr != nil {
+		id = botidentity.Identity{Name: botidentity.DefaultName, Email: botidentity.DefaultEmail}
+	}
+	if err := gitrepo.RebaseHead(ctx, wt, originBase, id.Name, id.Email); err != nil {
 		return false, err
 	}
 	newTip, err := gitrepo.RevParse(ctx, wt, "HEAD")

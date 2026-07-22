@@ -71,7 +71,7 @@ func (s *rebaseGitStubs) install() {
 		s.calls = append(s.calls, "worktree-remove "+worktreePath)
 		return nil
 	}
-	gitrepo.RebaseHead = func(_ context.Context, dir, base string) error {
+	gitrepo.RebaseHead = func(_ context.Context, dir, base, _, _ string) error {
 		s.calls = append(s.calls, "rebase "+dir+" "+base)
 		return s.rebaseErr
 	}
