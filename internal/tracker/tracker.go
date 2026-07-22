@@ -96,6 +96,30 @@ func ExtractProject(key string) string {
 	return ""
 }
 
+// shortcutCommitPrefix is Shortcut's fixed universal display prefix. A bare
+// numeric story ID is not attributable in a commit reference on its own, so it
+// is normalized to this prefixed form — the same key Shortcut prints and that
+// `human commits for` and the commit-msg hook expect. It is hardcoded (not
+// configured per workspace) for the same reason shortcutDisplayRe is.
+const shortcutCommitPrefix = "SC-"
+
+// CanonicalCommitKey normalizes a ticket key to the canonical form used in
+// commit references. Callers in the fix pipeline pass bare keys internally; a
+// purely numeric key is a Shortcut story ID whose canonical commit form carries
+// the "SC-" display prefix, so an agent that commits with the returned key
+// stays attributable via `human commits for` and passes the commit-msg hook.
+// Every other key format already carries its own project prefix (or is a repo
+// path) and is returned unchanged after trimming surrounding whitespace and
+// brackets.
+func CanonicalCommitKey(key string) string {
+	trimmed := strings.TrimSpace(key)
+	trimmed = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
+	if numericRe.MatchString(trimmed) {
+		return shortcutCommitPrefix + trimmed
+	}
+	return trimmed
+}
+
 // FindResult holds the outcome of FindTracker.
 type FindResult struct {
 	Provider string `json:"provider"`
