@@ -242,6 +242,31 @@ func TestDiagnoseFailure_FenceLinesDropped(t *testing.T) {
 	}
 }
 
+func TestDiagnoseFailure_TailKeepsRealMessagePastTrailerAndBlanks(t *testing.T) {
+	withLogRoot(t)
+	withInstantDiagnosis(t)
+	var b strings.Builder
+	b.WriteString("agent final message: work complete\n")
+	// ANSI-only shutdown lines strip to empty and must not fill the tail window.
+	for range 20 {
+		b.WriteString("\x1b[0m\x1b[2K\n")
+	}
+	b.WriteString("\n\n")
+	b.WriteString(execExitTrailerPrefix + "0\n")
+	newRunFixture(t, "board-SC-1117-planning", b.String(), nil)
+	d := DiagnoseFailure("board-SC-1117-planning", "")
+	fence := extractFence(t, d.Detail)
+	if !strings.Contains(fence, "agent final message: work complete") {
+		t.Fatalf("fence must keep the agent's real final message: %q", fence)
+	}
+	if strings.Contains(fence, "exited with code") {
+		t.Fatalf("exit trailer must be excluded from the quoted tail: %q", fence)
+	}
+	if !strings.Contains(d.Detail, "exit code: 0") {
+		t.Fatalf("exit code must still be reported in its own field: %q", d.Detail)
+	}
+}
+
 func TestParseExitTrailer(t *testing.T) {
 	cases := []struct {
 		name  string
