@@ -20,6 +20,12 @@ on:
       - "desktop/**"
       - ".github/workflows/desktop.yml"
 
+# One run per ref: supersede the in-progress matrix build on a new push to the
+# same branch/PR rather than running stale multi-OS builds in parallel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

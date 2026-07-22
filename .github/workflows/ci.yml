@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+# One run per ref: a new push (or a deploy's rebase force-push) supersedes the
+# in-progress run for the same branch/PR and cancels it, instead of piling up.
+# During a burst of merges this stops the parallel runs from starving the runner
+# pool — the symptom was jobs stuck "pending" for minutes and superseded runs
+# surfacing as red "operation was canceled" failures.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
