@@ -15,6 +15,12 @@ import (
 // the daemon wiring supplies it and tests can shorten it.
 var BoardReconcileInterval = 2 * time.Minute
 
+// StuckRunningGrace is how long a card may sit in a running state before the
+// stuck-running reconcile pass is willing to red it. It spares a genuinely slow
+// but live agent — only a running-state card older than this AND with no live
+// stage agent is treated as a dead-end.
+var StuckRunningGrace = 15 * time.Minute
+
 // BoardReconcileJitter is the fraction of the interval added/subtracted at
 // random each cycle so independently started daemons do not converge on the
 // same reconcile instant and stampede one orphaned handoff (SC-660 rule 6).
@@ -61,6 +67,19 @@ type PRMergedProbe func(ctx context.Context, prURL string) (bool, error)
 // deploy-failed red. A nil poster disables the shipped-confirmation pass.
 type DeployedPoster func(ctx context.Context, pmKey, prURL string) error
 
+// LiveAgentLister returns the names of the board agents currently running on
+// THIS machine — the same source the zombie sweep reads. The stuck-running
+// reconcile pass uses it to tell a genuinely-working (slow) run from a
+// dead-ended card that froze with no live owner. A nil lister disables the
+// pass (the package's "nil disables" convention): a card whose liveness cannot
+// be established is never reddened.
+type LiveAgentLister func() ([]string, error)
+
+// FailedMarkerPoster posts a free-form *-failed marker body on the PM ticket,
+// moving the card to a failed/needs-attention badge whose first body line is
+// the headline. A nil poster disables the stuck-running pass.
+type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
+
 // RunBoardReconcile is the durable counterpart to RunBoardFailureWatch's live
 // fix→review chain. The live chain fires only on the one-shot Stop/SessionEnd
 // hook event; if the daemon restarts or the hook is lost, that trigger is gone
@@ -72,7 +91,7 @@ type DeployedPoster func(ctx context.Context, pmKey, prURL string) error
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
@@ -82,14 +101,14 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable
 	// Recover a restart-orphaned handoff immediately, before the first wait. The
 	// jitter applies only to subsequent cycles, so a restart-orphan is never made
 	// to wait a full interval.
-	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, chainReview, logger)
+	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, logger)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
-			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, chainReview, logger)
+			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, logger)
 		}
 	}
 }
@@ -112,7 +131,7 @@ func jitteredInterval(d time.Duration, fraction float64) time.Duration {
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, chainReview func(pmKey string) error, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
@@ -124,6 +143,77 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 	if n := reconcileShippedFailures(ctx, cards, mergedProbe, postDeployed, logger); n > 0 {
 		logger.Info().Int("cleared", n).Msg("board reconcile: confirmed shipped, cleared stale deploy-failed red")
 	}
+	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, time.Now(), logger); n > 0 {
+		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
+	}
+}
+
+// reconcileStuckRunning reds the dead-end a NOT DONE bug-verify (and any other
+// silently-halted stage) leaves behind: a card frozen in a running state with
+// no terminal marker and no live agent. The live exit-hook watcher and the
+// container-only zombie sweep both miss it on a daemon restart or a dropped
+// hook, so the card sits at "being fixed" forever (1136). This is the durable
+// safety net — the bug-fix analog of the no-dead-end-states work (SC-355/591).
+//
+// A card is reddened only when ALL hold: its derived state is BoardRunning; its
+// stage has a *-failed marker (Planning/Implementation/Verification/Done); it
+// has sat past StuckRunningGrace; and no board agent for (key, stage) is alive
+// on this machine. The grace plus the liveness probe spare a genuinely slow but
+// live run — only a card with no owner is failed. Nil deps or a lister error do
+// nothing: the pass never reds a card it cannot prove is dead. Idempotent —
+// once the *-failed marker lands the card derives BoardFailed, so the next tick
+// skips it and never double-posts. Reuses DeriveBoardCard verbatim so detection
+// can never disagree with the board's rendered state. Returns the number reddened.
+func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, now time.Time, logger zerolog.Logger) int {
+	if liveAgents == nil || postFailed == nil {
+		return 0
+	}
+	names, err := liveAgents()
+	if err != nil {
+		// Without a trustworthy liveness picture the pass must not red anything —
+		// a probe blip is not evidence a card is dead.
+		logger.Warn().Err(err).Msg("board reconcile: cannot list live agents, leaving running cards as-is")
+		return 0
+	}
+	alive := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		alive[n] = struct{}{}
+	}
+
+	reddened := 0
+	for _, card := range cards {
+		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
+		if derived.State != BoardRunning {
+			continue
+		}
+		header := failedHeaderFor(derived.Stage)
+		if header == "" {
+			continue
+		}
+		if now.Sub(derived.StageEnteredAt) < StuckRunningGrace {
+			// Young enough to still be genuine in-flight work.
+			continue
+		}
+		if _, ok := alive[agentNameFor(card.Key, derived.Stage)]; ok {
+			// A live owner is working this stage — slow, not stuck.
+			continue
+		}
+		body := header + "\n" + stuckRunningReason(derived.Stage)
+		if err := postFailed(ctx, card.Key, body); err != nil {
+			logger.Warn().Err(err).Str("pm", card.Key).
+				Msg("board reconcile: cannot red stuck-running card")
+			continue
+		}
+		reddened++
+	}
+	return reddened
+}
+
+// stuckRunningReason is the one-line badge text for a card the stuck-running
+// pass red: the stage froze with no terminal marker and no live agent, so it
+// needs attention (a Retry). The first body line becomes the card's headline.
+func stuckRunningReason(stage BoardStage) string {
+	return "Stuck in " + string(stage) + ": no terminal marker and no live agent — needs attention"
 }
 
 // reconcileShippedFailures clears the 695-class stale red: a done-stage card

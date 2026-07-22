@@ -499,9 +499,44 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	go daemon.RunBoardReconcile(ctx,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
 		branchReachable, commitsPresent, prMerged, postDeployed,
+		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		chainReview, daemon.BoardReconcileInterval, logger)
 
 	return ds.srv.ListenAndServe(ctx)
+}
+
+// liveBoardAgents lists the names of currently running agents so the durable
+// stuck-running reconcile pass (1136) can tell a live-but-slow run from a
+// dead-ended card. It reads the same running-agent metadata the zombie sweep
+// does; a card whose stage agent is absent here has no live owner.
+func liveBoardAgents() ([]string, error) {
+	metas, err := agent.ListMetas()
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, m := range metas {
+		if m.Status != agent.StatusRunning {
+			continue
+		}
+		names = append(names, m.Name)
+	}
+	return names, nil
+}
+
+// postFailedMarkerFunc builds the reconcile pass's marker poster. A stuck-running
+// card is reddened by posting its stage's *-failed marker on the PM ticket,
+// moving it to a needs-attention Retry badge. Stamped with the daemon id
+// (SC-660 rule 1) so the poster is attributable.
+func postFailedMarkerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string) func(context.Context, string, string) error {
+	return func(postCtx context.Context, pmKey, body string) error {
+		commenter, err := boardPMCommenterFunc(reg, resolver)()
+		if err != nil {
+			return err
+		}
+		_, err = commenter.AddComment(postCtx, pmKey, daemon.StampDaemon(body, daemonID))
+		return err
+	}
 }
 
 // startChromeServices launches the socket relay and Chrome MCP proxy.

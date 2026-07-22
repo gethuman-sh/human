@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,7 +171,7 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, chain, time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, chain, time.Hour, zerolog.Nop())
 
 	select {
 	case pmKey := <-chained:
@@ -243,4 +244,121 @@ func TestReconcileShippedFailures_NilDepsDisabled(t *testing.T) {
 	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
 		cmt("[human:deploy-failed]\nx\npr: https://github.com/o/r/pull/7", time.Unix(1, 0))}}}
 	assert.Equal(t, 0, reconcileShippedFailures(context.Background(), cards, nil, nil, zerolog.Nop()))
+}
+
+// liveAgents is the test lister: the set of board agent names currently running
+// on this machine. An empty set models a card whose stage agent is gone.
+func liveAgents(names ...string) LiveAgentLister {
+	return func() ([]string, error) { return names, nil }
+}
+
+// capturingPoster records the (pmKey, body) of every *-failed marker the
+// stuck-running pass posts, so a test can assert both the target and the badge
+// header without a tracker.
+func capturingPoster(posted *[]struct{ Key, Body string }) FailedMarkerPoster {
+	return func(_ context.Context, pmKey, body string) error {
+		*posted = append(*posted, struct{ Key, Body string }{pmKey, body})
+		return nil
+	}
+}
+
+// This is the bug (1136): a card left at [human:implementation-started] with no
+// terminal marker and no live agent freezes at "being fixed" forever — a
+// bug-verify NOT DONE STOPped the run without posting any board-terminal
+// marker, and no reconcile pass ever red it. The durable stuck-running pass
+// must red an aged running-orphan whose stage agent is not alive.
+func TestReconcileStuckRunning_FailsAgedRunningOrphanWithNoAgent(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), now, zerolog.Nop())
+
+	assert.Equal(t, 1, n)
+	assert.Len(t, posted, 1)
+	assert.Equal(t, "SC-1", posted[0].Key)
+	assert.True(t, strings.HasPrefix(posted[0].Body, ImplementationFailedHeader),
+		"body must start with the implementation-failed header so it becomes the badge")
+}
+
+// A card younger than the grace age might be a slow-but-live run, so the pass
+// must leave it alone — the grace protects genuine work from a premature red.
+func TestReconcileStuckRunning_SkipsWithinGrace(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), now, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.Empty(t, posted)
+}
+
+// An aged card whose stage agent is still running on this machine is genuine
+// slow work, not a dead-end — the liveness probe spares it.
+func TestReconcileStuckRunning_SkipsWhenAgentAlive(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	live := liveAgents(agentNameFor("SC-1", BoardImplementation))
+	n := reconcileStuckRunning(context.Background(), cards, live, capturingPoster(&posted), now, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.Empty(t, posted)
+}
+
+// A card already carrying a terminal *-failed marker is not running, so the
+// pass skips it — the guarantee that once red it never double-posts.
+func TestReconcileStuckRunning_SkipsNonRunning(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-2*time.Minute)),
+			cmt("[human:implementation-failed]\nstuck", now.Add(-StuckRunningGrace-time.Minute)),
+		},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), now, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.Empty(t, posted)
+}
+
+// The pass covers every running stage uniformly: a stuck verification-stage
+// card (review-started, no reviewer agent) reds with the review-failed header.
+func TestReconcileStuckRunning_CoversVerificationStage(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:review-started]", now.Add(-StuckRunningGrace-time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), now, zerolog.Nop())
+
+	assert.Equal(t, 1, n)
+	assert.Len(t, posted, 1)
+	assert.True(t, strings.HasPrefix(posted[0].Body, ReviewFailedHeader))
+}
+
+// If liveness cannot be established (nil lister), the pass does nothing — it
+// must never red a card it cannot prove is dead.
+func TestReconcileStuckRunning_NilListerDisables(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), cards, nil, capturingPoster(&posted), now, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.Empty(t, posted)
 }
