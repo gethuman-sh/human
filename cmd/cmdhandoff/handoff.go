@@ -46,7 +46,7 @@ func BuildHandoffCmd(deps cmdutil.Deps) *cobra.Command {
 }
 
 func buildPostCmd(deps cmdutil.Deps) *cobra.Command {
-	var engineering, branch, commits string
+	var engineering, branch, commits, notes string
 	var noVerify bool
 	cmd := &cobra.Command{
 		Use:   "post KEY",
@@ -62,6 +62,7 @@ func buildPostCmd(deps cmdutil.Deps) *cobra.Command {
 				Engineering: splitList(engineering),
 				Branch:      branch,
 				Commits:     splitList(commits),
+				Notes:       notes,
 				DaemonID:    os.Getenv("HUMAN_DAEMON_ID"),
 				Verify:      !noVerify,
 			}
@@ -71,6 +72,7 @@ func buildPostCmd(deps cmdutil.Deps) *cobra.Command {
 	cmd.Flags().StringVar(&engineering, "engineering", "", "Engineering ticket keys, comma-separated (omit in single-tracker topology)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch the commits live on (default: current branch)")
 	cmd.Flags().StringVar(&commits, "commits", "", "Short SHAs, comma-separated (default: commits referencing the work keys)")
+	cmd.Flags().StringVar(&notes, "notes", "", "Open items / caveats to record in the handoff body")
 	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "Skip verifying the commits are reachable on the branch")
 	return cmd
 }
@@ -98,6 +100,7 @@ type PostOptions struct {
 	Engineering []string
 	Branch      string
 	Commits     []string
+	Notes       string
 	DaemonID    string
 	Verify      bool
 }
@@ -146,6 +149,9 @@ func RunHandoffPost(ctx context.Context, p tracker.Provider, out io.Writer, dir,
 		fields["daemon"] = opts.DaemonID
 	}
 	m := marker.Marker{Type: handoffType, Fields: fields}
+	if strings.TrimSpace(opts.Notes) != "" {
+		m.Body = strings.TrimSpace(opts.Notes)
+	}
 	rendered := marker.Render(m, []string{"engineering", "branch", "commits", "daemon"})
 	if _, err := p.AddComment(ctx, key, rendered); err != nil {
 		return err

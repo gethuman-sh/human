@@ -65,8 +65,32 @@ human <TRACKER> issue comment list <TICKET_KEY>
    commits: <short-shas>
    daemon: <daemon-id>
    ```
-   The `branch:` and `commits:` lines ARE the review binding: the daemon threads them into the reviewer's dispatch, which checks the code out and verifies it before reviewing, then posts its verdict on the dispatched key alone — the dispatched key is fixed for a run and is never re-derived from the reviewed diff. If `human-done` failed, do NOT post the handoff — leave the work in progress and report the failures so the user can fix them and re-run.
-7. **Summarize** what was done: files created, files modified, done verdict, link/key of the PM comment that was posted (or note that it was skipped because done failed).
+   The `branch:` and `commits:` lines ARE the review binding: the daemon threads them into the reviewer's dispatch, which checks the code out and verifies it before reviewing, then posts its verdict on the dispatched key alone — the dispatched key is fixed for a run and is never re-derived from the reviewed diff. If `human-done` failed, do not report a bare failure and stop — follow the termination contract in step 7 (commit the in-progress work and hand off with the failures noted, post an options block for a genuine fork, or nothing-to-do if already shipped).
+7. **Termination contract — a session may end in exactly one of three states. Ending with a prose question plus uncommitted work is forbidden.** When the plan is executed and the build is green (or you reach any point where you might otherwise ask the operator "should I commit / branch / hand off / proceed?"), do NOT ask — you are headless and no one will answer. Choose one:
+
+   a. **Handoff (default).** Commit whatever work exists on a branch (create one if on the default branch), then post the review handoff, recording any open/uncertain items so the reviewer sees them:
+      ```bash
+      human handoff post <PM_KEY> --notes "Open items: <one line each — what is unfinished or needs a human eye>"
+      ```
+      (Single-tracker topology: omit `--engineering`. `--notes` is optional; omit it when nothing is open.) `human handoff post` refuses to post if nothing is committed, so commit first. This is the correct end state even when the plan is only partially done — commit the partial work and note the gaps rather than asking.
+
+   b. **Options block — only for a genuine human fork.** If continuing genuinely requires a human choice between distinct directions (not "may I proceed?", but "build path X or remove feature Y?"), stop cleanly and post a machine-readable decision block the board renders as clickable options:
+      ```bash
+      human marker post <PM_KEY> options \
+        --field stage=implementation \
+        --field context="<why a human must choose — one line>" \
+        --field 1="<first direction, one line>" \
+        --field 2="<second direction, one line>"
+      ```
+      Use sparingly; `stage` must be `implementation`. Do not use this as a disguised "may I proceed?" — that is case (a).
+
+   c. **Nothing to ship.** If executing the plan revealed there is genuinely nothing to implement (the work is already merged), post the terminal marker instead of a handoff:
+      ```bash
+      human marker post <PM_KEY> nothing-to-do --field "evidence=<merged PR/commit that already satisfies the ticket>"
+      ```
+
+   Never end a session with uncommitted work and a question. If `human-done` (step 5) failed, you still owe one of these three: commit the in-progress work and hand off with the failures listed in `--notes`, OR post an options block if the failure is a real fork, OR `nothing-to-do` if the work was already shipped — but do not exit with a dead-card question.
+8. **Summarize** what was done: files created, files modified, done verdict, link/key of the PM comment that was posted (or note that it was skipped because done failed).
 
 ## Completion invariant
 
@@ -82,4 +106,4 @@ A run never ends with the card in a non-terminal state AND no live agent. The on
 - **Boil the Lake**: When the complete implementation costs minutes more than a partial one, do the complete thing. Handle all edge cases, all error paths, all related tests. Completeness is cheap with AI — do not leave known gaps for follow-up tickets.
 - **User Sovereignty**: Recommend, do not decide. When a plan step has multiple valid approaches or a judgment call, present both sides with trade-offs and let the user choose. Never silently make opinionated choices on the user's behalf.
 
-Do NOT use `AskUserQuestion` — you cannot interact with the user. Execute the plan autonomously and report the results.
+Do NOT use `AskUserQuestion` and do NOT end your final message with a question to the operator — you are headless and cannot interact. Execute the plan autonomously and always finish in one of the three termination states above.
