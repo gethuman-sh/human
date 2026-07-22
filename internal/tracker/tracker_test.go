@@ -327,6 +327,31 @@ func TestExtractProject(t *testing.T) {
 	}
 }
 
+func TestCanonicalCommitKey(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		want string
+	}{
+		// A bare Shortcut story ID must resolve to the tool's canonical "SC-nnn"
+		// display form so agent commits match the commit->ticket trail and the
+		// commit-msg hook accepts them.
+		{name: "bare numeric gains SC prefix", key: "1117", want: "SC-1117"},
+		{name: "surrounding whitespace trimmed", key: " 1134 ", want: "SC-1134"},
+		// Keys already carrying their own project prefix pass through unchanged.
+		{name: "shortcut display key unchanged", key: "SC-1117", want: "SC-1117"},
+		{name: "jira key unchanged", key: "KAN-42", want: "KAN-42"},
+		{name: "engineering key unchanged", key: "HUM-59", want: "HUM-59"},
+		{name: "github issue unchanged", key: "octocat/repo#42", want: "octocat/repo#42"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, CanonicalCommitKey(tt.key))
+		})
+	}
+}
+
 // --- FindTracker tests ---
 
 func TestFindTracker_singleConfigured(t *testing.T) {
