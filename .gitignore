@@ -12,6 +12,8 @@ local/
 .humanconfig.yaml
 humanconfig.bak
 tools/
+# Local strategy notes, not part of the repo.
+multivendor.md
 
 # Desktop (Wails) frontend build artifacts. The embedded dist/ is checked in so
 # `//go:embed all:frontend/dist` resolves without a separate npm build, so it is
