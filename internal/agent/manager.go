@@ -14,6 +14,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/botidentity"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/dockerhost"
@@ -202,9 +203,18 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 	claudeArgs = append(claudeArgs, extraArgs...)
 	claudeArgs = append(claudeArgs, "-p", opts.Prompt)
 	cmd := append([]string{"claude"}, claudeArgs...)
+	env := []string{"HUMAN_AGENT_NAME=" + opts.Name, "HUMAN_DAEMON_ID=" + opts.DaemonID}
+	// Attribute the agent's commits to the bot so authorship alone separates
+	// agent work from developer work (SC-371). A config read failure must never
+	// fail the launch — fall back to the default identity.
+	id, loadErr := botidentity.Load(repoDir)
+	if loadErr != nil {
+		id = botidentity.Identity{Name: botidentity.DefaultName, Email: botidentity.DefaultEmail}
+	}
+	env = append(env, id.GitEnv()...)
 	execID, err := m.Docker.ExecCreate(ctx, containerID, cmd, devcontainer.ExecOptions{
 		User: remoteUser, AttachStdout: true, AttachStderr: true,
-		Env: []string{"HUMAN_AGENT_NAME=" + opts.Name, "HUMAN_DAEMON_ID=" + opts.DaemonID},
+		Env: env,
 	})
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "creating agent exec")

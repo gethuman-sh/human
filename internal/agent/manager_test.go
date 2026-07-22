@@ -25,6 +25,9 @@ type mockDockerClient struct {
 	// execCmds records the argv of every ExecCreate call so tests can assert the
 	// exact claude invocation (e.g. that SendMessage injects --continue).
 	execCmds [][]string
+	// execEnvs records the env of every ExecCreate call so tests can assert the
+	// injected git identity attribution (SC-371).
+	execEnvs [][]string
 }
 
 func (m *mockDockerClient) ImageBuild(_ context.Context, _ io.Reader, _ devcontainer.ImageBuildOptions) (io.ReadCloser, error) {
@@ -78,9 +81,10 @@ func (m *mockDockerClient) CopyToContainer(_ context.Context, _, _ string, _ io.
 func (m *mockDockerClient) CopyFromContainer(_ context.Context, _, _ string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
-func (m *mockDockerClient) ExecCreate(_ context.Context, _ string, cmd []string, _ devcontainer.ExecOptions) (string, error) {
+func (m *mockDockerClient) ExecCreate(_ context.Context, _ string, cmd []string, opts devcontainer.ExecOptions) (string, error) {
 	m.mu.Lock()
 	m.execCmds = append(m.execCmds, cmd)
+	m.execEnvs = append(m.execEnvs, opts.Env)
 	m.mu.Unlock()
 	return "exec-1", nil
 }
