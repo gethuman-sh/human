@@ -554,7 +554,6 @@ require (
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/nilaway v0.0.0-20260213150243-937701de96c7 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
@@ -601,7 +600,6 @@ tool (
 	github.com/goreleaser/goreleaser/v2
 	github.com/securego/gosec/v2/cmd/gosec
 	github.com/zricethezav/gitleaks/v8
-	go.uber.org/nilaway/cmd/nilaway
 	golang.org/x/tools/cmd/goimports
 	golang.org/x/vuln/cmd/govulncheck
 	gotest.tools/gotestsum

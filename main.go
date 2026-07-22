@@ -701,7 +701,7 @@ func printDaemonSkewWarning(clientVersion, daemonVersion string) {
 // like "human-browser" and returns the implied subcommand (e.g. "browser").
 // Returns "" when os.Args[0] is just "human" or unrecognised.
 func subcmdFromBinary() string {
-	base := filepath.Base(os.Args[0]) //nolint:nilaway // os.Args is always set in main
+	base := filepath.Base(os.Args[0])
 	// Strip common extensions (.exe on Windows).
 	base = strings.TrimSuffix(base, ".exe")
 	if strings.HasPrefix(base, "human-") {
@@ -764,7 +764,7 @@ func main() {
 	daemon.ClientVersion = version
 
 	// Busybox-style dispatch: "human-browser URL" → "human browser URL".
-	args := os.Args[1:] //nolint:nilaway // os.Args is always set in main
+	args := os.Args[1:]
 	if sub := subcmdFromBinary(); sub != "" {
 		args = append([]string{sub}, args...)
 	}

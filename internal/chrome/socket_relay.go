@@ -90,7 +90,7 @@ func (r *SocketRelay) ListenAndServe(ctx context.Context) error {
 			continue
 		}
 		if conn == nil {
-			continue // satisfy nilaway; Accept never returns nil without error
+			continue // defensive: a nil conn with no error would panic downstream
 		}
 		r.Logger.Debug().Msg("chrome native host connected to relay")
 
