@@ -45,7 +45,7 @@ human commits prefix <PM_KEY> [<ENG_KEY>]
 ## Definition of Done checklist
 
 - [ ] All acceptance criteria addressed in code
-- [ ] Tests pass
+- [ ] Tests pass — OR every remaining failure is proven unrelated-and-pre-existing on a clean baseline worktree and flagged, never change-caused
 - [ ] No unrelated changes (scope check)
 - [ ] Edge cases from the ticket handled
 - [ ] Plan tasks completed (if plan exists)
@@ -55,7 +55,14 @@ human commits prefix <PM_KEY> [<ENG_KEY>]
 
 - Evidence-based verdicts only. Every PASS must cite code. Every FAIL must cite what's missing.
 - Do not hedge — state pass or fail, not "probably" or "seems to."
-- If tests fail, the ticket is not done. No exceptions.
+- A red suite is a two-tier decision, not an automatic NOT DONE. The agent runs tests in a dirty, contended shared checkout, so an environment-sensitive test can go red for reasons unrelated to this ticket. Classify each failure in a clean, isolated baseline worktree — do not trust a baseline run inside the same contaminated workspace:
+  ```bash
+  wt="$(mktemp -d)/done-baseline"
+  git worktree add --detach "$wt" origin/<base>
+  ( cd "$wt" && <run the failing test(s)> )   # clean baseline, no change applied
+  git worktree remove --force "$wt"
+  ```
+  A failure that is in this ticket's scope OR green on the clean baseline is change-caused and **blocks** (NOT DONE). A failure that is BOTH outside scope AND already red on the clean baseline is proven unrelated-and-pre-existing: record it as a **non-blocking flag** and keep the verdict DONE. Never fail a proven-complete ticket on an unrelated, pre-existing, environmental flake — and never wave through a change-caused failure as "unrelated".
 - **User Sovereignty**: Recommend, do not decide. When a criterion is borderline (e.g. partially met, met differently than specified), present the evidence for both interpretations and let the user make the final call. Never silently round a borderline case up or down.
 
 ## Output format
