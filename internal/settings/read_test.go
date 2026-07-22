@@ -16,6 +16,10 @@ vault:
   provider: 1password
   account: amazingcto
 
+bot:
+  name: acmebot
+  email: bot@acme.dev
+
 linears:
   - name: work
     role: engineering
@@ -89,6 +93,14 @@ func TestSnapshotMissingFileYieldsSkeleton(t *testing.T) {
 	// Singleton and scalar leaves render as an editable skeleton.
 	assert.Equal(t, "", valueByPath(t, doc, "project").Value)
 	assert.Equal(t, "", valueByPath(t, doc, "vault.account").Value)
+}
+
+func TestSnapshotIncludesBotSection(t *testing.T) {
+	dir := writeFixture(t, ".humanconfig.yaml", fixtureConfig)
+	doc, err := Snapshot(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "acmebot", valueByPath(t, doc, "bot.name").Value)
+	assert.Equal(t, "bot@acme.dev", valueByPath(t, doc, "bot.email").Value)
 }
 
 func TestSnapshotDuplicateNamesWarnAndReadOnly(t *testing.T) {

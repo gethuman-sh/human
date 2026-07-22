@@ -96,13 +96,24 @@ func buildRegistry() []SectionDef {
 	return []SectionDef{
 		{
 			Key: "project", Label: "Project",
-			Groups: []Group{{
-				Section: "project", Label: "Project", Scalar: true,
-				Fields: []Field{{
-					Key: "project", Label: "Project name", Type: TypeString, RestartRequired: true,
-					Description: "Project name used by the daemon's project registry",
-				}},
-			}},
+			Groups: []Group{
+				{
+					Section: "project", Label: "Project", Scalar: true,
+					Fields: []Field{{
+						Key: "project", Label: "Project name", Type: TypeString, RestartRequired: true,
+						Description: "Project name used by the daemon's project registry",
+					}},
+				},
+				{
+					Section: "bot", Label: "Bot identity",
+					Fields: []Field{
+						{Key: "name", Label: "Name", Type: TypeString,
+							Description: "Git author/committer name for agent commits (default humanbot)"},
+						{Key: "email", Label: "Email", Type: TypeString,
+							Description: "Git author/committer email for agent commits"},
+					},
+				},
+			},
 		},
 		{
 			Key: "trackers", Label: "Trackers",
