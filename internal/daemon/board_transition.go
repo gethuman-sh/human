@@ -75,6 +75,13 @@ var (
 	// this). The poll waits for a definitive verdict before merging.
 	mergeablePollInterval = 3 * time.Second
 	mergeablePollTimeout  = 60 * time.Second
+	// Merge-retry pacing: even past the mergeability recompute the forge can
+	// report the rebased head unstable/behind for a beat (or a concurrent deploy
+	// advances the base under it), 405-ing the merge with a transient "not
+	// mergeable". The bounded retry rides that window out instead of dead-ending
+	// the card (SC-1184).
+	mergeRetryInterval = 3 * time.Second
+	mergeRetryTimeout  = 60 * time.Second
 )
 
 // BoardTransitionRequest is the wire request for advancing a card one stage.
@@ -452,6 +459,15 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		}
 	}
 	if rebased {
+		// The freshness force-push rewrote the head and re-triggered CI on it.
+		// Merging while that fresh run is still in_progress is exactly the
+		// SC-1184 race: GitHub reports mergeable_state unstable and 405s the
+		// merge. Re-gate CI on the rebased head — the mergeability recompute
+		// alone does not cover the in-flight checks — before waiting out the
+		// recompute window.
+		if err := d.waitForChecks(ctx, res); err != nil {
+			return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
+		}
 		// The re-push invalidated the forge's cached mergeability; merging
 		// before the recompute settles draws a spurious 405 on a clean branch.
 		if err := d.awaitMergeable(ctx, res.Number); err != nil {
@@ -460,7 +476,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 				err))
 		}
 	}
-	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
+	if err := d.mergeWithRetry(ctx, res.Number); err != nil {
 		return d.deployFailed(pmKey, res.URL, deployReason(
 			"the forge refused the merge — open the PR to see why, then re-run Deploy",
 			err))
@@ -519,6 +535,43 @@ func (d BoardTransitionDeps) awaitMergeable(ctx context.Context, number int) err
 		case <-time.After(mergeablePollInterval):
 		}
 	}
+}
+
+// mergeWithRetry merges the PR, riding out a transient merge refusal with
+// bounded backoff. After a freshness rebase (or a concurrent deploy advancing
+// the base) the forge can report the head unstable/behind for a beat and 405
+// the merge with a racy "not mergeable" — that clears on its own, so retrying
+// lets the deploy self-heal instead of dead-ending the card. A genuine,
+// terminal refusal (a real conflict) is not retried: it is returned at once so
+// the card reds with a real cause (SC-1184).
+func (d BoardTransitionDeps) mergeWithRetry(ctx context.Context, number int) error {
+	deadline := time.Now().Add(mergeRetryTimeout)
+	for {
+		err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, number)
+		if err == nil || !isTransientMergeRefusal(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(mergeRetryInterval):
+		}
+	}
+}
+
+// isTransientMergeRefusal reports whether a merge error is the forge's racy
+// post-rebase refusal (a 405 "Pull Request is not mergeable" while the head is
+// still unstable/behind) rather than a genuine, terminal conflict. Only the
+// former is worth retrying — a real conflict never clears on its own (SC-1184).
+func isTransientMergeRefusal(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not mergeable") || strings.Contains(msg, "405")
 }
 
 // forgeMergeableFallback reports whether the deploy may proceed to the merge
