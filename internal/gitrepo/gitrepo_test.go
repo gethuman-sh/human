@@ -691,6 +691,9 @@ func TestCommitsForRev_anchorsAtGivenRev(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if len(gotArgs) == 0 {
+		t.Fatal("runner was never invoked, no args captured")
+	}
 	if gotArgs[len(gotArgs)-1] != "feat/branch" {
 		t.Errorf("args = %v, want rev anchor feat/branch", gotArgs)
 	}
