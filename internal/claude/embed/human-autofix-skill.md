@@ -131,7 +131,17 @@ Task(subagent_type="human-bug-verify", prompt="Verify ticket <WORK_KEY> (PM bug 
 
 This is the pipeline's ONE full-suite pass; the fixer used the fast tier. Ensure the `[human:bug-verify]` comment records the `## Evidence` block (branch/commit/command/result) so the review can trust it without re-running the suite.
 
-If the verdict is NOT DONE, re-run Step 5 once to address the gaps; if it still fails, STOP and report honestly without posting the handoff.
+If the verdict is NOT DONE, re-run Step 5 once to address the gaps; if it still fails, do NOT stop silently — in board context a silent stop freezes the card at "being fixed" forever with no agent and no reconciliation path (1136). Before stopping, post an explicit terminal marker so the board reds the card to a needs-attention/Retry badge instead:
+
+```bash
+human marker post <BUG_KEY> implementation-failed --body-file - <<'EOF'
+<one-line verdict headline — becomes the card's badge text>
+
+<the bug-verify gaps: what is still NOT DONE and why>
+EOF
+```
+
+The first body line becomes the badge headline. This is mandatory in board context — the bug-fix analog of the no-dead-end-states work (SC-355/591). Then STOP and report honestly without posting the handoff.
 
 ## Step 7 — Phase 5: Hand off and review
 

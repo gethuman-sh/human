@@ -40,20 +40,22 @@ type spec struct {
 }
 
 var specs = map[string]spec{
-	"plan":             {},
-	"plan-ready":       {},
-	"ready-for-review": {required: []string{"branch", "commits"}},
-	"review-started":   {},
-	"review-complete":  {required: []string{"verdict"}},
-	"review-failed":    {required: []string{"reason"}},
-	"no-fix-needed":    {required: []string{"verdict"}},
-	"nothing-to-do":    {required: []string{"evidence"}},
-	"deploy-started":   {},
-	"deploy-failed":    {required: []string{"reason"}},
-	"deployed":         {required: []string{"pr"}},
-	"bug-verdict":      {needsHead: true, headEnum: []string{"confirmed", "not-a-bug", "undetermined"}},
-	"bug-verify":       {needsHead: true, headEnum: []string{"DONE", "NOT DONE"}},
-	"options":          {required: []string{"stage"}},
+	"plan":                  {},
+	"plan-ready":            {},
+	"planning-failed":       {},
+	"implementation-failed": {},
+	"ready-for-review":      {required: []string{"branch", "commits"}},
+	"review-started":        {},
+	"review-complete":       {required: []string{"verdict"}},
+	"review-failed":         {required: []string{"reason"}},
+	"no-fix-needed":         {required: []string{"verdict"}},
+	"nothing-to-do":         {required: []string{"evidence"}},
+	"deploy-started":        {},
+	"deploy-failed":         {required: []string{"reason"}},
+	"deployed":              {required: []string{"pr"}},
+	"bug-verdict":           {needsHead: true, headEnum: []string{"confirmed", "not-a-bug", "undetermined"}},
+	"bug-verify":            {needsHead: true, headEnum: []string{"DONE", "NOT DONE"}},
+	"options":               {required: []string{"stage"}},
 }
 
 // KnownTypes lists the marker types with a validation contract, sorted.
