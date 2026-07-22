@@ -396,6 +396,15 @@ func GenerateFeatures(addr, token string) error {
 	return err
 }
 
+// StartFindbugs asks the daemon to launch the human-findbugs sweep for the
+// registered project. It takes no arguments — the daemon resolves the project
+// directory itself — and returns once the agent is launched, not when the sweep
+// finishes; new bug tickets surface on the board's next card refresh.
+func StartFindbugs(addr, token string) error {
+	_, err := RunRemoteCapture(addr, token, []string{"findbugs-start"})
+	return err
+}
+
 // CloseTicket asks the daemon to close a PM ticket (transition it to Done). The
 // request is a single JSON arg, matching BoardTransition. This is a dedicated
 // route, so it never hits the interactive `issue status` confirmation.

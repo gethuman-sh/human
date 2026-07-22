@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/gethuman-sh/human/internal/boardprefs"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/ideaspace"
+	"github.com/gethuman-sh/human/internal/pipeline"
 	"github.com/gethuman-sh/human/internal/recentprojects"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -462,6 +464,43 @@ func (a *App) GenerateFeatures() error {
 	}
 	return daemonCause(daemon.GenerateFeatures(info.Addr, info.Token))
 }
+
+// FindBugs asks the daemon to launch the human-findbugs sweep for the registered
+// project — the Bugs pane's Findbugs button. Like GenerateFeatures it goes
+// through the daemon so the sweep runs containerized with the daemon's
+// credentials, and it returns once the agent is launched; surviving findings
+// surface as bug cards on the next Cards() reconcile.
+func (a *App) FindBugs() error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.StartFindbugs(info.Addr, info.Token))
+}
+
+// FindbugsHunting reports whether a findbugs sweep is currently running for any
+// registered project. It reads the sweep's own pipeline state file directly (the
+// same project-local read pattern MockupSets uses), so the pane can show a live
+// hunt indicator without a dedicated daemon route. A sweep sets status
+// running/triaging for its whole run and cleans the file up at the end; a stale
+// status older than findbugsHuntWindow (a crashed sweep) is treated as finished.
+func (a *App) FindbugsHunting() bool {
+	for _, p := range mockupRoots() {
+		w := pipeline.Workspace{Dir: p.Dir, Name: "bugs"}
+		status, err := w.StateGet("status")
+		if err != nil || (status != "running" && status != "triaging") {
+			continue
+		}
+		if fi, statErr := os.Stat(w.StatePath()); statErr == nil && time.Since(fi.ModTime()) < findbugsHuntWindow {
+			return true
+		}
+	}
+	return false
+}
+
+// findbugsHuntWindow bounds how long a running/triaging status counts as an
+// active hunt; past it a crashed sweep no longer pins the pane's indicator.
+const findbugsHuntWindow = 60 * time.Minute
 
 // CreateMocks asks the daemon to launch the human-mockups skill for one PM
 // ticket — the same containerized agent path as GenerateFeatures. It returns

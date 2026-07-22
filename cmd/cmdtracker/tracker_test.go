@@ -494,6 +494,36 @@ func TestRunTrackerTopology_SingleOmitsEngineering(t *testing.T) {
 	assert.NotContains(t, out, `"engineering"`)
 }
 
+// 1087: the pm entry carries its first configured project so an autonomous
+// findbugs sweep can pass --project to `issue create` without a prompt.
+func TestRunTrackerTopology_PMProject(t *testing.T) {
+	instances := []tracker.Instance{{Name: "board", Kind: "shortcut", Projects: []string{"team-a", "team-b"}}}
+	var buf bytes.Buffer
+	err := RunTrackerTopology(&buf, ".", false, loaderOK(instances))
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), `"project": "team-a"`)
+}
+
+// 1087: with no configured project the field is omitted (omitempty), keeping the
+// topology contract backward compatible.
+func TestRunTrackerTopology_NoProjectOmitted(t *testing.T) {
+	instances := []tracker.Instance{{Name: "board", Kind: "shortcut"}}
+	var buf bytes.Buffer
+	err := RunTrackerTopology(&buf, ".", false, loaderOK(instances))
+	require.NoError(t, err)
+	assert.NotContains(t, buf.String(), `"project"`)
+}
+
+// 1087: `tracker list` output stays byte-for-byte unchanged — the Project field
+// is populated only at the topology construction site, never for the list.
+func TestRunTrackerList_OmitsProjectField(t *testing.T) {
+	instances := []tracker.Instance{{Name: "board", Kind: "shortcut", Projects: []string{"team-a"}}}
+	var buf bytes.Buffer
+	err := RunTrackerList(&buf, ".", false, loaderOK(instances))
+	require.NoError(t, err)
+	assert.NotContains(t, buf.String(), `"project"`)
+}
+
 func TestRunTrackerTopology_Table(t *testing.T) {
 	instances := []tracker.Instance{
 		{Name: "board", Kind: "shortcut"},

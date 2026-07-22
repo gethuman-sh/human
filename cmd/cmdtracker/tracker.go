@@ -14,11 +14,15 @@ import (
 
 // TrackerEntry is the JSON output structure for a single tracker instance.
 type TrackerEntry struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	URL         string `json:"url"`
-	User        string `json:"user"`
-	Role        string `json:"role,omitempty"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+	User string `json:"user"`
+	Role string `json:"role,omitempty"`
+	// Project is the tracker's first configured project (Instance.Projects[0]),
+	// empty when none. Emitted so an autonomous agent resolving topology can pass
+	// `--project` to `issue create` without a prompt.
+	Project     string `json:"project,omitempty"`
 	Description string `json:"description"`
 }
 
@@ -125,7 +129,11 @@ func toEntry(inst *tracker.Instance) *TrackerEntry {
 	if inst == nil {
 		return nil
 	}
-	return &TrackerEntry{Name: inst.Name, Type: inst.Kind, URL: inst.URL, User: inst.User, Role: inst.InferRole(), Description: inst.Description}
+	project := ""
+	if len(inst.Projects) > 0 {
+		project = inst.Projects[0]
+	}
+	return &TrackerEntry{Name: inst.Name, Type: inst.Kind, URL: inst.URL, User: inst.User, Role: inst.InferRole(), Project: project, Description: inst.Description}
 }
 
 // PrintTopologyTable prints a topology result as a table.

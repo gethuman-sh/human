@@ -18,6 +18,7 @@ import {
   trail,
 } from "./fancy.js";
 import { initPermissions, type PermissionRequest } from "./permissions.js";
+import { bugsHeaderHTML } from "./board-findbugs.js";
 import { initMockupsView, showMockups, setPendingMockupSlug, type MockupSet } from "./mockupsview.js";
 import {
   initSettingsView,
@@ -267,6 +268,8 @@ interface AppBindings {
   Instances(): Promise<InstancesData>;
   Features(): Promise<FeatureDoc>;
   GenerateFeatures(): Promise<void>;
+  FindBugs(): Promise<void>;
+  FindbugsHunting(): Promise<boolean>;
   CreateMocks(pmKey: string, pmTitle: string, description: string): Promise<void>;
   StartProjectStatus(): Promise<StartProjectInfo>;
   StartProject(projectType: string, language: string): Promise<StartProjectResult>;
@@ -864,11 +867,9 @@ function renderBugs(): void {
   const gridCol = document.createElement("section");
   gridCol.className = "column bug-grid-col";
   gridCol.dataset.stage = "bugs:grid";
-  gridCol.innerHTML =
-    `<div class="column-header"><span>Bugs</span>` +
-    `<button class="add-card" title="File a bug">+</button>` +
-    `<span class="column-count">${gridBugs.length + pendingBugs.length}</span></div>`;
+  gridCol.innerHTML = bugsHeaderHTML(findbugsHunting, gridBugs.length + pendingBugs.length);
   gridCol.querySelector(".add-card")!.addEventListener("click", () => showBugModal());
+  gridCol.querySelector(".findbugs-btn")?.addEventListener("click", () => void startFindbugs());
   const gridBody = document.createElement("div");
   gridBody.className = "column-body bug-grid";
   if (bugs.length === 0 && pendingBugs.length === 0) {
@@ -919,6 +920,11 @@ async function fixBug(key: string, title: string): Promise<void> {
 // grid's counterpart to pendingIdeas, with the same handover rule: the
 // placeholder clears when a fetched bug card carries its title.
 let pendingBugs: { title: string; description: string }[] = [];
+
+// True while a findbugs sweep is running for the project — drives the Bugs
+// pane's hunt indicator. Refreshed in reconcile() and set optimistically on a
+// Findbugs click so the button responds instantly.
+let findbugsHunting = false;
 
 // showBugModal opens the file-a-bug dialog: a title and a free-text
 // description. Filing is optimistic like the idea quick-add — the placeholder
@@ -986,6 +992,23 @@ async function createBug(title: string, description: string): Promise<void> {
   // Invalidate fetches already in flight — their pre-create snapshot would
   // miss the new ticket (same guard as CreateIdea).
   reconcileEpoch++;
+  await reconcile();
+}
+
+// startFindbugs launches the autonomous bug sweep. Optimistic like fixBug: flip
+// the hunt indicator on immediately, then let the daemon-backed status poll in
+// reconcile() own the truth (it clears when the sweep's pipeline state is gone).
+async function startFindbugs(): Promise<void> {
+  findbugsHunting = true;
+  render();
+  try {
+    await go().FindBugs();
+  } catch (err) {
+    findbugsHunting = false;
+    showError(errMessage(err));
+    render();
+    return;
+  }
   await reconcile();
 }
 
@@ -1715,6 +1738,9 @@ async function reconcile(): Promise<void> {
     const data = await go().Cards();
     if (epoch !== reconcileEpoch) return;
     current = boardStateFromPayload(data);
+    findbugsHunting = await go()
+      .FindbugsHunting()
+      .catch(() => false);
   } catch (err) {
     if (epoch !== reconcileEpoch) return;
     current = { cards: [], dockerAvailable: false, error: errMessage(err) };

@@ -308,6 +308,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		BugCreator:        bugCreatorFunc(projectRegistry, vaultResolver),
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
+		FindbugsRunner:    findbugsRunnerFunc(projectRegistry),
 		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
 		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, logger),
 	}
@@ -2058,6 +2059,29 @@ func featuresGeneratorFunc(reg *daemon.ProjectRegistry) func() error {
 			_ = docker.Close()
 		}
 		return dockerAgentLauncher{}.Launch(context.Background(), "features", "/human-features", entry.Dir, entry.Dir)
+	}
+}
+
+// findbugsRunnerFunc builds the daemon's FindbugsRunner closure: it launches the
+// human-findbugs sweep in the registered project's devcontainer, the same
+// containerized agent path as feature generation. The sweep resolves the PM
+// tracker itself (via `human tracker topology`, forwarded to this daemon) and
+// files each surviving finding as a bug ticket, so the button needs no argument.
+func findbugsRunnerFunc(reg *daemon.ProjectRegistry) func() error {
+	return func() error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for findbugs sweep")
+		}
+		entry := entries[0]
+		// Tear down any prior "findbugs" agent first so a re-click after a stale
+		// or crashed run is idempotent — Manager.Start refuses to start over a
+		// still-running agent.
+		if docker, err := devcontainer.NewDockerClient(); err == nil {
+			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), "findbugs")
+			_ = docker.Close()
+		}
+		return dockerAgentLauncher{}.Launch(context.Background(), "findbugs", "/human-findbugs", entry.Dir, entry.Dir)
 	}
 }
 

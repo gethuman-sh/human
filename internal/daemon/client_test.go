@@ -327,6 +327,25 @@ func TestSendConfirmDecision_Denied(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestStartFindbugs_SendsRoute(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		assert.Equal(t, []string{"findbugs-start"}, req.Args)
+		return Response{ExitCode: 0, Stdout: "ok\n"}
+	})
+
+	err := StartFindbugs(addr, "tok")
+	require.NoError(t, err)
+}
+
+func TestStartFindbugs_ErrorPropagates(t *testing.T) {
+	addr := startMockDaemon(t, func(_ Request) Response {
+		return Response{ExitCode: 1, Stderr: "findbugs sweep not available"}
+	})
+
+	err := StartFindbugs(addr, "tok")
+	require.Error(t, err)
+}
+
 func TestRunRemoteCapture_DaemonError(t *testing.T) {
 	addr := startMockDaemon(t, func(_ Request) Response {
 		return Response{ExitCode: 1, Stderr: "some error"}

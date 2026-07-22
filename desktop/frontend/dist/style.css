@@ -964,6 +964,33 @@ body {
   color: var(--accent);
 }
 
+.findbugs-btn {
+  /* Reuse the column-header control look; distinct from the neutral + so the
+     sweep reads as an action, not another quick-add. */
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--col-border);
+  background: var(--card-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.findbugs-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.findbugs-hunting {
+  margin-left: auto;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.8;
+}
+
 .ideation-panel {
   position: fixed;
   right: 0;

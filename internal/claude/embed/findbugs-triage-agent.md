@@ -107,15 +107,13 @@ Write the final report to `$REPORT`:
 - **<title>** (from <agent>): <reason for exclusion>
 ```
 
-### 5. Clean up intermediate files
+### 5. Finish
 
-After the report is written, remove the intermediate files:
-
-```bash
-human pipeline cleanup bugs
-```
-
-This deletes ALL dot-files in `.human/bugs/` (recon report, candidates, state) and keeps final reports — run it only after the report exists.
+Do not clean up — the skill files tickets from this report first and runs
+`human pipeline cleanup bugs` as its final step. Leave the report and the
+intermediate files (candidates, recon report, state) in place so the filing
+phase can read the report and the desktop hunt indicator stays lit until the
+whole sweep is done.
 
 ## Principles
 
