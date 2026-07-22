@@ -82,6 +82,12 @@ type fakeDeployer struct {
 	// mergeUntil models GitHub's 405 on a stale branch: MergePullRequest fails
 	// with a merge-conflict error until EnsureMergeable has run, then succeeds.
 	mergeUntil bool
+	// mergeFailN models GitHub's transient 405 "Pull Request is not mergeable"
+	// while the forge recomputes mergeability against freshly-arrived checks:
+	// MergePullRequest returns that racy error for the first mergeFailN calls,
+	// then succeeds. Distinct from mergeUntil (a stale branch cleared by a
+	// rebase) — this branch never rebases; only a retry clears it.
+	mergeFailN int
 	// mergeable is the forge's own end-state merge verdict reported by
 	// PullRequestMergeable — the fallback signal when the mechanical rebase in
 	// EnsureMergeable conflicts on an intermediate commit (SC-804).
@@ -140,6 +146,9 @@ func (f *fakeDeployer) MergePullRequest(_ context.Context, _ string, _ int) erro
 	// stage (EnsureMergeable) has rebased and re-pushed it.
 	if f.mergeUntil && f.ensured == 0 {
 		return errors.New("Pull Request has merge conflicts")
+	}
+	if f.mergeFailN > 0 && f.merged <= f.mergeFailN {
+		return errors.New("405 Pull Request is not mergeable")
 	}
 	return f.mergeErr
 }
@@ -538,6 +547,82 @@ func TestApplyTransitionDeployMergeFails(t *testing.T) {
 		}
 	}
 	assert.True(t, sawFailed)
+}
+
+// TestApplyTransitionDeployRecoversRacyMergeRefusal is the 1187 regression:
+// a fresh (non-rebased) branch whose merge draws a transient 405 "Pull Request
+// is not mergeable" — the forge still recomputing against just-arrived checks —
+// must be recovered by waiting out the recompute and retrying the merge, never
+// dead-ended on a terminal deploy-failed. The forge reports the PR mergeable and
+// CI green the whole time (mergeable:true, checks passing); only the merge call
+// races. On the pre-fix deploy() (bare MergePullRequest at the merge step) the
+// single 405 reds the card — this test fails there.
+func TestApplyTransitionDeployRecoversRacyMergeRefusal(t *testing.T) {
+	syncDeploy(t)
+	origInterval, origTimeout := mergeablePollInterval, mergeablePollTimeout
+	origAttempts, origBackoff := mergeRetryAttempts, mergeRetryBackoff
+	mergeablePollInterval, mergeablePollTimeout = time.Millisecond, time.Second
+	mergeRetryBackoff = time.Millisecond
+	t.Cleanup(func() {
+		mergeablePollInterval, mergeablePollTimeout = origInterval, origTimeout
+		mergeRetryAttempts, mergeRetryBackoff = origAttempts, origBackoff
+	})
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/16", Number: 16},
+		checks:     []forge.ChecksState{forge.ChecksPassing},
+		mergeFailN: 1, mergeable: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.ensured, "the freshness stage runs once; a fresh branch recovers via the retry, not a rebase re-push")
+	assert.GreaterOrEqual(t, p.merged, 2, "the racy merge must be retried after the recompute settles")
+	assert.Equal(t, []string{"feat/x"}, p.deleted)
+	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/16")
+	for _, b := range c.added {
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader),
+			"a racy 405 on a mergeable PR must recover, never dead-end on deploy-failed: %q", b)
+	}
+}
+
+// TestApplyTransitionDeployRedsWhenMergeKeepsRacing is the 1187 exhaustion case:
+// a PR the forge keeps reporting mergeable but whose merge call keeps drawing the
+// racy 405 past the bounded retry ladder must eventually red — with a headline
+// naming the re-race — rather than loop forever. mergeFailN (5) exceeds the
+// shrunk mergeRetryAttempts, so the ladder is exhausted and the card reds.
+func TestApplyTransitionDeployRedsWhenMergeKeepsRacing(t *testing.T) {
+	syncDeploy(t)
+	origInterval, origTimeout := mergeablePollInterval, mergeablePollTimeout
+	origAttempts, origBackoff := mergeRetryAttempts, mergeRetryBackoff
+	mergeablePollInterval, mergeablePollTimeout = time.Millisecond, time.Second
+	mergeRetryBackoff = time.Millisecond
+	t.Cleanup(func() {
+		mergeablePollInterval, mergeablePollTimeout = origInterval, origTimeout
+		mergeRetryAttempts, mergeRetryBackoff = origAttempts, origBackoff
+	})
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/17", Number: 17},
+		checks:     []forge.ChecksState{forge.ChecksPassing},
+		mergeFailN: 5, mergeable: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+	assert.Empty(t, p.deleted, "an unmerged PR must not have its branch deleted")
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed, "an exhausted retry ladder must red the card")
+	assert.Contains(t, failed, "kept re-racing")
 }
 
 // TestApplyTransitionDeployRebasesStaleBranch is the ticket-735 regression: a

@@ -75,6 +75,12 @@ var (
 	// this). The poll waits for a definitive verdict before merging.
 	mergeablePollInterval = 3 * time.Second
 	mergeablePollTimeout  = 60 * time.Second
+	// Merge-retry pacing: a racy 405 ("Pull Request is not mergeable" while the
+	// forge recomputes against fresh checks) is recovered by waiting out the
+	// mergeability recompute and re-attempting the merge, bounded so a genuinely
+	// unmergeable PR still reds within the deploy window (1187).
+	mergeRetryAttempts = 3
+	mergeRetryBackoff  = 5 * time.Second
 )
 
 // BoardTransitionRequest is the wire request for advancing a card one stage.
@@ -460,9 +466,9 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 				err))
 		}
 	}
-	if err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err != nil {
+	if err := d.mergeWithRecovery(ctx, res); err != nil {
 		return d.deployFailed(pmKey, res.URL, deployReason(
-			"the forge refused the merge — open the PR to see why, then re-run Deploy",
+			"the forge refused the merge and kept re-racing through the mergeability recompute — open the PR to see why, then re-run Deploy",
 			err))
 	}
 	// Past the merge the work IS shipped: branch cleanup and the ticket close
@@ -519,6 +525,58 @@ func (d BoardTransitionDeps) awaitMergeable(ctx context.Context, number int) err
 		case <-time.After(mergeablePollInterval):
 		}
 	}
+}
+
+// mergeWithRecovery merges the PR, recovering the racy 405 the forge returns
+// while it recomputes mergeability against freshly-arrived checks (the
+// SC-1134/1135 freeze, 1187). The first attempt is the common path. On failure
+// it classifies the refusal: a genuinely-unmergeable PR (forge reports not
+// mergeable AND checks are not still running) surfaces the original error so the
+// card reds with a named blocker; a racy one (mergeable, or checks in flight)
+// waits out the mergeability recompute — the same wait the rebased path uses,
+// now extended to a fresh branch merely racing fresh checks — and re-attempts
+// the merge, bounded by mergeRetryAttempts so a PR that keeps re-racing still
+// reds within the deploy window rather than looping forever.
+func (d BoardTransitionDeps) mergeWithRecovery(ctx context.Context, res PRResult) error {
+	err := d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number)
+	if err == nil {
+		return nil
+	}
+	for attempt := 0; attempt < mergeRetryAttempts; attempt++ {
+		if !d.mergeRefusalRetryable(ctx, res.Number) {
+			// Genuine refusal: red with the forge's own reason, not a retry story.
+			return err
+		}
+		// Wait out the forge's asynchronous mergeability recompute before the
+		// retry — the same settling window the freshness-rebase path waits on.
+		if awaitErr := d.awaitMergeable(ctx, res.Number); awaitErr != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(mergeRetryBackoff):
+		}
+		if err = d.Deployer.MergePullRequest(ctx, d.WorkspaceDir, res.Number); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// mergeRefusalRetryable reports whether a failed merge is a transient race worth
+// retrying rather than a genuine unmergeable state. Retryable when the forge
+// reports the PR mergeable, OR its checks are still running (the merge raced
+// ahead of the check reconciliation). A not-mergeable PR whose checks have
+// settled is a real conflict — do not retry. Read errors are treated as "not
+// retryable" so an unknown forge state reds rather than spins (mirrors
+// forgeMergeableFallback's conservative default, SC-804).
+func (d BoardTransitionDeps) mergeRefusalRetryable(ctx context.Context, number int) bool {
+	if mergeable, err := d.Deployer.PullRequestMergeable(ctx, d.WorkspaceDir, number); err == nil && mergeable {
+		return true
+	}
+	state, err := d.Deployer.PullRequestChecks(ctx, d.WorkspaceDir, number)
+	return err == nil && state == forge.ChecksPending
 }
 
 // forgeMergeableFallback reports whether the deploy may proceed to the merge
