@@ -10,12 +10,16 @@ import (
 //go:embed embed/shared/exit-contract.md
 var exitContractFragment []byte
 
+//go:embed embed/shared/model-tiers.md
+var modelTiersFragment []byte
+
 // sharedFragments are prompt blocks that must read identically in every skill
 // and agent that carries them. Keeping one copy here and substituting it at
 // install time is what stops twenty prompts from drifting apart, which is how
 // the pipeline accumulated a different phrasing of the same rule per stage.
 var sharedFragments = map[string][]byte{
 	"exit-contract": exitContractFragment,
+	"model-tiers":   modelTiersFragment,
 }
 
 // includePattern matches a whole-line include directive:

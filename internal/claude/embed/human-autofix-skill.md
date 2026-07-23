@@ -38,6 +38,10 @@ Exhausting the budget is an honest `needs-human-work` ending, not a silent stop:
 
 <!-- human:include exit-contract -->
 
+<!-- human:include model-tiers -->
+
+The tiers this pipeline uses, unless you have a reason to differ: triage, planner, reviewer and every adversarial check at `opus`; bug-fixer and bug-verify at `sonnet`; preflight inherits.
+
 ## Step 1 — Parse argument
 
 `$ARGUMENTS` is the bug ticket key — the PM ticket — optionally followed by `--board`. Take the first non-flag token as `<BUG_KEY>`. Resolve the bug ticket with `human get <BUG_KEY>` — the CLI auto-detects the owning tracker from the key shape, regardless of how many trackers are configured; `human tracker list` only enumerates trackers and must not be used to guess a key's owner. Call the tracker `<tracker>`.
@@ -92,7 +96,7 @@ Set `<BOARD_CONTEXT>` to the set's `board_context`. (`--board` in `$ARGUMENTS` i
 Delegate to the **human-bug-triage** agent:
 
 ```
-Task(subagent_type="human-bug-triage", prompt="Triage bug ticket <BUG_KEY>: reproduce it minimally, trace the full cause chain (symptom → proximate cause → underlying cause) with file:line evidence and the regression window, scan for sibling occurrences of the same defect pattern, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation section a non-engineer can follow.")
+Task(subagent_type="human-bug-triage", model="opus", prompt="Triage bug ticket <BUG_KEY>: reproduce it minimally, trace the full cause chain (symptom → proximate cause → underlying cause) with file:line evidence and the regression window, scan for sibling occurrences of the same defect pattern, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation section a non-engineer can follow.")
 ```
 
 It posts a `[human:bug-verdict] <verdict>` comment on the bug ticket — the ticket's permanent root-cause record: a plain-language explanation first, then the reproduction, the cause chain down to the underlying cause (not just the line that crashed), the regression window, and sibling occurrences. **Read the verdict from state, not from the agent's prose:**
@@ -116,7 +120,7 @@ For a confirmed bug the record also carries the root cause and fix outline. If t
 Dispatch the skeptic against the verdict:
 
 ```
-Task(subagent_type="human-verdict-skeptic", prompt="Challenge the latest bug-verdict on ticket <BUG_KEY>")
+Task(subagent_type="human-verdict-skeptic", model="opus", prompt="Challenge the latest bug-verdict on ticket <BUG_KEY>")
 ```
 
 Read its outcome from state:
@@ -155,7 +159,7 @@ challenge: upheld
 2. Delegate to the **human-planner** agent, seeding it with the triage root cause:
 
 ```
-Task(subagent_type="human-planner", prompt="Create an implementation plan to fix bug <BUG_KEY>. The root-cause analysis from triage:\n<paste the triage root cause + fix outline>\nThe plan's Changes section MUST begin with adding a regression test that fails because of the bug, then fixing the root cause. Return the plan as output; do not write files or create tickets.")
+Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan to fix bug <BUG_KEY>. The root-cause analysis from triage:\n<paste the triage root cause + fix outline>\nThe plan's Changes section MUST begin with adding a regression test that fails because of the bug, then fixing the root cause. Return the plan as output; do not write files or create tickets.")
 ```
 
 Capture the output as `<PLAN_CONTENT>`. Ensure its header has a `**PM ticket**: <BUG_KEY>` line and, in split topology, an `**Engineering ticket**: TBD` line.
@@ -188,13 +192,13 @@ Verify with `human plan show <BUG_KEY>` — the fixer and verify agents read the
 Delegate to the **human-bug-fixer** agent. When `<BOARD_CONTEXT>` is true the fixer must NOT push — the board container has no push credentials and Deploy owns shipping — so forward the board instruction explicitly in the dispatch prompt (the fixer cannot see `$ARGUMENTS`):
 
 ```
-Task(subagent_type="human-bug-fixer", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch. BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. Report the local branch name. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.")
+Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch. BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. Report the local branch name. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.")
 ```
 
 Otherwise (standalone, `<BOARD_CONTEXT>` false) dispatch the existing push prompt:
 
 ```
-Task(subagent_type="human-bug-fixer", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch and push it. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.")
+Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch and push it. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.")
 ```
 
 It creates branch `autofix/<work-key>` (the key lowercased), writes a regression test that **fails** because of the bug, implements the root-cause fix, confirms the suite is green, commits with subjects starting with the `human commits prefix <BUG_KEY> [<ENG_KEY>]` prefix (e.g. `[SC-79] [HUM-59]` in split topology, `[SC-79]` otherwise), and returns the branch name. In a standalone run it pushes the branch; in board context it leaves the branch local (the bind-mounted host repo) and returns its name without pushing. If it reports it could not reach a green build/test, STOP and report — do not open a PR.
@@ -204,7 +208,7 @@ It creates branch `autofix/<work-key>` (the key lowercased), writes a regression
 Delegate to the **human-bug-verify** agent:
 
 ```
-Task(subagent_type="human-bug-verify", prompt="Verify ticket <WORK_KEY> (PM bug <BUG_KEY>): confirm the regression test fails before / passes after the fix, the full suite is green, and the fix addresses the root cause. Post the verdict as a comment on <BUG_KEY>.")
+Task(subagent_type="human-bug-verify", model="sonnet", prompt="Verify ticket <WORK_KEY> (PM bug <BUG_KEY>): confirm the regression test fails before / passes after the fix, the full suite is green, and the fix addresses the root cause. Post the verdict as a comment on <BUG_KEY>.")
 ```
 
 This is the pipeline's ONE full-suite pass; the fixer used the fast tier. Ensure the `[human:bug-verify]` comment records the `## Evidence` block (branch/commit/command/result) so the review can trust it without re-running the suite.
@@ -264,7 +268,7 @@ human marker post <BUG_KEY> review-started
 ```
 
 ```
-Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria.")
+Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria.")
 ```
 
 The reviewer writes `.human/reviews/<work-key>.md` and records its outcome in state. **Read the verdict from state, never from the file's prose:**
@@ -290,7 +294,20 @@ REVIEW_EOF
 
 ### 7.3 Review gate
 
-- **pass** or **pass with notes** — continue to Step 8.
+- **pass** or **pass with notes** — a pass is the one review outcome nothing downstream checks, and it is about to be made irreversible by a merge. Before continuing, get one adversarial second opinion:
+
+  ```
+  Task(subagent_type="human-second-opinion", model="opus", prompt="The pipeline is about to merge branch autofix/<work-key> for ticket <WORK_KEY> on the strength of a passing review. Lens: did-you-actually-look. Evidence: the ticket, the branch diff against main, and stage.review in agent state. Try to refute that the review examined the change. Do not read the reviewer's reasoning first.")
+  ```
+
+  ```bash
+  human state get <WORK_KEY> stage.opinion --field opinion    # upheld | refuted
+  ```
+
+  - **upheld** — continue to Step 8.
+  - **refuted** — treat it exactly like a failing review: feed its evidence back to the fixer under the review budget (the `fail` branch below). Do not merge on a refuted pass.
+
+  Run this once per review verdict, not once per attempt: a second opinion on the same unchanged code twice is noise.
 - **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the **human-bug-fixer** and do NOT post `[human:review-complete] verdict: fail` (that would badge the card "review found problems" and point a rework run at phantom findings). Instead post `[human:review-failed]` on the bug ticket naming the unreachable ref — `human marker post <BUG_KEY> review-failed --field reason="<reachability reason>"` — then STOP (report per Step 9). No PR is merged. The card shows an honest, retryable stage failure. The board-context 7.1 stop is unchanged.
 - **fail** — feed the reviewer's findings back: re-dispatch the **human-bug-fixer** (Step 5) with the review findings appended to the prompt, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). This loops under the retry budget (`budget.review.attempts`) — a review that fails for a *different* reason each round is progress, while the same finding surviving twice is not. When the budget is spent, STOP honestly as `needs-human-work`: the `[human:ready-for-review]` handoff stays standing for a human, and NO pull request is merged.
 

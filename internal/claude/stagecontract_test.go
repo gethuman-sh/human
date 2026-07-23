@@ -75,7 +75,57 @@ func TestStageContract_EveryFieldReadIsAlsoWritten(t *testing.T) {
 	}
 }
 
-var markerPostPattern = regexp.MustCompile(`human marker post \S+ ([a-z][a-z-]*)`)
+var (
+	markerPostPattern = regexp.MustCompile(`human marker post \S+ ([a-z][a-z-]*)`)
+	taskModelPattern  = regexp.MustCompile(`Task\(subagent_type="([a-z-]+)", model="([^"]+)"`)
+	// The Task tool accepts model aliases, never full model ids. Verified
+	// against the Claude Code 2.1.218 input schema:
+	//   model: z.enum(["sonnet","opus","haiku","fable"]).optional()
+	validTaskModels = map[string]bool{"opus": true, "sonnet": true, "haiku": true, "fable": true}
+)
+
+// A model override is only honoured if it is one of the tool's aliases. Writing
+// a real model id ("claude-opus-4-8") is the natural mistake and would be
+// rejected at dispatch, at which point a tiering decision silently does
+// nothing — so pin the vocabulary here.
+func TestPrompts_DispatchModelsAreValidAliases(t *testing.T) {
+	entries, err := os.ReadDir("embed")
+	require.NoError(t, err)
+
+	dispatches := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		for _, m := range taskModelPattern.FindAllStringSubmatch(readEmbed(t, e.Name()), -1) {
+			dispatches++
+			require.True(t, validTaskModels[m[2]],
+				"%s dispatches %s with model=%q; valid values are opus, sonnet, haiku, fable",
+				e.Name(), m[1], m[2])
+		}
+	}
+	require.Positive(t, dispatches, "no tiered dispatches found — the pipeline pays for a model it did not choose")
+}
+
+// An adversarial check that runs on a weaker model gets argued out of its
+// objection, which turns the gate into a rubber stamp — worse than no gate,
+// because it manufactures confidence. Pin the adversaries to the top tier.
+func TestPrompts_AdversarialChecksAreNotTieredDown(t *testing.T) {
+	skill := readEmbed(t, "human-autofix-skill.md")
+
+	adversaries := []string{"human-verdict-skeptic", "human-second-opinion"}
+	for _, agent := range adversaries {
+		found := false
+		for _, m := range taskModelPattern.FindAllStringSubmatch(skill, -1) {
+			if m[1] != agent {
+				continue
+			}
+			found = true
+			require.Equal(t, "opus", m[2], "%s must run at the top tier", agent)
+		}
+		require.True(t, found, "%s is never dispatched with an explicit model", agent)
+	}
+}
 
 // Every marker a prompt posts must be a type the protocol knows.
 //
