@@ -39,6 +39,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdprovider"
 	"github.com/gethuman-sh/human/cmd/cmdproxy"
 	"github.com/gethuman-sh/human/cmd/cmdslack"
+	"github.com/gethuman-sh/human/cmd/cmdstate"
 	"github.com/gethuman-sh/human/cmd/cmdtelegram"
 	"github.com/gethuman-sh/human/cmd/cmdtracker"
 	"github.com/gethuman-sh/human/cmd/cmdtui"
@@ -247,6 +248,12 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	handoffCmd := cmdhandoff.BuildHandoffCmd(autoDeps)
 	handoffCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(handoffCmd)
+
+	// Deliberately absent from localSubcommands: "state" is forwarded to the
+	// daemon so every agent and container shares one store on the daemon host.
+	stateCmd := cmdstate.BuildStateCmd()
+	stateCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(stateCmd)
 
 	pipelineCmd := cmdpipeline.BuildPipelineCmd()
 	pipelineCmd.GroupID = "utility"

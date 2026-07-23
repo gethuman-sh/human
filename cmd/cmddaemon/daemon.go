@@ -23,6 +23,7 @@ import (
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/internal/agent"
+	"github.com/gethuman-sh/human/internal/agentstate"
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/chrome"
 	"github.com/gethuman-sh/human/internal/claude"
@@ -114,31 +115,64 @@ type daemonState struct {
 }
 
 // runMaintenanceLoop periodically cleans up stale pending confirmations and
-// prunes the stats, audit, and agent-execution-log stores past their retention
-// windows. It runs until ctx is cancelled.
+// prunes the stats, audit, agent-execution-log, and agent-state stores past
+// their retention windows. It runs until ctx is cancelled.
 func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore *daemon.PendingConfirmStore, statsStore *stats.StatsStore, auditStore *audit.Store) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	// Agent state has a multi-day retention, so it gets its own slow ticker
+	// rather than reopening SQLite every 30 seconds for nothing.
+	stateTicker := time.NewTicker(time.Hour)
+	defer stateTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			confirmStore.Cleanup(daemon.ConfirmRetention)
-			if statsStore != nil {
-				if _, pruneErr := statsStore.Prune(ctx); pruneErr != nil {
-					logger.Warn().Err(pruneErr).Msg("periodic stats prune failed")
-				}
-			}
-			if auditStore != nil {
-				if _, pruneErr := auditStore.Prune(ctx); pruneErr != nil {
-					logger.Warn().Err(pruneErr).Msg("periodic audit prune failed")
-				}
-			}
-			if _, pruneErr := agent.PruneExecutions(); pruneErr != nil {
-				logger.Warn().Err(pruneErr).Msg("periodic agent execution log prune failed")
-			}
+			runMaintenanceTick(ctx, logger, confirmStore, statsStore, auditStore)
+		case <-stateTicker.C:
+			pruneAgentState(ctx, logger)
 		}
+	}
+}
+
+// runMaintenanceTick is one pass of the fast maintenance sweep.
+func runMaintenanceTick(ctx context.Context, logger zerolog.Logger, confirmStore *daemon.PendingConfirmStore, statsStore *stats.StatsStore, auditStore *audit.Store) {
+	confirmStore.Cleanup(daemon.ConfirmRetention)
+	if statsStore != nil {
+		if _, pruneErr := statsStore.Prune(ctx); pruneErr != nil {
+			logger.Warn().Err(pruneErr).Msg("periodic stats prune failed")
+		}
+	}
+	if auditStore != nil {
+		if _, pruneErr := auditStore.Prune(ctx); pruneErr != nil {
+			logger.Warn().Err(pruneErr).Msg("periodic audit prune failed")
+		}
+	}
+	if _, pruneErr := agent.PruneExecutions(); pruneErr != nil {
+		logger.Warn().Err(pruneErr).Msg("periodic agent execution log prune failed")
+	}
+}
+
+// pruneAgentState drops agent working state past its retention window. Every
+// failure is logged and none is fatal: stale state costs disk, a daemon that
+// exits over it costs the whole pipeline.
+func pruneAgentState(ctx context.Context, logger zerolog.Logger) {
+	store, err := agentstate.Open(agentstate.DefaultDBPath())
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to open agent state database for prune")
+		return
+	}
+	defer func() { _ = store.Close() }()
+
+	deleted, err := store.Prune(ctx, time.Now().UTC().Add(-agentstate.DefaultRetention))
+	if err != nil {
+		logger.Warn().Err(err).Msg("periodic agent state prune failed")
+		return
+	}
+	if deleted > 0 {
+		logger.Info().Int("deleted", deleted).Msg("pruned old agent state")
 	}
 }
 
