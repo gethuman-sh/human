@@ -46,7 +46,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // resolved marker). It is the success signal that authorizes reclaiming the
 // run's private worktree — every other exit KEEPS the worktree so uncommitted
 // work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), daemonID string, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -76,7 +76,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, commitsPresent, diagnose, onHandoff, daemonID, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger)
 			}
 		}
 	}
@@ -86,7 +86,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), daemonID string, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
@@ -105,6 +105,10 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	// only treat the exit as a failure when that did NOT happen.
 	_, state := latestStageState(comments, stage)
 	if state == BoardDone {
+		// A clean finish clears the automatic-retry budget: the next failure on
+		// this stage is a fresh problem and deserves its own attempts, not the
+		// remainder of an older one's.
+		retry.reset(pmKey, stage)
 		// A clean finish is the positive success signal: authorize reclaiming the
 		// run's worktree (the work is safely committed on its branch).
 		if onHandoff != nil {
@@ -149,6 +153,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	//      up-front human decision (see stagePausedOnOptions). Posting a *-failed
 	//      here would red the card and loop re-planning forever (SC-751).
 	if state == BoardResolved || stagePausedOnOptions(comments, stage) {
+		retry.reset(pmKey, stage)
 		if onHandoff != nil {
 			onHandoff(agentName)
 		}
@@ -157,7 +162,15 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	body := failedHeaderFor(stage) + "\n" + failureMarkerBody(diagnose, agentName, errorType)
 	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
+		// Without the failed marker the card does not derive to a failed state,
+		// which is precisely what every in-place retry transition requires — so
+		// an automatic relaunch would be rejected. Leave it for a human.
+		return
 	}
+	// A stage that failed for a reason another attempt could fix — a flake, a
+	// dead container — is relaunched here rather than waiting for someone to
+	// click Retry. The failure stays on the record either way.
+	retry.tryRelaunch(ctx, pmKey, stage, commenter, daemonID, logger)
 }
 
 // stagePausedOnOptions reports whether the exiting stage left an open

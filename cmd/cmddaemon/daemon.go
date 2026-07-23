@@ -511,9 +511,32 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// run's private worktree; every other exit keeps the work for forensics
 	// (SC-731). MarkHandoff is best-effort/idempotent.
 	onHandoff := func(agentName string) { agent.MarkHandoff(agentName) }
+	// stageRetry lets a stage that failed for a reason another attempt could fix
+	// — a flaky check, a container that died — relaunch itself instead of waiting
+	// for someone to click Retry. It reads the exit class the agent recorded in
+	// agent state and issues the same in-place retry transition the Retry gesture
+	// does, so every existing guard (idempotency, the cross-daemon claim arbiter,
+	// the per-stage prompt) applies unchanged.
+	stageRetry := daemon.StageRetry{
+		Max: daemon.DefaultStageRetries,
+		Outcome: func(pmKey string, stage daemon.BoardStage) (string, bool) {
+			return stageExitClass(ctx, pmKey, stage, logger)
+		},
+		Attempts: func(pmKey string, stage daemon.BoardStage) (int, error) {
+			return bumpStageRetries(ctx, pmKey, stage)
+		},
+		Reset: func(pmKey string, stage daemon.BoardStage) {
+			clearStageRetries(ctx, pmKey, stage)
+		},
+		Relaunch: func(pmKey string, stage daemon.BoardStage) error {
+			// From is unused by the in-place retry rules; the card's own derived
+			// stage plus its failed state is what selects the retry path.
+			return boardTransition(daemon.BoardTransitionRequest{PMKey: pmKey, From: stage, To: stage})
+		},
+	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, branchReachable, commitsPresent, diagnoseFailure, onHandoff, ds.daemonID, logger)
+		chainReview, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
