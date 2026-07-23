@@ -149,6 +149,33 @@ human marker post <PM_KEY> plan-ready
 
 `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
 
+## Retry budgets, flakes, and how this run may end
+
+The board's planning stage runs this skill, so it must recover like every other stage rather than stopping at the first failure.
+
+A verification pass or a tool call that fails is not automatically a failed plan. Re-run the failing step **alone** first: if it succeeds in isolation it is a flake — record it and retry without charging an attempt. Only a failure that reproduces identically twice is real. The budget is **3 real attempts**:
+
+```bash
+human state incr <PM_KEY> budget.planning.flakes      # vanished in isolation
+human state incr <PM_KEY> budget.planning.attempts    # reproduced
+human state get  <PM_KEY> budget.planning.attempts --default 0
+```
+
+Infrastructure trouble — a dead container, a network blip — is never a real attempt; it is a `retryable` ending, and the board relaunches the stage automatically rather than reddening the card.
+
+Record the outcome before finishing, so the board can tell a glitch from a blocker:
+
+```bash
+human state set <PM_KEY> stage.planning --json --body-file - <<'EOF'
+{"exit":"done",
+ "outcome":"<plan-ready|nothing-to-do|decision-required>",
+ "summary":"<one line>",
+ "evidence":"<the marker or ticket that carries the result>"}
+EOF
+```
+
+<!-- human:include exit-contract -->
+
 ## After completion
 
 Tell the user:
