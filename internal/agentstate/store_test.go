@@ -185,6 +185,60 @@ func TestDelete_AndDeleteScope(t *testing.T) {
 	require.Empty(t, claims, "dropping a scope must drop its claims too")
 }
 
+// Clearing a namespace is how a fresh run drops the previous run's retry
+// budgets without disturbing the rest of the ticket's state.
+func TestDeletePrefix_ClearsOnlyTheNamespace(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+
+	for _, n := range []string{"budget.fix.attempts", "budget.fix.flakes", "budget.review.attempts", "fix.evidence", "budgetary"} {
+		_, err := s.Set(ctx, "SC-1", n, "1", "", Meta{})
+		require.NoError(t, err)
+	}
+
+	n, err := s.DeletePrefix(ctx, "SC-1", "budget.")
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+
+	remaining, err := s.List(ctx, "SC-1", "")
+	require.NoError(t, err)
+	names := []string{}
+	for _, e := range remaining {
+		names = append(names, e.Name)
+	}
+	require.ElementsMatch(t, []string{"fix.evidence", "budgetary"}, names,
+		"only the dotted namespace goes; a name that merely starts with the same letters stays")
+}
+
+// An empty prefix must not quietly mean "everything" — a typo would wipe a
+// ticket's whole working memory.
+func TestDeletePrefix_RefusesEmptyPrefix(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	_, err := s.Set(ctx, "SC-1", "keep", "1", "", Meta{})
+	require.NoError(t, err)
+
+	_, err = s.DeletePrefix(ctx, "SC-1", "  ")
+	require.Error(t, err)
+
+	remaining, err := s.List(ctx, "SC-1", "")
+	require.NoError(t, err)
+	require.Len(t, remaining, 1)
+}
+
+func TestDeletePrefix_UnderscoreIsLiteral(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	_, err := s.Set(ctx, "SC-1", "budget_fix", "1", "", Meta{})
+	require.NoError(t, err)
+	_, err = s.Set(ctx, "SC-1", "budgetXfix", "1", "", Meta{})
+	require.NoError(t, err)
+
+	n, err := s.DeletePrefix(ctx, "SC-1", "budget_")
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "_ must not act as a LIKE wildcard")
+}
+
 func TestIncr_CountsFromZeroAndAccumulates(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()

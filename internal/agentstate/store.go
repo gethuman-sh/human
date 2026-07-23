@@ -126,6 +126,7 @@ type Store interface {
 	Get(ctx context.Context, scope, name string) (Entry, error)
 	List(ctx context.Context, scope, prefix string) ([]Entry, error)
 	Delete(ctx context.Context, scope, name string) (bool, error)
+	DeletePrefix(ctx context.Context, scope, prefix string) (int, error)
 	DeleteScope(ctx context.Context, scope string) (int, error)
 	Incr(ctx context.Context, scope, name string, by int64, meta Meta) (int64, error)
 	Claim(ctx context.Context, req ClaimRequest) (ClaimResult, error)

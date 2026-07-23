@@ -79,6 +79,17 @@ func (f *fakeStore) Delete(_ context.Context, scope, name string) (bool, error) 
 	return true, nil
 }
 
+func (f *fakeStore) DeletePrefix(_ context.Context, scope, prefix string) (int, error) {
+	n := 0
+	for k, e := range f.entries {
+		if e.Scope == strings.ToUpper(scope) && strings.HasPrefix(e.Name, prefix) {
+			delete(f.entries, k)
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (f *fakeStore) DeleteScope(_ context.Context, scope string) (int, error) {
 	n := 0
 	for k, e := range f.entries {
@@ -357,6 +368,39 @@ func TestRm_RequiresExactlyOneOfNameOrAll(t *testing.T) {
 
 	_, err = run(t, store, context.Background(), "rm", "SC-1", "a", "--all")
 	require.Error(t, err, "both a name and --all")
+}
+
+// A fresh run clears the previous run's budgets; without this they read as
+// already spent and the run gives up before doing any work.
+func TestRm_PrefixClearsANamespace(t *testing.T) {
+	store := newFakeStore()
+	ctx := context.Background()
+	for _, n := range []string{"budget.fix.attempts", "budget.review.attempts", "fix.evidence"} {
+		_, err := store.Set(ctx, "SC-1", n, "3", "", agentstate.Meta{})
+		require.NoError(t, err)
+	}
+
+	out, err := run(t, store, ctx, "rm", "SC-1", "--prefix", "budget.")
+	require.NoError(t, err)
+	require.Contains(t, out, "removed 2 entries")
+
+	left, err := store.List(ctx, "SC-1", "")
+	require.NoError(t, err)
+	require.Len(t, left, 1)
+	require.Equal(t, "fix.evidence", left[0].Name)
+}
+
+func TestRm_RejectsMoreThanOneTarget(t *testing.T) {
+	store := newFakeStore()
+	for _, args := range [][]string{
+		{"rm", "SC-1", "a", "--prefix", "budget."},
+		{"rm", "SC-1", "--prefix", "budget.", "--all"},
+		{"rm", "SC-1", "a", "--all"},
+		{"rm", "SC-1"},
+	} {
+		_, err := run(t, store, context.Background(), args...)
+		require.Error(t, err, "args %v must be refused", args)
+	}
 }
 
 func TestIncr_PrintsRunningTotal(t *testing.T) {

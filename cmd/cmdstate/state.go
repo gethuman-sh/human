@@ -232,34 +232,70 @@ func buildListCmd(open storeOpener) *cobra.Command {
 
 func buildRmCmd(open storeOpener) *cobra.Command {
 	var all bool
+	var prefix string
 	cmd := &cobra.Command{
 		Use:   "rm SCOPE [NAME]",
-		Short: "Remove one entry, or every entry of a scope with --all",
-		Args:  cobra.RangeArgs(1, 2),
+		Short: "Remove one entry, a whole namespace with --prefix, or the scope with --all",
+		Long: `Remove state.
+
+--prefix clears one namespace and leaves the rest of the ticket's state alone.
+A fresh run uses it to drop the previous run's retry budgets, which would
+otherwise read as already spent:
+
+  human state rm SC-1 --prefix budget.`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if all == (len(args) == 2) {
-				return errors.WithDetails("give either a NAME or --all, not both or neither")
+			if err := checkRmTarget(len(args) == 2, prefix != "", all); err != nil {
+				return err
 			}
 			return withStore(open, func(store agentstate.Store) error {
-				if all {
-					n, err := store.DeleteScope(cmd.Context(), args[0])
-					if err != nil {
-						return err
-					}
-					_, printErr := fmt.Fprintf(cmd.OutOrStdout(), "removed %d entries\n", n)
-					return printErr
-				}
-				removed, err := store.Delete(cmd.Context(), args[0], args[1])
+				n, err := runRm(cmd.Context(), store, args, prefix, all)
 				if err != nil {
 					return err
 				}
-				_, printErr := fmt.Fprintln(cmd.OutOrStdout(), removedMessage(removed))
+				if len(args) == 2 {
+					_, printErr := fmt.Fprintln(cmd.OutOrStdout(), removedMessage(n > 0))
+					return printErr
+				}
+				_, printErr := fmt.Fprintf(cmd.OutOrStdout(), "removed %d entries\n", n)
 				return printErr
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "Remove every entry and claim of the scope")
+	cmd.Flags().StringVar(&prefix, "prefix", "", "Remove every entry whose name starts with this prefix")
 	return cmd
+}
+
+// checkRmTarget enforces exactly one target, so a command that could delete a
+// ticket's whole working memory can never be reached by accident.
+func checkRmTarget(hasName, hasPrefix, all bool) error {
+	chosen := 0
+	for _, set := range []bool{hasName, hasPrefix, all} {
+		if set {
+			chosen++
+		}
+	}
+	if chosen != 1 {
+		return errors.WithDetails("give exactly one of NAME, --prefix, or --all")
+	}
+	return nil
+}
+
+// runRm performs the selected removal and returns how many entries went.
+func runRm(ctx context.Context, store agentstate.Store, args []string, prefix string, all bool) (int, error) {
+	switch {
+	case all:
+		return store.DeleteScope(ctx, args[0])
+	case prefix != "":
+		return store.DeletePrefix(ctx, args[0], prefix)
+	default:
+		removed, err := store.Delete(ctx, args[0], args[1])
+		if err != nil || !removed {
+			return 0, err
+		}
+		return 1, nil
+	}
 }
 
 func removedMessage(removed bool) string {

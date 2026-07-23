@@ -235,6 +235,31 @@ func (s *SQLiteStore) Delete(ctx context.Context, scope, name string) (bool, err
 	return n > 0, nil
 }
 
+// DeletePrefix removes every entry of a scope whose name starts with prefix,
+// returning how many went. It is how a run clears a namespace it owns — the
+// retry budgets at the start of a fresh attempt — without touching the rest of
+// the ticket's state. An empty prefix is refused rather than silently meaning
+// "everything": that is what DeleteScope is for, and a typo should not wipe a
+// ticket.
+func (s *SQLiteStore) DeletePrefix(ctx context.Context, scope, prefix string) (int, error) {
+	normScope, err := NormalizeScope(scope)
+	if err != nil {
+		return 0, err
+	}
+	if strings.TrimSpace(prefix) == "" {
+		return 0, errors.WithDetails("prefix must not be empty; use DeleteScope to clear a whole scope", "scope", normScope)
+	}
+
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM agent_state WHERE scope = ? AND name LIKE ? ESCAPE '\'`,
+		normScope, escapeLike(prefix)+"%")
+	if err != nil {
+		return 0, errors.WrapWithDetails(err, "delete state prefix", "scope", normScope, "prefix", prefix)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // DeleteScope removes every entry and claim of a scope, returning the entry
 // count. Used by `state rm --all` when a ticket's run is abandoned.
 func (s *SQLiteStore) DeleteScope(ctx context.Context, scope string) (int, error) {
