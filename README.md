@@ -102,6 +102,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 - [Marker Protocol](internal/marker/README.md) — post/read the structured `[human:*]` pipeline handoff comments
 - [Pipeline Runtime](internal/pipeline/README.md) — shared state, race-free finding IDs, and cleanup for multi-agent scans
 - [Agent State](internal/agentstate/README.md) — working memory one agent hands to the next; stage claims and takeover
+- [Run Capabilities](internal/capabilities/README.md) — what a run may do (push, PR, deploy), so prompts stop branching on context
 
 **Docs, design & analytics**
 

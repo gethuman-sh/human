@@ -21,6 +21,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdaudit"
 	"github.com/gethuman-sh/human/cmd/cmdauto"
 	"github.com/gethuman-sh/human/cmd/cmdbrowser"
+	"github.com/gethuman-sh/human/cmd/cmdcapabilities"
 	"github.com/gethuman-sh/human/cmd/cmdclickup"
 	"github.com/gethuman-sh/human/cmd/cmdcodenav"
 	"github.com/gethuman-sh/human/cmd/cmdcommits"
@@ -254,6 +255,12 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	stateCmd := cmdstate.BuildStateCmd()
 	stateCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(stateCmd)
+
+	// The mirror case: "capabilities" describes the caller's own checkout and
+	// environment, so it must run locally (see localSubcommands).
+	capabilitiesCmd := cmdcapabilities.BuildCapabilitiesCmd()
+	capabilitiesCmd.GroupID = "utility"
+	rootCmd.AddCommand(capabilitiesCmd)
 
 	pipelineCmd := cmdpipeline.BuildPipelineCmd()
 	pipelineCmd.GroupID = "utility"
@@ -561,6 +568,9 @@ var localSubcommands = map[string]bool{
 	"proxy":         true,
 	"hook":          true,
 	"agent":         true,
+	// Describes the caller's own checkout and environment — the one thing the
+	// daemon cannot see on its behalf.
+	"capabilities": true,
 }
 
 // globalValueFlags lists global persistent flags that take a value. When these
