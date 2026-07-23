@@ -558,7 +558,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
 		branchReachable, commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
-		chainReview, daemon.BoardReconcileInterval, logger)
+		chainReview, stageRetry, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }
