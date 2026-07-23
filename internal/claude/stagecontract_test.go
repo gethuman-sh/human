@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/gethuman-sh/human/internal/marker"
 )
 
 // The pipeline's stage handoffs are structured records, not prose: an
@@ -71,6 +73,42 @@ func TestStageContract_EveryFieldReadIsAlsoWritten(t *testing.T) {
 			"the skill reads stage.%s --field %s, but the agent that writes stage.%s never records %q",
 			stage, field, stage, field)
 	}
+}
+
+var markerPostPattern = regexp.MustCompile(`human marker post \S+ ([a-z][a-z-]*)`)
+
+// Every marker a prompt posts must be a type the protocol knows.
+//
+// This guards against the easiest mistake in this pipeline: inventing a new
+// marker for a job an existing one already does. The board's decision loop —
+// [human:options] rendered as "Decision needed", answered with
+// [human:option-chosen], and exempted from the failure watcher by
+// stagePausedOnOptions — already parks a card on a human decision. A parallel
+// "needs-input" marker would split that trail in half: one path the board
+// renders and resumes, another it does not.
+func TestPrompts_PostOnlyKnownMarkerTypes(t *testing.T) {
+	known := map[string]bool{}
+	for _, k := range marker.KnownTypes() {
+		known[k] = true
+	}
+
+	entries, err := os.ReadDir("embed")
+	require.NoError(t, err)
+
+	posts := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		for _, m := range markerPostPattern.FindAllStringSubmatch(readEmbed(t, e.Name()), -1) {
+			posts++
+			require.True(t, known[m[1]],
+				"%s posts [human:%s], which the marker protocol does not define — "+
+					"add it to internal/marker specs, or use the existing marker for that job",
+				e.Name(), m[1])
+		}
+	}
+	require.Positive(t, posts, "no marker posts found — the regex has drifted from the prompts")
 }
 
 // The verdict vocabularies are the routing keys: the skill branches on these

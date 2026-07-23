@@ -42,11 +42,39 @@ Exhausting the budget is an honest `needs-human-work` ending, not a silent stop:
 
 `$ARGUMENTS` is the bug ticket key — the PM ticket — optionally followed by `--board`. Take the first non-flag token as `<BUG_KEY>`. Resolve the bug ticket with `human get <BUG_KEY>` — the CLI auto-detects the owning tracker from the key shape, regardless of how many trackers are configured; `human tracker list` only enumerates trackers and must not be used to guess a key's owner. Call the tracker `<tracker>`.
 
-Then resolve what this run is actually allowed to do, and record it for every later stage:
+### Step 1a — Preflight (ask once, up front, or not at all)
+
+Before any work, run preflight. It resolves what this run may do, settles what the evidence can settle, and surfaces a decision only a human can make **now** rather than halfway through:
+
+```
+Task(subagent_type="human-preflight", prompt="Preflight bug ticket <BUG_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.")
+```
+
+Read its outcome from state:
 
 ```bash
-human capabilities --json | human state set <BUG_KEY> capabilities --json --body-file -
-human capabilities            # the same answer, human-readable
+human state get <BUG_KEY> stage.preflight --field ready       # yes | no
+human state get <BUG_KEY> stage.preflight --field question    # the fork, when ready is "no"
+```
+
+- **ready: yes** — the capability set and any prior decisions are recorded; continue to Step 2.
+- **ready: no** — preflight returned a `DECISION REQUIRED:` terminal. Surface it as the **existing** up-front decision block and STOP; do not triage, plan, or fix into an unmade decision:
+
+  ```bash
+  human marker post <BUG_KEY> options \
+    --field stage=implementation \
+    --field context="<the DECISION REQUIRED one-liner>" \
+    --field 1="<first option>" \
+    --field 2="<second option>"
+  ```
+
+  The board renders this as "Decision needed" and the card waits without being mistaken for a crash. When the human picks, the daemon records `[human:option-chosen]` and relaunches this run with the choice in hand; preflight then mirrors it into `decisions` and returns `ready: yes`. Do **not** invent a `needs-input` marker — this loop already exists and a second one would split the trail.
+
+Preflight records the capability set, so it is available to every later stage:
+
+```bash
+human state get <BUG_KEY> capabilities --field can_push    # false in board context
+human capabilities                                          # the same answer, human-readable
 ```
 
 The capability set is the single source of truth for the rest of the run — do not infer permissions from flags or env vars:

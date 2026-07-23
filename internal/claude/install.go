@@ -151,6 +151,9 @@ var autofixSkillContent []byte
 //go:embed embed/human-bug-triage-agent.md
 var bugTriageAgentContent []byte
 
+//go:embed embed/human-preflight-agent.md
+var preflightAgentContent []byte
+
 //go:embed embed/human-verdict-skeptic-agent.md
 var verdictSkepticAgentContent []byte
 
@@ -264,6 +267,7 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: gardeningTriageAgentContent, relPath: filepath.Join("agents", "gardening-triage.md")},
 		{content: autofixSkillContent, relPath: filepath.Join("skills", "human-autofix", "SKILL.md")},
 		{content: bugTriageAgentContent, relPath: filepath.Join("agents", "human-bug-triage.md")},
+		{content: preflightAgentContent, relPath: filepath.Join("agents", "human-preflight.md")},
 		{content: verdictSkepticAgentContent, relPath: filepath.Join("agents", "human-verdict-skeptic.md")},
 		{content: bugFixerAgentContent, relPath: filepath.Join("agents", "human-bug-fixer.md")},
 		{content: bugVerifyAgentContent, relPath: filepath.Join("agents", "human-bug-verify.md")},
