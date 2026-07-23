@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -113,6 +114,18 @@ type Server struct {
 	tokenMu    sync.Mutex
 	tokenCache map[StatsRange]tokenScanEntry
 
+	// Listener, when set, is served verbatim instead of binding s.Addr. The
+	// daemon's self-restart hands the live socket to the re-exec'd child this
+	// way, so a rebuild never tears the listening socket down (no client sees a
+	// refused connection). nil preserves the original bind-on-start behavior.
+	Listener net.Listener
+
+	// blockingOps counts in-flight requests a self-restart must not interrupt
+	// (a deploy waiting on CI, an autonomous launch). The binary watcher
+	// postpones its handover while this is non-zero rather than killing the
+	// work mid-flight. Streaming/read routes are deliberately excluded.
+	blockingOps atomic.Int64
+
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
 
 	// shutdown fires when the server is stopping. Set once at the start of
@@ -127,10 +140,14 @@ type Server struct {
 // closing, so a client request that's already accepted is never torn down
 // mid-flight by listener close alone.
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	lc := net.ListenConfig{}
-	ln, err := lc.Listen(ctx, "tcp", s.Addr)
-	if err != nil {
-		return err
+	ln := s.Listener
+	if ln == nil {
+		lc := net.ListenConfig{}
+		bound, err := lc.Listen(ctx, "tcp", s.Addr)
+		if err != nil {
+			return err
+		}
+		ln = bound
 	}
 	defer func() { _ = ln.Close() }()
 
@@ -172,6 +189,24 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// BlockingOps reports how many restart-blocking operations are currently in
+// flight. The binary watcher reads it to decide whether to postpone a
+// self-restart: a live deploy or autonomous launch keeps its work alive rather
+// than being torn down by a rebuild.
+func (s *Server) BlockingOps() int {
+	return int(s.blockingOps.Load())
+}
+
+// withBlockingOp runs fn while counting it as a restart-blocking operation, so
+// a concurrent binary-change handover postpones itself instead of interrupting
+// fn. Wrap only the heavy, must-not-interrupt route handlers with it; leave
+// read and streaming routes uncounted.
+func (s *Server) withBlockingOp(fn func()) {
+	s.blockingOps.Add(1)
+	defer s.blockingOps.Add(-1)
+	fn()
 }
 
 func (s *Server) handleConn(conn net.Conn) {
@@ -401,21 +436,24 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"audit-query":         func() { s.handleAuditQuery(conn, args[1:]) },
 		"agent-stop-async":    func() { s.handleAgentStopAsync(conn, args[1:]) },
 		"subscribe":           func() { s.handleSubscribe(conn) },
-		"board-transition":    func() { s.handleBoardTransition(conn, args[1:]) },
-		"board-fix":           func() { s.handleBoardFix(conn, args[1:]) },
-		"board-option":        func() { s.handleBoardOption(conn, args[1:]) },
-		"close-ticket":        func() { s.handleCloseTicket(conn, args[1:]) },
-		"ideation-start":      func() { s.handleIdeationStart(conn, args[1:]) },
-		"ideation-reply":      func() { s.handleIdeationReply(conn, args[1:]) },
-		"ideation-approve":    func() { s.handleIdeationApprove(conn, args[1:]) },
-		"ideation-status":     func() { s.handleIdeationStatus(conn) },
-		"idea-create":         func() { s.handleIdeaCreate(conn, args[1:]) },
-		"bug-create":          func() { s.handleBugCreate(conn, args[1:]) },
-		"features-generate":   func() { s.handleFeaturesGenerate(conn) },
-		"findbugs-start":      func() { s.handleFindbugsStart(conn) },
-		"create-mocks":        func() { s.handleCreateMocks(conn, args[1:]) },
-		"config-get":          func() { s.handleConfigGet(conn, projectDir) },
-		"config-set":          func() { s.handleConfigSet(conn, args[1:], projectDir) },
+		// Heavy, must-not-interrupt routes are counted as blocking ops so an
+		// overlapping binary-change handover postpones itself rather than
+		// killing a deploy/launch mid-flight.
+		"board-transition":  func() { s.withBlockingOp(func() { s.handleBoardTransition(conn, args[1:]) }) },
+		"board-fix":         func() { s.withBlockingOp(func() { s.handleBoardFix(conn, args[1:]) }) },
+		"board-option":      func() { s.withBlockingOp(func() { s.handleBoardOption(conn, args[1:]) }) },
+		"close-ticket":      func() { s.withBlockingOp(func() { s.handleCloseTicket(conn, args[1:]) }) },
+		"ideation-start":    func() { s.withBlockingOp(func() { s.handleIdeationStart(conn, args[1:]) }) },
+		"ideation-reply":    func() { s.withBlockingOp(func() { s.handleIdeationReply(conn, args[1:]) }) },
+		"ideation-approve":  func() { s.withBlockingOp(func() { s.handleIdeationApprove(conn, args[1:]) }) },
+		"ideation-status":   func() { s.handleIdeationStatus(conn) },
+		"idea-create":       func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
+		"bug-create":        func() { s.withBlockingOp(func() { s.handleBugCreate(conn, args[1:]) }) },
+		"features-generate": func() { s.withBlockingOp(func() { s.handleFeaturesGenerate(conn) }) },
+		"findbugs-start":    func() { s.withBlockingOp(func() { s.handleFindbugsStart(conn) }) },
+		"create-mocks":      func() { s.withBlockingOp(func() { s.handleCreateMocks(conn, args[1:]) }) },
+		"config-get":        func() { s.handleConfigGet(conn, projectDir) },
+		"config-set":        func() { s.handleConfigSet(conn, args[1:], projectDir) },
 	}
 	handler, ok := routes[args[0]]
 	if !ok {

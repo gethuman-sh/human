@@ -26,15 +26,23 @@ type Server struct {
 	Token      string
 	Translator *McpTranslator
 	Logger     zerolog.Logger
+	// Listener, when set, is served verbatim instead of binding s.Addr, so the
+	// daemon's self-restart can hand this bridge's live socket to the re-exec'd
+	// child. nil keeps the original bind-on-start behavior.
+	Listener net.Listener
 }
 
 // ListenAndServe starts the TCP listener and blocks until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	lc := net.ListenConfig{}
-	ln, err := lc.Listen(ctx, "tcp", s.Addr)
-	if err != nil {
-		return errors.WrapWithDetails(err, "chrome proxy listen failed",
-			"addr", s.Addr)
+	ln := s.Listener
+	if ln == nil {
+		lc := net.ListenConfig{}
+		bound, err := lc.Listen(ctx, "tcp", s.Addr)
+		if err != nil {
+			return errors.WrapWithDetails(err, "chrome proxy listen failed",
+				"addr", s.Addr)
+		}
+		ln = bound
 	}
 	defer func() { _ = ln.Close() }()
 
