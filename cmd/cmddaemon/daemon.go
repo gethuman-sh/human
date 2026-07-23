@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -366,6 +367,46 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 
 // runDaemonForeground runs the daemon in the current process (blocking).
 // It writes a PID file on start and removes it on shutdown.
+// initDaemonWithListeners binds (or, in a handover child, adopts) the three
+// listeners and initializes daemon state, wiring the daemon listener into the
+// server. On any failure it closes whatever it opened so no socket leaks.
+func initDaemonWithListeners(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) (*daemonState, *listenerSet, error) {
+	listeners, err := openListeners(addr, proxyAddr, chromeAddr)
+	if err != nil {
+		return nil, nil, err
+	}
+	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs, cmdFactory, version)
+	if err != nil {
+		_ = listeners.daemon.Close()
+		_ = listeners.proxy.Close()
+		_ = listeners.chrome.Close()
+		return nil, nil, err
+	}
+	ds.srv.Listener = listeners.daemon
+	return ds, listeners, nil
+}
+
+// removeDaemonFilesUnlessHandedOver clears the pidfile and daemon.json on
+// shutdown — but not after a self-restart handover, where the child now owns
+// them and deleting would erase its freshly written files.
+func removeDaemonFilesUnlessHandedOver(handedOver *atomic.Bool) {
+	if handedOver.Load() {
+		return
+	}
+	RemovePidFile()
+	daemon.RemoveInfo()
+}
+
+// removeStatsFilesUnlessHandedOver clears the stats/connected files on shutdown,
+// skipping the removal after a handover for the same reason.
+func removeStatsFilesUnlessHandedOver(handedOver *atomic.Bool, statsPath, connectedPath string) {
+	if handedOver.Load() {
+		return
+	}
+	proxy.RemoveStats(statsPath)
+	daemon.RemoveConnected(connectedPath)
+}
+
 func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
 	// Bind the daemon, chrome bridge, and HTTPS proxy on the interface
 	// containers can reach without exposing them to the LAN (never 0.0.0.0): the
@@ -379,12 +420,19 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	chromeAddr = swapLoopbackHost(chromeAddr, reachHost)
 	proxyAddr = swapLoopbackHost(proxyAddr, reachHost)
 
-	ds, err := initDaemon(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs, cmdFactory, version)
+	// Own the three listeners here so a self-restart can hand the live sockets
+	// to the re-exec'd child. On a handover child these adopt the inherited
+	// sockets instead of binding, so no listener is ever torn down mid-rebuild.
+	ds, listeners, err := initDaemonWithListeners(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs, cmdFactory, version)
 	if err != nil {
 		return err
 	}
-	defer RemovePidFile()
-	defer daemon.RemoveInfo()
+
+	// handedOver flips once a self-restart child owns the on-disk daemon state
+	// (pidfile, daemon.json, stats files); the parent must then NOT delete them
+	// on its way out, or it would erase the child's freshly written files.
+	var handedOver atomic.Bool
+	defer removeDaemonFilesUnlessHandedOver(&handedOver)
 	defer ds.stop()
 	if ds.statsWriter != nil {
 		defer ds.statsWriter.Close()
@@ -406,12 +454,13 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	ctx := ds.ctx
 	logger := ds.logger
 
-	startChromeServices(ctx, chromeAddr, ds.srv.Token, logger)
+	startChromeServices(ctx, chromeAddr, ds.srv.Token, listeners.chrome, logger)
 
 	proxySrv, proxyStatus, proxyErr := buildProxyServer(proxyAddr, interactive, logger, ds.networkStore)
 	if proxyErr != nil {
 		return proxyErr
 	}
+	proxySrv.Listener = listeners.proxy
 	if proxyStatus != "" {
 		_, _ = fmt.Fprintln(out, proxyStatus)
 	}
@@ -434,8 +483,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// removal, leaving stale files that outlive the daemon.
 	defer func() {
 		<-statsDone
-		proxy.RemoveStats(statsPath)
-		daemon.RemoveConnected(connectedPath)
+		removeStatsFilesUnlessHandedOver(&handedOver, statsPath, connectedPath)
 	}()
 
 	cwd, _ := os.Getwd()
@@ -560,6 +608,14 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		chainReview, stageRetry, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
+	// Watch the binary so a rebuild re-execs into the new build, handing over the
+	// live sockets (no client sees a refused connection) and draining in-flight
+	// proxied agent egress before the old process exits. A no-op on Windows.
+	maybeWatchBinary(ctx, listeners, ds.srv, proxySrv.ActiveConns, ds.stop, &handedOver, logger)
+	// If this process is itself a handover child, tell the parent we are serving
+	// so it can stop; a no-op on a normal start.
+	signalHandoverReady(logger)
+
 	return ds.srv.ListenAndServe(ctx)
 }
 
@@ -597,8 +653,10 @@ func postFailedMarkerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver,
 	}
 }
 
-// startChromeServices launches the socket relay and Chrome MCP proxy.
-func startChromeServices(ctx context.Context, chromeAddr, token string, logger zerolog.Logger) {
+// startChromeServices launches the socket relay and Chrome MCP proxy. The
+// chromeLn listener, when non-nil, is served instead of binding chromeAddr, so
+// a self-restart hands the bridge's live socket to the re-exec'd child.
+func startChromeServices(ctx context.Context, chromeAddr, token string, chromeLn net.Listener, logger zerolog.Logger) {
 	socketDir, sdErr := chrome.SocketDir()
 	if sdErr != nil {
 		logger.Warn().Err(sdErr).Msg("resolving socket directory")
@@ -624,7 +682,8 @@ func startChromeServices(ctx context.Context, chromeAddr, token string, logger z
 			ClaudePath: claudePath,
 			Logger:     logger,
 		},
-		Logger: logger,
+		Logger:   logger,
+		Listener: chromeLn,
 	}
 
 	go func() {

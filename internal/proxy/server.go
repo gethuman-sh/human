@@ -37,6 +37,12 @@ type Server struct {
 	// Dialer connects to upstream servers. Injected for testing.
 	Dialer func(ctx context.Context, network, address string) (net.Conn, error)
 
+	// Listener, when set, is served verbatim instead of binding s.Addr, so the
+	// daemon's self-restart can hand this proxy's live socket to the re-exec'd
+	// child and a running agent container never loses its egress. nil keeps the
+	// original bind-on-start behavior.
+	Listener net.Listener
+
 	activeConns atomic.Int64 // number of currently-active forwarded connections
 }
 
@@ -56,11 +62,15 @@ func (s *Server) ActiveConns() int64 {
 
 // ListenAndServe starts the TCP listener and blocks until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
-	lc := net.ListenConfig{}
-	ln, err := lc.Listen(ctx, "tcp", s.Addr)
-	if err != nil {
-		return errors.WrapWithDetails(err, "https proxy listen failed",
-			"addr", s.Addr)
+	ln := s.Listener
+	if ln == nil {
+		lc := net.ListenConfig{}
+		bound, err := lc.Listen(ctx, "tcp", s.Addr)
+		if err != nil {
+			return errors.WrapWithDetails(err, "https proxy listen failed",
+				"addr", s.Addr)
+		}
+		ln = bound
 	}
 	closeOnce := sync.Once{}
 	closeLn := func() { closeOnce.Do(func() { _ = ln.Close() }) }
