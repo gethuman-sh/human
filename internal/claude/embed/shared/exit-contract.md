@@ -11,14 +11,14 @@ Every run ends in exactly **one** of four ways. Anything else — a silent stop,
 
 `retryable` and `needs-human-work` are the two most often confused. Ask: *would running this again, unchanged, plausibly succeed?* If yes it is `retryable`; if no it is `needs-human-work`. A failure you have not diagnosed is not automatically retryable — say so honestly rather than inviting an endless loop.
 
-Before returning, record the outcome so the next stage reads it as data instead of parsing your prose:
+Before returning, record the outcome so the next stage reads it as data instead of parsing your prose. **Substitute your own ticket key and stage name** — `SC-123` and `stage.fix` below are examples, not literal keys. A record written under `stage.<stage>` verbatim is invisible to the orchestrator, which looks up the concrete stage:
 
 ```bash
-human state set <KEY> stage.<stage> --json --body-file - <<'EOF'
-{"exit":"<done|retryable|needs-input|needs-human-work>",
- "summary":"<one line — what happened>",
- "evidence":"<file:line, command output, or the marker that backs it>",
- "next":"<what the next stage or the human should do>"}
+human state set SC-123 stage.fix --json --body-file - <<'EOF'
+{"exit":"done",
+ "summary":"one line — what happened",
+ "evidence":"file:line, command output, or the marker that backs it",
+ "next":"what the next stage or the human should do"}
 EOF
 ```
 

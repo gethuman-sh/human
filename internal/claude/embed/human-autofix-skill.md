@@ -222,8 +222,8 @@ This is the pipeline's ONE full-suite pass; the fixer used the fast tier. Ensure
 **Read the gate's outcome from state:**
 
 ```bash
-human state get <BUG_KEY> stage.verify --field verdict   # DONE | NOT DONE
-human state get <BUG_KEY> stage.verify --field gaps      # what is still missing, when NOT DONE
+human state get <WORK_KEY> stage.verify --field verdict   # DONE | NOT DONE
+human state get <WORK_KEY> stage.verify --field gaps      # what is still missing, when NOT DONE
 ```
 
 If the verdict is NOT DONE, re-run Step 5 to address the gaps, under the retry budget above — charge an attempt only for a failure that reproduced, and keep going while the budget holds. Once the budget is spent, do NOT stop silently — in board context a silent stop freezes the card at "being fixed" forever with no agent and no reconciliation path (1136). Before stopping, post an explicit terminal marker so the board reds the card to a needs-attention/Retry badge instead:

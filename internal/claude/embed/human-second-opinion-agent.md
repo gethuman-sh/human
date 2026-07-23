@@ -26,10 +26,10 @@ Your dispatch names three things:
 Fetch the evidence yourself:
 
 ```bash
-human get <KEY>
-human state get <KEY> stage.<stage> --field verdict
-human state get <KEY> stage.<stage> --field findings
-human marker list <KEY>
+human get <WORK_KEY>
+human state get <WORK_KEY> stage.<stage> --field verdict
+human state get <WORK_KEY> stage.<stage> --field findings
+human marker list <WORK_KEY>
 git log --oneline <BASE>..<BRANCH>
 git diff <BASE>..<BRANCH>
 ```
@@ -63,7 +63,7 @@ You share a model's blind spots with the agent whose decision you are checking. 
 ## Verdict
 
 ```bash
-human state set <KEY> stage.opinion --json --body-file - <<'EOF'
+human state set <WORK_KEY> stage.opinion --json --body-file - <<'EOF'
 {"exit":"done",
  "lens":"<the lens you were given>",
  "opinion":"<upheld|refuted>",

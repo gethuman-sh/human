@@ -59,7 +59,7 @@ func Detect(ctx context.Context, probe RemoteProbe) Set {
 	}
 
 	if probe == nil || !probe(ctx) {
-		set.Reason = "no push remote is configured for this checkout"
+		set.Reason = "this checkout has no reachable remote — either none is configured, or its credentials do not authenticate"
 		return set
 	}
 
@@ -69,13 +69,26 @@ func Detect(ctx context.Context, probe RemoteProbe) Set {
 	return set
 }
 
-// GitRemoteProbe reports whether git knows a remote to push to. A failure to
-// run git at all counts as "no remote": the caller then withholds the
-// capability, which is always the safe direction.
+// GitRemoteProbe reports whether this checkout can actually reach its remote
+// with the credentials it has.
+//
+// Checking that a remote is merely *configured* is not the same question and
+// was the wrong one: a container with an origin but no usable credentials
+// answered "yes" and the run discovered the truth at the push, after all the
+// work was done. `git ls-remote` costs one network round trip and proves the
+// remote resolves and authenticates. It does not prove write permission — no
+// read-only check can — so a push may still be refused; what it removes is the
+// common case of having no credentials at all.
+//
+// Any failure counts as "cannot reach": withholding a capability is always the
+// safe direction, since a withheld capability is a boundary while a wrongly
+// granted one is a run that fails at the last step.
 func GitRemoteProbe(ctx context.Context) bool {
 	out, err := exec.CommandContext(ctx, "git", "remote").Output() // #nosec G204 -- fixed command, no user input
-	if err != nil {
+	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return false
 	}
-	return strings.TrimSpace(string(out)) != ""
+	// --exit-code makes an empty (but reachable) remote succeed rather than
+	// look like a failure; a fresh repository with no branches is still pushable.
+	return exec.CommandContext(ctx, "git", "ls-remote", "--quiet", "origin").Run() == nil // #nosec G204 -- fixed command, no user input
 }

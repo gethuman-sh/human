@@ -8,7 +8,7 @@ Before this, every skill had to describe two worlds at once — *"when BOARD_CON
 - Emits the set as JSON for agents to store and branch on (`human capabilities --json`)
 - Detects a board stage agent from the daemon's `board-<KEY>-<stage>` agent name — the same signal the daemon's failure watcher keys on
 - Withholds every shipping capability in board context, because the container holds no push credentials and the board's Deploy stage owns shipping
-- Withholds them too when the checkout has no push remote at all
+- Withholds them too when the remote is unreachable — not merely unconfigured, but also configured with credentials that do not authenticate (`git ls-remote`, one round trip). It cannot prove *write* permission, so a push may still be refused; what it removes is the common case of having no credentials at all
 - States **why** the set is restricted in one quotable line, so a stage that stops can say what stopped it
 - Reports the workspace kind (`local` or `bind-mounted`)
 - Fails safe: if the remote cannot be probed, the capability is withheld rather than assumed

@@ -56,7 +56,7 @@ func TestDetect_WithoutARemoteNothingCanShip(t *testing.T) {
 	require.False(t, set.CanPush)
 	require.False(t, set.CanOpenPR)
 	require.False(t, set.OwnsDeploy)
-	require.Contains(t, set.Reason, "no push remote")
+	require.Contains(t, set.Reason, "no reachable remote")
 }
 
 // A missing probe must withhold the capability rather than assume it: guessing
@@ -78,8 +78,9 @@ func TestDetect_BoardPrefixIsNotASubstringMatch(t *testing.T) {
 	require.True(t, set.CanPush)
 }
 
-func TestGitRemoteProbe_RunsWithoutPanicking(t *testing.T) {
-	// The repo under test has a remote; in a checkout without one the probe
-	// must still answer rather than fail.
-	require.NotPanics(t, func() { _ = GitRemoteProbe(context.Background()) })
+// A directory that is not a git repository has no reachable remote, so the
+// probe must answer false rather than error out or hang.
+func TestGitRemoteProbe_NonRepoIsNotReachable(t *testing.T) {
+	t.Chdir(t.TempDir())
+	require.False(t, GitRemoteProbe(context.Background()))
 }
