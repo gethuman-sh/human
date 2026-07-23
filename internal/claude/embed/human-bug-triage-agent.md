@@ -101,3 +101,24 @@ The rendered comment's first line is the machine-readable `[human:bug-verdict] <
 Return to the caller: the verdict word, and (for confirmed) the Root Cause + Fix Outline so the planner can build on it.
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Reach a verdict autonomously.
+
+## Stage record (what the orchestrator reads)
+
+Before returning, record your verdict as data — the orchestrator branches on this, never on your prose:
+
+```bash
+human state set <BUG_KEY> stage.triage --json --body-file - <<'EOF'
+{"exit":"done",
+ "verdict":"<confirmed|not-a-bug|undetermined>",
+ "root_cause":"<the underlying cause, not the line that crashed — file:line>",
+ "fix_outline":"<how it should be fixed, for a confirmed bug>",
+ "reproduction":"<the minimal steps or command>",
+ "summary":"<one line>"}
+EOF
+```
+
+`verdict` must be exactly one of the three words. A missing record reads as an incomplete stage and gets re-dispatched, so write it before you finish.
+
+<!-- human:include stage-lease -->
+
+<!-- human:include exit-contract -->

@@ -91,7 +91,7 @@ type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, retry StageRetry, daemonID string, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
@@ -101,14 +101,14 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable
 	// Recover a restart-orphaned handoff immediately, before the first wait. The
 	// jitter applies only to subsequent cycles, so a restart-orphan is never made
 	// to wait a full interval.
-	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, logger)
+	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, retry, daemonID, logger)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
-			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, logger)
+			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, retry, daemonID, logger)
 		}
 	}
 }
@@ -131,7 +131,7 @@ func jitteredInterval(d time.Duration, fraction float64) time.Duration {
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, retry StageRetry, daemonID string, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
@@ -143,7 +143,7 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 	if n := reconcileShippedFailures(ctx, cards, mergedProbe, postDeployed, logger); n > 0 {
 		logger.Info().Int("cleared", n).Msg("board reconcile: confirmed shipped, cleared stale deploy-failed red")
 	}
-	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, time.Now(), logger); n > 0 {
+	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, retry, daemonID, time.Now(), logger); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
 	}
 }
@@ -164,7 +164,7 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 // once the *-failed marker lands the card derives BoardFailed, so the next tick
 // skips it and never double-posts. Reuses DeriveBoardCard verbatim so detection
 // can never disagree with the board's rendered state. Returns the number reddened.
-func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, now time.Time, logger zerolog.Logger) int {
+func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, daemonID string, now time.Time, logger zerolog.Logger) int {
 	if liveAgents == nil || postFailed == nil {
 		return 0
 	}
@@ -205,6 +205,13 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 			continue
 		}
 		reddened++
+		// This is the fallback path the live failure watcher misses — an agent
+		// that died with no exit hook (a daemon restart, a dropped event). The
+		// same bounded relaunch applies, so a silently-dead stage recovers here
+		// too instead of only reddening. The just-posted failed marker is the
+		// trail record, so no separate retry note (nil commenter); the shared
+		// per-stage budget bounds this path and the watcher's together.
+		retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger)
 	}
 	return reddened
 }

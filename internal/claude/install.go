@@ -151,6 +151,12 @@ var autofixSkillContent []byte
 //go:embed embed/human-bug-triage-agent.md
 var bugTriageAgentContent []byte
 
+//go:embed embed/human-preflight-agent.md
+var preflightAgentContent []byte
+
+//go:embed embed/human-second-opinion-agent.md
+var secondOpinionAgentContent []byte
+
 //go:embed embed/human-verdict-skeptic-agent.md
 var verdictSkepticAgentContent []byte
 
@@ -264,6 +270,8 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: gardeningTriageAgentContent, relPath: filepath.Join("agents", "gardening-triage.md")},
 		{content: autofixSkillContent, relPath: filepath.Join("skills", "human-autofix", "SKILL.md")},
 		{content: bugTriageAgentContent, relPath: filepath.Join("agents", "human-bug-triage.md")},
+		{content: preflightAgentContent, relPath: filepath.Join("agents", "human-preflight.md")},
+		{content: secondOpinionAgentContent, relPath: filepath.Join("agents", "human-second-opinion.md")},
 		{content: verdictSkepticAgentContent, relPath: filepath.Join("agents", "human-verdict-skeptic.md")},
 		{content: bugFixerAgentContent, relPath: filepath.Join("agents", "human-bug-fixer.md")},
 		{content: bugVerifyAgentContent, relPath: filepath.Join("agents", "human-bug-verify.md")},
@@ -288,7 +296,12 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 			action = "Overwriting"
 		}
 
-		if err := fw.WriteFile(dest, f.content, 0o644); err != nil {
+		body, err := expandIncludes(f.content)
+		if err != nil {
+			return errors.WrapWithDetails(err, "expanding shared fragments", "path", dest)
+		}
+
+		if err := fw.WriteFile(dest, body, 0o644); err != nil {
 			return errors.WrapWithDetails(err, "writing file",
 				"path", dest)
 		}

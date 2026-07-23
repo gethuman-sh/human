@@ -50,6 +50,51 @@ func RunRemote(addr, token string, args []string, version string) (int, error) {
 	return 1, nil
 }
 
+// maxForwardedStdin caps what a client will read from a pipe. Stdin here
+// carries a comment body or a state value, not a file transfer, and an
+// unbounded read would let a stray `cat` of something huge exhaust memory on
+// both sides of the connection.
+const maxForwardedStdin = 1 << 20
+
+// readPipedStdin returns the client's piped standard input for the invocations
+// that asked for it, and "" for every other one.
+//
+// It is the client half of forwarding: the daemon executes commands in its own
+// process, so without this every `--body-file -` read the daemon's stdin and
+// silently got nothing.
+//
+// It reads ONLY when the arguments name stdin as a source. Reading whenever
+// stdin merely happens not to be a terminal is what makes this dangerous: a
+// command run from a script, a CI step, or an agent container inherits a pipe
+// that may never reach EOF, and io.ReadAll on it blocks forever — hanging every
+// forwarded command, including the ones that never wanted stdin at all.
+func readPipedStdin(args []string) string {
+	if !wantsStdin(args) {
+		return ""
+	}
+	info, err := os.Stdin.Stat()
+	if err != nil || info.Mode()&os.ModeCharDevice != 0 {
+		return "" // a terminal: nobody is piping anything in
+	}
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, maxForwardedStdin))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// wantsStdin reports whether the arguments ask to read from standard input —
+// the "-" sentinel, either as its own token (`--body-file -`) or attached
+// (`--body-file=-`).
+func wantsStdin(args []string) bool {
+	for _, a := range args {
+		if a == "-" || strings.HasSuffix(a, "=-") {
+			return true
+		}
+	}
+	return false
+}
+
 // runRemoteOnce performs a single request/response round-trip. The returned
 // Response carries the await_confirm signal for RunRemote's grant cycle.
 func runRemoteOnce(addr, token string, args []string, version, confirmID string) (int, Response, error) {
@@ -71,6 +116,7 @@ func runRemoteOnce(addr, token string, args []string, version, confirmID string)
 		ClientPID: findAncestorClaude(),
 		Cwd:       cwd,
 		ConfirmID: confirmID,
+		Stdin:     readPipedStdin(args),
 	}
 
 	enc := json.NewEncoder(conn)
@@ -97,6 +143,9 @@ func runRemoteOnce(addr, token string, args []string, version, confirmID string)
 	}
 	if resp.Stderr != "" {
 		_, _ = fmt.Fprint(os.Stderr, resp.Stderr)
+		if hint := staleDaemonHint(resp.Stderr); hint != "" {
+			_, _ = fmt.Fprint(os.Stderr, hint)
+		}
 	}
 
 	// Two-line OAuth protocol: daemon signals us to wait for a callback URL.
@@ -106,6 +155,20 @@ func runRemoteOnce(addr, token string, args []string, version, confirmID string)
 	}
 
 	return resp.ExitCode, resp, nil
+}
+
+// staleDaemonHint explains an unknown-command failure that comes from the
+// daemon rather than from a typo. A forwarded command executes inside the
+// daemon's own command tree, so a client newer than the daemon fails here with
+// cobra's unknown-command error — the version gate cannot catch it, because it
+// only refuses a client that is too old, never a daemon that is.
+func staleDaemonHint(stderr string) string {
+	if !strings.Contains(stderr, "unknown command") {
+		return ""
+	}
+	return "\nThis command executes inside the daemon, and the running daemon's binary " +
+		"does not have it.\nRebuild human, then restart the daemon " +
+		"(`human daemon stop` and `human daemon start`), and retry.\n"
 }
 
 // handleOAuthCallback reads line 2 of the OAuth relay protocol and delivers

@@ -920,6 +920,12 @@ func TestIsLocalSubcommand(t *testing.T) {
 		{[]string{"codenav", "rm", "p"}, true},
 		{[]string{"codenav", "impact", "--diff"}, true},
 		{[]string{"codenav", "impact", "Foo"}, false},
+		// "state" must forward: the store is shared across agents and
+		// containers precisely because it executes on the daemon host. Making
+		// it local would silently give every caller a private database.
+		{[]string{"state", "get", "SC-1", "stage.fix"}, false},
+		{[]string{"state", "claim", "SC-1", "--stage", "fix"}, false},
+		{[]string{"--tracker", "work", "state", "list", "SC-1"}, false},
 	}
 	for _, tt := range tests {
 		got := isLocalSubcommand(tt.args)

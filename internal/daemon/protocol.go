@@ -75,6 +75,11 @@ type Request struct {
 	Env       map[string]string `json:"env,omitempty"`
 	ClientPID int               `json:"client_pid,omitempty"` // parent PID (Claude process) for connection tracking
 	Cwd       string            `json:"cwd,omitempty"`        // client working directory for project routing
+	// Stdin is the client's piped standard input, forwarded because the daemon
+	// executes the command in its own process and would otherwise hand it the
+	// daemon's stdin — so every `--body-file -` silently read nothing. Empty
+	// when the client's stdin is a terminal or carries no data.
+	Stdin string `json:"stdin,omitempty"`
 	// ConfirmID is a client-generated unique ID for destructive operations.
 	// It keys the daemon's confirmation queue, makes resubmits idempotent,
 	// and lets the client query the decision later via confirm-status.

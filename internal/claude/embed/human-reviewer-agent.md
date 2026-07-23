@@ -120,3 +120,21 @@ Write the review in this structure:
 ```
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Return the structured review so the calling skill can present it.
+
+## Stage record (what the orchestrator reads)
+
+Before returning, record the review outcome as data — the orchestrator must never have to parse `.human/reviews/<key>.md` to learn the verdict:
+
+```bash
+human state set <WORK_KEY> stage.review --json --body-file - <<'EOF'
+{"exit":"done",
+ "verdict":"<pass|pass with notes|fail|unreviewable>",
+ "reason":"<why the code could not be obtained, for unreviewable — empty otherwise>",
+ "findings":"<the substance of what you found, or 'no issues'>",
+ "summary":"<one line>"}
+EOF
+```
+
+Use `unreviewable` only when the code itself could not be obtained (branch unreachable, no commits reference the key). It is not a synonym for `fail`: a review that examined code and found problems is `fail`.
+
+<!-- human:include exit-contract -->

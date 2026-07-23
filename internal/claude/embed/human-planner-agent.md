@@ -145,3 +145,5 @@ For each new or modified behavior:
 - **User Sovereignty for genuine forks only**: For a trade-off the codebase or ticket can settle, decide it and record the rationale in "Architecture Decisions" — a board plan must arrive decided. Reserve deferral for a real product/UX taste call or an ambiguous requirement, and express that as the up-front `DECISION REQUIRED:` terminal (per the Autonomy contract) so the human chooses BEFORE implementation — never as a sign-off gate baked into a step.
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Either return a complete, gate-free plan or, for a genuine human fork, the `DECISION REQUIRED:` terminal verdict. Then finish.
+
+<!-- human:include exit-contract -->

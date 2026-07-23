@@ -56,6 +56,10 @@ var specs = map[string]spec{
 	"bug-verdict":           {needsHead: true, headEnum: []string{"confirmed", "not-a-bug", "undetermined"}},
 	"bug-verify":            {needsHead: true, headEnum: []string{"DONE", "NOT DONE"}},
 	"options":               {required: []string{"stage"}},
+	// Posted by the autofix skill at every terminal point and rendered by the
+	// daemon (IssueDetailResult.FixSummaryHTML), so it is a first-class marker
+	// rather than one of the open-ended types — declare it as such.
+	"fix-summary": {},
 }
 
 // KnownTypes lists the marker types with a validation contract, sorted.

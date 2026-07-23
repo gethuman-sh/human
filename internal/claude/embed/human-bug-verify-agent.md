@@ -100,3 +100,21 @@ EOF
 The rendered comment's first line is the machine-readable `[human:bug-verify] <verdict>` marker.
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Return the structured verdict so the calling skill can act on it.
+
+## Stage record (what the orchestrator reads)
+
+Before returning, record the gate outcome as data:
+
+```bash
+human state set <WORK_KEY> stage.verify --json --body-file - <<'EOF'
+{"exit":"done",
+ "verdict":"<DONE|NOT DONE>",
+ "gaps":"<what is still missing, when NOT DONE — empty otherwise>",
+ "evidence":"<branch, commit, command, result>",
+ "summary":"<one line>"}
+EOF
+```
+
+`verdict` must be exactly `DONE` or `NOT DONE`.
+
+<!-- human:include exit-contract -->
