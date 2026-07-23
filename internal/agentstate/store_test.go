@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fixedClock returns a clock whose value the test controls, so claim expiry is
+// fixedClock returns a clock whose value the test controls, so lease expiry is
 // exercised by moving time rather than sleeping.
 func fixedClock(t *time.Time) func() time.Time {
 	return func() time.Time { return *t }
@@ -165,7 +165,7 @@ func TestDelete_AndDeleteScope(t *testing.T) {
 	require.NoError(t, err)
 	_, err = s.Set(ctx, "SC-1", "b", "2", "", Meta{})
 	require.NoError(t, err)
-	_, err = s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
+	_, err = s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 
 	removed, err := s.Delete(ctx, "SC-1", "a")
@@ -180,9 +180,9 @@ func TestDelete_AndDeleteScope(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 
-	claims, err := s.Claims(ctx, "SC-1")
+	leases, err := s.Leases(ctx, "SC-1")
 	require.NoError(t, err)
-	require.Empty(t, claims, "dropping a scope must drop its claims too")
+	require.Empty(t, leases, "dropping a scope must drop its leases too")
 }
 
 // Clearing a namespace is how a fresh run drops the previous run's retry
@@ -300,13 +300,13 @@ func TestPrune_DropsOnlyEntriesOlderThanCutoff(t *testing.T) {
 func TestClaim_FreshStageIsGranted(t *testing.T) {
 	s, _ := newTestStore(t)
 
-	res, err := s.Claim(context.Background(), ClaimRequest{
+	res, err := s.Lease(context.Background(), LeaseRequest{
 		Scope: "sc-1200", Stage: "fix", Meta: Meta{Agent: "alpha", RunID: "run-1"},
 	})
 	require.NoError(t, err)
 	require.True(t, res.Granted)
-	require.Equal(t, "SC-1200", res.Claim.Scope)
-	require.Equal(t, "alpha", res.Claim.Agent)
+	require.Equal(t, "SC-1200", res.Lease.Scope)
+	require.Equal(t, "alpha", res.Lease.Agent)
 	require.Nil(t, res.Displaced)
 }
 
@@ -314,14 +314,14 @@ func TestClaim_RefusedWhileAnotherAgentHoldsItLive(t *testing.T) {
 	s, clock := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
+	_, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 
 	*clock = clock.Add(time.Minute)
-	res, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
-	require.NoError(t, err, "a refused claim is a result, not an error")
+	res, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
+	require.NoError(t, err, "a refused lease is a result, not an error")
 	require.False(t, res.Granted)
-	require.Equal(t, "alpha", res.Claim.Agent, "the refusal names the holder")
+	require.Equal(t, "alpha", res.Lease.Agent, "the refusal names the holder")
 }
 
 // The takeover path: once the holder stops heartbeating past the TTL, a fresh
@@ -330,7 +330,7 @@ func TestClaim_StaleClaimIsTakenOverWithInheritance(t *testing.T) {
 	s, clock := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{
+	_, err := s.Lease(ctx, LeaseRequest{
 		Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}, TTL: 5 * time.Minute,
 	})
 	require.NoError(t, err)
@@ -340,7 +340,7 @@ func TestClaim_StaleClaimIsTakenOverWithInheritance(t *testing.T) {
 	require.NoError(t, err)
 
 	*clock = clock.Add(6 * time.Minute)
-	res, err := s.Claim(ctx, ClaimRequest{
+	res, err := s.Lease(ctx, LeaseRequest{
 		Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}, TTL: 5 * time.Minute,
 	})
 	require.NoError(t, err)
@@ -353,13 +353,13 @@ func TestClaim_StaleClaimIsTakenOverWithInheritance(t *testing.T) {
 
 // Staleness is judged by the TTL the holder declared, never by the
 // challenger's. Otherwise a successor would have to guess its predecessor's
-// heartbeat cadence: a short-lived stage claimed with --ttl 2s stayed
+// heartbeat cadence: a short-lived stage leased with --ttl 2s stayed
 // un-reclaimable for the challenger's default 15 minutes.
 func TestClaim_StalenessUsesTheHoldersOwnTTL(t *testing.T) {
 	s, clock := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{
+	_, err := s.Lease(ctx, LeaseRequest{
 		Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}, TTL: 2 * time.Second,
 	})
 	require.NoError(t, err)
@@ -367,12 +367,12 @@ func TestClaim_StalenessUsesTheHoldersOwnTTL(t *testing.T) {
 	*clock = clock.Add(10 * time.Second)
 
 	// beta asks with the default (long) TTL; alpha's own 2s TTL has lapsed.
-	res, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
+	res, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
 	require.NoError(t, err)
 	require.True(t, res.Granted, "the holder's short TTL decides, not the challenger's long one")
 	require.NotNil(t, res.Displaced)
 	require.Equal(t, "alpha", res.Displaced.Agent)
-	require.Equal(t, DefaultClaimTTL, res.Claim.TTL, "beta's own claim carries beta's TTL")
+	require.Equal(t, DefaultLeaseTTL, res.Lease.TTL, "beta's own lease carries beta's TTL")
 }
 
 // The mirror case: a holder with a long TTL is not stolen by a challenger that
@@ -381,29 +381,29 @@ func TestClaim_ShortChallengerTTLCannotStealALiveClaim(t *testing.T) {
 	s, clock := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{
+	_, err := s.Lease(ctx, LeaseRequest{
 		Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}, TTL: time.Hour,
 	})
 	require.NoError(t, err)
 
 	*clock = clock.Add(10 * time.Minute)
 
-	res, err := s.Claim(ctx, ClaimRequest{
+	res, err := s.Lease(ctx, LeaseRequest{
 		Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}, TTL: time.Second,
 	})
 	require.NoError(t, err)
 	require.False(t, res.Granted)
-	require.Equal(t, "alpha", res.Claim.Agent)
+	require.Equal(t, "alpha", res.Lease.Agent)
 }
 
 func TestClaim_TakeoverOverridesALiveClaim(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
+	_, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 
-	res, err := s.Claim(ctx, ClaimRequest{
+	res, err := s.Lease(ctx, LeaseRequest{
 		Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}, Takeover: true,
 	})
 	require.NoError(t, err)
@@ -416,22 +416,22 @@ func TestClaim_SameAgentHeartbeatKeepsOriginalClaimTime(t *testing.T) {
 	s, clock := newTestStore(t)
 	ctx := context.Background()
 
-	first, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
+	first, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 
 	*clock = clock.Add(3 * time.Minute)
-	second, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
+	second, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 	require.True(t, second.Granted)
-	require.Nil(t, second.Displaced, "refreshing your own claim displaces nobody")
-	require.Equal(t, first.Claim.ClaimedAt.UTC(), second.Claim.ClaimedAt.UTC())
-	require.True(t, second.Claim.HeartbeatAt.After(first.Claim.HeartbeatAt))
+	require.Nil(t, second.Displaced, "refreshing your own lease displaces nobody")
+	require.Equal(t, first.Lease.LeasedAt.UTC(), second.Lease.LeasedAt.UTC())
+	require.True(t, second.Lease.HeartbeatAt.After(first.Lease.HeartbeatAt))
 }
 
 func TestClaim_RequiresAgentName(t *testing.T) {
 	s, _ := newTestStore(t)
 
-	_, err := s.Claim(context.Background(), ClaimRequest{Scope: "SC-1", Stage: "fix"})
+	_, err := s.Lease(context.Background(), LeaseRequest{Scope: "SC-1", Stage: "fix"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires an agent name")
 }
@@ -439,7 +439,7 @@ func TestClaim_RequiresAgentName(t *testing.T) {
 func TestClaim_RejectsBadStageName(t *testing.T) {
 	s, _ := newTestStore(t)
 
-	_, err := s.Claim(context.Background(), ClaimRequest{
+	_, err := s.Lease(context.Background(), LeaseRequest{
 		Scope: "SC-1", Stage: "not a stage", Meta: Meta{Agent: "alpha"},
 	})
 	require.Error(t, err)
@@ -450,43 +450,43 @@ func TestRelease_FreesTheStageForAnotherAgent(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
+	_, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 
 	released, err := s.Release(ctx, "SC-1", "fix", "alpha")
 	require.NoError(t, err)
 	require.True(t, released)
 
-	res, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
+	res, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
 	require.NoError(t, err)
 	require.True(t, res.Granted)
 	require.Nil(t, res.Displaced, "a released holder handed off; it was not displaced")
 }
 
-// A stale process must not be able to release the claim of the agent that took
+// A stale process must not be able to release the lease of the agent that took
 // over from it.
 func TestRelease_OnlyAffectsTheNamedAgentsClaim(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
+	_, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
 	require.NoError(t, err)
 
 	released, err := s.Release(ctx, "SC-1", "fix", "alpha")
 	require.NoError(t, err)
 	require.False(t, released)
 
-	claims, err := s.Claims(ctx, "SC-1")
+	leases, err := s.Leases(ctx, "SC-1")
 	require.NoError(t, err)
-	require.Len(t, claims, 1)
-	require.Nil(t, claims[0].ReleasedAt)
+	require.Len(t, leases, 1)
+	require.Nil(t, leases[0].ReleasedAt)
 }
 
 func TestRelease_WithoutAgentReleasesAnyHolder(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
+	_, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 
 	released, err := s.Release(ctx, "SC-1", "fix", "")
@@ -502,29 +502,29 @@ func TestClaims_ListsReleasedAndLiveClaims(t *testing.T) {
 	s, clock := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "triage", Meta: Meta{Agent: "alpha"}})
+	_, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "triage", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 	_, err = s.Release(ctx, "SC-1", "triage", "alpha")
 	require.NoError(t, err)
 
 	*clock = clock.Add(time.Minute)
-	_, err = s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
+	_, err = s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "beta"}})
 	require.NoError(t, err)
 
-	claims, err := s.Claims(ctx, "SC-1")
+	leases, err := s.Leases(ctx, "SC-1")
 	require.NoError(t, err)
-	require.Len(t, claims, 2)
-	require.Equal(t, "fix", claims[0].Stage, "newest heartbeat first")
-	require.Nil(t, claims[0].ReleasedAt)
+	require.Len(t, leases, 2)
+	require.Equal(t, "fix", leases[0].Stage, "newest heartbeat first")
+	require.Nil(t, leases[0].ReleasedAt)
 
-	require.Equal(t, "triage", claims[1].Stage)
-	require.NotNil(t, claims[1].ReleasedAt)
+	require.Equal(t, "triage", leases[1].Stage)
+	require.NotNil(t, leases[1].ReleasedAt)
 }
 
 func TestClaims_EmptyScopeIsAnError(t *testing.T) {
 	s, _ := newTestStore(t)
 
-	_, err := s.Claims(context.Background(), "")
+	_, err := s.Leases(context.Background(), "")
 	require.Error(t, err)
 }
 
@@ -532,16 +532,16 @@ func TestPrune_DropsStaleClaims(t *testing.T) {
 	s, clock := newTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.Claim(ctx, ClaimRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
+	_, err := s.Lease(ctx, LeaseRequest{Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "alpha"}})
 	require.NoError(t, err)
 
 	*clock = clock.Add(30 * 24 * time.Hour)
 	_, err = s.Prune(ctx, clock.Add(-DefaultRetention))
 	require.NoError(t, err)
 
-	claims, err := s.Claims(ctx, "SC-1")
+	leases, err := s.Leases(ctx, "SC-1")
 	require.NoError(t, err)
-	require.Empty(t, claims)
+	require.Empty(t, leases)
 }
 
 func TestOpen_CreatesDatabaseFileAndReopens(t *testing.T) {

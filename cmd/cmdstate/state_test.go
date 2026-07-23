@@ -20,16 +20,16 @@ import (
 // output without SQLite or the user's home directory.
 type fakeStore struct {
 	entries   map[string]agentstate.Entry
-	claims    map[string]agentstate.Claim
+	leases    map[string]agentstate.Lease
 	lastMeta  agentstate.Meta
-	claimResp *agentstate.ClaimResult
+	claimResp *agentstate.LeaseResult
 	closed    bool
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		entries: map[string]agentstate.Entry{},
-		claims:  map[string]agentstate.Claim{},
+		leases:  map[string]agentstate.Lease{},
 	}
 }
 
@@ -116,32 +116,32 @@ func (f *fakeStore) Incr(_ context.Context, scope, name string, by int64, meta a
 	return next, nil
 }
 
-func (f *fakeStore) Claim(_ context.Context, req agentstate.ClaimRequest) (agentstate.ClaimResult, error) {
+func (f *fakeStore) Lease(_ context.Context, req agentstate.LeaseRequest) (agentstate.LeaseResult, error) {
 	f.lastMeta = req.Meta
 	if f.claimResp != nil {
 		return *f.claimResp, nil
 	}
-	c := agentstate.Claim{
+	c := agentstate.Lease{
 		Scope: strings.ToUpper(req.Scope), Stage: req.Stage, Agent: req.Meta.Agent,
-		ClaimedAt: time.Unix(0, 0).UTC(), HeartbeatAt: time.Unix(0, 0).UTC(),
+		LeasedAt: time.Unix(0, 0).UTC(), HeartbeatAt: time.Unix(0, 0).UTC(),
 	}
-	f.claims[f.key(req.Scope, req.Stage)] = c
-	return agentstate.ClaimResult{Granted: true, Claim: c}, nil
+	f.leases[f.key(req.Scope, req.Stage)] = c
+	return agentstate.LeaseResult{Granted: true, Lease: c}, nil
 }
 
 func (f *fakeStore) Release(_ context.Context, scope, stage, agent string) (bool, error) {
 	k := f.key(scope, stage)
-	c, ok := f.claims[k]
+	c, ok := f.leases[k]
 	if !ok || (agent != "" && c.Agent != agent) {
 		return false, nil
 	}
-	delete(f.claims, k)
+	delete(f.leases, k)
 	return true, nil
 }
 
-func (f *fakeStore) Claims(_ context.Context, scope string) ([]agentstate.Claim, error) {
-	out := []agentstate.Claim{}
-	for _, c := range f.claims {
+func (f *fakeStore) Leases(_ context.Context, scope string) ([]agentstate.Lease, error) {
+	out := []agentstate.Lease{}
+	for _, c := range f.leases {
 		if c.Scope == strings.ToUpper(scope) {
 			out = append(out, c)
 		}
@@ -419,38 +419,38 @@ func TestIncr_PrintsRunningTotal(t *testing.T) {
 func TestClaim_GrantedPrintsHolder(t *testing.T) {
 	store := newFakeStore()
 
-	out, err := run(t, store, context.Background(), "claim", "SC-1", "--stage", "fix", "--agent", "alpha")
+	out, err := run(t, store, context.Background(), "lease", "SC-1", "--stage", "fix", "--agent", "alpha")
 	require.NoError(t, err)
-	require.Contains(t, out, "claimed SC-1/fix as alpha")
+	require.Contains(t, out, "leased SC-1/fix as alpha")
 }
 
-// A refused claim must fail the command so a caller can branch on the exit
+// A refused lease must fail the command so a caller can branch on the exit
 // code, while still naming the holder on stdout.
 func TestClaim_RefusedNamesHolderAndFails(t *testing.T) {
 	store := newFakeStore()
-	store.claimResp = &agentstate.ClaimResult{
+	store.claimResp = &agentstate.LeaseResult{
 		Granted: false,
-		Claim: agentstate.Claim{
+		Lease: agentstate.Lease{
 			Scope: "SC-1", Stage: "fix", Agent: "alpha", HeartbeatAt: time.Unix(0, 0).UTC(),
 		},
 	}
 
-	out, err := run(t, store, context.Background(), "claim", "SC-1", "--stage", "fix", "--agent", "beta")
+	out, err := run(t, store, context.Background(), "lease", "SC-1", "--stage", "fix", "--agent", "beta")
 	require.Error(t, err)
 	require.Contains(t, out, "held by alpha")
 }
 
 func TestClaim_TakeoverReportsInheritedState(t *testing.T) {
 	store := newFakeStore()
-	displaced := agentstate.Claim{Scope: "SC-1", Stage: "fix", Agent: "alpha", HeartbeatAt: time.Unix(0, 0).UTC()}
-	store.claimResp = &agentstate.ClaimResult{
+	displaced := agentstate.Lease{Scope: "SC-1", Stage: "fix", Agent: "alpha", HeartbeatAt: time.Unix(0, 0).UTC()}
+	store.claimResp = &agentstate.LeaseResult{
 		Granted:       true,
-		Claim:         agentstate.Claim{Scope: "SC-1", Stage: "fix", Agent: "beta"},
+		Lease:         agentstate.Lease{Scope: "SC-1", Stage: "fix", Agent: "beta"},
 		Displaced:     &displaced,
 		InheritedKeys: []string{"fix.evidence", "stage.fix"},
 	}
 
-	out, err := run(t, store, context.Background(), "claim", "SC-1", "--stage", "fix", "--agent", "beta")
+	out, err := run(t, store, context.Background(), "lease", "SC-1", "--stage", "fix", "--agent", "beta")
 	require.NoError(t, err)
 	require.Contains(t, out, "took over from alpha")
 	require.Contains(t, out, "inherited state: fix.evidence, stage.fix")
@@ -458,31 +458,31 @@ func TestClaim_TakeoverReportsInheritedState(t *testing.T) {
 
 func TestClaim_TakeoverWithNoInheritedStateSaysSo(t *testing.T) {
 	store := newFakeStore()
-	displaced := agentstate.Claim{Scope: "SC-1", Stage: "fix", Agent: "alpha"}
-	store.claimResp = &agentstate.ClaimResult{
+	displaced := agentstate.Lease{Scope: "SC-1", Stage: "fix", Agent: "alpha"}
+	store.claimResp = &agentstate.LeaseResult{
 		Granted:   true,
-		Claim:     agentstate.Claim{Scope: "SC-1", Stage: "fix", Agent: "beta"},
+		Lease:     agentstate.Lease{Scope: "SC-1", Stage: "fix", Agent: "beta"},
 		Displaced: &displaced,
 	}
 
-	out, err := run(t, store, context.Background(), "claim", "SC-1", "--stage", "fix", "--agent", "beta")
+	out, err := run(t, store, context.Background(), "lease", "SC-1", "--stage", "fix", "--agent", "beta")
 	require.NoError(t, err)
 	require.Contains(t, out, "it left no state behind")
 }
 
 func TestClaim_JSONOutput(t *testing.T) {
 	out, err := run(t, newFakeStore(), context.Background(),
-		"claim", "SC-1", "--stage", "fix", "--agent", "alpha", "--json")
+		"lease", "SC-1", "--stage", "fix", "--agent", "alpha", "--json")
 	require.NoError(t, err)
 
-	var res agentstate.ClaimResult
+	var res agentstate.LeaseResult
 	require.NoError(t, json.Unmarshal([]byte(out), &res))
 	require.True(t, res.Granted)
-	require.Equal(t, "alpha", res.Claim.Agent)
+	require.Equal(t, "alpha", res.Lease.Agent)
 }
 
 func TestClaim_StageIsRequired(t *testing.T) {
-	_, err := run(t, newFakeStore(), context.Background(), "claim", "SC-1")
+	_, err := run(t, newFakeStore(), context.Background(), "lease", "SC-1")
 	require.Error(t, err)
 }
 
@@ -490,7 +490,7 @@ func TestRelease_ReportsWhetherAClaimWasLive(t *testing.T) {
 	store := newFakeStore()
 	ctx := context.Background()
 
-	_, err := run(t, store, ctx, "claim", "SC-1", "--stage", "fix", "--agent", "alpha")
+	_, err := run(t, store, ctx, "lease", "SC-1", "--stage", "fix", "--agent", "alpha")
 	require.NoError(t, err)
 
 	out, err := run(t, store, ctx, "release", "SC-1", "--stage", "fix", "--agent", "alpha")
@@ -499,30 +499,30 @@ func TestRelease_ReportsWhetherAClaimWasLive(t *testing.T) {
 
 	out, err = run(t, store, ctx, "release", "SC-1", "--stage", "fix", "--agent", "alpha")
 	require.NoError(t, err)
-	require.Contains(t, out, "no live claim")
+	require.Contains(t, out, "no live lease")
 }
 
 func TestClaims_TableAndEmpty(t *testing.T) {
 	store := newFakeStore()
 	ctx := context.Background()
 
-	out, err := run(t, store, ctx, "claims", "SC-1")
+	out, err := run(t, store, ctx, "leases", "SC-1")
 	require.NoError(t, err)
-	require.Contains(t, out, "no claims")
+	require.Contains(t, out, "no leases")
 
-	_, err = run(t, store, ctx, "claim", "SC-1", "--stage", "fix", "--agent", "alpha")
+	_, err = run(t, store, ctx, "lease", "SC-1", "--stage", "fix", "--agent", "alpha")
 	require.NoError(t, err)
 
-	out, err = run(t, store, ctx, "claims", "SC-1")
+	out, err = run(t, store, ctx, "leases", "SC-1")
 	require.NoError(t, err)
 	require.Contains(t, out, "fix")
 	require.Contains(t, out, "alpha")
 
-	out, err = run(t, store, ctx, "claims", "SC-1", "--json")
+	out, err = run(t, store, ctx, "leases", "SC-1", "--json")
 	require.NoError(t, err)
-	var claims []agentstate.Claim
-	require.NoError(t, json.Unmarshal([]byte(out), &claims))
-	require.Len(t, claims, 1)
+	var leases []agentstate.Lease
+	require.NoError(t, json.Unmarshal([]byte(out), &leases))
+	require.Len(t, leases, 1)
 }
 
 func TestPrune_ReportsCount(t *testing.T) {
@@ -546,7 +546,7 @@ func TestBuildStateCmd_RegistersEveryVerb(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		got[sub.Name()] = true
 	}
-	for _, want := range []string{"set", "get", "list", "rm", "incr", "claim", "release", "claims", "prune"} {
+	for _, want := range []string{"set", "get", "list", "rm", "incr", "lease", "release", "leases", "prune"} {
 		require.True(t, got[want], "missing subcommand %q", want)
 	}
 }

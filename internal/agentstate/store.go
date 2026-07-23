@@ -21,7 +21,7 @@ import (
 )
 
 // TimeFormat is fixed-width down to the nanosecond so lexical string comparison
-// equals chronological ordering — the prune and the claim-staleness check both
+// equals chronological ordering — the prune and the lease-staleness check both
 // rely on that. RFC3339Nano cannot be used: it trims trailing zeros and so is
 // not fixed width, which silently breaks ordered comparison.
 const TimeFormat = "2006-01-02 15:04:05.000000000"
@@ -31,10 +31,10 @@ const TimeFormat = "2006-01-02 15:04:05.000000000"
 // should leave a path behind, not the payload.
 const MaxValueBytes = 256 << 10
 
-// DefaultClaimTTL is how long a stage claim stays live without a heartbeat.
-// Past it the claim is considered abandoned and a fresh agent may take over —
+// DefaultLeaseTTL is how long a stage lease stays live without a heartbeat.
+// Past it the lease is considered abandoned and a fresh agent may take over —
 // the recovery path for an agent that died mid-stage.
-const DefaultClaimTTL = 15 * time.Minute
+const DefaultLeaseTTL = 15 * time.Minute
 
 // DefaultRetention is how long entries survive without an update before the
 // daemon's maintenance sweep prunes them.
@@ -51,9 +51,9 @@ const (
 // been deleted. Callers distinguish it with errors.Is.
 var ErrNotFound = stderrors.New("state entry not found")
 
-// ErrClaimHeld is returned by Claim when a live claim belongs to another agent
+// ErrLeaseHeld is returned by Lease when a live lease belongs to another agent
 // and no takeover was requested.
-var ErrClaimHeld = stderrors.New("stage claim held by another agent")
+var ErrLeaseHeld = stderrors.New("stage lease held by another agent")
 
 // namePattern keeps names to a dotted namespace so `list --prefix` stays a
 // meaningful query and names never carry whitespace or wildcards.
@@ -77,30 +77,30 @@ type Entry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// Claim is one agent's hold on a stage of a scope.
+// Lease is one agent's hold on a stage of a scope.
 //
-// TTL is stored with the claim because the holder — not whoever comes knocking
+// TTL is stored with the lease because the holder — not whoever comes knocking
 // later — knows how often it heartbeats. A short-running stage can declare a
 // short TTL and be reclaimed quickly; a slow one declares a long TTL and is not
 // stolen out from under it. Judging staleness by the challenger's TTL instead
 // would mean a successor had to guess its predecessor's cadence.
-type Claim struct {
+type Lease struct {
 	Scope       string        `json:"scope"`
 	Stage       string        `json:"stage"`
 	Agent       string        `json:"agent"`
 	RunID       string        `json:"run_id,omitempty"`
 	TTL         time.Duration `json:"ttl"`
-	ClaimedAt   time.Time     `json:"claimed_at"`
+	LeasedAt    time.Time     `json:"leased_at"`
 	HeartbeatAt time.Time     `json:"heartbeat_at"`
 	ReleasedAt  *time.Time    `json:"released_at,omitempty"`
 }
 
-// ClaimRequest asks to hold a stage. A zero TTL means DefaultClaimTTL, and the
-// TTL applies to the claim being made — an existing holder's liveness is always
-// judged by the TTL it declared itself. Takeover displaces even a live claim:
+// LeaseRequest asks to hold a stage. A zero TTL means DefaultLeaseTTL, and the
+// TTL applies to the lease being made — an existing holder's liveness is always
+// judged by the TTL it declared itself. Takeover displaces even a live lease:
 // the explicit override for when an operator knows the holder is gone before
 // its heartbeat has expired.
-type ClaimRequest struct {
+type LeaseRequest struct {
 	Scope    string
 	Stage    string
 	Meta     Meta
@@ -108,14 +108,14 @@ type ClaimRequest struct {
 	Takeover bool
 }
 
-// ClaimResult reports the outcome of a claim attempt. When a claim is granted
+// LeaseResult reports the outcome of a lease attempt. When a lease is granted
 // over a previous holder, Displaced names it and InheritedKeys lists the state
 // that holder left behind — the successor's starting point, so a crashed
 // stage's work is inherited rather than redone.
-type ClaimResult struct {
+type LeaseResult struct {
 	Granted       bool     `json:"granted"`
-	Claim         Claim    `json:"claim"`
-	Displaced     *Claim   `json:"displaced,omitempty"`
+	Lease         Lease    `json:"lease"`
+	Displaced     *Lease   `json:"displaced,omitempty"`
 	InheritedKeys []string `json:"inherited_keys,omitempty"`
 }
 
@@ -129,9 +129,9 @@ type Store interface {
 	DeletePrefix(ctx context.Context, scope, prefix string) (int, error)
 	DeleteScope(ctx context.Context, scope string) (int, error)
 	Incr(ctx context.Context, scope, name string, by int64, meta Meta) (int64, error)
-	Claim(ctx context.Context, req ClaimRequest) (ClaimResult, error)
+	Lease(ctx context.Context, req LeaseRequest) (LeaseResult, error)
 	Release(ctx context.Context, scope, stage, agent string) (bool, error)
-	Claims(ctx context.Context, scope string) ([]Claim, error)
+	Leases(ctx context.Context, scope string) ([]Lease, error)
 	Prune(ctx context.Context, cutoff time.Time) (int, error)
 	Close() error
 }
@@ -157,7 +157,7 @@ func ValidateName(name string) error {
 	return nil
 }
 
-// ValidateStage applies the same grammar to a claim's stage name.
+// ValidateStage applies the same grammar to a lease's stage name.
 func ValidateStage(stage string) error {
 	if !namePattern.MatchString(stage) {
 		return errors.WithDetails("stage must be a simple name", "stage", stage)

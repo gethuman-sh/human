@@ -119,4 +119,6 @@ EOF
 
 `verdict` must be exactly one of the three words. A missing record reads as an incomplete stage and gets re-dispatched, so write it before you finish.
 
+<!-- human:include stage-lease -->
+
 <!-- human:include exit-contract -->

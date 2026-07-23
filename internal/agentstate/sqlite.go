@@ -26,7 +26,7 @@ type SQLiteStore struct {
 // Option customises a store at open time.
 type Option func(*SQLiteStore)
 
-// WithClock injects the time source. Claim expiry is time-driven, so tests
+// WithClock injects the time source. Lease expiry is time-driven, so tests
 // drive it explicitly instead of sleeping.
 func WithClock(now func() time.Time) Option {
 	return func(s *SQLiteStore) {
@@ -86,20 +86,20 @@ func (s *SQLiteStore) ensureSchema() error {
 		CREATE INDEX IF NOT EXISTS idx_agent_state_updated
 			ON agent_state (updated_at);
 
-		CREATE TABLE IF NOT EXISTS agent_claims (
+		CREATE TABLE IF NOT EXISTS agent_leases (
 			scope        TEXT NOT NULL,
 			stage        TEXT NOT NULL,
 			agent        TEXT NOT NULL,
 			run_id       TEXT NOT NULL DEFAULT '',
 			ttl_seconds  INTEGER NOT NULL DEFAULT 0,
-			claimed_at   TEXT NOT NULL,
+			leased_at   TEXT NOT NULL,
 			heartbeat_at TEXT NOT NULL,
 			released_at  TEXT,
 			PRIMARY KEY (scope, stage)
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_agent_claims_heartbeat
-			ON agent_claims (heartbeat_at);
+		CREATE INDEX IF NOT EXISTS idx_agent_leases_heartbeat
+			ON agent_leases (heartbeat_at);
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		return errors.WrapWithDetails(err, "create state schema")
@@ -260,7 +260,7 @@ func (s *SQLiteStore) DeletePrefix(ctx context.Context, scope, prefix string) (i
 	return int(n), nil
 }
 
-// DeleteScope removes every entry and claim of a scope, returning the entry
+// DeleteScope removes every entry and lease of a scope, returning the entry
 // count. Used by `state rm --all` when a ticket's run is abandoned.
 func (s *SQLiteStore) DeleteScope(ctx context.Context, scope string) (int, error) {
 	normScope, err := NormalizeScope(scope)
@@ -272,8 +272,8 @@ func (s *SQLiteStore) DeleteScope(ctx context.Context, scope string) (int, error
 		return 0, errors.WrapWithDetails(err, "delete scope", "scope", normScope)
 	}
 	n, _ := res.RowsAffected()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM agent_claims WHERE scope = ?`, normScope); err != nil {
-		return 0, errors.WrapWithDetails(err, "delete scope claims", "scope", normScope)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM agent_leases WHERE scope = ?`, normScope); err != nil {
+		return 0, errors.WrapWithDetails(err, "delete scope leases", "scope", normScope)
 	}
 	return int(n), nil
 }
@@ -341,7 +341,7 @@ func readCounter(ctx context.Context, tx *sql.Tx, scope, name string) (int64, er
 	return n, nil
 }
 
-// Prune removes entries not updated since cutoff and claims released before it,
+// Prune removes entries not updated since cutoff and leases released before it,
 // returning the number of entries dropped.
 func (s *SQLiteStore) Prune(ctx context.Context, cutoff time.Time) (int, error) {
 	stamp := cutoff.UTC().Format(TimeFormat)
@@ -353,8 +353,8 @@ func (s *SQLiteStore) Prune(ctx context.Context, cutoff time.Time) (int, error) 
 	n, _ := res.RowsAffected()
 
 	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM agent_claims WHERE heartbeat_at < ?`, stamp); err != nil {
-		return 0, errors.WrapWithDetails(err, "prune stale claims")
+		`DELETE FROM agent_leases WHERE heartbeat_at < ?`, stamp); err != nil {
+		return 0, errors.WrapWithDetails(err, "prune stale leases")
 	}
 	return int(n), nil
 }

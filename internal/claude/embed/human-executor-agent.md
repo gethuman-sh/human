@@ -108,6 +108,8 @@ human state get  <PM_KEY> budget.implementation.attempts --default 0
 
 Infrastructure trouble is never a real attempt — it is a `retryable` ending, not a spent budget.
 
+<!-- human:include stage-lease -->
+
 <!-- human:include exit-contract -->
 
 ## Completion invariant

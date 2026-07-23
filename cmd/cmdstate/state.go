@@ -1,5 +1,5 @@
 // Package cmdstate surfaces the agent state store as CLI commands: the durable
-// working memory one pipeline stage leaves for the next, and the stage claims
+// working memory one pipeline stage leaves for the next, and the stage leases
 // that let a fresh agent take over from one that died mid-run.
 //
 // The command is deliberately absent from main.go's localSubcommands, so it is
@@ -262,7 +262,7 @@ otherwise read as already spent:
 			})
 		},
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "Remove every entry and claim of the scope")
+	cmd.Flags().BoolVar(&all, "all", false, "Remove every entry and lease of the scope")
 	cmd.Flags().StringVar(&prefix, "prefix", "", "Remove every entry whose name starts with this prefix")
 	return cmd
 }
@@ -337,18 +337,18 @@ func buildClaimCmd(open storeOpener) *cobra.Command {
 	var ttl time.Duration
 	var takeover, asJSON bool
 	cmd := &cobra.Command{
-		Use:   "claim SCOPE",
-		Short: "Claim a stage of a scope, taking over an abandoned claim",
-		Long: `Claim a stage of a scope.
+		Use:   "lease SCOPE",
+		Short: "Lease a stage of a scope, taking over an abandoned lease",
+		Long: `Lease a stage of a scope.
 
-A claim held by another agent that is still heartbeating is refused, naming the
+A lease held by another agent that is still heartbeating is refused, naming the
 holder. Once its heartbeat lapses past the TTL the stage is considered
-abandoned and the claim is granted: the result then names the displaced agent
+abandoned and the lease is granted: the result then names the displaced agent
 and the state keys it left behind, so its work is inherited rather than redone.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withStore(open, func(store agentstate.Store) error {
-				res, err := store.Claim(cmd.Context(), agentstate.ClaimRequest{
+				res, err := store.Lease(cmd.Context(), agentstate.LeaseRequest{
 					Scope:    args[0],
 					Stage:    stage,
 					Meta:     metaFromContext(cmd.Context(), agent),
@@ -362,18 +362,18 @@ and the state keys it left behind, so its work is inherited rather than redone.`
 			})
 		},
 	}
-	cmd.Flags().StringVar(&stage, "stage", "", "Stage to claim (triage, plan, fix, verify, review, deploy, …)")
-	cmd.Flags().StringVar(&agent, "agent", "", "Claiming agent (defaults to $HUMAN_AGENT_NAME)")
-	cmd.Flags().DurationVar(&ttl, "ttl", agentstate.DefaultClaimTTL, "How long the claim stays live without a heartbeat")
-	cmd.Flags().BoolVar(&takeover, "takeover", false, "Displace even a live claim")
-	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit the claim result as JSON")
+	cmd.Flags().StringVar(&stage, "stage", "", "Stage to lease (triage, plan, fix, verify, review, deploy, …)")
+	cmd.Flags().StringVar(&agent, "agent", "", "Leasing agent (defaults to $HUMAN_AGENT_NAME)")
+	cmd.Flags().DurationVar(&ttl, "ttl", agentstate.DefaultLeaseTTL, "How long the lease stays live without a heartbeat")
+	cmd.Flags().BoolVar(&takeover, "takeover", false, "Displace even a live lease")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit the lease result as JSON")
 	_ = cmd.MarkFlagRequired("stage")
 	return cmd
 }
 
-// reportClaim prints the outcome and fails the command when the claim was
+// reportClaim prints the outcome and fails the command when the lease was
 // refused, so a caller can branch on the exit code alone.
-func reportClaim(out io.Writer, res agentstate.ClaimResult, asJSON bool) error {
+func reportClaim(out io.Writer, res agentstate.LeaseResult, asJSON bool) error {
 	if asJSON {
 		if err := writeJSON(out, res); err != nil {
 			return err
@@ -382,21 +382,21 @@ func reportClaim(out io.Writer, res agentstate.ClaimResult, asJSON bool) error {
 		return err
 	}
 	if !res.Granted {
-		return errors.WrapWithDetails(agentstate.ErrClaimHeld, "claim refused",
-			"scope", res.Claim.Scope, "stage", res.Claim.Stage, "holder", res.Claim.Agent)
+		return errors.WrapWithDetails(agentstate.ErrLeaseHeld, "lease refused",
+			"scope", res.Lease.Scope, "stage", res.Lease.Stage, "holder", res.Lease.Agent)
 	}
 	return nil
 }
 
-func writeClaimText(out io.Writer, res agentstate.ClaimResult) error {
+func writeClaimText(out io.Writer, res agentstate.LeaseResult) error {
 	if !res.Granted {
 		_, err := fmt.Fprintf(out, "refused: %s/%s is held by %s (last heartbeat %s)\n",
-			res.Claim.Scope, res.Claim.Stage, res.Claim.Agent,
-			res.Claim.HeartbeatAt.Format(time.RFC3339))
+			res.Lease.Scope, res.Lease.Stage, res.Lease.Agent,
+			res.Lease.HeartbeatAt.Format(time.RFC3339))
 		return err
 	}
-	if _, err := fmt.Fprintf(out, "claimed %s/%s as %s\n",
-		res.Claim.Scope, res.Claim.Stage, res.Claim.Agent); err != nil {
+	if _, err := fmt.Fprintf(out, "leased %s/%s as %s\n",
+		res.Lease.Scope, res.Lease.Stage, res.Lease.Agent); err != nil {
 		return err
 	}
 	if res.Displaced == nil {
@@ -418,7 +418,7 @@ func buildReleaseCmd(open storeOpener) *cobra.Command {
 	var stage, agent string
 	cmd := &cobra.Command{
 		Use:   "release SCOPE",
-		Short: "Hand a stage claim back",
+		Short: "Hand a stage lease back",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withStore(open, func(store agentstate.Store) error {
@@ -442,25 +442,25 @@ func releasedMessage(released bool) string {
 	if released {
 		return "released"
 	}
-	return "no live claim to release"
+	return "no live lease to release"
 }
 
 func buildClaimsCmd(open storeOpener) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "claims SCOPE",
+		Use:   "leases SCOPE",
 		Short: "Show who holds which stage of a scope",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withStore(open, func(store agentstate.Store) error {
-				claims, err := store.Claims(cmd.Context(), args[0])
+				leases, err := store.Leases(cmd.Context(), args[0])
 				if err != nil {
 					return err
 				}
 				if asJSON {
-					return writeJSON(cmd.OutOrStdout(), claims)
+					return writeJSON(cmd.OutOrStdout(), leases)
 				}
-				return writeClaimTable(cmd.OutOrStdout(), claims)
+				return writeClaimTable(cmd.OutOrStdout(), leases)
 			})
 		},
 	}
@@ -503,12 +503,12 @@ func writeEntryTable(out io.Writer, entries []agentstate.Entry) error {
 	return nil
 }
 
-func writeClaimTable(out io.Writer, claims []agentstate.Claim) error {
-	if len(claims) == 0 {
-		_, err := fmt.Fprintln(out, "no claims")
+func writeClaimTable(out io.Writer, leases []agentstate.Lease) error {
+	if len(leases) == 0 {
+		_, err := fmt.Fprintln(out, "no leases")
 		return err
 	}
-	for _, c := range claims {
+	for _, c := range leases {
 		state := "held"
 		if c.ReleasedAt != nil {
 			state = "released"
