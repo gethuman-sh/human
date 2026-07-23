@@ -92,6 +92,24 @@ human <TRACKER> issue comment list <TICKET_KEY>
    Never end a session with uncommitted work and a question. If `human-done` (step 5) failed, you still owe one of these three: commit the in-progress work and hand off with the failures listed in `--notes`, OR post an options block if the failure is a real fork, OR `nothing-to-do` if the work was already shipped — but do not exit with a dead-card question.
 8. **Summarize** what was done: files created, files modified, done verdict, link/key of the PM comment that was posted (or note that it was skipped because done failed).
 
+## Retry budget and flakes
+
+A failing check does not end the run on its first failure. Establish whether the failure is real before acting on it:
+
+1. Re-run the failing test **alone**. If it passes in isolation it is a **flake** — retry without charging an attempt.
+2. Only a failure that reproduces identically twice is real.
+3. Charge a real failure and keep iterating while the budget holds. The budget is **3 real attempts**.
+
+```bash
+human state incr <PM_KEY> budget.implementation.flakes
+human state incr <PM_KEY> budget.implementation.attempts
+human state get  <PM_KEY> budget.implementation.attempts --default 0
+```
+
+Infrastructure trouble is never a real attempt — it is a `retryable` ending, not a spent budget.
+
+<!-- human:include exit-contract -->
+
 ## Completion invariant
 
 A run never ends with the card in a non-terminal state AND no live agent. The only acceptable ends are (a) deployed/closed, or (b) an explicit needs-human marker that names the specific unresolved blocker — never a silent frozen card. A transient tool failure (e.g. a racy merge 405 while the forge reconciles fresh checks) is NOT terminal: the deploy tool runs a bounded recovery ladder and retries it internally, so do not treat the first tool failure as the end of the job. Only a `[human:deploy-failed]` posted after that ladder is exhausted — with the named blocker — is a legitimate terminal needs-human end state; when you see it, STOP honestly (do not merge by hand, do not re-implement the reviewed work) rather than leaving the card stuck.

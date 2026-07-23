@@ -37,12 +37,30 @@ Use `human tracker list` first when multiple trackers are configured.
    ```
 3. **Write the regression test first** — add a test that captures the bug. Run it and **confirm it FAILS** for the documented reason (capture the red output). If it passes, your test does not reproduce the bug — fix the test before touching product code.
 4. **Fix the root cause** — implement the change from the plan. Do not paper over the symptom. Read each file before editing it.
-5. **Go green (fast tier)** — the new test now passes; iterate with the project's **fast feedback gate**, not the full quality suite: run the tests plus the lean lint (in this repo `make test` and `make lint` — `make lint` is the documented lean hot-loop gate; NOT `make check`, whose fresh-test + sec + secrets passes are the verify step's one authoritative job). Confirm the new test passes and no existing tests regress. If you cannot reach green on the fast tier, stop and report what failed — do not push a broken branch. Do NOT run `make check`/the full suite here; running it now is exactly the redundant pass this pipeline removes (SC-782) — the verify gate owns the single full-suite run.
+5. **Go green (fast tier)** — the new test now passes; iterate with the project's **fast feedback gate**, not the full quality suite: run the tests plus the lean lint (in this repo `make test` and `make lint` — `make lint` is the documented lean hot-loop gate; NOT `make check`, whose fresh-test + sec + secrets passes are the verify step's one authoritative job). Confirm the new test passes and no existing tests regress. If a check fails, do **not** stop on the first failure — apply the retry budget below. Only when the budget is spent do you stop and report what failed; never push a broken branch. Do NOT run `make check`/the full suite here; running it now is exactly the redundant pass this pipeline removes (SC-782) — the verify gate owns the single full-suite run.
 6. **Commit** — one or more commits, each starting with the canonical prefix from `human commits prefix <BUG_KEY> [<ENG_KEY>]` (both keys in split topology, the single bug key otherwise), e.g. `[SC-79] [HUM-59] Fix <summary>`.
 7. **Push (conditional)** —
    - **Standalone run**: push the branch: `git push -u origin autofix/<work-key>`.
    - **Board context** (the dispatch prompt contains "BOARD CONTEXT: do NOT run git push"): do NOT push. The workspace is the bind-mounted host repo, so the local branch is already where the daemon's Deploy stage picks it up. Read the branch name from `git rev-parse --abbrev-ref HEAD`. Never push and never fail for missing push credentials.
 8. **Report** the branch name, the commit SHAs (`human commits for <BUG_KEY>` lists them), and a short red→green summary (the failing-then-passing test output). In board context, explicitly note the branch was left local (not pushed).
+
+## Retry budget and flakes
+
+A failing check is not automatically a failing fix. Before treating one as real:
+
+1. Re-run the failing test **alone**. If it passes in isolation it is a **flake** — record it and retry without charging an attempt.
+2. Only a failure that reproduces identically twice is real.
+3. Charge a real failure, then keep iterating while the budget holds. The budget is **3 real attempts**.
+
+```bash
+human state incr <WORK_KEY> budget.fix.flakes      # vanished in isolation
+human state incr <WORK_KEY> budget.fix.attempts    # reproduced
+human state get  <WORK_KEY> budget.fix.attempts --default 0
+```
+
+Infrastructure trouble — a dead container, a network blip, a runner that never started — is never a real attempt; it is a `retryable` ending. Say so rather than spending the budget on it.
+
+<!-- human:include exit-contract -->
 
 ## Principles
 

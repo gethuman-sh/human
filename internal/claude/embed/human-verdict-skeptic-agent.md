@@ -76,3 +76,20 @@ output, or the missing/off-topic commit — followed by what the triage got
 wrong. This becomes the reproduction the fix run starts from, so it must be
 complete enough to hand to a fixer.>
 ```
+
+## Stage record (what the orchestrator reads)
+
+Before returning, record the challenge outcome as data:
+
+```bash
+human state set <BUG_KEY> stage.challenge --json --body-file - <<'EOF'
+{"exit":"done",
+ "challenge":"<upheld|refuted>",
+ "evidence":"<what you reproduced, the commit you found, or the output that contradicts the verdict>",
+ "summary":"<one line>"}
+EOF
+```
+
+`upheld` means the no-fix verdict stands; `refuted` means the bug is real after all and the run continues as confirmed.
+
+<!-- human:include exit-contract -->

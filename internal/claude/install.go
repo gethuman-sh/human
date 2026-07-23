@@ -288,7 +288,12 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 			action = "Overwriting"
 		}
 
-		if err := fw.WriteFile(dest, f.content, 0o644); err != nil {
+		body, err := expandIncludes(f.content)
+		if err != nil {
+			return errors.WrapWithDetails(err, "expanding shared fragments", "path", dest)
+		}
+
+		if err := fw.WriteFile(dest, body, 0o644); err != nil {
 			return errors.WrapWithDetails(err, "writing file",
 				"path", dest)
 		}
