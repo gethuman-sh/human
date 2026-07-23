@@ -106,7 +106,13 @@ human state get <BUG_KEY> stage.triage --field verdict     # confirmed | not-a-b
 human state get <BUG_KEY> stage.triage --field root_cause
 ```
 
-The agent records `stage.triage` before returning (per the exit contract). Its message is for a human reader; the state record is what you branch on — a rephrased summary must never change the routing. If `stage.triage` is missing, the stage did not complete: treat that as `retryable` and re-dispatch rather than guessing a verdict from the text.
+The agent records `stage.triage` before returning (per the exit contract). Its message is for a human reader; the state record is what you branch on — a rephrased summary must never change the routing. If `stage.triage` is missing, the stage did not complete: treat that as `retryable` and re-dispatch rather than guessing a verdict from the text — **at most twice**. A record that is still missing after two re-dispatches is not a flaky agent, it is a broken state store (most often a daemon that predates `human state`). Stop then with `needs-human-work`, naming state as the suspect, instead of re-dispatching forever:
+
+```bash
+human state incr <BUG_KEY> budget.triage.missing   # if this reaches 3, stop
+```
+
+If `human state` itself errors, do not loop on it either — the same two-attempt bound applies to every stage record this skill reads.
 
 For a confirmed bug the record also carries the root cause and fix outline. If the recorded analysis stops at a proximate cause ("X is null" without *why* X can be null), re-dispatch the triage agent once, telling it which "why" is unanswered — do not carry a shallow root cause into the plan.
 

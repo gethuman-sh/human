@@ -35,7 +35,15 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
    human capabilities --json | human state set <PM_KEY> capabilities --json --body-file -
    ```
 
-2. **Collect decisions already made.** Read the ticket's comments for `[human:option-chosen]` — each one is a fork a human already settled. Mirror them into state so later stages read decisions as data and a retry never re-asks a settled question:
+2. **Clear the previous run's retry budgets.** Counters persist between runs, so a fresh attempt that does not clear them reads the last run's spent budget and gives up before doing any work:
+
+   ```bash
+   human state rm <PM_KEY> --prefix budget.
+   ```
+
+   Only budgets. Leave `decisions`, `capabilities`, and every stage's evidence alone — those are what the run inherits.
+
+3. **Collect decisions already made.** Read the ticket's comments for `[human:option-chosen]` — each one is a fork a human already settled. Mirror them into state so later stages read decisions as data and a retry never re-asks a settled question:
 
    ```bash
    human state set <PM_KEY> decisions --json --body-file - <<'EOF'
@@ -45,11 +53,11 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
    A decision recorded here is **final**. Never re-surface it as a new fork.
 
-3. **Read everything that could answer a question before you ask it** — the ticket description and comments, the attached plan, `.humanconfig`, `CLAUDE.md`, and the actual code. Most apparent ambiguity is answered by the codebase.
+4. **Read everything that could answer a question before you ask it** — the ticket description and comments, the attached plan, `.humanconfig`, `CLAUDE.md`, and the actual code. Most apparent ambiguity is answered by the codebase.
 
-4. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
+5. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
 
-5. **Emit exactly one verdict** (below).
+6. **Emit exactly one verdict** (below).
 
 ## What may be asked
 
