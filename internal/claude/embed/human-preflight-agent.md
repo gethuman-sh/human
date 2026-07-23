@@ -43,7 +43,15 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
    Only budgets. Leave `decisions`, `capabilities`, and every stage's evidence alone — those are what the run inherits.
 
-3. **Collect decisions already made.** Read the ticket's comments for `[human:option-chosen]` — each one is a fork a human already settled. Mirror them into state so later stages read decisions as data and a retry never re-asks a settled question:
+3. **Read the decisions already recorded**, before considering any question of your own. A fork settled on an earlier run is settled for good:
+
+   ```bash
+   human state get <PM_KEY> decisions --default '{}'
+   ```
+
+   Anything named here is closed. Never re-surface it.
+
+4. **Fold in decisions made since.** Read the ticket's comments for `[human:option-chosen]` — each one is a fork a human already settled. Mirror them into state so later stages read decisions as data and a retry never re-asks a settled question:
 
    ```bash
    human state set <PM_KEY> decisions --json --body-file - <<'EOF'
@@ -53,11 +61,11 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
    A decision recorded here is **final**. Never re-surface it as a new fork.
 
-4. **Read everything that could answer a question before you ask it** — the ticket description and comments, the attached plan, `.humanconfig`, `CLAUDE.md`, and the actual code. Most apparent ambiguity is answered by the codebase.
+5. **Read everything that could answer a question before you ask it** — the ticket description and comments, the attached plan, `.humanconfig`, `CLAUDE.md`, and the actual code. Most apparent ambiguity is answered by the codebase.
 
-5. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
+6. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
 
-6. **Emit exactly one verdict** (below).
+7. **Emit exactly one verdict** (below).
 
 ## What may be asked
 

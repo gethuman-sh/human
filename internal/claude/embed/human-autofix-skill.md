@@ -109,8 +109,11 @@ human state get <BUG_KEY> stage.triage --field root_cause
 The agent records `stage.triage` before returning (per the exit contract). Its message is for a human reader; the state record is what you branch on — a rephrased summary must never change the routing. If `stage.triage` is missing, the stage did not complete: treat that as `retryable` and re-dispatch rather than guessing a verdict from the text — **at most twice**. A record that is still missing after two re-dispatches is not a flaky agent, it is a broken state store (most often a daemon that predates `human state`). Stop then with `needs-human-work`, naming state as the suspect, instead of re-dispatching forever:
 
 ```bash
-human state incr <BUG_KEY> budget.triage.missing   # if this reaches 3, stop
+human state incr <BUG_KEY> budget.triage.missing              # count this miss
+human state get  <BUG_KEY> budget.triage.missing --default 0  # at 3, stop
 ```
+
+Increment, then read it back and compare — a counter that is only ever incremented bounds nothing.
 
 If `human state` itself errors, do not loop on it either — the same two-attempt bound applies to every stage record this skill reads.
 
@@ -165,7 +168,7 @@ challenge: upheld
 2. Delegate to the **human-planner** agent, seeding it with the triage root cause:
 
 ```
-Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan to fix bug <BUG_KEY>. The root-cause analysis from triage:\n<paste the triage root cause + fix outline>\nThe plan's Changes section MUST begin with adding a regression test that fails because of the bug, then fixing the root cause. Return the plan as output; do not write files or create tickets.")
+Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan to fix bug <BUG_KEY>. Decisions already settled for this ticket (do not re-open any of them): <paste the output of `human state get <BUG_KEY> decisions --default '{}'`>. The root-cause analysis from triage:\n<paste the triage root cause + fix outline>\nThe plan's Changes section MUST begin with adding a regression test that fails because of the bug, then fixing the root cause. Return the plan as output; do not write files or create tickets.")
 ```
 
 Capture the output as `<PLAN_CONTENT>`. Ensure its header has a `**PM ticket**: <BUG_KEY>` line and, in split topology, an `**Engineering ticket**: TBD` line.
