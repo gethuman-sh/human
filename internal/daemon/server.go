@@ -277,6 +277,9 @@ func (s *Server) executeCommand(conn net.Conn, req Request, projectDir string) {
 	cmd.SetArgs(req.Args)
 	cmd.SetOut(&stdoutBuf)
 	cmd.SetErr(&stderrBuf)
+	// Without this the command reads the DAEMON's stdin, so every `--body-file -`
+	// gets nothing: a marker posts an empty body, a state write fails validation.
+	cmd.SetIn(strings.NewReader(req.Stdin))
 	ctx := env.WithEnv(context.Background(), req.Env)
 	ctx = vault.WithResolver(ctx, s.VaultResolver)
 	cmd.SetContext(ctx)
