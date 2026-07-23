@@ -383,6 +383,23 @@ func TestHandleOAuthCallback_ReadError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to read callback response")
 }
 
+// A client newer than the daemon fails with cobra's unknown-command error,
+// which reads like a typo. The hint names the real cause, since the version
+// gate only refuses a too-old client and never a too-old daemon.
+func TestStaleDaemonHint(t *testing.T) {
+	hint := staleDaemonHint(`Error: unknown command "state" for "human"`)
+	if !strings.Contains(hint, "daemon") || !strings.Contains(hint, "daemon start") {
+		t.Errorf("hint should explain the stale daemon and how to fix it, got %q", hint)
+	}
+
+	if got := staleDaemonHint("Error: ticket not found"); got != "" {
+		t.Errorf("unrelated stderr must get no hint, got %q", got)
+	}
+	if got := staleDaemonHint(""); got != "" {
+		t.Errorf("empty stderr must get no hint, got %q", got)
+	}
+}
+
 func TestNewConfirmID_Unique(t *testing.T) {
 	seen := make(map[string]bool)
 	for range 100 {

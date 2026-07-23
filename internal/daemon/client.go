@@ -97,6 +97,9 @@ func runRemoteOnce(addr, token string, args []string, version, confirmID string)
 	}
 	if resp.Stderr != "" {
 		_, _ = fmt.Fprint(os.Stderr, resp.Stderr)
+		if hint := staleDaemonHint(resp.Stderr); hint != "" {
+			_, _ = fmt.Fprint(os.Stderr, hint)
+		}
 	}
 
 	// Two-line OAuth protocol: daemon signals us to wait for a callback URL.
@@ -106,6 +109,20 @@ func runRemoteOnce(addr, token string, args []string, version, confirmID string)
 	}
 
 	return resp.ExitCode, resp, nil
+}
+
+// staleDaemonHint explains an unknown-command failure that comes from the
+// daemon rather than from a typo. A forwarded command executes inside the
+// daemon's own command tree, so a client newer than the daemon fails here with
+// cobra's unknown-command error — the version gate cannot catch it, because it
+// only refuses a client that is too old, never a daemon that is.
+func staleDaemonHint(stderr string) string {
+	if !strings.Contains(stderr, "unknown command") {
+		return ""
+	}
+	return "\nThis command executes inside the daemon, and the running daemon's binary " +
+		"does not have it.\nRebuild human, then restart the daemon " +
+		"(`human daemon stop` and `human daemon start`), and retry.\n"
 }
 
 // handleOAuthCallback reads line 2 of the OAuth relay protocol and delivers
