@@ -54,3 +54,23 @@ make desktop-deps   # pinned Wails CLI
 make desktop        # build for the current OS (cannot cross-compile)
 make desktop-dev    # live-reload dev loop
 ```
+
+### Dev-mode PATH gotcha (`human` CLI not found)
+
+`make install` (`go install .`) puts the `human` binary in `$GOBIN`/`$GOPATH/bin`
+(e.g. `~/go/bin`), which is only on PATH for shells that source your profile —
+GUI apps launched from Finder/Dock/Spotlight inherit macOS's minimal default
+PATH instead, so `ResolveCLIPath` (`internal/daemon/lifecycle.go`) fails with
+"human CLI not found on PATH" even though `human` works fine from a terminal.
+
+This only affects building `human` from source (development mode). A normal
+install via `brew` places the binary directly in `/opt/homebrew/bin` or
+`/usr/local/bin`, which GUI apps do see, so this never comes up for installed
+users.
+
+Fix for local dev: symlink the built binary into a directory on the default
+GUI PATH, e.g.:
+
+```bash
+ln -sf "$(go env GOPATH)/bin/human" /opt/homebrew/bin/human
+```
