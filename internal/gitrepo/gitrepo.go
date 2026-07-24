@@ -94,12 +94,13 @@ var RevParse = func(ctx context.Context, dir, rev string) (string, error) {
 // global git identity, so a plain `git rebase` that re-commits the replayed
 // commits would die with "please tell me who you are" — an environmental
 // failure that used to surface as a spurious red suite and fail a correct fix.
-// The identity is set only on the replay invocation, never on `--abort` (which
-// commits nothing).
-var RebaseHead = func(ctx context.Context, dir, base string) error {
+// The name/email are supplied by the caller (the configured bot identity, SC-371)
+// so the whole pipeline shares one committer. The identity is set only on the
+// replay invocation, never on `--abort` (which commits nothing).
+var RebaseHead = func(ctx context.Context, dir, base, name, email string) error {
 	if _, err := runner(ctx, "git", "-C", dir,
-		"-c", "user.name=human",
-		"-c", "user.email=human@users.noreply.gethuman.sh",
+		"-c", "user.name="+name,
+		"-c", "user.email="+email,
 		"rebase", base); err != nil {
 		// Leaving a half-applied rebase would strand the worktree; abort so a
 		// retry starts from a clean state. The abort's own error is irrelevant —

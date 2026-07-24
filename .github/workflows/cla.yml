@@ -33,4 +33,4 @@ jobs:
           # No name patterns here — entries match GitHub logins (or bare git
           # author names for unlinked commits), so a wildcard would let any
           # similarly named account or spoofed git identity bypass the gate.
-          allowlist: StephanSchmidt,dependabot[bot],github-actions[bot]
+          allowlist: StephanSchmidt,humanbot,dependabot[bot],github-actions[bot]

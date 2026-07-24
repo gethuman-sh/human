@@ -10,4 +10,5 @@ Lets `human` read facts about the git repository you are working in, so it can f
 - Prints the canonical bracket-style commit-message prefix for a ticket (`human commits prefix PM_KEY [ENG_KEY]`)
 - Extracts the ticket keys referenced by commits touching given paths (`human commits keys [PATH...]`)
 - Resolves the recency boundary — latest tag, else a 30-day window — and whether paths changed since it (`human commits recency`, `human commits touched`)
+- Replays the deploy freshness rebase in an ephemeral worktree, attributing the replayed commits to the caller-supplied committer identity (the configured bot identity)
 - Reports a clear error when no remote

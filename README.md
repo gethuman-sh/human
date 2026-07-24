@@ -139,6 +139,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 - [Project Configuration](internal/config/README.md) — `.humanconfig.yaml` and credentials
 - [Cross-Tracker Search](internal/recall/README.md) — local full-text index over all issues
 - [Git Repository](internal/gitrepo/README.md) — detect forge and project from git
+- [Bot Identity](internal/botidentity/README.md) — configurable git identity attributing agent commits
 - [Tracker Connections](internal/apiclient/README.md) — shared networking for every backend
 - [Setup Wizard](internal/init/README.md) — guided `human init` onboarding
 - [Update Notifications](internal/update/README.md) — background new-release checks
@@ -402,6 +403,12 @@ proxy:
   mode: allowlist
   domains:
     - "*.github.com"
+
+# Bot identity attributed to pipeline agent commits (defaults to humanbot),
+# so authorship alone separates agent work from developer work.
+bot:
+  name: humanbot
+  email: humanbot@users.noreply.gethuman.sh
 ```
 
 Tokens can also be set via environment variables using the pattern `<TRACKER>_<NAME>_TOKEN` (e.g. `JIRA_WORK_KEY`, `NOTION_WORK_TOKEN`, `FIGMA_DESIGN_TOKEN`, `AMPLITUDE_PRODUCT_KEY` + `AMPLITUDE_PRODUCT_SECRET`).

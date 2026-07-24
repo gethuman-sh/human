@@ -426,14 +426,15 @@ func TestRebaseHead_argv(t *testing.T) {
 		gotArgs = append([]string{name}, args...)
 		return nil, nil
 	})
-	if err := RebaseHead(context.Background(), "/wt", "origin/main"); err != nil {
+	if err := RebaseHead(context.Background(), "/wt", "origin/main", "humanbot", "humanbot@users.noreply.gethuman.sh"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// The replay carries an explicit committer identity so a headless worktree
-	// with no global git config can still re-commit the replayed commits (SC-1135).
+	// The replay carries the caller-supplied committer identity (the configured
+	// bot identity, SC-371) so a headless worktree with no global git config can
+	// still re-commit the replayed commits (SC-1135).
 	assertArgs(t, gotArgs, []string{"git", "-C", "/wt",
-		"-c", "user.name=human",
-		"-c", "user.email=human@users.noreply.gethuman.sh",
+		"-c", "user.name=humanbot",
+		"-c", "user.email=humanbot@users.noreply.gethuman.sh",
 		"rebase", "origin/main"})
 }
 
@@ -469,7 +470,7 @@ func TestRebaseHead_conflictAborts(t *testing.T) {
 		}
 		return nil, nil
 	})
-	if err := RebaseHead(context.Background(), "/wt", "origin/main"); err == nil {
+	if err := RebaseHead(context.Background(), "/wt", "origin/main", "humanbot", "humanbot@users.noreply.gethuman.sh"); err == nil {
 		t.Fatal("expected error on rebase conflict")
 	}
 	var sawAbort bool
