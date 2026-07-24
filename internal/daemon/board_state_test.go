@@ -283,3 +283,40 @@ func TestDeriveBoardCard_stageEnteredAt(t *testing.T) {
 	backlog := DeriveBoardCard(nil, tracker.CategoryUnstarted, false)
 	assert.True(t, backlog.StageEnteredAt.IsZero(), "a no-marker backlog card carries no stage time")
 }
+
+// SC-1320 regression: after a decision is recorded ([human:option-chosen]) and
+// the relaunch is deferred (launch gate blockers → no fresh started marker), the
+// card must read as queued for the chosen stage — never collapse to the stale
+// pre-decision running marker (which the stuck-running pass would then red).
+func TestDeriveBoardCard_OptionChosenQueuesChosenStage(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	comments := []tracker.Comment{
+		cmt(PlanningStartedHeader, base),
+		cmt("[human:options]\nstage: planning\ncontext: two directions\n1: A\n2: B", base.Add(1*time.Minute)),
+		cmt(OptionChosenHeader+" 2: B", base.Add(2*time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardPlanning, card.Stage)
+	assert.Equal(t, BoardQueued, card.State, "a recorded decision with no later started marker must read as queued")
+	assert.Empty(t, card.Options, "the chosen block is consumed")
+	assert.Empty(t, card.Error, "a queued card is not a failure")
+}
+
+// SC-1320 regression: the fresh started marker supersedes the queued state
+// (latest-wins) — once ApplyOption's relaunch posts planning-started the card
+// reads running again, exactly as before.
+func TestDeriveBoardCard_StartedMarkerSupersedesQueued(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	comments := []tracker.Comment{
+		cmt("[human:options]\nstage: planning\n1: A\n2: B", base),
+		cmt(OptionChosenHeader+" 2: B", base.Add(1*time.Minute)),
+		cmt(PlanningStartedHeader, base.Add(2*time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardPlanning, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+}

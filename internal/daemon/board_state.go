@@ -93,23 +93,37 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 
 	_, hasPlan := latestPlanComment(comments)
 
+	var state BoardState
+	var latest tracker.Comment
+	if anyMarker {
+		// Second pass: within the furthest stage, the latest marker decides state.
+		state, latest = latestStateInStage(comments, furthest)
+
+		// A furthest-stage failure is authoritative only while it is the ticket's
+		// newest marker. A strictly-newer marker anywhere — a re-implementation
+		// restarting from an earlier stage (ticket 881) or a later deploy — retires
+		// the stale red; the card follows the ticket's current activity rather than a
+		// terminal failure the pipeline already moved past (SC-910).
+		if state == BoardFailed {
+			if newest, newestStage, newestState, ok := latestMarkerOverall(comments); ok && newest.Created.After(latest.Created) {
+				furthest, state, latest = newestStage, newestState, newest
+			}
+		}
+	}
+
+	// A recorded decision ([human:option-chosen]) that no started/terminal marker
+	// has yet superseded: the chosen stage is (re)queued while the relaunch's
+	// started marker is pending or its launch was deferred to a healthy daemon.
+	// Without this the card collapses to the pre-decision running marker and the
+	// stuck-running pass falsely reds it (SC-1320). Placed after the SC-910
+	// supersede so a decision strictly newer than a stale failure still wins.
+	if qStage, qChosen, ok := optionChosenQueued(comments); ok {
+		furthest, state, latest, anyMarker = qStage, BoardQueued, qChosen, true
+	}
+
 	if !anyMarker {
 		// No pipeline activity yet: the open ticket waits in Backlog.
 		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
-	}
-
-	// Second pass: within the furthest stage, the latest marker decides state.
-	state, latest := latestStateInStage(comments, furthest)
-
-	// A furthest-stage failure is authoritative only while it is the ticket's
-	// newest marker. A strictly-newer marker anywhere — a re-implementation
-	// restarting from an earlier stage (ticket 881) or a later deploy — retires
-	// the stale red; the card follows the ticket's current activity rather than a
-	// terminal failure the pipeline already moved past (SC-910).
-	if state == BoardFailed {
-		if newest, newestStage, newestState, ok := latestMarkerOverall(comments); ok && newest.Created.After(latest.Created) {
-			furthest, state, latest = newestStage, newestState, newest
-		}
 	}
 
 	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, StageEnteredAt: latest.Created}
@@ -117,23 +131,27 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
 	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
-	card.PRURL = latestPrefixedLine(comments, DeployedHeader, "pr:")
-	if card.PRURL == "" {
-		// Threads written before the deploy pipeline carry the URL on the old
-		// pr-pushed marker.
-		card.PRURL = latestPrefixedLine(comments, PRPushedHeader, "pr:")
-	}
-	if card.PRURL == "" {
-		// A deploy that failed AFTER opening the PR (the 695 merge-conflict case)
-		// records the PR on its deploy-failed marker. Surface it so the reconcile
-		// pass can confirm-shipped an out-of-band manual merge (SC-910).
-		card.PRURL = latestPrefixedLine(comments, DeployFailedHeader, "pr:")
-	}
+	card.PRURL = derivePRURL(comments)
 	if state == BoardFailed {
 		card.Error = failureReason(latest.Body)
 	}
 	attachOpenOptions(&card, comments)
 	return card
+}
+
+// derivePRURL resolves the card's PR link, newest-marker-first: a deployed
+// ticket's own pr: line, falling back to the pre-deploy-pipeline pr-pushed
+// marker, and finally to a deploy-failed marker's pr: line (the 695
+// merge-conflict case, where the PR opened before the deploy step failed) so
+// the reconcile pass can confirm-shipped an out-of-band manual merge (SC-910).
+func derivePRURL(comments []tracker.Comment) string {
+	if url := latestPrefixedLine(comments, DeployedHeader, "pr:"); url != "" {
+		return url
+	}
+	if url := latestPrefixedLine(comments, PRPushedHeader, "pr:"); url != "" {
+		return url
+	}
+	return latestPrefixedLine(comments, DeployFailedHeader, "pr:")
 }
 
 // failureReason extracts the human-readable reason from a *-failed marker: the

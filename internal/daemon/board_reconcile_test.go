@@ -362,3 +362,25 @@ func TestReconcileStuckRunning_NilListerDisables(t *testing.T) {
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
 }
+
+// SC-1320 regression: a card whose newest signal is a recorded decision
+// ([human:option-chosen]) with a deferred relaunch derives to BoardQueued, not
+// BoardRunning — the stuck-running pass must leave it alone rather than red it
+// "Stuck in planning…" (the exact false red from the report).
+func TestReconcileStuckRunning_SkipsJustDecidedCard(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	old := now.Add(-StuckRunningGrace - time.Minute)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(PlanningStartedHeader, old),
+			cmt("[human:options]\nstage: planning\n1: A\n2: B", old.Add(time.Second)),
+			cmt(OptionChosenHeader+" 2: B", old.Add(2*time.Second)),
+		},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+
+	assert.Equal(t, 0, n, "a just-decided card must never be reddened")
+	assert.Empty(t, posted)
+}

@@ -35,6 +35,14 @@ const (
 	// triage concluded no fix is warranted (not-a-bug or undetermined). It
 	// neither reds the card, chains a review, nor offers a deploy (ticket 405).
 	BoardResolved BoardState = "resolved"
+	// BoardQueued marks a stage that a recorded decision ([human:option-chosen])
+	// has (re)queued but whose relaunched agent has not yet posted its started
+	// marker — either the fresh agent is spinning up, or the launch was deferred
+	// to a healthy daemon (SC-1320). A non-failing in-progress state: it never
+	// reds the card and is superseded the moment the real started marker lands
+	// (latest-wins). [human:option-chosen] is not a classified marker, so this
+	// state is synthesized in DeriveBoardCard, not mapped from a marker.
+	BoardQueued BoardState = "queued"
 )
 
 // Board marker headers. These mirror the existing review-handoff headers in

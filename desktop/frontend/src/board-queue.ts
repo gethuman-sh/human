@@ -125,6 +125,14 @@ export const RUNNING_LABELS: Record<string, string> = {
   done: "deploying…",
 };
 
+// The verb per chosen stage for a card a recorded decision has (re)queued but
+// whose fresh agent has not yet posted its started marker (SC-1320).
+export const QUEUED_LABELS: Record<string, string> = {
+  planning: "replanning",
+  implementation: "rebuild",
+  verification: "re-review",
+};
+
 // badgeInfo classifies a card's live state into a badge descriptor, or null
 // when the card rests and needs none — its queue position IS the statement of
 // completion. A review that found problems is a WARNING, not a stage failure:
@@ -135,6 +143,19 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
       cls: "running",
       text: RUNNING_LABELS[card.stage] ?? "working…",
       title: "Agent running",
+      spinner: true,
+    };
+  }
+  // A recorded decision has (re)queued the chosen stage but the relaunched
+  // agent has not posted its started marker yet — or the launch was deferred to
+  // a healthy daemon. An in-progress, non-failing signal: never red, never a
+  // blank card, so the user always sees the choice re-queued the work (SC-1320).
+  if (card.state === "queued") {
+    const verb = QUEUED_LABELS[card.stage] ?? "work";
+    return {
+      cls: "queued",
+      text: `decision recorded — ${verb} picked up`,
+      title: "A direction was chosen — a fresh agent will pick up the work",
       spinner: true,
     };
   }

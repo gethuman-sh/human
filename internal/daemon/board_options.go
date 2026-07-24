@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -101,6 +102,78 @@ func openOptionsBlock(comments []tracker.Comment) (tracker.Comment, bool) {
 		}
 	}
 	return latest, true
+}
+
+// optionChosenQueued reports the stage a recorded decision has (re)queued, when
+// the newest board-relevant signal is an [human:option-chosen] comment with no
+// later started/terminal marker. It returns the chosen stage (parsed from the
+// [human:options] block the decision consumed) and the choice comment, so
+// DeriveBoardCard can synthesize a BoardQueued state for the window before the
+// relaunch's started marker lands — or, when the launch is deferred to a healthy
+// daemon, indefinitely (SC-1320). Any classified marker strictly newer than the
+// choice supersedes it (latest-wins).
+func optionChosenQueued(comments []tracker.Comment) (BoardStage, tracker.Comment, bool) {
+	chosen, ok := latestOptionChosen(comments)
+	if !ok {
+		return "", tracker.Comment{}, false
+	}
+	if hasLaterMarker(comments, chosen.Created) {
+		return "", tracker.Comment{}, false
+	}
+	block, ok := latestOptionsBlockAtOrBefore(comments, chosen.Created)
+	if !ok {
+		return "", tracker.Comment{}, false
+	}
+	stage, _, opts := parseOptionsBlock(block.Body)
+	if len(opts) == 0 {
+		return "", tracker.Comment{}, false
+	}
+	return stage, chosen, true
+}
+
+// latestOptionChosen returns the newest [human:option-chosen] comment.
+func latestOptionChosen(comments []tracker.Comment) (tracker.Comment, bool) {
+	var chosen tracker.Comment
+	var have bool
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), OptionChosenHeader) &&
+			(!have || c.Created.After(chosen.Created)) {
+			chosen, have = c, true
+		}
+	}
+	return chosen, have
+}
+
+// hasLaterMarker reports whether any classified board marker lands strictly
+// after since — used to detect a started/terminal marker that supersedes a
+// recorded decision (latest-wins).
+func hasLaterMarker(comments []tracker.Comment, since time.Time) bool {
+	for _, c := range comments {
+		if !c.Created.After(since) {
+			continue
+		}
+		if _, _, ok := ClassifyMarker(c.Body); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// latestOptionsBlockAtOrBefore returns the newest [human:options] block posted
+// at or before until — the block a decision at that time would have consumed.
+func latestOptionsBlockAtOrBefore(comments []tracker.Comment, until time.Time) (tracker.Comment, bool) {
+	var block tracker.Comment
+	var have bool
+	for _, c := range comments {
+		if c.Created.After(until) {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(c.Body), OptionsHeader) &&
+			(!have || c.Created.After(block.Created)) {
+			block, have = c, true
+		}
+	}
+	return block, have
 }
 
 // BoardOptionRequest is the wire request for choosing one option from a
