@@ -175,6 +175,7 @@ func TestBuildStatsOverview_tokenScanCachedWithinTTL(t *testing.T) {
 		WindowFresh:     4200,
 		WindowCacheRead: 1300,
 		PerHour:         []claude.TokenHourBucket{{Bucket: "2026-03-20 11:00", Fresh: 4200, CacheRead: 1300}},
+		ByModel:         []claude.ModelTokens{{Model: "opus 4.8", Fresh: 300, CacheRead: 30}},
 	}
 	srv := &Server{
 		Logger:          zerolog.Nop(),
@@ -196,6 +197,7 @@ func TestBuildStatsOverview_tokenScanCachedWithinTTL(t *testing.T) {
 		assert.Equal(t, 4200, ov.Tokens.Fresh)
 		assert.Equal(t, 1300, ov.Tokens.CacheRead)
 		assert.Equal(t, scan.PerHour, ov.TokensPerHour)
+		assert.Equal(t, scan.ByModel, ov.TokensByModel)
 	}
 }
 
