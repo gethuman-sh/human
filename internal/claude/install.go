@@ -40,6 +40,18 @@ var reviewSkillContent []byte
 //go:embed embed/human-reviewer-agent.md
 var reviewerAgentContent []byte
 
+//go:embed embed/human-pr-reviewer-agent.md
+var prReviewerAgentContent []byte
+
+//go:embed embed/human-pr-fixer-agent.md
+var prFixerAgentContent []byte
+
+//go:embed embed/human-pr-review-skill.md
+var prReviewSkillContent []byte
+
+//go:embed embed/human-pr-fix-skill.md
+var prFixSkillContent []byte
+
 //go:embed embed/human-done-agent.md
 var doneAgentContent []byte
 
@@ -233,6 +245,10 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: bugAnalyzerAgentContent, relPath: filepath.Join("agents", "human-bug-analyzer.md")},
 		{content: reviewSkillContent, relPath: filepath.Join("skills", "human-review", "SKILL.md")},
 		{content: reviewerAgentContent, relPath: filepath.Join("agents", "human-reviewer.md")},
+		{content: prReviewerAgentContent, relPath: filepath.Join("agents", "human-pr-reviewer.md")},
+		{content: prFixerAgentContent, relPath: filepath.Join("agents", "human-pr-fixer.md")},
+		{content: prReviewSkillContent, relPath: filepath.Join("skills", "human-pr-review", "SKILL.md")},
+		{content: prFixSkillContent, relPath: filepath.Join("skills", "human-pr-fix", "SKILL.md")},
 		{content: doneAgentContent, relPath: filepath.Join("agents", "human-done.md")},
 		{content: executeSkillContent, relPath: filepath.Join("skills", "human-execute", "SKILL.md")},
 		{content: executorAgentContent, relPath: filepath.Join("agents", "human-executor.md")},

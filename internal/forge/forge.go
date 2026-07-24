@@ -24,6 +24,7 @@ type PullRequest struct {
 	Head  string // source branch holding the changes
 	Title string
 	Body  string
+	Draft bool // open the PR in the forge's draft (unmergeable) state
 
 	Number int    // populated on return
 	URL    string // populated on return
@@ -125,6 +126,16 @@ type MergedReader interface {
 // source branch after merging.
 type BranchDeleter interface {
 	DeleteBranch(ctx context.Context, repo, branch string) error
+}
+
+// ReadyForReviewMarker converts a draft pull request to ready-for-review. It is
+// the signal that the pre-merge machine review→fix loop has converged: the PR
+// was opened draft (unmergeable) and stays that way until the review approves,
+// so a half-reviewed change cannot be merged even if the daemon's own gate
+// failed. Separate capability because a forge may open PRs without supporting
+// the draft lifecycle — callers type-assert for it.
+type ReadyForReviewMarker interface {
+	MarkReadyForReview(ctx context.Context, repo string, number int) error
 }
 
 // Forge aggregates the code-forge operations every provider must support. The

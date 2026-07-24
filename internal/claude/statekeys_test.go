@@ -30,8 +30,10 @@ var writeOnlyStateKeys = map[string]string{
 	// stageExitClass), not by another prompt, so a prompt-only scan cannot see
 	// the reader. The stage-contract test covers the ones a prompt DOES read
 	// back; these are the stages whose only reader is the board.
-	"stage.planning": "read by the daemon's stage-retry policy, not by a prompt",
-	"stage.opinion":  "read by the orchestrator prompt AND the daemon; the read is in human-autofix-skill.md",
+	"stage.planning":  "read by the daemon's stage-retry policy, not by a prompt",
+	"stage.opinion":   "read by the orchestrator prompt AND the daemon; the read is in human-autofix-skill.md",
+	"stage.pr-review": "read by the daemon's PR review→fix deploy loop (SC-1387), not by a prompt",
+	"stage.pr-fix":    "read by the daemon's PR review→fix deploy loop (SC-1387), not by a prompt",
 }
 
 // collectStateKeys returns the concrete keys prompts write and read.

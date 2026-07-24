@@ -13,6 +13,53 @@ func cmt(body string, t time.Time) tracker.Comment {
 	return tracker.Comment{Body: body, Created: t}
 }
 
+// The PR review→fix loop lives inside the done (deploy) stage: its markers must
+// derive the done stage — leaving the verification→done transition adjacency
+// untouched — while still exposing the loop's running/failed state (SC-1387).
+func TestDeriveBoardCard_prReviewLoop(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+
+	t.Run("pr-review-started is done stage running", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{cmt(PRReviewStartedHeader, t0)}, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardDoneStage, card.Stage)
+		assert.Equal(t, BoardRunning, card.State)
+	})
+
+	t.Run("pr-fix-started is done stage running", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{cmt(PRFixStartedHeader, t0)}, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardDoneStage, card.Stage)
+		assert.Equal(t, BoardRunning, card.State)
+	})
+
+	t.Run("pr-review-failed reds the card with a reason", func(t *testing.T) {
+		card := DeriveBoardCard(
+			[]tracker.Comment{cmt(PRReviewFailedHeader+"\nreview budget exhausted — needs a human", t0)},
+			tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardDoneStage, card.Stage)
+		assert.Equal(t, BoardFailed, card.State)
+		assert.NotEmpty(t, card.Error)
+	})
+
+	t.Run("pr-review supersedes a passed verification (furthest stage wins)", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(ReviewCompleteHeader+"\nverdict: pass", t0),
+			cmt(PRReviewStartedHeader, t1),
+		}, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardDoneStage, card.Stage)
+		assert.Equal(t, BoardRunning, card.State)
+	})
+
+	t.Run("a later deployed marker retires the loop state (latest wins)", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(PRReviewStartedHeader, t0),
+			cmt(DeployedHeader, t1),
+		}, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardDoneStage, card.Stage)
+		assert.Equal(t, BoardDone, card.State)
+	})
+}
+
 func TestDeriveBoardCard(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	t1 := time.Unix(2000, 0)

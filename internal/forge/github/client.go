@@ -15,12 +15,13 @@ import (
 )
 
 var (
-	_ forge.Forge             = (*Client)(nil)
-	_ forge.ChecksReader      = (*Client)(nil)
-	_ forge.Merger            = (*Client)(nil)
-	_ forge.MergedReader      = (*Client)(nil)
-	_ forge.BranchDeleter     = (*Client)(nil)
-	_ forge.PullRequestFinder = (*Client)(nil)
+	_ forge.Forge                = (*Client)(nil)
+	_ forge.ChecksReader         = (*Client)(nil)
+	_ forge.Merger               = (*Client)(nil)
+	_ forge.MergedReader         = (*Client)(nil)
+	_ forge.BranchDeleter        = (*Client)(nil)
+	_ forge.PullRequestFinder    = (*Client)(nil)
+	_ forge.ReadyForReviewMarker = (*Client)(nil)
 )
 
 // Client is a GitHub REST API client scoped to code-forge (pull request)
@@ -59,6 +60,7 @@ func (c *Client) CreatePullRequest(ctx context.Context, pr *forge.PullRequest) (
 		Head:  pr.Head,
 		Base:  pr.Base,
 		Body:  pr.Body,
+		Draft: pr.Draft,
 	}
 
 	body, err := json.Marshal(payload)
@@ -83,9 +85,67 @@ func (c *Client) CreatePullRequest(ctx context.Context, pr *forge.PullRequest) (
 		Head:   pr.Head,
 		Title:  result.Title,
 		Body:   pr.Body,
+		Draft:  pr.Draft,
 		Number: result.Number,
 		URL:    result.HTMLURL,
 	}, nil
+}
+
+// MarkReadyForReview implements forge.ReadyForReviewMarker. Un-drafting a PR is
+// a GraphQL-only mutation on GitHub — the REST pulls endpoint cannot toggle the
+// draft flag — so it resolves the PR's GraphQL node id and runs
+// markPullRequestReadyForReview. GitHub returns HTTP 200 with an `errors` array
+// on a GraphQL-level failure, so the body is inspected rather than the status.
+func (c *Client) MarkReadyForReview(ctx context.Context, repoName string, number int) error {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return err
+	}
+	nodeID, err := c.pullNodeID(ctx, owner, repo, number)
+	if err != nil {
+		return err
+	}
+	payload := graphQLRequest{
+		Query:     "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}",
+		Variables: map[string]any{"id": nodeID},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshalling ready-for-review mutation", "repo", repoName, "number", number)
+	}
+	resp, err := c.api.Do(ctx, http.MethodPost, "/graphql", "", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	var result graphQLResponse
+	if err := apiclient.DecodeJSON(resp, &result, "repo", repoName, "number", number); err != nil {
+		return err
+	}
+	if len(result.Errors) > 0 {
+		// The reason goes into the message itself — the deploy pipeline surfaces
+		// err.Error() on the board card, where structured details are invisible.
+		return errors.WithDetails("marking pull request ready for review failed: "+result.Errors[0].Message,
+			"repo", repoName, "number", number)
+	}
+	return nil
+}
+
+// pullNodeID fetches a pull request's GraphQL global id, needed by mutations the
+// REST API cannot express.
+func (c *Client) pullNodeID(ctx context.Context, owner, repo string, number int) (string, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	resp, err := c.api.Do(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return "", err
+	}
+	var pull pullGetResponse
+	if err := apiclient.DecodeJSON(resp, &pull, "number", number); err != nil {
+		return "", err
+	}
+	if pull.NodeID == "" {
+		return "", errors.WithDetails("pull request has no node id", "number", number)
+	}
+	return pull.NodeID, nil
 }
 
 // FindOpenPullRequest implements forge.PullRequestFinder. GitHub's list-pulls

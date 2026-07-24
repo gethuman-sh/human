@@ -63,6 +63,86 @@ func TestCreatePullRequest_invalidRepo(t *testing.T) {
 	assert.Contains(t, err.Error(), "owner/repo")
 }
 
+func TestCreatePullRequest_draft(t *testing.T) {
+	var gotBody pullCreateRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		w.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprint(w, `{"number":7,"title":"WIP","html_url":"https://github.com/octocat/hello-world/pull/7"}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	pr, err := client.CreatePullRequest(context.Background(), &forge.PullRequest{
+		Repo:  "octocat/hello-world",
+		Base:  "main",
+		Head:  "autofix/1387",
+		Title: "WIP",
+		Draft: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, gotBody.Draft, "create payload must set draft:true")
+	assert.True(t, pr.Draft, "returned PR echoes the draft flag")
+}
+
+func TestMarkReadyForReview_happy(t *testing.T) {
+	var graphqlBody graphQLRequest
+	var sawGet bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/octocat/hello-world/pulls/42":
+			sawGet = true
+			_, _ = fmt.Fprint(w, `{"node_id":"PR_node_abc","head":{"sha":"deadbeef"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/graphql":
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &graphqlBody))
+			_, _ = fmt.Fprint(w, `{"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":false}}}}`)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	err := client.MarkReadyForReview(context.Background(), "octocat/hello-world", 42)
+	require.NoError(t, err)
+	assert.True(t, sawGet, "must resolve the PR node id via REST first")
+	assert.Contains(t, graphqlBody.Query, "markPullRequestReadyForReview")
+	assert.Equal(t, "PR_node_abc", graphqlBody.Variables["id"])
+}
+
+func TestMarkReadyForReview_graphQLError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = fmt.Fprint(w, `{"node_id":"PR_1"}`)
+			return
+		}
+		// GitHub returns HTTP 200 with an errors array on a GraphQL-level failure.
+		_, _ = fmt.Fprint(w, `{"errors":[{"message":"Pull request is not a draft"}]}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	err := client.MarkReadyForReview(context.Background(), "octocat/hello-world", 9)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a draft")
+}
+
+func TestMarkReadyForReview_noNodeID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"head":{"sha":"x"}}`) // response carries no node_id
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	err := client.MarkReadyForReview(context.Background(), "octocat/hello-world", 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "node id")
+}
+
 func TestFindOpenPullRequest_found(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
