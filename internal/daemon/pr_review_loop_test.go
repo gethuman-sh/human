@@ -1,6 +1,11 @@
 package daemon
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/gethuman-sh/human/internal/tracker"
+)
 
 func TestNextPRLoopAction(t *testing.T) {
 	cases := []struct {
@@ -51,6 +56,49 @@ func TestNextPRLoopAction(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("NextPRLoopAction(%v, %q, round=%d, budget=%d) = %d, want %d",
 					tc.stage, tc.outcome, tc.round, tc.budget, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEvaluatePRLoop(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	t2 := time.Unix(3000, 0)
+
+	rev := func(at time.Time) tracker.Comment { return cmt(PRReviewStartedHeader, at) }
+	fix := func(at time.Time) tracker.Comment { return cmt(PRFixStartedHeader, at) }
+
+	cases := []struct {
+		name     string
+		comments []tracker.Comment
+		verdict  string
+		fixExit  string
+		want     PRLoopAction
+	}{
+		{"no loop markers reviews first", nil, "", "", PRActionReview},
+		{"review approved merges", []tracker.Comment{rev(t0)}, PRVerdictApproved, "", PRActionMerge},
+		{"review changes below budget fixes", []tracker.Comment{rev(t0)}, PRVerdictChanges, "", PRActionFix},
+		{"review changes at budget escalates",
+			[]tracker.Comment{rev(t0), rev(t1), rev(t2)}, PRVerdictChanges, "", PRActionEscalate},
+		{"fix done re-reviews",
+			[]tracker.Comment{rev(t0), fix(t1)}, "", PRFixDone, PRActionReview},
+		{"fix needs-input escalates",
+			[]tracker.Comment{rev(t0), fix(t1)}, "", ExitNeedsInput, PRActionEscalate},
+		// The newest loop marker names the step that just finished, so a fix after
+		// a review is evaluated as a fix (its exit), not the stale review verdict.
+		{"latest marker decides the step",
+			[]tracker.Comment{rev(t1), fix(t2)}, PRVerdictApproved, PRFixDone, PRActionReview},
+		// Deploy-stage markers share the done stage but never move the loop.
+		{"deploy markers are ignored",
+			[]tracker.Comment{cmt(DeployStartedHeader, t0), rev(t1)}, PRVerdictApproved, "", PRActionMerge},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := EvaluatePRLoop(tc.comments, tc.verdict, tc.fixExit)
+			if got != tc.want {
+				t.Fatalf("EvaluatePRLoop() = %d, want %d", got, tc.want)
 			}
 		})
 	}

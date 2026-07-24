@@ -1,5 +1,12 @@
 package daemon
 
+import (
+	"strings"
+	"time"
+
+	"github.com/gethuman-sh/human/internal/tracker"
+)
+
 // The pre-merge PR review→fix loop. Once a deploy opens the PR, the daemon runs
 // the human-pr-reviewer and human-pr-fixer agents in alternation against it: the
 // reviewer posts its findings as PR comments and records a verdict, the fixer
@@ -88,4 +95,64 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int) PRLo
 	default:
 		return PRActionEscalate
 	}
+}
+
+// latestPRLoopStage reports which loop step most recently started — and so just
+// finished, when its agent's Stop fires the evaluation. It scans the comment
+// thread for the newest pr-review-started / pr-fix-started marker; PRStageNone
+// means the loop has not run yet (the draft PR is freshly opened). Deploy-stage
+// markers that share the done stage are ignored: only the loop's own markers
+// move the loop.
+func latestPRLoopStage(comments []tracker.Comment) PRLoopStage {
+	stage := PRStageNone
+	var latest time.Time
+	found := false
+	for _, c := range comments {
+		trimmed := strings.TrimSpace(c.Body)
+		var s PRLoopStage
+		switch {
+		case strings.HasPrefix(trimmed, PRReviewStartedHeader):
+			s = PRStageReview
+		case strings.HasPrefix(trimmed, PRFixStartedHeader):
+			s = PRStageFix
+		default:
+			continue
+		}
+		if !found || c.Created.After(latest) {
+			latest, stage, found = c.Created, s, true
+		}
+	}
+	return stage
+}
+
+// prReviewRounds counts completed review rounds — one per pr-review-started
+// marker — the value the decider bounds against DefaultPRReviewRounds.
+func prReviewRounds(comments []tracker.Comment) int {
+	n := 0
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), PRReviewStartedHeader) {
+			n++
+		}
+	}
+	return n
+}
+
+// EvaluatePRLoop bridges the recorded board state to the decider: it reads which
+// loop step last ran (from the markers) and how many review rounds have
+// completed, pairs the step with the outcome that step recorded — the reviewer's
+// verdict or the fixer's exit, which live in the state store, not the comment
+// thread, so the caller supplies them — and returns the next action. Keeping the
+// bridge pure lets the marker/state → action mapping be tested without a daemon;
+// the caller executes the action (launch an agent, mark-ready + merge, or red
+// the card).
+func EvaluatePRLoop(comments []tracker.Comment, reviewVerdict, fixExit string) PRLoopAction {
+	stage := latestPRLoopStage(comments)
+	var outcome string
+	switch stage {
+	case PRStageReview:
+		outcome = reviewVerdict
+	case PRStageFix:
+		outcome = fixExit
+	}
+	return NextPRLoopAction(stage, outcome, prReviewRounds(comments), DefaultPRReviewRounds)
 }
