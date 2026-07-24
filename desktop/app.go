@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/board"
+	"github.com/gethuman-sh/human/internal/boardcache"
 	"github.com/gethuman-sh/human/internal/boardprefs"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/ideaspace"
@@ -58,6 +60,10 @@ type App struct {
 	// prefs holds the board view preferences (per-column card order, hidden
 	// tickets) — the same local-only rationale as ideas.
 	prefs *boardprefs.Store
+	// cache holds the last-known full board snapshot, keyed by project, so a
+	// cold open paints instantly from it before the live fetch lands
+	// (stale-while-revalidate). Local UI acceleration only — never tracker state.
+	cache *boardcache.Store
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
@@ -67,6 +73,7 @@ func NewApp() *App {
 		ideas:   ideaspace.NewStore(ideaspace.DefaultPath()),
 		recents: recentprojects.NewStore(recentprojects.DefaultPath()),
 		prefs:   boardprefs.NewStore(boardprefs.DefaultPath()),
+		cache:   boardcache.NewStore(boardcache.DefaultPath()),
 	}
 }
 
@@ -163,6 +170,12 @@ func (a *App) Cards() (BoardData, error) {
 		board.PruneTarget{Store: a.prefs, Keep: boardPrefsKeep(data)},
 		board.PruneTarget{Store: a.ideas, Keep: ideaSpaceKeep(data)},
 	)
+	// Persist the freshly derived board as the instant-paint snapshot for the
+	// next cold open. Best-effort: a cache-write failure must never fail a live
+	// fetch, exactly as a lost recent-projects bump does not.
+	if raw, mErr := json.Marshal(data); mErr == nil {
+		_ = a.cache.Save(projectKeyOf(info), raw)
+	}
 	return data, nil
 }
 
@@ -281,6 +294,45 @@ func (a *App) CardsQuick() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	return boardFromResults(results, true, a.ideas.Assignments(), cardMockups(), a.prefs.Snapshot()), nil
+}
+
+// projectKeyOf identifies the project a board snapshot belongs to. v1 serves one
+// project, so the first registered project's directory is the key; empty when a
+// daemon predates the Projects field, which degrades to a single global cache.
+func projectKeyOf(info daemon.DaemonInfo) string {
+	if len(info.Projects) > 0 {
+		return info.Projects[0].Dir
+	}
+	return ""
+}
+
+// CachedBoard is the instant-paint payload: the last-known board plus whether a
+// snapshot for the active project actually existed. Hit=false tells the frontend
+// to fall back to its spinner + quick-titles load.
+type CachedBoard struct {
+	Hit  bool      `json:"hit"`
+	Data BoardData `json:"data"`
+}
+
+// CachedCards returns the last-known board snapshot for the active project from
+// the local cache file — a fast, network-free read (daemon.ReadInfo reads
+// ~/.human/daemon.json, no tracker call), so the board paints instantly on a cold
+// open. A missing daemon info file, a missing/other-project snapshot, or a corrupt
+// cache all return Hit=false, and the frontend then shows its normal load.
+func (a *App) CachedCards() CachedBoard {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return CachedBoard{}
+	}
+	raw, ok := a.cache.Load(projectKeyOf(info))
+	if !ok {
+		return CachedBoard{}
+	}
+	var data BoardData
+	if json.Unmarshal(raw, &data) != nil {
+		return CachedBoard{}
+	}
+	return CachedBoard{Hit: true, Data: data}
 }
 
 // boardFromResults flattens the single PM-role result into the frontend card
