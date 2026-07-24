@@ -36,26 +36,31 @@ func readEmbed(t *testing.T, name string) string {
 	return string(body)
 }
 
-// stageWriters maps a stage name to the prompt that records it.
-// keyAlias maps a prompt's local placeholder to the ticket it denotes. The
-// autofix pipeline's PM ticket is the bug ticket, so a stage that records under
-// <PM_KEY> is read back as <BUG_KEY> and vice versa; anything else naming a
-// different key is a real mismatch and breaks the handoff.
+// keyAlias maps a prompt's local placeholder to the ticket it denotes. A
+// pipeline's PM ticket is its own kind of ticket — the bug ticket in autofix,
+// the security ticket in security-fix — so a stage recorded under <PM_KEY>,
+// <BUG_KEY> or <SEC_KEY> is the same PM-ticket record read back; anything else
+// naming a different key is a real mismatch and breaks the handoff.
 func keyAlias(key string) string {
 	switch key {
-	case "<PM_KEY>", "<BUG_KEY>":
+	case "<PM_KEY>", "<BUG_KEY>", "<SEC_KEY>":
 		return "<PM/BUG_KEY>"
 	default:
 		return key
 	}
 }
 
-func stageWriters(t *testing.T) map[string]string {
+// stageWriters maps a stage name to EVERY agent prompt that records it. Two
+// pipelines (human-autofix and human-security-fix) now share the stage names
+// and each has its own triage/verify writer, so a stage can have more than one
+// writer; a reader is satisfied by ANY writer that records its field under a
+// matching key.
+func stageWriters(t *testing.T) map[string][]string {
 	t.Helper()
 	entries, err := os.ReadDir("embed")
 	require.NoError(t, err)
 
-	writers := map[string]string{}
+	writers := map[string][]string{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
@@ -68,34 +73,44 @@ func stageWriters(t *testing.T) map[string]string {
 			if stage == "" {
 				continue
 			}
-			writers[stage] = body
+			writers[stage] = append(writers[stage], body)
 		}
 	}
 	return writers
 }
 
 func TestStageContract_EveryFieldReadIsAlsoWritten(t *testing.T) {
-	skill := readEmbed(t, "human-autofix-skill.md")
+	// Both orchestrators share the stage contract; each reads its own pipeline's
+	// records, so validate both against the aggregated writers.
+	skills := []string{"human-autofix-skill.md", "human-security-fix-skill.md"}
 	writers := stageWriters(t)
 
-	reads := stageReadPattern.FindAllStringSubmatch(skill, -1)
-	require.NotEmpty(t, reads, "the orchestrator should read stage records as data")
+	for _, skillName := range skills {
+		skill := readEmbed(t, skillName)
+		reads := stageReadPattern.FindAllStringSubmatch(skill, -1)
+		require.NotEmpty(t, reads, "%s should read stage records as data", skillName)
 
-	for _, read := range reads {
-		readKey, stage, field := read[1], read[2], read[3]
+		for _, read := range reads {
+			readKey, stage, field := read[1], read[2], read[3]
 
-		writer, ok := writers[stage]
-		require.True(t, ok, "the skill reads stage.%s but no agent prompt records it", stage)
-		require.Contains(t, writer, `"`+field+`"`,
-			"the skill reads stage.%s --field %s, but the agent that writes stage.%s never records %q",
-			stage, field, stage, field)
+			bodies, ok := writers[stage]
+			require.True(t, ok, "%s reads stage.%s but no agent prompt records it", skillName, stage)
 
-		// A record written under a different ticket key is invisible to the
-		// reader — latent while the keys happen to be equal, broken the first
-		// time they are not (split topology).
-		writeKey := stageWriteKey(writer, stage)
-		require.Equal(t, keyAlias(readKey), keyAlias(writeKey),
-			"stage.%s is read under %s but recorded under %s", stage, readKey, writeKey)
+			// A reader is satisfied when SOME writer records the field under a
+			// key that aliases to the reader's key — a record written under a
+			// different ticket key is invisible to the reader (latent while the
+			// keys happen to be equal, broken the first time they are not).
+			satisfied := false
+			for _, body := range bodies {
+				if strings.Contains(body, `"`+field+`"`) && keyAlias(stageWriteKey(body, stage)) == keyAlias(readKey) {
+					satisfied = true
+					break
+				}
+			}
+			require.True(t, satisfied,
+				"%s reads stage.%s --field %s under %s, but no agent that writes stage.%s records %q under a matching key",
+				skillName, stage, field, readKey, stage, field)
+		}
 	}
 }
 
@@ -188,22 +203,49 @@ func TestPrompts_PostOnlyKnownMarkerTypes(t *testing.T) {
 // The verdict vocabularies are the routing keys: the skill branches on these
 // exact words, so the agent that produces them must offer the same set.
 func TestStageContract_VerdictVocabulariesMatch(t *testing.T) {
-	cases := []struct {
-		agent  string
-		values []string
+	pipelines := []struct {
+		skill string
+		cases []struct {
+			agent  string
+			values []string
+		}
 	}{
-		{"human-bug-triage-agent.md", []string{"confirmed", "not-a-bug", "undetermined"}},
-		{"human-verdict-skeptic-agent.md", []string{"upheld", "refuted"}},
-		{"human-bug-verify-agent.md", []string{"DONE", "NOT DONE"}},
-		{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "unreviewable"}},
+		{
+			skill: "human-autofix-skill.md",
+			cases: []struct {
+				agent  string
+				values []string
+			}{
+				{"human-bug-triage-agent.md", []string{"confirmed", "not-a-bug", "undetermined"}},
+				{"human-verdict-skeptic-agent.md", []string{"upheld", "refuted"}},
+				{"human-bug-verify-agent.md", []string{"DONE", "NOT DONE"}},
+				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "unreviewable"}},
+			},
+		},
+		{
+			// The security pipeline shares the reviewer and skeptic and swaps in
+			// its own triage/verify, but branches on the identical vocabularies.
+			skill: "human-security-fix-skill.md",
+			cases: []struct {
+				agent  string
+				values []string
+			}{
+				{"human-security-triage-agent.md", []string{"confirmed", "not-a-bug", "undetermined"}},
+				{"human-verdict-skeptic-agent.md", []string{"upheld", "refuted"}},
+				{"human-security-verify-agent.md", []string{"DONE", "NOT DONE"}},
+				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "unreviewable"}},
+			},
+		},
 	}
-	skill := readEmbed(t, "human-autofix-skill.md")
 
-	for _, c := range cases {
-		body := readEmbed(t, c.agent)
-		for _, v := range c.values {
-			require.Contains(t, body, v, "%s must offer the verdict %q the skill branches on", c.agent, v)
-			require.Contains(t, skill, v, "the skill must handle the verdict %q that %s can produce", v, c.agent)
+	for _, p := range pipelines {
+		skill := readEmbed(t, p.skill)
+		for _, c := range p.cases {
+			body := readEmbed(t, c.agent)
+			for _, v := range c.values {
+				require.Contains(t, body, v, "%s must offer the verdict %q %s branches on", c.agent, v, p.skill)
+				require.Contains(t, skill, v, "%s must handle the verdict %q that %s can produce", p.skill, v, c.agent)
+			}
 		}
 	}
 }

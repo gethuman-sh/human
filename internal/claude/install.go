@@ -166,6 +166,15 @@ var bugFixerAgentContent []byte
 //go:embed embed/human-bug-verify-agent.md
 var bugVerifyAgentContent []byte
 
+//go:embed embed/human-security-fix-skill.md
+var securityFixSkillContent []byte
+
+//go:embed embed/human-security-triage-agent.md
+var humanSecurityTriageAgentContent []byte
+
+//go:embed embed/human-security-verify-agent.md
+var humanSecurityVerifyAgentContent []byte
+
 //go:embed embed/codenav-skill.md
 var codenavSkillContent []byte
 
@@ -275,6 +284,9 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: verdictSkepticAgentContent, relPath: filepath.Join("agents", "human-verdict-skeptic.md")},
 		{content: bugFixerAgentContent, relPath: filepath.Join("agents", "human-bug-fixer.md")},
 		{content: bugVerifyAgentContent, relPath: filepath.Join("agents", "human-bug-verify.md")},
+		{content: securityFixSkillContent, relPath: filepath.Join("skills", "human-security-fix", "SKILL.md")},
+		{content: humanSecurityTriageAgentContent, relPath: filepath.Join("agents", "human-security-triage.md")},
+		{content: humanSecurityVerifyAgentContent, relPath: filepath.Join("agents", "human-security-verify.md")},
 		{content: codenavSkillContent, relPath: filepath.Join("skills", "codenav", "SKILL.md")},
 		{content: featuresSkillContent, relPath: filepath.Join("skills", "human-features", "SKILL.md")},
 		{content: featuresReconAgentContent, relPath: filepath.Join("agents", "features-recon.md")},
