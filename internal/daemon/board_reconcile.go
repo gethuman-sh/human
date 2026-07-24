@@ -172,11 +172,14 @@ func stageStalled(progress AgentProgressProbe, agentName string, now time.Time) 
 // hook, so the card sits at "being fixed" forever (1136). This is the durable
 // safety net — the bug-fix analog of the no-dead-end-states work (SC-355/591).
 //
-// A card is reddened only when ALL hold: its derived state is BoardRunning; its
-// stage has a *-failed marker (Planning/Implementation/Verification/Done); it
-// has sat past StuckRunningGrace; and no board agent for (key, stage) is alive
-// on this machine. The grace plus the liveness probe spare a genuinely slow but
-// live run — only a card with no owner is failed. Nil deps or a lister error do
+// A card is reddened only when ALL hold: its derived state is BoardRunning; it
+// carries no open [human:options] block for its OWN stage (that is a
+// deliberate human pause, not a hang — the durable twin of the live path's
+// stagePausedOnOptions guard); its stage has a *-failed marker
+// (Planning/Implementation/Verification/Done); it has sat past
+// StuckRunningGrace; and no board agent for (key, stage) is alive on this
+// machine. The grace plus the liveness probe spare a genuinely slow but live
+// run — only a card with no owner is failed. Nil deps or a lister error do
 // nothing: the pass never reds a card it cannot prove is dead. Idempotent —
 // once the *-failed marker lands the card derives BoardFailed, so the next tick
 // skips it and never double-posts. Reuses DeriveBoardCard verbatim so detection
@@ -201,6 +204,15 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 	for _, card := range cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
 		if derived.State != BoardRunning {
+			continue
+		}
+		// An open [human:options] block for the card's OWN running stage is a
+		// deliberate human pause, not a hang — the live failure path already
+		// treats it as a clean pause (stagePausedOnOptions). [human:options] is
+		// not a state marker, so the card stays BoardRunning; without this twin
+		// guard the durable reconcile pass reddens the pause and loops
+		// re-planning forever (1290, the planning twin of SC-751).
+		if cardPausedOnOwnStage(derived) {
 			continue
 		}
 		header := failedHeaderFor(derived.Stage)
@@ -251,6 +263,14 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 		retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger)
 	}
 	return reddened
+}
+
+// cardPausedOnOwnStage reports whether a card carries an open [human:options]
+// block for its OWN running stage — the durable reconcile pass's twin of the
+// live path's stagePausedOnOptions guard, expressed over the already-derived
+// board card rather than raw comments (1290).
+func cardPausedOnOwnStage(derived BoardCard) bool {
+	return len(derived.Options) > 0 && derived.OptionsStage == derived.Stage
 }
 
 // stuckRunningReason is the one-line badge text for a card the stuck-running
