@@ -10,7 +10,7 @@
 // call unconditionally on the hot paths below.
 import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
 import { initPermissions } from "./permissions.js";
-import { bugsHeaderHTML } from "./board-findbugs.js";
+import { bugsHeaderHTML, securityHeaderHTML } from "./board-findbugs.js";
 import { initMockupsView, showMockups, setPendingMockupSlug, setChosenMockup, } from "./mockupsview.js";
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
@@ -217,7 +217,7 @@ function showCardMenu(card, x, y) {
     // again — the Fix column only accepts grid and rework drops, and a card
     // cannot be dropped onto the column it already sits in. Retry is therefore
     // a menu action. Relaunching runs an agent — same Docker gate as the drops.
-    if (card.bug && card.state === "failed") {
+    if ((card.bug || card.security) && card.state === "failed") {
         const retryItem = document.createElement("button");
         retryItem.type = "button";
         retryItem.className = "context-menu-item";
@@ -227,7 +227,7 @@ function showCardMenu(card, x, y) {
             retryItem.title = "Docker required";
         retryItem.addEventListener("click", () => {
             menu.remove();
-            void fixBug(card.key, card.title);
+            void (card.security ? fixSecurity : fixBug)(card.key, card.title);
         });
         menu.appendChild(retryItem);
     }
@@ -237,7 +237,7 @@ function showCardMenu(card, x, y) {
     // gate as the drops. from="backlog" reproduces the original launch semantics;
     // the daemon re-derives the real stage and ignores from except for ideas, so
     // the value is inert for validation.
-    if (!card.bug && card.stage === "planning" && card.state === "failed") {
+    if (!card.bug && !card.security && card.stage === "planning" && card.state === "failed") {
         const retryPlan = document.createElement("button");
         retryPlan.type = "button";
         retryPlan.className = "context-menu-item";
@@ -273,7 +273,7 @@ function showCardMenu(card, x, y) {
     // re-drop requires a failed REVIEW verdict and Retry fix is bug-pane-only
     // (SC-591). Mirrors Retry plan: relaunch runs an agent, same Docker gate;
     // from="planning" is inert for validation (the daemon re-derives the stage).
-    if (!card.bug && card.stage === "implementation" && card.state === "failed") {
+    if (!card.bug && !card.security && card.stage === "implementation" && card.state === "failed") {
         const retryBuild = document.createElement("button");
         retryBuild.type = "button";
         retryBuild.className = "context-menu-item";
@@ -292,7 +292,7 @@ function showCardMenu(card, x, y) {
     // gate (missing branch, unreachable commits) had no gesture to try again
     // (SC-695). Mirrors Retry build — relaunch runs an agent in place, same Docker
     // gate; the daemon re-derives the stage and re-binds the handoff.
-    if (!card.bug && isReviewRetryable(card)) {
+    if (!card.bug && !card.security && isReviewRetryable(card)) {
         const retryReview = document.createElement("button");
         retryReview.type = "button";
         retryReview.className = "context-menu-item";
@@ -326,7 +326,7 @@ function showCardMenu(card, x, y) {
     // Product backlog column, toggling create → creating → view as the local
     // mockup set for this ticket comes into existence. Bug tickets never get
     // one — a defect has no product surface to mock.
-    if (queueOf(card) === "product" && !card.bug) {
+    if (queueOf(card) === "product" && !card.bug && !card.security) {
         const mockItem = document.createElement("button");
         mockItem.type = "button";
         mockItem.className = "context-menu-item";
@@ -408,7 +408,7 @@ function renderColumn(queue) {
     col.dataset.stage = queue;
     // Bug tickets live in the Bugs pane, never in the workflow columns; hidden
     // tickets only render while revealed. The saved hand order sorts what's left.
-    const cards = current.cards.filter((c) => queueOf(c) === queue && !c.bug && cardVisible(c));
+    const cards = current.cards.filter((c) => queueOf(c) === queue && !c.bug && !c.security && cardVisible(c));
     sortByHandOrder(cards, current.columnOrder?.[queue]);
     const header = document.createElement("div");
     header.className = "column-header";
@@ -446,7 +446,7 @@ function renderIdeaSpace() {
     // (fancy tint, clear sweep) anchored to the space as a whole.
     space.className = "idea-space";
     space.dataset.stage = "ideas";
-    const ideas = current.cards.filter((c) => queueOf(c) === "ideas" && !c.bug && cardVisible(c));
+    const ideas = current.cards.filter((c) => queueOf(c) === "ideas" && !c.bug && !c.security && cardVisible(c));
     const grid = document.createElement("div");
     grid.className = "idea-space-grid";
     const subcols = [];
@@ -496,7 +496,7 @@ function renderIdeaSpace() {
 // a column — no card ever rests "in Deploy"; a shipped card leaves the board.
 function renderDeployControl(side) {
     const view = deployControlView(current.cards, side);
-    const className = side === "bugs" ? "bug-deploy" : "deploy-zone";
+    const className = side === "bugs" ? "bug-deploy" : side === "security" ? "security-deploy" : "deploy-zone";
     return buildDeployControl(view, { className, onClick: () => void deployReady(side) });
 }
 // --- Bugs pane ----------------------------------------------------------
@@ -561,49 +561,89 @@ function renderBugCard(card) {
     }
     return el;
 }
+const bugSection = {
+    match: (c) => !!c.bug,
+    side: "bugs",
+    gridStage: "bugs:grid",
+    fixStage: "bugs:fix",
+    gridColClass: "bug-grid-col",
+    fixColClass: "bug-fix-col",
+    headerHTML: (count) => bugsHeaderHTML(findbugsHunting, count),
+    wireHeader: (gridCol) => {
+        gridCol.querySelector(".add-card").addEventListener("click", () => showBugModal());
+        gridCol.querySelector(".findbugs-btn")?.addEventListener("click", () => void startFindbugs());
+    },
+    emptyText: "No open bugs",
+    pending: () => pendingBugs,
+    dropTarget: "fix",
+};
+const securitySection = {
+    match: (c) => !!c.security,
+    side: "security",
+    gridStage: "security:grid",
+    fixStage: "security:fix",
+    gridColClass: "security-grid-col",
+    fixColClass: "security-fix-col",
+    headerHTML: (count) => securityHeaderHTML(count),
+    wireHeader: (gridCol) => {
+        gridCol.querySelector(".add-card").addEventListener("click", () => showSecurityModal());
+    },
+    emptyText: "No open security issues",
+    pending: () => pendingSecurity,
+    dropTarget: "security-fix",
+};
+// renderBugs paints both halves of the Bugs & Security view: bugs on top,
+// security below. Every reconcile rebuilds both from the same card list.
 function renderBugs() {
     const host = document.getElementById("bugs");
     if (!host)
         return;
     const scrollByStage = captureColumnScroll(host);
     host.innerHTML = "";
-    const bugs = current.cards.filter((c) => c.bug && cardVisible(c));
-    const gridBugs = bugs.filter((c) => bugAreaOf(c) === "grid");
-    const fixBugs = bugs.filter((c) => bugAreaOf(c) !== "grid");
+    renderFixSection(host, bugSection);
+    renderFixSection(host, securitySection);
+    restoreColumnScroll(host, scrollByStage);
+}
+// renderFixSection appends one half's grid → Fix → Deploy trio to the host. The
+// Deploy side is derived from the section's own cards (deploySideOf), so it is
+// implied by the config rather than threaded separately.
+function renderFixSection(host, section) {
+    const cards = current.cards.filter((c) => section.match(c) && cardVisible(c));
+    const gridCards = cards.filter((c) => bugAreaOf(c) === "grid");
+    const fixCards = cards.filter((c) => bugAreaOf(c) !== "grid");
+    const pending = section.pending();
     const gridCol = document.createElement("section");
-    gridCol.className = "column bug-grid-col";
-    gridCol.dataset.stage = "bugs:grid";
-    gridCol.innerHTML = bugsHeaderHTML(findbugsHunting, gridBugs.length + pendingBugs.length);
-    gridCol.querySelector(".add-card").addEventListener("click", () => showBugModal());
-    gridCol.querySelector(".findbugs-btn")?.addEventListener("click", () => void startFindbugs());
+    gridCol.className = `column ${section.gridColClass}`;
+    gridCol.dataset.stage = section.gridStage;
+    gridCol.innerHTML = section.headerHTML(gridCards.length + pending.length);
+    section.wireHeader(gridCol);
     const gridBody = document.createElement("div");
     gridBody.className = "column-body bug-grid";
-    if (bugs.length === 0 && pendingBugs.length === 0) {
-        gridBody.innerHTML = `<div class="bug-grid-empty">No open bugs</div>`;
+    if (cards.length === 0 && pending.length === 0) {
+        gridBody.innerHTML = `<div class="bug-grid-empty">${section.emptyText}</div>`;
     }
     else {
-        for (const b of pendingBugs)
+        for (const b of pending)
             gridBody.appendChild(renderPendingCard(b.title));
-        for (const card of gridBugs)
+        for (const card of gridCards)
             gridBody.appendChild(renderBugCard(card));
     }
     gridCol.appendChild(gridBody);
     const fixCol = document.createElement("section");
-    fixCol.className = "column bug-fix-col";
-    fixCol.dataset.stage = "bugs:fix";
+    fixCol.className = `column ${section.fixColClass}`;
+    fixCol.dataset.stage = section.fixStage;
     fixCol.innerHTML =
-        `<div class="column-header"><span>Fix</span><span class="column-count">${fixBugs.length}</span></div>`;
+        `<div class="column-header"><span>Fix</span><span class="column-count">${fixCards.length}</span></div>`;
     const fixBody = document.createElement("div");
     fixBody.className = "column-body";
-    fixBody.dataset.drop = "fix";
+    fixBody.dataset.drop = section.dropTarget;
     fixBody.dataset.verb = "Fix it";
-    for (const card of fixBugs)
+    for (const card of fixCards)
         fixBody.appendChild(renderBugCard(card));
     fixCol.appendChild(fixBody);
     host.appendChild(gridCol);
     host.appendChild(fixCol);
-    host.appendChild(renderDeployControl("bugs"));
-    restoreColumnScroll(host, scrollByStage);
+    host.appendChild(renderDeployControl(section.side));
 }
 // fixBug launches the autonomous fix pipeline on one bug. Optimistic move into
 // the Fix column, same shape as transition(): the daemon is authoritative and
@@ -623,10 +663,31 @@ async function fixBug(key, title) {
     }
     await reconcile();
 }
+// fixSecurity launches the security-fix pipeline on one security ticket — the
+// Security half's counterpart to fixBug, same optimistic move into the Fix
+// column and the same daemon-is-authoritative contract.
+async function fixSecurity(key, title) {
+    const card = current.cards.find((c) => c.key === key);
+    if (card) {
+        card.stage = "implementation";
+        card.state = "running";
+        render();
+    }
+    try {
+        await go().FixSecurity(key, title);
+    }
+    catch (err) {
+        showError(errMessage(err));
+    }
+    await reconcile();
+}
 // Bugs filed from the pane but not yet confirmed by a board fetch — the bug
 // grid's counterpart to pendingIdeas, with the same handover rule: the
 // placeholder clears when a fetched bug card carries its title.
 let pendingBugs = [];
+// Security tickets filed from the Security half but not yet confirmed by a
+// board fetch — the Security counterpart to pendingBugs, same handover rule.
+let pendingSecurity = [];
 // True while a findbugs sweep is running for the project — drives the Bugs
 // pane's hunt indicator. Refreshed in reconcile() and set optimistically on a
 // Findbugs click so the button responds instantly.
@@ -696,6 +757,69 @@ async function createBug(title, description) {
     }
     // Invalidate fetches already in flight — their pre-create snapshot would
     // miss the new ticket (same guard as CreateIdea).
+    reconcileEpoch++;
+    await reconcile();
+}
+// showSecurityModal opens the file-a-security-issue dialog — the Security
+// half's counterpart to showBugModal, same optimistic-filing contract (the
+// placeholder appears at once; a failed create reopens the dialog intact).
+function showSecurityModal(prefillTitle = "", prefillDescription = "") {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const modal = document.createElement("div");
+    modal.className = "modal bug-modal";
+    modal.innerHTML = `
+    <div class="modal-title">File a security issue</div>
+    <input class="modal-input" type="text" placeholder="What is the vulnerability?" />
+    <textarea class="modal-textarea" rows="6" placeholder="What is exposed, and how could it be exploited?"></textarea>
+    <div class="modal-actions">
+      <button class="modal-cancel" type="button">Cancel</button>
+      <button class="modal-confirm" type="button">Create security issue</button>
+    </div>
+  `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    const titleInput = modal.querySelector(".modal-input");
+    const descInput = modal.querySelector(".modal-textarea");
+    const confirm = modal.querySelector(".modal-confirm");
+    titleInput.value = prefillTitle;
+    descInput.value = prefillDescription;
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay)
+            close();
+    });
+    modal.addEventListener("keydown", (e) => {
+        if (e.key === "Escape")
+            close();
+    });
+    modal.querySelector(".modal-cancel").addEventListener("click", close);
+    confirm.addEventListener("click", () => {
+        const title = titleInput.value.trim();
+        if (!title) {
+            titleInput.focus();
+            return;
+        }
+        const description = descInput.value.trim();
+        close();
+        void createSecurity(title, description);
+    });
+    titleInput.focus();
+}
+// createSecurity files the security ticket and keeps the grid honest:
+// placeholder first, rollback + reopened dialog on failure (mirrors createBug).
+async function createSecurity(title, description) {
+    pendingSecurity.push({ title, description });
+    render();
+    try {
+        await go().CreateSecurity(title, description);
+    }
+    catch (err) {
+        pendingSecurity = pendingSecurity.filter((s) => s.title !== title);
+        showError(errMessage(err));
+        showSecurityModal(title, description);
+        return;
+    }
     reconcileEpoch++;
     await reconcile();
 }
@@ -868,10 +992,17 @@ function dropAllowed(target) {
             return false;
         return bugAreaOf(card) === "grid" || isReworkable(card);
     }
+    if (target.dataset.drop === "security-fix") {
+        // The Security half's Fix column, gated exactly like the bug one but for
+        // security cards — the security-fix pipeline triages and plans itself too.
+        if (!card.security || !current.dockerAvailable)
+            return false;
+        return bugAreaOf(card) === "grid" || isReworkable(card);
+    }
     const toQueue = target.dataset.dropQueue ?? "";
     // A drop back into the card's own column is a local reorder — it launches
     // nothing, so neither the Docker gate nor forward-adjacency applies.
-    if (!card.bug && toQueue === queueOf(card))
+    if (!card.bug && !card.security && toQueue === queueOf(card))
         return true;
     // Ready to Deploy is never a transition target — cards earn their way in by
     // passing review; only the same-column sort above may drop here.
@@ -1036,9 +1167,14 @@ function performDrop(target, info, pt) {
         void fixBug(info.key, info.title);
         return;
     }
+    if (target.dataset.drop === "security-fix") {
+        celebrateDrop(pt, { key: info.key, fromStage: info.stage, done: false });
+        void fixSecurity(info.key, info.title);
+        return;
+    }
     const toQueue = target.dataset.dropQueue ?? "";
     const dropped = current.cards.find((c) => c.key === info.key);
-    if (dropped && !dropped.bug && toQueue === queueOf(dropped)) {
+    if (dropped && !dropped.bug && !dropped.security && toQueue === queueOf(dropped)) {
         // A drop into the card's own column sorts it — mirrors the idea-space
         // local reorder, never a transition.
         reorderWithinQueue(toQueue, info.key, pt.y);
@@ -1473,6 +1609,11 @@ async function reconcile() {
         // Same handover rule for bugs filed from the pane's + dialog.
         const fetchedBugs = new Set(current.cards.filter((c) => c.bug).map((c) => c.title));
         pendingBugs = pendingBugs.filter((b) => !fetchedBugs.has(b.title));
+    }
+    if (pendingSecurity.length) {
+        // Same handover rule for security tickets filed from the Security half.
+        const fetchedSecurity = new Set(current.cards.filter((c) => c.security).map((c) => c.title));
+        pendingSecurity = pendingSecurity.filter((s) => !fetchedSecurity.has(s.title));
     }
     boardLoading = false;
     stagesLoading = false;

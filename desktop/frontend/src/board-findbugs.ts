@@ -17,3 +17,15 @@ export function bugsHeaderHTML(hunting: boolean, count: number): string {
     `<span class="column-count">${count}</span></div>`
   );
 }
+
+// securityHeaderHTML builds the Security half's header. Unlike the Bugs header
+// it carries no sweep control — security tickets are filed by hand, not hunted
+// (the human-security scanner is a separate report today) — so only the neutral
+// "+" quick-add and the count follow the title.
+export function securityHeaderHTML(count: number): string {
+  return (
+    `<div class="column-header"><span>Security</span>` +
+    `<button class="add-card" title="File a security issue">+</button>` +
+    `<span class="column-count">${count}</span></div>`
+  );
+}
