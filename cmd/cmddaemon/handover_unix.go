@@ -92,7 +92,8 @@ func (w *watchState) reject(cur binStat) {
 type handoverCoordinator struct {
 	listeners   *listenerSet
 	blockingOps func() int         // in-flight restart-blocking op count; a handover waits while > 0
-	activeConns func() int64       // in-flight proxied connections; the parent drains these before exiting
+	activeConns func() int64       // in-flight connections the parent drains before exiting
+	retire      func()             // releases what the child cannot inherit (the PID-named relay socket)
 	stop        context.CancelFunc // cancels the parent server context on handover
 	handedOver  *atomic.Bool       // suppresses the parent's file cleanup once the child owns them
 	logger      zerolog.Logger
@@ -108,7 +109,7 @@ type handoverCoordinator struct {
 
 // maybeWatchBinary starts the self-restart watcher unless it is disabled or the
 // binary path cannot be resolved. Safe to call unconditionally.
-func maybeWatchBinary(ctx context.Context, ls *listenerSet, srv *daemon.Server, activeConns func() int64, stop context.CancelFunc, handedOver *atomic.Bool, logger zerolog.Logger) {
+func maybeWatchBinary(ctx context.Context, ls *listenerSet, srv *daemon.Server, hooks handoverHooks, stop context.CancelFunc, handedOver *atomic.Bool, logger zerolog.Logger) {
 	if watchBinaryDisabled() {
 		logger.Info().Msg("daemon self-restart on binary change disabled (HUMAN_DAEMON_WATCH_BINARY)")
 		return
@@ -121,7 +122,8 @@ func maybeWatchBinary(ctx context.Context, ls *listenerSet, srv *daemon.Server, 
 	c := &handoverCoordinator{
 		listeners:    ls,
 		blockingOps:  srv.BlockingOps,
-		activeConns:  activeConns,
+		activeConns:  hooks.activeConns,
+		retire:       hooks.retire,
 		stop:         stop,
 		handedOver:   handedOver,
 		logger:       logger,
@@ -258,10 +260,18 @@ func reexecChild(ctx context.Context, c *handoverCoordinator) error {
 	c.handedOver.Store(true)
 	c.logger.Info().Int("child_pid", cmd.Process.Pid).Msg("daemon self-restart: child ready, handing over")
 
-	// New connections already reach the child; let any in-flight proxied streams
-	// (agent egress that was mid-transfer) finish before the parent exits, so a
-	// running agent is not cut off. Bounded so a stuck stream can't wedge the
-	// handover forever.
+	// Release what the child could not inherit before anything else discovers
+	// it: the chrome relay's socket is named after this process id and clients
+	// pick one by globbing, so leaving it in place lets a client attach to the
+	// daemon that is about to exit.
+	if c.retire != nil {
+		c.retire()
+	}
+
+	// New connections already reach the child; let any in-flight streams (agent
+	// egress or a chrome session that was mid-transfer) finish before the parent
+	// exits, so nothing live is cut off. Bounded so a stuck stream can't wedge
+	// the handover forever.
 	c.drainInflight(ctx)
 
 	c.stop()

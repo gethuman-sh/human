@@ -15,6 +15,6 @@ import (
 // passing listener fds to a re-exec'd child (os/exec ExtraFiles), which Windows
 // does not support. Rebuilds are picked up with a manual `human daemon stop`
 // then `human daemon start`.
-func maybeWatchBinary(_ context.Context, _ *listenerSet, _ *daemon.Server, _ func() int64, _ context.CancelFunc, _ *atomic.Bool, logger zerolog.Logger) {
+func maybeWatchBinary(_ context.Context, _ *listenerSet, _ *daemon.Server, _ handoverHooks, _ context.CancelFunc, _ *atomic.Bool, logger zerolog.Logger) {
 	logger.Info().Msg("daemon self-restart on binary change is not supported on Windows; rebuild then `human daemon stop && human daemon start`")
 }

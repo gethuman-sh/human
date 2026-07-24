@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -30,6 +31,8 @@ type Server struct {
 	// daemon's self-restart can hand this bridge's live socket to the re-exec'd
 	// child. nil keeps the original bind-on-start behavior.
 	Listener net.Listener
+
+	activeConns atomic.Int64 // sessions currently being served; drained on handover
 }
 
 // ListenAndServe starts the TCP listener and blocks until ctx is cancelled.
@@ -80,7 +83,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
+// ActiveConns reports how many chrome-proxy sessions are currently being
+// served, so a self-restart handover can drain them instead of cutting them off.
+func (s *Server) ActiveConns() int64 {
+	return s.activeConns.Load()
+}
+
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
+	s.activeConns.Add(1)
+	defer s.activeConns.Add(-1)
 	defer func() { _ = conn.Close() }()
 
 	// Bound the time we wait for the initial auth line.

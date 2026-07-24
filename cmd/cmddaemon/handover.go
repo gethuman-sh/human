@@ -24,6 +24,19 @@ const (
 	envHandoverReadyFD = "_HUMAN_HANDOVER_READY_FD"
 )
 
+// handoverHooks are the per-process resources a self-restart must settle before
+// the outgoing daemon exits, injected so the coordinator stays testable.
+type handoverHooks struct {
+	// activeConns reports in-flight connections the outgoing process still owns
+	// (proxied agent egress plus chrome-side sessions). The handover drains
+	// these rather than cutting them off. nil disables draining.
+	activeConns func() int64
+	// retire releases resources the successor cannot inherit — today the
+	// PID-named chrome relay socket, which must stop being discoverable the
+	// moment the successor is serving. nil is a no-op.
+	retire func()
+}
+
 // listenerSet is the daemon's three listening sockets, owned by
 // runDaemonForeground so the handover coordinator can pass them to a re-exec'd
 // child. On a fresh start they are bound; on a handover child they are rebuilt

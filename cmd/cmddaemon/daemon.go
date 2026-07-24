@@ -112,6 +112,7 @@ type daemonState struct {
 	auditStore    *audit.Store
 	auditWriter   *audit.Writer
 	confirmDB     *daemon.ConfirmDB
+	ideationDB    *daemon.IdeationDB
 	daemonID      string
 }
 
@@ -274,6 +275,22 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		confirmDB = nil
 	}
 
+	// A live ideation chat is in-memory state that a restart would otherwise
+	// reset; persisting it lets a self-restart land between turns harmlessly.
+	// A failed open degrades to memory-only rather than aborting startup.
+	ideationDB, err := daemon.NewIdeationDB(daemon.DefaultIdeationDBPath())
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to open ideation database, ideation sessions will not survive a restart")
+		ideationDB = nil
+	}
+	// Assigned through a typed nil check: handing a nil *IdeationDB straight to
+	// the interface would produce a non-nil interface wrapping a nil pointer,
+	// and the engine's nil-Store check would not catch it.
+	var ideationStore daemon.IdeationStore
+	if ideationDB != nil {
+		ideationStore = ideationDB
+	}
+
 	statsStore, err := stats.NewStatsStore(stats.DefaultDBPath())
 	if err != nil {
 		logger.Warn().Err(err).Msg("failed to open stats database, tool persistence disabled")
@@ -345,8 +362,12 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
 		FindbugsRunner:    findbugsRunnerFunc(projectRegistry),
 		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
-		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, logger),
+		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
 	}
+
+	// Bring back a chat the previous process was in the middle of, before the
+	// server accepts its first ideation request.
+	restoreIdeationSession(srv.Ideation, ideationStore, logger)
 
 	return &daemonState{
 		srv:           srv,
@@ -361,6 +382,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		auditStore:    auditStore,
 		auditWriter:   auditWriter,
 		confirmDB:     confirmDB,
+		ideationDB:    ideationDB,
 		daemonID:      daemonID,
 	}, nil
 }
@@ -449,12 +471,15 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	if ds.confirmDB != nil {
 		defer func() { _ = ds.confirmDB.Close() }()
 	}
+	if ds.ideationDB != nil {
+		defer func() { _ = ds.ideationDB.Close() }()
+	}
 
 	out := cmd.OutOrStdout()
 	ctx := ds.ctx
 	logger := ds.logger
 
-	startChromeServices(ctx, chromeAddr, ds.srv.Token, listeners.chrome, logger)
+	chromeSvcs := startChromeServices(ctx, chromeAddr, ds.srv.Token, listeners.chrome, logger)
 
 	proxySrv, proxyStatus, proxyErr := buildProxyServer(proxyAddr, interactive, logger, ds.networkStore)
 	if proxyErr != nil {
@@ -623,8 +648,17 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	// Watch the binary so a rebuild re-execs into the new build, handing over the
 	// live sockets (no client sees a refused connection) and draining in-flight
-	// proxied agent egress before the old process exits. A no-op on Windows.
-	maybeWatchBinary(ctx, listeners, ds.srv, proxySrv.ActiveConns, ds.stop, &handedOver, logger)
+	// connections before the old process exits. A no-op on Windows.
+	//
+	// The drain covers proxied agent egress and chrome-side sessions alike; the
+	// retire hook removes this process's PID-named relay socket the moment the
+	// successor is up, so a client globbing the socket directory cannot pick the
+	// dying daemon's socket.
+	handover := handoverHooks{
+		activeConns: func() int64 { return proxySrv.ActiveConns() + chromeSvcs.activeConns() },
+		retire:      chromeSvcs.retire,
+	}
+	maybeWatchBinary(ctx, listeners, ds.srv, handover, ds.stop, &handedOver, logger)
 	// If this process is itself a handover child, tell the parent we are serving
 	// so it can stop; a no-op on a normal start.
 	signalHandoverReady(logger)
@@ -666,14 +700,45 @@ func postFailedMarkerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver,
 	}
 }
 
+// chromeServices are the running chrome-side listeners a self-restart has to
+// account for: the TCP bridge (its socket is handed to the child) and the Unix
+// socket relay (whose PID-named socket the outgoing daemon must retire).
+type chromeServices struct {
+	relay  *chrome.SocketRelay
+	server *chrome.Server
+}
+
+// activeConns reports chrome-side connections still in flight, so a handover
+// drains them rather than cutting Chrome off mid-session. Nil-safe: chrome
+// services that failed to start contribute nothing.
+func (c chromeServices) activeConns() int64 {
+	var n int64
+	if c.relay != nil {
+		n += c.relay.ActiveConns()
+	}
+	if c.server != nil {
+		n += c.server.ActiveConns()
+	}
+	return n
+}
+
+// retire stops the outgoing daemon's relay from accepting and removes its
+// socket file, so a client globbing the socket directory finds only the
+// successor's. Nil-safe.
+func (c chromeServices) retire() {
+	if c.relay != nil {
+		c.relay.Retire()
+	}
+}
+
 // startChromeServices launches the socket relay and Chrome MCP proxy. The
 // chromeLn listener, when non-nil, is served instead of binding chromeAddr, so
 // a self-restart hands the bridge's live socket to the re-exec'd child.
-func startChromeServices(ctx context.Context, chromeAddr, token string, chromeLn net.Listener, logger zerolog.Logger) {
+func startChromeServices(ctx context.Context, chromeAddr, token string, chromeLn net.Listener, logger zerolog.Logger) chromeServices {
 	socketDir, sdErr := chrome.SocketDir()
 	if sdErr != nil {
 		logger.Warn().Err(sdErr).Msg("resolving socket directory")
-		return
+		return chromeServices{}
 	}
 
 	relay := chrome.NewSocketRelay(socketDir, logger)
@@ -704,6 +769,8 @@ func startChromeServices(ctx context.Context, chromeAddr, token string, chromeLn
 			logger.Error().Err(err).Msg("chrome proxy server failed")
 		}
 	}()
+
+	return chromeServices{relay: relay, server: chromeSrv}
 }
 
 // runDaemonBackground re-execs the current binary as a detached child process.
@@ -2359,7 +2426,7 @@ func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 // ideationEngine wires the board ideation engine: host claude runner, role-
 // resolved PM creator/editor, and a hook-store poke so the created card
 // reaches the board through the existing subscribe/refetch loop.
-func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, logger zerolog.Logger) *daemon.IdeationEngine {
+func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, store daemon.IdeationStore, logger zerolog.Logger) *daemon.IdeationEngine {
 	firstEntry := func() (daemon.ProjectEntry, error) {
 		entries := reg.Entries()
 		if len(entries) == 0 {
@@ -2386,7 +2453,28 @@ func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookS
 		Notify: func() {
 			hookStore.Append(hookevents.Event{EventName: "IdeationCreated", Timestamp: time.Now().UTC()})
 		},
+		Store:  store,
 		Logger: logger,
+	}
+}
+
+// restoreIdeationSession brings back a chat interrupted by a restart — the
+// self-restart handover lands between turns, exactly when the user is composing
+// a reply. A finished or stale session is left behind rather than resurrected.
+func restoreIdeationSession(engine *daemon.IdeationEngine, store daemon.IdeationStore, logger zerolog.Logger) {
+	if engine == nil || store == nil {
+		return
+	}
+	saved, err := store.Load()
+	if err != nil {
+		logger.Warn().Err(err).Msg("loading persisted ideation session failed")
+		return
+	}
+	if saved == nil {
+		return
+	}
+	if engine.Restore(*saved, time.Now(), daemon.IdeationMaxAge) {
+		logger.Info().Str("session", saved.ID).Str("state", string(saved.State)).Msg("restored ideation session")
 	}
 }
 
