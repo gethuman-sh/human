@@ -169,6 +169,20 @@ test("renderCard gates the error subtitle on cardError, not raw card.error (SC-1
   );
 });
 
+test("queued state renders the decision-recorded note, not a failure (SC-1320)", () => {
+  const info = badgeInfo({ stage: "planning", state: "queued" });
+  assert.equal(info.cls, "queued");
+  assert.match(info.text, /decision recorded — replanning picked up/);
+});
+
+test("queued verb is stage-aware (SC-1320)", () => {
+  assert.match(badgeInfo({ stage: "implementation", state: "queued" }).text, /rebuild picked up/);
+});
+
+test("a queued card shows no red error subtitle (SC-1320)", () => {
+  assert.equal(cardError({ stage: "planning", state: "queued", error: "Stuck in planning" }), "");
+});
+
 // SC-624: columns render in the user's hand-sorted order; cards without a
 // saved slot keep fetch order after the sorted ones.
 test("sortByHandOrder: listed keys first in saved order, rest stable after", () => {

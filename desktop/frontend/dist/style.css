@@ -749,6 +749,13 @@ body {
   font-weight: 600;
 }
 
+/* A recorded decision that has (re)queued the chosen stage (SC-1320): in-play,
+   accent-colored like the running/decision states — never red. */
+.badge.queued {
+  color: var(--running);
+  font-weight: 600;
+}
+
 /* Age of a finished plan sitting in the Engineering backlog. Muted while
    fresh; escalates amber then red as the plan's code context rots, so stale
    work is visible without reading the number. */
