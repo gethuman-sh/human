@@ -28,6 +28,9 @@ type HookEventStore struct {
 	eventSeqs   []uint64 // monotonic id per event, index-aligned with events
 	appended    uint64   // total events ever appended (last assigned sequence)
 	subscribers []chan struct{}
+	// progress is the last sign of life per agent, kept outside the ring so
+	// eviction cannot make a quiet-but-working agent look hung.
+	progress map[string]AgentProgress
 	// persist is an optional durable sink invoked for every appended event.
 	// The in-memory ring evicts under load and is empty after a restart, so a
 	// hook event tied to a since-reaped agent run is otherwise lost; the sink
@@ -40,6 +43,7 @@ func NewHookEventStore() *HookEventStore {
 	return &HookEventStore{
 		events:    make([]hookevents.Event, 0, maxHookEvents),
 		eventSeqs: make([]uint64, 0, maxHookEvents),
+		progress:  make(map[string]AgentProgress),
 	}
 }
 
@@ -78,6 +82,10 @@ func (s *HookEventStore) Append(evt hookevents.Event) {
 			}
 		}
 	}
+	if s.progress == nil {
+		s.progress = make(map[string]AgentProgress)
+	}
+	trackProgress(s.progress, evt)
 	s.appended++
 	s.events = append(s.events, evt)
 	s.eventSeqs = append(s.eventSeqs, s.appended)
@@ -103,6 +111,15 @@ func (s *HookEventStore) Append(evt hookevents.Event) {
 		default: // non-blocking — subscriber already has a pending notification
 		}
 	}
+}
+
+// AgentProgress returns the last progress seen from an agent. ok is false when
+// nothing is known — the daemon restarted, or the agent has not acted yet.
+func (s *HookEventStore) AgentProgress(agentName string) (AgentProgress, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.progress[agentName]
+	return p, ok
 }
 
 // Subscribe returns a channel that receives a signal whenever a new event is
