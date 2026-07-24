@@ -438,6 +438,18 @@ func BoardFix(addr, token string, req BoardFixRequest) error {
 	return err
 }
 
+// BoardSecurityFix asks the daemon to launch the security-fix pipeline
+// (/human-security-fix) on a security ticket. Single JSON arg, matching
+// BoardFix; it returns once the agent is launched, not when the fix finishes.
+func BoardSecurityFix(addr, token string, req SecurityFixRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling security fix request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"security-fix", string(data)})
+	return err
+}
+
 // SendBoardOption records a chosen option from a card's open decision block and
 // relaunches the block's stage with the choice. Single JSON arg, matching
 // BoardTransition; returns once the agent is launched.
@@ -575,6 +587,24 @@ func BugCreate(addr, token string, req BugCreateRequest) (BugCreateResponse, err
 	var resp BugCreateResponse
 	if err := json.Unmarshal(out, &resp); err != nil {
 		return BugCreateResponse{}, errors.WrapWithDetails(err, "invalid bug-create JSON")
+	}
+	return resp, nil
+}
+
+// SecurityCreate files a security ticket on the PM tracker — the Security
+// section's `+` dialog (title plus free-text description).
+func SecurityCreate(addr, token string, req SecurityCreateRequest) (SecurityCreateResponse, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return SecurityCreateResponse{}, errors.WrapWithDetails(err, "marshaling security-create request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{"security-create", string(data)})
+	if err != nil {
+		return SecurityCreateResponse{}, err
+	}
+	var resp SecurityCreateResponse
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return SecurityCreateResponse{}, errors.WrapWithDetails(err, "invalid security-create JSON")
 	}
 	return resp, nil
 }

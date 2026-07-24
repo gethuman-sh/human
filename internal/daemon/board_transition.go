@@ -319,6 +319,37 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 		"/human-autofix "+req.PMKey+" --board")
 }
 
+// SecurityFixRequest is the wire request for launching the security-fix pipeline
+// on a security ticket. It mirrors BoardFixRequest — PMTitle is carried so
+// downstream stages never need a second tracker fetch.
+type SecurityFixRequest struct {
+	PMKey   string `json:"pm_key"`
+	PMTitle string `json:"pm_title"`
+}
+
+// ApplySecurityFix launches the security-fix pipeline (/human-security-fix) on a
+// security ticket. Like ApplyFix it skips the board's planning gate — the skill
+// triages, plans and fixes in one run — and it launches the agent under the
+// BoardImplementation stage name so the failure watcher and the build→review
+// chain apply to a security fix unchanged. The only difference from ApplyFix is
+// the skill invoked: a security-tuned triage/verify pass instead of autofix.
+func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityFixRequest) error {
+	comments, err := d.Commenter.ListComments(ctx, req.PMKey)
+	if err != nil {
+		return errors.WrapWithDetails(err, "loading PM comments for security fix", "pm", req.PMKey)
+	}
+	// Idempotency mirrors ApplyFix: a re-drop or Retry click while the fix agent
+	// — or the review it chains into — is still running must not launch a second.
+	if _, state := latestStageState(comments, BoardImplementation); state == BoardRunning {
+		return nil
+	}
+	if _, state := latestStageState(comments, BoardVerification); state == BoardRunning {
+		return nil
+	}
+	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+		"/human-security-fix "+req.PMKey+" --board")
+}
+
 // startAgentStage posts the stage's started marker, then launches the agent. On
 // launch failure it posts the stage's *-failed marker so the board reflects the
 // error rather than leaving a stuck spinner.

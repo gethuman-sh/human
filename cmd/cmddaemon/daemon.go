@@ -333,40 +333,42 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	}
 
 	srv := &daemon.Server{
-		Addr:              addr,
-		Token:             token,
-		SafeMode:          safe,
-		DaemonStartedAt:   time.Now().UTC(),
-		CmdFactory:        cmdFactory,
-		Logger:            logger,
-		ConnectedPIDs:     connTracker,
-		HookEvents:        hookStore,
-		NetworkEvents:     networkStore,
-		IssueFetcher:      fetchTrackerIssuesFunc(projectRegistry, vaultResolver),
-		LiteIssueFetcher:  fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
-		IssueGetter:       daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
-		TrackerDiagnoser:  trackerDiagnoserFunc(projectRegistry, vaultResolver),
-		Doctor:            doctor,
-		Projects:          projectRegistry,
-		PendingConfirms:   confirmStore,
-		StatsWriter:       statsWriter,
-		StatsStore:        statsStore,
-		AuditSink:         auditWriter,
-		AuditStore:        auditStore,
-		AgentCleaner:      &dockerAgentCleaner{},
-		VaultResolver:     vaultResolver,
-		BoardTransitioner: boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
-		BoardFixer:        boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
-		BoardOptioner:     boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
-		BugCreator:        bugCreatorFunc(projectRegistry, vaultResolver),
-		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver),
-		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
-		FindbugsRunner:    findbugsRunnerFunc(projectRegistry),
-		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
-		VariationsCreator: variationsCreatorFunc(projectRegistry),
-		MockupChooser:     mockupChooserFunc(projectRegistry),
-		MockupPruner:      mockupPrunerFunc(projectRegistry),
-		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
+		Addr:               addr,
+		Token:              token,
+		SafeMode:           safe,
+		DaemonStartedAt:    time.Now().UTC(),
+		CmdFactory:         cmdFactory,
+		Logger:             logger,
+		ConnectedPIDs:      connTracker,
+		HookEvents:         hookStore,
+		NetworkEvents:      networkStore,
+		IssueFetcher:       fetchTrackerIssuesFunc(projectRegistry, vaultResolver),
+		LiteIssueFetcher:   fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
+		IssueGetter:        daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
+		TrackerDiagnoser:   trackerDiagnoserFunc(projectRegistry, vaultResolver),
+		Doctor:             doctor,
+		Projects:           projectRegistry,
+		PendingConfirms:    confirmStore,
+		StatsWriter:        statsWriter,
+		StatsStore:         statsStore,
+		AuditSink:          auditWriter,
+		AuditStore:         auditStore,
+		AgentCleaner:       &dockerAgentCleaner{},
+		VaultResolver:      vaultResolver,
+		BoardTransitioner:  boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BoardFixer:         boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BoardSecurityFixer: securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BoardOptioner:      boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BugCreator:         bugCreatorFunc(projectRegistry, vaultResolver),
+		SecurityCreator:    securityCreatorFunc(projectRegistry, vaultResolver),
+		CloseTicketer:      closeTicketerFunc(projectRegistry, vaultResolver),
+		FeaturesGenerator:  featuresGeneratorFunc(projectRegistry),
+		FindbugsRunner:     findbugsRunnerFunc(projectRegistry),
+		MockupsCreator:     mockupsCreatorFunc(projectRegistry),
+		VariationsCreator:  variationsCreatorFunc(projectRegistry),
+		MockupChooser:      mockupChooserFunc(projectRegistry),
+		MockupPruner:       mockupPrunerFunc(projectRegistry),
+		Ideation:           ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
 	}
 
 	// Bring back a chat the previous process was in the middle of, before the
@@ -2211,6 +2213,20 @@ func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemo
 	}
 }
 
+// securityFixerFunc builds the daemon's BoardSecurityFixer closure: identical
+// collaborators to a bug fix, but the entry point is the security-fix pipeline
+// (/human-security-fix) — a security-tuned triage/verify pass over the same
+// containerized agent path.
+func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.SecurityFixRequest) error {
+	return func(req daemon.SecurityFixRequest) error {
+		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
+		if err != nil {
+			return err
+		}
+		return deps.ApplySecurityFix(context.Background(), req)
+	}
+}
+
 // bugCreatorFunc builds the daemon's BugCreator closure: it files a bug-typed
 // ticket on the role-resolved PM tracker. The provider maps the bug type onto
 // its native defect marker (issue/story type where one exists, the bug label
@@ -2241,6 +2257,43 @@ func bugCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(
 			return daemon.BugCreateResponse{}, errors.WrapWithDetails(err, "creating bug ticket", "project", project)
 		}
 		return daemon.BugCreateResponse{Key: created.Key, URL: created.URL}, nil
+	}
+}
+
+// securityCreatorFunc builds the daemon's SecurityCreator closure: it files a
+// security ticket on the role-resolved PM tracker. Unlike a bug — which every
+// backend marks with a native defect type — no tracker has a universal native
+// "security" type, so the ticket carries the SecurityLabel explicitly (which
+// every provider passes straight through on create). tracker.Issue.IsSecurity
+// then recognises the card on every backend via that label, and the Security
+// type is set for display where a tracker shows it.
+func securityCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.SecurityCreateRequest) (daemon.SecurityCreateResponse, error) {
+	return func(req daemon.SecurityCreateRequest) (daemon.SecurityCreateResponse, error) {
+		if err := daemon.ValidateSecurityCreate(req); err != nil {
+			return daemon.SecurityCreateResponse{}, err
+		}
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return daemon.SecurityCreateResponse{}, errors.WithDetails("no project registered for security creation")
+		}
+		entry := entries[0]
+		creator, project, err := resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			return daemon.SecurityCreateResponse{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		created, err := creator.CreateIssue(ctx, &tracker.Issue{
+			Project:     project,
+			Title:       req.Title,
+			Description: req.Description,
+			Type:        "Security",
+			Labels:      []string{tracker.SecurityLabel},
+		})
+		if err != nil {
+			return daemon.SecurityCreateResponse{}, errors.WrapWithDetails(err, "creating security ticket", "project", project)
+		}
+		return daemon.SecurityCreateResponse{Key: created.Key, URL: created.URL}, nil
 	}
 }
 

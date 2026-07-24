@@ -56,7 +56,7 @@ const AGE_HOT_DAYS = 14;
 // plan shows the spinner badge and a failed one its error; under a day the
 // pill is suppressed rather than shouting "0d" at fresh plans.
 export function ageBadge(card, now) {
-    if (card.bug || card.stage !== "planning" || card.state !== "done")
+    if (card.bug || card.security || card.stage !== "planning" || card.state !== "done")
         return null;
     const days = ageDays(card.stageEnteredAt, now);
     if (days === null || days < 1)
@@ -73,7 +73,7 @@ export function ageBadge(card, now) {
 // codebase may have moved since the plan landed; replanning posts a fresh
 // [human:plan] that supersedes the old one (latest wins).
 export function isReplannable(card) {
-    return !card.bug && card.stage === "planning" && card.state === "done";
+    return !card.bug && !card.security && card.stage === "planning" && card.state === "done";
 }
 // isReviewRetryable reports a stage-failed review — a [human:review-failed] card
 // (verification/failed). It is a dead end on the board otherwise: the rework
@@ -265,20 +265,29 @@ export function isNextQueue(fromQueue, toQueue) {
 export function isReadyToDeploy(card) {
     return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict) && !!card.branch;
 }
+// deploySideOf maps a card to the pane that owns it — bug and security are
+// disjoint kinds, everything else is a feature. The one place the three-way
+// split is decided, so the selectors below cannot drift apart.
+export function deploySideOf(c) {
+    if (c.security)
+        return "security";
+    if (c.bug)
+        return "bugs";
+    return "features";
+}
 // deployableCards is the click's payload: every ready card in the control's pane
-// — feature cards on the board, bug cards in the Bugs pane. The same predicate
-// gates the single-card drop, so click and drop can never disagree on what is
-// shippable.
+// — feature cards on the board, bug/security cards in their halves. The same
+// predicate gates the single-card drop, so click and drop can never disagree on
+// what is shippable.
 export function deployableCards(cards, side) {
-    const wantBug = side === "bugs";
-    return cards.filter((c) => !!c.bug === wantBug && isReadyToDeploy(c));
+    return cards.filter((c) => deploySideOf(c) === side && isReadyToDeploy(c));
 }
 // deployControlView derives the affordance both controls show from the live card
 // list: a count-labelled Deploy caption, disabled with a pane-specific tooltip
 // when nothing is ready, enabled with a "ship every…" tooltip otherwise.
 export function deployControlView(cards, side) {
     const count = deployableCards(cards, side).length;
-    const noun = side === "bugs" ? "fixed bug" : "ready-to-deploy card";
+    const noun = side === "bugs" ? "fixed bug" : side === "security" ? "fixed vulnerability" : "ready-to-deploy card";
     return {
         count,
         disabled: count === 0,

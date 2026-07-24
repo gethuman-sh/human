@@ -263,20 +263,51 @@ func IsBugType(s string) bool {
 	return isBugToken(s)
 }
 
-// CreateLabels returns the labels a provider WITHOUT a native bug type must
-// send when creating i: i.Labels, plus BugLabel when i is bug-typed and not
-// already bug-labeled. Without this translation a bug-typed Issue would lose
-// its defect marking on label-only trackers (Linear, GitHub, GitLab, ClickUp)
-// and IsBug could never recognise the created ticket. Providers with a native
-// type (Jira, Shortcut, Azure DevOps) map i.Type directly instead.
+// CreateLabels returns the labels a provider WITHOUT a native bug or security
+// type must send when creating i: i.Labels, plus BugLabel or SecurityLabel when
+// i is bug- or security-typed and not already so-labeled. Without this
+// translation a typed Issue would lose its kind marking on label-only trackers
+// (Linear, GitHub, GitLab, ClickUp) and IsBug/IsSecurity could never recognise
+// the created ticket. Providers with a native type (Jira, Shortcut, Azure
+// DevOps) map i.Type directly instead. Type is a single string, so at most one
+// of the two branches ever fires.
 func CreateLabels(i *Issue) []string {
-	if !isBugToken(i.Type) {
-		return i.Labels
+	labels := i.Labels
+	if isBugToken(i.Type) && !slices.ContainsFunc(labels, isBugToken) {
+		labels = append(append([]string{}, labels...), BugLabel)
 	}
-	if slices.ContainsFunc(i.Labels, isBugToken) {
-		return i.Labels
+	if isSecurityToken(i.Type) && !slices.ContainsFunc(labels, isSecurityToken) {
+		labels = append(append([]string{}, labels...), SecurityLabel)
 	}
-	return append(append([]string{}, i.Labels...), BugLabel)
+	return labels
+}
+
+// SecurityLabel marks a security/vulnerability ticket on providers without a
+// native security type, matching the classification IsSecurity accepts.
+const SecurityLabel = "security"
+
+// IsSecurity reports whether this issue represents a security vulnerability,
+// normalised across trackers exactly like IsBug: any segment equal to
+// "security" (case-insensitive) in Type or in any label, after splitting on
+// '/' and ':'. Covers "security", "Security", "kind/security", "type:security";
+// segment equality keeps words like "insecurity" from matching. A security
+// ticket is its own kind, distinct from a bug — the two tokens never overlap.
+func (i Issue) IsSecurity() bool {
+	if isSecurityToken(i.Type) {
+		return true
+	}
+	return slices.ContainsFunc(i.Labels, isSecurityToken)
+}
+
+func isSecurityToken(s string) bool {
+	return hasToken(s, "security")
+}
+
+// IsSecurityType reports whether the type string names the security issue type,
+// normalised like IsSecurity. Providers use it to map a security-typed Issue
+// onto their native marker (or the SecurityLabel) at create time.
+func IsSecurityType(s string) bool {
+	return isSecurityToken(s)
 }
 
 // IdeaLabel is the canonical label marking a ticket as a raw idea — the first
