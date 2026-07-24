@@ -19,7 +19,13 @@ import {
 } from "./fancy.js";
 import { initPermissions, type PermissionRequest } from "./permissions.js";
 import { bugsHeaderHTML } from "./board-findbugs.js";
-import { initMockupsView, showMockups, setPendingMockupSlug, type MockupSet } from "./mockupsview.js";
+import {
+  initMockupsView,
+  showMockups,
+  setPendingMockupSlug,
+  setChosenMockup,
+  type MockupSet,
+} from "./mockupsview.js";
 import {
   initSettingsView,
   showSettings,
@@ -94,6 +100,11 @@ interface Card {
   hidden?: boolean;
   mockupSlug?: string;
   mockupState?: string; // "ready" | "creating"
+  // The ticket's chosen winner mockup (leaf group slug + option file), set once
+  // a design is picked. "View mocks" still opens the root group; the winner is
+  // surfaced as the highlighted root→leaf path inside the viewer.
+  mockupChosenSlug?: string;
+  mockupChosenFile?: string;
   // The card's open decision block: a stage ended in a fork and a human must
   // pick a direction (rendered in the detail panel; badge "decision needed").
   options?: { id: string; label: string }[];
@@ -272,6 +283,15 @@ interface AppBindings {
   FindBugs(): Promise<void>;
   FindbugsHunting(): Promise<boolean>;
   CreateMocks(pmKey: string, pmTitle: string, description: string): Promise<void>;
+  CreateVariations(
+    pmKey: string,
+    feature: string,
+    parentSlug: string,
+    parentFile: string,
+    instructions: string,
+  ): Promise<void>;
+  ChooseMockup(pmKey: string, slug: string, file: string): Promise<void>;
+  PruneMockup(pmKey: string, slug: string): Promise<void>;
   StartProjectStatus(): Promise<StartProjectInfo>;
   StartProject(projectType: string, language: string): Promise<StartProjectResult>;
   PendingPermissions(): Promise<PermissionRequest[]>;
@@ -633,6 +653,7 @@ function showCardMenu(card: Card, x: number, y: number): void {
       mockItem.addEventListener("click", () => {
         menu.remove();
         setPendingMockupSlug(card.mockupSlug ?? "");
+        setChosenMockup(card.mockupChosenSlug ?? "", card.mockupChosenFile ?? "");
         selectView("mockups");
       });
     } else if (card.mockupState === "creating") {

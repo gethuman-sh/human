@@ -128,6 +128,12 @@ type Card struct {
 	// ticket.
 	MockupSlug  string `json:"mockupSlug,omitempty"`
 	MockupState string `json:"mockupState,omitempty"`
+	// MockupChosenSlug/MockupChosenFile pin the ticket's chosen winner mockup
+	// (a leaf group's slug + option file) when one has been marked, so the card
+	// can surface that a design direction is selected and the viewer can
+	// highlight the root→winner path. Empty when no winner is chosen.
+	MockupChosenSlug string `json:"mockupChosenSlug,omitempty"`
+	MockupChosenFile string `json:"mockupChosenFile,omitempty"`
 }
 
 // BoardData is the full payload the frontend renders: the flat card list plus an
@@ -331,29 +337,31 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 		mock := mocks[issue.Key]
 		_, hidden := prefs.Hidden[issue.Key]
 		data.Cards = append(data.Cards, Card{
-			Key:            issue.Key,
-			Title:          issue.Title,
-			URL:            issue.URL,
-			Stage:          string(stage),
-			State:          string(card.State),
-			EngineeringKey: card.EngineeringKey,
-			Branch:         card.Branch,
-			PRURL:          card.PRURL,
-			Error:          card.Error,
-			Verdict:        card.Verdict,
-			StageEnteredAt: formatStageTime(card.StageEnteredAt),
-			Labels:         issue.Labels,
-			Description:    issue.Description,
-			Assignee:       issue.Assignee,
-			Tracker:        pm.TrackerName,
-			TrackerKind:    pm.TrackerKind,
-			Bug:            issue.IsBug(),
-			Hidden:         hidden,
-			IdeaColumn:     ideaCol,
-			Options:        card.Options,
-			OptionsContext: card.OptionsContext,
-			MockupSlug:     mock.Slug,
-			MockupState:    mock.State,
+			Key:              issue.Key,
+			Title:            issue.Title,
+			URL:              issue.URL,
+			Stage:            string(stage),
+			State:            string(card.State),
+			EngineeringKey:   card.EngineeringKey,
+			Branch:           card.Branch,
+			PRURL:            card.PRURL,
+			Error:            card.Error,
+			Verdict:          card.Verdict,
+			StageEnteredAt:   formatStageTime(card.StageEnteredAt),
+			Labels:           issue.Labels,
+			Description:      issue.Description,
+			Assignee:         issue.Assignee,
+			Tracker:          pm.TrackerName,
+			TrackerKind:      pm.TrackerKind,
+			Bug:              issue.IsBug(),
+			Hidden:           hidden,
+			IdeaColumn:       ideaCol,
+			Options:          card.Options,
+			OptionsContext:   card.OptionsContext,
+			MockupSlug:       mock.Slug,
+			MockupState:      mock.State,
+			MockupChosenSlug: mock.ChosenSlug,
+			MockupChosenFile: mock.ChosenFile,
 		})
 	}
 	return data
@@ -515,6 +523,53 @@ func (a *App) CreateMocks(pmKey, pmTitle, description string) error {
 		PMKey:       pmKey,
 		PMTitle:     pmTitle,
 		Description: description,
+	}))
+}
+
+// CreateVariations asks the daemon to spawn a new group of variations of one
+// existing mockup (parentSlug/parentFile) honoring the free-text instructions.
+// The source group is never touched; the new group attaches under it in the
+// tree. Returns once the agent is launched, like CreateMocks.
+func (a *App) CreateVariations(pmKey, feature, parentSlug, parentFile, instructions string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.CreateVariations(info.Addr, info.Token, daemon.CreateVariationsRequest{
+		PMKey:        pmKey,
+		Feature:      feature,
+		ParentSlug:   parentSlug,
+		ParentFile:   parentFile,
+		Instructions: instructions,
+	}))
+}
+
+// ChooseMockup marks a leaf mockup as the ticket's winner; an empty slug clears
+// the current choice. Host-local state (never the tracker), consistent with the
+// mockup link.
+func (a *App) ChooseMockup(pmKey, slug, file string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.ChooseMockup(info.Addr, info.Token, daemon.ChooseMockupRequest{
+		PMKey: pmKey,
+		Slug:  slug,
+		File:  file,
+	}))
+}
+
+// PruneMockup archives a variation group and its descendants; the root group of
+// a ticket cannot be pruned. If the current winner lives in the pruned subtree
+// the daemon clears it.
+func (a *App) PruneMockup(pmKey, slug string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.PruneMockup(info.Addr, info.Token, daemon.PruneMockupRequest{
+		PMKey: pmKey,
+		Slug:  slug,
 	}))
 }
 

@@ -6,13 +6,33 @@ argument-hint: <feature to explore> [number of options, default 5]
 
 # UI Option Mockups
 
-Produce N static HTML mockups (default 5), each showing a DIFFERENT interaction pattern for the requested feature, so the options can be compared side by side and one can be picked for implementation. No functionality, no JavaScript — these are pictures made of HTML.
+Produce N static HTML mockups (default 5), each showing a DIFFERENT interaction pattern for the requested feature, so the options can be compared side by side and one can be picked for implementation. A picked mockup can be iterated further via the variation invocation below and ultimately marked as the ticket's winner in the app, whereupon it is handed to planning/execution agents as the design direction. No functionality, no JavaScript — these are pictures made of HTML.
 
 All files for one invocation go into their own subdirectory `mockups/<feature-slug>/` (kebab-case, e.g. `mockups/permission-requests/`) so multiple explored features coexist. Never write mockup files into `mockups/` directly.
 
 ## Ticket-linked invocation
 
 If the argument begins with an issue key followed by a colon (e.g. `SC-123: dark mode toggle`), the mockups belong to that ticket: use the lowercased key as the feature slug (`mockups/sc-123/`), use the text after the colon as the feature name, and add a top-level `"ticket": "SC-123"` field to `index.json`. An optional `Ticket context:` block after the first line is background for choosing options — never render it in the mockups. Without a leading key, behave exactly as described below.
+
+## Variation invocation
+
+When invoked with `--variation <KEY>: <feature>` followed by a block:
+
+```
+Vary this existing mockup:
+  group slug: <parentSlug>
+  source file: mockups/<parentSlug>/<sourceFile>
+Write the new group to: mockups/<childSlug>/
+Change instructions:
+<free text>
+```
+
+produce a NEW group that iterates on ONE existing mockup rather than exploring fresh alternatives:
+
+- **Read the source file first** and treat it as the hard baseline. Every option in the new group is a *refinement of that one mockup* applying the change instructions — NOT fresh unrelated alternatives. Preserve the source's interaction paradigm, sample data, and app-shell context; vary only what the instructions ask for (plus tightly related follow-on choices).
+- **Never modify or delete the source group.** Write ONLY into the given `mockups/<childSlug>/` directory. The parent must remain viewable unchanged.
+- Default to **3 variations** (the exploration is narrower than a first round); still render distinct, comparable options.
+- Write `mockups/<childSlug>/index.json` with the normal fields PLUS `"parent": "<parentSlug>"`, `"parentFile": "<sourceFile>"`, `"instructions": "<free text>"`, and `"ticket": "<KEY>"` (the same ticket as the parent). Keep the same brief-bar / annotation / verify-before-presenting rules as a first-round set.
 
 ## Ground rules
 

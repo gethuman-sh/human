@@ -8,6 +8,10 @@ argument-hint: <ticket-key>
 
 Create an implementation plan using a 3-phase agent pipeline: draft, verify, finalize. No plan files are created — the plan lands on the tracker: as a separate engineering ticket's description (split topology: distinct PM and engineering trackers) or as a `[human:plan]` comment on the ticket itself (single-tracker topology).
 
+## Phase 0: Inherit the chosen design
+
+Run `human mockups chosen <KEY>` (the PM key this skill received). If it prints a path, read that HTML file — it is the human-selected design direction (the winning mockup) for this ticket. Treat it as authoritative UI/interaction context: the plan MUST build the UI to match it, and the planner prompt should carry that design as context. If it prints nothing, there is no chosen design; proceed normally.
+
 ## Phase 1: Draft Plan
 
 Run the planner agent. It returns the plan as its output (no files written):

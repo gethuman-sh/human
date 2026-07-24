@@ -33,6 +33,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdindex"
 	"github.com/gethuman-sh/human/cmd/cmdinit"
 	"github.com/gethuman-sh/human/cmd/cmdmarker"
+	"github.com/gethuman-sh/human/cmd/cmdmockups"
 	"github.com/gethuman-sh/human/cmd/cmdnotion"
 	"github.com/gethuman-sh/human/cmd/cmdping"
 	"github.com/gethuman-sh/human/cmd/cmdpipeline"
@@ -241,6 +242,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	commitsCmd := cmdcommits.BuildCommitsCmd()
 	commitsCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(commitsCmd)
+
+	mockupsCmd := cmdmockups.BuildMockupsCmd()
+	mockupsCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(mockupsCmd)
 
 	markerCmd := cmdmarker.BuildMarkerCmd(autoDeps)
 	markerCmd.GroupID = "shortcuts"
