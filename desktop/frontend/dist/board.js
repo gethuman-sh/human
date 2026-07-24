@@ -15,7 +15,7 @@ import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsvie
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, initialLoadPhase, } from "./board-queue.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
@@ -1392,26 +1392,47 @@ async function pollDoctor() {
         ? "All systems go"
         : failing.map((c) => `${c.name}: ${c.detail || "failing"}`).join("\n") || "System health unknown";
 }
-// initialLoad renders the board progressively on startup: a spinner first, then
-// ticket titles (Backlog) from the fast comment-scan-free fetch, then the full
-// reconcile that moves each card into its real stage. Steady-state updates use
-// reconcile() directly so they never flash the spinner or re-place cards.
+// initialLoad renders the board on startup with stale-while-revalidate: it first
+// paints the last-known cached snapshot instantly (a cold open, including after a
+// restart, shows the previous board rather than a spinner), then the full
+// reconcile below silently swaps in fresh data. On a cache miss it falls back to
+// the original spinner → quick-titles → reconcile path. reconcile() persists each
+// full fetch as the next snapshot (App.Cards).
 async function initialLoad() {
-    boardLoading = true;
-    render();
+    let painted = false;
     try {
-        const quick = await go().CardsQuick();
-        // Suppress the quick-phase error: the full reconcile surfaces it, and
-        // clearing it here avoids a banner that flickers away a moment later.
-        current = boardStateFromPayload(quick, true);
-        boardLoading = false;
-        stagesLoading = true;
-        render();
+        const cached = await go().CachedCards();
+        if (initialLoadPhase(cached.hit) === "cache") {
+            // Cached cards already carry real stages, so no spinner and no
+            // per-card resolving badge (stagesLoading stays false) — the paint must
+            // look identical to a live view, with no staleness cue.
+            current = boardStateFromPayload(cached.data, true);
+            boardLoading = false;
+            stagesLoading = false;
+            painted = true;
+            render();
+        }
     }
     catch {
-        // Quick phase failed (e.g. daemon not up yet): fall through to the full
-        // fetch, which surfaces the error via reconcile().
-        boardLoading = false;
+        // Cache read failed (e.g. bindings not ready): fall through to the live path.
+    }
+    if (!painted) {
+        boardLoading = true;
+        render();
+        try {
+            const quick = await go().CardsQuick();
+            // Suppress the quick-phase error: the full reconcile surfaces it, and
+            // clearing it here avoids a banner that flickers away a moment later.
+            current = boardStateFromPayload(quick, true);
+            boardLoading = false;
+            stagesLoading = true;
+            render();
+        }
+        catch {
+            // Quick phase failed (e.g. daemon not up yet): fall through to the full
+            // fetch, which surfaces the error via reconcile().
+            boardLoading = false;
+        }
     }
     await reconcile();
 }
