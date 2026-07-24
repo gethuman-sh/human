@@ -17,6 +17,14 @@ import (
 	"github.com/gethuman-sh/human/errors"
 )
 
+// Choice pins the ticket's chosen winner mockup: the variation group it lives
+// in and the option HTML file within that group. Stored host-side (never on the
+// tracker) so the choice travels and dies with the clone, like the set link.
+type Choice struct {
+	Slug string `json:"slug"`
+	File string `json:"file"`
+}
+
 // Entry links one ticket to its mockup set. Created marks when generation was
 // launched: an entry without a finished set is "in progress" while young and
 // treated as stale (absent) once old, so a crashed agent can never
@@ -24,6 +32,9 @@ import (
 type Entry struct {
 	Slug    string    `json:"slug"`
 	Created time.Time `json:"created"`
+	// Chosen is the selected winner, nil until a leaf is marked. Optional so
+	// existing mockups.json files (no "chosen" key) read back unchanged.
+	Chosen *Choice `json:"chosen,omitempty"`
 }
 
 // fileFormat is the on-disk shape. Version exists so a later change (e.g.
@@ -89,6 +100,48 @@ func (s *Store) Delete(key string) error {
 	}
 	delete(mocks, key)
 	return s.write(mocks)
+}
+
+// Choose records the winner for one ticket, preserving the existing set link.
+// A missing entry is created with only the choice (defensive: the root link is
+// normally already present).
+func (s *Store) Choose(key string, c Choice) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mocks := s.read()
+	e := mocks[key]
+	e.Chosen = &Choice{Slug: c.Slug, File: c.File}
+	mocks[key] = e
+	return s.write(mocks)
+}
+
+// ClearChoice removes the winner for one ticket; a missing entry or absent
+// choice is a no-op. Used when the chosen leaf is pruned.
+func (s *Store) ClearChoice(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mocks := s.read()
+	e, ok := mocks[key]
+	if !ok || e.Chosen == nil {
+		return nil
+	}
+	e.Chosen = nil
+	mocks[key] = e
+	return s.write(mocks)
+}
+
+// ChosenFor returns the winner for one ticket if set.
+func (s *Store) ChosenFor(key string) (Choice, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mocks := s.read()
+	if e, ok := mocks[key]; ok && e.Chosen != nil {
+		return *e.Chosen, true
+	}
+	return Choice{}, false
 }
 
 // SlugFor derives the mockup set directory slug from a ticket key: lowercase
