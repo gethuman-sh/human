@@ -37,6 +37,11 @@ var skipDirs = map[string]bool{
 	"venv": true, ".idea": true, ".vscode": true, ".codenav": true,
 }
 
+// SkipDir reports whether a directory basename is one the indexer never
+// descends into. Exported so the daemon's file watcher watches exactly the
+// directories the indexer walks, keeping the two in lockstep.
+func SkipDir(name string) bool { return skipDirs[name] }
+
 const maxFileBytes = 1 << 20 // skip files larger than 1 MiB
 
 func (TreeSitter) Name() string       { return "treesitter" }
