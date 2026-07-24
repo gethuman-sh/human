@@ -86,6 +86,22 @@ test("badgeInfo preserves prior classifications", () => {
   assert.equal(badgeInfo({ stage: "done", state: "done" }).cls, "done");
 });
 
+// 1290: an open decision block must outrank a `failed` state too, not just the
+// review warning — a card carrying a stale *-failed marker AND an open
+// same-stage options block is a deliberate human pause (the daemon's twin
+// guard in reconcileStuckRunning suppresses the marker going forward, but a
+// marker posted before the fix landed must still render as a decision, not a
+// red ✕). The badge text carries a `?` glyph so it reads as a question, not an
+// error.
+test("open options outrank a failed state with a decision-needed badge (1290)", () => {
+  const card = { stage: "planning", state: "failed", options: [{ id: "1", label: "a" }, { id: "2", label: "b" }] };
+  const info = badgeInfo(card);
+  assert.equal(info.cls, "decision");
+  assert.match(info.text, /\?/);
+  // Without options the same card falls back to the plain failed badge.
+  assert.equal(badgeInfo({ ...card, options: [] }).cls, "failed");
+});
+
 // An open decision block must surface as its own badge, outranking the
 // generic review warning — the actionable statement is "pick one" (SC-534).
 test("open options render a decision-needed badge over the review warning", () => {

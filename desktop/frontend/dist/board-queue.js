@@ -105,6 +105,20 @@ export function badgeInfo(card) {
             spinner: true,
         };
     }
+    // An open decision block outranks EVERY other classification, including a
+    // stale failed marker: a card parked on a deliberate human fork must never
+    // paint red, even if a *-failed marker also landed on it (the daemon's twin
+    // guard in reconcileStuckRunning stops new spurious markers going forward,
+    // but a marker posted before that fix — or any other race — must still
+    // defer to the open decision here). The `?` glyph reads as a question, not
+    // an error (ticket 1290).
+    if (card.options && card.options.length > 0) {
+        return {
+            cls: "decision",
+            text: `? decision needed`,
+            title: `The stage offers ${card.options.length} ways forward — open the card to choose`,
+        };
+    }
     if (card.state === "failed")
         return { cls: "failed", text: "✕", title: "Stage failed" };
     if (card.state === "resolved") {
@@ -118,16 +132,6 @@ export function badgeInfo(card) {
         // undetermined): a successful terminal outcome, never red, never deployable
         // (ticket 405).
         return { cls: "resolved", text: "no fix needed", title: "Triage concluded no fix is warranted" };
-    }
-    // An open decision block outranks the generic review warning: the review
-    // deliberately handed the human a fork, and the actionable statement is
-    // "pick one", not "problems found" (ticket 372/534).
-    if (card.options && card.options.length > 0) {
-        return {
-            cls: "decision",
-            text: "decision needed",
-            title: `The review offers ${card.options.length} ways forward — open the card to choose`,
-        };
     }
     if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
         return { cls: "warning", text: "⚠ review found problems", title: `Review verdict: ${card.verdict ?? ""}` };
