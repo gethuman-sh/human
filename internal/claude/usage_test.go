@@ -658,3 +658,58 @@ func TestScanTokens_singlePassMatchesSeparateWalks(t *testing.T) {
 		t.Errorf("PerHour not ascending: %q then %q", scan.PerHour[0].Bucket, scan.PerHour[1].Bucket)
 	}
 }
+
+// TestScanTokens_byModel guards that the single pass attributes tokens per model
+// over the range, using classifyModel's short display names, excludes
+// out-of-range and non-assistant lines, and orders rows by total spend desc.
+func TestScanTokens_byModel(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-24 * time.Hour)
+	inRange := now.Add(-2 * time.Hour)
+	outOfRange := now.Add(-48 * time.Hour)
+
+	lines := [][]byte{
+		makeLine(t, "assistant", "claude-opus-4-8", inRange, 100, 200, 50, 30),
+		makeLine(t, "assistant", "claude-3-5-haiku", inRange, 10, 5, 0, 2),
+		// Out of range — excluded from the per-model totals.
+		makeLine(t, "assistant", "claude-opus-4-8", outOfRange, 999, 999, 999, 999),
+		// Non-assistant — filtered out entirely.
+		makeLine(t, "user", "claude-opus-4-8", inRange, 999, 999, 999, 999),
+	}
+
+	scan, err := ScanTokens(fakeWalker{lines: lines}, "/fake", since, now, now)
+	if err != nil {
+		t.Fatalf("ScanTokens: %v", err)
+	}
+	if len(scan.ByModel) != 2 {
+		t.Fatalf("ByModel has %d entries, want 2: %+v", len(scan.ByModel), scan.ByModel)
+	}
+	// Sorted by total spend desc, so opus (350+30) reads before haiku (15+2).
+	want := []ModelTokens{
+		{Model: "opus 4.8", Fresh: 350, CacheRead: 30},
+		{Model: "haiku 3.5", Fresh: 15, CacheRead: 2},
+	}
+	for i := range want {
+		if scan.ByModel[i] != want[i] {
+			t.Errorf("ByModel[%d] = %+v, want %+v", i, scan.ByModel[i], want[i])
+		}
+	}
+}
+
+// TestScanTokens_byModel_empty guards that a tree with no assistant-usage lines
+// yields an empty (non-nil-behaving) ByModel and does not panic.
+func TestScanTokens_byModel_empty(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-24 * time.Hour)
+
+	lines := [][]byte{
+		makeLine(t, "user", "claude-opus-4-8", now.Add(-time.Hour), 1, 1, 1, 1),
+	}
+	scan, err := ScanTokens(fakeWalker{lines: lines}, "/fake", since, now, now)
+	if err != nil {
+		t.Fatalf("ScanTokens: %v", err)
+	}
+	if len(scan.ByModel) != 0 {
+		t.Errorf("ByModel = %+v, want empty", scan.ByModel)
+	}
+}

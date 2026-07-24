@@ -83,6 +83,7 @@ test("in-flight guard: overlapping showStats calls do not stack Stats() calls (S
         audit: { total: 0, success: 0, failure: 0 },
         agentRuns: { total: 0, success: 0, failure: 0 },
         tokensPerHour: [],
+        tokensByModel: [],
         toolsByTool: [],
         auditByDay: [],
         networkDecisions: [],
@@ -97,4 +98,32 @@ test("in-flight guard: overlapping showStats calls do not stack Stats() calls (S
   release();
   await Promise.all([first, second]);
   assert.equal(calls, 2, "the overlapping call coalesces into exactly one follow-up fetch");
+});
+
+// SC-1316: the stats page must render a "Tokens by model" panel from the
+// tokensByModel payload so the tier split (opus/sonnet/haiku) is visible.
+test("showStats renders the Tokens by model panel from tokensByModel (SC-1316)", async () => {
+  const el = installStatsDOM();
+  initStatsView(() => ({
+    Stats: () =>
+      Promise.resolve({
+        range: "24h",
+        generatedAt: "",
+        daemonStartedAt: "",
+        tokens: { fresh: 0, cacheRead: 0 },
+        toolCalls: { total: 0, success: 0, failure: 0 },
+        audit: { total: 0, success: 0, failure: 0 },
+        agentRuns: { total: 0, success: 0, failure: 0 },
+        tokensPerHour: [],
+        tokensByModel: [{ model: "opus 4.8", fresh: 300, cacheRead: 30 }],
+        toolsByTool: [],
+        auditByDay: [],
+        networkDecisions: [],
+      }),
+  }));
+
+  await showStats();
+
+  assert.match(el.innerHTML, /Tokens by model/, "the panel title renders");
+  assert.match(el.innerHTML, /opus 4\.8/, "the model row renders");
 });

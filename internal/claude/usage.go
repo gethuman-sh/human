@@ -174,6 +174,16 @@ type TokenHourBucket struct {
 	CacheRead int    `json:"cacheRead"`
 }
 
+// ModelTokens is one model class's fresh vs cache-read token split over a
+// range. Fresh folds input, output and cache-creation tokens (all billed as
+// work); cache reads are kept apart, mirroring TokenHourBucket. The model name
+// is classifyModel's short display form ("opus 4.8", "haiku 3.5", "fable 5").
+type ModelTokens struct {
+	Model     string `json:"model"`
+	Fresh     int    `json:"fresh"`
+	CacheRead int    `json:"cacheRead"`
+}
+
 // ClaudeProjectsRoot returns ~/.claude/projects on the local host. The path was
 // only ever built inline before (discovery.go); the board's token panel needs
 // the projects root without a specific project dir, so it gets a named helper.
@@ -238,6 +248,7 @@ type TokenScan struct {
 	WindowFresh     int               // Input+Output+CacheCreate in the current 5h window
 	WindowCacheRead int               // CacheRead in the current 5h window
 	PerHour         []TokenHourBucket // per-hour buckets in [since, until], ascending
+	ByModel         []ModelTokens     // per-model fresh/cache totals over [since, until], desc by total
 }
 
 // ScanTokens folds CalculateUsage's current-window totals and TokensByHour's
@@ -250,6 +261,7 @@ func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (Tok
 	winStart := WindowStart(now)
 	winEnd := WindowEnd(winStart)
 	buckets := make(map[string]*TokenHourBucket)
+	byModel := make(map[string]*ModelTokens)
 	var scan TokenScan
 
 	err := walker.WalkJSONL(root, func(line []byte) error {
@@ -280,6 +292,15 @@ func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (Tok
 			}
 			b.Fresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
 			b.CacheRead += u.CacheReadInputTokens
+
+			model := classifyModel(entry.Message.Model)
+			mt := byModel[model]
+			if mt == nil {
+				mt = &ModelTokens{Model: model}
+				byModel[model] = mt
+			}
+			mt.Fresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
+			mt.CacheRead += u.CacheReadInputTokens
 		}
 		return nil
 	})
@@ -292,6 +313,21 @@ func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (Tok
 		scan.PerHour = append(scan.PerHour, *b)
 	}
 	sort.Slice(scan.PerHour, func(i, j int) bool { return scan.PerHour[i].Bucket < scan.PerHour[j].Bucket })
+
+	scan.ByModel = make([]ModelTokens, 0, len(byModel))
+	for _, m := range byModel {
+		scan.ByModel = append(scan.ByModel, *m)
+	}
+	// Sort by total spend desc so the biggest tier reads first; break ties on
+	// model name for deterministic output.
+	sort.Slice(scan.ByModel, func(i, j int) bool {
+		ti := scan.ByModel[i].Fresh + scan.ByModel[i].CacheRead
+		tj := scan.ByModel[j].Fresh + scan.ByModel[j].CacheRead
+		if ti != tj {
+			return ti > tj
+		}
+		return scan.ByModel[i].Model < scan.ByModel[j].Model
+	})
 	return scan, nil
 }
 

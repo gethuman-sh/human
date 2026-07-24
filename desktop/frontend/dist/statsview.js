@@ -201,6 +201,7 @@ function renderHeadlines() {
 function renderPanels() {
     return (`<div class="stats-panels">` +
         panelTokens() +
+        panelTokensByModel() +
         panelTools() +
         panelAudit() +
         panelNetwork() +
@@ -240,6 +241,31 @@ function panelTokens() {
     })
         .join("");
     return panelShell("Tokens per hour", "fresh / cache", body);
+}
+// Tokens-by-model: one row per model with two bars (fresh, cache-read)
+// normalized against the overall max, so the tier split (opus/sonnet/haiku)
+// reads at a glance over the selected range.
+function panelTokensByModel() {
+    const rows = latest.tokensByModel;
+    if (rows.length === 0)
+        return panelShell("Tokens by model", "", emptyBody());
+    const all = rows.flatMap((r) => [r.fresh, r.cacheRead]);
+    const pcts = barPercents(all);
+    const body = rows
+        .map((r, i) => {
+        const fp = pcts[i * 2];
+        const cp = pcts[i * 2 + 1];
+        return (`<div class="stats-hour-row">` +
+            `<span class="stats-hour-label">${escapeHtml(r.model)}</span>` +
+            `<span class="stats-hour-bars">` +
+            `<span class="token-bar"><span class="token-bar-fill fresh" style="width:${fp}%"></span></span>` +
+            `<span class="token-bar"><span class="token-bar-fill cache" style="width:${cp}%"></span></span>` +
+            `</span>` +
+            `<span class="stats-hour-val">${escapeHtml(fmtNum(r.fresh))}/${escapeHtml(fmtNum(r.cacheRead))}</span>` +
+            `</div>`);
+    })
+        .join("");
+    return panelShell("Tokens by model", "fresh / cache", body);
 }
 function panelTools() {
     const rows = latest.toolsByTool;

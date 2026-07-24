@@ -66,6 +66,7 @@ type StatsOverview struct {
 	Audit            StatsHeadline            `json:"audit"`     // over range
 	AgentRuns        StatsHeadline            `json:"agentRuns"` // over range
 	TokensPerHour    []claude.TokenHourBucket `json:"tokensPerHour"`
+	TokensByModel    []claude.ModelTokens     `json:"tokensByModel"`
 	ToolsByTool      []stats.ToolCount        `json:"toolsByTool"`
 	AuditByDay       []AuditDayCount          `json:"auditByDay"`
 	NetworkDecisions []NetworkEvent           `json:"networkDecisions"` // live, ignores range
@@ -106,6 +107,7 @@ func (s *Server) buildStatsOverview(ctx context.Context, r StatsRange) (StatsOve
 	ov.Tokens.Fresh = scan.WindowFresh
 	ov.Tokens.CacheRead = scan.WindowCacheRead
 	ov.TokensPerHour = scan.PerHour
+	ov.TokensByModel = scan.ByModel
 
 	// Tool calls: panel breakdown plus the ok/error headline split.
 	if s.StatsStore != nil {
