@@ -33,8 +33,15 @@ type MockupSet struct {
 	// Ticket is the PM key a ticket-linked invocation recorded in the
 	// manifest — recovery metadata; the authoritative ticket→set link is the
 	// project's .human/mockups.json.
-	Ticket  string         `json:"ticket,omitempty"`
-	Options []MockupOption `json:"options"`
+	Ticket string `json:"ticket,omitempty"`
+	// Parent is the slug of the group this one was varied from; empty for a
+	// root group. ParentFile is the option HTML file within Parent that was
+	// varied. Instructions is the free-text change request that produced this
+	// group. All three are written by the human-mockups skill in variation mode.
+	Parent       string         `json:"parent,omitempty"`
+	ParentFile   string         `json:"parentFile,omitempty"`
+	Instructions string         `json:"instructions,omitempty"`
+	Options      []MockupOption `json:"options"`
 }
 
 // mockupDirs maps a set slug to its directory on disk. MockupSets rebuilds it
@@ -75,6 +82,11 @@ func (a *App) MockupSets() ([]MockupSet, error) {
 			if !e.IsDir() {
 				continue
 			}
+			// Dot-prefixed dirs hold pruned/archived subtrees (mockups/.archive/…);
+			// they must not surface in navigation.
+			if strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
 			setDir := filepath.Join(p.Dir, "mockups", e.Name())
 			data, err := os.ReadFile(filepath.Join(setDir, "index.json"))
 			if err != nil {
@@ -108,8 +120,10 @@ func (a *App) MockupSets() ([]MockupSet, error) {
 // cardMockupInfo is one card's link to a local mockup set: the set slug plus
 // whether the set is ready to view or still being generated.
 type cardMockupInfo struct {
-	Slug  string
-	State string // "ready" | "creating"
+	Slug       string
+	State      string // "ready" | "creating"
+	ChosenSlug string // group slug of the winner, "" if none
+	ChosenFile string // option file of the winner, "" if none
 }
 
 // creatingWindow bounds how long a mockup link without a finished set counts
@@ -130,12 +144,20 @@ func cardMockups() map[string]cardMockupInfo {
 			if _, dup := links[key]; dup || entry.Slug == "" {
 				continue
 			}
+			var info cardMockupInfo
 			switch {
 			case validMockupSet(filepath.Join(p.Dir, "mockups", entry.Slug)):
-				links[key] = cardMockupInfo{Slug: entry.Slug, State: "ready"}
+				info = cardMockupInfo{Slug: entry.Slug, State: "ready"}
 			case time.Since(entry.Created) < creatingWindow:
-				links[key] = cardMockupInfo{Slug: entry.Slug, State: "creating"}
+				info = cardMockupInfo{Slug: entry.Slug, State: "creating"}
+			default:
+				continue
 			}
+			if entry.Chosen != nil {
+				info.ChosenSlug = entry.Chosen.Slug
+				info.ChosenFile = entry.Chosen.File
+			}
+			links[key] = info
 		}
 	}
 	return links
