@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable } from "../build/board-queue.js";
+import { queueOf, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, initialLoadPhase } from "../build/board-queue.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -287,4 +287,12 @@ test("isReplannable: planned feature cards only", async () => {
   assert.equal(isReplannable({ stage: "planning", state: "running" }), false);
   assert.equal(isReplannable({ stage: "implementation", state: "done" }), false);
   assert.equal(isReplannable({ stage: "planning", state: "done", bug: true }), false);
+});
+
+test("initialLoadPhase: a cache hit paints from cache and skips the quick pass", () => {
+  assert.equal(initialLoadPhase(true), "cache");
+});
+
+test("initialLoadPhase: a cache miss falls back to the spinner + quick-titles path", () => {
+  assert.equal(initialLoadPhase(false), "quick");
 });

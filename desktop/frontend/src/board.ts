@@ -60,6 +60,7 @@ import {
   isReadyToDeploy,
   deployableCards,
   deployControlView,
+  initialLoadPhase,
 } from "./board-queue.js";
 import type { DeploySide } from "./board-queue.js";
 import { buildDeployControl } from "./board-deploy.js";
@@ -118,6 +119,14 @@ interface BoardData {
   // Hand-sorted ticket order per queue column (top first); cards absent from
   // their queue's list render after it in fetch order.
   columnOrder?: Record<string, string[]>;
+}
+
+// CachedBoard is App.CachedCards's payload: the last-known board snapshot plus
+// whether one existed for the active project. hit=false means paint nothing from
+// cache and run the normal spinner + quick-titles load.
+interface CachedBoard {
+  hit: boolean;
+  data: BoardData;
 }
 
 interface IdeationMsg {
@@ -263,6 +272,7 @@ interface AppBindings {
   Doctor(): Promise<DoctorData>;
   GetIssueDetail(trackerKind: string, trackerName: string, key: string): Promise<IssueDetailData>;
   CardsQuick(): Promise<BoardData>;
+  CachedCards(): Promise<CachedBoard>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   FixBug(pmKey: string, pmTitle: string): Promise<void>;
   ChooseOption(pmKey: string, optionID: string): Promise<void>;
@@ -1731,25 +1741,45 @@ async function pollDoctor(): Promise<void> {
     : failing.map((c) => `${c.name}: ${c.detail || "failing"}`).join("\n") || "System health unknown";
 }
 
-// initialLoad renders the board progressively on startup: a spinner first, then
-// ticket titles (Backlog) from the fast comment-scan-free fetch, then the full
-// reconcile that moves each card into its real stage. Steady-state updates use
-// reconcile() directly so they never flash the spinner or re-place cards.
+// initialLoad renders the board on startup with stale-while-revalidate: it first
+// paints the last-known cached snapshot instantly (a cold open, including after a
+// restart, shows the previous board rather than a spinner), then the full
+// reconcile below silently swaps in fresh data. On a cache miss it falls back to
+// the original spinner → quick-titles → reconcile path. reconcile() persists each
+// full fetch as the next snapshot (App.Cards).
 async function initialLoad(): Promise<void> {
-  boardLoading = true;
-  render();
+  let painted = false;
   try {
-    const quick = await go().CardsQuick();
-    // Suppress the quick-phase error: the full reconcile surfaces it, and
-    // clearing it here avoids a banner that flickers away a moment later.
-    current = boardStateFromPayload(quick, true);
-    boardLoading = false;
-    stagesLoading = true;
-    render();
+    const cached = await go().CachedCards();
+    if (initialLoadPhase(cached.hit) === "cache") {
+      // Cached cards already carry real stages, so no spinner and no
+      // per-card resolving badge (stagesLoading stays false) — the paint must
+      // look identical to a live view, with no staleness cue.
+      current = boardStateFromPayload(cached.data, true);
+      boardLoading = false;
+      stagesLoading = false;
+      painted = true;
+      render();
+    }
   } catch {
-    // Quick phase failed (e.g. daemon not up yet): fall through to the full
-    // fetch, which surfaces the error via reconcile().
-    boardLoading = false;
+    // Cache read failed (e.g. bindings not ready): fall through to the live path.
+  }
+  if (!painted) {
+    boardLoading = true;
+    render();
+    try {
+      const quick = await go().CardsQuick();
+      // Suppress the quick-phase error: the full reconcile surfaces it, and
+      // clearing it here avoids a banner that flickers away a moment later.
+      current = boardStateFromPayload(quick, true);
+      boardLoading = false;
+      stagesLoading = true;
+      render();
+    } catch {
+      // Quick phase failed (e.g. daemon not up yet): fall through to the full
+      // fetch, which surfaces the error via reconcile().
+      boardLoading = false;
+    }
   }
   await reconcile();
 }
