@@ -188,6 +188,17 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
   return null;
 }
 
+// cardError derives the red `.card-error` subtitle from the SAME classifier the
+// badge uses, so the two render paths can never disagree: a card only shows its
+// failure text when badgeInfo classifies it as an actual stage failure. A card
+// parked on an open decision (which outranks a stale *-failed marker in
+// badgeInfo) therefore paints the amber decision badge and NO red line — SC-1290
+// fixed the badge but left renderCard rendering on raw `card.error` (SC-1301).
+export function cardError(card: QueueCard & { error?: string }): string {
+  if (!card.error) return "";
+  return badgeInfo(card)?.cls === "failed" ? card.error : "";
+}
+
 // planReady reports a planning card whose plan is complete — the only planning
 // state permitted to advance forward into Code. A running or failed planning
 // card in Engineering must NOT launch implementation on an unplanned ticket.

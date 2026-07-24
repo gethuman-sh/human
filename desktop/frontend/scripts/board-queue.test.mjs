@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, forwardDropAllowed, planReady, badgeInfo, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable } from "../build/board-queue.js";
+import { queueOf, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable } from "../build/board-queue.js";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // SC-355 regression: a running or failed planning card must render in the
 // Engineering column where the user dropped it — not snap back to Product.
@@ -117,6 +120,53 @@ test("open options render a decision-needed badge over the review warning", () =
   assert.match(info.text, /decision needed/);
   // Without options the same card falls back to the review warning.
   assert.equal(badgeInfo({ ...card, options: [] }).cls, "warning");
+});
+
+// SC-1301: the red `.card-error` subtitle must track the SAME badge
+// classification as the amber decision badge, not be computed independently. A
+// card parked on an open [human:options] decision that ALSO carries a stale
+// *-failed marker must paint the decision badge and NO red error line — SC-1290
+// fixed the badge but left renderCard's error render on raw `card.error`.
+test("cardError suppresses the failure subtitle when a decision outranks it (SC-1301)", () => {
+  const card = {
+    stage: "planning",
+    state: "failed",
+    error: "Stuck in planning: no terminal marker and no live agent — needs attention",
+    options: [{ id: "1", label: "a" }, { id: "2", label: "b" }],
+  };
+  assert.equal(badgeInfo(card)?.cls, "decision", "an open decision must classify as the decision badge");
+  assert.equal(cardError(card), "", "no red error subtitle may accompany the decision badge");
+});
+
+test("cardError keeps the failure text for a genuinely failed card (SC-1301)", () => {
+  const card = { stage: "planning", state: "failed", error: "boom" };
+  assert.equal(badgeInfo(card)?.cls, "failed", "no decision → the failed badge");
+  assert.equal(cardError(card), "boom", "a real failure still shows its error text");
+});
+
+test("cardError is empty for a running card (SC-1301)", () => {
+  assert.equal(cardError({ stage: "implementation", state: "running", error: "boom" }), "");
+});
+
+test("cardError is empty when the error field is blank or absent (SC-1301)", () => {
+  assert.equal(cardError({ stage: "planning", state: "failed" }), "");
+  assert.equal(cardError({ stage: "planning", state: "failed", error: "" }), "");
+});
+
+// SC-1301 wiring guard: renderCard's error subtitle must be gated on the shared
+// cardError classifier, never on raw `card.error`. The frontend is dependency-
+// free (no DOM test runner), so this asserts the source wiring like
+// ideation-done.test.mjs — so the unconditional render cannot be reintroduced.
+test("renderCard gates the error subtitle on cardError, not raw card.error (SC-1301)", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const ts = readFileSync(resolve(here, "..", "src", "board.ts"), "utf8");
+  assert.match(ts, /cardError\(/, "renderCard must derive the error text through the shared cardError classifier");
+  assert.match(ts, /class="card-error"/, "the error subtitle keeps its style hook");
+  assert.doesNotMatch(
+    ts,
+    /card\.error \? `<div class="card-error"/,
+    "the unconditional card.error render must not be reintroduced",
+  );
 });
 
 // SC-624: columns render in the user's hand-sorted order; cards without a

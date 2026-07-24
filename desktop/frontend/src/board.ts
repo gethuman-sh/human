@@ -47,6 +47,7 @@ import {
   isReplannable,
   forwardDropAllowed,
   badgeInfo,
+  cardError,
   sortByHandOrder,
   insertKeyAt,
   boardStateFromPayload,
@@ -412,8 +413,12 @@ function targetEnabled(toQueue: string): boolean {
 // its queue position IS the statement of completion. A review that found
 // problems is a WARNING, not a stage failure: the work exists, it just may
 // not advance until a rebuild passes.
+// badge renders an already-normalized card's live state — renderCard normalizes
+// the card once (consuming the session's chosen options) and feeds the SAME card
+// to both the badge and the error-subtitle gate, so the two paths can never
+// disagree during the local session window.
 function badge(card: Card): string {
-  const info = badgeInfo(chosenOptions.has(card.key) ? { ...card, options: liveOptions(card) } : card);
+  const info = badgeInfo(card);
   if (!info) return "";
   const spinner = info.spinner ? `<span class="spinner"></span> ` : "";
   return `<span class="badge ${info.cls}" title="${escapeAttr(info.title)}">${spinner}${escapeHtml(info.text)}</span>`;
@@ -437,8 +442,14 @@ function renderCard(card: Card): HTMLElement {
     // comments; a resolving spinner signals it may still move columns.
     meta.push(`<span class="badge resolving" title="Resolving stage…"><span class="spinner"></span></span>`);
   }
-  const b = badge(card);
+  // Normalize once — consume the session's chosen decision block — and derive
+  // both the badge and the red error subtitle from the SAME card, so a card
+  // parked on an open decision can never paint the amber badge AND a red failure
+  // line at the same time (SC-1301).
+  const classCard = chosenOptions.has(card.key) ? { ...card, options: liveOptions(card) } : card;
+  const b = badge(classCard);
   if (b) meta.push(b);
+  const errText = cardError(classCard);
   // Age pill: how long the finished plan has been sitting in the Engineering
   // backlog — color escalates so rotting plans are visible at a glance.
   const age = ageBadge(card, new Date());
@@ -459,7 +470,7 @@ function renderCard(card: Card): HTMLElement {
     <div class="card-key">${escapeHtml(card.key)}</div>
     <div class="card-title" title="${escapeAttr(card.title)}">${hiddenPill}${escapeHtml(card.title)}</div>
     <div class="card-meta">${meta.join("")}</div>
-    ${card.error ? `<div class="card-error">${escapeHtml(card.error)}</div>` : ""}
+    ${errText ? `<div class="card-error">${escapeHtml(errText)}</div>` : ""}
   `;
   // External links must go through the Wails runtime (see openExternal);
   // the pointerdown filter in beginPointerDrag already exempts anchors.
