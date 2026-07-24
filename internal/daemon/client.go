@@ -494,6 +494,39 @@ func CreateMocks(addr, token string, req CreateMocksRequest) error {
 	return err
 }
 
+// CreateVariations asks the daemon to launch human-mockups in variation mode:
+// a new group of variations of one existing mockup. Single JSON arg, matching
+// CreateMocks; returns once the agent is launched.
+func CreateVariations(addr, token string, req CreateVariationsRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling create variations request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"create-variations", string(data)})
+	return err
+}
+
+// ChooseMockup asks the daemon to record (or clear, when Slug is empty) the
+// ticket's winner mockup.
+func ChooseMockup(addr, token string, req ChooseMockupRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling choose mockup request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"choose-mockup", string(data)})
+	return err
+}
+
+// PruneMockup asks the daemon to archive a variation subtree.
+func PruneMockup(addr, token string, req PruneMockupRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling prune mockup request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"prune-mockup", string(data)})
+	return err
+}
+
 // IdeationStart starts (or re-attaches to) the board ideation session.
 func IdeationStart(addr, token string, req IdeationStartRequest) (IdeationStatus, error) {
 	return ideationCall(addr, token, "ideation-start", req)

@@ -99,6 +99,14 @@ type Server struct {
 	// MockupsCreator launches the human-mockups skill for one PM ticket and
 	// records the ticket→mockup-set link. nil disables the create-mocks route.
 	MockupsCreator func(req CreateMocksRequest) error
+	// VariationsCreator launches human-mockups in variation mode: a new group of
+	// variations of one existing mockup. nil disables the create-variations route.
+	VariationsCreator func(req CreateVariationsRequest) error
+	// MockupChooser records (or clears) the ticket's winner mockup. nil disables
+	// the choose-mockup route.
+	MockupChooser func(req ChooseMockupRequest) error
+	// MockupPruner archives a variation subtree. nil disables the prune-mockup route.
+	MockupPruner func(req PruneMockupRequest) error
 	// Ideation owns the board's single agent-driven ideation session. nil
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
@@ -460,6 +468,9 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"features-generate": func() { s.withBlockingOp(func() { s.handleFeaturesGenerate(conn) }) },
 		"findbugs-start":    func() { s.withBlockingOp(func() { s.handleFindbugsStart(conn) }) },
 		"create-mocks":      func() { s.withBlockingOp(func() { s.handleCreateMocks(conn, args[1:]) }) },
+		"create-variations": func() { s.withBlockingOp(func() { s.handleCreateVariations(conn, args[1:]) }) },
+		"choose-mockup":     func() { s.withBlockingOp(func() { s.handleChooseMockup(conn, args[1:]) }) },
+		"prune-mockup":      func() { s.withBlockingOp(func() { s.handlePruneMockup(conn, args[1:]) }) },
 		"config-get":        func() { s.handleConfigGet(conn, projectDir) },
 		"config-set":        func() { s.handleConfigSet(conn, args[1:], projectDir) },
 	}
@@ -811,6 +822,87 @@ func (s *Server) handleCreateMocks(conn net.Conn, args []string) {
 		return
 	}
 	if err := s.MockupsCreator(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	s.pokeBoard()
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleCreateVariations launches human-mockups in variation mode via the
+// injected VariationsCreator. Non-destructive (the toolbar click is consent),
+// so it bypasses the destructive-confirm gate like create-mocks.
+func (s *Server) handleCreateVariations(conn net.Conn, args []string) {
+	if s.VariationsCreator == nil {
+		s.writeError(conn, "variation creation not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "create-variations requires one JSON arg", 1)
+		return
+	}
+	var req CreateVariationsRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid create-variations request: "+err.Error(), 1)
+		return
+	}
+	if err := s.VariationsCreator(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	s.pokeBoard()
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleChooseMockup records or clears the ticket's winner mockup via the
+// injected MockupChooser. A host-state edit the click consents to, so no
+// destructive-confirm gate.
+func (s *Server) handleChooseMockup(conn net.Conn, args []string) {
+	if s.MockupChooser == nil {
+		s.writeError(conn, "mockup selection not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "choose-mockup requires one JSON arg", 1)
+		return
+	}
+	var req ChooseMockupRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid choose-mockup request: "+err.Error(), 1)
+		return
+	}
+	if err := s.MockupChooser(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	s.pokeBoard()
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handlePruneMockup archives a variation subtree via the injected MockupPruner.
+// Archiving is reversible (the subtree moves under mockups/.archive/), so the
+// click is consent enough and it bypasses the destructive-confirm gate.
+func (s *Server) handlePruneMockup(conn net.Conn, args []string) {
+	if s.MockupPruner == nil {
+		s.writeError(conn, "mockup pruning not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "prune-mockup requires one JSON arg", 1)
+		return
+	}
+	var req PruneMockupRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid prune-mockup request: "+err.Error(), 1)
+		return
+	}
+	if err := s.MockupPruner(req); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
