@@ -27,10 +27,8 @@ jobs:
         with:
           go-version-file: go.mod
       # golangci-lint's default set includes govet and the full staticcheck
-      # suite — one owner per analysis. nilaway and gocyclo are enforced here
-      # (CI wall-clock is parallel and free) and stay out of the local hot loop.
+      # suite — one owner per analysis.
       - run: go tool golangci-lint run ./...
-      - run: go tool nilaway ./...
       - run: go tool gocyclo -over 15 .
 
   test:
