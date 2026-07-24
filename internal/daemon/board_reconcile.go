@@ -91,7 +91,7 @@ type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, retry StageRetry, daemonID string, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
@@ -101,14 +101,14 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable
 	// Recover a restart-orphaned handoff immediately, before the first wait. The
 	// jitter applies only to subsequent cycles, so a restart-orphan is never made
 	// to wait a full interval.
-	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, retry, daemonID, logger)
+	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, retry, progress, stopAgent, daemonID, logger)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
-			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, retry, daemonID, logger)
+			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, retry, progress, stopAgent, daemonID, logger)
 		}
 	}
 }
@@ -131,7 +131,7 @@ func jitteredInterval(d time.Duration, fraction float64) time.Duration {
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, retry StageRetry, daemonID string, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
@@ -143,9 +143,26 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 	if n := reconcileShippedFailures(ctx, cards, mergedProbe, postDeployed, logger); n > 0 {
 		logger.Info().Int("cleared", n).Msg("board reconcile: confirmed shipped, cleared stale deploy-failed red")
 	}
-	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, retry, daemonID, time.Now(), logger); n > 0 {
+	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
 	}
+}
+
+// stageStalled reports whether a live agent has stopped making progress.
+//
+// An unknown agent (no probe, or a daemon that restarted and lost its progress
+// map) is NOT treated as stalled: killing live work on absent evidence is the
+// one failure this must never risk, and the container-liveness check has
+// already established something is running.
+func stageStalled(progress AgentProgressProbe, agentName string, now time.Time) (bool, time.Duration) {
+	if progress == nil {
+		return false, 0
+	}
+	p, ok := progress(agentName)
+	if !ok {
+		return false, 0
+	}
+	return p.Stalled(now)
 }
 
 // reconcileStuckRunning reds the dead-end a NOT DONE bug-verify (and any other
@@ -164,7 +181,7 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 // once the *-failed marker lands the card derives BoardFailed, so the next tick
 // skips it and never double-posts. Reuses DeriveBoardCard verbatim so detection
 // can never disagree with the board's rendered state. Returns the number reddened.
-func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, daemonID string, now time.Time, logger zerolog.Logger) int {
+func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) int {
 	if liveAgents == nil || postFailed == nil {
 		return 0
 	}
@@ -194,9 +211,29 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 			// Young enough to still be genuine in-flight work.
 			continue
 		}
-		if _, ok := alive[agentNameFor(card.Key, derived.Stage)]; ok {
-			// A live owner is working this stage — slow, not stuck.
-			continue
+		agentName := agentNameFor(card.Key, derived.Stage)
+		if _, ok := alive[agentName]; ok {
+			// A live container is not the same as a working agent: a hung agent
+			// looks perfectly healthy here, which is why a hang was previously
+			// never detected at all. Ask whether it is still making progress.
+			stalled, idle := stageStalled(progress, agentName, now)
+			if !stalled {
+				continue // genuinely working, however long it has been running
+			}
+			logger.Warn().Str("pm", card.Key).Str("stage", string(derived.Stage)).
+				Dur("idle", idle).Msg("board reconcile: agent alive but making no progress, treating as hung")
+			// A hung agent still holds its container and workspace, so it must be
+			// stopped before anything relaunches — otherwise two agents work the
+			// same stage. A stop that fails leaves the card alone rather than
+			// risking that.
+			if stopAgent == nil {
+				continue
+			}
+			if err := stopAgent(agentName); err != nil {
+				logger.Warn().Err(err).Str("agent", agentName).
+					Msg("board reconcile: cannot stop hung agent, leaving the card as-is")
+				continue
+			}
 		}
 		body := header + "\n" + stuckRunningReason(derived.Stage)
 		if err := postFailed(ctx, card.Key, body); err != nil {

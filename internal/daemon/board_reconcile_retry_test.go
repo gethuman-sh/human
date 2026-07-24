@@ -33,7 +33,7 @@ func TestReconcileStuckRunning_RelaunchesAfterReddening(t *testing.T) {
 	}
 
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), retry, "d1", now, zerolog.Nop())
+		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 1, n, "the card is reddened")
 	require.Len(t, posted, 1, "the failed marker is the trail record")
@@ -59,7 +59,7 @@ func TestReconcileStuckRunning_RelaunchRespectsTheBudget(t *testing.T) {
 	}
 
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), retry, "d1", now, zerolog.Nop())
+		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 1, n, "the card is still reddened for a human")
 	require.Empty(t, relaunched, "a spent budget stops the automatic relaunch")

@@ -46,8 +46,9 @@ func TestReexecChildSuccess(t *testing.T) {
 	var handed atomic.Bool
 	stopped := make(chan struct{})
 	c := &handoverCoordinator{
-		listeners:  ls,
-		logger:     zerolog.Nop(),
+		listeners: ls,
+		logger:    zerolog.Nop(),
+		//nolint:nilaway // os.Args is always set for a running process
 		execPath:   os.Args[0], // the test binary stands in for the rebuilt daemon
 		handedOver: &handed,
 		stop:       func() { close(stopped) },

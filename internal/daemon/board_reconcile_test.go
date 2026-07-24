@@ -171,7 +171,7 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, chain, StageRetry{}, "", time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, chain, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
 
 	select {
 	case pmKey := <-chained:
@@ -274,7 +274,7 @@ func TestReconcileStuckRunning_FailsAgedRunningOrphanWithNoAgent(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -292,7 +292,7 @@ func TestReconcileStuckRunning_SkipsWithinGrace(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -308,7 +308,7 @@ func TestReconcileStuckRunning_SkipsWhenAgentAlive(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 	live := liveAgents(agentNameFor("SC-1", BoardImplementation))
-	n := reconcileStuckRunning(context.Background(), cards, live, capturingPoster(&posted), StageRetry{}, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, live, capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -326,7 +326,7 @@ func TestReconcileStuckRunning_SkipsNonRunning(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -341,7 +341,7 @@ func TestReconcileStuckRunning_CoversVerificationStage(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:review-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -357,7 +357,7 @@ func TestReconcileStuckRunning_NilListerDisables(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, nil, capturingPoster(&posted), StageRetry{}, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, nil, capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)

@@ -627,11 +627,24 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			daemon.StampDaemon(daemon.DeployedHeader+"\npr: "+prURL, ds.daemonID))
 		return err
 	}
+	// A live container is not a working agent. The hook stream is the progress
+	// signal — a crashed AND a hung agent both stop emitting — so the reconcile
+	// pass asks it before deciding a stage is stuck.
+	agentProgress := func(agentName string) (daemon.AgentProgress, bool) {
+		return ds.srv.HookEvents.AgentProgress(agentName)
+	}
+	// A hung agent still holds its container and workspace; it must be stopped
+	// before any relaunch, or two agents work the same stage.
+	stopHungAgent := func(agentName string) error {
+		stopCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		return (&dockerAgentCleaner{}).DeleteAgent(stopCtx, agentName)
+	}
 	go daemon.RunBoardReconcile(ctx,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
 		branchReachable, commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
-		chainReview, stageRetry, ds.daemonID, daemon.BoardReconcileInterval, logger)
+		chainReview, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
 	// Watch the binary so a rebuild re-execs into the new build, handing over the
 	// live sockets (no client sees a refused connection) and draining in-flight
