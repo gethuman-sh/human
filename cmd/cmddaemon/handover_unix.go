@@ -222,7 +222,10 @@ func reexecChild(ctx context.Context, c *handoverCoordinator) error {
 	extra := append(files, readyW) // #nosec G601 -- files is not retained after this call
 	readyFD := 3 + len(files)
 
-	cmd := exec.Command(c.execPath, os.Args[1:]...) // #nosec G204 -- re-exec of our own binary with our own args
+	// #nosec G204 G702 -- re-exec of our own binary with our own args: the
+	// path is our own resolved executable and the args are this process's,
+	// neither reaches us from an external caller.
+	cmd := exec.Command(c.execPath, os.Args[1:]...) //nolint:nilaway // os.Args is always set for a running process
 	cmd.Env = append(os.Environ(),
 		daemonChildEnv+"=1",
 		envInheritListeners+"="+handoverListenerSpec,

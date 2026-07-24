@@ -58,6 +58,9 @@ func TestOpenListenersInheritRoundTrip(t *testing.T) {
 		t.Fatalf("files: %v", err)
 	}
 	defer closeAllFiles(files)
+	if len(files) < 3 {
+		t.Fatalf("files: got %d listener files, want 3", len(files))
+	}
 	// The parent keeps serving on its own copies; the child adopts the dups.
 	defer func() {
 		_ = parent.daemon.Close()
