@@ -11,7 +11,7 @@
 import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
 import { initPermissions } from "./permissions.js";
 import { bugsHeaderHTML } from "./board-findbugs.js";
-import { initMockupsView, showMockups, setPendingMockupSlug } from "./mockupsview.js";
+import { initMockupsView, showMockups, setPendingMockupSlug, setChosenMockup, } from "./mockupsview.js";
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
@@ -335,6 +335,7 @@ function showCardMenu(card, x, y) {
             mockItem.addEventListener("click", () => {
                 menu.remove();
                 setPendingMockupSlug(card.mockupSlug ?? "");
+                setChosenMockup(card.mockupChosenSlug ?? "", card.mockupChosenFile ?? "");
                 selectView("mockups");
             });
         }

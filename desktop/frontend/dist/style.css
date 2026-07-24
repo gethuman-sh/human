@@ -2520,6 +2520,143 @@ body {
   background: #0b0c0f;
 }
 
+/* Breadcrumb up the variation tree; the winning path is tinted with the accent
+   so the selected design direction reads at a glance. */
+.mockup-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.mockup-crumb {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 2px 4px;
+  cursor: pointer;
+  font-size: 12px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mockup-crumb.current {
+  color: var(--fg);
+  font-weight: 600;
+  cursor: default;
+}
+
+.mockup-crumb.on-winner-path,
+.mockup-child-chip.on-winner-path {
+  color: #fff;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 6px;
+}
+
+.mockup-crumb-sep {
+  color: var(--muted);
+}
+
+.mockup-tab.chosen {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Host-side toolbar controls for the active mockup: create variations, mark
+   winner, prune. Deliberately on the host chrome — never inside the iframe. */
+.mockup-controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mockup-ctl {
+  border: 1px solid var(--card-border);
+  background: var(--col-bg);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mockup-ctl:hover {
+  border-color: var(--accent);
+}
+
+.mockup-ctl.chosen {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mockup-ctl.danger:hover {
+  border-color: var(--danger, #d9534f);
+  color: var(--danger, #d9534f);
+}
+
+.mockup-vary-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mockup-vary-input {
+  width: 100%;
+  border: 1px solid var(--card-border);
+  background: var(--col-bg);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.mockup-vary-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mockup-children {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.mockup-children-label {
+  color: var(--muted);
+}
+
+.mockup-child-chip {
+  border: 1px solid var(--card-border);
+  background: var(--col-bg);
+  color: var(--fg);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mockup-child-chip:hover {
+  border-color: var(--accent);
+}
+
+.mockup-child-chip.creating {
+  color: var(--muted);
+  cursor: default;
+  font-style: italic;
+}
+
 /* ---- Settings view (HUM-163) ----------------------------------------------
    Sidebar-of-sections + form cards over the daemon's masked config snapshot.
    The search box is an entry point into the command palette, not a filter. */
