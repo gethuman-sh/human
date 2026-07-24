@@ -409,7 +409,12 @@ func (s *Server) routeIntercept(conn net.Conn, reader *bufio.Reader, args []stri
 		if opener == nil {
 			opener = defaultBrowserOpener{}
 		}
-		s.handleOAuthRelay(conn, reader, info, url, opener)
+		// A browser OAuth flow parks a callback listener until the user finishes
+		// signing in. Counting it as a blocking op keeps a self-restart from
+		// tearing that listener down mid-login, which would strand the callback.
+		s.withBlockingOp(func() {
+			s.handleOAuthRelay(conn, reader, info, url, opener)
+		})
 		return true
 	}
 

@@ -5,8 +5,10 @@ package cmddaemon
 import (
 	"context"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -61,6 +63,63 @@ func TestReexecChildSuccess(t *testing.T) {
 	case <-stopped:
 	default:
 		t.Fatal("parent server context was not stopped after handover")
+	}
+}
+
+// TestReexecChildRetiresBeforeDraining pins the ordering the socket handover
+// depends on: the outgoing relay socket must stop being discoverable BEFORE the
+// parent settles down to drain, otherwise a client globbing the socket
+// directory can still attach to the daemon that is about to exit.
+func TestReexecChildRetiresBeforeDraining(t *testing.T) {
+	t.Setenv("HANDOVER_TEST_CHILD", "1")
+
+	ls, err := openListeners("127.0.0.1:0", "127.0.0.1:0", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind listeners: %v", err)
+	}
+	defer func() {
+		_ = ls.daemon.Close()
+		_ = ls.proxy.Close()
+		_ = ls.chrome.Close()
+	}()
+
+	var order []string
+	var mu sync.Mutex
+	record := func(what string) {
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, what)
+	}
+
+	var handed atomic.Bool
+	c := &handoverCoordinator{
+		listeners:    ls,
+		logger:       zerolog.Nop(),
+		execPath:     os.Args[0],
+		handedOver:   &handed,
+		stop:         func() { record("stop") },
+		drainTimeout: time.Second,
+		retire:       func() { record("retire") },
+		activeConns: func() int64 {
+			record("drain-check")
+			return 0
+		},
+	}
+
+	if err := reexecChild(context.Background(), c); err != nil {
+		t.Fatalf("reexecChild: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) < 3 {
+		t.Fatalf("expected retire, drain-check and stop; got %v", order)
+	}
+	if order[0] != "retire" {
+		t.Fatalf("retire must come first, got %v", order)
+	}
+	if order[len(order)-1] != "stop" {
+		t.Fatalf("stop must come last, got %v", order)
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 
 	"github.com/rs/zerolog"
 
@@ -23,6 +25,17 @@ type SocketRelay struct {
 	SocketDir string
 	Logger    zerolog.Logger
 	pending   chan net.Conn
+
+	// mu guards the listening socket so Retire can close it from another
+	// goroutine (the daemon's self-restart) while ListenAndServe is accepting.
+	mu       sync.Mutex
+	ln       net.Listener
+	sockPath string
+	retired  bool
+
+	// activeConns counts Chrome connections currently queued or paired, so a
+	// self-restart handover can drain them instead of cutting them off.
+	activeConns atomic.Int64
 }
 
 // NewSocketRelay creates a SocketRelay with a buffered pending channel.
@@ -32,6 +45,36 @@ func NewSocketRelay(socketDir string, logger zerolog.Logger) *SocketRelay {
 		Logger:    logger,
 		pending:   make(chan net.Conn, pendingBuffer),
 	}
+}
+
+// ActiveConns reports how many Chrome connections this relay currently holds
+// (queued awaiting a bridge, or paired with one).
+func (r *SocketRelay) ActiveConns() int64 {
+	return r.activeConns.Load()
+}
+
+// Retire stops this relay from accepting and removes its socket file, without
+// disturbing connections it already handed out.
+//
+// It exists for the daemon's self-restart: the relay socket is named after the
+// process id, and clients discover one by globbing the directory and taking the
+// first that answers. While both the outgoing and incoming daemon are alive,
+// two sockets are discoverable and a client can pick the dying one. Retiring the
+// outgoing socket the moment the successor is ready leaves exactly one.
+func (r *SocketRelay) Retire() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.retired {
+		return
+	}
+	r.retired = true
+	if r.ln != nil {
+		_ = r.ln.Close()
+	}
+	if r.sockPath != "" {
+		_ = os.Remove(r.sockPath)
+	}
+	r.Logger.Info().Str("path", r.sockPath).Msg("socket relay retired; successor owns the socket directory")
 }
 
 // ListenAndServe creates a Unix socket in SocketDir and accepts connections,
@@ -67,6 +110,19 @@ func (r *SocketRelay) ListenAndServe(ctx context.Context) error {
 		return errors.WrapWithDetails(chmodErr, "socket relay chmod failed",
 			"path", sockPath)
 	}
+	// Publish the listener so Retire can close it from the handover path. A
+	// relay retired before it finished binding closes immediately rather than
+	// serving a socket nobody will clean up.
+	r.mu.Lock()
+	if r.retired {
+		r.mu.Unlock()
+		_ = ln.Close()
+		_ = os.Remove(sockPath)
+		return nil
+	}
+	r.ln, r.sockPath = ln, sockPath
+	r.mu.Unlock()
+
 	defer func() {
 		_ = ln.Close()
 		_ = os.Remove(sockPath)
@@ -100,6 +156,7 @@ func (r *SocketRelay) ListenAndServe(ctx context.Context) error {
 			r.drainPending()
 			return nil
 		case r.pending <- conn:
+			r.activeConns.Add(1)
 		default:
 			// Drop new connections when the pending queue is full
 			// rather than blocking the Accept loop, which would
@@ -119,8 +176,14 @@ func (r *SocketRelay) Spawn(ctx context.Context) (io.WriteCloser, io.ReadCloser,
 		r.Logger.Info().Msg("paired chrome connection with bridge")
 		wc := &connWriteCloser{conn: conn}
 		rc := &connReadCloser{conn: conn}
+		// The connection stays counted until the pairing ends, so a handover
+		// drain waits for live Chrome traffic rather than cutting it off. Once
+		// guards against a double decrement if wait is called more than once.
+		var done sync.Once
 		wait := func() error {
-			return conn.Close()
+			err := conn.Close()
+			done.Do(func() { r.activeConns.Add(-1) })
+			return err
 		}
 		return wc, rc, wait, nil
 	case <-ctx.Done():
@@ -136,6 +199,7 @@ func (r *SocketRelay) drainPending() {
 			if conn != nil {
 				_ = conn.Close()
 			}
+			r.activeConns.Add(-1)
 		default:
 			return
 		}
