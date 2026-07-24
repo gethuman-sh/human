@@ -151,9 +151,52 @@ type IdeationEngine struct {
 	Notify         func()           // pokes the subscribe loop after ticket creation; nil ok
 	TurnTimeout    time.Duration    // defaults to 5 * time.Minute when zero
 	Logger         zerolog.Logger
+	// Store persists the session so a live chat survives a daemon restart —
+	// notably the self-restart handover, which lands between turns exactly when
+	// the user is composing a reply. nil keeps the engine memory-only.
+	Store IdeationStore
 
 	mu   sync.Mutex
 	sess *ideationSession
+}
+
+// persistLocked writes the current session through to the store. Caller must
+// hold mu. A store failure is logged, never fatal: losing durability must not
+// break a running conversation.
+func (e *IdeationEngine) persistLocked() {
+	if e.Store == nil {
+		return
+	}
+	var err error
+	if e.sess == nil {
+		err = e.Store.Clear()
+	} else {
+		err = e.Store.Save(e.sess.persist())
+	}
+	if err != nil {
+		e.Logger.Warn().Err(err).Msg("persisting ideation session failed; it will not survive a restart")
+	}
+}
+
+// commitLocked persists the session and releases the lock. Every mutation path
+// ends here instead of a bare Unlock, so no state change escapes unsaved.
+func (e *IdeationEngine) commitLocked() {
+	e.persistLocked()
+	e.mu.Unlock()
+}
+
+// Restore brings back a session saved by a previous process. It is called once
+// at startup, before the engine serves any request, and ignores a session that
+// finished or went stale (see PersistedIdeation.restorable).
+func (e *IdeationEngine) Restore(p PersistedIdeation, now time.Time, maxAge time.Duration) bool {
+	if !p.restorable(now, maxAge) {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sess = restoreSession(normalizeForRestore(p))
+	e.persistLocked()
+	return true
 }
 
 // turnTimeout returns the configured turn timeout, defaulting to 5 minutes so
@@ -220,7 +263,7 @@ func (e *IdeationEngine) Start(req IdeationStartRequest) (IdeationStatus, error)
 	}
 	e.sess = sess
 	snap := e.snapshot()
-	e.mu.Unlock()
+	e.commitLocked()
 
 	// Evolve mode refines an existing idea ticket; the agent must know the
 	// outcome updates that ticket in place rather than creating a new one.
@@ -267,7 +310,7 @@ func (e *IdeationEngine) Reply(req IdeationReplyRequest) (IdeationStatus, error)
 	resumeID := e.sess.resumeID
 	sessID := e.sess.id
 	snap := e.snapshot()
-	e.mu.Unlock()
+	e.commitLocked()
 
 	go e.runTurn(sessID, resumeID, req.Message)
 	return snap, nil
@@ -326,7 +369,7 @@ func (e *IdeationEngine) runTurn(sessID, resumeID, prompt string) {
 		e.Logger.Error().Fields(errors.AllDetails(err)).Msg(errors.CauseChain(err))
 		e.sess.state = IdeationError
 		e.sess.errMsg = err.Error()
-		e.mu.Unlock()
+		e.commitLocked()
 		return
 	}
 
@@ -344,7 +387,7 @@ func (e *IdeationEngine) runTurn(sessID, resumeID, prompt string) {
 		e.sess.draft = &IdeationDraft{Title: ticket.Title, Description: ticket.Description}
 		e.sess.question = nil
 		e.sess.state = IdeationAwaitingApproval
-		e.mu.Unlock()
+		e.commitLocked()
 	case ticketFound && ticketErr == nil:
 		// Chat mode keeps auto-creating the ticket the instant a valid block
 		// is parsed — unchanged from HUM-152.
@@ -352,7 +395,7 @@ func (e *IdeationEngine) runTurn(sessID, resumeID, prompt string) {
 		if stripped != "" {
 			e.sess.transcript = append(e.sess.transcript, IdeationMessage{Role: "agent", Text: stripped, Time: time.Now()})
 		}
-		e.mu.Unlock()
+		e.commitLocked()
 		e.createTicket(sessID, ticket.Title, ticket.Description)
 	case ticketFound:
 		e.applyRepairOrError(sessID, turn.Reply, ideationRepairPrompt, "agent emitted a malformed ticket block")
@@ -364,7 +407,7 @@ func (e *IdeationEngine) runTurn(sessID, resumeID, prompt string) {
 		e.sess.transcript = append(e.sess.transcript, IdeationMessage{Role: "agent", Text: turn.Reply, Time: time.Now()})
 		e.sess.state = IdeationAwaitingReply
 		e.sess.repairAttempted = false
-		e.mu.Unlock()
+		e.commitLocked()
 	}
 }
 
@@ -382,7 +425,7 @@ func (e *IdeationEngine) applyGuidedTurnResult(sessID, reply string) {
 		e.sess.question = &q
 		e.sess.state = IdeationAwaitingReply
 		e.sess.repairAttempted = false
-		e.mu.Unlock()
+		e.commitLocked()
 	case found:
 		e.applyRepairOrError(sessID, reply, ideationQuestionRepairPrompt, "agent emitted a malformed question block")
 	default:
@@ -393,7 +436,7 @@ func (e *IdeationEngine) applyGuidedTurnResult(sessID, reply string) {
 		e.sess.question = nil
 		e.sess.state = IdeationAwaitingReply
 		e.sess.repairAttempted = false
-		e.mu.Unlock()
+		e.commitLocked()
 	}
 }
 
@@ -406,14 +449,14 @@ func (e *IdeationEngine) applyRepairOrError(sessID, reply, repairPrompt, errMsg 
 		e.sess.repairAttempted = true
 		resume := e.sess.resumeID
 		e.sess.state = IdeationThinking
-		e.mu.Unlock()
+		e.commitLocked()
 		go e.runTurn(sessID, resume, repairPrompt)
 		return
 	}
 	e.sess.transcript = append(e.sess.transcript, IdeationMessage{Role: "agent", Text: reply, Time: time.Now()})
 	e.sess.state = IdeationError
 	e.sess.errMsg = errMsg
-	e.mu.Unlock()
+	e.commitLocked()
 }
 
 // createTicket materializes the session's outcome: evolve mode rewrites the
@@ -439,7 +482,7 @@ func (e *IdeationEngine) createTicket(sessID, title, description string) {
 			e.sess.state = IdeationError
 			e.sess.errMsg = "no PM ticket creator configured"
 		}
-		e.mu.Unlock()
+		e.commitLocked()
 		return
 	}
 
@@ -450,7 +493,7 @@ func (e *IdeationEngine) createTicket(sessID, title, description string) {
 			e.sess.state = IdeationError
 			e.sess.errMsg = err.Error()
 		}
-		e.mu.Unlock()
+		e.commitLocked()
 		return
 	}
 
@@ -460,6 +503,9 @@ func (e *IdeationEngine) createTicket(sessID, title, description string) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// Registered after the unlock so LIFO runs it first — the write happens
+	// while the lock is still held, on every return path below.
+	defer e.persistLocked()
 	if e.sess == nil || e.sess.id != sessID {
 		return
 	}
@@ -498,7 +544,7 @@ func (e *IdeationEngine) evolveTicket(sessID, key, title, description string, re
 			e.sess.state = IdeationError
 			e.sess.errMsg = msg
 		}
-		e.mu.Unlock()
+		e.commitLocked()
 	}
 	if e.ResolveEditor == nil {
 		fail("no PM ticket editor configured")
@@ -534,6 +580,9 @@ func (e *IdeationEngine) evolveTicket(sessID, key, title, description string, re
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// LIFO: this runs before the unlock above, so every return path below
+	// persists while still holding the lock.
+	defer e.persistLocked()
 	if e.sess == nil || e.sess.id != sessID {
 		return
 	}
