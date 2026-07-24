@@ -86,6 +86,17 @@ const (
 	DeployStartedHeader = "[human:deploy-started]"
 	DeployedHeader      = "[human:deployed]"
 	DeployFailedHeader  = "[human:deploy-failed]"
+
+	// PR review→fix loop markers (SC-1387): the pre-merge sub-phase of the
+	// deploy (done) stage where the machine reviewer and fixer alternate on the
+	// open draft PR before the merge. Both launches read as the done stage
+	// running; an escalation (budget spent, unreviewable, or an unresolvable
+	// review) reds it like any other deploy-phase failure. They deliberately
+	// live in the done stage rather than a new pipeline stage, so the
+	// verification→done transition adjacency (board_transition.go) is unchanged.
+	PRReviewStartedHeader = "[human:pr-review-started]"
+	PRFixStartedHeader    = "[human:pr-fix-started]"
+	PRReviewFailedHeader  = "[human:pr-review-failed]"
 )
 
 // PlanCommentHeader marks a comment whose body IS the engineering plan for
@@ -132,6 +143,9 @@ var orderedMarkerSpecs = []markerSpec{
 	{DeployStartedHeader, BoardDoneStage, BoardRunning},
 	{DeployedHeader, BoardDoneStage, BoardDone},
 	{DeployFailedHeader, BoardDoneStage, BoardFailed},
+	{PRReviewStartedHeader, BoardDoneStage, BoardRunning},
+	{PRFixStartedHeader, BoardDoneStage, BoardRunning},
+	{PRReviewFailedHeader, BoardDoneStage, BoardFailed},
 }
 
 // stageRank orders the pipeline stages so derivation can pick the furthest
