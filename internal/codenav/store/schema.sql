@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS file (
   lang         TEXT,
   content_hash TEXT NOT NULL,
   fidelity     TEXT,
+  -- size+mtime are the cheap change-detection fingerprint: an incremental
+  -- refresh stats each file and only re-hashes when these differ.
+  mtime        INTEGER,
+  size         INTEGER,
   UNIQUE(project_id, path)
 );
 
@@ -57,7 +61,10 @@ CREATE TABLE IF NOT EXISTS route (
   method     TEXT,
   pattern    TEXT,
   handler_id INTEGER REFERENCES symbol(id),
-  framework  TEXT
+  framework  TEXT,
+  -- file_id ties a route to its registration site so an incremental refresh can
+  -- drop and recompute just that file's routes.
+  file_id    INTEGER REFERENCES file(id) ON DELETE CASCADE
 );
 
 -- Full-text search: BM25 over code bodies and over symbol names.
@@ -78,3 +85,4 @@ CREATE INDEX IF NOT EXISTS idx_ref_qname    ON reference(qname);
 CREATE INDEX IF NOT EXISTS idx_edge_src     ON edge(src_id, kind);
 CREATE INDEX IF NOT EXISTS idx_edge_dst     ON edge(dst_id, kind);
 CREATE INDEX IF NOT EXISTS idx_route_proj   ON route(project_id);
+CREATE INDEX IF NOT EXISTS idx_route_file   ON route(file_id);

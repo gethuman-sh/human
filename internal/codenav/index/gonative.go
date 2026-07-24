@@ -37,21 +37,54 @@ func (GoNative) CanHandle(scan RepoScan) bool {
 }
 
 func (g GoNative) Index(ctx context.Context, scan RepoScan, sink Sink) error {
+	// Whole-module load; a repo with no Go packages is a real "nothing to index".
+	return g.indexPatterns(ctx, scan, []string{"./..."}, map[string]bool{}, true, sink)
+}
+
+// IndexIncremental reloads only the Go packages that own a changed .go file,
+// seeding `defined` with every existing repo qname so a reprocessed package's
+// references/edges into unchanged packages still resolve. It implements
+// IncrementalIndexer.
+func (g GoNative) IndexIncremental(ctx context.Context, scan RepoScan, delta Delta, prior PriorIndex, sink Sink) error {
+	dirs := goPackageDirs(delta)
+	if len(dirs) == 0 {
+		return nil // no Go change
+	}
+	defined, err := prior.DefinedQNames()
+	if err != nil {
+		return err
+	}
+	return g.indexPatterns(ctx, scan, dirs, defined, false, sink)
+}
+
+// indexPatterns loads the given package patterns and runs the four extraction
+// passes against `defined` (pre-seeded in the incremental path). When full is
+// false it tolerates patterns that match no loadable package (a deleted or
+// emptied dir) instead of treating that as fatal — cleanup of such a package's
+// stale rows is left to the writer's RemoveFiles.
+func (g GoNative) indexPatterns(ctx context.Context, scan RepoScan, patterns []string, defined map[string]bool, full bool, sink Sink) error {
 	cfg := &packages.Config{
 		Mode:    packages.LoadAllSyntax | packages.NeedModule,
 		Dir:     scan.Root,
 		Context: ctx,
 		Tests:   false,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
-		return fmt.Errorf("load packages: %w", err)
+		if full || !isNoPackagesErr(err) {
+			return fmt.Errorf("load packages: %w", err)
+		}
+		// Incremental: a pattern for a removed dir may surface as a top-level
+		// "matched no packages" error; continue with whatever loaded.
 	}
-	if len(pkgs) == 0 {
+	if full && len(pkgs) == 0 {
 		return fmt.Errorf("no Go packages found under %s", scan.Root)
 	}
-
-	defined := map[string]bool{} // qnames defined inside this repo
+	// In the incremental path, drop packages that carry load errors and hold no
+	// Go files (a deleted/emptied dir): emit nothing so RemoveFiles clears them.
+	if !full {
+		pkgs = loadablePkgs(pkgs)
+	}
 
 	// Pass A: symbols + files. Pass B: references to repo-local symbols.
 	emitSymbolsAndFiles(scan, pkgs, sink, defined)
@@ -59,7 +92,7 @@ func (g GoNative) Index(ctx context.Context, scan RepoScan, sink Sink) error {
 
 	// Pass C: framework route detection (route nodes + handler links).
 	for _, pkg := range pkgs {
-		detectRoutes(pkg, sink)
+		detectRoutes(scan.Root, pkg, sink)
 	}
 
 	// Pass D: precise CALLS edges via CHA call graph. The CHA builder in
@@ -69,6 +102,59 @@ func (g GoNative) Index(ctx context.Context, scan RepoScan, sink Sink) error {
 	// (callers/callees/callpath/impact) is skipped when this fires.
 	buildCallGraph(scan, pkgs, defined, sink)
 	return nil
+}
+
+// goPackageDirs maps a delta's changed .go files to per-directory load patterns
+// ("./sub/pkg"), normalizing the repo root ("." from filepath.Dir) to "./" and
+// deduping. It returns nil when no .go file changed.
+func goPackageDirs(delta Delta) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(rel string) {
+		if !strings.HasSuffix(rel, ".go") {
+			return
+		}
+		dir := filepath.ToSlash(filepath.Dir(rel))
+		pattern := "./" + dir
+		if dir == "." {
+			pattern = "./"
+		}
+		if !seen[pattern] {
+			seen[pattern] = true
+			out = append(out, pattern)
+		}
+	}
+	for _, p := range delta.Added {
+		add(p)
+	}
+	for _, p := range delta.Modified {
+		add(p)
+	}
+	for _, p := range delta.Deleted {
+		add(p)
+	}
+	return out
+}
+
+// loadablePkgs keeps only packages that actually contributed Go files; a package
+// returned solely to carry a load error (no GoFiles) is dropped so its stale
+// rows are cleaned up by RemoveFiles rather than re-emitted empty.
+func loadablePkgs(pkgs []*packages.Package) []*packages.Package {
+	out := pkgs[:0]
+	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 && len(pkg.GoFiles) == 0 {
+			continue
+		}
+		out = append(out, pkg)
+	}
+	return out
+}
+
+// isNoPackagesErr reports whether a packages.Load error is the benign
+// "matched no packages" case a deleted directory pattern produces.
+func isNoPackagesErr(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "matched no packages") || strings.Contains(msg, "no packages")
 }
 
 // emitSymbolsAndFiles records each repo-local file once and emits a Symbol for

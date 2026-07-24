@@ -54,6 +54,9 @@ type Route struct {
 	Pattern      string
 	HandlerQName string
 	Framework    string
+	// File is the repo-relative path of the registration site, so an incremental
+	// refresh can drop and recompute a reprocessed file's routes.
+	File string
 }
 
 // FileRec records a scanned file so re-indexing can skip unchanged files.
@@ -88,4 +91,37 @@ type Indexer interface {
 	// (e.g. GoNative when a go.mod is present).
 	CanHandle(RepoScan) bool
 	Index(ctx context.Context, scan RepoScan, sink Sink) error
+}
+
+// Delta is the set of source-file changes a refresh must apply, repo-relative.
+type Delta struct {
+	Added, Modified, Deleted []string
+}
+
+// Reprocess is Added+Modified — the files a backend must re-extract.
+func (d Delta) Reprocess() []string {
+	out := make([]string, 0, len(d.Added)+len(d.Modified))
+	out = append(out, d.Added...)
+	out = append(out, d.Modified...)
+	return out
+}
+
+// Empty reports that nothing changed (the refresh can skip).
+func (d Delta) Empty() bool {
+	return len(d.Added) == 0 && len(d.Modified) == 0 && len(d.Deleted) == 0
+}
+
+// PriorIndex is read access to the already-persisted index, used to resolve
+// cross-file references during an incremental reload without re-parsing
+// unchanged files. Implemented by an adapter over *store.Store (indexrepo.go).
+type PriorIndex interface {
+	DefinedQNames() (map[string]bool, error)
+	HeuristicNames(exclude []string) (map[string][]string, error)
+}
+
+// IncrementalIndexer is an Indexer that can reprocess only the changed files it
+// owns. Backends that do not implement it fall back to a full Index.
+type IncrementalIndexer interface {
+	Indexer
+	IndexIncremental(ctx context.Context, scan RepoScan, delta Delta, prior PriorIndex, sink Sink) error
 }

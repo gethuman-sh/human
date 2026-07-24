@@ -50,7 +50,60 @@ func Open(path string) (*Store, error) {
 	}
 	// Migrate databases created before source_sig existed (ignore "duplicate column").
 	_, _ = db.Exec(`ALTER TABLE project ADD COLUMN source_sig TEXT`)
+	// Migrate databases created before incremental refresh: cheap change-detection
+	// fingerprint on file, and route attribution to its registration file.
+	_, _ = db.Exec(`ALTER TABLE file  ADD COLUMN mtime INTEGER`)
+	_, _ = db.Exec(`ALTER TABLE file  ADD COLUMN size  INTEGER`)
+	_, _ = db.Exec(`ALTER TABLE route ADD COLUMN file_id INTEGER`)
 	return &Store{db: db, path: path}, nil
+}
+
+// heuristicFidelity is the fidelity string tree-sitter symbols carry; it mirrors
+// index.Heuristic and is duplicated here to avoid a store->index import cycle.
+const heuristicFidelity = "heuristic"
+
+// FileMeta is the change-detection fingerprint stored for one indexed file.
+type FileMeta struct {
+	Hash  string
+	Size  int64
+	MTime int64
+}
+
+// ProjectExists reports whether a project row is present (an index exists).
+func (s *Store) ProjectExists(name string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM project WHERE name=?`, name).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ProjectFiles returns path -> FileMeta for every recorded file of a project,
+// the baseline the refresh diffs the working tree against. Pre-migration rows
+// (NULL size/mtime -> 0) force a hash comparison, which is safe.
+func (s *Store) ProjectFiles(name string) (map[string]FileMeta, error) {
+	rows, err := s.db.Query(`
+		SELECT f.path, COALESCE(f.content_hash,''), COALESCE(f.size,0), COALESCE(f.mtime,0)
+		FROM file f JOIN project p ON p.id=f.project_id
+		WHERE p.name=?`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]FileMeta{}
+	for rows.Next() {
+		var path string
+		var m FileMeta
+		if err := rows.Scan(&path, &m.Hash, &m.Size, &m.MTime); err != nil {
+			return nil, err
+		}
+		out[path] = m
+	}
+	return out, rows.Err()
 }
 
 // ProjectSig returns the stored source signature for a project, or "" if the

@@ -14,8 +14,10 @@ import (
 // Detection is syntactic (method name + string path literal), covering the
 // common registration shapes for net/http, chi, gin and echo.
 
-// detectRoutes scans a package's syntax for route registrations.
-func detectRoutes(pkg *packages.Package, sink Sink) {
+// detectRoutes scans a package's syntax for route registrations, attributing
+// each to the repo-relative file where the registration call appears so an
+// incremental refresh can drop and recompute just that file's routes.
+func detectRoutes(root string, pkg *packages.Package, sink Sink) {
 	if pkg.TypesInfo == nil {
 		return
 	}
@@ -39,11 +41,13 @@ func detectRoutes(pkg *packages.Package, sink Sink) {
 			if !ok || !strings.HasPrefix(path, "/") {
 				return true
 			}
+			rel, _ := relWithin(root, pkg.Fset.Position(call.Pos()).Filename)
 			_ = sink.Route(Route{
 				Method:       method,
 				Pattern:      path,
 				HandlerQName: handlerQName(pkg, call.Args[len(call.Args)-1]),
 				Framework:    frameworkOf(sel.Sel.Name),
+				File:         rel,
 			})
 			return true
 		})

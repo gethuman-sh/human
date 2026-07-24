@@ -102,15 +102,76 @@ func (TreeSitter) Index(ctx context.Context, scan RepoScan, sink Sink) error {
 	return nil
 }
 
-// scanTSFile parses one curated source file, emits its File and Symbol records,
-// and returns the collected tags. ok is false for files the backend skips
-// (wrong language, too large, unreadable, or outside the repo).
+// IndexIncremental re-parses only the changed curated non-Go files, rebuilding
+// the project-wide name map from the DB (excluding the files being reparsed, so
+// their stale defs do not linger) and merging fresh defs in. It implements
+// IncrementalIndexer.
+func (t TreeSitter) IndexIncremental(ctx context.Context, scan RepoScan, delta Delta, prior PriorIndex, sink Sink) error {
+	changed := curatedNonGo(scan.Root, delta.Reprocess())
+	if len(changed) == 0 {
+		return nil
+	}
+	nameToQNames, err := prior.HeuristicNames(relOf(scan.Root, changed))
+	if err != nil {
+		return err
+	}
+	var files []tsFile
+	for _, abs := range changed {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if tf, ok := scanTSFilePath(scan.Root, abs, sink, nameToQNames); ok {
+			files = append(files, tf)
+		}
+	}
+	emitTSEdges(files, nameToQNames, sink)
+	return nil
+}
+
+// curatedNonGo keeps the repo-relative paths whose basename is a curated
+// tree-sitter (non-Go) language, mapping them to absolute paths.
+func curatedNonGo(root string, rels []string) []string {
+	var out []string
+	for _, rel := range rels {
+		entry := grammars.DetectLanguage(filepath.Base(rel))
+		if entry == nil || !tsLangs[entry.Name] {
+			continue
+		}
+		out = append(out, filepath.Join(root, filepath.FromSlash(rel)))
+	}
+	return out
+}
+
+// relOf maps absolute paths back to repo-relative form for the DB exclude set.
+func relOf(root string, abs []string) []string {
+	out := make([]string, 0, len(abs))
+	for _, p := range abs {
+		if rel, ok := relWithin(root, p); ok {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
+// scanTSFile parses one curated source file discovered by the walk, delegating
+// the parse/emit body to scanTSFilePath. ok is false for files the backend
+// skips (wrong language, too large, unreadable, or outside the repo).
 func scanTSFile(root, path string, d fs.DirEntry, sink Sink, nameToQNames map[string][]string) (tsFile, bool) {
-	entry := grammars.DetectLanguage(d.Name())
+	if entry := grammars.DetectLanguage(d.Name()); entry == nil || !tsLangs[entry.Name] {
+		return tsFile{}, false
+	}
+	return scanTSFilePath(root, path, sink, nameToQNames)
+}
+
+// scanTSFilePath parses one curated source file at an absolute path, emits its
+// File and Symbol records, and returns the collected tags. Shared by the walk
+// (Index) and the incremental path (IndexIncremental).
+func scanTSFilePath(root, path string, sink Sink, nameToQNames map[string][]string) (tsFile, bool) {
+	entry := grammars.DetectLanguage(filepath.Base(path))
 	if entry == nil || !tsLangs[entry.Name] {
 		return tsFile{}, false
 	}
-	info, err := d.Info()
+	info, err := os.Lstat(path)
 	if err != nil || info.Size() > maxFileBytes {
 		return tsFile{}, false
 	}
