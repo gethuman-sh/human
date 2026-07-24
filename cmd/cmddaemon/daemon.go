@@ -363,6 +363,9 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
 		FindbugsRunner:    findbugsRunnerFunc(projectRegistry),
 		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
+		VariationsCreator: variationsCreatorFunc(projectRegistry),
+		MockupChooser:     mockupChooserFunc(projectRegistry),
+		MockupPruner:      mockupPrunerFunc(projectRegistry),
 		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
 	}
 
@@ -2325,6 +2328,228 @@ func mockupsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateMocksRequ
 		}
 		return nil
 	}
+}
+
+// childManifest is the minimal index.json placeholder the daemon writes to
+// reserve a variation group's directory before launching the agent. internal/
+// daemon cannot import desktop's MockupSet, so this mirrors its JSON tags. Zero
+// options keeps validMockupSet false, so the reserved group stays hidden from
+// the viewer until the agent fills it in.
+type childManifest struct {
+	Slug         string   `json:"slug"`
+	Feature      string   `json:"feature"`
+	Ticket       string   `json:"ticket,omitempty"`
+	Parent       string   `json:"parent,omitempty"`
+	ParentFile   string   `json:"parentFile,omitempty"`
+	Instructions string   `json:"instructions,omitempty"`
+	Created      string   `json:"created"`
+	Options      []string `json:"options"`
+}
+
+// leadingDigits returns the run of digits at the start of s ("03-foo.html" →
+// "03"), or "" when s does not begin with a digit.
+func leadingDigits(s string) string {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	return s[:i]
+}
+
+// nextVariationSlug derives a human-readable, collision-free slug for a new
+// variation group: <parentSlug>-o<optN>-v<K>, where optN is parentFile's
+// leading option number (omitted when parentFile has none) and K is the
+// smallest positive integer with no existing mockups/<slug>/ directory. The
+// daemon reserves the dir before launch, so scanning for the free K is race-safe
+// against sequential creations; concurrent creations pick distinct K because
+// each reserves its dir before the next scan.
+func nextVariationSlug(projectDir, parentSlug, parentFile string) string {
+	prefix := parentSlug
+	if digits := leadingDigits(parentFile); digits != "" {
+		// Strip leading zeros for readability ("03" → "3"); "0" stays "0".
+		trimmed := strings.TrimLeft(digits, "0")
+		if trimmed == "" {
+			trimmed = "0"
+		}
+		prefix += "-o" + trimmed
+	}
+	mockupsDir := filepath.Join(projectDir, "mockups")
+	for k := 1; ; k++ {
+		slug := fmt.Sprintf("%s-v%d", prefix, k)
+		if _, err := os.Stat(filepath.Join(mockupsDir, slug)); os.IsNotExist(err) {
+			return slug
+		}
+	}
+}
+
+// variationsCreatorFunc builds the daemon's VariationsCreator closure: it
+// reserves a child group directory (a 0-option manifest placeholder that stays
+// hidden from the viewer) and launches human-mockups in variation mode. The
+// directory is the "creating" marker (NOT the store, which is keyed one entry
+// per ticket for the root link + winner); a launch failure rolls the directory
+// back so navigation never shows a group that was never started.
+func variationsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateVariationsRequest) error {
+	return func(req daemon.CreateVariationsRequest) error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for variation creation")
+		}
+		entry := entries[0]
+		if req.ParentSlug == "" || req.ParentFile == "" {
+			return errors.WithDetails("variation requires a parent slug and file",
+				"parent_slug", req.ParentSlug, "parent_file", req.ParentFile)
+		}
+		childSlug := nextVariationSlug(entry.Dir, req.ParentSlug, req.ParentFile)
+
+		// Idempotent retry: tear down any prior agent for this child slug so a
+		// re-launch after a crash is not blocked by a still-running agent.
+		agentName := "mockups-" + childSlug
+		if docker, err := devcontainer.NewDockerClient(); err == nil {
+			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), agentName)
+			_ = docker.Close()
+		}
+
+		childDir := filepath.Join(entry.Dir, "mockups", childSlug)
+		if err := os.MkdirAll(childDir, 0o700); err != nil {
+			return errors.WrapWithDetails(err, "reserve variation group dir", "dir", childDir)
+		}
+		manifest := childManifest{
+			Slug:         childSlug,
+			Feature:      req.Feature,
+			Ticket:       req.PMKey,
+			Parent:       req.ParentSlug,
+			ParentFile:   req.ParentFile,
+			Instructions: req.Instructions,
+			Created:      time.Now().UTC().Format(time.RFC3339),
+			Options:      []string{},
+		}
+		data, err := json.Marshal(manifest)
+		if err != nil {
+			_ = os.RemoveAll(childDir)
+			return errors.WrapWithDetails(err, "marshal variation placeholder", "slug", childSlug)
+		}
+		if err := os.WriteFile(filepath.Join(childDir, "index.json"), data, 0o600); err != nil {
+			_ = os.RemoveAll(childDir)
+			return errors.WrapWithDetails(err, "write variation placeholder", "slug", childSlug)
+		}
+
+		prompt := "/human-mockups --variation " + req.PMKey + ": " + req.Feature +
+			"\n\nVary this existing mockup:" +
+			"\n  group slug: " + req.ParentSlug +
+			"\n  source file: mockups/" + req.ParentSlug + "/" + req.ParentFile +
+			"\nWrite the new group to: mockups/" + childSlug + "/" +
+			"\nChange instructions:\n" + req.Instructions
+		if err := (dockerAgentLauncher{}).Launch(context.Background(), agentName, prompt, entry.Dir, entry.Dir); err != nil {
+			_ = os.RemoveAll(childDir)
+			return err
+		}
+		return nil
+	}
+}
+
+// mockupChooserFunc builds the daemon's MockupChooser closure: record the
+// ticket's winner (validating the target file exists) or clear it when Slug is
+// empty.
+func mockupChooserFunc(reg *daemon.ProjectRegistry) func(daemon.ChooseMockupRequest) error {
+	return func(req daemon.ChooseMockupRequest) error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for mockup selection")
+		}
+		entry := entries[0]
+		store := mockups.NewStore(mockups.PathIn(entry.Dir))
+		if req.Slug == "" {
+			return store.ClearChoice(req.PMKey)
+		}
+		target := filepath.Join(entry.Dir, "mockups", req.Slug, req.File)
+		if _, err := os.Stat(target); err != nil {
+			return errors.WrapWithDetails(err, "chosen mockup not found",
+				"slug", req.Slug, "file", req.File)
+		}
+		return store.Choose(req.PMKey, mockups.Choice{Slug: req.Slug, File: req.File})
+	}
+}
+
+// mockupPrunerFunc builds the daemon's MockupPruner closure: archive a
+// variation subtree (the group plus every transitive descendant) under
+// mockups/.archive/, refusing to prune a ticket's root group. If the ticket's
+// current winner lives inside the pruned subtree, the winner is cleared so no
+// dangling choice survives.
+func mockupPrunerFunc(reg *daemon.ProjectRegistry) func(daemon.PruneMockupRequest) error {
+	return func(req daemon.PruneMockupRequest) error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for mockup pruning")
+		}
+		entry := entries[0]
+		if req.Slug == "" {
+			return errors.WithDetails("prune requires a group slug")
+		}
+		if req.Slug == mockups.SlugFor(req.PMKey) {
+			return errors.WithDetails("cannot prune the root mockup group", "slug", req.Slug)
+		}
+		mockupsDir := filepath.Join(entry.Dir, "mockups")
+		subtree := variationSubtree(mockupsDir, req.Slug)
+
+		archiveRoot := filepath.Join(mockupsDir, ".archive")
+		if err := os.MkdirAll(archiveRoot, 0o700); err != nil {
+			return errors.WrapWithDetails(err, "create archive dir", "dir", archiveRoot)
+		}
+		for _, slug := range subtree {
+			src := filepath.Join(mockupsDir, slug)
+			if _, err := os.Stat(src); err != nil {
+				continue // already gone; nothing to archive
+			}
+			if err := os.Rename(src, filepath.Join(archiveRoot, slug)); err != nil {
+				return errors.WrapWithDetails(err, "archive pruned group", "slug", slug)
+			}
+		}
+
+		store := mockups.NewStore(mockups.PathIn(entry.Dir))
+		if chosen, ok := store.ChosenFor(req.PMKey); ok {
+			for _, slug := range subtree {
+				if chosen.Slug == slug {
+					return store.ClearChoice(req.PMKey)
+				}
+			}
+		}
+		return nil
+	}
+}
+
+// variationSubtree returns the slug plus every transitive descendant, computed
+// from the parent links each group's index.json records. An orphan (parent dir
+// gone) simply contributes no children, so navigation and pruning stay
+// consistent even after a manual deletion.
+func variationSubtree(mockupsDir, root string) []string {
+	children := map[string][]string{}
+	dirEntries, err := os.ReadDir(mockupsDir)
+	if err == nil {
+		for _, e := range dirEntries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			data, rerr := os.ReadFile(filepath.Join(mockupsDir, e.Name(), "index.json")) // #nosec G304 — registered project dir
+			if rerr != nil {
+				continue
+			}
+			var m childManifest
+			if json.Unmarshal(data, &m) != nil || m.Parent == "" {
+				continue
+			}
+			children[m.Parent] = append(children[m.Parent], e.Name())
+		}
+	}
+	var out []string
+	var walk func(slug string)
+	walk = func(slug string) {
+		out = append(out, slug)
+		for _, c := range children[slug] {
+			walk(c)
+		}
+	}
+	walk(root)
+	return out
 }
 
 // hostClaudeIdeationRunner implements daemon.IdeationRunner by running one
