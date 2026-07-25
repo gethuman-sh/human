@@ -331,6 +331,28 @@ func TestDeriveBoardCard_stageEnteredAt(t *testing.T) {
 	assert.True(t, backlog.StageEnteredAt.IsZero(), "a no-marker backlog card carries no stage time")
 }
 
+// A running stage's deciding marker stamped with a daemon id must carry that
+// id onto the derived card, so the stuck-running reconcile pass can tell a
+// peer daemon's live card from its own (SC-1450).
+func TestDeriveBoardCard_stampsStageDaemonID(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(StampDaemon(ImplementationStartedHeader, "d1"), time.Unix(1000, 0)),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, "d1", card.StageDaemonID)
+}
+
+// An unstamped deciding marker (today's single-daemon boards) must leave
+// StageDaemonID empty, keeping the stuck-running pass's local grace path
+// unchanged (SC-1450).
+func TestDeriveBoardCard_unstampedStageDaemonEmpty(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ImplementationStartedHeader, time.Unix(1000, 0)),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Empty(t, card.StageDaemonID)
+}
+
 // SC-1320 regression: after a decision is recorded ([human:option-chosen]) and
 // the relaunch is deferred (launch gate blockers → no fresh started marker), the
 // card must read as queued for the chosen stage — never collapse to the stale
