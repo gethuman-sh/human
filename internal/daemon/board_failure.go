@@ -3,10 +3,21 @@ package daemon
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/internal/tracker"
+)
+
+// boardExitRecheckStep/boardExitRecheckTries bound the read-after-write race
+// between a board agent's exit event and the tracker's comment thread catching
+// up to a just-posted stage-completion marker (hand-off, stage-done, resolved).
+// Mirrors the wait/retry shape of internal/agent/diagnose.go's waitForRunEnd.
+// Package vars so tests can shrink them to keep the suite fast.
+var (
+	boardExitRecheckStep  = 2 * time.Second
+	boardExitRecheckTries = 3
 )
 
 // FailureDiagnosis is the distilled cause of a dead agent run. It mirrors the
@@ -96,13 +107,17 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot resolve PM commenter")
 		return
 	}
-	comments, err := commenter.ListComments(ctx, pmKey)
+	// A clean stage finish leaves the stage's done-marker as the latest marker;
+	// only treat the exit as a failure when that did NOT happen. Re-read with
+	// bounded backoff first: a reap-synthesized exit can be handled before the
+	// just-posted hand-off comment is visible on the tracker (SC-1484's
+	// read-after-write race) — polling briefly for a settled state closes that
+	// window without changing behavior for a genuinely incomplete stage.
+	comments, err := listStageSettled(ctx, commenter, pmKey, stage)
 	if err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot list comments")
 		return
 	}
-	// A clean stage finish leaves the stage's done-marker as the latest marker;
-	// only treat the exit as a failure when that did NOT happen.
 	_, state := latestStageState(comments, stage)
 	if state == BoardDone {
 		// A clean finish clears the automatic-retry budget: the next failure on
@@ -234,6 +249,47 @@ func handoffNamesPhantomCommits(comments []tracker.Comment, branch string, commi
 	}
 	commits := ParseCommitsFromHandoff(latestHandoffBody(comments))
 	return len(commits) > 0 && !commitsPresent(branch, commits)
+}
+
+// listStageSettled fetches the PM ticket's comment thread and, while the given
+// stage has not yet reached a settled (non-failure) state, re-fetches with a
+// bounded backoff — closing the window where an exit event is handled before
+// the tracker reflects the stage's just-posted completion marker. It returns
+// as soon as the thread looks settled or the retry budget is spent, so a
+// genuinely incomplete stage pays the full backoff exactly once. A mid-loop
+// list error keeps the last good snapshot (the caller then decides on stale
+// data rather than erroring out); ctx cancellation returns the last snapshot
+// read so far.
+func listStageSettled(ctx context.Context, commenter tracker.Commenter, pmKey string, stage BoardStage) ([]tracker.Comment, error) {
+	comments, err := commenter.ListComments(ctx, pmKey)
+	if err != nil {
+		return nil, err
+	}
+	for try := 0; !stageSettled(comments, stage) && try < boardExitRecheckTries-1; try++ {
+		select {
+		case <-ctx.Done():
+			return comments, nil
+		case <-time.After(boardExitRecheckStep):
+		}
+		// A re-read failure mid-backoff keeps the last good snapshot rather than
+		// discarding it — the only way the caller ever gets an error is the very
+		// first read failing, so a later flake never turns a real hand-off into a
+		// dropped decision.
+		if c, e := commenter.ListComments(ctx, pmKey); e == nil {
+			comments = c
+		}
+	}
+	return comments, nil
+}
+
+// stageSettled reports whether the stage's latest marker is one of the three
+// clean, non-failure endings handleBoardAgentExit treats as settled: the
+// stage's own done-marker, a terminal BoardResolved marker, or an open
+// same-stage [human:options] pause. Kept as the exact negation of the failure
+// branch so the re-read loop and the post decision can never drift apart.
+func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
+	_, state := latestStageState(comments, stage)
+	return state == BoardDone || state == BoardResolved || stagePausedOnOptions(comments, stage)
 }
 
 // failureMarkerBody composes the failed marker's body: a one-line headline
