@@ -85,3 +85,43 @@ func clearStageRetries(ctx context.Context, pmKey string, stage daemon.BoardStag
 		return err
 	})
 }
+
+// prLoopSnapshot reads the recorded PR review→fix loop outcomes for a card: the
+// reviewer's verdict (stage.pr-review) and the fixer's exit/summary/options
+// (stage.pr-fix). It mirrors stageExitClass's withStateStore + store.Get +
+// json.Unmarshal(entry.Value) shape so the agentstate dependency stays out of
+// the daemon package (AD3). A missing or unreadable report leaves the zero
+// value, which the decider treats as "escalate safely".
+func prLoopSnapshot(ctx context.Context, pmKey string, logger zerolog.Logger) daemon.PRLoopStateSnapshot {
+	var snap daemon.PRLoopStateSnapshot
+	err := withStateStore(func(store agentstate.Store) error {
+		if e, err := store.Get(ctx, pmKey, "stage.pr-review"); err == nil {
+			var r struct {
+				Verdict string `json:"verdict"`
+			}
+			if json.Unmarshal([]byte(e.Value), &r) == nil {
+				snap.ReviewVerdict = r.Verdict
+			}
+		}
+		if e, err := store.Get(ctx, pmKey, "stage.pr-fix"); err == nil {
+			var r struct {
+				Exit     string               `json:"exit"`
+				Summary  string               `json:"summary"`
+				Deferred string               `json:"deferred"`
+				Options  []daemon.BoardOption `json:"options"`
+			}
+			if json.Unmarshal([]byte(e.Value), &r) == nil {
+				snap.FixExit, snap.FixOptions = r.Exit, r.Options
+				snap.FixSummary = r.Summary
+				if snap.FixSummary == "" {
+					snap.FixSummary = r.Deferred
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Debug().Err(err).Str("pm", pmKey).Msg("board PR loop: no readable loop state")
+	}
+	return snap
+}

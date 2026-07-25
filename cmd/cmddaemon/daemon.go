@@ -566,6 +566,17 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			To:    daemon.BoardVerification,
 		})
 	}
+	// driveLoop advances the pre-merge review→fix loop one step when a loop
+	// half-agent stops (live path) or a restart strands it (durable path). It
+	// rebuilds the deploy deps so the loop reads the same forge/commenter the
+	// deploy opened the draft with.
+	driveLoop := func(loopCtx context.Context, pmKey string) error {
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
+		if err != nil {
+			return err
+		}
+		return deps.HandlePRLoopExit(loopCtx, pmKey)
+	}
 	// The diagnoser reads the dead run's persisted artifacts so the failed
 	// marker says what actually broke instead of the generic stage line.
 	diagnoseFailure := func(agentName, hookErrorType string) daemon.FailureDiagnosis {
@@ -615,7 +626,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
+		chainReview, driveLoop, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
@@ -2198,6 +2209,13 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		DaemonID:     daemonID,
 		Logger:       logger,
 		LaunchGate:   launchGate,
+		// The daemon board is the only place a launcher and an exit-hook watcher
+		// exist to drive the loop event-driven; enabling it here (never in the CLI
+		// deploy) is what AD1 scopes to the DoD's environment.
+		PRReviewLoop: true,
+		PRLoopState: func(pmKey string) daemon.PRLoopStateSnapshot {
+			return prLoopSnapshot(context.Background(), pmKey, logger)
+		},
 	}, nil
 }
 
