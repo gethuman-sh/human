@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,9 @@ type Deployer interface {
 	// card must short-circuit to a clean no-op rather than open a doomed PR the
 	// forge rejects 422 "No commits between" (SC-911).
 	BranchMerged(ctx context.Context, workspaceDir, branch string) bool
+	// MarkReadyForReview converts the draft PR opened for the review loop to
+	// ready-for-review, so the adopted PR can merge once the machine review approves.
+	MarkReadyForReview(ctx context.Context, workspaceDir string, number int) error
 }
 
 // PRRequest carries everything needed to push a branch and open its PR.
@@ -67,6 +71,9 @@ type PRRequest struct {
 	Branch       string
 	Title        string
 	Body         string
+	// Draft opens the PR in the forge's draft (unmergeable) state — the review
+	// loop opens draft, then un-drafts on approval so the reviewed PR can merge.
+	Draft bool
 }
 
 // PRResult identifies the created pull request for the pipeline steps that
@@ -139,6 +146,15 @@ var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
 func sanitize(s string) string {
 	return sanitizeRe.ReplaceAllString(s, "-")
 }
+
+// Hyphen-free agent-name suffixes for the PR review→fix loop steps. parseAgentName
+// splits on the last hyphen, so the token itself must carry none — the public
+// marker/state names keep their hyphenated form (pr-review-started, stage.pr-review);
+// only the internal agent-name token is hyphen-free.
+const (
+	prReviewAgentStage BoardStage = "prreview"
+	prFixAgentStage    BoardStage = "prfix"
+)
 
 // agentNameFor builds the agent name for a board stage. It is reversible (see
 // parseAgentName) so the failure watcher can recover (pmKey, stage) from a
@@ -414,21 +430,153 @@ var startDeploy = func(d BoardTransitionDeps, req BoardTransitionRequest, card B
 	go d.deploy(context.Background(), req, card)
 }
 
-// runDoneStage kicks off the deploy pipeline: push → PR → CI gate → merge →
-// branch cleanup → close ticket. The CI gate can take many minutes, so the
-// transition request returns as soon as [human:deploy-started] is posted and
-// the pipeline reports the outcome via markers.
-func (d BoardTransitionDeps) runDoneStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) error {
+// runDoneStage starts the pre-merge PR review→fix loop: it opens the branch's
+// PR in draft (unmergeable) state, launches the machine reviewer on it, and the
+// loop drives reviewer→fixer to convergence before the existing deploy engine
+// un-drafts and merges the PR. The reviewer's CI gate can take many minutes, so
+// the transition request returns as soon as the loop's first marker is posted
+// and the loop reports its progress via markers. The empty-branch guard is
+// unchanged — a handoff with no branch has nothing to open.
+func (d BoardTransitionDeps) runDoneStage(_ context.Context, req BoardTransitionRequest, card BoardCard) error {
 	if card.Branch == "" {
 		body := DeployFailedHeader + "\nno branch recorded on ready-for-review handoff"
-		_, _ = d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(body, d.DaemonID))
+		_, _ = d.Commenter.AddComment(context.Background(), req.PMKey, StampDaemon(body, d.DaemonID))
 		return errors.WithDetails("no branch recorded for deploy", "pm", req.PMKey)
 	}
-	if _, err := d.Commenter.AddComment(ctx, req.PMKey, StampDaemon(DeployStartedHeader, d.DaemonID)); err != nil {
-		return errors.WrapWithDetails(err, "posting deploy-started marker", "pm", req.PMKey)
-	}
-	startDeploy(d, req, card)
+	startPRReview(d, req, card)
 	return nil
+}
+
+// startPRReview opens the draft PR and launches the reviewer in the background.
+// A package var so tests can run the loop's first phase synchronously, mirroring
+// startDeploy.
+var startPRReview = func(d BoardTransitionDeps, req BoardTransitionRequest, card BoardCard) {
+	go func() { _ = d.openDraftPRAndReview(context.Background(), req.PMKey, card) }()
+}
+
+// openDraftPRAndReview opens the branch's PR in draft (unmergeable) state and
+// launches the machine reviewer on it, starting the pre-merge review→fix loop.
+// The draft state is a hard guard independent of the daemon: a half-reviewed
+// change cannot merge. On the already-merged carve-out (a re-run on shipped
+// work) it short-circuits to the terminal success path exactly like DeployBranch.
+func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey string, card BoardCard) error {
+	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, card.Branch) {
+		_, _ = d.Commenter.AddComment(ctx, pmKey,
+			StampDaemon(DeployedHeader+"\nalready merged into the base branch; no new PR opened", d.DaemonID))
+		d.closeTicketBestEffort(pmKey)
+		return nil
+	}
+	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
+		WorkspaceDir: d.WorkspaceDir,
+		Branch:       card.Branch,
+		Title:        pmKey, // adopted on the approval path; title only used on fresh create
+		Body:         doneBody(pmKey, card),
+		Draft:        true,
+	})
+	if err != nil {
+		return d.deployFailed(pmKey, "", deployReason(
+			"could not push "+card.Branch+" and open its draft pull request — check the branch and forge access, then re-run Deploy", err))
+	}
+	if _, err := d.Commenter.AddComment(ctx, pmKey,
+		StampDaemon(prReviewStartedBody(res.URL, res.Number, card.Branch), d.DaemonID)); err != nil {
+		return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
+	}
+	return d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage, prReviewDispatch(pmKey, res.Number, card.Branch))
+}
+
+// prReviewStartedBody carries the loop's PR binding on the started marker so the
+// Stop-hook driver can recover (url, number, branch) without a forge lookup.
+func prReviewStartedBody(url string, number int, branch string) string {
+	return PRReviewStartedHeader +
+		"\npr: " + url +
+		"\nnumber: " + strconv.Itoa(number) +
+		"\nbranch: " + branch
+}
+
+func prReviewDispatch(pmKey string, number int, branch string) string {
+	return "/human-pr-review " + pmKey + " --pr=" + strconv.Itoa(number) + " --branch=" + branch
+}
+
+func prFixDispatch(pmKey string, number int, branch string) string {
+	return "/human-pr-fix " + pmKey + " --pr=" + strconv.Itoa(number) + " --branch=" + branch
+}
+
+// launchPRLoopAgent launches one loop step's agent (fire-and-forget, no claim:
+// the loop is driven by the launching daemon's local Stop events). A launch
+// failure escalates the card — leaving it spinning would strand the loop.
+func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string, stage BoardStage, prompt string) error {
+	name := agentNameFor(pmKey, stage)
+	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
+		body := PRReviewFailedHeader + "\ncould not launch the PR " + string(stage) + " agent — " + errors.CauseChain(err)
+		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID))
+		return errors.WrapWithDetails(err, "launching PR loop agent", "pm", pmKey, "stage", string(stage))
+	}
+	return nil
+}
+
+// prLoopNumber recovers the loop's PR number from the latest pr-review-started
+// marker's binding; 0 when absent or unparseable.
+func prLoopNumber(comments []tracker.Comment) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(latestPrefixedLine(comments, PRReviewStartedHeader, "number:")))
+	return n
+}
+
+// prLoopURL recovers the loop's PR URL from the latest pr-review-started marker.
+func prLoopURL(comments []tracker.Comment) string {
+	return latestPrefixedLine(comments, PRReviewStartedHeader, "pr:")
+}
+
+// AdvancePRLoop is the deploy-stage loop executor. On each reviewer/fixer exit
+// the failure watcher calls it with the outcome the step recorded in the state
+// store (reviewVerdict or fixExit); it reads the loop's markers, asks the pure
+// decider for the next action, and executes it: launch the reviewer, launch the
+// fixer, un-draft + merge via the existing DeployBranch, or red the card for a
+// human. Human PR review runs out of band and never enters here.
+func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey, reviewVerdict, fixExit string) error {
+	comments, err := d.Commenter.ListComments(ctx, pmKey)
+	if err != nil {
+		return errors.WrapWithDetails(err, "loading comments for PR loop", "pm", pmKey)
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	number, url, branch := prLoopNumber(comments), prLoopURL(comments), card.Branch
+	switch EvaluatePRLoop(comments, reviewVerdict, fixExit) {
+	case PRActionReview:
+		if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(prReviewStartedBody(url, number, branch), d.DaemonID)); err != nil {
+			return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
+		}
+		return d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage, prReviewDispatch(pmKey, number, branch))
+	case PRActionFix:
+		if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(PRFixStartedHeader, d.DaemonID)); err != nil {
+			return errors.WrapWithDetails(err, "posting pr-fix-started marker", "pm", pmKey)
+		}
+		return d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage, prFixDispatch(pmKey, number, branch))
+	case PRActionMerge:
+		if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, number); err != nil {
+			return d.deployFailed(pmKey, url, deployReason(
+				"the reviewed PR could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
+		}
+		// Reuse the untouched deploy engine: it adopts the now-ready open PR
+		// (forge.AdoptOrCreatePullRequest), runs the CI gate, freshness rebase and merge.
+		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), branch)
+	default: // PRActionEscalate
+		_, _ = d.Commenter.AddComment(ctx, pmKey,
+			StampDaemon(PRReviewFailedHeader+"\n"+prEscalationReason(reviewVerdict, fixExit), d.DaemonID))
+		return nil
+	}
+}
+
+// prEscalationReason renders the actionable headline the failed marker's badge shows.
+func prEscalationReason(reviewVerdict, fixExit string) string {
+	switch {
+	case fixExit == ExitNeedsInput:
+		return "the PR fixer needs a human decision — read the PR review comments, decide, then re-run Deploy"
+	case reviewVerdict == PRVerdictChanges:
+		return "the machine review did not converge within the round budget — review the PR yourself, then re-run Deploy"
+	case reviewVerdict == PRVerdictUnreviewable:
+		return "the PR could not be reviewed (bad binding or empty diff) — check the PR, then re-run Deploy"
+	default:
+		return "the PR review→fix loop stopped on an unreadable outcome — check the PR and its review, then re-run Deploy"
+	}
 }
 
 // deployGate queues deploy pipelines: the Deploy button ships every ready fix

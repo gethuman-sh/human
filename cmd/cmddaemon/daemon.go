@@ -566,6 +566,11 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			To:    daemon.BoardVerification,
 		})
 	}
+	// The pre-merge PR review→fix loop is driven off the reviewer/fixer Stop
+	// events, exactly like chainReview: on each loop-agent exit read the outcome
+	// it recorded (the reviewer's verdict, the fixer's exit) from the state store
+	// and hand it to the loop executor, which decides the next step.
+	advancePRLoop := advancePRLoopFunc(ctx, ds, reviewLaunchGate, logger)
 	// The diagnoser reads the dead run's persisted artifacts so the failed
 	// marker says what actually broke instead of the generic stage line.
 	diagnoseFailure := func(agentName, hookErrorType string) daemon.FailureDiagnosis {
@@ -615,7 +620,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
+		chainReview, advancePRLoop, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
@@ -1871,6 +1876,7 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 		Head:  req.Branch,
 		Title: req.Title,
 		Body:  req.Body,
+		Draft: req.Draft,
 	})
 	if err != nil {
 		return daemon.PRResult{}, errors.WrapWithDetails(err, "opening pull request", "repo", repo, "head", req.Branch)
@@ -1986,6 +1992,21 @@ func addEphemeralWorktree(ctx context.Context, dir, tip string) (string, func(),
 		return "", nil, err
 	}
 	return wt, func() { _ = gitrepo.WorktreeRemove(ctx, dir, wt) }, nil
+}
+
+// MarkReadyForReview un-drafts the review loop's PR so the adopted PR can merge
+// once the machine review approves. Mirrors the resolveForge + capability
+// type-assert shape of the other forgeDeployer forge operations.
+func (p forgeDeployer) MarkReadyForReview(ctx context.Context, workspaceDir string, number int) error {
+	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
+	if err != nil {
+		return err
+	}
+	marker, ok := creator.(forge.ReadyForReviewMarker)
+	if !ok {
+		return errors.WithDetails("forge does not support marking a PR ready for review", "repo", repo)
+	}
+	return marker.MarkReadyForReview(ctx, repo, number)
 }
 
 func (p forgeDeployer) PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error) {
@@ -2162,6 +2183,23 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) fu
 			return err
 		}
 		return transitioner.TransitionIssue(context.Background(), req.PMKey, "done")
+	}
+}
+
+// advancePRLoopFunc builds the PR review→fix loop's Stop-event driver: on each
+// reviewer/fixer exit it reads the outcome that step recorded in the state store
+// (the reviewer's verdict, the fixer's exit) and hands it to the loop executor,
+// which decides and runs the next step. Extracted from runDaemonForeground so
+// the state-read + error path lives in its own scope.
+func advancePRLoopFunc(ctx context.Context, ds *daemonState, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
+	return func(pmKey string) error {
+		verdict := readPRReviewVerdict(ctx, pmKey, logger)
+		exit := readPRFixExit(ctx, pmKey, logger)
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
+		if err != nil {
+			return err
+		}
+		return deps.AdvancePRLoop(ctx, pmKey, verdict, exit)
 	}
 }
 
