@@ -204,10 +204,13 @@ body {
 .board {
   display: grid;
   /* The wide idea-space track (five loose→concrete sub-columns), four queue
-     columns, and the slim terminal Deploy drop zone; min-widths keep each
-     readable and the board scrolls horizontally on narrow windows instead of
-     squishing cards into slivers. */
-  grid-template-columns: minmax(540px, 2.4fr) repeat(4, minmax(170px, 1fr)) minmax(80px, 110px);
+     columns, and the slim terminal Deploy drop zone. The Ideas track has a
+     0 floor (not a px minimum) so it absorbs compression at the default
+     window size instead of forcing the deploy-side columns off-screen
+     (SC-1451); the four queue columns keep their 170px floors so they stay
+     readable, and the board still scrolls horizontally when even that is not
+     enough room. */
+  grid-template-columns: minmax(0, 2.4fr) repeat(4, minmax(170px, 1fr)) minmax(80px, 110px);
   /* Bound the single row to the board's own height so columns can never grow
      past the space below the header (the old 100vh-based column max-height did,
      which pushed the document 20px taller than the viewport). */
@@ -216,6 +219,19 @@ body {
   padding: 12px;
   height: 100%;
   overflow-x: auto;
+  /* Reserve the scrollbar's space up front so its later appearance (once
+     content genuinely overflows) never shifts the board layout (SC-1451). */
+  scrollbar-gutter: stable;
+}
+.board::-webkit-scrollbar {
+  height: 10px;
+}
+.board::-webkit-scrollbar-thumb {
+  background: var(--col-border);
+  border-radius: 5px;
+}
+.board::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* The idea space: the Ideas queue widened into five lanes spanning a
@@ -242,8 +258,11 @@ body {
   min-height: 0;
   display: grid;
   /* Sub-columns run narrower than regular queues: idea cards are title-only
-     captures, and five of them must share one board track. */
-  grid-template-columns: repeat(5, minmax(100px, 1fr));
+     captures, and five of them must share one board track. The 0 floor lets
+     the lanes shrink with the Ideas track itself rather than forcing a fixed
+     500px inner min-width that would clip inside the (now compressible)
+     outer track (SC-1451). */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   grid-auto-rows: minmax(0, 1fr);
   gap: 0;
 }
