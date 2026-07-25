@@ -661,7 +661,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
 		branchReachable, commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
-		chainReview, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
+		chainReview, driveLoop, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
 	// Surface tickets created or edited outside the board (tracker web UI, CLI,
 	// another teammate or daemon) — none raise a board event — by polling the
