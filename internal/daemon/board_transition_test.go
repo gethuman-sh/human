@@ -592,6 +592,9 @@ func TestApplyTransitionDeployChecksFail(t *testing.T) {
 	}}
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/9", Number: 9}, checks: []forge.ChecksState{forge.ChecksFailing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
+	// Nil launcher = the CLI deploy path: a failing CI gate is terminal (AD4). The
+	// launcher-wired dispatch path has its own test.
+	deps.Launcher = nil
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.Error(t, err) // the transition itself succeeded; the failure is a marker
 	assert.Zero(t, p.merged)
@@ -669,6 +672,9 @@ func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
 		checks:    []forge.ChecksState{forge.ChecksPassing},
 		ensureErr: errors.New("rebase hit a conflict"), mergeable: false}
 	deps := newDeps(c, &fakeLauncher{}, p)
+	// Nil launcher = the CLI deploy path: no fixer to dispatch, so a conflict is
+	// terminal (AD4). The launcher-wired dispatch path has its own test.
+	deps.Launcher = nil
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.Error(t, err)
 	assert.Equal(t, 1, p.ensured)
@@ -1411,6 +1417,9 @@ func TestApplyTransitionDeployCIFailureHeadline(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/16", Number: 16},
 		checks: []forge.ChecksState{forge.ChecksFailing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
+	// Nil launcher = the CLI deploy path: a failing CI gate is terminal (AD4). The
+	// launcher-wired dispatch path has its own test.
+	deps.Launcher = nil
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.Error(t, err)
 	var failed string
@@ -1455,4 +1464,249 @@ func TestApplyTransitionReplanRejectedBeyondPlanning(t *testing.T) {
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardPlanning})
 	require.Error(t, err)
 	assert.Zero(t, l.calls)
+}
+
+// deployFixReadyComments is the standard review-complete thread a deploy runs
+// against: a branch binding plus the review-complete gate that lets the deploy
+// pipeline proceed to its CI/merge steps.
+func deployFixReadyComments() []tracker.Comment {
+	return []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}
+}
+
+// A code-fixable CI failure at the deploy gate, with a launcher wired (the board
+// path), dispatches the deploy-fixer and keeps the card spinning instead of
+// redding — the whole point of SC-1557.
+func TestDeployBranch_CIFailure_DispatchesFixer(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7},
+		checks: []forge.ChecksState{forge.ChecksFailing}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err, "a dispatched fixer releases the deploy gate rather than erroring")
+
+	var started string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFixStartedHeader) {
+			started = b
+		}
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader), "a dispatched fixer must not red the card: %q", b)
+	}
+	require.NotEmpty(t, started, "the running deploy-fix-started marker must be posted")
+	assert.Contains(t, started, "number: 7")
+	assert.Contains(t, started, "branch: feat/x")
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "board-SC-1-deployfix", l.name)
+	assert.Equal(t, "/human-deploy-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
+	assert.Zero(t, p.merged, "the deploy must not merge a CI-failed head")
+}
+
+// The CLI deploy path wires no launcher: a failing CI gate stays terminal (AD4),
+// exactly as before SC-1557 — a human is at the CLI and fixes it directly.
+func TestDeployBranch_CIFailure_NilLauncher_Reds(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7},
+		checks: []forge.ChecksState{forge.ChecksFailing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	deps.Launcher = nil
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var failed, started string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+		if strings.HasPrefix(b, DeployFixStartedHeader) {
+			started = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Empty(t, started, "no fixer is dispatched on the CLI path")
+}
+
+// A CI *timeout* is an infra/slowness signal, not a code defect: even with a
+// launcher wired the card reds and no fixer is dispatched (AD3, ciFailureFixable).
+func TestDeployBranch_CITimeout_Reds(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/8", Number: 8},
+		checksErr: errors.New("timed out waiting for CI checks")}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Zero(t, l.calls, "a CI timeout must not dispatch a code fixer")
+}
+
+// A genuine end-state conflict (mechanical rebase fails AND the forge declines
+// the merge) dispatches the fixer to rebase and resolve it, rather than redding.
+func TestDeployBranch_EnsureMergeableConflict_DispatchesFixer(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
+		checks:    []forge.ChecksState{forge.ChecksPassing},
+		ensureErr: errors.New("rebase hit a conflict"), mergeable: false}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.NoError(t, err)
+
+	var started, failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFixStartedHeader) {
+			started = b
+		}
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, started, "the conflict must dispatch the fixer")
+	assert.Empty(t, failed)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-deploy-fix SC-1 --pr=13 --branch=feat/x", l.prompt)
+	assert.Zero(t, p.merged, "a branch that could not be made mergeable must not be merged blind")
+}
+
+// Once the per-ticket deploy-fix budget is spent (two prior rounds), a further
+// failure reds instead of dispatching a third fixer — the loop is bounded (AD2).
+func TestDeployBranch_BudgetExhausted_Reds(t *testing.T) {
+	syncDeploy(t)
+	comments := deployFixReadyComments()
+	comments = append(comments,
+		cmt(DeployFixStartedHeader+"\nround 1", time.Unix(3, 0)),
+		cmt(DeployFixStartedHeader+"\nround 2", time.Unix(4, 0)))
+	c := &fakeCommenter{comments: comments}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/9", Number: 9},
+		checks: []forge.ChecksState{forge.ChecksFailing}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed, "a spent budget reds the card")
+	assert.Zero(t, l.calls, "no third fixer is dispatched once the budget is spent")
+}
+
+// A launcher that fails to start the fixer reds the card (a spinning marker with
+// no container behind it would strand the deploy).
+func TestDeployBranch_FixerLaunchError_Reds(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/9", Number: 9},
+		checks: []forge.ChecksState{forge.ChecksFailing}}
+	l := &fakeLauncher{err: errors.New("boom")}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var startedIdx, failedIdx = -1, -1
+	for i, b := range c.added {
+		if strings.HasPrefix(b, DeployFixStartedHeader) {
+			startedIdx = i
+		}
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failedIdx = i
+		}
+	}
+	require.GreaterOrEqual(t, startedIdx, 0, "the fixer dispatch is attempted before the launch fails")
+	require.GreaterOrEqual(t, failedIdx, 0, "the launch failure reds the card")
+	assert.Greater(t, failedIdx, startedIdx, "the deploy-failed marker follows the deploy-fix-started marker")
+}
+
+// On the fixer's `done` exit the deploy re-runs end to end — the fixer rebased,
+// fixed and pushed, so the branch is ready for a fresh CI gate + merge.
+func TestAdvanceDeployFix_Done_RerunsDeploy(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
+		checks: []forge.ChecksState{forge.ChecksPassing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone)
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.merged, "a done fixer re-runs the deploy through to the merge")
+
+	var deployed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployedHeader) {
+			deployed = b
+		}
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader), "a done exit must not red the card: %q", b)
+	}
+	require.NotEmpty(t, deployed, "the re-run deploy posts the deployed marker")
+}
+
+// A non-done fixer exit reds the card with an actionable, exit-specific reason.
+func TestAdvanceDeployFix_NeedsInput_Reds(t *testing.T) {
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", ExitNeedsInput)
+	require.NoError(t, err)
+	assert.Zero(t, p.merged, "a needs-input exit never touches the deployer")
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Contains(t, failed, "needs a human decision")
+}
+
+// An unrecorded (empty) exit — a crashed fixer — reds via the default escalation
+// branch rather than proceeding on a state the driver cannot read (AD5).
+func TestAdvanceDeployFix_UnrecordedExit_Reds(t *testing.T) {
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", "")
+	require.NoError(t, err)
+	assert.Zero(t, p.merged)
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Contains(t, failed, "stopped without recovering the deploy")
+}
+
+func TestDeployFixRounds_CountsMarkers(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt("[human:ready-for-review]", time.Unix(1, 0)),
+		cmt(DeployFixStartedHeader+"\nround 1", time.Unix(2, 0)),
+		cmt("[human:deployed]", time.Unix(3, 0)),
+		cmt(DeployFixStartedHeader+"\nround 2", time.Unix(4, 0)),
+	}
+	assert.Equal(t, 2, deployFixRounds(comments))
+	assert.Zero(t, deployFixRounds(nil))
+}
+
+func TestCiFailureFixable(t *testing.T) {
+	assert.True(t, ciFailureFixable(errors.New("CI checks failed")))
+	assert.False(t, ciFailureFixable(errors.New("timed out waiting for CI checks")))
+	assert.False(t, ciFailureFixable(nil))
 }

@@ -571,6 +571,10 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// it recorded (the reviewer's verdict, the fixer's exit) from the state store
 	// and hand it to the loop executor, which decides the next step.
 	advancePRLoop := advancePRLoopFunc(ctx, ds, reviewLaunchGate, logger)
+	// The deploy-fixer (SC-1557) is driven off its Stop event exactly like the PR
+	// loop: on exit read the exit it recorded in stage.deploy-fix and hand it to
+	// AdvanceDeployFix, which re-runs Deploy on `done` or reds the card otherwise.
+	advanceDeployFix := advanceDeployFixFunc(ctx, ds, reviewLaunchGate, logger)
 	// The diagnoser reads the dead run's persisted artifacts so the failed
 	// marker says what actually broke instead of the generic stage line.
 	diagnoseFailure := func(agentName, hookErrorType string) daemon.FailureDiagnosis {
@@ -620,7 +624,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, advancePRLoop, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
+		chainReview, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
@@ -2200,6 +2204,20 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, reviewLaunchGate fu
 			return err
 		}
 		return deps.AdvancePRLoop(ctx, pmKey, verdict, exit)
+	}
+}
+
+// advanceDeployFixFunc builds the deploy-fixer's Stop-event driver: on the fixer's
+// exit it reads the exit recorded in stage.deploy-fix and hands it to the deploy-fix
+// executor, which re-runs Deploy on `done` or reds the card on anything else.
+func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
+	return func(pmKey string) error {
+		exit := readDeployFixExit(ctx, pmKey, logger)
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, launchGate)
+		if err != nil {
+			return err
+		}
+		return deps.AdvanceDeployFix(ctx, pmKey, exit)
 	}
 }
 

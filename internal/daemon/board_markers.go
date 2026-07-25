@@ -97,6 +97,12 @@ const (
 	PRReviewStartedHeader = "[human:pr-review-started]"
 	PRFixStartedHeader    = "[human:pr-fix-started]"
 	PRReviewFailedHeader  = "[human:pr-review-failed]"
+
+	// DeployFixStartedHeader marks the deploy stage's automated fixer sub-phase
+	// (SC-1557): a CI failure or rebase conflict at the deploy gate dispatches the
+	// human-deploy-fixer instead of redding, so this reads as the done stage running.
+	// Each occurrence is one deploy-fix round — the budget counts them (deployFixRounds).
+	DeployFixStartedHeader = "[human:deploy-fix-started]"
 )
 
 // PlanCommentHeader marks a comment whose body IS the engineering plan for
@@ -146,6 +152,7 @@ var orderedMarkerSpecs = []markerSpec{
 	{PRReviewStartedHeader, BoardDoneStage, BoardRunning},
 	{PRFixStartedHeader, BoardDoneStage, BoardRunning},
 	{PRReviewFailedHeader, BoardDoneStage, BoardFailed},
+	{DeployFixStartedHeader, BoardDoneStage, BoardRunning},
 }
 
 // stageRank orders the pipeline stages so derivation can pick the furthest
