@@ -514,13 +514,17 @@ func (m model) handleDispatch() (tea.Model, tea.Cmd) {
 	}
 	sel := flat[m.issueCursor]
 
-	// Bug-ness wins regardless of tracker — a Shortcut bug story still wants
-	// root-cause analysis, not the generic planner. Otherwise topology decides:
-	// execution (split topology) is opt-in and requires an explicit engineering
-	// role — a role-less ticket (single-tracker default) plans, it never skips
-	// planning just because its tracker kind is not Shortcut ([SC-254]).
+	// Kind wins regardless of tracker — a defect or vulnerability wants its
+	// dedicated flow, not the generic planner. Security tickets route to the
+	// autonomous security-fix pipeline; bugs to root-cause analysis. Otherwise
+	// topology decides: execution (split topology) is opt-in and requires an
+	// explicit engineering role — a role-less ticket (single-tracker default)
+	// plans, it never skips planning just because its tracker kind is not
+	// Shortcut ([SC-254]).
 	var prompt string
 	switch {
+	case sel.Issue.IsSecurity():
+		prompt = "/human-security-fix " + sel.Issue.Key
 	case sel.Issue.IsBug():
 		prompt = "/human-bug-plan " + sel.Issue.Key
 	case inferRole(sel.TrackerKind) == "engineering" || sel.TrackerRole == "engineering":
@@ -2151,13 +2155,16 @@ func renderIssuesPanel(groups []trackerIssues, fetchedAt time.Time, w, cursor, m
 				prefix = "    ▸ "
 				cursorLine = len(lines)
 			}
-			// (B) marks defect tickets so the eye can spot bugs without
-			// reading types; (R) marks engineering tickets currently flagged
-			// ready for review on their PM ticket — those keys come from the
-			// handoff's engineering: line, which split topology populates.
-			// The two markers are independent — a ticket may carry both.
+			// (B) marks defect tickets and (S) security tickets so the eye can
+			// spot them without reading types (the two kinds are disjoint); (R)
+			// marks engineering tickets currently flagged ready for review on
+			// their PM ticket — those keys come from the handoff's engineering:
+			// line, which split topology populates. (R) is independent — a
+			// ticket may carry a kind marker and (R) both.
 			bugMarker := "   "
-			if issue.IsBug() {
+			if issue.IsSecurity() {
+				bugMarker = errorStyle.Render("(S)")
+			} else if issue.IsBug() {
 				bugMarker = errorStyle.Render("(B)")
 			}
 			lines = append(lines, fmt.Sprintf("%s%-12s %s %s %-14s %s",

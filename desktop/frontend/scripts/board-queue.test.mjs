@@ -296,3 +296,25 @@ test("initialLoadPhase: a cache hit paints from cache and skips the quick pass",
 test("initialLoadPhase: a cache miss falls back to the spinner + quick-titles path", () => {
   assert.equal(initialLoadPhase(false), "quick");
 });
+
+import { deploySideOf, deployControlView } from "../build/board-queue.js";
+
+// deploySideOf is the one place the three-way pane split is decided: security
+// wins over bug (they are disjoint, but the guard makes the precedence explicit),
+// bug over feature, and a plain card is a feature.
+test("deploySideOf maps each kind to its own pane", () => {
+  assert.equal(deploySideOf({ security: true }), "security");
+  assert.equal(deploySideOf({ bug: true }), "bugs");
+  assert.equal(deploySideOf({}), "features");
+  // Disjoint in practice; if both flags ever appear, security takes precedence.
+  assert.equal(deploySideOf({ bug: true, security: true }), "security");
+});
+
+// The Security Deploy control names vulnerabilities, not bugs or ready cards, so
+// its empty-state tooltip reads in security language.
+test("security deploy control uses vulnerability wording", () => {
+  const view = deployControlView([], "security");
+  assert.equal(view.count, 0);
+  assert.ok(view.disabled);
+  assert.match(view.tooltip, /vulnerability/);
+});

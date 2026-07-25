@@ -115,8 +115,8 @@ func TestMockupPruner_RefusesRoot(t *testing.T) {
 
 func TestMockupPruner_ArchivesSubtreeAndClearsWinnerInside(t *testing.T) {
 	dir := t.TempDir()
-	writeGroup(t, dir, "sc-1", "", "01.html")             // root
-	writeGroup(t, dir, "sc-1-o1-v1", "sc-1", "01.html")   // A
+	writeGroup(t, dir, "sc-1", "", "01.html")                       // root
+	writeGroup(t, dir, "sc-1-o1-v1", "sc-1", "01.html")             // A
 	writeGroup(t, dir, "sc-1-o1-v1-o1-v1", "sc-1-o1-v1", "01.html") // B (child of A)
 	reg := testRegistry(t, dir)
 
@@ -139,8 +139,8 @@ func TestMockupPruner_ArchivesSubtreeAndClearsWinnerInside(t *testing.T) {
 func TestMockupPruner_KeepsWinnerOutsideSubtree(t *testing.T) {
 	dir := t.TempDir()
 	writeGroup(t, dir, "sc-1", "", "01.html")
-	writeGroup(t, dir, "sc-1-o1-v1", "sc-1", "01.html")   // pruned branch A
-	writeGroup(t, dir, "sc-1-o2-v1", "sc-1", "01.html")   // sibling branch, winner here
+	writeGroup(t, dir, "sc-1-o1-v1", "sc-1", "01.html") // pruned branch A
+	writeGroup(t, dir, "sc-1-o2-v1", "sc-1", "01.html") // sibling branch, winner here
 	reg := testRegistry(t, dir)
 
 	store := mockups.NewStore(mockups.PathIn(dir))

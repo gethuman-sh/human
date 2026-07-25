@@ -12,6 +12,10 @@ export interface QueueCard {
   // board. The Deploy selectors split on it so each control ships only its own
   // pane's ready cards.
   bug?: boolean;
+  // Security ticket: lives in the Security half of the Bugs pane. Mutually
+  // exclusive with bug (the classification tokens are disjoint) — the Deploy
+  // selectors treat it as a third pane.
+  security?: boolean;
   options?: { id: string; label: string }[];
   // RFC3339 time the newest marker of the card's current stage landed; feeds
   // the Engineering-backlog age badge. Absent for cards with no derived stage.
@@ -78,7 +82,7 @@ const AGE_HOT_DAYS = 14;
 // plan shows the spinner badge and a failed one its error; under a day the
 // pill is suppressed rather than shouting "0d" at fresh plans.
 export function ageBadge(card: QueueCard, now: Date): { text: string; cls: string } | null {
-  if (card.bug || card.stage !== "planning" || card.state !== "done") return null;
+  if (card.bug || card.security || card.stage !== "planning" || card.state !== "done") return null;
   const days = ageDays(card.stageEnteredAt, now);
   if (days === null || days < 1) return null;
   let cls = "age";
@@ -92,7 +96,7 @@ export function ageBadge(card: QueueCard, now: Date): { text: string; cls: strin
 // codebase may have moved since the plan landed; replanning posts a fresh
 // [human:plan] that supersedes the old one (latest wins).
 export function isReplannable(card: QueueCard): boolean {
-  return !card.bug && card.stage === "planning" && card.state === "done";
+  return !card.bug && !card.security && card.stage === "planning" && card.state === "done";
 }
 
 // isReviewRetryable reports a stage-failed review — a [human:review-failed] card
@@ -320,16 +324,25 @@ export function isReadyToDeploy(card: QueueCard): boolean {
 }
 
 // DeploySide names the pane a Deploy control belongs to: the board's feature
-// workflow, or the Bugs pane. It selects which ready cards the control ships.
-export type DeploySide = "features" | "bugs";
+// workflow, the Bugs half, or the Security half. It selects which ready cards
+// the control ships.
+export type DeploySide = "features" | "bugs" | "security";
+
+// deploySideOf maps a card to the pane that owns it — bug and security are
+// disjoint kinds, everything else is a feature. The one place the three-way
+// split is decided, so the selectors below cannot drift apart.
+export function deploySideOf(c: QueueCard): DeploySide {
+  if (c.security) return "security";
+  if (c.bug) return "bugs";
+  return "features";
+}
 
 // deployableCards is the click's payload: every ready card in the control's pane
-// — feature cards on the board, bug cards in the Bugs pane. The same predicate
-// gates the single-card drop, so click and drop can never disagree on what is
-// shippable.
+// — feature cards on the board, bug/security cards in their halves. The same
+// predicate gates the single-card drop, so click and drop can never disagree on
+// what is shippable.
 export function deployableCards<C extends QueueCard>(cards: C[], side: DeploySide): C[] {
-  const wantBug = side === "bugs";
-  return cards.filter((c) => !!c.bug === wantBug && isReadyToDeploy(c));
+  return cards.filter((c) => deploySideOf(c) === side && isReadyToDeploy(c));
 }
 
 // DeployControlView is the DOM-free description a Deploy control renders: how
@@ -347,7 +360,8 @@ export interface DeployControlView {
 // when nothing is ready, enabled with a "ship every…" tooltip otherwise.
 export function deployControlView(cards: QueueCard[], side: DeploySide): DeployControlView {
   const count = deployableCards(cards, side).length;
-  const noun = side === "bugs" ? "fixed bug" : "ready-to-deploy card";
+  const noun =
+    side === "bugs" ? "fixed bug" : side === "security" ? "fixed vulnerability" : "ready-to-deploy card";
   return {
     count,
     disabled: count === 0,

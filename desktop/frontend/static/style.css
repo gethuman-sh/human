@@ -368,13 +368,16 @@ body {
   background: var(--drop-reject);
 }
 
-/* The Bugs pane: a wide tray of open bugs, the Fix activity column, and the
-   terminal Deploy button — same board grammar (columns, cards, drops), scoped
-   to defects. */
+/* The Bugs & Security view: two equal halves stacked top (bugs) and bottom
+   (security). Each half is a wide tray of open tickets, a Fix activity column,
+   and a terminal Deploy button — same board grammar (columns, cards, drops),
+   scoped to defects and vulnerabilities. The six children (two × [grid, Fix,
+   Deploy]) flow into this 3×2 grid in order, so bugs fill row one and security
+   row two. */
 .bugs-view {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(180px, 240px) minmax(80px, 110px);
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
   padding: 12px;
   /* Same containment as .app-main .board: fill the space below the header,
@@ -406,16 +409,22 @@ body {
   font-size: 13px;
 }
 
-/* Fix is the bug pane's one activity column — the red counterpart to the
-   board's green Code border: same double weight, opposite signal. */
+/* Fix is each half's one activity column — the red counterpart to the board's
+   green Code border: same double weight, opposite signal. The Security half
+   uses violet so the two Fix columns read as distinct kinds at a glance. */
 .column.bug-fix-col {
   border: 2px solid #ff1744;
 }
 
-/* The terminal Deploy control: click ships every fixed bug, and a single ready
-   bug can be dropped on it too (849). Styled after .deploy-zone so both panes
-   end on the same visual full stop. */
-.bug-deploy {
+.column.security-fix-col {
+  border: 2px solid #7c4dff;
+}
+
+/* The terminal Deploy control: click ships every fixed ticket, and a single
+   ready one can be dropped on it too. Styled after .deploy-zone so every pane
+   ends on the same visual full stop; the bug and security halves share it. */
+.bug-deploy,
+.security-deploy {
   border: 2px dashed var(--col-border);
   border-radius: 8px;
   background: transparent;
@@ -428,26 +437,30 @@ body {
   font: inherit;
 }
 
-.bug-deploy:hover:not(:disabled) {
+.bug-deploy:hover:not(:disabled),
+.security-deploy:hover:not(:disabled) {
   border-color: var(--done);
   color: var(--done);
   background: var(--drop-ok);
 }
 
-.bug-deploy:disabled {
+.bug-deploy:disabled,
+.security-deploy:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-/* Drag-hover feedback for a single bug dropped on the control, mirroring the
+/* Drag-hover feedback for a single ticket dropped on the control, mirroring the
    board's .deploy-zone.drop-ok / .drop-reject rules. */
-.bug-deploy.drop-ok {
+.bug-deploy.drop-ok,
+.security-deploy.drop-ok {
   border-color: var(--done);
   color: var(--done);
   background: var(--drop-ok);
 }
 
-.bug-deploy.drop-reject {
+.bug-deploy.drop-reject,
+.security-deploy.drop-reject {
   border-color: var(--failed);
   background: var(--drop-reject);
 }

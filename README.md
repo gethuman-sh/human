@@ -305,6 +305,7 @@ This writes skill and agent files to `.claude/` in the current directory. Re-run
 | `/human-plan` | Fetches a ticket and produces a structured implementation plan — attached as a separate engineering ticket (split topology) or as a `[human:plan]` comment on the ticket itself (`human plan show <KEY>` prints it) |
 | `/human-bug-plan` | Analyzes a bug ticket for root cause and writes a fix plan |
 | `/human-autofix` | Autonomously triages, root-causes, fixes, verifies, reviews, and ships a bug end to end — a passing review merges the PR, the whole trail recorded on the tracker |
+| `/human-security-fix` | The security counterpart to `/human-autofix`: threat-models, root-causes, fixes, verifies the exploit is closed, security-reviews, and ships a vulnerability end to end |
 | `/human-execute` | Loads a plan, executes step by step, runs a review checkpoint |
 | `/human-review` | Diffs the current branch against acceptance criteria |
 | `/human-findbugs` | Multi-agent pipeline to find logic errors, race conditions, and security issues |

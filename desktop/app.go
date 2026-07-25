@@ -120,6 +120,11 @@ type Card struct {
 	// tracker.Issue.IsBug). Bug cards render in the Bugs pane instead of the
 	// workflow board's columns.
 	Bug bool `json:"bug,omitempty"`
+	// Security marks a security ticket (security label or type, see
+	// tracker.Issue.IsSecurity). Security cards render in the Security half of
+	// the Bugs pane. A ticket is never both a bug and security — the tokens are
+	// disjoint — so the two flags are mutually exclusive.
+	Security bool `json:"security,omitempty"`
 	// Hidden marks a ticket the user parked off the board (right-click →
 	// Hide). Locally persisted view preference, never tracker state; the
 	// frontend filters hidden cards out unless the user reveals them.
@@ -406,6 +411,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Tracker:          pm.TrackerName,
 			TrackerKind:      pm.TrackerKind,
 			Bug:              issue.IsBug(),
+			Security:         issue.IsSecurity(),
 			Hidden:           hidden,
 			IdeaColumn:       ideaCol,
 			Options:          card.Options,
@@ -493,6 +499,22 @@ func (a *App) FixBug(pmKey, pmTitle string) error {
 		return err
 	}
 	return daemonCause(daemon.BoardFix(info.Addr, info.Token, daemon.BoardFixRequest{
+		PMKey:   pmKey,
+		PMTitle: pmTitle,
+	}))
+}
+
+// FixSecurity asks the daemon to launch the security-fix pipeline
+// (/human-security-fix) on a security ticket — the Security section's Fix drop.
+// Like FixBug it goes through the daemon so the agent runs containerized with
+// the daemon's credentials; the daemon guards against double-launches, so an
+// optimistic re-drop is safe.
+func (a *App) FixSecurity(pmKey, pmTitle string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.BoardSecurityFix(info.Addr, info.Token, daemon.SecurityFixRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
 	}))
@@ -710,6 +732,18 @@ func (a *App) CreateBug(title, description string) error {
 		return err
 	}
 	_, err = daemon.BugCreate(info.Addr, info.Token, daemon.BugCreateRequest{Title: title, Description: description})
+	return daemonCause(err)
+}
+
+// CreateSecurity files a security ticket from the Security section's `+` dialog.
+// The daemon marks it with the security label so the card lands in the Security
+// half on every backend.
+func (a *App) CreateSecurity(title, description string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	_, err = daemon.SecurityCreate(info.Addr, info.Token, daemon.SecurityCreateRequest{Title: title, Description: description})
 	return daemonCause(err)
 }
 

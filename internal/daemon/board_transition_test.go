@@ -1035,6 +1035,59 @@ func TestApplyFixLaunchFailurePostsFailedMarker(t *testing.T) {
 	assert.True(t, strings.HasPrefix(c.added[1], ImplementationFailedHeader))
 }
 
+func TestApplySecurityFixLaunchesSecurityFix(t *testing.T) {
+	// A security ticket goes straight to the fix: no planning gate, the
+	// security-fix pipeline triages and plans itself. It launches under the
+	// implementation-stage agent name so the failure watcher and the
+	// build→review chain apply to a security fix unchanged — exactly like a bug.
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplySecurityFix(context.Background(), SecurityFixRequest{PMKey: "SC-9", PMTitle: "Auth token leaks"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls)
+	assert.Equal(t, "/human-security-fix SC-9 --board", l.prompt)
+	assert.Equal(t, "board-SC-9-implementation", l.name)
+	require.Len(t, c.added, 1)
+	assert.Equal(t, ImplementationStartedHeader, c.added[0])
+}
+
+func TestApplySecurityFixCarriesBoardMarker(t *testing.T) {
+	// Same credential-less-container constraint as a board autofix (SC-252): the
+	// launch prompt must carry the explicit --board marker so the skill stops at
+	// the review handoff and never pushes from the container.
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplySecurityFix(context.Background(), SecurityFixRequest{PMKey: "SC-9", PMTitle: "Auth token leaks"})
+	require.NoError(t, err)
+	assert.Contains(t, l.prompt, "--board")
+}
+
+func TestApplySecurityFixIdempotentWhileRunning(t *testing.T) {
+	// A re-drop while the fix agent still runs must not launch a second one.
+	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:implementation-started]", time.Unix(1, 0))}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplySecurityFix(context.Background(), SecurityFixRequest{PMKey: "SC-9"})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+	assert.Empty(t, c.added)
+}
+
+func TestApplySecurityFixIdempotentWhileReviewRunning(t *testing.T) {
+	// The fix chains into its review; a drop during that review is a no-op too.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: autofix/sc-9", time.Unix(1, 0)),
+		cmt("[human:review-started]", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplySecurityFix(context.Background(), SecurityFixRequest{PMKey: "SC-9"})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+}
+
 // gateProbeDeployer reports when a pipeline enters the forge and holds it
 // there until released, so a test can observe whether a second pipeline gets
 // in while the first is still deploying.

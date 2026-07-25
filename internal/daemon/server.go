@@ -79,12 +79,18 @@ type Server struct {
 	// BoardFixer launches the autonomous bug-fix pipeline on a bug ticket for
 	// the Bugs pane's Fix drop. nil disables the board-fix route.
 	BoardFixer func(req BoardFixRequest) error
+	// BoardSecurityFixer launches the security-fix pipeline on a security ticket
+	// for the Security section's Fix drop. nil disables the security-fix route.
+	BoardSecurityFixer func(req SecurityFixRequest) error
 	// BoardOptioner records a chosen option from a card's open decision block
 	// and relaunches the block's stage with the choice; nil disables.
 	BoardOptioner func(req BoardOptionRequest) error
 	// BugCreator files a defect ticket on the PM tracker for the Bugs pane's
 	// + dialog. nil disables the bug-create route.
 	BugCreator func(req BugCreateRequest) (BugCreateResponse, error)
+	// SecurityCreator files a security ticket on the PM tracker for the Security
+	// section's + dialog. nil disables the security-create route.
+	SecurityCreator func(req SecurityCreateRequest) (SecurityCreateResponse, error)
 	// CloseTicketer closes a PM ticket (transitions it to Done) for the
 	// board's Close-Ticket drop zone. nil disables the close-ticket route.
 	CloseTicketer func(req CloseTicketRequest) error
@@ -457,6 +463,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		// killing a deploy/launch mid-flight.
 		"board-transition":  func() { s.withBlockingOp(func() { s.handleBoardTransition(conn, args[1:]) }) },
 		"board-fix":         func() { s.withBlockingOp(func() { s.handleBoardFix(conn, args[1:]) }) },
+		"security-fix":      func() { s.withBlockingOp(func() { s.handleBoardSecurityFix(conn, args[1:]) }) },
 		"board-option":      func() { s.withBlockingOp(func() { s.handleBoardOption(conn, args[1:]) }) },
 		"close-ticket":      func() { s.withBlockingOp(func() { s.handleCloseTicket(conn, args[1:]) }) },
 		"ideation-start":    func() { s.withBlockingOp(func() { s.handleIdeationStart(conn, args[1:]) }) },
@@ -465,6 +472,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"ideation-status":   func() { s.handleIdeationStatus(conn) },
 		"idea-create":       func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
 		"bug-create":        func() { s.withBlockingOp(func() { s.handleBugCreate(conn, args[1:]) }) },
+		"security-create":   func() { s.withBlockingOp(func() { s.handleSecurityCreate(conn, args[1:]) }) },
 		"features-generate": func() { s.withBlockingOp(func() { s.handleFeaturesGenerate(conn) }) },
 		"findbugs-start":    func() { s.withBlockingOp(func() { s.handleFindbugsStart(conn) }) },
 		"create-mocks":      func() { s.withBlockingOp(func() { s.handleCreateMocks(conn, args[1:]) }) },
@@ -693,6 +701,38 @@ func (s *Server) handleBoardFix(conn net.Conn, args []string) {
 		return
 	}
 	if err := s.BoardFixer(req); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	s.pokeBoard()
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleBoardSecurityFix launches the security-fix pipeline for one security
+// ticket via the injected BoardSecurityFixer. Like board-fix it is a dedicated
+// non-destructive route — the drag onto the Fix column is the user's consent —
+// and it returns as soon as the agent is launched, not when the fix finishes.
+func (s *Server) handleBoardSecurityFix(conn net.Conn, args []string) {
+	if s.BoardSecurityFixer == nil {
+		s.writeError(conn, "security fixing not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "security-fix requires one JSON arg", 1)
+		return
+	}
+	var req SecurityFixRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid security-fix request: "+err.Error(), 1)
+		return
+	}
+	if err := s.launchBlockedByDoctor(); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	if err := s.BoardSecurityFixer(req); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}

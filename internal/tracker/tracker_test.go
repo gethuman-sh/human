@@ -590,6 +590,10 @@ func TestCreateLabels(t *testing.T) {
 		{"bug type with kind/bug label", Issue{Type: "Bug", Labels: []string{"kind/bug"}}, []string{"kind/bug"}},
 		{"non-bug type passes labels through", Issue{Type: "Feature", Labels: []string{"urgent"}}, []string{"urgent"}},
 		{"empty type passes nil through", Issue{}, nil},
+		{"security type without labels", Issue{Type: "security"}, []string{"security"}},
+		{"security type titlecase without labels", Issue{Type: "Security"}, []string{"security"}},
+		{"security type appends to existing labels", Issue{Type: "Security", Labels: []string{"urgent"}}, []string{"urgent", "security"}},
+		{"security type with security label", Issue{Type: "security", Labels: []string{"security"}}, []string{"security"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -644,6 +648,68 @@ func TestIssue_IsIdea(t *testing.T) {
 			assert.Equal(t, tt.want, tt.i.IsIdea())
 		})
 	}
+}
+
+func TestIssue_IsSecurity(t *testing.T) {
+	tests := []struct {
+		name string
+		i    Issue
+		want bool
+	}{
+		{"empty issue", Issue{}, false},
+		{"type security lowercase", Issue{Type: "security"}, true},
+		{"type Security titlecase", Issue{Type: "Security"}, true},
+		{"type SECURITY uppercase", Issue{Type: "SECURITY"}, true},
+		{"type feature", Issue{Type: "Feature"}, false},
+		{"label plain security", Issue{Labels: []string{"security"}}, true},
+		{"label kind/security", Issue{Labels: []string{"kind/security"}}, true},
+		{"label type:security", Issue{Labels: []string{"type:security"}}, true},
+		{"label Security among others, not first", Issue{Labels: []string{"priority/high", "Security"}}, true},
+		// Segment equality, not substring: "insecurity" contains "security"
+		// but must not classify as a security ticket.
+		{"label insecurity is not security", Issue{Labels: []string{"insecurity"}}, false},
+		{"type wins even with non-security labels", Issue{Type: "security", Labels: []string{"priority/high"}}, true},
+		// Security is its own kind — a bug is never a security ticket and vice versa.
+		{"bug is not security", Issue{Type: "bug"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.i.IsSecurity())
+		})
+	}
+}
+
+func TestIsSecurityType(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want bool
+	}{
+		{"security lowercase", "security", true},
+		{"Security titlecase", "Security", true},
+		{"type:security", "type:security", true},
+		{"kind/security", "kind/security", true},
+		{"empty", "", false},
+		{"Task", "Task", false},
+		{"insecurity is not security", "insecurity", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsSecurityType(tt.s))
+		})
+	}
+}
+
+// TestBugAndSecurityDisjoint pins the mutual-exclusivity the frontend routing
+// relies on: a card is exactly one of bug or security, never both.
+func TestBugAndSecurityDisjoint(t *testing.T) {
+	bug := Issue{Type: "bug"}
+	assert.True(t, bug.IsBug())
+	assert.False(t, bug.IsSecurity())
+
+	sec := Issue{Type: "security"}
+	assert.True(t, sec.IsSecurity())
+	assert.False(t, sec.IsBug())
 }
 
 // fakeLabelEditor is executable documentation of the EditOptions label
