@@ -1776,6 +1776,22 @@ func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace
 		ConfigDir: configDir,
 		DaemonID:  l.daemonID,
 	})
+	return translateLaunchErr(err)
+}
+
+// translateLaunchErr bridges the agent package's single-flight sentinel to the
+// daemon's AgentLauncher-contract sentinel. This is the one place that imports
+// both packages, so the translation lives here rather than in either package
+// (agent imports daemon — the reverse would cycle). A benign already-running
+// refusal becomes daemon.ErrAgentAlreadyRunning so the board launcher swallows
+// it; every other error (and nil) passes through unchanged (SC-1419).
+func translateLaunchErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if goerrors.Is(err, agent.ErrAlreadyRunning) {
+		return daemon.ErrAgentAlreadyRunning
+	}
 	return err
 }
 

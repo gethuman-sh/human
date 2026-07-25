@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -20,6 +21,13 @@ import (
 	"github.com/gethuman-sh/human/internal/dockerhost"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 )
+
+// ErrAlreadyRunning is the typed sentinel Start returns (wrapped, so the "name"
+// detail survives) when an agent of the same name is already running with a
+// live container. Callers — the board launcher and the `human agent start` CLI
+// — errors.Is it to treat the single-flight refusal as a benign no-op rather
+// than a hard failure (SC-1419).
+var ErrAlreadyRunning = stderrors.New("agent already running")
 
 // isDockerUnreachable reports whether err is (or wraps) a Docker daemon
 // connection failure. errors.As traverses the wrap chain, so SDK connection
@@ -75,7 +83,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 				// Interactive mode: reuse the running container.
 				return existing, nil
 			}
-			return Meta{}, errors.WithDetails("agent already running", "name", opts.Name)
+			return Meta{}, errors.WrapWithDetails(ErrAlreadyRunning, "agent already running", "name", opts.Name)
 		}
 		existing.Status = StatusStopped
 		existing.StoppedAt = time.Now()

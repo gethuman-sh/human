@@ -723,6 +723,24 @@ func TestStartAgentStageLaunchFails(t *testing.T) {
 	assert.Contains(t, c.added[1], PlanningFailedHeader)
 }
 
+func TestStartAgentStageAlreadyRunningIsNoOp(t *testing.T) {
+	// A retry that races the daemon's agent cleanup hits the manager's
+	// single-flight guard, which refuses the second launch with
+	// ErrAgentAlreadyRunning. That benign refusal must leave the card running:
+	// no [human:*-failed] marker, nil return (SC-1419).
+	c := &fakeCommenter{}
+	l := &fakeLauncher{err: ErrAgentAlreadyRunning}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
+	require.NoError(t, err)
+	// exactly the started marker, and no failed marker.
+	require.Len(t, c.added, 1)
+	assert.Equal(t, PlanningStartedHeader, c.added[0])
+	for _, body := range c.added {
+		assert.NotContains(t, body, PlanningFailedHeader)
+	}
+}
+
 func TestAgentNameRoundTrip(t *testing.T) {
 	name := agentNameFor("SC-105", BoardImplementation)
 	assert.Equal(t, "board-SC-105-implementation", name)

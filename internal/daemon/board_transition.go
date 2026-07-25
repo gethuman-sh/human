@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -15,8 +16,18 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
+// ErrAgentAlreadyRunning is the AgentLauncher-boundary sentinel for a benign
+// single-flight refusal: the stage's agent is already running, so a racing
+// retry must be a no-op rather than a failure. The daemon package cannot import
+// internal/agent (that would cycle — agent imports daemon), so the launcher
+// implementation in cmd/cmddaemon translates agent.ErrAlreadyRunning into this
+// contract sentinel at the boundary (SC-1419).
+var ErrAgentAlreadyRunning = stderrors.New("agent already running")
+
 // AgentLauncher launches a containerized agent for a board stage. It is an
-// interface so the transition engine is testable without Docker.
+// interface so the transition engine is testable without Docker. An
+// implementation returns ErrAgentAlreadyRunning when the stage's agent is
+// already running so the caller can treat the racing retry as a no-op.
 type AgentLauncher interface {
 	Launch(ctx context.Context, name, prompt, workspace, configDir string) error
 }
@@ -383,6 +394,13 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	}
 	name := agentNameFor(pmKey, stage)
 	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
+		// A single-flight refusal (the stage's agent is already running) is the
+		// launch-path analogue of ApplyTransition's idempotency guard: a retry
+		// raced the agent cleanup, only one agent ever ran, so leave the card
+		// running and post no failed marker (SC-1419).
+		if stderrors.Is(err, ErrAgentAlreadyRunning) {
+			return nil
+		}
 		failBody := failedHeaderFor(stage) + "\n" + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(failBody, d.DaemonID))
 		return errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
