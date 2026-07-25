@@ -37,6 +37,7 @@ func TestStartAgentStage_stampsStartedMarker(t *testing.T) {
 // The failure watcher's *-failed marker is stamped too, so a crash is attributed
 // to the machine whose agent died.
 func TestHandleBoardAgentExit_stampsFailedMarker(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:implementation-started]", time.Unix(1, 0))}}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 

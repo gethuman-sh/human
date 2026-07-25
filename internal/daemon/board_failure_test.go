@@ -43,7 +43,110 @@ func (s *syncCommenter) AddComment(_ context.Context, _ string, body string) (*t
 	return &c, nil
 }
 
+// withInstantBoardExitRecheck removes the bounded-backoff re-read's wait so a
+// test that never settles the stage (genuinely incomplete, on purpose) decides
+// on the very first ListComments call — mirroring the pre-SC-1484 timing so
+// these tests stay fast and deterministic. Tests that specifically exercise
+// the re-read/backoff behavior (e.g. the race regression test) shrink the vars
+// themselves instead, since they need at least one extra read to occur.
+func withInstantBoardExitRecheck(t *testing.T) {
+	t.Helper()
+	oldStep, oldTries := boardExitRecheckStep, boardExitRecheckTries
+	boardExitRecheckStep, boardExitRecheckTries = 0, 1
+	t.Cleanup(func() { boardExitRecheckStep, boardExitRecheckTries = oldStep, oldTries })
+}
+
+// raceCommenter reproduces the read-after-write race between a reap-synthesized
+// exit event and the tracker's comment thread catching up to a just-posted
+// hand-off: ListComments returns a queued sequence of thread snapshots across
+// successive calls, with the last snapshot sticking once the queue is drained.
+type raceCommenter struct {
+	mu        sync.Mutex
+	snapshots [][]tracker.Comment
+	call      int
+	added     []string
+	addCh     chan string
+}
+
+func (r *raceCommenter) ListComments(_ context.Context, _ string) ([]tracker.Comment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	idx := r.call
+	if idx >= len(r.snapshots) {
+		idx = len(r.snapshots) - 1
+	}
+	r.call++
+	out := make([]tracker.Comment, len(r.snapshots[idx]))
+	copy(out, r.snapshots[idx])
+	return out, nil
+}
+
+func (r *raceCommenter) AddComment(_ context.Context, _ string, body string) (*tracker.Comment, error) {
+	r.mu.Lock()
+	r.added = append(r.added, body)
+	r.mu.Unlock()
+	if r.addCh != nil {
+		r.addCh <- body
+	}
+	c := tracker.Comment{Body: body, Created: time.Now()}
+	return &c, nil
+}
+
+// SC-1484: a reap-synthesized StopFailure can fire before the just-posted
+// [human:ready-for-review] hand-off is visible in the fetched comment thread —
+// the classic read-after-write race. The watcher must re-read with bounded
+// backoff before deciding the stage failed: the first ListComments call sees
+// only the started marker, the second (and later) sees the hand-off. That must
+// NOT post an implementation-failed marker, and the completed build must still
+// chain into its review exactly like a clean exit.
+func TestRunBoardFailureWatch_ReapAfterHandoffRechecksAndChains(t *testing.T) {
+	origStep, origTries := boardExitRecheckStep, boardExitRecheckTries
+	boardExitRecheckStep = 10 * time.Millisecond
+	boardExitRecheckTries = 3
+	t.Cleanup(func() {
+		boardExitRecheckStep, boardExitRecheckTries = origStep, origTries
+	})
+
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &raceCommenter{
+			snapshots: [][]tracker.Comment{
+				{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
+				{
+					cmt(ImplementationStartedHeader, time.Unix(1, 0)),
+					cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(2, 0)),
+				},
+			},
+			addCh: make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 1)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
+
+		// Reap-synthesized event: no SessionID, carries only name + time.
+		store.Append(hookevents.Event{EventName: "StopFailure", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+
+		select {
+		case pmKey := <-chained:
+			assert.Equal(t, "SC-1", pmKey)
+		case body := <-c.addCh:
+			t.Fatalf("must not post a failed marker for a reap that raced the hand-off, got: %q", body)
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected the reap-after-handoff exit to re-read and chain a review")
+		}
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		assert.Empty(t, c.added, "a reap that raced a completed hand-off must post no failed marker")
+	})
+}
+
 func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	synctest.Test(t, func(t *testing.T) {
 		store := NewHookEventStore()
 		c := &syncCommenter{
@@ -73,6 +176,7 @@ func TestRunBoardFailureWatch_PostsFailedOnIncompleteStage(t *testing.T) {
 // handle EVERY exit of a reused name, not just the first — a name-keyed
 // lifetime dedupe silently dropped second-and-later runs.
 func TestRunBoardFailureWatch_ReusedNameSecondIncompleteExitPostsAgain(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	synctest.Test(t, func(t *testing.T) {
 		store := NewHookEventStore()
 		c := &syncCommenter{
@@ -386,6 +490,7 @@ func TestRunBoardFailureWatch_NoChainForOtherStages(t *testing.T) {
 // posting the stage's failed marker when only the started marker exists.
 // Tightening the watcher's event filter would silently reopen the bug.
 func TestRunBoardFailureWatch_SyntheticStopFailurePostsImplementationFailed(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	synctest.Test(t, func(t *testing.T) {
 		store := NewHookEventStore()
 		c := &syncCommenter{
@@ -570,6 +675,7 @@ func TestRunBoardFailureWatch_OpenPlanningOptionsIsCleanPause(t *testing.T) {
 // planning agent that crashed while such a block is open must still surface a
 // real planning-failed marker — the guard must not swallow unrelated crashes.
 func TestRunBoardFailureWatch_OpenOptionsForOtherStageStillFails(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	synctest.Test(t, func(t *testing.T) {
 		store := NewHookEventStore()
 		c := &syncCommenter{
@@ -600,6 +706,7 @@ func TestRunBoardFailureWatch_OpenOptionsForOtherStageStillFails(t *testing.T) {
 // reads exactly the first non-header line via failureReason — followed by the
 // diagnosis detail block for the detail pane.
 func TestHandleBoardAgentExit_UsesDiagnoserHeadlineAndDetail(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	c := &syncCommenter{
 		comments: []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
 	}
@@ -625,6 +732,7 @@ func TestHandleBoardAgentExit_UsesDiagnoserHeadlineAndDetail(t *testing.T) {
 }
 
 func TestHandleBoardAgentExit_NilDiagnoserFallsBackToGeneric(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	c := &syncCommenter{
 		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
 	}
@@ -639,6 +747,7 @@ func TestHandleBoardAgentExit_NilDiagnoserFallsBackToGeneric(t *testing.T) {
 }
 
 func TestHandleBoardAgentExit_EmptyHeadlineFallsBackToGeneric(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	c := &syncCommenter{
 		comments: []tracker.Comment{cmt(PlanningStartedHeader, time.Unix(1, 0))},
 	}
@@ -656,6 +765,7 @@ func TestHandleBoardAgentExit_EmptyHeadlineFallsBackToGeneric(t *testing.T) {
 // The watch loop must hand the hook event's error type to the diagnoser —
 // a rate-limit stop is diagnosed from the event, not the artifacts.
 func TestRunBoardFailureWatch_PassesErrorTypeToDiagnoser(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	synctest.Test(t, func(t *testing.T) {
 		store := NewHookEventStore()
 		c := &syncCommenter{

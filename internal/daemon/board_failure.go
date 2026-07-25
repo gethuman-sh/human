@@ -3,10 +3,21 @@ package daemon
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/internal/tracker"
+)
+
+// boardExitRecheckStep/boardExitRecheckTries bound the read-after-write race
+// between a board agent's exit event and the tracker's comment thread catching
+// up to a just-posted stage-completion marker (hand-off, stage-done, resolved).
+// Mirrors the wait/retry shape of internal/agent/diagnose.go's waitForRunEnd.
+// Package vars so tests can shrink them to keep the suite fast.
+var (
+	boardExitRecheckStep  = 2 * time.Second
+	boardExitRecheckTries = 3
 )
 
 // FailureDiagnosis is the distilled cause of a dead agent run. It mirrors the

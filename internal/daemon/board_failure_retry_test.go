@@ -27,6 +27,7 @@ func retryPolicyFor(outcome string, recorded bool, relaunched *[]BoardStage, res
 // its failed marker AND relaunches, instead of leaving the card red for a human
 // to click Retry.
 func TestHandleBoardAgentExit_RetryableFailureRelaunchesTheStage(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	c := &syncCommenter{}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	var relaunched, resets []BoardStage
@@ -51,6 +52,7 @@ func TestHandleBoardAgentExit_RetryableFailureRelaunchesTheStage(t *testing.T) {
 // A stage that concluded it needs a human must not be relaunched — that is the
 // difference between recovering from a flake and looping on a real blocker.
 func TestHandleBoardAgentExit_TerminalFailureIsNotRelaunched(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	c := &syncCommenter{}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	var relaunched, resets []BoardStage
