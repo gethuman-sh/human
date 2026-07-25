@@ -300,6 +300,8 @@ interface AppBindings {
   GenerateFeatures(): Promise<void>;
   FindBugs(): Promise<void>;
   FindbugsHunting(): Promise<boolean>;
+  FindSecurity(): Promise<void>;
+  SecurityHunting(): Promise<boolean>;
   CreateMocks(pmKey: string, pmTitle: string, description: string): Promise<void>;
   CreateVariations(
     pmKey: string,
@@ -947,9 +949,10 @@ const securitySection: FixSection = {
   fixStage: "security:fix",
   gridColClass: "security-grid-col",
   fixColClass: "security-fix-col",
-  headerHTML: (count) => securityHeaderHTML(count),
+  headerHTML: (count) => securityHeaderHTML(securityHunting, count),
   wireHeader: (gridCol) => {
     gridCol.querySelector(".add-card")!.addEventListener("click", () => showSecurityModal());
+    gridCol.querySelector(".findsecurity-btn")?.addEventListener("click", () => void startFindsecurity());
   },
   emptyText: "No open security issues",
   pending: () => pendingSecurity,
@@ -1063,6 +1066,11 @@ let pendingSecurity: { title: string; description: string }[] = [];
 // pane's hunt indicator. Refreshed in reconcile() and set optimistically on a
 // Findbugs click so the button responds instantly.
 let findbugsHunting = false;
+
+// True while a human-security sweep is running for the project — drives the
+// Security pane's scan indicator. Refreshed in reconcile() and set
+// optimistically on a Find Security click so the button responds instantly.
+let securityHunting = false;
 
 // showBugModal opens the file-a-bug dialog: a title and a free-text
 // description. Filing is optimistic like the idea quick-add — the placeholder
@@ -1207,6 +1215,23 @@ async function startFindbugs(): Promise<void> {
     await go().FindBugs();
   } catch (err) {
     findbugsHunting = false;
+    showError(errMessage(err));
+    render();
+    return;
+  }
+  await reconcile();
+}
+
+// startFindsecurity launches the autonomous vulnerability scan — the Security
+// counterpart to startFindbugs. Optimistic: flip the scan indicator on
+// immediately, then let the status poll in reconcile() own the truth.
+async function startFindsecurity(): Promise<void> {
+  securityHunting = true;
+  render();
+  try {
+    await go().FindSecurity();
+  } catch (err) {
+    securityHunting = false;
     showError(errMessage(err));
     render();
     return;
@@ -1973,6 +1998,9 @@ async function reconcile(): Promise<void> {
     current = boardStateFromPayload(data);
     findbugsHunting = await go()
       .FindbugsHunting()
+      .catch(() => false);
+    securityHunting = await go()
+      .SecurityHunting()
       .catch(() => false);
   } catch (err) {
     if (epoch !== reconcileEpoch) return;

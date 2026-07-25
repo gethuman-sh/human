@@ -573,8 +573,36 @@ func (a *App) FindBugs() error {
 // running/triaging for its whole run and cleans the file up at the end; a stale
 // status older than findbugsHuntWindow (a crashed sweep) is treated as finished.
 func (a *App) FindbugsHunting() bool {
+	return sweepRunning("bugs")
+}
+
+// FindSecurity asks the daemon to launch the human-security sweep for the
+// registered project — the Security pane's Find Security button, the exact
+// counterpart to FindBugs. It runs containerized with the daemon's credentials
+// and returns once the agent is launched; surviving findings surface as security
+// cards on the next Cards() reconcile.
+func (a *App) FindSecurity() error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.StartFindsecurity(info.Addr, info.Token))
+}
+
+// SecurityHunting reports whether a human-security sweep is currently running —
+// the Security counterpart to FindbugsHunting, reading the "security" pipeline
+// state the sweep maintains under .human/security/.
+func (a *App) SecurityHunting() bool {
+	return sweepRunning("security")
+}
+
+// sweepRunning reports whether a pipeline sweep of the given name (bugs or
+// security) is live for any registered project: its state file must report
+// running/triaging and be fresher than findbugsHuntWindow, so a crashed sweep
+// stops pinning the pane's indicator. Shared by both panes' hunt probes.
+func sweepRunning(name string) bool {
 	for _, p := range mockupRoots() {
-		w := pipeline.Workspace{Dir: p.Dir, Name: "bugs"}
+		w := pipeline.Workspace{Dir: p.Dir, Name: name}
 		status, err := w.StateGet("status")
 		if err != nil || (status != "running" && status != "triaging") {
 			continue

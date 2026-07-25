@@ -480,6 +480,13 @@ func StartFindbugs(addr, token string) error {
 	return err
 }
 
+// StartFindsecurity asks the daemon to launch the human-security sweep — the
+// Security pane's counterpart to StartFindbugs.
+func StartFindsecurity(addr, token string) error {
+	_, err := RunRemoteCapture(addr, token, []string{"findsecurity-start"})
+	return err
+}
+
 // CloseTicket asks the daemon to close a PM ticket (transition it to Done). The
 // request is a single JSON arg, matching BoardTransition. This is a dedicated
 // route, so it never hits the interactive `issue status` confirmation.

@@ -364,6 +364,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		CloseTicketer:      closeTicketerFunc(projectRegistry, vaultResolver),
 		FeaturesGenerator:  featuresGeneratorFunc(projectRegistry),
 		FindbugsRunner:     findbugsRunnerFunc(projectRegistry),
+		SecurityRunner:     securityRunnerFunc(projectRegistry),
 		MockupsCreator:     mockupsCreatorFunc(projectRegistry),
 		VariationsCreator:  variationsCreatorFunc(projectRegistry),
 		MockupChooser:      mockupChooserFunc(projectRegistry),
@@ -2422,6 +2423,29 @@ func findbugsRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 			_ = docker.Close()
 		}
 		return dockerAgentLauncher{}.Launch(context.Background(), "findbugs", "/human-findbugs", entry.Dir, entry.Dir)
+	}
+}
+
+// securityRunnerFunc builds the daemon's SecurityRunner closure: it launches the
+// human-security sweep in the registered project's devcontainer — the Security
+// pane's counterpart to findbugsRunnerFunc. The scan resolves the PM tracker
+// itself and files each surviving vulnerability as a security ticket, so the
+// button needs no argument.
+func securityRunnerFunc(reg *daemon.ProjectRegistry) func() error {
+	return func() error {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return errors.WithDetails("no project registered for security sweep")
+		}
+		entry := entries[0]
+		// Tear down any prior "findsecurity" agent first so a re-click after a
+		// stale or crashed run is idempotent — Manager.Start refuses to start over
+		// a still-running agent.
+		if docker, err := devcontainer.NewDockerClient(); err == nil {
+			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), "findsecurity")
+			_ = docker.Close()
+		}
+		return dockerAgentLauncher{}.Launch(context.Background(), "findsecurity", "/human-security", entry.Dir, entry.Dir)
 	}
 }
 

@@ -102,6 +102,11 @@ type Server struct {
 	// that files surviving findings as bug tickets) in the registered project's
 	// devcontainer. nil disables the findbugs-start route.
 	FindbugsRunner func() error
+	// SecurityRunner launches the human-security sweep (multi-agent vulnerability
+	// scan that files surviving findings as security tickets) in the registered
+	// project's devcontainer — the Security pane's counterpart to FindbugsRunner.
+	// nil disables the findsecurity-start route.
+	SecurityRunner func() error
 	// MockupsCreator launches the human-mockups skill for one PM ticket and
 	// records the ticket→mockup-set link. nil disables the create-mocks route.
 	MockupsCreator func(req CreateMocksRequest) error
@@ -461,26 +466,27 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		// Heavy, must-not-interrupt routes are counted as blocking ops so an
 		// overlapping binary-change handover postpones itself rather than
 		// killing a deploy/launch mid-flight.
-		"board-transition":  func() { s.withBlockingOp(func() { s.handleBoardTransition(conn, args[1:]) }) },
-		"board-fix":         func() { s.withBlockingOp(func() { s.handleBoardFix(conn, args[1:]) }) },
-		"security-fix":      func() { s.withBlockingOp(func() { s.handleBoardSecurityFix(conn, args[1:]) }) },
-		"board-option":      func() { s.withBlockingOp(func() { s.handleBoardOption(conn, args[1:]) }) },
-		"close-ticket":      func() { s.withBlockingOp(func() { s.handleCloseTicket(conn, args[1:]) }) },
-		"ideation-start":    func() { s.withBlockingOp(func() { s.handleIdeationStart(conn, args[1:]) }) },
-		"ideation-reply":    func() { s.withBlockingOp(func() { s.handleIdeationReply(conn, args[1:]) }) },
-		"ideation-approve":  func() { s.withBlockingOp(func() { s.handleIdeationApprove(conn, args[1:]) }) },
-		"ideation-status":   func() { s.handleIdeationStatus(conn) },
-		"idea-create":       func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
-		"bug-create":        func() { s.withBlockingOp(func() { s.handleBugCreate(conn, args[1:]) }) },
-		"security-create":   func() { s.withBlockingOp(func() { s.handleSecurityCreate(conn, args[1:]) }) },
-		"features-generate": func() { s.withBlockingOp(func() { s.handleFeaturesGenerate(conn) }) },
-		"findbugs-start":    func() { s.withBlockingOp(func() { s.handleFindbugsStart(conn) }) },
-		"create-mocks":      func() { s.withBlockingOp(func() { s.handleCreateMocks(conn, args[1:]) }) },
-		"create-variations": func() { s.withBlockingOp(func() { s.handleCreateVariations(conn, args[1:]) }) },
-		"choose-mockup":     func() { s.withBlockingOp(func() { s.handleChooseMockup(conn, args[1:]) }) },
-		"prune-mockup":      func() { s.withBlockingOp(func() { s.handlePruneMockup(conn, args[1:]) }) },
-		"config-get":        func() { s.handleConfigGet(conn, projectDir) },
-		"config-set":        func() { s.handleConfigSet(conn, args[1:], projectDir) },
+		"board-transition":   func() { s.withBlockingOp(func() { s.handleBoardTransition(conn, args[1:]) }) },
+		"board-fix":          func() { s.withBlockingOp(func() { s.handleBoardFix(conn, args[1:]) }) },
+		"security-fix":       func() { s.withBlockingOp(func() { s.handleBoardSecurityFix(conn, args[1:]) }) },
+		"board-option":       func() { s.withBlockingOp(func() { s.handleBoardOption(conn, args[1:]) }) },
+		"close-ticket":       func() { s.withBlockingOp(func() { s.handleCloseTicket(conn, args[1:]) }) },
+		"ideation-start":     func() { s.withBlockingOp(func() { s.handleIdeationStart(conn, args[1:]) }) },
+		"ideation-reply":     func() { s.withBlockingOp(func() { s.handleIdeationReply(conn, args[1:]) }) },
+		"ideation-approve":   func() { s.withBlockingOp(func() { s.handleIdeationApprove(conn, args[1:]) }) },
+		"ideation-status":    func() { s.handleIdeationStatus(conn) },
+		"idea-create":        func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
+		"bug-create":         func() { s.withBlockingOp(func() { s.handleBugCreate(conn, args[1:]) }) },
+		"security-create":    func() { s.withBlockingOp(func() { s.handleSecurityCreate(conn, args[1:]) }) },
+		"features-generate":  func() { s.withBlockingOp(func() { s.handleFeaturesGenerate(conn) }) },
+		"findbugs-start":     func() { s.withBlockingOp(func() { s.handleFindbugsStart(conn) }) },
+		"findsecurity-start": func() { s.withBlockingOp(func() { s.handleFindsecurityStart(conn) }) },
+		"create-mocks":       func() { s.withBlockingOp(func() { s.handleCreateMocks(conn, args[1:]) }) },
+		"create-variations":  func() { s.withBlockingOp(func() { s.handleCreateVariations(conn, args[1:]) }) },
+		"choose-mockup":      func() { s.withBlockingOp(func() { s.handleChooseMockup(conn, args[1:]) }) },
+		"prune-mockup":       func() { s.withBlockingOp(func() { s.handlePruneMockup(conn, args[1:]) }) },
+		"config-get":         func() { s.handleConfigGet(conn, projectDir) },
+		"config-set":         func() { s.handleConfigSet(conn, args[1:], projectDir) },
 	}
 	handler, ok := routes[args[0]]
 	if !ok {
@@ -805,6 +811,26 @@ func (s *Server) handleFindbugsStart(conn net.Conn) {
 		return
 	}
 	if err := s.FindbugsRunner(); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	s.pokeBoard()
+	resp := Response{Stdout: "ok\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleFindsecurityStart launches the human-security sweep via the injected
+// SecurityRunner — the Security pane's counterpart to handleFindbugsStart. The
+// Find Security button press is the user's consent, so like findbugs-start it is
+// a dedicated non-destructive route that takes no argument and returns as soon
+// as the agent is launched, not when the scan finishes.
+func (s *Server) handleFindsecurityStart(conn net.Conn) {
+	if s.SecurityRunner == nil {
+		s.writeError(conn, "security sweep not available", 1)
+		return
+	}
+	if err := s.SecurityRunner(); err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
 	}
