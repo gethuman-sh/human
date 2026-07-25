@@ -178,6 +178,9 @@ human jira issue start KAN-1           # transition + assign
 human jira issue edit KAN-1 --title "New title"
 human jira issue comment add KAN-1 "Shipped"
 
+human bug create "Login button does nothing on Safari"       # file a bug auto-scoped to the configured PM group (bug-typed; needs the daemon)
+human security create "Auth token leaks in error logs"       # file a security ticket on the configured PM group (needs the daemon)
+
 human pr create --head fix-login --title "Fix login" --body "Closes #42"  # open a PR; forge + repo derived from the git origin remote
 
 human search "retry logic"             # cross-tracker search

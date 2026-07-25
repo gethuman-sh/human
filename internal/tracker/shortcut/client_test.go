@@ -378,6 +378,39 @@ func TestCreateIssue_withoutDescription(t *testing.T) {
 	assert.False(t, hasDesc)
 }
 
+// A create naming a group the workspace does not have must fail loudly rather
+// than silently create a group-less (off-board) story.
+func TestCreateIssue_groupNotFound(t *testing.T) {
+	var postedStory bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/workflows":
+			_, _ = fmt.Fprint(w, `[{"id":1,"name":"Default","states":[
+				{"id":500,"name":"To Do","type":"unstarted"}
+			]}]`)
+		case "/api/v3/groups":
+			_, _ = fmt.Fprint(w, `[{"id":"g1","name":"Human"}]`)
+		case "/api/v3/stories":
+			postedStory = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprint(w, `{"id":1,"name":"x"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	_, err := client.CreateIssue(context.Background(), &tracker.Issue{
+		Project: "Nonexistent",
+		Title:   "x",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "group not found in Shortcut")
+	assert.False(t, postedStory, "must not POST a story when the group does not resolve")
+}
+
 func TestCreateIssue_httpError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

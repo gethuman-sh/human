@@ -926,6 +926,9 @@ func TestIsLocalSubcommand(t *testing.T) {
 		{[]string{"state", "get", "SC-1", "stage.fix"}, false},
 		{[]string{"state", "claim", "SC-1", "--stage", "fix"}, false},
 		{[]string{"--tracker", "work", "state", "list", "SC-1"}, false},
+		// bug/security create call the daemon route directly and must run locally.
+		{[]string{"bug", "create", "x"}, true},
+		{[]string{"security", "create", "x"}, true},
 	}
 	for _, tt := range tests {
 		got := isLocalSubcommand(tt.args)

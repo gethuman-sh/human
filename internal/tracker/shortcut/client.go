@@ -261,9 +261,13 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		if err != nil {
 			return nil, err
 		}
-		if groupID != "" {
-			body["group_id"] = groupID
+		// A named-but-unresolved group means the caller asked for a board the
+		// workspace does not have; creating group-less would land the story
+		// off-board and invisible. Fail loudly, matching ListIssues.
+		if groupID == "" {
+			return nil, errors.WithDetails("group not found in Shortcut", "project", issue.Project)
 		}
+		body["group_id"] = groupID
 	}
 
 	payload, err := json.Marshal(body)
