@@ -43,6 +43,13 @@ type BoardCard struct {
 	// current stage — for a plan-done card, when the current plan landed. The
 	// board renders it as an age badge so work rotting in a queue is visible.
 	StageEnteredAt time.Time `json:"stage_entered_at,omitzero"`
+	// StageDaemonID is the posting daemon stamped on that same deciding marker
+	// (StampDaemon / ParseDaemonID). It tells the durable stuck-running reconcile
+	// pass which daemon owns a running stage, so a peer daemon spares a live
+	// foreign-owned card instead of reddening work it simply cannot see locally
+	// (SC-1450). Empty for an unstamped marker, preserving single-daemon
+	// behaviour.
+	StageDaemonID string `json:"stage_daemon_id,omitempty"`
 }
 
 // VerdictFailed reports whether a review verdict blocks the card from moving
@@ -126,7 +133,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
 	}
 
-	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, StageEnteredAt: latest.Created}
+	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, StageEnteredAt: latest.Created, StageDaemonID: ParseDaemonID(latest.Body)}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")

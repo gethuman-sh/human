@@ -21,6 +21,16 @@ var BoardReconcileInterval = 2 * time.Minute
 // stage agent is treated as a dead-end.
 var StuckRunningGrace = 15 * time.Minute
 
+// StuckRunningForeignGrace is the far longer grace a running card owned by a
+// DIFFERENT daemon (its deciding marker stamped with a peer's id) gets before
+// this daemon is willing to red it. Machine-local liveAgents() cannot see a
+// peer's healthy run, so a foreign-owned card is only reddened once it has sat
+// long enough that the owner is almost certainly gone — sparing a live peer run
+// while still recovering a truly-abandoned card. An unstamped marker is never
+// foreign and keeps the local StuckRunningGrace (single-daemon boards
+// unchanged). SC-1450.
+var StuckRunningForeignGrace = 2 * time.Hour
+
 // BoardReconcileJitter is the fraction of the interval added/subtracted at
 // random each cycle so independently started daemons do not converge on the
 // same reconcile instant and stampede one orphaned handoff (SC-660 rule 6).
@@ -219,8 +229,11 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 		if header == "" {
 			continue
 		}
-		if now.Sub(derived.StageEnteredAt) < StuckRunningGrace {
-			// Young enough to still be genuine in-flight work.
+		if now.Sub(derived.StageEnteredAt) < stuckRunningGraceFor(derived.StageDaemonID, daemonID) {
+			// Young enough to still be genuine in-flight work. A stage owned by a
+			// peer daemon gets the far longer foreign grace: this daemon's
+			// machine-local liveAgents() cannot see the peer's healthy run, so
+			// reddening it at the local 15m would duplicate live work (SC-1450).
 			continue
 		}
 		agentName := agentNameFor(card.Key, derived.Stage)
@@ -263,6 +276,19 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 		retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger)
 	}
 	return reddened
+}
+
+// stuckRunningGraceFor picks how long a running card may sit before this daemon
+// will red it. A card whose deciding marker is stamped with a DIFFERENT daemon
+// (foreign-owned) gets StuckRunningForeignGrace, because this daemon cannot see
+// the owner's live agent and must not red a healthy peer run. An unstamped
+// stage (empty stageDaemonID) or this daemon's own stage keeps the local
+// StuckRunningGrace with its real machine-local liveness evidence (SC-1450).
+func stuckRunningGraceFor(stageDaemonID, daemonID string) time.Duration {
+	if stageDaemonID != "" && stageDaemonID != daemonID {
+		return StuckRunningForeignGrace
+	}
+	return StuckRunningGrace
 }
 
 // cardPausedOnOwnStage reports whether a card carries an open [human:options]
