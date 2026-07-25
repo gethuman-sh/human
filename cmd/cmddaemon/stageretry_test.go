@@ -2,11 +2,15 @@ package cmddaemon
 
 import (
 	"context"
+	stderrors "errors"
+	"fmt"
 	"testing"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/agentstate"
 	"github.com/gethuman-sh/human/internal/daemon"
 )
@@ -107,4 +111,28 @@ func TestBumpStageRetries_IsPerStage(t *testing.T) {
 func TestRetryCounterName_IsScopedToTheStage(t *testing.T) {
 	require.Equal(t, "relaunch.implementation.attempts", retryCounterName(daemon.BoardImplementation))
 	require.Equal(t, "stage.planning", stageReportName(daemon.BoardPlanning))
+}
+
+func TestTranslateLaunchErr(t *testing.T) {
+	// The launcher bridges the agent single-flight sentinel to the daemon
+	// AgentLauncher-contract sentinel so the board swallows a benign racing
+	// retry; every other error (and nil) passes through unchanged (SC-1419).
+	t.Run("nil passes through", func(t *testing.T) {
+		require.NoError(t, translateLaunchErr(nil))
+	})
+	t.Run("bare sentinel maps to daemon sentinel", func(t *testing.T) {
+		got := translateLaunchErr(agent.ErrAlreadyRunning)
+		assert.True(t, stderrors.Is(got, daemon.ErrAgentAlreadyRunning))
+	})
+	t.Run("wrapped sentinel maps to daemon sentinel", func(t *testing.T) {
+		wrapped := fmt.Errorf("start failed: %w", agent.ErrAlreadyRunning)
+		got := translateLaunchErr(wrapped)
+		assert.True(t, stderrors.Is(got, daemon.ErrAgentAlreadyRunning))
+	})
+	t.Run("unrelated error passes through", func(t *testing.T) {
+		down := stderrors.New("docker down")
+		got := translateLaunchErr(down)
+		assert.Same(t, down, got)
+		assert.False(t, stderrors.Is(got, daemon.ErrAgentAlreadyRunning))
+	})
 }
