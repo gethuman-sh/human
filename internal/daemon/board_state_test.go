@@ -367,3 +367,37 @@ func TestDeriveBoardCard_StartedMarkerSupersedesQueued(t *testing.T) {
 	assert.Equal(t, BoardPlanning, card.Stage)
 	assert.Equal(t, BoardRunning, card.State)
 }
+
+// A running loop card exposes its done-stage sub-phase so the board badge reads
+// "PR review…" instead of the plain "deploying…".
+func TestDeriveBoardCardDeployPhasePRReview(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(PRReviewStartedHeader+"\npr: https://github.com/o/r/pull/7\nbranch: feat/x", time.Unix(1000, 0)),
+	}, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Equal(t, "pr-review", card.DeployPhase)
+}
+
+// A plain deploy carries no sub-phase, so the badge stays "deploying…".
+func TestDeriveBoardCardDeployPhaseEmptyForPlainDeploy(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(DeployStartedHeader, time.Unix(1000, 0)),
+	}, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Empty(t, card.DeployPhase)
+}
+
+// A rebuild chosen from the loop's needs-input decision posts a strictly-newer
+// implementation-started marker; the done-stage loop supersession must retire
+// the loop marker and move the card back to the building lane (AD4).
+func TestDeriveBoardCardRebuildSupersedesLoopMarker(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(PRFixStartedHeader+"\npr: https://github.com/o/r/pull/7\nbranch: feat/x", time.Unix(1000, 0)),
+		cmt(ImplementationStartedHeader, time.Unix(2000, 0)),
+	}, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardImplementation, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Empty(t, card.DeployPhase, "the retired loop marker must not leave a stale sub-phase")
+}

@@ -43,6 +43,11 @@ type BoardCard struct {
 	// current stage — for a plan-done card, when the current plan landed. The
 	// board renders it as an age badge so work rotting in a queue is visible.
 	StageEnteredAt time.Time `json:"stage_entered_at,omitzero"`
+	// DeployPhase names the done-stage sub-phase for a running card: "pr-review"
+	// while the machine review→fix loop is mid-flight, empty for a plain deploy.
+	// It lets the board badge read "PR review…" instead of "deploying…" so the
+	// loop is visible while it runs.
+	DeployPhase string `json:"deploy_phase,omitempty"`
 }
 
 // VerdictFailed reports whether a review verdict blocks the card from moving
@@ -104,7 +109,13 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		// restarting from an earlier stage (ticket 881) or a later deploy — retires
 		// the stale red; the card follows the ticket's current activity rather than a
 		// terminal failure the pipeline already moved past (SC-910).
-		if state == BoardFailed {
+		//
+		// The same supersession also fires for a done-stage PR-loop running card,
+		// so a rebuild chosen from the loop's needs-input options block (whose
+		// implementation-started marker is strictly newer) retires the loop marker
+		// and moves the card back to the building lane (AD4). Safe: it only moves
+		// when a strictly-newer marker exists.
+		if state == BoardFailed || (furthest == BoardDoneStage && doneStageLoopActive(comments)) {
 			if newest, newestStage, newestState, ok := latestMarkerOverall(comments); ok && newest.Created.After(latest.Created) {
 				furthest, state, latest = newestStage, newestState, newest
 			}
@@ -134,6 +145,12 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.PRURL = derivePRURL(comments)
 	if state == BoardFailed {
 		card.Error = failureReason(latest.Body)
+	}
+	// The done stage runs two very different things — a plain deploy and the
+	// pre-merge review→fix loop. Surface which one is live so the badge reads
+	// "PR review…" rather than "deploying…" while the loop runs.
+	if card.Stage == BoardDoneStage && card.State == BoardRunning && doneStageLoopActive(comments) {
+		card.DeployPhase = "pr-review"
 	}
 	attachOpenOptions(&card, comments)
 	return card
