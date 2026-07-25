@@ -168,14 +168,21 @@ func resolveDirectories(opts StartOpts) (workspace, configDir string) {
 	if workspace == "" {
 		workspace = "."
 	}
+	// Must be absolute: it becomes projectDir, which worktreeGitDir joins
+	// with ".git" to produce a Docker bind-mount source — Docker rejects a
+	// relative mount path outright ("invalid mount path: '.git' must be
+	// absolute") whenever a caller (e.g. the CLI's default "." workspace)
+	// leaves it relative.
+	if abs, err := filepath.Abs(workspace); err == nil {
+		workspace = abs
+	}
 	configDir = opts.ConfigDir
 	if configDir == "" {
 		// Check .humanconfig for devcontainer.configdir.
 		if hcfg, err := devcontainer.LoadHumanConfig(workspace); err == nil && hcfg.ConfigDir != "" {
 			configDir = hcfg.ConfigDir
 			if !filepath.IsAbs(configDir) {
-				abs, _ := filepath.Abs(workspace)
-				configDir = filepath.Join(abs, configDir)
+				configDir = filepath.Join(workspace, configDir)
 			}
 		} else {
 			configDir = workspace

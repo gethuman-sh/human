@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -147,12 +148,19 @@ func TestBuildClaudeArgs(t *testing.T) {
 func TestResolveDirectories_DefaultWorkspace(t *testing.T) {
 	opts := StartOpts{}
 	workspace, configDir := resolveDirectories(opts)
-	if workspace != "." {
-		t.Errorf("workspace = %q, want %q", workspace, ".")
+	wantCwd, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatalf("filepath.Abs(\".\") failed: %v", err)
+	}
+	// workspace must be absolute: it becomes projectDir, which worktreeGitDir
+	// joins with ".git" for a Docker bind-mount source, and Docker rejects a
+	// relative mount path outright.
+	if workspace != wantCwd {
+		t.Errorf("workspace = %q, want %q", workspace, wantCwd)
 	}
 	// When no ConfigDir and no .humanconfig, configDir falls back to workspace.
-	if configDir != "." {
-		t.Errorf("configDir = %q, want %q", configDir, ".")
+	if configDir != wantCwd {
+		t.Errorf("configDir = %q, want %q", configDir, wantCwd)
 	}
 }
 
