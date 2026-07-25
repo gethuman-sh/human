@@ -297,7 +297,7 @@ test("initialLoadPhase: a cache miss falls back to the spinner + quick-titles pa
   assert.equal(initialLoadPhase(false), "quick");
 });
 
-import { deploySideOf, deployControlView } from "../build/board-queue.js";
+import { deploySideOf, deployControlView, deployableCards } from "../build/board-queue.js";
 
 // deploySideOf is the one place the three-way pane split is decided: security
 // wins over bug (they are disjoint, but the guard makes the precedence explicit),
@@ -317,4 +317,27 @@ test("security deploy control uses vulnerability wording", () => {
   assert.equal(view.count, 0);
   assert.ok(view.disabled);
   assert.match(view.tooltip, /vulnerability/);
+});
+
+// The single "defects" Deploy control ships BOTH kinds: deployableCards for it
+// returns every ready bug AND security card, but never a feature (the board has
+// its own Deploy) nor an unready one.
+test("defects deploy collects ready bugs and security, excludes features and unready", () => {
+  const ready = { stage: "verification", state: "done", branch: "b" };
+  const cards = [
+    { ...ready, key: "bug", bug: true },
+    { ...ready, key: "sec", security: true },
+    { ...ready, key: "feat" },
+    { key: "unready-bug", bug: true, stage: "implementation", state: "running" },
+  ];
+  const got = deployableCards(cards, "defects").map((c) => c.key).sort();
+  assert.deepEqual(got, ["bug", "sec"]);
+});
+
+// The shared control names both kinds in its wording.
+test("defects deploy control names bugs and vulnerabilities", () => {
+  const view = deployControlView([], "defects");
+  assert.equal(view.count, 0);
+  assert.ok(view.disabled);
+  assert.match(view.tooltip, /bugs or vulnerabilities/);
 });
