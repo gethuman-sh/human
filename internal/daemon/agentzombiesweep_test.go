@@ -140,7 +140,7 @@ func TestSweepZombieAgents_MixedAgents(t *testing.T) {
 
 func TestRunAgentZombieSweep_NilSweeper(t *testing.T) {
 	// Should return immediately without panic.
-	RunAgentZombieSweep(context.Background(), nil, nil, zerolog.Nop())
+	RunAgentZombieSweep(context.Background(), nil, nil, nil, zerolog.Nop())
 }
 
 // SC-236: a deliberately idle agent (bare `human agent start NAME`, empty
@@ -345,6 +345,85 @@ func TestSweepZombieAgents_SparesIdleUnderPersistentCheckError(t *testing.T) {
 		sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 	}
 	assert.Empty(t, s.deleted, "idle agent never seen with claude must survive even a broken liveness check")
+}
+
+// SC-1600: a board agent whose claude process is still up but has gone silent
+// past its idle budget is a hang the sweep must catch — process liveness alone
+// says "healthy" forever.
+func TestSweepZombieAgents_ReapsHungBoardAgent(t *testing.T) {
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "board-1557-implementation", ContainerID: "c1", CreatedAt: time.Now().Add(-3 * time.Hour)},
+		},
+		processUp: map[string]bool{"c1": true},
+	}
+	sweep := newZombieSweep()
+	sweep.progress = func(agentName string) (AgentProgress, bool) {
+		return AgentProgress{LastEventAt: time.Now().Add(-40 * time.Minute)}, true
+	}
+
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+
+	assert.Equal(t, []string{"board-1557-implementation"}, s.deleted)
+}
+
+// A board agent silent for only a short time is well within its idle budget
+// and must be left running.
+func TestSweepZombieAgents_SparesWorkingBoardAgent(t *testing.T) {
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "board-1557-implementation", ContainerID: "c1", CreatedAt: time.Now().Add(-3 * time.Hour)},
+		},
+		processUp: map[string]bool{"c1": true},
+	}
+	sweep := newZombieSweep()
+	sweep.progress = func(agentName string) (AgentProgress, bool) {
+		return AgentProgress{LastEventAt: time.Now().Add(-30 * time.Second)}, true
+	}
+
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+
+	assert.Empty(t, s.deleted)
+}
+
+// A non-board (interactive) agent must never be reaped on silence alone: a
+// human simply thinking between turns looks identical to a hang, and killing
+// an interactive session on that basis would discard live work.
+func TestSweepZombieAgents_SparesHungNonBoardAgentWithLiveClaude(t *testing.T) {
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "debug-session", ContainerID: "c1", CreatedAt: time.Now().Add(-3 * time.Hour)},
+		},
+		processUp: map[string]bool{"c1": true},
+	}
+	sweep := newZombieSweep()
+	sweep.progress = func(agentName string) (AgentProgress, bool) {
+		return AgentProgress{LastEventAt: time.Now().Add(-40 * time.Minute)}, true
+	}
+
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+
+	assert.Empty(t, s.deleted)
+}
+
+// Absent evidence must never be read as a hang: an agent unknown to the
+// progress probe (daemon restart, no event yet) is spared, matching
+// stageStalled's contract.
+func TestSweepZombieAgents_SparesLiveClaudeWithUnknownProgress(t *testing.T) {
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "board-1557-implementation", ContainerID: "c1", CreatedAt: time.Now().Add(-3 * time.Hour)},
+		},
+		processUp: map[string]bool{"c1": true},
+	}
+	sweep := newZombieSweep()
+	sweep.progress = func(agentName string) (AgentProgress, bool) {
+		return AgentProgress{}, false
+	}
+
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+
+	assert.Empty(t, s.deleted)
 }
 
 // SC-427: the sweep runs on a single goroutine. If one reap hangs (a stalled

@@ -66,6 +66,11 @@ type zombieSweep struct {
 	// sweep loop (SC-427). Injectable so tests can shrink it below the
 	// production default.
 	reapHardDeadline time.Duration
+	// progress reports the last observed sign of life for an agent. A nil
+	// progress means "never stalled" — production always sets this, but a
+	// nil value keeps every existing call site compiling and behaving
+	// unchanged (SC-1600).
+	progress AgentProgressProbe
 }
 
 func newZombieSweep() *zombieSweep {
@@ -87,7 +92,11 @@ func newZombieSweep() *zombieSweep {
 // exit and the board card spins forever (SC-206). nil disables notification.
 // The AgentZombieSweeper interface is deliberately NOT widened: the sweep's
 // job is to reap zombies and report the fact, not to post markers itself.
-func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, onReaped func(agentName string), logger zerolog.Logger) {
+//
+// progress additionally catches a board agent whose claude process is still
+// up but has gone silent past its idle budget (SC-1600) — process liveness
+// alone reports such an agent as healthy forever. nil disables this check.
+func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, progress AgentProgressProbe, onReaped func(agentName string), logger zerolog.Logger) {
 	if sweeper == nil {
 		return
 	}
@@ -98,6 +107,7 @@ func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, onReap
 	defer ticker.Stop()
 
 	sweep := newZombieSweep()
+	sweep.progress = progress
 
 	for {
 		select {
@@ -151,7 +161,14 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 				// agent, even one flagged idle — this is what preserves the
 				// crashed-agent contract for agents that once ran claude (SC-236).
 				z.seenClaude[a.Name] = true
-				continue
+				// A live claude is normally spared here. But a board agent
+				// silent past its idle budget is hung, not healthy — process
+				// liveness alone can never detect that, so fall through to
+				// the reap gate instead of sparing it (SC-1600).
+				if !z.hungBoardAgent(a.Name, time.Now()) {
+					continue
+				}
+				logger.Warn().Str("agent", a.Name).Msg("zombie sweep: board agent silent past its idle budget, reaping")
 			}
 		}
 
@@ -164,6 +181,28 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 
 		z.reap(ctx, sweeper, a.Name, onReaped, logger)
 	}
+}
+
+// hungBoardAgent reports whether name is a board agent whose claude has gone
+// silent past its idle budget. Board stage agents are autonomous with no
+// human at the keyboard, so a stall is unambiguous; an interactive agent is
+// deliberately excluded — a human simply thinking between turns looks
+// identical to a hang, and reaping it would discard live work (SC-1600).
+// Absent evidence (no probe, non-board name, or an agent the probe does not
+// know about) is never read as a hang, matching stageStalled's contract.
+func (z *zombieSweep) hungBoardAgent(name string, now time.Time) bool {
+	if z.progress == nil {
+		return false
+	}
+	if _, _, ok := parseAgentName(name); !ok {
+		return false
+	}
+	p, ok := z.progress(name)
+	if !ok {
+		return false
+	}
+	stalled, _ := p.Stalled(now)
+	return stalled
 }
 
 // reap deletes one agent under a hard deadline that the sweep loop can never be

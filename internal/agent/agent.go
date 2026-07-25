@@ -136,10 +136,18 @@ func ListMetas() ([]Meta, error) {
 	return metas, nil
 }
 
-// DeleteMeta removes the agent metadata file from disk.
+// DeleteMeta removes the agent's metadata file. It is idempotent: the zombie
+// sweep and the session-end auto-clean are two independent cleanup paths
+// serialized by a per-name lock, but both can still race to call DeleteMeta
+// for the same agent once it is done — the loser must see "already gone" as
+// success, not failure, or every finished agent logs a spurious cleanup
+// error (SC-1600).
 func DeleteMeta(name string) error {
 	path := MetaPath(name)
 	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return errors.WrapWithDetails(err, "deleting agent metadata", "path", path)
 	}
 	return nil

@@ -218,9 +218,13 @@ func TestListMetas_SkipsDirectories(t *testing.T) {
 func TestDeleteMeta_NonExistent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
+	// Two independent cleanup paths (the zombie sweep and the session-end
+	// auto-clean) are serialized by a per-name lock but can both still call
+	// DeleteMeta for the same agent; the loser must not treat "already gone"
+	// as failure (SC-1600).
 	err := DeleteMeta("does-not-exist")
-	if err == nil {
-		t.Fatal("expected error deleting non-existent meta")
+	if err != nil {
+		t.Fatalf("expected nil deleting already-absent meta, got %v", err)
 	}
 }
 
