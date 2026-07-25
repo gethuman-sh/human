@@ -226,3 +226,37 @@ func TestMergeTailBehaviorPreserved(t *testing.T) {
 	assert.Equal(t, "SC-1", closed)
 	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/7")
 }
+
+func TestOpenDraftPRPushFailsReds(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{prErr: errors.New("push rejected")}
+	deps := loopDeps(c, l, p, PRLoopStateSnapshot{})
+	err := deps.DeployBranch(context.Background(), "SC-1", "My feature", "body", "feat/x")
+	require.Error(t, err)
+	assert.Zero(t, l.calls, "a failed draft-open must not launch a reviewer")
+	var failed bool
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = true
+			assert.Contains(t, b, "draft pull request")
+		}
+	}
+	assert.True(t, failed, "a failed draft-open must red the done stage")
+}
+
+func TestStartPRLoopAgentSkipsOnLaunchGate(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	// A launch-critical doctor check failing means this daemon leaves the work
+	// for a healthy one: no marker posted, no launch, silent skip (not an error).
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "docker", Name: "Docker", OK: false}}
+	}
+	err := deps.startPRLoopAgent(context.Background(), "SC-1", PRReviewAgent, PRReviewStartedHeader,
+		"/human-pr-review SC-1 --pr=7 --branch=feat/x", "https://example/pr/7", "feat/x")
+	require.NoError(t, err)
+	assert.Zero(t, l.calls, "a failing launch gate must not launch")
+	assert.Empty(t, c.added, "a failing launch gate must post no marker (leaves work unclaimed)")
+}
