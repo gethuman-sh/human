@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -101,7 +102,7 @@ type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
@@ -111,14 +112,14 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable
 	// Recover a restart-orphaned handoff immediately, before the first wait. The
 	// jitter applies only to subsequent cycles, so a restart-orphan is never made
 	// to wait a full interval.
-	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, retry, progress, stopAgent, daemonID, logger)
+	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, driveLoop, retry, progress, stopAgent, daemonID, logger)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
-			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, retry, progress, stopAgent, daemonID, logger)
+			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, chainReview, driveLoop, retry, progress, stopAgent, daemonID, logger)
 		}
 	}
 }
@@ -141,7 +142,7 @@ func jitteredInterval(d time.Duration, fraction float64) time.Duration {
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
@@ -152,6 +153,12 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 	}
 	if n := reconcileShippedFailures(ctx, cards, mergedProbe, postDeployed, logger); n > 0 {
 		logger.Info().Int("cleared", n).Msg("board reconcile: confirmed shipped, cleared stale deploy-failed red")
+	}
+	// The PR-loop re-drive runs BEFORE the stuck-running pass so a loop card
+	// stranded by a restart is re-driven rather than reddened — the stuck pass
+	// also skips it (doneStageLoopActive), but ordering makes the ownership clear.
+	if n := reconcilePRLoops(ctx, cards, liveAgents, driveLoop, logger); n > 0 {
+		logger.Info().Int("redriven", n).Msg("board reconcile: re-drove stalled PR review→fix loops")
 	}
 	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
@@ -173,6 +180,69 @@ func stageStalled(progress AgentProgressProbe, agentName string, now time.Time) 
 		return false, 0
 	}
 	return p.Stalled(now)
+}
+
+// doneStageLoopActive reports whether the card's newest done-stage marker is a
+// PR-loop started marker — the review→fix loop is mid-flight rather than a plain
+// deploy. Used to hand loop cards to the re-drive pass, to keep the generic
+// stuck-running pass from redding them, and (board_state.go) to badge the loop.
+func doneStageLoopActive(comments []tracker.Comment) bool {
+	_, latest := latestStateInStage(comments, BoardDoneStage)
+	t := strings.TrimSpace(latest.Body)
+	return strings.HasPrefix(t, PRReviewStartedHeader) || strings.HasPrefix(t, PRFixStartedHeader)
+}
+
+// reconcilePRLoops re-drives a loop card the live exit hook missed: a
+// done/running card whose newest done marker is a loop-started marker and for
+// which no loop half-agent is alive on this machine (a daemon restart lost the
+// Stop event). driveLoop re-reads the recorded state and advances or escalates,
+// idempotently (AdvancePRLoop's escalate no-ops on an already-open options
+// block, and the alive-guard prevents racing a second launch). nil deps disable it.
+func reconcilePRLoops(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, driveLoop func(pmKey string) error, logger zerolog.Logger) int {
+	if driveLoop == nil || liveAgents == nil {
+		return 0
+	}
+	names, err := liveAgents()
+	if err != nil {
+		logger.Warn().Err(err).Msg("board reconcile: cannot list live agents for PR loops")
+		return 0
+	}
+	alive := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		alive[n] = struct{}{}
+	}
+	redriven := 0
+	for _, card := range cards {
+		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
+		if derived.Stage != BoardDoneStage || derived.State != BoardRunning {
+			continue
+		}
+		if !doneStageLoopActive(card.Comments) {
+			continue
+		}
+		// A live loop half-agent owns the card — leave it; re-driving would race a
+		// second launch onto the same step.
+		if _, ok := alive[agentNameFor(card.Key, prReviewAgentStage)]; ok {
+			continue
+		}
+		if _, ok := alive[agentNameFor(card.Key, prFixAgentStage)]; ok {
+			continue
+		}
+		if err := driveLoop(card.Key); err != nil {
+			logger.Warn().Err(err).Str("pm", card.Key).Msg("board reconcile: cannot re-drive PR loop")
+			continue
+		}
+		redriven++
+	}
+	return redriven
+}
+
+// stuckRunningCandidate reports whether a card is eligible for the stuck-running
+// red: it is in a running state AND not a mid-flight PR review→fix loop (which
+// reconcilePRLoops owns). A loop card's half-agents come and go between rounds,
+// so this pass must never treat the gap as a hang.
+func stuckRunningCandidate(derived BoardCard, comments []tracker.Comment) bool {
+	return derived.State == BoardRunning && !doneStageLoopActive(comments)
 }
 
 // reconcileStuckRunning reds the dead-end a NOT DONE bug-verify (and any other
@@ -213,7 +283,11 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 	reddened := 0
 	for _, card := range cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
-		if derived.State != BoardRunning {
+		// Only a running card with no active PR loop is a stuck-running candidate.
+		// A mid-flight review→fix loop is owned by reconcilePRLoops, not this hang
+		// detector: its half-agents come and go between rounds, so the absence of a
+		// live agent here is normal rather than a dead-end.
+		if !stuckRunningCandidate(derived, card.Comments) {
 			continue
 		}
 		// An open [human:options] block for the card's OWN running stage is a

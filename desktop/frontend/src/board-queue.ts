@@ -20,6 +20,9 @@ export interface QueueCard {
   // RFC3339 time the newest marker of the card's current stage landed; feeds
   // the Engineering-backlog age badge. Absent for cards with no derived stage.
   stageEnteredAt?: string;
+  // Done-stage sub-phase: "pr-review" while the machine review→fix loop runs,
+  // absent for a plain deploy — the running badge reads "PR review…" for it.
+  deployPhase?: string;
 }
 
 export const QUEUES = ["ideas", "product", "engineering", "building", "deploy"] as const;
@@ -143,9 +146,13 @@ export const QUEUED_LABELS: Record<string, string> = {
 // the work exists, it just may not advance until a rebuild passes.
 export function badgeInfo(card: QueueCard): BadgeInfo | null {
   if (card.state === "running") {
+    const text =
+      card.stage === "done" && card.deployPhase === "pr-review"
+        ? "PR review…"
+        : (RUNNING_LABELS[card.stage] ?? "working…");
     return {
       cls: "running",
-      text: RUNNING_LABELS[card.stage] ?? "working…",
+      text,
       title: "Agent running",
       spinner: true,
     };

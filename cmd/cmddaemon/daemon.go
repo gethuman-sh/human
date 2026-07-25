@@ -659,7 +659,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
 		branchReachable, commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
-		chainReview, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
+		chainReview, advancePRLoop, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
 	// Surface tickets created or edited outside the board (tracker web UI, CLI,
 	// another teammate or daemon) — none raise a board event — by polling the
@@ -2198,12 +2198,12 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) fu
 func advancePRLoopFunc(ctx context.Context, ds *daemonState, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
 	return func(pmKey string) error {
 		verdict := readPRReviewVerdict(ctx, pmKey, logger)
-		exit := readPRFixExit(ctx, pmKey, logger)
+		exit, options, summary := readPRFixReport(ctx, pmKey, logger)
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 		if err != nil {
 			return err
 		}
-		return deps.AdvancePRLoop(ctx, pmKey, verdict, exit)
+		return deps.AdvancePRLoop(ctx, pmKey, verdict, exit, options, summary)
 	}
 }
 

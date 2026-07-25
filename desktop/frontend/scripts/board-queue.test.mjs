@@ -68,6 +68,20 @@ test("implementation/done card gets a non-empty badge (SC-429)", () => {
   assert.equal(info.cls, "await");
 });
 
+// A card mid PR-review→fix-loop (done stage, running, deployPhase pr-review)
+// badges distinctly from a plain deploy so the loop is visible while it runs.
+test("badge PR review label for a running loop card", () => {
+  const info = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review" });
+  assert.equal(info.cls, "running");
+  assert.equal(info.text, "PR review…");
+});
+
+test("badge deploying label for a plain deploy (no phase)", () => {
+  const info = badgeInfo({ stage: "done", state: "running" });
+  assert.equal(info.cls, "running");
+  assert.equal(info.text, "deploying…");
+});
+
 test("badgeInfo preserves prior classifications", () => {
   assert.equal(badgeInfo({ stage: "implementation", state: "running" }).cls, "running");
   assert.equal(badgeInfo({ stage: "verification", state: "failed" }).cls, "failed");

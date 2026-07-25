@@ -47,12 +47,13 @@ human state set <WORK_KEY> stage.pr-fix --json --body-file - <<'EOF'
  "pushed":<true|false>,
  "addressed":"<what you changed / which comments>",
  "deferred":"<comments you could not address and why — empty when done>",
+ "options":[{"id":"1","label":"<direction A>"},{"id":"2","label":"<direction B>"}],
  "summary":"<one line>"}
 EOF
 ```
 
-- `done` — every blocking comment addressed and pushed; the reviewer runs again.
-- `needs-input` — a comment names a decision only a human can make. State the question and stop; do not invent an answer to keep the loop moving.
+- `done` — every blocking comment addressed and pushed; the reviewer runs again. Omit `options` on `done`.
+- `needs-input` — a comment names a decision only a human can make. State the question and stop; do not invent an answer to keep the loop moving. On `needs-input`, list 2+ concrete directions in `options` — each becomes a clickable board decision button, and the human's pick re-runs the build with that direction injected (the still-open draft PR is re-adopted, never merged while draft). When you cannot enumerate distinct directions the daemon falls back to a single generic "rebuild" option, so `options` is optional — but naming the real choices is what makes the escalation actionable.
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
 
