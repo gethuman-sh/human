@@ -21,6 +21,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdaudit"
 	"github.com/gethuman-sh/human/cmd/cmdauto"
 	"github.com/gethuman-sh/human/cmd/cmdbrowser"
+	"github.com/gethuman-sh/human/cmd/cmdbug"
 	"github.com/gethuman-sh/human/cmd/cmdcapabilities"
 	"github.com/gethuman-sh/human/cmd/cmdclickup"
 	"github.com/gethuman-sh/human/cmd/cmdcodenav"
@@ -254,6 +255,14 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	handoffCmd := cmdhandoff.BuildHandoffCmd(autoDeps)
 	handoffCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(handoffCmd)
+
+	bugCmd := cmdbug.BuildBugCmd()
+	bugCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(bugCmd)
+
+	securityCmd := cmdbug.BuildSecurityCmd()
+	securityCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(securityCmd)
 
 	// Deliberately absent from localSubcommands: "state" is forwarded to the
 	// daemon so every agent and container shares one store on the daemon host.
@@ -576,6 +585,11 @@ var localSubcommands = map[string]bool{
 	// Describes the caller's own checkout and environment — the one thing the
 	// daemon cannot see on its behalf.
 	"capabilities": true,
+	// bug/security create call the daemon's bug-create/security-create route
+	// directly (like the desktop board buttons); they must not be forwarded, or
+	// the RunE would open a reentrant connection back into the daemon.
+	"bug":      true,
+	"security": true,
 }
 
 // globalValueFlags lists global persistent flags that take a value. When these
