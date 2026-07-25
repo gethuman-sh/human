@@ -171,7 +171,7 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, chain, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, chain, nil, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
 
 	select {
 	case pmKey := <-chained:
@@ -382,5 +382,80 @@ func TestReconcileStuckRunning_SkipsJustDecidedCard(t *testing.T) {
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n, "a just-decided card must never be reddened")
+	assert.Empty(t, posted)
+}
+
+// A loop card stranded by a daemon restart (the reviewer/fixer Stop event was
+// lost) sits done/running with no live half-agent. reconcilePRLoops must
+// re-drive it through driveLoop rather than leaving it stranded forever.
+func TestReconcilePRLoop_RedrivesStalled(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		},
+	}}
+	var driven []string
+	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
+
+	n := reconcilePRLoops(context.Background(), cards, liveAgents(), drive, zerolog.Nop())
+
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []string{"SC-1"}, driven)
+}
+
+// A live loop half-agent still owns the card; re-driving would race a second
+// launch onto the same step, so the pass must skip it.
+func TestReconcilePRLoop_SkipsWhenAgentAlive(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		},
+	}}
+	var driven []string
+	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
+	live := liveAgents(agentNameFor("SC-1", prReviewAgentStage))
+
+	n := reconcilePRLoops(context.Background(), cards, live, drive, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.Empty(t, driven)
+}
+
+// A plain deploy (newest done marker is deploy-started, not a loop marker) is
+// not a PR loop and must never be handed to the loop driver.
+func TestReconcilePRLoop_SkipsPlainDeploy(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt(DeployStartedHeader, time.Unix(2, 0))},
+	}}
+	var driven []string
+	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
+
+	n := reconcilePRLoops(context.Background(), cards, liveAgents(), drive, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.Empty(t, driven)
+}
+
+// The stuck-running pass must NOT red a mid-flight loop card even past the
+// grace with no live agent: its half-agents come and go between rounds, so the
+// re-drive pass owns it, not the hang detector.
+func TestReconcileStuckRunning_SkipsActiveLoop(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x", now.Add(-StuckRunningGrace-2*time.Minute)),
+			cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), now.Add(-StuckRunningGrace-time.Minute)),
+		},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+
+	assert.Equal(t, 0, n, "a mid-flight PR loop must never be reddened by the stuck pass")
 	assert.Empty(t, posted)
 }

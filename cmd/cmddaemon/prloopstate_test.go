@@ -38,16 +38,45 @@ func TestReadPRReviewVerdict_missingIsEmpty(t *testing.T) {
 	assert.Equal(t, "", readPRReviewVerdict(context.Background(), "SC-1", zerolog.Nop()))
 }
 
-func TestReadPRFixExit_readsField(t *testing.T) {
+func TestReadPRFixReport_readsField(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"done","pushed":true}`)
 
-	assert.Equal(t, "done", readPRFixExit(context.Background(), "SC-1", zerolog.Nop()))
+	exit, options, summary := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
+	assert.Equal(t, "done", exit)
+	assert.Empty(t, options)
+	assert.Empty(t, summary)
 }
 
-func TestReadPRFixExit_needsInput(t *testing.T) {
+func TestReadPRFixReport_needsInput(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"needs-input","pushed":false}`)
 
-	assert.Equal(t, "needs-input", readPRFixExit(context.Background(), "SC-1", zerolog.Nop()))
+	exit, _, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
+	assert.Equal(t, "needs-input", exit)
+}
+
+// The fixer's enumerated directions and its context line (deferred, else
+// summary) must round-trip into the options block the escalation posts.
+func TestReadPRFixReport_optionsAndDeferredContext(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.pr-fix",
+		`{"exit":"needs-input","options":[{"id":"1","label":"A"},{"id":"2","label":"B"}],"deferred":"blocked on X","summary":"one line"}`)
+
+	exit, options, summary := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
+	assert.Equal(t, "needs-input", exit)
+	require.Len(t, options, 2)
+	assert.Equal(t, "A", options[0].Label)
+	assert.Equal(t, "B", options[1].Label)
+	// deferred wins over summary as the human-facing context line.
+	assert.Equal(t, "blocked on X", summary)
+}
+
+// With no deferred line the summary is the context fallback.
+func TestReadPRFixReport_summaryContextFallback(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"needs-input","summary":"one line"}`)
+
+	_, _, summary := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
+	assert.Equal(t, "one line", summary)
 }

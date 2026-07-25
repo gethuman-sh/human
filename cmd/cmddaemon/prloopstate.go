@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/internal/agentstate"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // readPRReviewVerdict returns the machine reviewer's verdict recorded in
@@ -23,14 +24,23 @@ func readPRReviewVerdict(ctx context.Context, pmKey string, logger zerolog.Logge
 	return v.Verdict
 }
 
-// readPRFixExit returns the fixer's exit recorded in stage.pr-fix ("" when
-// absent). Read into a typed struct for the same reason as the verdict.
-func readPRFixExit(ctx context.Context, pmKey string, logger zerolog.Logger) string {
+// readPRFixReport loads the fixer's stage.pr-fix report: its exit, the optional
+// enumerated directions it recorded on needs-input, and a one-line context
+// (deferred comments, else the summary) for the options block. Absent fields
+// stay zero — the loop driver treats a missing exit as escalate.
+func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary string) {
 	var v struct {
-		Exit string `json:"exit"`
+		Exit     string               `json:"exit"`
+		Options  []daemon.BoardOption `json:"options"`
+		Deferred string               `json:"deferred"`
+		Summary  string               `json:"summary"`
 	}
 	readStageReport(ctx, pmKey, "stage.pr-fix", &v, logger)
-	return v.Exit
+	summary = v.Deferred
+	if summary == "" {
+		summary = v.Summary
+	}
+	return v.Exit, v.Options, summary
 }
 
 // readDeployFixExit returns the deploy fixer's exit recorded in stage.deploy-fix

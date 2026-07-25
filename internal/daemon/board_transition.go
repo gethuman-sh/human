@@ -557,7 +557,7 @@ func prLoopURL(comments []tracker.Comment) string {
 // decider for the next action, and executes it: launch the reviewer, launch the
 // fixer, un-draft + merge via the existing DeployBranch, or red the card for a
 // human. Human PR review runs out of band and never enters here.
-func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey, reviewVerdict, fixExit string) error {
+func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey, reviewVerdict, fixExit string, fixOptions []BoardOption, fixSummary string) error {
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading comments for PR loop", "pm", pmKey)
@@ -584,10 +584,44 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey, reviewVer
 		// (forge.AdoptOrCreatePullRequest), runs the CI gate, freshness rebase and merge.
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), branch)
 	default: // PRActionEscalate
-		_, _ = d.Commenter.AddComment(ctx, pmKey,
-			StampDaemon(PRReviewFailedHeader+"\n"+prEscalationReason(reviewVerdict, fixExit), d.DaemonID))
+		return d.escalatePRLoop(ctx, pmKey, comments, reviewVerdict, fixExit, fixOptions, fixSummary)
+	}
+}
+
+// escalatePRLoop routes a non-converging loop to the right surface: a fixer
+// needs-input is a DECISION, posted as a [human:options] block whose stage is
+// implementation so choosing rebuilds through the normal chain (which re-adopts
+// the still-open draft PR); everything else — a spent round budget, an
+// unreviewable PR, an outcome the daemon cannot classify — reds the done stage.
+// Idempotent: a durable re-drive must never re-post the block, so an already-open
+// options block short-circuits.
+func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, comments []tracker.Comment, reviewVerdict, fixExit string, fixOptions []BoardOption, fixSummary string) error {
+	if _, open := openOptionsBlock(comments); open {
 		return nil
 	}
+	if latestPRLoopStage(comments) == PRStageFix && fixExit != PRFixDone {
+		var b strings.Builder
+		b.WriteString(OptionsHeader + "\nstage: " + string(BoardImplementation) + "\n")
+		ctxLine := fixSummary
+		if ctxLine == "" {
+			ctxLine = "the PR review→fix loop needs a decision the fixer could not make"
+		}
+		b.WriteString("context: " + ctxLine + "\n")
+		opts := fixOptions
+		if len(opts) == 0 {
+			// A generic single option keeps the block valid (parseOptionsBlock needs
+			// ≥1) so the human can always move the card off the loop.
+			opts = []BoardOption{{ID: "1", Label: "Rebuild the branch to resolve the decision the fixer raised"}}
+		}
+		for _, o := range opts {
+			b.WriteString(o.ID + ": " + o.Label + "\n")
+		}
+		_, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(b.String(), d.DaemonID))
+		return err
+	}
+	_, _ = d.Commenter.AddComment(ctx, pmKey,
+		StampDaemon(PRReviewFailedHeader+"\n"+prEscalationReason(reviewVerdict, fixExit), d.DaemonID))
+	return nil
 }
 
 // prEscalationReason renders the actionable headline the failed marker's badge shows.
