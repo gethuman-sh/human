@@ -44,17 +44,24 @@ func Open(path string) (*Store, error) {
 	// per-connection PRAGMA drift.
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
+	// Additive column migrations run BEFORE schema.sql, not after: schema.sql
+	// creates indexes over these columns (e.g. idx_route_file ON route(file_id)),
+	// and applying it against a pre-migration database whose table still lacks
+	// the column fails the whole batch with "no such column", which used to abort
+	// Open entirely and leave the index unusable. On a fresh database the tables
+	// do not exist yet, so each ALTER is a harmless no-op (error ignored) and
+	// schema.sql then creates the tables with the columns already present; on an
+	// existing database the ALTER adds the missing column (ignoring the
+	// "duplicate column" error when it is already there) so schema.sql's indexes
+	// resolve. Ordering is the migration here — do not move these after the batch.
+	_, _ = db.Exec(`ALTER TABLE project ADD COLUMN source_sig TEXT`)
+	_, _ = db.Exec(`ALTER TABLE file  ADD COLUMN mtime INTEGER`)
+	_, _ = db.Exec(`ALTER TABLE file  ADD COLUMN size  INTEGER`)
+	_, _ = db.Exec(`ALTER TABLE route ADD COLUMN file_id INTEGER`)
 	if _, err := db.Exec(schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	// Migrate databases created before source_sig existed (ignore "duplicate column").
-	_, _ = db.Exec(`ALTER TABLE project ADD COLUMN source_sig TEXT`)
-	// Migrate databases created before incremental refresh: cheap change-detection
-	// fingerprint on file, and route attribution to its registration file.
-	_, _ = db.Exec(`ALTER TABLE file  ADD COLUMN mtime INTEGER`)
-	_, _ = db.Exec(`ALTER TABLE file  ADD COLUMN size  INTEGER`)
-	_, _ = db.Exec(`ALTER TABLE route ADD COLUMN file_id INTEGER`)
 	return &Store{db: db, path: path}, nil
 }
 
