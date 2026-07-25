@@ -57,7 +57,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // resolved marker). It is the success signal that authorizes reclaiming the
 // run's private worktree — every other exit KEEPS the worktree so uncommitted
 // work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -87,7 +87,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, advancePRLoop, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger)
 			}
 		}
 	}
@@ -97,9 +97,14 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
+		return
+	}
+	// The PR review→fix loop steps are not board stages: their exits are driven
+	// by the loop executor, not the generic stage-failure path below.
+	if drivePRLoopExit(pmKey, stage, agentName, advancePRLoop, onHandoff, logger) {
 		return
 	}
 	commenter, err := commenterFor()
@@ -129,28 +134,8 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 		if onHandoff != nil {
 			onHandoff(agentName)
 		}
-		if stage == BoardImplementation && chainReview != nil {
-			// SC-782 merged verification stage: the autofix implementation container
-			// now runs the review in-place (warm workspace, one container startup).
-			// If it already posted a verification-stage marker, the review is
-			// accounted for here — launching a second, cold review container would
-			// re-run the whole suite. Branch on what that marker says:
-			if vOK, vState := latestStageState(comments, BoardVerification); vOK {
-				// review-complete (pass OR fail verdict) is a recorded outcome the
-				// board acts on; a review-failed marker is already retryable. Either
-				// way, do not chain a second review.
-				if vState == BoardRunning {
-					// The container died AFTER [human:review-started] but before the
-					// review completed: surface a retryable review failure instead of
-					// leaving the card spinning on a verification stage no agent owns.
-					body := ReviewFailedHeader + "\nreview agent exited before completing the in-container review — retry the review"
-					if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
-						logger.Warn().Err(err).Str("pm", pmKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
-					}
-				}
-				return
-			}
-			chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
+		if stage == BoardImplementation {
+			chainReviewAfterCleanBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
 		}
 		return
 	}
@@ -186,6 +171,53 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 	// dead container — is relaunched here rather than waiting for someone to
 	// click Retry. The failure stays on the record either way.
 	retry.tryRelaunch(ctx, pmKey, stage, commenter, daemonID, logger)
+}
+
+// chainReviewAfterCleanBuild handles a cleanly finished implementation stage's
+// review chaining, guarding the SC-782 merged verification stage: the autofix
+// implementation container now runs the review in-place (warm workspace, one
+// container startup). If it already posted a verification-stage marker, the
+// review is accounted for and a second cold review container must NOT launch;
+// only a mid-review death (marker still running) surfaces a retryable review
+// failure. Otherwise it flows into chainReviewAfterBuild's branch/commit-gated
+// chain. A nil chainReview disables chaining entirely.
+func chainReviewAfterCleanBuild(ctx context.Context, pmKey string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, daemonID string, logger zerolog.Logger) {
+	if chainReview == nil {
+		return
+	}
+	if vOK, vState := latestStageState(comments, BoardVerification); vOK {
+		// review-complete (pass OR fail verdict) is a recorded outcome the board
+		// acts on; a review-failed marker is already retryable. Either way, do not
+		// chain a second review. Only a mid-review death needs a retryable marker.
+		if vState == BoardRunning {
+			body := ReviewFailedHeader + "\nreview agent exited before completing the in-container review — retry the review"
+			if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+				logger.Warn().Err(err).Str("pm", pmKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
+			}
+		}
+		return
+	}
+	chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
+}
+
+// drivePRLoopExit routes a PR review/fix loop agent's exit to the loop driver
+// instead of the generic stage-failure path, reclaiming its worktree first (the
+// reviewer is read-only, the fixer already pushed its work). It reports whether
+// the exit was a loop step and thus fully handled here. A non-loop stage returns
+// false so the caller falls through to the stage-failure handling.
+func drivePRLoopExit(pmKey string, stage BoardStage, agentName string, advancePRLoop func(pmKey string) error, onHandoff func(agentName string), logger zerolog.Logger) bool {
+	if stage != prReviewAgentStage && stage != prFixAgentStage {
+		return false
+	}
+	if onHandoff != nil {
+		onHandoff(agentName)
+	}
+	if advancePRLoop != nil {
+		if err := advancePRLoop(pmKey); err != nil {
+			logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).Msg("board PR loop: advance failed")
+		}
+	}
+	return true
 }
 
 // stagePausedOnOptions reports whether the exiting stage left an open

@@ -108,6 +108,11 @@ type fakeDeployer struct {
 	// alreadyMerged models a branch whose work is already on the base: the deploy
 	// must short-circuit to a clean no-op instead of opening a doomed PR (SC-911).
 	alreadyMerged bool
+	// markedReady captures the PR number the review loop un-drafted on approval;
+	// markReadyErr models a forge that refuses the un-draft.
+	markedReady   int
+	markReadyErr  error
+	markReadyCall int
 }
 
 func (f *fakeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResult, error) {
@@ -180,6 +185,15 @@ func (f *fakeDeployer) BranchMerged(_ context.Context, _, _ string) bool {
 	return f.alreadyMerged
 }
 
+func (f *fakeDeployer) MarkReadyForReview(_ context.Context, _ string, number int) error {
+	f.markReadyCall++
+	if f.markReadyErr != nil {
+		return f.markReadyErr
+	}
+	f.markedReady = number
+	return nil
+}
+
 func newDeps(c *fakeCommenter, l *fakeLauncher, p *fakeDeployer) BoardTransitionDeps {
 	return BoardTransitionDeps{Commenter: c, Launcher: l, Deployer: p, WorkspaceDir: "/ws", ConfigDir: "/ws"}
 }
@@ -194,6 +208,31 @@ func syncDeploy(t *testing.T) {
 	}
 	deployCheckInterval = time.Millisecond
 	t.Cleanup(func() { startDeploy, deployCheckInterval = origStart, origInterval })
+}
+
+// syncPRReview makes the review-loop's first phase (open draft PR, launch
+// reviewer) run inline so tests observe its markers deterministically. Mirrors
+// syncDeploy, which overrides startDeploy.
+func syncPRReview(t *testing.T) {
+	t.Helper()
+	orig := startPRReview
+	startPRReview = func(d BoardTransitionDeps, req BoardTransitionRequest, card BoardCard) {
+		_ = d.openDraftPRAndReview(context.Background(), req.PMKey, card)
+	}
+	t.Cleanup(func() { startPRReview = orig })
+}
+
+// deployVia drives the deploy engine synchronously the way the review loop's
+// approval action reaches it (MarkReadyForReview + DeployBranch). Since the
+// review→fix loop now fronts runDoneStage, the deploy-pipeline tests exercise
+// DeployBranch directly rather than through the transition entry point, which
+// only opens the draft PR and launches the reviewer.
+func deployVia(t *testing.T, deps BoardTransitionDeps, req BoardTransitionRequest) error {
+	t.Helper()
+	comments, err := deps.Commenter.ListComments(context.Background(), req.PMKey)
+	require.NoError(t, err)
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	return deps.DeployBranch(context.Background(), req.PMKey, req.PMTitle, doneBody(req.PMKey, card), card.Branch)
 }
 
 func TestApplyTransitionBackwardRejected(t *testing.T) {
@@ -403,6 +442,30 @@ func TestApplyTransitionDoneNoBranch(t *testing.T) {
 	assert.Contains(t, c.added[0], DeployFailedHeader)
 }
 
+// TestRunDoneStage_startsReviewLoop verifies the Done stage now fronts the deploy
+// with the PR review→fix loop: it starts the review (opens a draft PR, launches
+// the reviewer) rather than posting deploy-started and merging.
+func TestRunDoneStage_startsReviewLoop(t *testing.T) {
+	syncPRReview(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7}}
+	deps := newDeps(c, l, p)
+
+	require.NoError(t, deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage}))
+
+	assert.True(t, p.req.Draft, "the review loop opens the PR in draft state")
+	assert.Equal(t, "board-SC-1-prreview", l.name, "the reviewer must be launched")
+	assert.Zero(t, p.merged, "the loop must not merge before the review approves")
+	for _, b := range c.added {
+		assert.NotEqual(t, DeployStartedHeader, b, "the Done stage no longer posts deploy-started")
+	}
+}
+
 func TestApplyTransitionDeploySuccess(t *testing.T) {
 	syncDeploy(t)
 	c := &fakeCommenter{comments: []tracker.Comment{
@@ -413,7 +476,7 @@ func TestApplyTransitionDeploySuccess(t *testing.T) {
 	deps := newDeps(c, &fakeLauncher{}, p)
 	var closed string
 	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
-	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	assert.Equal(t, 1, p.call)
 	assert.Equal(t, "feat/x", p.req.Branch)
@@ -421,7 +484,6 @@ func TestApplyTransitionDeploySuccess(t *testing.T) {
 	assert.Equal(t, 1, p.merged)
 	assert.Equal(t, []string{"feat/x"}, p.deleted)
 	assert.Equal(t, "SC-1", closed)
-	assert.Contains(t, c.added, DeployStartedHeader)
 	assert.Contains(t, c.added, DeployedHeader+"\npr: https://example/pr/7")
 }
 
@@ -441,8 +503,7 @@ func TestApplyTransitionDeployAlreadyMerged(t *testing.T) {
 	deps := newDeps(c, &fakeLauncher{}, p)
 	var closed string
 	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	// The already-merged short-circuit must skip the forge entirely.
 	assert.Zero(t, p.call, "an already-merged branch must never open a PR")
@@ -479,8 +540,7 @@ func TestApplyTransitionDeployCloseFails(t *testing.T) {
 		closeCalls++
 		return errors.New("tracker unavailable")
 	}
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 
 	// The deploy itself must succeed — the card never turns red.
 	require.NoError(t, err)
@@ -518,7 +578,7 @@ func TestApplyTransitionDeployWaitsForPendingChecks(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/8", Number: 8},
 		checks: []forge.ChecksState{forge.ChecksPending, forge.ChecksPending, forge.ChecksPassing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	assert.Equal(t, 3, p.checkCall)
 	assert.Equal(t, 1, p.merged)
@@ -532,8 +592,8 @@ func TestApplyTransitionDeployChecksFail(t *testing.T) {
 	}}
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/9", Number: 9}, checks: []forge.ChecksState{forge.ChecksFailing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
-	require.NoError(t, err) // the transition itself succeeded; the failure is a marker
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err) // the transition itself succeeded; the failure is a marker
 	assert.Zero(t, p.merged)
 	var failed string
 	for _, b := range c.added {
@@ -555,8 +615,8 @@ func TestApplyTransitionDeployMergeFails(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/10", Number: 10},
 		checks: []forge.ChecksState{forge.ChecksPassing}, mergeErr: errors.New("merge conflict")}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
-	require.NoError(t, err)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
 	assert.Empty(t, p.deleted)
 	var sawFailed bool
 	for _, b := range c.added {
@@ -582,8 +642,7 @@ func TestApplyTransitionDeployRebasesStaleBranch(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/12", Number: 12},
 		checks: []forge.ChecksState{forge.ChecksPassing}, mergeUntil: true}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	// The freshness stage ran once, before the merge.
 	assert.Equal(t, 1, p.ensured, "EnsureMergeable must run exactly once before the merge")
@@ -610,9 +669,8 @@ func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
 		checks:    []forge.ChecksState{forge.ChecksPassing},
 		ensureErr: errors.New("rebase hit a conflict"), mergeable: false}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
-	require.NoError(t, err)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
 	assert.Equal(t, 1, p.ensured)
 	assert.Zero(t, p.merged, "a branch that could not be made mergeable must not be merged blind")
 	var failed string
@@ -648,8 +706,7 @@ func TestApplyTransitionDeployRebaseConflictForgeMergeableFallback(t *testing.T)
 		checks:    []forge.ChecksState{forge.ChecksPassing},
 		ensureErr: errors.New("rebasing branch onto base"), mergeable: true}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	assert.Equal(t, 1, p.ensured, "the freshness stage must still run once")
 	assert.Equal(t, 1, p.merged, "a forge-mergeable, green-CI PR must merge despite the rebase conflict")
@@ -684,8 +741,7 @@ func TestApplyTransitionDeployRetryRebasesAndRedeploys(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/14", Number: 14},
 		checks: []forge.ChecksState{forge.ChecksPassing}, mergeUntil: true}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", From: BoardDoneStage, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardDoneStage, To: BoardDoneStage})
 	require.NoError(t, err)
 	assert.Equal(t, 1, p.ensured)
 	assert.Equal(t, 1, p.merged)
@@ -700,8 +756,8 @@ func TestApplyTransitionDonePushFails(t *testing.T) {
 	}}
 	p := &fakeDeployer{prErr: errors.New("push rejected")}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
-	require.NoError(t, err) // async pipeline: the push failure lands as a marker
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err) // async pipeline: the push failure lands as a marker
 	var sawFailed bool
 	for _, b := range c.added {
 		if strings.HasPrefix(b, DeployFailedHeader) && strings.Contains(b, "push rejected") {
@@ -921,16 +977,28 @@ func TestApplyTransitionDeployBlockedByFailedVerdict(t *testing.T) {
 }
 
 func TestApplyTransitionDeployAllowedWithPassWithNotes(t *testing.T) {
-	syncDeploy(t)
+	syncPRReview(t)
 	c := &fakeCommenter{comments: []tracker.Comment{
 		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
 		cmt("[human:review-complete]\nverdict: pass with notes", time.Unix(2, 0)),
 	}}
-	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/11", Number: 11}, checks: []forge.ChecksState{forge.ChecksPassing}}
-	deps := newDeps(c, &fakeLauncher{}, p)
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/11", Number: 11}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
-	assert.Equal(t, 1, p.merged)
+	// pass-with-notes is not a failing verdict: the deploy is not blocked, so the
+	// review loop is entered — a draft PR opens and the reviewer is launched.
+	assert.Equal(t, 1, p.call)
+	assert.True(t, p.req.Draft)
+	assert.Equal(t, "board-SC-1-prreview", l.name)
+	var sawReviewStarted bool
+	for _, b := range c.added {
+		if strings.HasPrefix(b, PRReviewStartedHeader) {
+			sawReviewStarted = true
+		}
+	}
+	assert.True(t, sawReviewStarted, "expected a pr-review-started marker")
 }
 
 func TestVerdictFailed(t *testing.T) {
@@ -1138,6 +1206,8 @@ func (f *gateProbeDeployer) DeleteRemoteBranch(_ context.Context, _, _ string) e
 
 func (f *gateProbeDeployer) BranchMerged(_ context.Context, _, _ string) bool { return false }
 
+func (f *gateProbeDeployer) MarkReadyForReview(_ context.Context, _ string, _ int) error { return nil }
+
 func TestDeploysQueueOneAtATime(t *testing.T) {
 	// Regression (SC-296): the Deploy button ships every ready fix at once.
 	// Concurrent pipelines race the mainline — the first merge moves the base
@@ -1187,8 +1257,7 @@ func TestApplyTransitionDeployWaitsOutMergeabilityRecompute(t *testing.T) {
 		checks:  []forge.ChecksState{forge.ChecksPassing},
 		rebased: true, mergeableAfter: 3}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	assert.Equal(t, 1, p.merged, "merge must proceed once the recompute settles")
 	assert.GreaterOrEqual(t, p.mergeableCalls, 3, "the verdict must be polled through the recompute window")
@@ -1213,9 +1282,8 @@ func TestApplyTransitionDeployRecomputeStaysUnmergeable(t *testing.T) {
 		checks:  []forge.ChecksState{forge.ChecksPassing},
 		rebased: true, mergeable: false}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
-	require.NoError(t, err)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
 	assert.Zero(t, p.merged)
 	var failed string
 	for _, b := range c.added {
@@ -1257,8 +1325,7 @@ func TestApplyTransitionDeployReGatesCIAfterRebase(t *testing.T) {
 		},
 		rebased: true, mergeable: true, mergeBlockedUntilRegate: true}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	// The fresh CI on the rebased head must be re-gated: more than the single
 	// pre-rebase poll, and settled on Passing at least twice.
@@ -1291,8 +1358,7 @@ func TestApplyTransitionDeployRetriesTransientMergeRefusal(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/18", Number: 18},
 		checks: []forge.ChecksState{forge.ChecksPassing}, mergeTransientUntil: 2}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
 	assert.Equal(t, 3, p.merged, "the merge must retry through the transient 405 until it lands")
 	assert.Equal(t, []string{"feat/x"}, p.deleted)
@@ -1319,9 +1385,8 @@ func TestApplyTransitionDeployTransientMergeRefusalTimesOut(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/19", Number: 19},
 		checks: []forge.ChecksState{forge.ChecksPassing}, mergeErr: errors.New("405 Pull Request is not mergeable")}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
-	require.NoError(t, err)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
 	assert.Empty(t, p.deleted, "an unmerged branch must not be deleted")
 	var failed string
 	for _, b := range c.added {
@@ -1346,9 +1411,8 @@ func TestApplyTransitionDeployCIFailureHeadline(t *testing.T) {
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/16", Number: 16},
 		checks: []forge.ChecksState{forge.ChecksFailing}}
 	deps := newDeps(c, &fakeLauncher{}, p)
-	err := deps.ApplyTransition(context.Background(),
-		BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
-	require.NoError(t, err)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
 	var failed string
 	for _, b := range c.added {
 		if strings.HasPrefix(b, DeployFailedHeader) {
