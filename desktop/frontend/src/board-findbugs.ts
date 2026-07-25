@@ -18,13 +18,17 @@ export function bugsHeaderHTML(hunting: boolean, count: number): string {
   );
 }
 
-// securityHeaderHTML builds the Security half's header. Unlike the Bugs header
-// it carries no sweep control — security tickets are filed by hand, not hunted
-// (the human-security scanner is a separate report today) — so only the neutral
-// "+" quick-add and the count follow the title.
-export function securityHeaderHTML(count: number): string {
+// securityHeaderHTML builds the Security half's header — the counterpart to
+// bugsHeaderHTML. When a sweep is running it shows a spinner + "scanning…";
+// otherwise it offers the Find Security button that launches the project-wide
+// human-security scan. The neutral "+" quick-add and the count always follow.
+export function securityHeaderHTML(hunting: boolean, count: number): string {
+  const action = hunting
+    ? `<span class="findsecurity-hunting" title="A security scan is in progress…"><span class="spinner"></span> scanning…</span>`
+    : `<button class="findsecurity-btn" title="Scan the project for vulnerabilities">Find Security</button>`;
   return (
     `<div class="column-header"><span>Security</span>` +
+    action +
     `<button class="add-card" title="File a security issue">+</button>` +
     `<span class="column-count">${count}</span></div>`
   );

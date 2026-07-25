@@ -23,14 +23,23 @@ test("hunting header renders the spinner label, no Findbugs button", () => {
   assert.match(html, /class="column-count">0</);
 });
 
-// The Security header is filed-by-hand only: the neutral quick-add and count
-// follow the "Security" title, but there is no Findbugs sweep control (the
-// human-security scanner is a separate report, not a board-filing hunt).
-test("security header renders the quick-add and count, no Findbugs control", () => {
-  const html = securityHeaderHTML(2);
+// The Security header mirrors the Bugs header: an idle Find Security button that
+// launches the human-security scan, swapped for a scanning spinner while a sweep
+// runs, with the neutral quick-add and count always following the title.
+test("idle security header renders the Find Security button, no spinner", () => {
+  const html = securityHeaderHTML(false, 2);
   assert.match(html, /<span>Security<\/span>/);
+  assert.match(html, /class="findsecurity-btn"/);
+  assert.doesNotMatch(html, /class="findsecurity-hunting"/);
   assert.match(html, /class="add-card"/);
   assert.match(html, /class="column-count">2</);
-  assert.doesNotMatch(html, /class="findbugs-btn"/);
-  assert.doesNotMatch(html, /class="findbugs-hunting"/);
+});
+
+test("scanning security header renders the spinner label, no button", () => {
+  const html = securityHeaderHTML(true, 0);
+  assert.match(html, /class="findsecurity-hunting"/);
+  assert.match(html, /class="spinner"/);
+  assert.match(html, /scanning…/);
+  assert.doesNotMatch(html, /class="findsecurity-btn"/);
+  assert.match(html, /class="column-count">0</);
 });
