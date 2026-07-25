@@ -389,3 +389,43 @@ func TestDeriveBoardCard_StartedMarkerSupersedesQueued(t *testing.T) {
 	assert.Equal(t, BoardPlanning, card.Stage)
 	assert.Equal(t, BoardRunning, card.State)
 }
+
+// A card whose newest done-stage marker is a pr-review-started marker is
+// mid-loop: it must derive done/running with DeployPhase "pr-review" so the
+// board badges it "PR review…" rather than "deploying…".
+func TestDeriveBoardCard_DeployPhasePRReview(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Equal(t, "pr-review", card.DeployPhase)
+}
+
+// A plain deploy (deploy-started, not a loop marker) has no loop sub-phase, so
+// DeployPhase stays empty and the badge reads "deploying…".
+func TestDeriveBoardCard_DeployPhaseEmptyForPlainDeploy(t *testing.T) {
+	comments := []tracker.Comment{cmt(DeployStartedHeader, time.Unix(2, 0))}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Empty(t, card.DeployPhase)
+}
+
+// A chosen rebuild posts a strictly-newer implementation-started marker; the
+// generalized supersession must let it retire the loop marker so the card
+// leaves the done lane back to Building.
+func TestDeriveBoardCard_RebuildSupersedesLoopMarker(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(PRFixStartedHeader, time.Unix(2, 0)),
+		cmt(ImplementationStartedHeader, time.Unix(3, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardImplementation, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Empty(t, card.DeployPhase)
+}

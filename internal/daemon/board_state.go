@@ -50,6 +50,11 @@ type BoardCard struct {
 	// (SC-1450). Empty for an unstamped marker, preserving single-daemon
 	// behaviour.
 	StageDaemonID string `json:"stage_daemon_id,omitempty"`
+	// DeployPhase names the done-stage sub-phase for a running card: "pr-review"
+	// while the machine review→fix loop is mid-flight, empty for a plain deploy.
+	// It lets the board badge read "PR review…" instead of "deploying…" so the
+	// loop is visible while it runs.
+	DeployPhase string `json:"deploy_phase,omitempty"`
 }
 
 // VerdictFailed reports whether a review verdict blocks the card from moving
@@ -111,7 +116,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		// restarting from an earlier stage (ticket 881) or a later deploy — retires
 		// the stale red; the card follows the ticket's current activity rather than a
 		// terminal failure the pipeline already moved past (SC-910).
-		if state == BoardFailed {
+		if supersededByNewerMarker(state, furthest, comments) {
 			if newest, newestStage, newestState, ok := latestMarkerOverall(comments); ok && newest.Created.After(latest.Created) {
 				furthest, state, latest = newestStage, newestState, newest
 			}
@@ -142,8 +147,30 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	if state == BoardFailed {
 		card.Error = failureReason(latest.Body)
 	}
+	card.DeployPhase = deployPhaseFor(card, comments)
 	attachOpenOptions(&card, comments)
 	return card
+}
+
+// supersededByNewerMarker reports whether the furthest-stage marker may be
+// overridden by a strictly-newer marker anywhere on the ticket. Two cases: a
+// stale failure the pipeline has moved past (SC-910), and a done-stage PR loop a
+// chosen rebuild has restarted from an earlier stage — its strictly-newer
+// implementation-started marker retires the loop marker so the card leaves the
+// done lane back to Building.
+func supersededByNewerMarker(state BoardState, furthest BoardStage, comments []tracker.Comment) bool {
+	return state == BoardFailed || (furthest == BoardDoneStage && doneStageLoopActive(comments))
+}
+
+// deployPhaseFor names the done-stage sub-phase of a running card: "pr-review"
+// while the pre-merge review→fix loop is mid-flight, empty for a plain deploy so
+// the board badge reads "PR review…" rather than "deploying…" while the loop
+// runs.
+func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
+	if card.Stage == BoardDoneStage && card.State == BoardRunning && doneStageLoopActive(comments) {
+		return "pr-review"
+	}
+	return ""
 }
 
 // derivePRURL resolves the card's PR link, newest-marker-first: a deployed

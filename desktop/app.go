@@ -97,6 +97,11 @@ type Card struct {
 	// landed (RFC3339); the board's age badge renders how long the card has
 	// been sitting. Empty when the card has no derived stage yet.
 	StageEnteredAt string `json:"stageEnteredAt,omitempty"`
+	// DeployPhase names the done-stage sub-phase ("pr-review" while the machine
+	// review→fix loop runs, empty for a plain deploy) so the badge reads "PR
+	// review…" instead of "deploying…". Populated by the explicit field copy
+	// below — the daemon→desktop hop is a Go copy, not a JSON re-tag.
+	DeployPhase string `json:"deployPhase,omitempty"`
 	// Labels and Description feed the Ideas→Backlog promotion: labels tell
 	// the evolve session which idea labels to remove, the description seeds
 	// the ideation conversation alongside the title.
@@ -405,6 +410,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 			Error:            card.Error,
 			Verdict:          card.Verdict,
 			StageEnteredAt:   formatStageTime(card.StageEnteredAt),
+			DeployPhase:      card.DeployPhase,
 			Labels:           issue.Labels,
 			Description:      issue.Description,
 			Assignee:         issue.Assignee,

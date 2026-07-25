@@ -105,9 +105,12 @@ export const QUEUED_LABELS = {
 // the work exists, it just may not advance until a rebuild passes.
 export function badgeInfo(card) {
     if (card.state === "running") {
+        const text = card.stage === "done" && card.deployPhase === "pr-review"
+            ? "PR review…"
+            : (RUNNING_LABELS[card.stage] ?? "working…");
         return {
             cls: "running",
-            text: RUNNING_LABELS[card.stage] ?? "working…",
+            text,
             title: "Agent running",
             spinner: true,
         };
