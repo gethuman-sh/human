@@ -124,7 +124,7 @@ func TestRunBoardFailureWatch_ReapAfterHandoffRechecksAndChains(t *testing.T) {
 		chain := func(pmKey string) error { chained <- pmKey; return nil }
 
 		ctx := t.Context()
-		go RunBoardFailureWatch(ctx, store, commenterFor, chain, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
 		time.Sleep(50 * time.Millisecond)
 
 		// Reap-synthesized event: no SessionID, carries only name + time.
