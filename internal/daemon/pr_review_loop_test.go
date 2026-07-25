@@ -103,3 +103,37 @@ func TestEvaluatePRLoop(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePRLoopAgentName(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		wantKey string
+		wantWhy string
+		wantOK  bool
+	}{
+		{"review loop agent", "board-SC-1388-pr-review", "SC-1388", PRReviewAgent, true},
+		{"fix loop agent", "board-SC-1388-pr-fix", "SC-1388", PRFixAgent, true},
+		// A plain board stage agent is NOT a loop agent — it must fall through to
+		// parseAgentName rather than be captured here.
+		{"plain stage agent", "board-SC-1-planning", "", "", false},
+		{"not a board agent", "not-board", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key, why, ok := parsePRLoopAgentName(tc.in)
+			if ok != tc.wantOK || key != tc.wantKey || why != tc.wantWhy {
+				t.Fatalf("parsePRLoopAgentName(%q) = (%q,%q,%v), want (%q,%q,%v)",
+					tc.in, key, why, ok, tc.wantKey, tc.wantWhy, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestPRLoopAgentNameRoundTrip(t *testing.T) {
+	name := prLoopAgentName("SC-1388", PRFixAgent)
+	key, why, ok := parsePRLoopAgentName(name)
+	if !ok || key != "SC-1388" || why != PRFixAgent {
+		t.Fatalf("round-trip of %q = (%q,%q,%v), want (SC-1388,pr-fix,true)", name, key, why, ok)
+	}
+}

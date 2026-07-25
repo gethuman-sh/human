@@ -156,3 +156,45 @@ func EvaluatePRLoop(comments []tracker.Comment, reviewVerdict, fixExit string) P
 	}
 	return NextPRLoopAction(stage, outcome, prReviewRounds(comments), DefaultPRReviewRounds)
 }
+
+// PRReviewAgent / PRFixAgent name the two loop half-agents. They share
+// BoardDoneStage, so they cannot use agentNameFor (which is stage-keyed and
+// would collide on the shared done stage); they get their own reversible names.
+const (
+	PRReviewAgent = "pr-review"
+	PRFixAgent    = "pr-fix"
+)
+
+// PRLoopStateSnapshot is the recorded loop state the decider and the escalation
+// path read. It is injected via BoardTransitionDeps.PRLoopState so the
+// agentstate dependency stays in the command layer rather than leaking into the
+// daemon package.
+type PRLoopStateSnapshot struct {
+	ReviewVerdict string        // stage.pr-review "verdict"
+	FixExit       string        // stage.pr-fix "exit"
+	FixSummary    string        // stage.pr-fix "summary" / "deferred" — options context
+	FixOptions    []BoardOption // enumerated directions the fixer recorded on needs-input
+}
+
+// prLoopAgentName builds a loop half-agent's name: board-<key>-pr-review /
+// board-<key>-pr-fix. Reversible via parsePRLoopAgentName.
+func prLoopAgentName(pmKey, which string) string {
+	return "board-" + sanitize(pmKey) + "-" + which
+}
+
+// parsePRLoopAgentName recovers (pmKey, which) from a loop agent name, or
+// ok=false when the name is not a loop agent. It MUST be tried before
+// parseAgentName, whose last-hyphen split mis-parses these compound suffixes
+// (a "pr-review" suffix would leave stage "review" and key "board-<key>-pr").
+func parsePRLoopAgentName(name string) (pmKey, which string, ok bool) {
+	rest, found := strings.CutPrefix(name, "board-")
+	if !found {
+		return "", "", false
+	}
+	for _, w := range []string{PRReviewAgent, PRFixAgent} {
+		if key, cut := strings.CutSuffix(rest, "-"+w); cut && key != "" {
+			return key, w, true
+		}
+	}
+	return "", "", false
+}
