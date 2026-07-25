@@ -1197,6 +1197,11 @@ func (s *Server) handleSubscribe(conn net.Conn) {
 	}
 }
 
+// PokeBoard is the exported entry to the same board-refresh signal the route
+// handlers raise via pokeBoard, for changes detected outside a handler — today
+// the board-freshness poll, which notices tickets mutated in the tracker web UI.
+func (s *Server) PokeBoard() { s.pokeBoard() }
+
 // pokeBoard notifies open board subscribers that a daemon-executed change
 // landed, so the board refreshes within a second or two instead of waiting for
 // an unrelated agent lifecycle event. It appends a lightweight session-less

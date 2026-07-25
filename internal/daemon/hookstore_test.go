@@ -13,6 +13,21 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/logparser"
 )
 
+func TestHookEventStore_SubscriberCount(t *testing.T) {
+	store := NewHookEventStore()
+	assert.Equal(t, 0, store.SubscriberCount())
+
+	a := store.Subscribe()
+	b := store.Subscribe()
+	assert.Equal(t, 2, store.SubscriberCount())
+
+	store.Unsubscribe(a)
+	assert.Equal(t, 1, store.SubscriberCount())
+
+	store.Unsubscribe(b)
+	assert.Equal(t, 0, store.SubscriberCount())
+}
+
 func TestHookEventStore_AppendAndSnapshot(t *testing.T) {
 	store := NewHookEventStore()
 

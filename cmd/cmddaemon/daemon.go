@@ -652,6 +652,15 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		chainReview, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
+	// Surface tickets created or edited outside the board (tracker web UI, CLI,
+	// another teammate or daemon) — none raise a board event — by polling the
+	// cheap titles-only listing and poking subscribers on any change. Gated on
+	// live subscribers so it costs nothing when no board is open.
+	go daemon.RunBoardFreshnessPoll(ctx,
+		ds.srv.LiteIssueFetcher, ds.srv.PokeBoard,
+		boardHasWatchers(ds.srv.HookEvents),
+		daemon.BoardFreshnessInterval, logger)
+
 	// Watch the binary so a rebuild re-execs into the new build, handing over the
 	// live sockets (no client sees a refused connection) and draining in-flight
 	// connections before the old process exits. A no-op on Windows.
@@ -2771,6 +2780,13 @@ func boardPMCommenterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver)
 		entry := entries[0]
 		return resolvePMCommenter(entry.Dir, entry.EnvLookup(), resolver)
 	}
+}
+
+// boardHasWatchers reports whether any UI (board or TUI) is subscribed, so the
+// freshness poll can skip tracker work when no board is open. A nil store (hook
+// tracking disabled) reads as no watchers.
+func boardHasWatchers(events *daemon.HookEventStore) func() bool {
+	return func() bool { return events != nil && events.SubscriberCount() > 0 }
 }
 
 // boardReconcileListerFunc enumerates open PM cards with their comment threads

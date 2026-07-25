@@ -148,6 +148,15 @@ func (s *HookEventStore) Unsubscribe(ch chan struct{}) {
 	}
 }
 
+// SubscriberCount reports how many live subscribers (board/TUI subscribe
+// streams) are attached. The board-freshness poll reads it to skip tracker work
+// when no UI is watching.
+func (s *HookEventStore) SubscriberCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.subscribers)
+}
+
 // Snapshot returns the current per-session state derived from all stored events.
 func (s *HookEventStore) Snapshot() map[string]hookevents.SessionSnapshot {
 	s.mu.Lock()
