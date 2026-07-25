@@ -1855,6 +1855,7 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 		Head:  req.Branch,
 		Title: req.Title,
 		Body:  req.Body,
+		Draft: req.Draft,
 	})
 	if err != nil {
 		return daemon.PRResult{}, errors.WrapWithDetails(err, "opening pull request", "repo", repo, "head", req.Branch)
@@ -1994,6 +1995,22 @@ func (p forgeDeployer) PullRequestMergeable(ctx context.Context, workspaceDir st
 		return false, errors.WithDetails("forge does not support reading mergeability", "repo", repo)
 	}
 	return reader.PullRequestMergeable(ctx, repo, number)
+}
+
+// MarkReadyForReview un-drafts the loop's PR once the machine review approves —
+// the convergence signal that lets the merge tail run. Mirrors the other
+// workspaceDir-keyed forge methods: resolve the forge, then require the
+// ready-for-review capability.
+func (p forgeDeployer) MarkReadyForReview(ctx context.Context, workspaceDir string, number int) error {
+	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
+	if err != nil {
+		return err
+	}
+	marker, ok := creator.(forge.ReadyForReviewMarker)
+	if !ok {
+		return errors.WithDetails("forge does not support marking PRs ready for review", "repo", repo)
+	}
+	return marker.MarkReadyForReview(ctx, repo, number)
 }
 
 func (p forgeDeployer) MergePullRequest(ctx context.Context, workspaceDir string, number int) error {

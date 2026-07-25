@@ -48,6 +48,10 @@ type Deployer interface {
 	// card must short-circuit to a clean no-op rather than open a doomed PR the
 	// forge rejects 422 "No commits between" (SC-911).
 	BranchMerged(ctx context.Context, workspaceDir, branch string) bool
+	// MarkReadyForReview converts the loop's draft PR to ready-for-review — the
+	// gate that lets the merge tail run. Called only after the machine review
+	// approves, so nothing can merge while the PR is still an unmergeable draft.
+	MarkReadyForReview(ctx context.Context, workspaceDir string, number int) error
 }
 
 // PRRequest carries everything needed to push a branch and open its PR.
@@ -56,6 +60,10 @@ type PRRequest struct {
 	Branch       string
 	Title        string
 	Body         string
+	// Draft opens the PR in the forge's draft (unmergeable) state — the pre-merge
+	// review→fix loop's safety property: the PR cannot merge until the loop
+	// approves and MarkReadyForReview un-drafts it.
+	Draft bool
 }
 
 // PRResult identifies the created pull request for the pipeline steps that
@@ -118,6 +126,15 @@ type BoardTransitionDeps struct {
 	// leaves the work for a healthy daemon, and the failure surfaces only on this
 	// host (doctor / rail LED), never as a ticket marker (SC-912). nil disables.
 	LaunchGate func(ctx context.Context) []DoctorCheck
+	// PRReviewLoop turns the pre-merge machine review→fix loop on. When false
+	// (the CLI deploy and every existing test) DeployBranch runs the legacy
+	// synchronous pipeline unchanged; when true (the daemon board wiring) it
+	// opens a DRAFT PR and drives the reviewer→fixer loop event-driven.
+	PRReviewLoop bool
+	// PRLoopState reads the recorded loop outcomes for the decider and the
+	// escalation. nil returns a zero snapshot, so a missing read escalates safely
+	// rather than merging on an unknown state.
+	PRLoopState func(pmKey string) PRLoopStateSnapshot
 }
 
 // sanitizeRe drops characters that are invalid in an agent name (alphanumeric,
@@ -437,8 +454,6 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 // posted as deploy-failed markers (the board's channel) and returned (the CLI's
 // channel).
 func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prBody, branch string) error {
-	deployGate.Lock()
-	defer deployGate.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, deployTimeout)
 	defer cancel()
 
@@ -455,6 +470,17 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		return nil
 	}
 
+	// Loop path (daemon board): open a DRAFT PR gate-free and hand off to the
+	// event-driven review→fix loop. The merge tail is deferred to the loop's
+	// approval, where the deploy gate is taken for the merge alone (AD2).
+	if d.PRReviewLoop {
+		return d.openDraftPRAndStartLoop(ctx, pmKey, title, prBody, branch)
+	}
+
+	// Legacy synchronous path: gate the whole pipeline, open a non-draft PR, and
+	// merge now. Every existing DeployBranch test exercises this branch unchanged.
+	deployGate.Lock()
+	defer deployGate.Unlock()
 	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,
 		Branch:       branch,
@@ -466,6 +492,16 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 			"could not push "+branch+" and open its pull request — check the branch and forge access, then re-run Deploy",
 			err))
 	}
+	return d.mergeTail(ctx, pmKey, res, branch)
+}
+
+// mergeTail runs the deploy pipeline from an open PR to the shipped, closed
+// card: the CI gate, the freshness rebase + re-gate, the merge, branch cleanup,
+// the deployed marker and the ticket close. It is the exact body that used to
+// follow PushAndCreatePR in DeployBranch — behavior-preserving. The CALLER
+// holds deployGate: the legacy path over the whole pipeline, the loop path
+// around the merge alone (AD2).
+func (d BoardTransitionDeps) mergeTail(ctx context.Context, pmKey string, res PRResult, branch string) error {
 	if err := d.waitForChecks(ctx, res); err != nil {
 		return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
 	}
@@ -521,6 +557,159 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
 	d.closeTicketBestEffort(pmKey)
 	return nil
+}
+
+// openDraftPRAndStartLoop opens the deploy's PR as a draft (gate-free — a draft
+// PR never touches the base, so concurrent drafts are harmless, AD2) and starts
+// the first review round. A push/PR failure reds the card exactly like the
+// legacy path.
+func (d BoardTransitionDeps) openDraftPRAndStartLoop(ctx context.Context, pmKey, title, prBody, branch string) error {
+	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
+		WorkspaceDir: d.WorkspaceDir,
+		Branch:       branch,
+		Title:        title,
+		Body:         prBody,
+		Draft:        true,
+	})
+	if err != nil {
+		return d.deployFailed(pmKey, "", deployReason(
+			"could not push "+branch+" and open its draft pull request — check the branch and forge access, then re-run Deploy",
+			err))
+	}
+	return d.startPRLoopAgent(ctx, pmKey, PRReviewAgent, PRReviewStartedHeader,
+		fmt.Sprintf("/human-pr-review %s --pr=%d --branch=%s", pmKey, res.Number, branch),
+		res.URL, branch)
+}
+
+// startPRLoopAgent posts a loop half-agent's started marker (carrying the pr:
+// and branch: lines the exit handler recovers the loop's PR from) and launches
+// it. It mirrors startAgentStage — launch gate, cross-daemon claim on the shared
+// done stage, then launch — but names the agent with prLoopAgentName so the
+// exit watcher routes its Stop back into the loop rather than the generic stage
+// path. A launch failure reds the done stage with a pr-review-failed marker.
+func (d BoardTransitionDeps) startPRLoopAgent(ctx context.Context, pmKey, which, startedHeader, prompt, prURL, branch string) error {
+	if d.LaunchGate != nil {
+		if blockers := d.LaunchGate(ctx); len(blockers) > 0 {
+			d.Logger.Warn().Str("pm", pmKey).Str("loop", which).Str("check", blockers[0].ID).
+				Msg("PR loop launch skipped: launch-critical doctor check failing; leaving work for a healthy daemon")
+			return nil
+		}
+	}
+	// The loop shares the done stage; arbitrate on it so two daemons watching the
+	// same board never double-launch a loop step (SC-660 rule 2).
+	won, err := d.winClaim(ctx, pmKey, BoardDoneStage)
+	if err != nil {
+		return err
+	}
+	if !won {
+		return nil
+	}
+	body := startedHeader + "\npr: " + prURL + "\nbranch: " + branch
+	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID)); err != nil {
+		return errors.WrapWithDetails(err, "posting PR loop started marker", "pm", pmKey, "loop", which)
+	}
+	if err := d.Launcher.Launch(ctx, prLoopAgentName(pmKey, which), prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
+		failBody := PRReviewFailedHeader + "\ncould not launch the " + which + " agent\n" + errors.CauseChain(err)
+		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(failBody, d.DaemonID))
+		return errors.WrapWithDetails(err, "launching PR loop agent", "pm", pmKey, "loop", which)
+	}
+	return nil
+}
+
+// HandlePRLoopExit drives the loop one step when a half-agent stops: it reads
+// the recorded outcome, asks the pure decider for the next action, and executes
+// it — launch the next reviewer/fixer, mark the approved PR ready and merge, or
+// escalate. The PR number is recovered from the loop's own started markers and
+// the branch from the ready-for-review handoff, so no new state key is needed
+// (AD5). The merge is the ONLY step that takes deployGate (AD2).
+func (d BoardTransitionDeps) HandlePRLoopExit(ctx context.Context, pmKey string) error {
+	comments, err := d.Commenter.ListComments(ctx, pmKey)
+	if err != nil {
+		return errors.WrapWithDetails(err, "loading PM comments for PR loop", "pm", pmKey)
+	}
+	var snap PRLoopStateSnapshot
+	if d.PRLoopState != nil {
+		snap = d.PRLoopState(pmKey)
+	}
+	action := EvaluatePRLoop(comments, snap.ReviewVerdict, snap.FixExit)
+	prURL := derivePRLoopURL(comments)
+	// A malformed/empty URL yields 0 — an obviously-wrong PR number the launch
+	// surfaces, never a silent panic (the ok result is intentionally discarded).
+	number, _ := forge.PullRequestNumberFromURL(prURL)
+	branch := latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
+	switch action {
+	case PRActionReview:
+		return d.startPRLoopAgent(ctx, pmKey, PRReviewAgent, PRReviewStartedHeader,
+			fmt.Sprintf("/human-pr-review %s --pr=%d --branch=%s", pmKey, number, branch), prURL, branch)
+	case PRActionFix:
+		return d.startPRLoopAgent(ctx, pmKey, PRFixAgent, PRFixStartedHeader,
+			fmt.Sprintf("/human-pr-fix %s --pr=%d --branch=%s", pmKey, number, branch), prURL, branch)
+	case PRActionMerge:
+		if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, number); err != nil {
+			return d.deployFailed(pmKey, prURL, deployReason(
+				"could not mark the reviewed pull request ready for merge — open the PR, then re-run Deploy", err))
+		}
+		// Only the mainline-moving merge serializes; the loop itself ran gate-free.
+		deployGate.Lock()
+		defer deployGate.Unlock()
+		return d.mergeTail(ctx, pmKey, PRResult{URL: prURL, Number: number}, branch)
+	default: // PRActionEscalate
+		return d.escalatePRLoop(ctx, pmKey, comments, snap)
+	}
+}
+
+// escalatePRLoop routes a non-converging loop to the right surface: a fixer
+// needs-input is a DECISION, posted as an [human:options] block whose stage is
+// implementation so choosing rebuilds through the normal chain (which re-adopts
+// the still-open draft PR); everything else — a spent round budget, an
+// unreviewable PR, an outcome the daemon cannot classify — reds the done stage.
+// Idempotent: a durable re-drive must not re-post the block or the failure.
+func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, comments []tracker.Comment, snap PRLoopStateSnapshot) error {
+	if _, open := openOptionsBlock(comments); open {
+		return nil
+	}
+	if latestPRLoopStage(comments) == PRStageFix && snap.FixExit != PRFixDone {
+		var b strings.Builder
+		b.WriteString(OptionsHeader + "\nstage: " + string(BoardImplementation) + "\n")
+		ctxLine := snap.FixSummary
+		if ctxLine == "" {
+			ctxLine = "the PR review→fix loop needs a decision the fixer could not make"
+		}
+		b.WriteString("context: " + ctxLine + "\n")
+		opts := snap.FixOptions
+		if len(opts) == 0 {
+			// A generic single option keeps the block valid (parseOptionsBlock needs
+			// ≥1) so the human can always move the card off the loop.
+			opts = []BoardOption{{ID: "1", Label: "Rebuild the branch to resolve the decision the fixer raised"}}
+		}
+		for _, o := range opts {
+			b.WriteString(o.ID + ": " + o.Label + "\n")
+		}
+		_, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(b.String(), d.DaemonID))
+		return err
+	}
+	body := PRReviewFailedHeader + "\n" + prReviewFailureReason(snap)
+	_, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID))
+	return err
+}
+
+// prReviewFailureReason is the actionable headline for a red loop escalation: an
+// unreviewable PR the machine reviewer could not read, else a budget-spent loop
+// that did not converge.
+func prReviewFailureReason(snap PRLoopStateSnapshot) string {
+	if snap.ReviewVerdict == PRVerdictUnreviewable {
+		return "the machine reviewer could not review the pull request (unreviewable) — open the PR to see why, then re-run Deploy"
+	}
+	return fmt.Sprintf("the review→fix loop did not converge within %d rounds — review the PR and merge or rework by hand", DefaultPRReviewRounds)
+}
+
+// derivePRLoopURL resolves the loop's PR link from the newest pr-review/pr-fix
+// started marker's pr: line — the convention startPRLoopAgent stamps.
+func derivePRLoopURL(comments []tracker.Comment) string {
+	if url := latestPrefixedLine(comments, PRReviewStartedHeader, "pr:"); url != "" {
+		return url
+	}
+	return latestPrefixedLine(comments, PRFixStartedHeader, "pr:")
 }
 
 // failureReason renders a deploy-failed marker body per the marker-body

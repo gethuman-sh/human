@@ -108,6 +108,10 @@ type fakeDeployer struct {
 	// alreadyMerged models a branch whose work is already on the base: the deploy
 	// must short-circuit to a clean no-op instead of opening a doomed PR (SC-911).
 	alreadyMerged bool
+	// readied counts MarkReadyForReview calls — the loop un-drafts the PR exactly
+	// once, after the review approves. readyErr models an un-draft failure.
+	readied  int
+	readyErr error
 }
 
 func (f *fakeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResult, error) {
@@ -178,6 +182,11 @@ func (f *fakeDeployer) DeleteRemoteBranch(_ context.Context, _, branch string) e
 
 func (f *fakeDeployer) BranchMerged(_ context.Context, _, _ string) bool {
 	return f.alreadyMerged
+}
+
+func (f *fakeDeployer) MarkReadyForReview(_ context.Context, _ string, _ int) error {
+	f.readied++
+	return f.readyErr
 }
 
 func newDeps(c *fakeCommenter, l *fakeLauncher, p *fakeDeployer) BoardTransitionDeps {
@@ -1119,6 +1128,8 @@ func (f *gateProbeDeployer) MergePullRequest(_ context.Context, _ string, _ int)
 func (f *gateProbeDeployer) DeleteRemoteBranch(_ context.Context, _, _ string) error { return nil }
 
 func (f *gateProbeDeployer) BranchMerged(_ context.Context, _, _ string) bool { return false }
+
+func (f *gateProbeDeployer) MarkReadyForReview(_ context.Context, _ string, _ int) error { return nil }
 
 func TestDeploysQueueOneAtATime(t *testing.T) {
 	// Regression (SC-296): the Deploy button ships every ready fix at once.
