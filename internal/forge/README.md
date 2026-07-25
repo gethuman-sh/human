@@ -2,10 +2,11 @@
 
 Lets `human` open pull requests on code-hosting platforms, keeping that work separate from issue tracking. It recognises which of your configured backends can actually host code and only offers pull-request actions where they make sense.
 
-- Opens a pull request from one branch to another
+- Opens a pull request from one branch to another (optionally as a draft)
 - Sets the title and description of a PR
 - Returns the new pull request number and URL
 - Reads a pull request's combined CI verdict (check runs and legacy statuses)
+- Marks a draft pull request ready for review (the pre-merge review→fix loop's convergence signal)
 - Merges a pull request into its base branch
 - Deletes the source branch after a merge
 - Knows which backends can host pull requests
