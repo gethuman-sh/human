@@ -105,9 +105,15 @@ export const QUEUED_LABELS = {
 // the work exists, it just may not advance until a rebuild passes.
 export function badgeInfo(card) {
     if (card.state === "running") {
+        // The done stage runs two things — a plain deploy and the pre-merge machine
+        // review→fix loop. Prefer the loop label so the card reads "PR review…"
+        // while the loop is mid-flight, "deploying…" otherwise.
+        const text = card.stage === "done" && card.deployPhase === "pr-review"
+            ? "PR review…"
+            : (RUNNING_LABELS[card.stage] ?? "working…");
         return {
             cls: "running",
-            text: RUNNING_LABELS[card.stage] ?? "working…",
+            text,
             title: "Agent running",
             spinner: true,
         };
