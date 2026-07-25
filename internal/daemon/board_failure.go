@@ -57,7 +57,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // resolved marker). It is the success signal that authorizes reclaiming the
 // run's private worktree — every other exit KEEPS the worktree so uncommitted
 // work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -87,7 +87,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, advancePRLoop, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger)
 			}
 		}
 	}
@@ -97,9 +97,14 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
+		return
+	}
+	// The deploy-fixer is not a board stage: its exit re-runs the deploy (on `done`)
+	// or reds the card, driven by AdvanceDeployFix — not the generic stage-failure path.
+	if driveDeployFixExit(pmKey, stage, agentName, advanceDeployFix, onHandoff, logger) {
 		return
 	}
 	// The PR review→fix loop steps are not board stages: their exits are driven
@@ -215,6 +220,25 @@ func drivePRLoopExit(pmKey string, stage BoardStage, agentName string, advancePR
 	if advancePRLoop != nil {
 		if err := advancePRLoop(pmKey); err != nil {
 			logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).Msg("board PR loop: advance failed")
+		}
+	}
+	return true
+}
+
+// driveDeployFixExit routes a deploy-fixer's exit to AdvanceDeployFix, reclaiming
+// its worktree first (the fixer already pushed its work). It reports whether the
+// exit was the deploy-fix stage and thus fully handled here. A non-deployfix stage
+// returns false so the caller falls through to the PR-loop / stage-failure handling.
+func driveDeployFixExit(pmKey string, stage BoardStage, agentName string, advanceDeployFix func(pmKey string) error, onHandoff func(agentName string), logger zerolog.Logger) bool {
+	if stage != deployFixAgentStage {
+		return false
+	}
+	if onHandoff != nil {
+		onHandoff(agentName)
+	}
+	if advanceDeployFix != nil {
+		if err := advanceDeployFix(pmKey); err != nil {
+			logger.Warn().Err(err).Str("pm", pmKey).Msg("board deploy fix: advance failed")
 		}
 	}
 	return true

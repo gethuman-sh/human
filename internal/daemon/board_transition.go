@@ -152,8 +152,9 @@ func sanitize(s string) string {
 // marker/state names keep their hyphenated form (pr-review-started, stage.pr-review);
 // only the internal agent-name token is hyphen-free.
 const (
-	prReviewAgentStage BoardStage = "prreview"
-	prFixAgentStage    BoardStage = "prfix"
+	prReviewAgentStage  BoardStage = "prreview"
+	prFixAgentStage     BoardStage = "prfix"
+	deployFixAgentStage BoardStage = "deployfix"
 )
 
 // agentNameFor builds the agent name for a board stage. It is reversible (see
@@ -501,6 +502,30 @@ func prFixDispatch(pmKey string, number int, branch string) string {
 	return "/human-pr-fix " + pmKey + " --pr=" + strconv.Itoa(number) + " --branch=" + branch
 }
 
+// DefaultDeployFixRounds bounds the automated deploy-fix loop: at most this many
+// dispatched fixer rounds before a still-failing deploy reds for a human. Mirrors
+// DefaultStageRetries — a mechanical rebase/CI failure is almost always fixed on
+// the first pass; a failure that survives two fixer rounds is genuinely stuck.
+const DefaultDeployFixRounds = 2
+
+// deployFixDispatch is the deploy-fixer's slash-skill dispatch (sibling of prFixDispatch).
+func deployFixDispatch(pmKey string, number int, branch string) string {
+	return "/human-deploy-fix " + pmKey + " --pr=" + strconv.Itoa(number) + " --branch=" + branch
+}
+
+// deployFixRounds counts dispatched deploy-fix rounds — one per deploy-fix-started
+// marker — the value the budget bounds against DefaultDeployFixRounds. Mirrors
+// prReviewRounds; per-ticket-lifetime by design (see plan AD2).
+func deployFixRounds(comments []tracker.Comment) int {
+	n := 0
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), DeployFixStartedHeader) {
+			n++
+		}
+	}
+	return n
+}
+
 // launchPRLoopAgent launches one loop step's agent (fire-and-forget, no claim:
 // the loop is driven by the launching daemon's local Stop events). A launch
 // failure escalates the card — leaving it spinning would strand the loop.
@@ -579,6 +604,39 @@ func prEscalationReason(reviewVerdict, fixExit string) string {
 	}
 }
 
+// AdvanceDeployFix is the deploy-fixer's Stop-event driver. On the fixer's exit the
+// failure watcher calls it with the exit the agent recorded in stage.deploy-fix. A
+// `done` exit re-runs the deploy pipeline (the fixer rebased/fixed and pushed, so the
+// branch is ready for a fresh CI gate + merge); any other exit reds the card with a
+// terminal deploy-failed. The deployFixRounds budget already bounds how many times
+// the pipeline re-enters here, so a genuinely unfixable failure terminates.
+func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey, fixExit string) error {
+	comments, err := d.Commenter.ListComments(ctx, pmKey)
+	if err != nil {
+		return errors.WrapWithDetails(err, "loading comments for deploy fix", "pm", pmKey)
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	if fixExit == ExitDone {
+		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
+	}
+	_, _ = d.Commenter.AddComment(ctx, pmKey,
+		StampDaemon(DeployFailedHeader+"\n"+deployFixEscalationReason(fixExit), d.DaemonID))
+	return nil
+}
+
+// deployFixEscalationReason renders the actionable headline the failed marker shows
+// when the deploy fixer did not converge.
+func deployFixEscalationReason(fixExit string) string {
+	switch fixExit {
+	case ExitNeedsInput:
+		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy"
+	case ExitNeedsHumanWork:
+		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy"
+	default:
+		return "the deploy fixer stopped without recovering the deploy — check the PR and its CI, then re-run Deploy"
+	}
+}
+
 // deployGate queues deploy pipelines: the Deploy button ships every ready fix
 // in one click, and concurrent pipelines race each other onto the mainline —
 // the first merge moves the base branch and the forge rejects the rest
@@ -633,6 +691,9 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 			err))
 	}
 	if err := d.waitForChecks(ctx, res); err != nil {
+		if ciFailureFixable(err) {
+			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
+		}
 		return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
 	}
 	// Freshness stage: own the branch's mergeability BEFORE attempting the merge.
@@ -650,9 +711,9 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		// Consult the forge's mergeable verdict and the green CI on the
 		// (rebase-aborted, unchanged) tip before redding the card (SC-804).
 		if !d.forgeMergeableFallback(ctx, res) {
-			return d.deployFailed(pmKey, res.URL, deployReason(
+			return d.deployFailedOrDispatchFixer(ctx, pmKey, res,
 				"the branch conflicts with the base — resolve the conflict on "+branch+" (rebase it onto the base branch), then re-run Deploy",
-				ensureErr))
+				ensureErr, branch)
 		}
 	}
 	if rebased {
@@ -663,6 +724,9 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		// alone does not cover the in-flight checks — before waiting out the
 		// recompute window.
 		if err := d.waitForChecks(ctx, res); err != nil {
+			if ciFailureFixable(err) {
+				return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
+			}
 			return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
 		}
 		// The re-push invalidated the forge's cached mergeability; merging
@@ -706,6 +770,13 @@ func ciFailureHeadline(err error) string {
 		return "CI did not finish within the deploy window — check the PR's checks, then re-run Deploy"
 	}
 	return "CI checks failed on the pull request — fix the failing checks, then re-run Deploy"
+}
+
+// ciFailureFixable reports whether a CI gate error is a genuine check FAILURE a
+// fixer can repair (lint/test), as opposed to a gate timeout — a timeout is an
+// infra/slowness signal with nothing for a code fixer to change.
+func ciFailureFixable(err error) bool {
+	return err != nil && !strings.Contains(err.Error(), "timed out")
 }
 
 // awaitMergeable waits for the forge's asynchronous mergeability recompute to
@@ -846,6 +917,49 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
 	}
 	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
 	return errors.WithDetails("deploy failed: "+reason, "pm", pmKey, "pr", prURL)
+}
+
+// deployFailedOrDispatchFixer routes a code-fixable deploy failure to the
+// automated deploy-fixer instead of redding the card — but only when a launcher
+// is wired (the board path, never the CLI) and the per-ticket deploy-fix budget
+// has room. Otherwise it falls back to the terminal deploy-failed marker. On a
+// successful dispatch it returns nil, releasing the deploy gate while the fixer
+// works; the fixer's Stop event drives AdvanceDeployFix, which re-runs the deploy.
+func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pmKey string, res PRResult, headline string, cause error, branch string) error {
+	if d.Launcher != nil {
+		if comments, err := d.Commenter.ListComments(ctx, pmKey); err == nil && deployFixRounds(comments) < DefaultDeployFixRounds {
+			return d.dispatchDeployFixer(ctx, pmKey, res, branch, headline)
+		}
+	}
+	return d.deployFailed(pmKey, res.URL, deployReason(headline, cause))
+}
+
+// dispatchDeployFixer posts the running deploy-fix-started marker (carrying the
+// failure headline and the PR binding for the trail) and launches the fixer. The
+// marker keeps the card spinning rather than red while the fixer works.
+func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string) error {
+	body := DeployFixStartedHeader +
+		"\n" + headline +
+		"\npr: " + res.URL +
+		"\nnumber: " + strconv.Itoa(res.Number) +
+		"\nbranch: " + branch
+	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID)); err != nil {
+		return errors.WrapWithDetails(err, "posting deploy-fix-started marker", "pm", pmKey)
+	}
+	return d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
+}
+
+// launchDeployFixAgent launches the deploy-fixer fire-and-forget (no claim: driven
+// by this daemon's local Stop event, like the PR-loop agents). A launch failure
+// reds the card — leaving it spinning would strand the deploy.
+func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) error {
+	name := agentNameFor(pmKey, deployFixAgentStage)
+	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
+		body := DeployFailedHeader + "\ncould not launch the deploy fixer — " + errors.CauseChain(err)
+		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID))
+		return errors.WrapWithDetails(err, "launching deploy fixer", "pm", pmKey)
+	}
+	return nil
 }
 
 // executePrompt builds the implementation-stage dispatch. The BOARD CONTEXT

@@ -33,6 +33,16 @@ func readPRFixExit(ctx context.Context, pmKey string, logger zerolog.Logger) str
 	return v.Exit
 }
 
+// readDeployFixExit returns the deploy fixer's exit recorded in stage.deploy-fix
+// ("" when absent — the driver treats a non-done exit, including absence, as red).
+func readDeployFixExit(ctx context.Context, pmKey string, logger zerolog.Logger) string {
+	var v struct {
+		Exit string `json:"exit"`
+	}
+	readStageReport(ctx, pmKey, "stage.deploy-fix", &v, logger)
+	return v.Exit
+}
+
 // readStageReport loads one loop step's JSON report from the agent state store
 // into out. A missing or unreadable report is not an error the loop can act on
 // — it is logged and out is left at its zero value, which the decider treats as
