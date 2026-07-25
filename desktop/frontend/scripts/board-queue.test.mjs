@@ -341,3 +341,18 @@ test("defects deploy control names bugs and vulnerabilities", () => {
   assert.ok(view.disabled);
   assert.match(view.tooltip, /bugs or vulnerabilities/);
 });
+
+// SC-1388: the done stage runs both a plain deploy and the pre-merge machine
+// review→fix loop. The running badge must distinguish them so the loop is
+// visible while it runs.
+test("badge PR review label for a running loop card", () => {
+  const info = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review" });
+  assert.equal(info.cls, "running");
+  assert.equal(info.text, "PR review…");
+});
+
+test("badge deploying label for a plain deploy (no phase)", () => {
+  const info = badgeInfo({ stage: "done", state: "running" });
+  assert.equal(info.cls, "running");
+  assert.equal(info.text, "deploying…");
+});

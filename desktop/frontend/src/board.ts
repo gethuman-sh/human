@@ -90,6 +90,9 @@ interface Card {
   // RFC3339 time the newest marker of the card's current stage landed; feeds
   // the Engineering-backlog age badge.
   stageEnteredAt?: string;
+  // Done-stage sub-phase ("pr-review" while the machine review→fix loop runs);
+  // badgeInfo reads it to render "PR review…" instead of "deploying…".
+  deployPhase?: string;
   // Idea-space sub-column (0 loosest … 4 most concrete) for Ideas-stage cards.
   // Locally persisted preference; absent means leftmost.
   ideaColumn?: number;
