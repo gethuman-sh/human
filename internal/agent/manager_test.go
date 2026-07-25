@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"strings"
@@ -271,6 +272,33 @@ func TestIsContainerAlive_InspectError(t *testing.T) {
 	mgr := &Manager{Docker: mock}
 	if mgr.isContainerAlive(context.Background(), "nonexistent") {
 		t.Error("expected isContainerAlive to return false when inspect fails")
+	}
+}
+
+func TestStart_AlreadyRunningReturnsSentinel(t *testing.T) {
+	// A non-interactive Start against a name whose container is already live is a
+	// single-flight refusal. It must return an error satisfying
+	// errors.Is(err, ErrAlreadyRunning) so callers can treat the racing retry as
+	// a benign no-op rather than a hard failure (SC-1419).
+	t.Setenv("HOME", t.TempDir())
+
+	if err := WriteMeta(Meta{
+		Name:          "busy",
+		ContainerID:   "live-container",
+		ContainerName: ContainerName("busy"),
+		Status:        StatusRunning,
+		CreatedAt:     time.Now(),
+	}); err != nil {
+		t.Fatalf("WriteMeta: %v", err)
+	}
+
+	mgr := &Manager{Docker: &mockDockerClient{inspectRunning: true}}
+	_, err := mgr.Start(context.Background(), StartOpts{Name: "busy"})
+	if err == nil {
+		t.Fatal("expected an error when the agent is already running")
+	}
+	if !stderrors.Is(err, ErrAlreadyRunning) {
+		t.Errorf("expected errors.Is(err, ErrAlreadyRunning); got %v", err)
 	}
 }
 
