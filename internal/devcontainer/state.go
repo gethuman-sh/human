@@ -109,10 +109,16 @@ func ListMetas() ([]Meta, error) {
 	return metas, nil
 }
 
-// DeleteMeta removes the devcontainer metadata file from disk.
+// DeleteMeta removes the devcontainer's metadata file. It is idempotent for
+// the same reason as its sibling internal/agent.DeleteMeta: two independent
+// cleanup paths can race to delete the same already-gone meta file, and the
+// loser must not treat that as failure (SC-1600).
 func DeleteMeta(name string) error {
 	path := MetaPath(name)
 	if err := os.Remove(path); err != nil { // #nosec G703 -- path from MetaPath, name is sanitized
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return errors.WrapWithDetails(err, "deleting devcontainer metadata", "path", path)
 	}
 	return nil

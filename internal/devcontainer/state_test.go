@@ -195,9 +195,11 @@ func TestListMetas_SkipsNonJSONAndDirs(t *testing.T) {
 func TestDeleteMeta_NonExistent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
+	// Mirrors internal/agent's DeleteMeta: an already-absent meta file must
+	// not be reported as a failure (SC-1600).
 	err := DeleteMeta("nonexistent")
-	if err == nil {
-		t.Error("expected error deleting non-existent meta")
+	if err != nil {
+		t.Errorf("expected nil deleting already-absent meta, got %v", err)
 	}
 }
 
