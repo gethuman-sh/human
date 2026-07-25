@@ -261,6 +261,23 @@ func TestInstall_CreatesNewFiles(t *testing.T) {
 	assert.Equal(t, expanded(t, mockupsSkillContent), string(fw.files[mockupsSkillPath]))
 }
 
+// The deploy-fixer agent and its slash-skill (SC-1557) must be installed so the
+// daemon's deploy-fix dispatch can launch them.
+func TestInstall_WritesDeployFixSkillAndAgent(t *testing.T) {
+	fw := newMockFileWriter()
+	var buf bytes.Buffer
+
+	err := Install(&buf, fw, false)
+	require.NoError(t, err)
+
+	agentPath := filepath.Join(".claude", "agents", "human-deploy-fixer.md")
+	skillPath := filepath.Join(".claude", "skills", "human-deploy-fix", "SKILL.md")
+	assert.NotEmpty(t, fw.files[agentPath], "the deploy-fixer agent must be installed")
+	assert.NotEmpty(t, fw.files[skillPath], "the deploy-fix skill must be installed")
+	assert.Equal(t, expanded(t, deployFixerAgentContent), string(fw.files[agentPath]))
+	assert.Equal(t, expanded(t, deployFixSkillContent), string(fw.files[skillPath]))
+}
+
 func TestInstall_OverwritesIdenticalFiles(t *testing.T) {
 	fw := newMockFileWriter()
 
