@@ -324,25 +324,35 @@ export function isReadyToDeploy(card: QueueCard): boolean {
 }
 
 // DeploySide names the pane a Deploy control belongs to: the board's feature
-// workflow, the Bugs half, or the Security half. It selects which ready cards
-// the control ships.
-export type DeploySide = "features" | "bugs" | "security";
+// workflow, or "defects" — the single Deploy control shared by the Bugs and
+// Security halves, which ships fixed cards of both kinds. It selects which ready
+// cards the control ships. ("bugs"/"security" name a card's own kind via
+// deploySideOf; only "features" and "defects" are ever passed to a control.)
+export type DeploySide = "features" | "bugs" | "security" | "defects";
 
-// deploySideOf maps a card to the pane that owns it — bug and security are
-// disjoint kinds, everything else is a feature. The one place the three-way
-// split is decided, so the selectors below cannot drift apart.
-export function deploySideOf(c: QueueCard): DeploySide {
+// deploySideOf maps a card to its own kind — bug and security are disjoint,
+// everything else is a feature. The one place the split is decided, so the
+// selectors below cannot drift apart.
+export function deploySideOf(c: QueueCard): "features" | "bugs" | "security" {
   if (c.security) return "security";
   if (c.bug) return "bugs";
   return "features";
 }
 
-// deployableCards is the click's payload: every ready card in the control's pane
-// — feature cards on the board, bug/security cards in their halves. The same
-// predicate gates the single-card drop, so click and drop can never disagree on
-// what is shippable.
+// deployMatches reports whether a card of the given kind belongs to a control's
+// side. "defects" is the union of bug and security — the shared Deploy button;
+// every other side matches its own kind exactly.
+function deployMatches(kind: "features" | "bugs" | "security", side: DeploySide): boolean {
+  if (side === "defects") return kind === "bugs" || kind === "security";
+  return kind === side;
+}
+
+// deployableCards is the click's payload: every ready card the control ships —
+// feature cards on the board, both bug and security cards for the shared
+// "defects" control. The same predicate gates the single-card drop, so click and
+// drop can never disagree on what is shippable.
 export function deployableCards<C extends QueueCard>(cards: C[], side: DeploySide): C[] {
-  return cards.filter((c) => deploySideOf(c) === side && isReadyToDeploy(c));
+  return cards.filter((c) => deployMatches(deploySideOf(c), side) && isReadyToDeploy(c));
 }
 
 // DeployControlView is the DOM-free description a Deploy control renders: how
@@ -360,6 +370,14 @@ export interface DeployControlView {
 // when nothing is ready, enabled with a "ship every…" tooltip otherwise.
 export function deployControlView(cards: QueueCard[], side: DeploySide): DeployControlView {
   const count = deployableCards(cards, side).length;
+  if (side === "defects") {
+    return {
+      count,
+      disabled: count === 0,
+      label: `Deploy${count ? ` (${count})` : ""}`,
+      tooltip: count === 0 ? "No fixed bugs or vulnerabilities to deploy yet" : "Ship every fixed bug and vulnerability",
+    };
+  }
   const noun =
     side === "bugs" ? "fixed bug" : side === "security" ? "fixed vulnerability" : "ready-to-deploy card";
   return {

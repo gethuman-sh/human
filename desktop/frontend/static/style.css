@@ -369,15 +369,18 @@ body {
 }
 
 /* The Bugs & Security view: two equal halves stacked top (bugs) and bottom
-   (security). Each half is a wide tray of open tickets, a Fix activity column,
-   and a terminal Deploy button — same board grammar (columns, cards, drops),
-   scoped to defects and vulnerabilities. The six children (two × [grid, Fix,
-   Deploy]) flow into this 3×2 grid in order, so bugs fill row one and security
-   row two. */
+   (security), each a wide tray of open tickets next to a Fix activity column —
+   same board grammar (columns, cards, drops), scoped to defects and
+   vulnerabilities. A SINGLE Deploy button spans both halves at full height in
+   the right column: the named grid areas place each element regardless of DOM
+   order, and "deploy" occupying both rows makes the button full-height. */
 .bugs-view {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(180px, 240px) minmax(80px, 110px);
   grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "bug-grid bug-fix deploy"
+    "sec-grid sec-fix deploy";
   gap: 10px;
   padding: 12px;
   /* Same containment as .app-main .board: fill the space below the header,
@@ -388,6 +391,24 @@ body {
 
 .bugs-view.hidden {
   display: none;
+}
+
+/* Place each half's columns and the shared full-height Deploy into their grid
+   areas (DOM order is then irrelevant). */
+.bug-grid-col {
+  grid-area: bug-grid;
+}
+.bug-fix-col {
+  grid-area: bug-fix;
+}
+.security-grid-col {
+  grid-area: sec-grid;
+}
+.security-fix-col {
+  grid-area: sec-fix;
+}
+.defect-deploy {
+  grid-area: deploy;
 }
 
 /* The bug grid fills up horizontally: cards flow left→right and wrap, five
@@ -420,11 +441,11 @@ body {
   border: 2px solid #7c4dff;
 }
 
-/* The terminal Deploy control: click ships every fixed ticket, and a single
-   ready one can be dropped on it too. Styled after .deploy-zone so every pane
-   ends on the same visual full stop; the bug and security halves share it. */
-.bug-deploy,
-.security-deploy {
+/* The single full-height Deploy control shared by both halves: click ships
+   every fixed bug and vulnerability, and a single ready one of either kind can
+   be dropped on it too. Styled after .deploy-zone so the view ends on the same
+   visual full stop as the board. */
+.defect-deploy {
   border: 2px dashed var(--col-border);
   border-radius: 8px;
   background: transparent;
@@ -437,30 +458,26 @@ body {
   font: inherit;
 }
 
-.bug-deploy:hover:not(:disabled),
-.security-deploy:hover:not(:disabled) {
+.defect-deploy:hover:not(:disabled) {
   border-color: var(--done);
   color: var(--done);
   background: var(--drop-ok);
 }
 
-.bug-deploy:disabled,
-.security-deploy:disabled {
+.defect-deploy:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
 /* Drag-hover feedback for a single ticket dropped on the control, mirroring the
    board's .deploy-zone.drop-ok / .drop-reject rules. */
-.bug-deploy.drop-ok,
-.security-deploy.drop-ok {
+.defect-deploy.drop-ok {
   border-color: var(--done);
   color: var(--done);
   background: var(--drop-ok);
 }
 
-.bug-deploy.drop-reject,
-.security-deploy.drop-reject {
+.defect-deploy.drop-reject {
   border-color: var(--failed);
   background: var(--drop-reject);
 }

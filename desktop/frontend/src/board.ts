@@ -836,7 +836,7 @@ function renderIdeaSpace(): HTMLElement {
 // a column — no card ever rests "in Deploy"; a shipped card leaves the board.
 function renderDeployControl(side: DeploySide): HTMLElement {
   const view = deployControlView(current.cards, side);
-  const className = side === "bugs" ? "bug-deploy" : side === "security" ? "security-deploy" : "deploy-zone";
+  const className = side === "defects" ? "defect-deploy" : "deploy-zone";
   return buildDeployControl(view, { className, onClick: () => void deployReady(side) });
 }
 
@@ -902,13 +902,13 @@ function renderBugCard(card: Card): HTMLElement {
 }
 
 // FixSection describes one half of the Bugs & Security view. Both halves share
-// the grid → Fix → Deploy fix cycle (renderBugCard, bugAreaOf and the deploy
-// control are kind-agnostic — they speak the fix cycle, not "bug"); the config
-// captures only what differs: which cards the half owns, its header, the "+"
-// dialog, the pending-placeholder list, and the pipeline the Fix drop launches.
+// the grid + Fix columns (renderBugCard and bugAreaOf are kind-agnostic — they
+// speak the fix cycle, not "bug") and a single full-height Deploy control to
+// their right; the config captures only what differs: which cards the half owns,
+// its header, the "+" dialog, the pending-placeholder list, and the pipeline the
+// Fix drop launches.
 interface FixSection {
   match: (c: Card) => boolean;
-  side: DeploySide;
   gridStage: string;
   fixStage: string;
   gridColClass: string;
@@ -924,7 +924,6 @@ interface FixSection {
 
 const bugSection: FixSection = {
   match: (c) => !!c.bug,
-  side: "bugs",
   gridStage: "bugs:grid",
   fixStage: "bugs:fix",
   gridColClass: "bug-grid-col",
@@ -941,7 +940,6 @@ const bugSection: FixSection = {
 
 const securitySection: FixSection = {
   match: (c) => !!c.security,
-  side: "security",
   gridStage: "security:grid",
   fixStage: "security:fix",
   gridColClass: "security-grid-col",
@@ -964,12 +962,18 @@ function renderBugs(): void {
   host.innerHTML = "";
   renderFixSection(host, bugSection);
   renderFixSection(host, securitySection);
+  // One Deploy control spans both halves at full height (CSS grid area
+  // "deploy"). It ships fixed bugs AND vulnerabilities: the drop is kind-
+  // agnostic (a ready card of either kind transitions to done), and the click
+  // ships every ready defect at once.
+  host.appendChild(renderDeployControl("defects"));
   restoreColumnScroll(host, scrollByStage);
 }
 
-// renderFixSection appends one half's grid → Fix → Deploy trio to the host. The
-// Deploy side is derived from the section's own cards (deploySideOf), so it is
-// implied by the config rather than threaded separately.
+// renderFixSection appends one half's grid + Fix column to the host. The shared
+// Deploy control is appended once by renderBugs, spanning both halves; the Fix
+// column's drop target is per-kind so a dropped card launches the right skill
+// (bug → /human-autofix, security → /human-security-fix).
 function renderFixSection(host: HTMLElement, section: FixSection): void {
   const cards = current.cards.filter((c) => section.match(c) && cardVisible(c));
   const gridCards = cards.filter((c) => bugAreaOf(c) === "grid");
@@ -1005,7 +1009,6 @@ function renderFixSection(host: HTMLElement, section: FixSection): void {
 
   host.appendChild(gridCol);
   host.appendChild(fixCol);
-  host.appendChild(renderDeployControl(section.side));
 }
 
 // fixBug launches the autonomous fix pipeline on one bug. Optimistic move into

@@ -265,9 +265,9 @@ export function isNextQueue(fromQueue, toQueue) {
 export function isReadyToDeploy(card) {
     return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict) && !!card.branch;
 }
-// deploySideOf maps a card to the pane that owns it — bug and security are
-// disjoint kinds, everything else is a feature. The one place the three-way
-// split is decided, so the selectors below cannot drift apart.
+// deploySideOf maps a card to its own kind — bug and security are disjoint,
+// everything else is a feature. The one place the split is decided, so the
+// selectors below cannot drift apart.
 export function deploySideOf(c) {
     if (c.security)
         return "security";
@@ -275,18 +275,34 @@ export function deploySideOf(c) {
         return "bugs";
     return "features";
 }
-// deployableCards is the click's payload: every ready card in the control's pane
-// — feature cards on the board, bug/security cards in their halves. The same
-// predicate gates the single-card drop, so click and drop can never disagree on
-// what is shippable.
+// deployMatches reports whether a card of the given kind belongs to a control's
+// side. "defects" is the union of bug and security — the shared Deploy button;
+// every other side matches its own kind exactly.
+function deployMatches(kind, side) {
+    if (side === "defects")
+        return kind === "bugs" || kind === "security";
+    return kind === side;
+}
+// deployableCards is the click's payload: every ready card the control ships —
+// feature cards on the board, both bug and security cards for the shared
+// "defects" control. The same predicate gates the single-card drop, so click and
+// drop can never disagree on what is shippable.
 export function deployableCards(cards, side) {
-    return cards.filter((c) => deploySideOf(c) === side && isReadyToDeploy(c));
+    return cards.filter((c) => deployMatches(deploySideOf(c), side) && isReadyToDeploy(c));
 }
 // deployControlView derives the affordance both controls show from the live card
 // list: a count-labelled Deploy caption, disabled with a pane-specific tooltip
 // when nothing is ready, enabled with a "ship every…" tooltip otherwise.
 export function deployControlView(cards, side) {
     const count = deployableCards(cards, side).length;
+    if (side === "defects") {
+        return {
+            count,
+            disabled: count === 0,
+            label: `Deploy${count ? ` (${count})` : ""}`,
+            tooltip: count === 0 ? "No fixed bugs or vulnerabilities to deploy yet" : "Ship every fixed bug and vulnerability",
+        };
+    }
     const noun = side === "bugs" ? "fixed bug" : side === "security" ? "fixed vulnerability" : "ready-to-deploy card";
     return {
         count,
