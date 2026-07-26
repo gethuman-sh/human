@@ -45,7 +45,7 @@ BEFORE=$(human pipeline count security)
 echo "Starting iteration $ITER_NUM with $BEFORE existing candidates"
 ```
 
-Launch all 5 scanning agents **in a single message** so they run in parallel:
+Launch all 7 scanning agents **in a single message** so they run in parallel:
 
 ```
 Task(subagent_type="security-injection", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for injection and input validation vulnerabilities. Report each new finding via `human pipeline append security` as described in your output format.")
@@ -57,9 +57,13 @@ Task(subagent_type="security-secrets", prompt="Read the attack surface report at
 Task(subagent_type="security-deps", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Audit dependencies for known vulnerabilities and supply chain risks. Report each new finding via `human pipeline append security` as described in your output format.")
 
 Task(subagent_type="security-infra", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze configuration files, Dockerfiles, CI pipelines, and infrastructure settings for security misconfigurations. Report each new finding via `human pipeline append security` as described in your output format.")
+
+Task(subagent_type="security-ssrf", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for server-side request forgery (SSRF) — user-controlled input reaching outbound request sinks, missing egress restrictions, and cloud metadata endpoint exposure. Report each new finding via `human pipeline append security` as described in your output format.")
+
+Task(subagent_type="security-deserialization", prompt="Read the attack surface report at .human/security/.security-surface.md and existing candidates at .human/security/.security-candidates.md. This is iteration ITER_NUM. Analyze the codebase for insecure deserialization and software/data-integrity failures — untrusted bytes into decoders, prototype pollution, unsigned artifacts, and dependency confusion. Report each new finding via `human pipeline append security` as described in your output format.")
 ```
 
-Wait for all 5 agents to finish.
+Wait for all 7 agents to finish.
 
 ### Check convergence
 

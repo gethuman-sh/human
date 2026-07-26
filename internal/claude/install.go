@@ -109,6 +109,12 @@ var securityDepsAgentContent []byte
 //go:embed embed/security-infra-agent.md
 var securityInfraAgentContent []byte
 
+//go:embed embed/security-ssrf-agent.md
+var securitySSRFAgentContent []byte
+
+//go:embed embed/security-deserialization-agent.md
+var securityDeserializationAgentContent []byte
+
 //go:embed embed/security-chains-agent.md
 var securityChainsAgentContent []byte
 
@@ -283,6 +289,8 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: securitySecretsAgentContent, relPath: filepath.Join("agents", "security-secrets.md")},
 		{content: securityDepsAgentContent, relPath: filepath.Join("agents", "security-deps.md")},
 		{content: securityInfraAgentContent, relPath: filepath.Join("agents", "security-infra.md")},
+		{content: securitySSRFAgentContent, relPath: filepath.Join("agents", "security-ssrf.md")},
+		{content: securityDeserializationAgentContent, relPath: filepath.Join("agents", "security-deserialization.md")},
 		{content: securityChainsAgentContent, relPath: filepath.Join("agents", "security-chains.md")},
 		{content: securityTriageAgentContent, relPath: filepath.Join("agents", "security-triage.md")},
 		{content: brainstormSkillContent, relPath: filepath.Join("skills", "human-brainstorm", "SKILL.md")},
