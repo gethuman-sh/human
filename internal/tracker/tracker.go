@@ -367,6 +367,79 @@ type Lister interface {
 	ListIssues(ctx context.Context, opts ListOptions) ([]Issue, error)
 }
 
+// IssuePage is a page of issues plus the completeness signal a caller needs to
+// act safely on an absence. Truncated is true when the backend applied
+// ListOptions.MaxResults and more issues existed than were returned, so the
+// caller knows the fetch is partial and must not treat a missing key as gone —
+// the board's prune guard depends on this to avoid erasing saved view state for
+// tickets that merely fell past the cap (SC-1693).
+type IssuePage struct {
+	Issues    []Issue
+	Truncated bool
+}
+
+// PagedLister is an optional Lister capability: a backend that enforces
+// ListOptions.MaxResults by returning a bounded page (rather than paging to
+// completion) implements it to report whether the page was cut short. Backends
+// that always return the complete set (they page internally, or ignore the cap)
+// need not implement it — ListIssuesPage treats their result as never
+// truncated. Kept separate from Lister so existing implementations and their
+// callers are undisturbed.
+type PagedLister interface {
+	ListIssuesPage(ctx context.Context, opts ListOptions) (IssuePage, error)
+}
+
+// ListIssuesPage fetches a page of issues and reports truncation, preferring a
+// Lister's optional PagedLister capability. A backend that pages to completion
+// exposes only ListIssues; its result is complete, so it is reported as never
+// truncated. This lets truncation-sensitive callers (board pruning) treat every
+// backend uniformly without a type switch at each call site.
+func ListIssuesPage(ctx context.Context, l Lister, opts ListOptions) (IssuePage, error) {
+	if pl, ok := l.(PagedLister); ok {
+		return pl.ListIssuesPage(ctx, opts)
+	}
+	issues, err := l.ListIssues(ctx, opts)
+	return IssuePage{Issues: issues}, err
+}
+
+// CollectPaged fills a bounded fetch up to maxResults for a backend whose
+// per-request page size is smaller than the board's cap, so the explicit cap
+// behaves the same on every backend rather than degrading to the backend's page
+// size (SC-1693). fetch returns one page of issues (pageIndex counts from 0) and
+// whether the backend signals a further page; a cursor-based backend keeps its
+// own cursor in the closure and ignores pageIndex. Collection stops as soon as
+// the cap is reached or the backend reports no further page. Truncated is true
+// only when issues genuinely remain beyond the cap — either the backend still
+// signals a next page at the cap, or a page pushed the total past it — so a
+// fetch that ends exactly on the last page is reported complete and the board's
+// prune guard does not fire on a full backlog. maxResults <= 0 means "no cap":
+// a single page is fetched and Truncated mirrors the backend's next-page signal,
+// matching the single-query backends (Linear).
+func CollectPaged(maxResults int, fetch func(pageIndex int) (issues []Issue, hasNext bool, err error)) (IssuePage, error) {
+	var collected []Issue
+	for pageIndex := 0; ; pageIndex++ {
+		issues, hasNext, err := fetch(pageIndex)
+		if err != nil {
+			return IssuePage{}, err
+		}
+		collected = append(collected, issues...)
+
+		if maxResults <= 0 {
+			return IssuePage{Issues: collected, Truncated: hasNext}, nil
+		}
+		if len(collected) >= maxResults {
+			truncated := hasNext || len(collected) > maxResults
+			if len(collected) > maxResults {
+				collected = collected[:maxResults]
+			}
+			return IssuePage{Issues: collected, Truncated: truncated}, nil
+		}
+		if !hasNext {
+			return IssuePage{Issues: collected, Truncated: false}, nil
+		}
+	}
+}
+
 // Getter retrieves a single issue by key.
 type Getter interface {
 	GetIssue(ctx context.Context, key string) (*Issue, error)

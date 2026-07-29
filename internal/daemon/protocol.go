@@ -23,7 +23,13 @@ type TrackerIssuesResult struct {
 	// drag-board GUI. It is PM-role-only (maps a PM issue key → its derived
 	// BoardCard) and is left nil on engineering-tracker results.
 	BoardCards map[string]BoardCard `json:"board_cards,omitempty"`
-	Err        string               `json:"error,omitempty"`
+	// Truncated is true when the fetch hit the backend's MaxResults cap and more
+	// issues existed than were returned — the result is a partial view of the
+	// project. The board uses it to refuse pruning local view state (which would
+	// erase saved order/hidden flags for tickets past the cap) and to surface a
+	// "showing the first N" affordance. See cli/CLAUDE.md and SC-1693.
+	Truncated bool   `json:"truncated,omitempty"`
+	Err       string `json:"error,omitempty"`
 }
 
 // IssueDetailRequest asks for one full ticket by key. Tracker and Kind are the

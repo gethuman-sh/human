@@ -13,10 +13,16 @@ import (
 
 var _ tracker.Provider = (*Client)(nil)
 
+// Every list query selects pageInfo.hasNextPage alongside the nodes so the
+// board can tell a fetch that hit the `first:` cap (partial) from one that
+// returned the whole backlog (complete). Linear does not paginate here by
+// design (SC-1693 chose an explicit cap over paging to completion); hasNextPage
+// is the truncation signal, not a cursor to follow.
 const listIssuesQuery = `query($teamKey: String!, $first: Int!) {
 	issues(filter: { team: { key: { eq: $teamKey } } }, first: $first, orderBy: createdAt) {
 		nodes { identifier url title description updatedAt state { name type } priorityLabel
 			assignee { name } creator { name } labels { nodes { name } } }
+		pageInfo { hasNextPage }
 	}
 }`
 
@@ -24,6 +30,7 @@ const listOpenIssuesQuery = `query($teamKey: String!, $first: Int!) {
 	issues(filter: { team: { key: { eq: $teamKey } }, state: { type: { nin: ["completed", "canceled"] } } }, first: $first, orderBy: createdAt) {
 		nodes { identifier url title description updatedAt state { name type } priorityLabel
 			assignee { name } creator { name } labels { nodes { name } } }
+		pageInfo { hasNextPage }
 	}
 }`
 
@@ -31,6 +38,7 @@ const listIssuesUpdatedSinceQuery = `query($teamKey: String!, $first: Int!, $sin
 	issues(filter: { team: { key: { eq: $teamKey } }, updatedAt: { gte: $since } }, first: $first, orderBy: createdAt) {
 		nodes { identifier url title description updatedAt state { name type } priorityLabel
 			assignee { name } creator { name } labels { nodes { name } } }
+		pageInfo { hasNextPage }
 	}
 }`
 
@@ -38,6 +46,7 @@ const listOpenIssuesUpdatedSinceQuery = `query($teamKey: String!, $first: Int!, 
 	issues(filter: { team: { key: { eq: $teamKey } }, state: { type: { nin: ["completed", "canceled"] } }, updatedAt: { gte: $since } }, first: $first, orderBy: createdAt) {
 		nodes { identifier url title description updatedAt state { name type } priorityLabel
 			assignee { name } creator { name } labels { nodes { name } } }
+		pageInfo { hasNextPage }
 	}
 }`
 
@@ -46,6 +55,7 @@ const listAllIssuesQuery = `query($first: Int!) {
 	issues(first: $first, orderBy: createdAt) {
 		nodes { identifier url title description updatedAt state { name type } priorityLabel
 			assignee { name } creator { name } labels { nodes { name } } }
+		pageInfo { hasNextPage }
 	}
 }`
 
@@ -53,6 +63,7 @@ const listAllOpenIssuesQuery = `query($first: Int!) {
 	issues(filter: { state: { type: { nin: ["completed", "canceled"] } } }, first: $first, orderBy: createdAt) {
 		nodes { identifier url title description updatedAt state { name type } priorityLabel
 			assignee { name } creator { name } labels { nodes { name } } }
+		pageInfo { hasNextPage }
 	}
 }`
 
@@ -60,6 +71,7 @@ const listAllIssuesUpdatedSinceQuery = `query($first: Int!, $since: DateTimeOrDu
 	issues(filter: { updatedAt: { gte: $since } }, first: $first, orderBy: createdAt) {
 		nodes { identifier url title description updatedAt state { name type } priorityLabel
 			assignee { name } creator { name } labels { nodes { name } } }
+		pageInfo { hasNextPage }
 	}
 }`
 
@@ -67,6 +79,7 @@ const listAllOpenIssuesUpdatedSinceQuery = `query($first: Int!, $since: DateTime
 	issues(filter: { state: { type: { nin: ["completed", "canceled"] } }, updatedAt: { gte: $since } }, first: $first, orderBy: createdAt) {
 		nodes { identifier url title description updatedAt state { name type } priorityLabel
 			assignee { name } creator { name } labels { nodes { name } } }
+		pageInfo { hasNextPage }
 	}
 }`
 
@@ -194,8 +207,19 @@ func clampFirst(n int) int {
 	}
 }
 
-// ListIssues implements tracker.Lister.
+// ListIssues implements tracker.Lister. It delegates to ListIssuesPage and
+// drops the truncation signal for callers that only want the slice.
 func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
+	page, err := c.ListIssuesPage(ctx, opts)
+	return page.Issues, err
+}
+
+// ListIssuesPage implements tracker.PagedLister. Linear enforces the caller's
+// MaxResults (via the GraphQL `first:` arg) instead of paging to completion, so
+// a full backlog can exceed the returned page. It reports that through
+// IssuePage.Truncated (from pageInfo.hasNextPage) so the board never prunes
+// saved view state against a partial fetch (SC-1693).
+func (c *Client) ListIssuesPage(ctx context.Context, opts tracker.ListOptions) (tracker.IssuePage, error) {
 	vars := map[string]any{
 		"first": clampFirst(opts.MaxResults),
 	}
@@ -231,12 +255,12 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 
 	data, err := c.doGraphQL(ctx, query, vars)
 	if err != nil {
-		return nil, err
+		return tracker.IssuePage{}, err
 	}
 
 	var result issuesData
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, errors.WrapWithDetails(err, "decoding issues response",
+		return tracker.IssuePage{}, errors.WrapWithDetails(err, "decoding issues response",
 			"project", opts.Project)
 	}
 
@@ -248,7 +272,7 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 		}
 		issues[i] = toTrackerIssue(li, project)
 	}
-	return issues, nil
+	return tracker.IssuePage{Issues: issues, Truncated: result.Issues.PageInfo.HasNextPage}, nil
 }
 
 // GetIssue implements tracker.Getter.

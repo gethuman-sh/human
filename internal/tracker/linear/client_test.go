@@ -155,6 +155,61 @@ func TestListIssues_all(t *testing.T) {
 	assert.Equal(t, "Done", issues[1].Status)
 }
 
+func TestListIssuesPage_truncated(t *testing.T) {
+	// hasNextPage true means the backlog exceeds the requested page, so the
+	// board must learn the fetch is partial (SC-1693).
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"completed": func(_ map[string]any) string {
+				return `{"data":{"issues":{"nodes":[
+					{"identifier":"ENG-1","title":"Open issue","description":"",
+					 "state":{"name":"Todo","type":"backlog"},"priorityLabel":"",
+					 "assignee":null,"creator":null,"labels":{"nodes":[]}}
+				],"pageInfo":{"hasNextPage":true}}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "ENG",
+		MaxResults: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Issues, 1)
+	assert.True(t, page.Truncated, "hasNextPage true must surface as Truncated")
+}
+
+func TestListIssuesPage_complete(t *testing.T) {
+	// hasNextPage false (the whole backlog fit in the page) is a complete fetch.
+	srv := httptest.NewServer(&graphQLHandler{
+		t: t,
+		handlers: map[string]func(vars map[string]any) string{
+			"completed": func(_ map[string]any) string {
+				return `{"data":{"issues":{"nodes":[
+					{"identifier":"ENG-1","title":"Only issue","description":"",
+					 "state":{"name":"Todo","type":"backlog"},"priorityLabel":"",
+					 "assignee":null,"creator":null,"labels":{"nodes":[]}}
+				],"pageInfo":{"hasNextPage":false}}}}`
+			},
+		},
+	})
+	defer srv.Close()
+
+	client := New(srv.URL, "lin_test")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "ENG",
+		MaxResults: 50,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Issues, 1)
+	assert.False(t, page.Truncated, "hasNextPage false must not report truncation")
+}
+
 func TestListIssues_emptyResult(t *testing.T) {
 	srv := httptest.NewServer(&graphQLHandler{
 		t: t,

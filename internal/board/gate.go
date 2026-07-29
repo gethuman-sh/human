@@ -70,14 +70,31 @@ func PMRoleNotice(results []daemon.TrackerIssuesResult) string {
 // fetch, so a degenerate fetch would erase everything the user saved. A
 // token-less daemon returns a results slice with no PM-role entry at all, which
 // is indistinguishable from — and must be treated no more destructively than —
-// a tracker error. Permit pruning ONLY when a PM-role result is present, carried
-// no error, and carried at least one issue.
+// a tracker error. A truncated fetch is likewise untrustworthy: the tickets
+// past the cap are present on the tracker but absent from this result, so
+// pruning against it would erase their saved order and hidden flags purely
+// because the backlog grew (SC-1693). Permit pruning ONLY when a PM-role result
+// is present, carried no error, is NOT truncated, and carried at least one issue.
 func CanPrune(results []daemon.TrackerIssuesResult) bool {
 	pm, ok := FirstPMResult(results)
-	if !ok || pm.Err != "" {
+	if !ok || pm.Err != "" || pm.Truncated {
 		return false
 	}
 	return len(pm.Issues) > 0
+}
+
+// TruncationNotice returns a "showing the first N" affordance when the PM-role
+// fetch was cut short by the backend's cap, so the board can tell the user that
+// tickets exist beyond what is displayed instead of presenting a partial list
+// as complete (SC-1693). N is the number actually returned (the cap), the only
+// count truthfully known — the backend reports that it truncated, not by how
+// much. An empty string means the fetch was complete and nothing need be shown.
+func TruncationNotice(results []daemon.TrackerIssuesResult) string {
+	pm, ok := FirstPMResult(results)
+	if !ok || !pm.Truncated {
+		return ""
+	}
+	return fmt.Sprintf("Showing the first %d tickets — more open tickets exist beyond the fetch cap and are not displayed. Saved order and hidden flags are preserved (pruning is paused) until the full list can be fetched.", len(pm.Issues))
 }
 
 // PrunePrefs drops stale entries from each target store for project, but ONLY

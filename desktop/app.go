@@ -168,7 +168,12 @@ type BoardData struct {
 	// board has nothing to render for a structural reason — chiefly no PM-role
 	// tracker configured (SC-1655). Distinct from Error so the frontend can
 	// style it as guidance rather than a failure.
-	Notice          string `json:"notice,omitempty"`
+	Notice string `json:"notice,omitempty"`
+	// Truncation is a non-error affordance shown alongside the columns when the
+	// fetch hit the backend's cap and more tickets exist than are displayed
+	// (SC-1693). Unlike Notice it accompanies a populated board rather than
+	// replacing empty columns, so the user knows the list is partial.
+	Truncation      string `json:"truncation,omitempty"`
 	DockerAvailable bool   `json:"dockerAvailable"`
 	// ColumnOrder is the hand-sorted ticket order per queue column (top
 	// first). The frontend sorts each column by it; cards absent from their
@@ -394,6 +399,10 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 	if pm.Err != "" {
 		data.Error = pm.Err
 	}
+	// A capped fetch renders a full board that silently omits the overflow; the
+	// affordance tells the user the list is partial (and that their saved state
+	// is preserved because pruning paused). See board.CanPrune / SC-1693.
+	data.Truncation = board.TruncationNotice(results)
 
 	for _, issue := range pm.Issues {
 		card := pm.BoardCards[issue.Key]

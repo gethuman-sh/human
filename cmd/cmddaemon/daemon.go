@@ -1575,12 +1575,16 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			issues, fetchErr := job.inst.Provider.ListIssues(ctx, tracker.ListOptions{
+			page, fetchErr := tracker.ListIssuesPage(ctx, job.inst.Provider, tracker.ListOptions{
 				Project: job.project,
 				// A ticket the board cannot fetch is a ticket silently lost —
 				// the cap must comfortably exceed any real open backlog. The
 				// per-ticket comment scan this once bounded stays cheap: idea
 				// tickets skip it entirely and the rest fan out concurrently.
+				// When a backend does hit this cap it reports it via
+				// IssuePage.Truncated, which the board threads into its prune
+				// guard and a "showing the first N" affordance (SC-1693) so the
+				// truncation is visible and never silently discards saved state.
 				MaxResults: 200,
 				IncludeAll: false,
 			})
@@ -1593,7 +1597,8 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 				TrackerKind: job.inst.Kind,
 				TrackerRole: job.inst.InferRole(),
 				Project:     label,
-				Issues:      issues,
+				Issues:      page.Issues,
+				Truncated:   page.Truncated,
 			}
 			if fetchErr != nil {
 				results[i].Err = fetchErr.Error()

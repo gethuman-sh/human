@@ -134,6 +134,10 @@ interface BoardData {
   // to render for a structural reason — chiefly no PM-role tracker configured
   // (SC-1655), where an empty board would otherwise read as "no work".
   notice?: string;
+  // Non-error affordance shown above a populated board when the fetch hit the
+  // backend's cap and more tickets exist than are displayed (SC-1693). Distinct
+  // from notice, which replaces empty columns; this accompanies real cards.
+  truncation?: string;
   // Hand-sorted ticket order per queue column (top first); cards absent from
   // their queue's list render after it in fetch order.
   columnOrder?: Record<string, string[]>;
@@ -1960,6 +1964,15 @@ function render(): void {
     notice.textContent = current.notice;
     board.appendChild(notice);
   } else {
+    if (current.truncation) {
+      // The fetch was capped and the board below omits the overflow — a bar
+      // above the columns tells the user the list is partial rather than
+      // letting a full-looking board read as the whole backlog (SC-1693).
+      const truncation = document.createElement("div");
+      truncation.className = "board-truncation";
+      truncation.textContent = current.truncation;
+      board.appendChild(truncation);
+    }
     for (const queue of QUEUES) {
       board.appendChild(queue === "ideas" ? renderIdeaSpace() : renderColumn(queue));
     }

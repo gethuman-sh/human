@@ -41,15 +41,28 @@ func (c *Client) SetHTTPDoer(doer apiclient.HTTPDoer) {
 	c.api.SetHTTPDoer(doer)
 }
 
-// ListIssues implements tracker.Lister.
+// ListIssues implements tracker.Lister. It delegates to ListIssuesPage and drops
+// the truncation signal for callers that only want the slice.
 func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
+	page, err := c.ListIssuesPage(ctx, opts)
+	return page.Issues, err
+}
+
+// ListIssuesPage implements tracker.PagedLister. GitHub's REST endpoints cap a
+// single response at 100 items (per_page) — below the board's cap — so a full
+// backlog spans several pages. Rather than degrade the cap to the backend's page
+// size, it pages up to opts.MaxResults via the Link header and reports
+// IssuePage.Truncated when issues remain beyond the cap, so the board never
+// prunes saved view state against a partial fetch and the cap behaves the same
+// as on every other backend (SC-1693).
+func (c *Client) ListIssuesPage(ctx context.Context, opts tracker.ListOptions) (tracker.IssuePage, error) {
 	if opts.Project == "" {
-		return c.listAllIssues(ctx, opts)
+		return c.listAllIssuesPage(ctx, opts)
 	}
 
 	owner, repo, err := splitProject(opts.Project)
 	if err != nil {
-		return nil, err
+		return tracker.IssuePage{}, err
 	}
 
 	path := fmt.Sprintf("/repos/%s/%s/issues", url.PathEscape(owner), url.PathEscape(repo))
@@ -57,31 +70,45 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 	if opts.IncludeAll {
 		state = "all"
 	}
-	query := url.Values{
-		"per_page": {fmt.Sprintf("%d", clampPerPage(opts.MaxResults))},
-		"state":    {state},
-	}
-	if !opts.UpdatedSince.IsZero() {
-		query.Set("since", opts.UpdatedSince.Format(time.RFC3339))
-	}
+	perPage := clampPerPage(opts.MaxResults)
 
-	resp, err := c.doRequest(ctx, http.MethodGet, path, query.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	var ghIssues []ghIssue
-	if err := apiclient.DecodeJSON(resp, &ghIssues, "project", opts.Project); err != nil {
-		return nil, err
-	}
-
-	var issues []tracker.Issue
-	for _, gi := range ghIssues {
-		if gi.PullRequest != nil {
-			continue
+	return tracker.CollectPaged(opts.MaxResults, func(pageIndex int) ([]tracker.Issue, bool, error) {
+		query := url.Values{
+			"per_page": {fmt.Sprintf("%d", perPage)},
+			"state":    {state},
+			"page":     {fmt.Sprintf("%d", pageIndex+1)},
 		}
-		issues = append(issues, toTrackerIssue(owner, repo, gi))
-	}
-	return issues, nil
+		if !opts.UpdatedSince.IsZero() {
+			query.Set("since", opts.UpdatedSince.Format(time.RFC3339))
+		}
+
+		resp, err := c.doRequest(ctx, http.MethodGet, path, query.Encode(), nil)
+		if err != nil {
+			return nil, false, err
+		}
+		hasNext := linkHasNext(resp.Header.Get("Link"))
+		var ghIssues []ghIssue
+		if err := apiclient.DecodeJSON(resp, &ghIssues, "project", opts.Project); err != nil {
+			return nil, false, err
+		}
+
+		var issues []tracker.Issue
+		for _, gi := range ghIssues {
+			if gi.PullRequest != nil {
+				continue
+			}
+			issues = append(issues, toTrackerIssue(owner, repo, gi))
+		}
+		return issues, hasNext, nil
+	})
+}
+
+// linkHasNext reports whether a GitHub Link header advertises a next page. The
+// header lists comma-separated URLs each tagged with a rel; a rel="next" tag
+// means more pages remain, which is how truncation is detected without a body
+// total (SC-1693).
+func linkHasNext(link string) bool {
+	return strings.Contains(link, `rel="next"`)
 }
 
 // clampPerPage bounds a requested page size to GitHub's accepted 1..100 range;
@@ -98,38 +125,44 @@ func clampPerPage(n int) int {
 	}
 }
 
-// listAllIssues uses GET /search/issues to list issues across all repos.
-func (c *Client) listAllIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
+// listAllIssuesPage uses GET /search/issues to list issues across all repos,
+// paging up to the cap the same way the per-repo path does (SC-1693).
+func (c *Client) listAllIssuesPage(ctx context.Context, opts tracker.ListOptions) (tracker.IssuePage, error) {
 	q := "is:issue"
 	if !opts.IncludeAll {
 		q += " is:open"
 	}
+	perPage := clampPerPage(opts.MaxResults)
 
-	query := url.Values{
-		"q":        {q},
-		"per_page": {fmt.Sprintf("%d", clampPerPage(opts.MaxResults))},
-		"sort":     {"created"},
-		"order":    {"desc"},
-	}
-
-	resp, err := c.doRequest(ctx, http.MethodGet, "/search/issues", query.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	var result ghSearchResult
-	if err := apiclient.DecodeJSON(resp, &result); err != nil {
-		return nil, err
-	}
-
-	var issues []tracker.Issue
-	for _, item := range result.Items {
-		if item.PullRequest != nil {
-			continue
+	return tracker.CollectPaged(opts.MaxResults, func(pageIndex int) ([]tracker.Issue, bool, error) {
+		query := url.Values{
+			"q":        {q},
+			"per_page": {fmt.Sprintf("%d", perPage)},
+			"page":     {fmt.Sprintf("%d", pageIndex+1)},
+			"sort":     {"created"},
+			"order":    {"desc"},
 		}
-		owner, repo := parseRepoURL(item.RepositoryURL)
-		issues = append(issues, toTrackerIssue(owner, repo, item.ghIssue))
-	}
-	return issues, nil
+
+		resp, err := c.doRequest(ctx, http.MethodGet, "/search/issues", query.Encode(), nil)
+		if err != nil {
+			return nil, false, err
+		}
+		hasNext := linkHasNext(resp.Header.Get("Link"))
+		var result ghSearchResult
+		if err := apiclient.DecodeJSON(resp, &result); err != nil {
+			return nil, false, err
+		}
+
+		var issues []tracker.Issue
+		for _, item := range result.Items {
+			if item.PullRequest != nil {
+				continue
+			}
+			owner, repo := parseRepoURL(item.RepositoryURL)
+			issues = append(issues, toTrackerIssue(owner, repo, item.ghIssue))
+		}
+		return issues, hasNext, nil
+	})
 }
 
 // GetIssue implements tracker.Getter.

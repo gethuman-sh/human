@@ -284,7 +284,13 @@ test("boardStateFromPayload normalizes an empty payload (SC-631)", () => {
   assert.equal(state.dockerAvailable, false);
   assert.equal(state.error, "");
   assert.equal(state.notice, "");
+  assert.equal(state.truncation, "");
   assert.equal(state.columnOrder, undefined);
+});
+
+test("boardStateFromPayload carries the truncation affordance through the mapping (SC-1693)", () => {
+  const state = boardStateFromPayload({ truncation: "Showing the first 200 tickets — more exist." });
+  assert.equal(state.truncation, "Showing the first 200 tickets — more exist.");
 });
 
 test("boardStateFromPayload carries the no-PM-tracker notice through the mapping (SC-1655)", () => {

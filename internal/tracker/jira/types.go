@@ -4,6 +4,11 @@ import "encoding/json"
 
 type searchResult struct {
 	Issues []issue `json:"issues"`
+	// NextPageToken is returned by the /search/jql endpoint only while further
+	// pages remain; its presence is how truncation past the board cap is
+	// detected, since that endpoint reports no total count (SC-1693).
+	NextPageToken string `json:"nextPageToken"`
+	IsLast        bool   `json:"isLast"`
 }
 
 type issue struct {
