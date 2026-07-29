@@ -109,6 +109,10 @@ interface Card {
   // Ticket the user parked off the board (right-click → Hide). Local view
   // preference; filtered out unless revealed via the header's Unhide toggle.
   hidden?: boolean;
+  // Set when the daemon could not read this ticket's markers this scan (a
+  // comment-fetch error). Rendered locked: non-draggable, no launch actions,
+  // with an "unreadable" badge — never presented as idle Backlog work (1700).
+  degraded?: boolean;
   mockupSlug?: string;
   mockupState?: string; // "ready" | "creating"
   // The ticket's chosen winner mockup (leaf group slug + option file), set once
@@ -483,8 +487,17 @@ function renderCard(card: Card): HTMLElement {
   el.setAttribute("draggable", "false");
   el.dataset.key = card.key;
   el.dataset.stage = card.stage;
+  if (card.degraded) el.classList.add("degraded");
 
   const meta: string[] = [];
+  if (card.degraded) {
+    // Markers could not be read this refresh — badge it distinctly so a
+    // transient fetch failure is never mistaken for idle, actionable work
+    // (1700). It self-heals on the next successful scan.
+    meta.push(
+      `<span class="badge degraded" title="Markers could not be read this refresh — the daemon will retry.">unreadable</span>`,
+    );
+  }
   if (stagesLoading) {
     // Titles are shown but this card's real stage is still being derived from
     // comments; a resolving spinner signals it may still move columns.
@@ -533,7 +546,10 @@ function renderCard(card: Card): HTMLElement {
     showCardMenu(card, e.clientX, e.clientY);
   });
 
-  beginPointerDrag(el, card);
+  // A degraded card's stage/state may be stale (carried forward from the last
+  // known good scan) — never let it be dragged into a transition based on
+  // markers we could not actually confirm this refresh (1700).
+  if (!card.degraded) beginPointerDrag(el, card);
   return el;
 }
 
@@ -557,6 +573,34 @@ function showCardMenu(card: Card, x: number, y: number): void {
     openExternal(card.url);
   });
   menu.appendChild(openItem);
+
+  if (card.degraded) {
+    // A card whose markers could not be read has no reliable stage/state, so
+    // every pipeline/launch action is suppressed until a healthy refresh
+    // (1700) — only "Open in tracker" is offered.
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    document.body.appendChild(menu);
+    // Keep the menu on-screen when opened near the window edge.
+    const r = menu.getBoundingClientRect();
+    if (r.right > window.innerWidth) menu.style.left = `${x - r.width}px`;
+    if (r.bottom > window.innerHeight) menu.style.top = `${y - r.height}px`;
+
+    const dismiss = (): void => {
+      menu.remove();
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+    const onDown = (e: PointerEvent): void => {
+      if (!menu.contains(e.target as Node)) dismiss();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") dismiss();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return;
+  }
 
   // A dead fix run leaves a bug card failed with no pipeline gesture to try
   // again — the Fix column only accepts grid and rework drops, and a card

@@ -102,6 +102,11 @@ type Card struct {
 	// review…" instead of "deploying…". Populated by the explicit field copy
 	// below — the daemon→desktop hop is a Go copy, not a JSON re-tag.
 	DeployPhase string `json:"deployPhase,omitempty"`
+	// Degraded marks a card whose markers could not be read this scan (a
+	// ListComments error). The frontend renders it locked — non-draggable and
+	// non-launchable — so a transient fetch failure never presents as idle,
+	// actionable Backlog work (1700).
+	Degraded bool `json:"degraded,omitempty"`
 	// Labels and Description feed the Ideas→Backlog promotion: labels tell
 	// the evolve session which idea labels to remove, the description seeds
 	// the ideation conversation alongside the title.
@@ -392,6 +397,52 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 
 	for _, issue := range pm.Issues {
 		card := pm.BoardCards[issue.Key]
+		if card.Degraded {
+			// Could not read this ticket's markers this scan: render it locked in
+			// its last-known column (or the Backlog position when we have no
+			// prior stage), never as a silent actionable Backlog card (1700).
+			stage := card.Stage
+			if stage == "" || stage == daemon.BoardHidden {
+				stage = daemon.BoardBacklog
+			}
+			ideaCol := 0
+			if stage == daemon.BoardIdeas {
+				ideaCol = ideaCols[issue.Key]
+			}
+			mock := mocks[issue.Key]
+			_, hidden := prefs.Hidden[issue.Key]
+			data.Cards = append(data.Cards, Card{
+				Key:              issue.Key,
+				Title:            issue.Title,
+				URL:              issue.URL,
+				Stage:            string(stage),
+				State:            string(card.State),
+				Degraded:         true,
+				EngineeringKey:   card.EngineeringKey,
+				Branch:           card.Branch,
+				PRURL:            card.PRURL,
+				Error:            card.Error,
+				Verdict:          card.Verdict,
+				StageEnteredAt:   formatStageTime(card.StageEnteredAt),
+				DeployPhase:      card.DeployPhase,
+				Labels:           issue.Labels,
+				Description:      issue.Description,
+				Assignee:         issue.Assignee,
+				Tracker:          pm.TrackerName,
+				TrackerKind:      pm.TrackerKind,
+				Bug:              issue.IsBug(),
+				Security:         issue.IsSecurity(),
+				Hidden:           hidden,
+				IdeaColumn:       ideaCol,
+				Options:          card.Options,
+				OptionsContext:   card.OptionsContext,
+				MockupSlug:       mock.Slug,
+				MockupState:      mock.State,
+				MockupChosenSlug: mock.ChosenSlug,
+				MockupChosenFile: mock.ChosenFile,
+			})
+			continue
+		}
 		stage := card.Stage
 		if stage == "" {
 			// No derived card (quick fetch, or a marker-less ticket): a
