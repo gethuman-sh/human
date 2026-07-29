@@ -136,6 +136,37 @@ test("open options render a decision-needed badge over the review warning", () =
   assert.equal(badgeInfo({ ...card, options: [] }).cls, "warning");
 });
 
+// SC-1669: a card parked on an open decision whose state is still "running"
+// (the agent stopped on a fork without posting a terminal marker) must paint
+// the decision badge, never the running spinner — the decision branch outranks
+// the running early-return, as its own comment claims.
+test("open options outrank a running state with a decision-needed badge (SC-1669)", () => {
+  const card = {
+    stage: "planning",
+    state: "running",
+    options: [{ id: "1", label: "a" }, { id: "2", label: "b" }],
+  };
+  const info = badgeInfo(card);
+  assert.equal(info.cls, "decision");
+  assert.match(info.text, /decision needed/);
+  // Without options the same card is a plain running badge.
+  assert.equal(badgeInfo({ ...card, options: [] }).cls, "running");
+});
+
+// SC-1669: the queued early-return shares the same mis-ordering — a decision
+// re-queued a stage but an open block is still present must read as a decision.
+test("open options outrank a queued state with a decision-needed badge (SC-1669)", () => {
+  const card = {
+    stage: "implementation",
+    state: "queued",
+    options: [{ id: "1", label: "a" }, { id: "2", label: "b" }],
+  };
+  const info = badgeInfo(card);
+  assert.equal(info.cls, "decision");
+  // Without options the same card is the queued decision-recorded note.
+  assert.equal(badgeInfo({ ...card, options: [] }).cls, "queued");
+});
+
 // SC-1301: the red `.card-error` subtitle must track the SAME badge
 // classification as the amber decision badge, not be computed independently. A
 // card parked on an open [human:options] decision that ALSO carries a stale

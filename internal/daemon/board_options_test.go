@@ -154,6 +154,37 @@ func TestApplyOptionConsumedBlockRejected(t *testing.T) {
 	assert.Empty(t, c.added)
 }
 
+// SC-1669: a running stage whose own agent stopped on an open same-stage
+// [human:options] fork must NOT keep deriving BoardRunning — the card is
+// paused waiting for a human, not working. It still carries the options block.
+func TestDeriveBoardCard_OpenSameStageOptionsEndsRunning(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	comments := []tracker.Comment{
+		optComment(PlanningStartedHeader, base),
+		optComment("[human:options]\nstage: planning\ncontext: pick storage\n1: sqlite\n2: files", base.Add(time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardPlanning, card.Stage)
+	assert.NotEqual(t, BoardRunning, card.State, "an open same-stage decision fork must end the running state")
+	assert.Equal(t, BoardIdle, card.State)
+	require.Len(t, card.Options, 2, "the open decision block stays attached")
+}
+
+// SC-1669 stage-precision companion: an options block naming a stage the card
+// has NOT reached does not belong to the running stage and must not clear it.
+func TestDeriveBoardCard_OpenOtherStageOptionsKeepsRunning(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	comments := []tracker.Comment{
+		optComment(PlanningStartedHeader, base),
+		optComment("[human:options]\nstage: implementation\ncontext: x\n1: a\n2: b", base.Add(time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardPlanning, card.Stage)
+	assert.Equal(t, BoardRunning, card.State, "a foreign-stage options block must not clear an active run")
+}
+
 // An older options block does not resurface after later pipeline activity;
 // only the newest block, and only while unconsumed, is offered.
 func TestDeriveBoardCard_LatestBlockWins(t *testing.T) {
