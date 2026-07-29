@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/platform"
 )
 
 func TestOpCLI_CanResolve(t *testing.T) {
@@ -17,6 +18,15 @@ func TestOpCLI_CanResolve(t *testing.T) {
 	assert.False(t, op.CanResolve("op://vault/item/field"))
 	assert.False(t, op.CanResolve("ghp_abc123"))
 	assert.False(t, op.CanResolve(""))
+}
+
+func TestNewOpCLI_binaryByPlatform(t *testing.T) {
+	op := NewOpCLI()
+	if platform.IsWSL() {
+		assert.Equal(t, "op.exe", op.Binary)
+	} else {
+		assert.Equal(t, "op", op.Binary)
+	}
 }
 
 func TestOpCLI_Resolve_success(t *testing.T) {
