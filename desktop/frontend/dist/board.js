@@ -78,7 +78,7 @@ const QUEUE_VERB = {
     engineering: "Plan it",
     building: "Build it",
 };
-let current = { cards: [], dockerAvailable: true, error: "" };
+let current = { cards: [], dockerAvailable: true, error: "", notice: "" };
 let dragging = null;
 // showHidden reveals user-hidden cards (marked with an "H" pill) instead of
 // filtering them out. Session-local so the board always starts clean.
@@ -1486,6 +1486,16 @@ function render() {
         loading.className = "board-loading";
         loading.innerHTML = `<span class="spinner"></span><span>Loading board…</span>`;
         board.appendChild(loading);
+    }
+    else if (current.notice && current.cards.length === 0) {
+        // No PM-role tracker resolved (SC-1655): show the explicit reason in place
+        // of five empty columns that would read as "no work". Only when there are
+        // genuinely no cards — a configured PM tracker with zero issues still shows
+        // its columns.
+        const notice = document.createElement("div");
+        notice.className = "board-notice";
+        notice.textContent = current.notice;
+        board.appendChild(notice);
     }
     else {
         for (const queue of QUEUES) {

@@ -23,6 +23,20 @@ A ticket is **one artifact that evolves in place** through maturity stages (kind
 
 **Topology rule:** whether planning ALSO creates a separate engineering ticket depends on the tracker config. Single-tracker is the default: unless a tracker carries an **explicit** `role: engineering` in `.humanconfig`, there is no second ticket — the plan comment on the ticket is the plan, and commits reference the one key. Split topology is opt-in: give a tracker an explicit `role: engineering` and planning then creates an engineering ticket on it whose description is the plan, with traceability running PM ticket → engineering ticket → git commits (reference the PM ticket in the engineering ticket, and both in commit messages). Role is never inferred from the tracker kind for the engineering side — a bare `linears:` entry with no `role:` stays single-tracker.
 
+# Board rendering
+
+The desktop workflow board renders the issues of the **PM-role tracker only**. A tracker resolves to the pm role either through an explicit `role: pm` in `.humanconfig` or by kind inference — and **only Shortcut is inferred as pm for free** (see `tracker.Instance.InferRole`). Every other kind (Linear, Jira, GitHub, GitLab, Azure DevOps, ClickUp) resolves to no role unless you write `role: pm`, and a tracker with no pm role contributes nothing to the board even when it is configured correctly and returns issues.
+
+So: **if your PM tracker is anything other than Shortcut, it needs an explicit `role: pm`** to appear on the board:
+
+```yaml
+linears:
+  - name: work
+    role: pm            # required for non-Shortcut PM trackers to render on the board
+```
+
+When no PM-role tracker resolves, the board shows an explicit "No PM-role tracker configured" notice (naming the trackers it did find) instead of five silently empty columns, so the misconfiguration is visible rather than mistaken for "no work yet". Inference is intentionally left narrow — widening it risks the SC-254/SC-660 split-topology regressions — so the fix for a blank board is to add `role: pm`, not to expect auto-detection.
+
 # Review handoff
 
 When an engineer (human or AI agent) finishes coding an engineering ticket and `human-done` passes, the handoff to a reviewer goes via a structured comment on the **PM ticket**. This is tracker-agnostic (works on every backend `human` supports) and requires no custom tracker status.
