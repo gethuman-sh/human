@@ -896,3 +896,80 @@ func TestLinkIssues_httpError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "linking issues")
 }
+
+// TestListIssuesPage_truncatedByNextPageToken verifies a nextPageToken at the
+// cap is surfaced as truncation so the board's prune guard fires (SC-1693).
+func TestListIssuesPage_truncatedByNextPageToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.URL.Query().Get("nextPageToken"), "first page carries no cursor")
+		_, _ = fmt.Fprint(w, `{"issues":[
+			{"key":"KAN-1","fields":{"summary":"one","status":{"name":"To Do"}}},
+			{"key":"KAN-2","fields":{"summary":"two","status":{"name":"To Do"}}}
+		],"nextPageToken":"tok2","isLast":false}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "u", "k")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "KAN",
+		MaxResults: 2,
+	})
+
+	require.NoError(t, err)
+	assert.Len(t, page.Issues, 2)
+	assert.True(t, page.Truncated, "a nextPageToken at the cap means issues remain beyond it")
+}
+
+// TestListIssuesPage_walksPagesViaToken verifies the token threads the cursor
+// across pages until isLast, reporting a complete fetch.
+func TestListIssuesPage_walksPagesViaToken(t *testing.T) {
+	var seenTokens []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("nextPageToken")
+		seenTokens = append(seenTokens, token)
+		if token == "" {
+			_, _ = fmt.Fprint(w, `{"issues":[
+				{"key":"KAN-1","fields":{"summary":"one","status":{"name":"To Do"}}}
+			],"nextPageToken":"tok2","isLast":false}`)
+			return
+		}
+		// Last page: isLast true, no further token.
+		_, _ = fmt.Fprint(w, `{"issues":[
+			{"key":"KAN-2","fields":{"summary":"two","status":{"name":"To Do"}}}
+		],"isLast":true}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "u", "k")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "KAN",
+		MaxResults: 150,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"", "tok2"}, seenTokens, "the nextPageToken drives a page walk")
+	assert.Len(t, page.Issues, 2)
+	assert.False(t, page.Truncated)
+}
+
+// TestListIssuesPage_lastPageTokenNotTruncated guards the isLast case: a final
+// page that still echoes a token but sets isLast must read as complete.
+func TestListIssuesPage_lastPageTokenNotTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"issues":[
+			{"key":"KAN-1","fields":{"summary":"one","status":{"name":"To Do"}}},
+			{"key":"KAN-2","fields":{"summary":"two","status":{"name":"To Do"}}}
+		],"nextPageToken":"tok2","isLast":true}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "u", "k")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "KAN",
+		MaxResults: 2,
+	})
+
+	require.NoError(t, err)
+	assert.Len(t, page.Issues, 2)
+	assert.False(t, page.Truncated, "isLast overrides a lingering nextPageToken")
+}

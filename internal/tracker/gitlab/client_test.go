@@ -925,3 +925,56 @@ func TestLinkIssues_httpError(t *testing.T) {
 	err := client.LinkIssues(context.Background(), "group/proj#5", "group/other#7")
 	require.Error(t, err)
 }
+
+// TestListIssuesPage_truncatedByNextPageHeader verifies GitLab's X-Next-Page
+// header at the cap is surfaced as truncation (SC-1693).
+func TestListIssuesPage_truncatedByNextPageHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "1", r.URL.Query().Get("page"))
+		w.Header().Set("X-Next-Page", "2")
+		_, _ = fmt.Fprint(w, `[
+			{"iid":1,"project_id":100,"title":"one","state":"opened"},
+			{"iid":2,"project_id":100,"title":"two","state":"opened"}
+		]`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "glpat-test")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "mygroup/myproject",
+		MaxResults: 2,
+	})
+
+	require.NoError(t, err)
+	assert.Len(t, page.Issues, 2)
+	assert.True(t, page.Truncated, "a non-empty X-Next-Page at the cap means issues remain beyond it")
+}
+
+// TestListIssuesPage_walksPagesToCap verifies GitLab follows X-Next-Page across
+// pages until it is empty, reporting a complete fetch.
+func TestListIssuesPage_walksPagesToCap(t *testing.T) {
+	var seenPages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		seenPages = append(seenPages, page)
+		if page == "1" {
+			w.Header().Set("X-Next-Page", "2")
+			_, _ = fmt.Fprint(w, `[{"iid":1,"project_id":100,"title":"one","state":"opened"}]`)
+			return
+		}
+		// Last page: GitLab leaves X-Next-Page empty.
+		_, _ = fmt.Fprint(w, `[{"iid":2,"project_id":100,"title":"two","state":"opened"}]`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "glpat-test")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "mygroup/myproject",
+		MaxResults: 150, // above per_page (100) so the cap spans pages
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "2"}, seenPages)
+	assert.Len(t, page.Issues, 2)
+	assert.False(t, page.Truncated)
+}

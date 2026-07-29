@@ -42,8 +42,21 @@ func (c *Client) SetHTTPDoer(doer apiclient.HTTPDoer) {
 	c.api.SetHTTPDoer(doer)
 }
 
-// ListIssues implements tracker.Lister.
+// ListIssues implements tracker.Lister. It delegates to ListIssuesPage and drops
+// the truncation signal for callers that only want the slice.
 func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
+	page, err := c.ListIssuesPage(ctx, opts)
+	return page.Issues, err
+}
+
+// ListIssuesPage implements tracker.PagedLister. The /search/jql endpoint caps a
+// single response and reports no total count, so a full backlog spans several
+// pages linked by nextPageToken. Rather than let the cap degrade to one page, it
+// pages up to opts.MaxResults via that token and reports IssuePage.Truncated
+// when issues remain beyond the cap, so the board never prunes saved view state
+// against a partial fetch and the cap behaves the same as on every other backend
+// (SC-1693).
+func (c *Client) ListIssuesPage(ctx context.Context, opts tracker.ListOptions) (tracker.IssuePage, error) {
 	var clauses []string
 	if opts.Project != "" {
 		clauses = append(clauses, fmt.Sprintf("project=\"%s\"", strings.ReplaceAll(opts.Project, "\"", "\\\"")))
@@ -60,37 +73,51 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 	} else {
 		jql += " order by created DESC"
 	}
-	query := url.Values{
-		"jql":        {jql},
-		"maxResults": {fmt.Sprintf("%d", opts.MaxResults)},
-		"fields":     {"*navigable"},
-	}
 
-	resp, err := c.doRequest(ctx, http.MethodGet, "/rest/api/3/search/jql", query.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	var result searchResult
-	if err := apiclient.DecodeJSON(resp, &result, "project", opts.Project); err != nil {
-		return nil, err
-	}
+	// nextToken carries the cursor between pages; the /search/jql endpoint is
+	// token-paginated, so CollectPaged's pageIndex is unused here.
+	nextToken := ""
+	return tracker.CollectPaged(opts.MaxResults, func(_ int) ([]tracker.Issue, bool, error) {
+		query := url.Values{
+			"jql":        {jql},
+			"maxResults": {fmt.Sprintf("%d", opts.MaxResults)},
+			"fields":     {"*navigable"},
+		}
+		if nextToken != "" {
+			query.Set("nextPageToken", nextToken)
+		}
 
-	issues := make([]tracker.Issue, len(result.Issues))
-	for i, iss := range result.Issues {
-		issues[i] = tracker.Issue{
-			Key:     iss.Key,
-			Project: projectFromKey(iss.Key),
-			Title:   iss.Fields.Summary,
-			Type:    iss.Fields.IssueType.Name,
-			Status:  iss.Fields.Status.Name,
-			Labels:  iss.Fields.Labels,
-			URL:     c.baseURL + "/browse/" + iss.Key,
+		resp, err := c.doRequest(ctx, http.MethodGet, "/rest/api/3/search/jql", query.Encode(), nil)
+		if err != nil {
+			return nil, false, err
 		}
-		if iss.Fields.Updated != "" {
-			issues[i].UpdatedAt, _ = time.Parse("2006-01-02T15:04:05.000-0700", iss.Fields.Updated)
+		var result searchResult
+		if err := apiclient.DecodeJSON(resp, &result, "project", opts.Project); err != nil {
+			return nil, false, err
 		}
-	}
-	return issues, nil
+
+		issues := make([]tracker.Issue, len(result.Issues))
+		for i, iss := range result.Issues {
+			issues[i] = tracker.Issue{
+				Key:     iss.Key,
+				Project: projectFromKey(iss.Key),
+				Title:   iss.Fields.Summary,
+				Type:    iss.Fields.IssueType.Name,
+				Status:  iss.Fields.Status.Name,
+				Labels:  iss.Fields.Labels,
+				URL:     c.baseURL + "/browse/" + iss.Key,
+			}
+			if iss.Fields.Updated != "" {
+				issues[i].UpdatedAt, _ = time.Parse("2006-01-02T15:04:05.000-0700", iss.Fields.Updated)
+			}
+		}
+
+		// The endpoint returns nextPageToken only while more pages remain, and
+		// flags the final page with isLast; either signal ends collection.
+		nextToken = result.NextPageToken
+		hasNext := result.NextPageToken != "" && !result.IsLast
+		return issues, hasNext, nil
+	})
 }
 
 // GetIssue implements tracker.Getter.

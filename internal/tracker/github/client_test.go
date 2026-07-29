@@ -1252,3 +1252,80 @@ func TestLinkIssues_badOtherKey(t *testing.T) {
 	err := client.LinkIssues(context.Background(), "octocat/hello-world#7", "not-a-key")
 	require.Error(t, err)
 }
+
+// TestListIssuesPage_truncatedByLinkHeader verifies a rel="next" Link header at
+// the cap is surfaced as truncation so the board's prune guard fires (SC-1693).
+func TestListIssuesPage_truncatedByLinkHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "1", r.URL.Query().Get("page"))
+		w.Header().Set("Link", `<https://api.github.com/repos/octocat/hello-world/issues?page=2>; rel="next"`)
+		_, _ = fmt.Fprint(w, `[
+			{"number":1,"html_url":"u1","title":"one","state":"open"},
+			{"number":2,"html_url":"u2","title":"two","state":"open"}
+		]`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "octocat/hello-world",
+		MaxResults: 2,
+	})
+
+	require.NoError(t, err)
+	assert.Len(t, page.Issues, 2)
+	assert.True(t, page.Truncated, "a rel=next link at the cap means issues remain beyond it")
+}
+
+// TestListIssuesPage_walksPagesToCap verifies the per-repo path follows the Link
+// header across pages until the backend runs out, reporting a complete fetch.
+func TestListIssuesPage_walksPagesToCap(t *testing.T) {
+	var seenPages []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		seenPages = append(seenPages, page)
+		if page == "1" {
+			w.Header().Set("Link", `<x?page=2>; rel="next"`)
+			_, _ = fmt.Fprint(w, `[{"number":1,"html_url":"u1","title":"one","state":"open"}]`)
+			return
+		}
+		// Last page: no Link header.
+		_, _ = fmt.Fprint(w, `[{"number":2,"html_url":"u2","title":"two","state":"open"}]`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		Project:    "octocat/hello-world",
+		MaxResults: 150, // above per_page (100) so the cap spans pages
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "2"}, seenPages, "the Link header drives a page walk")
+	assert.Len(t, page.Issues, 2)
+	assert.False(t, page.Truncated, "the walk ended on the last page, so the fetch is complete")
+}
+
+// TestListIssuesPage_searchTruncated verifies the cross-repo search path reports
+// truncation from the Link header the same way the per-repo path does.
+func TestListIssuesPage_searchTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/search/issues", r.URL.Path)
+		assert.Equal(t, "1", r.URL.Query().Get("page"))
+		w.Header().Set("Link", `<x?page=2>; rel="next"`)
+		_, _ = fmt.Fprint(w, `{"items":[
+			{"number":1,"html_url":"u1","title":"one","state":"open","repository_url":"https://api.github.com/repos/octocat/hello-world"}
+		]}`)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	page, err := client.ListIssuesPage(context.Background(), tracker.ListOptions{
+		MaxResults: 1, // empty project triggers the search path
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Issues, 1)
+	assert.Equal(t, "octocat/hello-world#1", page.Issues[0].Key)
+	assert.True(t, page.Truncated)
+}

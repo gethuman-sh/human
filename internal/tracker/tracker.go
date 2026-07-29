@@ -402,6 +402,44 @@ func ListIssuesPage(ctx context.Context, l Lister, opts ListOptions) (IssuePage,
 	return IssuePage{Issues: issues}, err
 }
 
+// CollectPaged fills a bounded fetch up to maxResults for a backend whose
+// per-request page size is smaller than the board's cap, so the explicit cap
+// behaves the same on every backend rather than degrading to the backend's page
+// size (SC-1693). fetch returns one page of issues (pageIndex counts from 0) and
+// whether the backend signals a further page; a cursor-based backend keeps its
+// own cursor in the closure and ignores pageIndex. Collection stops as soon as
+// the cap is reached or the backend reports no further page. Truncated is true
+// only when issues genuinely remain beyond the cap — either the backend still
+// signals a next page at the cap, or a page pushed the total past it — so a
+// fetch that ends exactly on the last page is reported complete and the board's
+// prune guard does not fire on a full backlog. maxResults <= 0 means "no cap":
+// a single page is fetched and Truncated mirrors the backend's next-page signal,
+// matching the single-query backends (Linear).
+func CollectPaged(maxResults int, fetch func(pageIndex int) (issues []Issue, hasNext bool, err error)) (IssuePage, error) {
+	var collected []Issue
+	for pageIndex := 0; ; pageIndex++ {
+		issues, hasNext, err := fetch(pageIndex)
+		if err != nil {
+			return IssuePage{}, err
+		}
+		collected = append(collected, issues...)
+
+		if maxResults <= 0 {
+			return IssuePage{Issues: collected, Truncated: hasNext}, nil
+		}
+		if len(collected) >= maxResults {
+			truncated := hasNext || len(collected) > maxResults
+			if len(collected) > maxResults {
+				collected = collected[:maxResults]
+			}
+			return IssuePage{Issues: collected, Truncated: truncated}, nil
+		}
+		if !hasNext {
+			return IssuePage{Issues: collected, Truncated: false}, nil
+		}
+	}
+}
+
 // Getter retrieves a single issue by key.
 type Getter interface {
 	GetIssue(ctx context.Context, key string) (*Issue, error)
