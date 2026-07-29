@@ -6,8 +6,8 @@ Instead of pasting real API tokens into your config, you write a short reference
 - Use `gh://token` (or `gh://<hostname>/token` for GitHub Enterprise) to resolve the GitHub CLI's keyring token — no PAT copying
 - Resolves references to real secrets at startup
 - Supports 1Password and the GitHub CLI as secret providers today; `gh://` works alongside any configured provider
-- Unlocks via the 1Password desktop app prompt
-- Falls back to the `op.exe` CLI on WSL2
+- Resolves via the 1Password CLI (`op`) on every platform — released binaries are built without CGO, so the in-process SDK is unavailable and the CLI is the working path (`op.exe` on WSL)
+- In CGO-enabled developer builds, unlocks via the 1Password desktop app prompt first, falling back to the CLI automatically
 - Passes plain non-secret values through untouched
 - Never caches secrets, fetching them fresh each time
 - Runs without vault resolution when none is configured
