@@ -186,8 +186,9 @@ func (a *App) Cards() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
-	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments(), cardMockups(), a.prefs.Snapshot())
-	board.PrunePrefs(results,
+	project := projectKeyOf(info)
+	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project))
+	board.PrunePrefs(results, project,
 		board.PruneTarget{Store: a.prefs, Keep: boardPrefsKeep(data)},
 		board.PruneTarget{Store: a.ideas, Keep: ideaSpaceKeep(data)},
 	)
@@ -195,7 +196,7 @@ func (a *App) Cards() (BoardData, error) {
 	// next cold open. Best-effort: a cache-write failure must never fail a live
 	// fetch, exactly as a lost recent-projects bump does not.
 	if raw, mErr := json.Marshal(data); mErr == nil {
-		_ = a.cache.Save(projectKeyOf(info), raw)
+		_ = a.cache.Save(project, raw)
 	}
 	return data, nil
 }
@@ -272,19 +273,31 @@ func ideaSpaceKeep(data BoardData) map[string]struct{} {
 // SetIdeaColumn persists the idea-space placement for one ticket. Purely
 // local UI state — never a tracker write or a board transition.
 func (a *App) SetIdeaColumn(pmKey string, col int) error {
-	return a.ideas.Set(pmKey, col)
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return a.ideas.Set(projectKeyOf(info), pmKey, col)
 }
 
 // SetColumnOrder persists the hand-sorted card order for one queue column.
 // Purely local UI state — never a tracker write or a board transition.
 func (a *App) SetColumnOrder(queue string, keys []string) error {
-	return a.prefs.SetOrder(queue, keys)
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return a.prefs.SetOrder(projectKeyOf(info), queue, keys)
 }
 
 // SetCardHidden parks a ticket off the board (or restores it). Purely local
 // UI state — the ticket on the tracker is untouched.
 func (a *App) SetCardHidden(pmKey string, hidden bool) error {
-	return a.prefs.SetHidden(pmKey, hidden)
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return a.prefs.SetHidden(projectKeyOf(info), pmKey, hidden)
 }
 
 // boardPrefsKeep is the set of every ticket key currently on the board.
@@ -314,7 +327,8 @@ func (a *App) CardsQuick() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
-	return boardFromResults(results, true, a.ideas.Assignments(), cardMockups(), a.prefs.Snapshot()), nil
+	project := projectKeyOf(info)
+	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project)), nil
 }
 
 // projectKeyOf identifies the project a board snapshot belongs to. v1 serves one
