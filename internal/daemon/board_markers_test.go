@@ -14,6 +14,11 @@ func TestClassifyMarker(t *testing.T) {
 		wantState BoardState
 		wantOK    bool
 	}{
+		// The gate runs before the pipeline, so both markers sit in backlog: a
+		// card must show the review running rather than looking idle, and must
+		// stop showing it once the verdict lands.
+		{"ticket-review-started", "[human:ticket-review-started]", BoardBacklog, BoardRunning, true},
+		{"ticket-review verdict", "[human:ticket-review] ready\nroot: same as ticket", BoardBacklog, BoardDone, true},
 		{"planning-started", "[human:planning-started]", BoardPlanning, BoardRunning, true},
 		{"plan-ready", "[human:plan-ready]\nengineering: HUM-7", BoardPlanning, BoardDone, true},
 		{"planning-failed", "[human:planning-failed]\nboom", BoardPlanning, BoardFailed, true},

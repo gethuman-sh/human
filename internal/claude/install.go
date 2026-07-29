@@ -28,6 +28,12 @@ var readySkillContent []byte
 //go:embed embed/human-ready-agent.md
 var readyAgentContent []byte
 
+//go:embed embed/human-ticket-review-skill.md
+var ticketReviewSkillContent []byte
+
+//go:embed embed/human-ticket-reviewer-agent.md
+var ticketReviewerAgentContent []byte
+
 //go:embed embed/human-bug-plan-skill.md
 var bugPlanSkillContent []byte
 
@@ -262,6 +268,8 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: planVerifyDocsAgentContent, relPath: filepath.Join("agents", "plan-verify-docs.md")},
 		{content: readySkillContent, relPath: filepath.Join("skills", "human-ready", "SKILL.md")},
 		{content: readyAgentContent, relPath: filepath.Join("agents", "human-ready.md")},
+		{content: ticketReviewSkillContent, relPath: filepath.Join("skills", "human-ticket-review", "SKILL.md")},
+		{content: ticketReviewerAgentContent, relPath: filepath.Join("agents", "human-ticket-reviewer.md")},
 		{content: bugPlanSkillContent, relPath: filepath.Join("skills", "human-bug-plan", "SKILL.md")},
 		{content: bugAnalyzerAgentContent, relPath: filepath.Join("agents", "human-bug-analyzer.md")},
 		{content: reviewSkillContent, relPath: filepath.Join("skills", "human-review", "SKILL.md")},

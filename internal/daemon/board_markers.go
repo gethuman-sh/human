@@ -53,6 +53,14 @@ const (
 // ReviewCompleteHeader as the verification done-marker; both are declared in
 // review_handoff.go and intentionally NOT redeclared here.
 const (
+	// Ticket-review markers bracket the gate that runs BEFORE planning, judging
+	// whether solving the ticket solves the problem. Both map to the backlog
+	// stage: the card has not entered the pipeline yet, and without them it would
+	// sit in Backlog looking idle for the gate's whole run — the "nothing is
+	// happening" reading the board must never give.
+	TicketReviewStartedHeader = "[human:ticket-review-started]"
+	TicketReviewedHeader      = "[human:ticket-review]"
+
 	PlanningStartedHeader       = "[human:planning-started]"
 	PlanReadyHeader             = "[human:plan-ready]"
 	PlanningFailedHeader        = "[human:planning-failed]"
@@ -132,6 +140,8 @@ type markerSpec struct {
 // for classification (each header is unique); stage-precedence is resolved via
 // stageRank ("furthest stage wins").
 var orderedMarkerSpecs = []markerSpec{
+	{TicketReviewStartedHeader, BoardBacklog, BoardRunning},
+	{TicketReviewedHeader, BoardBacklog, BoardDone},
 	{PlanningStartedHeader, BoardPlanning, BoardRunning},
 	{PlanReadyHeader, BoardPlanning, BoardDone},
 	{PlanningFailedHeader, BoardPlanning, BoardFailed},

@@ -38,7 +38,7 @@ Evaluate the ticket against each criterion below. For each one, mark it as **pre
 
 1. **Clear description** — Is the problem or feature clearly stated?
 2. **Acceptance criteria** — Are there concrete, testable conditions for "done"?
-3. **Scope** — Is the ticket small enough for a single implementation effort?
+3. **Scope** — Is the scope stated, and does it match the size of the problem? Note when a ticket is large, but do **not** treat size as a defect on its own: a problem that spans a system needs a ticket that spans it, and splitting a coherent change into small ones is how a system loses its shape. Mark this missing when the boundary is unstated, not when the boundary is wide.
 4. **Dependencies** — Are external dependencies or blockers identified?
 5. **Context** — Is the "why" explained (user need, business reason)?
 6. **Edge cases** — Are failure modes or boundary conditions mentioned?

@@ -56,6 +56,14 @@ var specs = map[string]spec{
 	"bug-verdict":           {needsHead: true, headEnum: []string{"confirmed", "not-a-bug", "undetermined"}},
 	"bug-verify":            {needsHead: true, headEnum: []string{"DONE", "NOT DONE"}},
 	"options":               {required: []string{"stage"}},
+	// The ticket-review gate's verdict. The head carries the outcome so a reader
+	// can classify it without parsing the body, exactly as bug-verdict does; the
+	// gate ACTS on every outcome, so these name what it did, not what it asks for.
+	"ticket-review": {
+		needsHead: true,
+		headEnum:  []string{"ready", "reframed", "superseded", "escalated", "rejected"},
+	},
+	"ticket-review-started": {},
 	// Posted by the autofix skill at every terminal point and rendered by the
 	// daemon (IssueDetailResult.FixSummaryHTML), so it is a first-class marker
 	// rather than one of the open-ended types — declare it as such.
