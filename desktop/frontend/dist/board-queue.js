@@ -101,8 +101,9 @@ export const QUEUED_LABELS = {
 };
 // badgeInfo classifies a card's live state into a badge descriptor, or null
 // when the card rests and needs none — its queue position IS the statement of
-// completion. A review that found problems is a WARNING, not a stage failure:
-// the work exists, it just may not advance until a rebuild passes.
+// completion. A review that found problems is machine-fixing work, not a demand
+// on the user: the daemon auto-launches a fixer, so it reads as in-flight
+// (gray + spinner), never the amber "your turn" register (SC-1830).
 export function badgeInfo(card) {
     // An open decision block outranks EVERY other classification, including a
     // stale failed marker: a card parked on a deliberate human fork must never
@@ -158,9 +159,23 @@ export function badgeInfo(card) {
         // (ticket 405).
         return { cls: "resolved", text: "no fix needed", title: "Triage concluded no fix is warranted" };
     }
+    // A failed review verdict is machine work, not a demand on the user: the
+    // daemon auto-launches a fixer (internal/daemon/board_failure.go →
+    // pr_review_loop.go). It must read as in-flight — the gray machine-working
+    // `fixing` badge with the running spinner and copy that says what is
+    // happening — never the amber `warning`/`decision` "your turn" register with
+    // a ⚠ glyph (SC-1830).
     if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
-        return { cls: "warning", text: "⚠ review found problems", title: `Review verdict: ${card.verdict ?? ""}` };
+        return {
+            cls: "fixing",
+            text: "review found problems — fixing…",
+            title: `Review found problems — a fixer is reworking the code automatically (verdict: ${card.verdict ?? ""})`,
+            spinner: true,
+        };
     }
+    // A passed review with no recorded branch is a BROKEN HANDOFF that genuinely
+    // needs a person: nothing can ship, so it keeps the needs-a-human `warning`
+    // register (SC-1830 split the two cases that used to share this class).
     if (card.stage === "verification" && card.state === "done" && !card.branch) {
         // A passed review with no recorded branch has nothing to ship — deploying
         // it can only fail, so it must read as needing a rebuild, never as ready.

@@ -93,7 +93,7 @@ test("badgeInfo preserves prior classifications", () => {
   assert.equal(badgeInfo({ stage: "planning", state: "resolved" }).text, "already shipped");
   assert.equal(
     badgeInfo({ stage: "verification", state: "done", verdict: "fail", branch: "b" }).cls,
-    "warning",
+    "fixing",
   );
   assert.equal(
     badgeInfo({ stage: "verification", state: "done", verdict: "pass", branch: "b" }),
@@ -101,6 +101,21 @@ test("badgeInfo preserves prior classifications", () => {
     "a resting reviewed card needs no badge — its queue position states completion",
   );
   assert.equal(badgeInfo({ stage: "done", state: "done" }).cls, "done");
+});
+
+// SC-1830 regression: a failed review verdict is machine work (the daemon
+// auto-launches a fixer), NOT a demand on the user. Its badge must read as
+// in-flight — a dedicated machine-working class, the running spinner, and copy
+// that says what is happening ("fixing…") — never the amber `warning`/`decision`
+// register with a ⚠ glyph that means "your turn".
+test("failed review verdict badges as in-flight machine work, not a warning (SC-1830)", () => {
+  const info = badgeInfo({ stage: "verification", state: "done", verdict: "fail", branch: "b" });
+  assert.notEqual(info, null);
+  assert.equal(info.cls, "fixing", "failed verdict must use the machine-working class, not amber `warning`");
+  assert.notEqual(info.cls, "decision", "must not share the needs-a-human decision class");
+  assert.equal(info.spinner, true, "must carry the running spinner so it reads as in-flight");
+  assert.match(info.text, /fixing…/, "copy must say what is happening, not hand a verdict to the user");
+  assert.doesNotMatch(info.text, /⚠/, "the alarm glyph belongs to needs-a-human states only");
 });
 
 // 1290: an open decision block must outrank a `failed` state too, not just the
@@ -132,8 +147,8 @@ test("open options render a decision-needed badge over the review warning", () =
   const info = badgeInfo(card);
   assert.equal(info.cls, "decision");
   assert.match(info.text, /decision needed/);
-  // Without options the same card falls back to the review warning.
-  assert.equal(badgeInfo({ ...card, options: [] }).cls, "warning");
+  // Without options the same card falls back to the fixing badge.
+  assert.equal(badgeInfo({ ...card, options: [] }).cls, "fixing");
 });
 
 // SC-1669: a card parked on an open decision whose state is still "running"
