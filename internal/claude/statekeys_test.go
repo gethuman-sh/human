@@ -37,10 +37,10 @@ var writeOnlyStateKeys = map[string]string{
 	// This record exists because the exit contract requires every run to leave a
 	// machine-readable outcome; it is the run's own trail, not the handoff.
 	"stage.ticket-review": "verdict is handed on via the [human:ticket-review] marker; this is the exit-contract record",
-	"stage.opinion":    "read by the orchestrator prompt AND the daemon; the read is in human-autofix-skill.md",
-	"stage.pr-review":  "read by the daemon's PR review→fix deploy loop (SC-1387), not by a prompt",
-	"stage.pr-fix":     "read by the daemon's PR review→fix deploy loop (SC-1387), not by a prompt",
-	"stage.deploy-fix": "read by the daemon's deploy CI/conflict fixer loop (SC-1557), not by a prompt",
+	"stage.opinion":       "read by the orchestrator prompt AND the daemon; the read is in human-autofix-skill.md",
+	"stage.pr-review":     "read by the daemon's PR review→fix deploy loop (SC-1387), not by a prompt",
+	"stage.pr-fix":        "read by the daemon's PR review→fix deploy loop (SC-1387), not by a prompt",
+	"stage.deploy-fix":    "read by the daemon's deploy CI/conflict fixer loop (SC-1557), not by a prompt",
 }
 
 // collectStateKeys returns the concrete keys prompts write and read.

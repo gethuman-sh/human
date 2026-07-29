@@ -224,7 +224,7 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	// idempotency guard above already returned for it.
 	if isPlanningRetry(req.To, card) {
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			"/human-plan "+req.PMKey)
+			planPrompt(req.PMKey))
 	}
 
 	// Build retry: the same sanctioned in-place relaunch for a failed
@@ -289,7 +289,7 @@ func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTr
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			"/human-plan "+req.PMKey)
+			planPrompt(req.PMKey))
 	case BoardImplementation:
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 			executePrompt(dispatchKey(req.PMKey, card), ""))
@@ -1001,6 +1001,25 @@ func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, pr
 // push credentials and no user — an executor that pauses to ask permission
 // burns the whole run and fails the stage with nothing posted (the 1087
 // deadlock, three runs in a row).
+// planPrompt gates planning behind the ticket review: the last point where a
+// ticket that treats a symptom, duplicates an open ticket, or is really a design
+// question can still be fixed cheaply. Every later stage takes the ticket as
+// given, so without this the pipeline builds whatever it was handed.
+//
+// The gate acts on its own findings rather than asking — it reframes, links,
+// creates the design ticket — so the run continues straight into planning in the
+// cases that stay plannable, and stops with the reason recorded in the cases that
+// do not. A ticket already carrying a [human:ticket-review] marker skips the gate
+// so a planning retry does not re-review it.
+func planPrompt(key string) string {
+	return "/human-ticket-review " + key +
+		" — then, if the verdict is ready or reframed, continue with /human-plan " + key +
+		" (a reframed verdict's corrected framing is in the [human:ticket-review] marker; plan against that, not the description)." +
+		" If the verdict is superseded, escalated or rejected, stop after recording it: the marker names the ticket that carries the work." +
+		" Skip the review and go straight to /human-plan " + key + " when the ticket already carries a [human:ticket-review] marker." +
+		" BOARD CONTEXT: there is no user to ask — never end the run with a question; act on what you find and record it."
+}
+
 func executePrompt(key, extra string) string {
 	return "/human-execute " + key + extra +
 		" BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. There is no user to ask: never end the run with a question — post the review handoff (human handoff post with --branch) or report the failure."

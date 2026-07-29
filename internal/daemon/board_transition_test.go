@@ -278,7 +278,8 @@ func TestApplyTransitionRetriesFailedPlanning(t *testing.T) {
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardPlanning})
 	require.NoError(t, err)
 	assert.Equal(t, 1, l.calls)
-	assert.Equal(t, "/human-plan SC-1", l.prompt)
+	assert.Contains(t, l.prompt, "/human-ticket-review SC-1")
+	assert.Contains(t, l.prompt, "/human-plan SC-1")
 	assert.Equal(t, "board-SC-1-planning", l.name)
 	require.Len(t, c.added, 1)
 	assert.Equal(t, PlanningStartedHeader, c.added[0])
@@ -337,7 +338,8 @@ func TestApplyTransitionBacklogToPlanning(t *testing.T) {
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
 	require.NoError(t, err)
 	assert.Equal(t, 1, l.calls)
-	assert.Equal(t, "/human-plan SC-1", l.prompt)
+	assert.Contains(t, l.prompt, "/human-ticket-review SC-1")
+	assert.Contains(t, l.prompt, "/human-plan SC-1")
 	assert.Equal(t, "board-SC-1-planning", l.name)
 	require.Len(t, c.added, 1)
 	assert.Equal(t, PlanningStartedHeader, c.added[0])
@@ -1447,7 +1449,8 @@ func TestApplyTransitionReplansDonePlanning(t *testing.T) {
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardBacklog, To: BoardPlanning})
 	require.NoError(t, err)
 	assert.Equal(t, 1, l.calls)
-	assert.Equal(t, "/human-plan SC-1", l.prompt)
+	assert.Contains(t, l.prompt, "/human-ticket-review SC-1")
+	assert.Contains(t, l.prompt, "/human-plan SC-1")
 	require.Len(t, c.added, 1)
 	assert.Equal(t, PlanningStartedHeader, c.added[0])
 }
@@ -1709,4 +1712,19 @@ func TestCiFailureFixable(t *testing.T) {
 	assert.True(t, ciFailureFixable(errors.New("CI checks failed")))
 	assert.False(t, ciFailureFixable(errors.New("timed out waiting for CI checks")))
 	assert.False(t, ciFailureFixable(nil))
+}
+
+// The planning dispatch is the pipeline's only entry into building, so the gate
+// has to be unskippable there — but it must also not re-review a ticket that
+// already carries a verdict, or a planning retry would loop through the gate
+// forever.
+func TestPlanPromptGatesPlanningOnTicketReview(t *testing.T) {
+	p := planPrompt("SC-1")
+
+	assert.Contains(t, p, "/human-ticket-review SC-1", "planning must be gated by the ticket review")
+	assert.Contains(t, p, "/human-plan SC-1", "a ready ticket must still reach planning")
+	assert.Contains(t, p, "[human:ticket-review]", "the skip condition names the marker to look for")
+
+	// The gate acts on its own findings; a board run has nobody to ask.
+	assert.Contains(t, p, "no user to ask")
 }
