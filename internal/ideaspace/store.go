@@ -18,14 +18,16 @@ import (
 // Columns-1 the most concrete.
 const Columns = 5
 
-// fileFormat is the on-disk shape. Version exists so a later change (e.g.
-// scoping assignments per tracker) can migrate instead of misreading.
+// fileFormat is the on-disk shape. IdeasByProject maps a project directory to
+// its (ticket key → column) map. Ideas is the legacy v1 shape, read only to
+// migrate an existing single-project file into the active project's slot.
 type fileFormat struct {
-	Version int            `json:"version"`
-	Ideas   map[string]int `json:"ideas"`
+	Version        int                       `json:"version"`
+	IdeasByProject map[string]map[string]int `json:"ideas_by_project"`
+	Ideas          map[string]int            `json:"ideas,omitempty"` // legacy v1
 }
 
-const currentVersion = 1
+const currentVersion = 2
 
 // Store reads and writes the (ticket key → column index) assignment file.
 type Store struct {
@@ -50,38 +52,39 @@ func NewStore(path string) *Store {
 	return &Store{path: path}
 }
 
-// Assignments returns the saved ticket→column map. A missing, corrupt, or
-// future-versioned file yields an empty map — an absent assignment simply
+// Assignments returns project's saved ticket→column map. A missing, corrupt,
+// or future-versioned file yields an empty map — an absent assignment simply
 // means "leftmost column", so there is nothing to fail loudly about.
-func (s *Store) Assignments() map[string]int {
+func (s *Store) Assignments(project string) map[string]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.read()
+	return s.read(project)
 }
 
-// Set persists the column for one ticket key. Out-of-range columns are
-// clamped rather than rejected: a drop landed, honoring it approximately
+// Set persists the column for one ticket key in project. Out-of-range columns
+// are clamped rather than rejected: a drop landed, honoring it approximately
 // beats losing the gesture.
-func (s *Store) Set(key string, col int) error {
+func (s *Store) Set(project, key string, col int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ideas := s.read()
-	ideas[key] = clamp(col)
-	return s.write(ideas)
+	f := s.readAll(project)
+	f.IdeasByProject[project][key] = clamp(col)
+	return s.write(f)
 }
 
 // PruneExcept drops assignments for tickets not in keys — ideas that were
-// promoted (idea label removed) or closed no longer need a placement. A
-// missing file is a no-op so pruning never creates state.
-func (s *Store) PruneExcept(keys map[string]struct{}) error {
+// promoted (idea label removed) or closed no longer need a placement — scoped
+// to project. A missing file is a no-op so pruning never creates state.
+func (s *Store) PruneExcept(project string, keys map[string]struct{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, err := os.Stat(s.path); err != nil {
 		return nil
 	}
-	ideas := s.read()
+	f := s.readAll(project)
+	ideas := f.IdeasByProject[project]
 	pruned := make(map[string]int, len(ideas))
 	for key, col := range ideas {
 		if _, ok := keys[key]; ok {
@@ -91,30 +94,56 @@ func (s *Store) PruneExcept(keys map[string]struct{}) error {
 	if len(pruned) == len(ideas) {
 		return nil
 	}
-	return s.write(pruned)
+	f.IdeasByProject[project] = pruned
+	return s.write(f)
 }
 
-// read loads the file tolerantly; callers hold s.mu.
-func (s *Store) read() map[string]int {
+// read returns one project's clamped assignments, folding a legacy v1 file into
+// that project in memory (not persisted); callers hold s.mu.
+func (s *Store) read(project string) map[string]int {
+	f := s.readAll(project)
+	return f.IdeasByProject[project]
+}
+
+// readAll returns the full project-keyed file with every column clamped and the
+// requested project's slot guaranteed non-nil, migrating a legacy v1 file into
+// that project's slot; callers hold s.mu.
+func (s *Store) readAll(project string) fileFormat {
+	f := fileFormat{Version: currentVersion, IdeasByProject: map[string]map[string]int{}}
 	data, err := os.ReadFile(s.path) // #nosec G304 — path fixed at construction
-	if err != nil {
-		return map[string]int{}
+	if err == nil {
+		var parsed fileFormat
+		if json.Unmarshal(data, &parsed) == nil {
+			switch parsed.Version {
+			case currentVersion:
+				if parsed.IdeasByProject != nil {
+					f.IdeasByProject = parsed.IdeasByProject
+				}
+			case 1:
+				if parsed.Ideas != nil {
+					f.IdeasByProject[project] = parsed.Ideas
+				}
+			}
+		}
 	}
-	var f fileFormat
-	if json.Unmarshal(data, &f) != nil || f.Version != currentVersion || f.Ideas == nil {
-		return map[string]int{}
+	if f.IdeasByProject[project] == nil {
+		f.IdeasByProject[project] = map[string]int{}
 	}
-	for key, col := range f.Ideas {
-		f.Ideas[key] = clamp(col)
+	for _, ideas := range f.IdeasByProject {
+		for key, col := range ideas {
+			ideas[key] = clamp(col)
+		}
 	}
-	return f.Ideas
+	return f
 }
 
 // write persists atomically via temp+rename so a crash mid-write can never
 // leave a half-written file that would silently reset every placement;
 // callers hold s.mu.
-func (s *Store) write(ideas map[string]int) error {
-	data, err := json.Marshal(fileFormat{Version: currentVersion, Ideas: ideas})
+func (s *Store) write(f fileFormat) error {
+	f.Version = currentVersion
+	f.Ideas = nil // never persist legacy fields
+	data, err := json.Marshal(f)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshal idea space", "path", s.path)
 	}

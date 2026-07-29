@@ -11,9 +11,10 @@ import (
 )
 
 // Pruner is the subset of a local view-preferences store that board pruning
-// drives. Both boardprefs.Store and ideaspace.Store satisfy it.
+// drives. Both boardprefs.Store and ideaspace.Store satisfy it; each store is
+// project-scoped, so pruning always names the project it applies to.
 type Pruner interface {
-	PruneExcept(keys map[string]struct{}) error
+	PruneExcept(project string, keys map[string]struct{}) error
 }
 
 // PruneTarget pairs a store with the key set to keep in it. Each store keeps a
@@ -79,15 +80,16 @@ func CanPrune(results []daemon.TrackerIssuesResult) bool {
 	return len(pm.Issues) > 0
 }
 
-// PrunePrefs drops stale entries from each target store, but ONLY when the fetch
-// is trustworthy (CanPrune). A prune failure is ignored: a stale entry is
-// harmless — the board renders from current cards regardless — whereas wiping
-// everything on a degenerate fetch is the defect this guard exists to prevent.
-func PrunePrefs(results []daemon.TrackerIssuesResult, targets ...PruneTarget) {
+// PrunePrefs drops stale entries from each target store for project, but ONLY
+// when the fetch is trustworthy (CanPrune). A prune failure is ignored: a
+// stale entry is harmless — the board renders from current cards regardless —
+// whereas wiping everything on a degenerate fetch is the defect this guard
+// exists to prevent.
+func PrunePrefs(results []daemon.TrackerIssuesResult, project string, targets ...PruneTarget) {
 	if !CanPrune(results) {
 		return
 	}
 	for _, t := range targets {
-		_ = t.Store.PruneExcept(t.Keep)
+		_ = t.Store.PruneExcept(project, t.Keep)
 	}
 }
