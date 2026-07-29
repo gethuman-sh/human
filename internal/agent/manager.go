@@ -317,7 +317,19 @@ func writeExecExitTrailer(w io.Writer, code int, haveExit bool) {
 // recordExecOutcome writes outcome.json from the tee, so the record exists the
 // moment the exec ends regardless of container teardown. A clean exit (code 0)
 // is "completed"; anything else — including an unknown code — is "failed".
+//
+// It never overwrites an outcome.json that already exists. stopLocked's
+// PreserveExecutionArtifacts writes outcome.json{reason:"reaped"} BEFORE
+// stopping/removing the container, which EOFs this same tee; without the
+// guard the tee's own write below would race in afterwards and clobber the
+// authoritative "reaped" classification DiagnoseFailure keys off, mislabeling
+// reaped agents as "failed" (SC-1688). The tee is the sole writer only when
+// no teardown ever runs (an in-container review dying while the warm
+// container stays up) — the case this recording exists to fix.
 func recordExecOutcome(exe *Execution, code int, haveExit bool) {
+	if exe.HasOutcome() {
+		return
+	}
 	reason := "failed"
 	if haveExit && code == 0 {
 		reason = "completed"

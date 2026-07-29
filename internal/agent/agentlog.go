@@ -143,6 +143,17 @@ func (e *Execution) RecordOutcome(o OutcomeRecord) error {
 	return writeJSONFile(filepath.Join(e.dir, "outcome.json"), o)
 }
 
+// HasOutcome reports whether outcome.json already exists for this execution.
+// PreserveExecutionArtifacts (the teardown path) is the authoritative writer
+// and always runs before the container is destroyed; recordExecOutcome (the
+// tee, at stream EOF) checks this first so it never clobbers a
+// teardown-written classification like "reaped" (SC-1688) — the tee is the
+// sole writer only in the no-teardown case, where no file exists yet.
+func (e *Execution) HasOutcome() bool {
+	_, err := os.Stat(filepath.Join(e.dir, "outcome.json"))
+	return err == nil
+}
+
 // ExecutionSummary is one run as surfaced to `human agent logs`.
 type ExecutionSummary struct {
 	Launch  LaunchRecord   `json:"launch"`

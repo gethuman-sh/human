@@ -187,6 +187,40 @@ func TestTeeExecOutput_RecordsOutcomeOnExit(t *testing.T) {
 	}
 }
 
+// TestTeeExecOutput_DoesNotOverwriteExistingOutcome is the SC-1688 reap-path
+// regression test: stopLocked's PreserveExecutionArtifacts writes
+// outcome.json{reason:"reaped"} BEFORE ContainerStop/ContainerRemove, which
+// then EOFs the still-live tee. Pre-fix, the tee's own recordExecOutcome
+// unconditionally overwrote that record with {reason:"failed"}, clobbering
+// the classification DiagnoseFailure keys off. The write-only-if-absent guard
+// must let the teardown-authored "reaped" record survive.
+func TestTeeExecOutput_DoesNotOverwriteExistingOutcome(t *testing.T) {
+	withLogRoot(t)
+	mgr := &Manager{Docker: &inspectTeeMock{}}
+	exe, err := NewExecution(LaunchRecord{ID: newExecID(), Agent: "tee", Prompt: "p", StartedAt: time.Now()})
+	if err != nil {
+		t.Fatalf("NewExecution: %v", err)
+	}
+	// Simulate PreserveExecutionArtifacts having already run on the reap path,
+	// before the container teardown that will EOF the tee below.
+	reapedAt := time.Now()
+	if err := exe.RecordOutcome(OutcomeRecord{Reason: "reaped", EndedAt: reapedAt}); err != nil {
+		t.Fatalf("seeding outcome.json: %v", err)
+	}
+
+	frames := append(stdoutFrame("OUT"), stderrFrame("ERR")...)
+	attach := devcontainer.ExecAttachResponse{Reader: bytesReader(frames), Conn: nopCloser()}
+	teeExecOutput(attach, exe, mgr.Docker, "exec-id")
+
+	var oc OutcomeRecord
+	if err := readJSONFile(filepath.Join(exe.Dir(), "outcome.json"), &oc); err != nil {
+		t.Fatalf("outcome.json must still exist: %v", err)
+	}
+	if oc.Reason != "reaped" {
+		t.Fatalf("outcome reason = %q, want reaped (teardown classification must survive the tee's EOF write)", oc.Reason)
+	}
+}
+
 func TestListExecutions_NewestFirst(t *testing.T) {
 	withLogRoot(t)
 	old, err := NewExecution(LaunchRecord{ID: "old", Agent: "a", StartedAt: time.Now().Add(-time.Hour)})
