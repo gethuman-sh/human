@@ -1,10 +1,13 @@
 package vault
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gethuman-sh/human/errors"
 )
 
 func TestIsSecretRef(t *testing.T) {
@@ -61,6 +64,45 @@ func TestResolver_Resolve_multipleProviders(t *testing.T) {
 	val, err := r.Resolve("1pw://vault/item/field")
 	require.NoError(t, err)
 	assert.Equal(t, "correct", val)
+}
+
+// Reproduces SC-1653: on a released (CGO_ENABLED=0) non-WSL build the SDK
+// provider fails to initialize; the resolver must fall through to the op CLI
+// behind it rather than surfacing "initializing 1Password SDK".
+func TestResolver_Resolve_fallsThroughToCLIWhenSDKFails(t *testing.T) {
+	sdk := NewOnePassword("my-account")
+	sdk.clientFactory = func(_ context.Context) (secretResolver, error) {
+		return nil, errors.WithDetails("initializing 1Password SDK")
+	}
+	cli := &OpCLI{
+		Binary: "op",
+		runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			assert.Equal(t, []string{"read", "op://Development/GitHub PAT/token"}, args)
+			return []byte("resolved-secret\n"), nil
+		},
+	}
+	r := NewResolver(sdk, cli, NewGhCLI())
+
+	val, err := r.Resolve("1pw://Development/GitHub PAT/token")
+	require.NoError(t, err)
+	assert.Equal(t, "resolved-secret", val)
+}
+
+// When every claiming provider errors, Resolve returns the last error.
+func TestResolver_Resolve_allClaimantsFail(t *testing.T) {
+	first := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve:    func(string) (string, error) { return "", errors.WithDetails("first failed") },
+	}
+	second := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve:    func(string) (string, error) { return "", errors.WithDetails("last failed") },
+	}
+	r := NewResolver(first, second)
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "last failed")
 }
 
 func TestResolveField_nilResolver(t *testing.T) {
