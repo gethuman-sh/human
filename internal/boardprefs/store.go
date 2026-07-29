@@ -15,15 +15,23 @@ import (
 	"github.com/gethuman-sh/human/errors"
 )
 
-// fileFormat is the on-disk shape. Version exists so a later change (e.g.
-// scoping preferences per tracker) can migrate instead of misreading.
-type fileFormat struct {
-	Version int                 `json:"version"`
+// projectPrefs is one project's view preferences.
+type projectPrefs struct {
 	Columns map[string][]string `json:"columns"`
 	Hidden  []string            `json:"hidden"`
 }
 
-const currentVersion = 1
+// fileFormat is the on-disk shape. Projects maps a project directory to its
+// preferences. The Columns/Hidden fields are the legacy v1 shape, read only to
+// migrate an existing single-project file into the active project's slot.
+type fileFormat struct {
+	Version  int                     `json:"version"`
+	Projects map[string]projectPrefs `json:"projects"`
+	Columns  map[string][]string     `json:"columns,omitempty"` // legacy v1
+	Hidden   []string                `json:"hidden,omitempty"`  // legacy v1
+}
+
+const currentVersion = 2
 
 // Prefs is one consistent snapshot of both preference kinds, taken under a
 // single lock so a caller never sees an order from before a hide.
@@ -58,36 +66,39 @@ func NewStore(path string) *Store {
 	return &Store{path: path}
 }
 
-// Snapshot returns the saved preferences. A missing, corrupt, or
+// Snapshot returns project's saved preferences. A missing, corrupt, or
 // future-versioned file yields empty preferences — no saved order simply
 // means fetch order, and nothing hidden.
-func (s *Store) Snapshot() Prefs {
+func (s *Store) Snapshot(project string) Prefs {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return prefsOf(s.read())
+	return prefsOf(s.read(project))
 }
 
-// SetOrder replaces the hand-sorted key list for one queue.
-func (s *Store) SetOrder(queue string, keys []string) error {
+// SetOrder replaces the hand-sorted key list for one queue in project.
+func (s *Store) SetOrder(project, queue string, keys []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	f := s.read()
-	if f.Columns == nil {
-		f.Columns = map[string][]string{}
+	f := s.readAll(project)
+	pp := f.Projects[project]
+	if pp.Columns == nil {
+		pp.Columns = map[string][]string{}
 	}
-	f.Columns[queue] = keys
+	pp.Columns[queue] = keys
+	f.Projects[project] = pp
 	return s.write(f)
 }
 
-// SetHidden parks or restores one ticket.
-func (s *Store) SetHidden(key string, hidden bool) error {
+// SetHidden parks or restores one ticket in project.
+func (s *Store) SetHidden(project, key string, hidden bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	f := s.read()
-	kept := make([]string, 0, len(f.Hidden)+1)
-	for _, k := range f.Hidden {
+	f := s.readAll(project)
+	pp := f.Projects[project]
+	kept := make([]string, 0, len(pp.Hidden)+1)
+	for _, k := range pp.Hidden {
 		if k != key {
 			kept = append(kept, k)
 		}
@@ -95,24 +106,26 @@ func (s *Store) SetHidden(key string, hidden bool) error {
 	if hidden {
 		kept = append(kept, key)
 	}
-	f.Hidden = kept
+	pp.Hidden = kept
+	f.Projects[project] = pp
 	return s.write(f)
 }
 
 // PruneExcept drops preferences for tickets not in keys — closed or vanished
-// tickets no longer need an order slot or a hidden flag. A missing file is a
-// no-op so pruning never creates state.
-func (s *Store) PruneExcept(keys map[string]struct{}) error {
+// tickets no longer need an order slot or a hidden flag — scoped to project. A
+// missing file is a no-op so pruning never creates state.
+func (s *Store) PruneExcept(project string, keys map[string]struct{}) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, err := os.Stat(s.path); err != nil {
 		return nil
 	}
-	f := s.read()
+	f := s.readAll(project)
+	pp := f.Projects[project]
 	changed := false
 
-	for queue, order := range f.Columns {
+	for queue, order := range pp.Columns {
 		kept := make([]string, 0, len(order))
 		for _, k := range order {
 			if _, ok := keys[k]; ok {
@@ -120,53 +133,79 @@ func (s *Store) PruneExcept(keys map[string]struct{}) error {
 			}
 		}
 		if len(kept) != len(order) {
-			f.Columns[queue] = kept
+			pp.Columns[queue] = kept
 			changed = true
 		}
 	}
-	keptHidden := make([]string, 0, len(f.Hidden))
-	for _, k := range f.Hidden {
+	keptHidden := make([]string, 0, len(pp.Hidden))
+	for _, k := range pp.Hidden {
 		if _, ok := keys[k]; ok {
 			keptHidden = append(keptHidden, k)
 		}
 	}
-	if len(keptHidden) != len(f.Hidden) {
-		f.Hidden = keptHidden
+	if len(keptHidden) != len(pp.Hidden) {
+		pp.Hidden = keptHidden
 		changed = true
 	}
 
 	if !changed {
 		return nil
 	}
+	f.Projects[project] = pp
 	return s.write(f)
 }
 
-func prefsOf(f fileFormat) Prefs {
-	p := Prefs{Columns: f.Columns, Hidden: make(map[string]struct{}, len(f.Hidden))}
+func prefsOf(pp projectPrefs) Prefs {
+	p := Prefs{Columns: pp.Columns, Hidden: make(map[string]struct{}, len(pp.Hidden))}
 	if p.Columns == nil {
 		p.Columns = map[string][]string{}
 	}
-	for _, k := range f.Hidden {
+	for _, k := range pp.Hidden {
 		p.Hidden[k] = struct{}{}
 	}
 	return p
 }
 
-// read loads the file tolerantly; callers hold s.mu.
-func (s *Store) read() fileFormat {
-	empty := fileFormat{Version: currentVersion, Columns: map[string][]string{}}
+// read returns one project's prefs, folding a legacy v1 file into that project
+// in memory (not persisted); callers hold s.mu.
+func (s *Store) read(project string) projectPrefs {
+	f := s.readAll(project)
+	pp := f.Projects[project]
+	if pp.Columns == nil {
+		pp.Columns = map[string][]string{}
+	}
+	return pp
+}
+
+// readAll returns the full project-keyed file, migrating a legacy v1 single-
+// project file into the requested project's slot; callers hold s.mu.
+func (s *Store) readAll(project string) fileFormat {
+	empty := fileFormat{Version: currentVersion, Projects: map[string]projectPrefs{}}
 	data, err := os.ReadFile(s.path) // #nosec G304 — path fixed at construction
 	if err != nil {
 		return empty
 	}
 	var f fileFormat
-	if json.Unmarshal(data, &f) != nil || f.Version != currentVersion {
+	if json.Unmarshal(data, &f) != nil {
 		return empty
 	}
-	if f.Columns == nil {
-		f.Columns = map[string][]string{}
+	switch f.Version {
+	case currentVersion:
+		if f.Projects == nil {
+			f.Projects = map[string]projectPrefs{}
+		}
+		return f
+	case 1:
+		cols := f.Columns
+		if cols == nil {
+			cols = map[string][]string{}
+		}
+		return fileFormat{Version: currentVersion, Projects: map[string]projectPrefs{
+			project: {Columns: cols, Hidden: f.Hidden},
+		}}
+	default:
+		return empty
 	}
-	return f
 }
 
 // write persists atomically via temp+rename so a crash mid-write can never
@@ -174,6 +213,8 @@ func (s *Store) read() fileFormat {
 // callers hold s.mu.
 func (s *Store) write(f fileFormat) error {
 	f.Version = currentVersion
+	f.Columns = nil // never persist legacy fields
+	f.Hidden = nil
 	data, err := json.Marshal(f)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshal board prefs", "path", s.path)
