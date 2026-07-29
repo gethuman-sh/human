@@ -21,6 +21,7 @@ import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
+import { reconcilePending, dropPending } from "./board-pending.js";
 export {};
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
@@ -512,8 +513,8 @@ function renderIdeaSpace() {
         if (i === 0) {
             // Quick-add writes into the leftmost sub-column, so captures awaiting
             // their ticket number sit on top of it — where the input just was.
-            for (const title of pendingIdeas)
-                body.prepend(renderPendingCard(title));
+            for (const idea of pendingIdeas)
+                body.prepend(renderPendingCard(idea.title));
         }
         col.appendChild(body);
         subcols.push(col);
@@ -755,7 +756,9 @@ async function fixSecurity(key, title) {
 }
 // Bugs filed from the pane but not yet confirmed by a board fetch — the bug
 // grid's counterpart to pendingIdeas, with the same handover rule: the
-// placeholder clears when a fetched bug card carries its title.
+// placeholder clears when a fetched bug card's key matches the one captured
+// from the create response (SC-1691); title is only a fallback for a
+// placeholder that never captured a key.
 let pendingBugs = [];
 // Security tickets filed from the Security half but not yet confirmed by a
 // board fetch — the Security counterpart to pendingBugs, same handover rule.
@@ -818,15 +821,16 @@ function showBugModal(prefillTitle = "", prefillDescription = "") {
 // createBug files the ticket and keeps the grid honest: placeholder first,
 // rollback + reopened dialog on failure (same contract as CreateIdea).
 async function createBug(title, description) {
-    pendingBugs.push({ title, description });
+    const pending = { title, description };
+    pendingBugs.push(pending);
     render();
     try {
-        await go().CreateBug(title, description);
+        pending.key = await go().CreateBug(title, description);
     }
     catch (err) {
         // The ticket does not exist, so the placeholder must not pretend it
         // does — give the text back to the dialog instead.
-        pendingBugs = pendingBugs.filter((b) => b.title !== title);
+        pendingBugs = dropPending(pendingBugs, pending);
         showError(errMessage(err));
         showBugModal(title, description);
         return;
@@ -885,13 +889,14 @@ function showSecurityModal(prefillTitle = "", prefillDescription = "") {
 // createSecurity files the security ticket and keeps the grid honest:
 // placeholder first, rollback + reopened dialog on failure (mirrors createBug).
 async function createSecurity(title, description) {
-    pendingSecurity.push({ title, description });
+    const pending = { title, description };
+    pendingSecurity.push(pending);
     render();
     try {
-        await go().CreateSecurity(title, description);
+        pending.key = await go().CreateSecurity(title, description);
     }
     catch (err) {
-        pendingSecurity = pendingSecurity.filter((s) => s.title !== title);
+        pendingSecurity = dropPending(pendingSecurity, pending);
         showError(errMessage(err));
         showSecurityModal(title, description);
         return;
@@ -975,11 +980,13 @@ async function deployReady(side) {
     }
     await reconcile();
 }
-// Ideas captured but not yet confirmed by a board fetch, by title. Each
-// renders as a placeholder card the moment Enter is pressed — waiting for the
-// full refetch (seconds of comment scanning) would make the capture look
-// lost. An entry clears when a fetched Ideas card carries its title, so even
-// a stale in-flight fetch cannot blink the capture away.
+// Ideas captured but not yet confirmed by a board fetch. Each renders as a
+// placeholder card the moment Enter is pressed — waiting for the full
+// refetch (seconds of comment scanning) would make the capture look lost. An
+// entry clears when a fetched Ideas card's key matches the one captured from
+// the create response (SC-1691); title is only a fallback for an entry that
+// never captured a key, so even a stale in-flight fetch cannot blink the
+// capture away.
 let pendingIdeas = [];
 // showIdeaQuickAdd swaps an inline title input into an idea-space sub-column.
 // Enter creates the idea-labeled ticket via CreateIdea; Escape or blur
@@ -1009,16 +1016,17 @@ function showIdeaQuickAdd(col, prefill = "") {
         // The capture is visible immediately as a placeholder card; the ticket
         // number arrives with the next fetch. render() rebuilds the board, which
         // also disposes of the input.
-        pendingIdeas.push(title);
+        const pending = { title };
+        pendingIdeas.push(pending);
         render();
         void (async () => {
             try {
-                await go().CreateIdea(title);
+                pending.key = await go().CreateIdea(title);
             }
             catch (err) {
                 // The ticket does not exist, so the placeholder must not pretend it
                 // does — put the title back into a fresh input instead.
-                pendingIdeas = pendingIdeas.filter((t) => t !== title);
+                pendingIdeas = dropPending(pendingIdeas, pending);
                 showError(errMessage(err));
                 const retryCol = document.querySelector(".idea-subcol");
                 if (retryCol)
@@ -1736,21 +1744,28 @@ async function reconcile(opts = {}) {
             : { cards: [], dockerAvailable: false, error: errMessage(err) };
     }
     if (pendingIdeas.length) {
-        // A fetched Ideas card carrying a pending title IS that capture — the
-        // placeholder hands over to the real card. Unconfirmed captures stay,
-        // whatever this fetch contained.
-        const fetched = new Set(current.cards.filter((c) => queueOf(c) === "ideas").map((c) => c.title));
-        pendingIdeas = pendingIdeas.filter((t) => !fetched.has(t));
+        // A fetched Ideas card whose key matches the pending capture's key IS
+        // that capture — the placeholder hands over to the real card. A
+        // placeholder that never captured a key falls back to title matching
+        // (SC-1691). Unconfirmed captures stay, whatever this fetch contained.
+        const ideaCards = current.cards.filter((c) => queueOf(c) === "ideas");
+        const keys = new Set(ideaCards.map((c) => c.key));
+        const titles = new Set(ideaCards.map((c) => c.title));
+        pendingIdeas = reconcilePending(pendingIdeas, keys, titles);
     }
     if (pendingBugs.length) {
         // Same handover rule for bugs filed from the pane's + dialog.
-        const fetchedBugs = new Set(current.cards.filter((c) => c.bug).map((c) => c.title));
-        pendingBugs = pendingBugs.filter((b) => !fetchedBugs.has(b.title));
+        const bugCards = current.cards.filter((c) => c.bug);
+        const keys = new Set(bugCards.map((c) => c.key));
+        const titles = new Set(bugCards.map((c) => c.title));
+        pendingBugs = reconcilePending(pendingBugs, keys, titles);
     }
     if (pendingSecurity.length) {
         // Same handover rule for security tickets filed from the Security half.
-        const fetchedSecurity = new Set(current.cards.filter((c) => c.security).map((c) => c.title));
-        pendingSecurity = pendingSecurity.filter((s) => !fetchedSecurity.has(s.title));
+        const securityCards = current.cards.filter((c) => c.security);
+        const keys = new Set(securityCards.map((c) => c.key));
+        const titles = new Set(securityCards.map((c) => c.title));
+        pendingSecurity = reconcilePending(pendingSecurity, keys, titles);
     }
     boardLoading = false;
     stagesLoading = false;
