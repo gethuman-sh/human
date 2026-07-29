@@ -2234,9 +2234,10 @@ func resolvePMTransitioner(dir string, lookup config.EnvLookup, resolver *vault.
 // Closing IS cancellation (1698): the board close reads to the user as "stop
 // this", so it must actually stop the claiming agent and release its container
 // before the ticket leaves the board — otherwise the run keeps working invisibly
-// against a closed card. The stop precedes the transition so a stop failure
-// still leaves the card open (and thus reachable by the reconcile safety net)
-// rather than closing over a run that refused to die.
+// against a closed card. The transition is GATED on a confirmed stop: if the run
+// could not be stopped (or could not even be enumerated to stop it), the ticket
+// is left open — and thus reachable by the reconcile safety net, which lists open
+// cards only — rather than closing over a run that refused to die.
 func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, liveAgents func() ([]string, error), stopAgent func(context.Context, string) error, logger zerolog.Logger) func(daemon.CloseTicketRequest) error {
 	return func(req daemon.CloseTicketRequest) error {
 		entries := reg.Entries()
@@ -2247,8 +2248,11 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, li
 		lookup := entry.EnvLookup()
 
 		stopCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		daemon.StopAgentsForPMKey(stopCtx, req.PMKey, liveAgents, stopAgent, logger)
+		_, stopErr := daemon.StopAgentsForPMKey(stopCtx, req.PMKey, liveAgents, stopAgent, logger)
 		cancel()
+		if stopErr != nil {
+			return stopErr
+		}
 
 		transitioner, err := resolvePMTransitioner(entry.Dir, lookup, resolver)
 		if err != nil {
