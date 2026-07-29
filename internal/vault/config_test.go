@@ -68,13 +68,13 @@ func TestNewResolverFromConfig_nil(t *testing.T) {
 func TestNewResolverFromConfig_1password(t *testing.T) {
 	r := NewResolverFromConfig(&Config{Provider: "1password"})
 	require.NotNil(t, r)
-	assert.Len(t, r.providers, 2) // 1Password + GitHub CLI
+	assert.Len(t, r.providers, 3) // 1Password SDK + op CLI + GitHub CLI
 }
 
 func TestNewResolverFromConfig_1pw(t *testing.T) {
 	r := NewResolverFromConfig(&Config{Provider: "1pw"})
 	require.NotNil(t, r)
-	assert.Len(t, r.providers, 2) // 1Password + GitHub CLI
+	assert.Len(t, r.providers, 3) // 1Password SDK + op CLI + GitHub CLI
 }
 
 func TestNewResolverFromConfig_unknownProvider(t *testing.T) {

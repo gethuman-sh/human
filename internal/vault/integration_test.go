@@ -131,8 +131,9 @@ func TestReadConfig_andNewResolver(t *testing.T) {
 
 	resolver := NewResolverFromConfig(cfg)
 	require.NotNil(t, resolver)
-	// The resolver has the 1Password provider plus the always-on GitHub CLI.
-	assert.Len(t, resolver.providers, 2)
+	// The resolver has the 1Password SDK, the op CLI fallback behind it, and
+	// the always-on GitHub CLI.
+	assert.Len(t, resolver.providers, 3)
 }
 
 func TestResolver_concurrentAccess(t *testing.T) {
