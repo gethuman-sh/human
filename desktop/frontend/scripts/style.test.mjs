@@ -26,10 +26,54 @@ function ruleBody(selector) {
 
 test("bug-grid card title is line-clamped with an ellipsis", () => {
   const body = ruleBody(".column-body.bug-grid .card-title");
-  assert.match(body, /-webkit-line-clamp:\s*\d+/, "title must set -webkit-line-clamp");
+  assert.match(body, /-webkit-line-clamp:\s*\S+/, "title must set -webkit-line-clamp");
   assert.match(body, /-webkit-box-orient:\s*vertical/, "clamp needs vertical box orient");
   assert.match(body, /display:\s*-webkit-box/, "clamp needs display:-webkit-box");
   assert.match(body, /overflow:\s*hidden/, "clamped title must hide its overflow");
+});
+
+// SC-1656 regression: a fixed 1/N grid-auto-rows pins every card to the same
+// height regardless of card count, leaving a large void when the tray is
+// sparse. The row height must instead be content-adaptive.
+test("bug-grid rows are content-adaptive, not a fixed 1/N fraction of the tray (SC-1656)", () => {
+  const body = exactRuleBody(".column-body.bug-grid");
+  const rows = body.match(/grid-auto-rows:\s*([^;]+);/);
+  assert.ok(rows, ".column-body.bug-grid must set grid-auto-rows");
+  assert.doesNotMatch(
+    rows[1], /\/\s*\d+\s*\)/,
+    "grid-auto-rows must not be a fixed 1/N fraction of the tray height (SC-1656)",
+  );
+  assert.match(
+    rows[1], /minmax\([^;]*,\s*1fr\s*\)/,
+    "grid-auto-rows must use minmax(min, 1fr) so rows expand to fill a sparse tray (SC-1656)",
+  );
+});
+
+// SC-1656 regression: the clamp constant and the cell height must be coupled
+// by layout (a shared --bug-title-lines token), not by assumption, so a cell
+// can never be shorter than the clamped lines and slice a title mid-glyph.
+test("bug-grid title clamp is coupled to the card min-height, not a bare constant (SC-1656)", () => {
+  const clampBody = ruleBody(".column-body.bug-grid .card-title");
+  const clamp = clampBody.match(/-webkit-line-clamp:\s*([^;]+);/);
+  assert.ok(clamp, "title must set -webkit-line-clamp");
+  assert.doesNotMatch(
+    clamp[1].trim(), /^\d+$/,
+    "-webkit-line-clamp must not be a bare integer disconnected from the cell height (SC-1656)",
+  );
+  assert.match(
+    clamp[1], /var\(\s*--bug-title-lines\s*\)/,
+    "-webkit-line-clamp must reference the shared --bug-title-lines token (SC-1656)",
+  );
+
+  const gridBody = exactRuleBody(".column-body.bug-grid");
+  assert.match(
+    gridBody, /--bug-title-lines:\s*\d+/,
+    ".column-body.bug-grid must declare --bug-title-lines (SC-1656)",
+  );
+  assert.match(
+    gridBody, /--bug-card-min-h:\s*calc\([^;]*var\(\s*--bug-title-lines\s*\)/,
+    ".column-body.bug-grid must derive --bug-card-min-h from --bug-title-lines (SC-1656)",
+  );
 });
 
 test("default-theme .card contains its overflow and resists shrinking", () => {
