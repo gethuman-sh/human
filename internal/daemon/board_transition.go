@@ -199,12 +199,10 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 
-	// Idempotency: if the target stage already has an open *-started marker, a
-	// duplicate drop (e.g. a quick re-drag before the board refetches) must not
-	// launch a second agent or re-post the marker. Checked first because a
-	// re-drop derives the card as already sitting in the target stage, which
-	// the forward-only rule below would otherwise reject as a non-advance.
-	if _, state := latestStageState(comments, req.To); state == BoardRunning {
+	// Idempotency, checked first because a re-drop derives the card as already
+	// sitting in the target stage, which the forward-only rule below would
+	// otherwise reject as a non-advance.
+	if isDuplicateDrop(req.To, card) {
 		return nil
 	}
 
@@ -328,8 +326,9 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 	// into) rather than a whole-card check on purpose: DeriveBoardCard reports
 	// the FURTHEST stage's state, so a stale [human:deploy-failed] marker pins
 	// the card to done/failed and structurally hides a running re-fix from a
-	// whole-card guard (SC-230). latestStageState mirrors ApplyTransition's
-	// duplicate-drop guard and is immune to that masking.
+	// whole-card guard (SC-230). Deliberately NOT the derived-card guard
+	// ApplyTransition uses: these two stages carry no supersede semantics, so a
+	// raw scan is both accurate here and immune to that masking.
 	if _, state := latestStageState(comments, BoardImplementation); state == BoardRunning {
 		return nil
 	}
@@ -1060,6 +1059,24 @@ func isReviewRetry(to BoardStage, card BoardCard) bool {
 	return to == BoardVerification &&
 		card.Stage == BoardVerification &&
 		card.State == BoardFailed
+}
+
+// isDuplicateDrop reports a drop onto a stage the card is already working, so a
+// quick re-drag before the board refetches cannot launch a second agent.
+//
+// The DERIVED card — not a raw per-stage marker scan — is the authority, and the
+// two genuinely disagree: DeriveBoardCard retires a done-stage marker the
+// pipeline has moved past (supersededByNewerMarker), a raw scan never does. A PR
+// review→fix loop that escalates to a [human:options] block leaves
+// [human:pr-fix-started] as the newest done-stage marker forever — the
+// escalation posts its block against the implementation stage, and nothing ever
+// closes the done stage. Once the chosen rebuild lands and its review passes,
+// the board (deriving) offers the Deploy drop while a raw scan still reads
+// "running": every drop was swallowed by a nil return no human could see or
+// clear (SC-1857). Gating on the derivation the board itself renders keeps the
+// two answering the same question.
+func isDuplicateDrop(to BoardStage, card BoardCard) bool {
+	return card.Stage == to && card.State == BoardRunning
 }
 
 // isReworkTransition reports the one allowed backward move: re-running the

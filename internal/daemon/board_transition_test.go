@@ -433,6 +433,71 @@ func TestApplyTransitionIdempotentDuplicate(t *testing.T) {
 	assert.Empty(t, c.added)
 }
 
+// escalatedLoopThenRebuilt is the marker thread SC-1857 stranded: the PR
+// review→fix loop escalated to a [human:options] block (which the escalation
+// posts against the IMPLEMENTATION stage), the chosen rebuild ran, and its
+// review passed. [human:pr-fix-started] is left as the newest done-stage marker
+// forever — nothing in the loop ever closes the done stage.
+func escalatedLoopThenRebuilt() []tracker.Comment {
+	return []tracker.Comment{
+		cmt("[human:pr-review-started]\nnumber: 257\nbranch: autofix/x", time.Unix(1, 0)),
+		cmt("[human:pr-fix-started]", time.Unix(2, 0)),
+		cmt("[human:options]\nstage: implementation\ncontext: the fixer needs a decision\n1: Rebuild the branch", time.Unix(3, 0)),
+		cmt("[human:option-chosen] 1: Rebuild the branch", time.Unix(4, 0)),
+		cmt("[human:implementation-started]", time.Unix(5, 0)),
+		cmt("[human:ready-for-review]\nbranch: autofix/x\ncommits: abc1234", time.Unix(6, 0)),
+		cmt("[human:review-started]", time.Unix(7, 0)),
+		cmt("[human:review-complete]\nverdict: pass", time.Unix(8, 0)),
+	}
+}
+
+func TestApplyTransitionDeployAfterEscalatedLoop(t *testing.T) {
+	// SC-1857: the board derives this card to verification/done and offers the
+	// Deploy drop, but the raw done stage still reads "running" off the stranded
+	// [human:pr-fix-started]. Gating on the raw scan swallowed every drop with a
+	// silent nil; gating on the derived card ships it.
+	comments := escalatedLoopThenRebuilt()
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	require.Equal(t, BoardVerification, card.Stage, "board offers the Deploy drop")
+	require.Equal(t, BoardDone, card.State)
+	_, raw := latestStageState(comments, BoardDoneStage)
+	require.Equal(t, BoardRunning, raw, "raw done stage disagrees — the trap")
+
+	syncPRReview(t)
+	c := &fakeCommenter{comments: comments}
+	p := &fakeDeployer{res: PRResult{Number: 257, URL: "https://github.com/o/r/pull/257"}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{
+		PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+
+	require.NoError(t, err)
+	assert.NotEmpty(t, c.added, "the drop must do something visible, not return a silent nil")
+}
+
+func TestApplyTransitionRunningDeployStillIdempotent(t *testing.T) {
+	// The other half of the contract: a genuinely in-flight loop — the same
+	// thread WITHOUT the rebuild that moved past it — still derives to
+	// done/running and must not launch a second deploy on a re-drop.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: autofix/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: pass", time.Unix(2, 0)),
+		cmt("[human:pr-review-started]\nnumber: 257\nbranch: autofix/x", time.Unix(3, 0)),
+		cmt("[human:pr-fix-started]", time.Unix(4, 0)),
+	}}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{}
+	deps := newDeps(c, l, p)
+
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{
+		PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+	assert.Zero(t, p.call)
+	assert.Empty(t, c.added)
+}
+
 func TestApplyTransitionDoneNoBranch(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:review-complete]", time.Unix(1, 0))}}
 	p := &fakeDeployer{}
