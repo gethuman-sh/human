@@ -166,3 +166,34 @@ test("board exposes a persistent horizontal scroll affordance (SC-1451)", () => 
     ".board must style ::-webkit-scrollbar so WebKitGTK shows a visible bar",
   );
 });
+
+// SC-1830 regression: badge colour answers "whose turn is it?", not severity.
+// The machine-working failed-verdict badge must not wear the same amber as the
+// needs-a-human decision badge.
+test("failed-verdict badge uses the machine-working colour, not the decision amber (SC-1830)", () => {
+  const fixing = ruleBody(".badge.fixing");
+  const decision = ruleBody(".badge.decision");
+  assert.match(fixing, /color:\s*var\(--turn-machine\)/, ".badge.fixing must use the gray machine-working token");
+  assert.match(decision, /color:\s*var\(--turn-person\)/, ".badge.decision must use the needs-a-person token");
+  assert.doesNotMatch(fixing, /var\(--turn-person\)/, "the fixing badge must not borrow the needs-a-person colour");
+});
+
+// SC-1830 inverse-sibling fix: terminal successes are green, not muted gray.
+test("resolved (terminal-success) badge is green, not muted (SC-1830)", () => {
+  const resolved = ruleBody(".badge.resolved");
+  assert.match(resolved, /color:\s*var\(--turn-done\)/, ".badge.resolved is a terminal success — it must be green");
+  assert.doesNotMatch(resolved, /var\(--muted\)/, "the muted-gray mistone must not be reintroduced");
+});
+
+// SC-1830: the four "whose turn" semantic tokens must exist and alias the
+// existing palette (gray=machine, amber=person, red=error, green=done).
+test("whose-turn colour tokens are defined (SC-1830)", () => {
+  for (const decl of [
+    /--turn-machine:\s*var\(--muted\)/,
+    /--turn-person:\s*var\(--running\)/,
+    /--turn-error:\s*var\(--failed\)/,
+    /--turn-done:\s*var\(--done\)/,
+  ]) {
+    assert.match(css, decl, `:root must define ${decl}`);
+  }
+});

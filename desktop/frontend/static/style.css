@@ -10,6 +10,14 @@
   --running: #d6a13a;
   --done: #3ec07a;
   --failed: #e0544e;
+  /* Badge colour answers "whose turn is it?", not severity (SC-1830):
+     gray = the machine is working (spinner carries aliveness),
+     amber = a person must act, red = an error a person must clear,
+     green = terminal success. */
+  --turn-machine: var(--muted);
+  --turn-person: var(--running);
+  --turn-error: var(--failed);
+  --turn-done: var(--done);
   --drop-ok: #2f4a2f;
   --drop-reject: #4a2f2f;
 }
@@ -790,55 +798,64 @@ body {
 }
 
 .badge.done {
-  color: var(--done);
+  color: var(--turn-done);
 }
 
 .badge.running {
-  color: var(--running);
+  color: var(--turn-machine);
 }
 
 .badge.failed {
-  color: var(--failed);
+  color: var(--turn-error);
 }
 
-/* A review that found problems: a warning, not a stage failure — the work
-   exists, it just cannot advance until a rebuild passes. */
+/* A broken handoff that needs a person: a passed review with no branch to ship
+   (SC-1830). Stays in the needs-a-human amber register — unlike the auto-fixed
+   failed-verdict case, which is now .badge.fixing. */
 .badge.warning {
-  color: var(--running);
+  color: var(--turn-person);
 }
 
-/* An autofix run that triage resolved as no-fix-needed (not-a-bug or
-   undetermined): a successful terminal outcome, muted rather than red — there
-   is nothing wrong and nothing to ship (ticket 405). */
+/* A failed review verdict the pipeline auto-fixes (SC-1830): machine work, not a
+   demand on the user — gray, with the running spinner carrying aliveness. */
+.badge.fixing {
+  color: var(--turn-machine);
+}
+
+/* A terminal success — an autofix triaged as no-fix-needed or a planning card
+   whose work already shipped: green, because the work is done, not muted
+   (SC-1830). There is nothing wrong and nothing left to do. */
 .badge.resolved {
-  color: var(--muted);
+  color: var(--turn-done);
 }
 
-/* A durable "fix done, review not yet started" hand-off (SC-429): a neutral
-   waiting state — not a warning, not a completion. */
+/* A durable "fix done, review not yet started" hand-off (SC-429): the machine
+   is between stages — gray machine-working register, not a warning, not a
+   completion. */
 .badge.await {
-  color: var(--muted);
+  color: var(--turn-machine);
 }
 
-/* A degraded card's marker fetch failed this scan (ticket 1700): muted like
-   the other non-failure waiting states — it is not a pipeline failure, just
-   an unreadable refresh that will retry. */
+/* A degraded card's marker fetch failed this scan (ticket 1700): the machine
+   will retry it, so it belongs in the machine-working register — nothing is
+   asked of the user and nothing has failed (SC-1830). */
 .badge.degraded {
-  color: var(--muted);
+  color: var(--turn-machine);
 }
 
-/* An open decision block (ticket 534): the pipeline is deliberately waiting
-   on the human — accent-colored like the running state, because the ball is
-   in play, just in the user's court. */
+/* An open decision block (ticket 534): the pipeline is deliberately waiting on
+   the human — amber, because the ball is in play and in the user's court
+   (SC-1830 needs-a-person register). */
 .badge.decision {
-  color: var(--running);
+  color: var(--turn-person);
   font-weight: 600;
 }
 
-/* A recorded decision that has (re)queued the chosen stage (SC-1320): in-play,
-   accent-colored like the running/decision states — never red. */
+/* A recorded decision that has (re)queued the chosen stage (SC-1320): gray
+   machine-working register — the spinner carries aliveness while a fresh agent
+   picks the work up (SC-1830). Never red. */
 .badge.queued {
-  color: var(--running);
+  color: var(--turn-machine);
   font-weight: 600;
 }
 

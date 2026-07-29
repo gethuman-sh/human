@@ -10,6 +10,14 @@
   --running: #d6a13a;
   --done: #3ec07a;
   --failed: #e0544e;
+  /* Badge colour answers "whose turn is it?", not severity (SC-1830):
+     gray = the machine is working (spinner carries aliveness),
+     amber = a person must act, red = an error a person must clear,
+     green = terminal success. */
+  --turn-machine: var(--muted);
+  --turn-person: var(--running);
+  --turn-error: var(--failed);
+  --turn-done: var(--done);
   --drop-ok: #2f4a2f;
   --drop-reject: #4a2f2f;
 }
@@ -438,14 +446,21 @@ body {
   grid-area: deploy;
 }
 
-/* The bug grid fills up horizontally: cards flow left→right and wrap, five
-   rows tall — a tray you scan, unlike the idea space's five sorted lanes.
-   Past five rows the tray scrolls. */
+/* The bug grid fills up horizontally: cards flow left→right and wrap — a
+   tray you scan, unlike the idea space's five sorted lanes. Row height is
+   content-adaptive (minmax(min, 1fr)): a sparse tray's rows expand to fill
+   the space instead of leaving a void; once rows hit --bug-card-min-h the
+   tray scrolls (SC-1656). */
 .column-body.bug-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   grid-auto-flow: row;
-  grid-auto-rows: calc((100% - 4 * 8px) / 5);
+  /* Guaranteed title lines; the clamp reads this same token so the two are
+     coupled by layout, not by assumption (SC-1656 root cause). */
+  --bug-title-lines: 3;
+  /* Card chrome ≈ 64px; each title line ≈ 19px (14px body font × 1.3). */
+  --bug-card-min-h: calc(64px + var(--bug-title-lines) * 19px);
+  grid-auto-rows: minmax(var(--bug-card-min-h), 1fr);
   align-content: start;
 }
 
@@ -747,15 +762,15 @@ body {
   line-height: 1.3;
 }
 
-/* In the Bugs pane every card is pinned to one-fifth of the tray height
-   (style.css .column-body.bug-grid grid-auto-rows), so a long title cannot
-   grow the card. Clamp it to the lines that fit above the key/meta rows and
-   end in an ellipsis, keeping the last line off the rounded bottom border
-   (bug 204). Three lines is the most that fits the smallest realistic cell. */
+/* In the Bugs pane the card's minimum height (--bug-card-min-h, set on
+   .column-body.bug-grid) is derived from this same --bug-title-lines count,
+   so the cell can never be shorter than the clamped lines and a title
+   always ends in a clean ellipsis instead of a mid-glyph slice (SC-1656),
+   keeping the last line off the rounded bottom border (bug 204). */
 .column-body.bug-grid .card-title {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: var(--bug-title-lines);
   overflow: hidden;
 }
 
@@ -783,55 +798,64 @@ body {
 }
 
 .badge.done {
-  color: var(--done);
+  color: var(--turn-done);
 }
 
 .badge.running {
-  color: var(--running);
+  color: var(--turn-machine);
 }
 
 .badge.failed {
-  color: var(--failed);
+  color: var(--turn-error);
 }
 
-/* A review that found problems: a warning, not a stage failure — the work
-   exists, it just cannot advance until a rebuild passes. */
+/* A broken handoff that needs a person: a passed review with no branch to ship
+   (SC-1830). Stays in the needs-a-human amber register — unlike the auto-fixed
+   failed-verdict case, which is now .badge.fixing. */
 .badge.warning {
-  color: var(--running);
+  color: var(--turn-person);
 }
 
-/* An autofix run that triage resolved as no-fix-needed (not-a-bug or
-   undetermined): a successful terminal outcome, muted rather than red — there
-   is nothing wrong and nothing to ship (ticket 405). */
+/* A failed review verdict the pipeline auto-fixes (SC-1830): machine work, not a
+   demand on the user — gray, with the running spinner carrying aliveness. */
+.badge.fixing {
+  color: var(--turn-machine);
+}
+
+/* A terminal success — an autofix triaged as no-fix-needed or a planning card
+   whose work already shipped: green, because the work is done, not muted
+   (SC-1830). There is nothing wrong and nothing left to do. */
 .badge.resolved {
-  color: var(--muted);
+  color: var(--turn-done);
 }
 
-/* A durable "fix done, review not yet started" hand-off (SC-429): a neutral
-   waiting state — not a warning, not a completion. */
+/* A durable "fix done, review not yet started" hand-off (SC-429): the machine
+   is between stages — gray machine-working register, not a warning, not a
+   completion. */
 .badge.await {
-  color: var(--muted);
+  color: var(--turn-machine);
 }
 
-/* A degraded card's marker fetch failed this scan (ticket 1700): muted like
-   the other non-failure waiting states — it is not a pipeline failure, just
-   an unreadable refresh that will retry. */
+/* A degraded card's marker fetch failed this scan (ticket 1700): the machine
+   will retry it, so it belongs in the machine-working register — nothing is
+   asked of the user and nothing has failed (SC-1830). */
 .badge.degraded {
-  color: var(--muted);
+  color: var(--turn-machine);
 }
 
-/* An open decision block (ticket 534): the pipeline is deliberately waiting
-   on the human — accent-colored like the running state, because the ball is
-   in play, just in the user's court. */
+/* An open decision block (ticket 534): the pipeline is deliberately waiting on
+   the human — amber, because the ball is in play and in the user's court
+   (SC-1830 needs-a-person register). */
 .badge.decision {
-  color: var(--running);
+  color: var(--turn-person);
   font-weight: 600;
 }
 
-/* A recorded decision that has (re)queued the chosen stage (SC-1320): in-play,
-   accent-colored like the running/decision states — never red. */
+/* A recorded decision that has (re)queued the chosen stage (SC-1320): gray
+   machine-working register — the spinner carries aliveness while a fresh agent
+   picks the work up (SC-1830). Never red. */
 .badge.queued {
-  color: var(--running);
+  color: var(--turn-machine);
   font-weight: 600;
 }
 
