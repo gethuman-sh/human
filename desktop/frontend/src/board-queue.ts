@@ -268,6 +268,7 @@ export interface BoardPayload<C> {
   dockerAvailable?: boolean;
   error?: string;
   notice?: string;
+  truncation?: string;
   columnOrder?: Record<string, string[]>;
 }
 
@@ -276,6 +277,7 @@ export interface BoardState<C> {
   dockerAvailable: boolean;
   error: string;
   notice: string;
+  truncation: string;
   columnOrder?: Record<string, string[]>;
 }
 
@@ -290,6 +292,7 @@ export function boardStateFromPayload<C>(payload: BoardPayload<C>, suppressError
     dockerAvailable: !!payload.dockerAvailable,
     error: suppressError ? "" : payload.error || "",
     notice: payload.notice || "",
+    truncation: payload.truncation || "",
     columnOrder: payload.columnOrder,
   };
 }

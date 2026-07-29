@@ -231,6 +231,7 @@ export function boardStateFromPayload(payload, suppressError = false) {
         dockerAvailable: !!payload.dockerAvailable,
         error: suppressError ? "" : payload.error || "",
         notice: payload.notice || "",
+        truncation: payload.truncation || "",
         columnOrder: payload.columnOrder,
     };
 }

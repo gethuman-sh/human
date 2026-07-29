@@ -1540,6 +1540,15 @@ function render() {
         board.appendChild(notice);
     }
     else {
+        if (current.truncation) {
+            // The fetch was capped and the board below omits the overflow — a bar
+            // above the columns tells the user the list is partial rather than
+            // letting a full-looking board read as the whole backlog (SC-1693).
+            const truncation = document.createElement("div");
+            truncation.className = "board-truncation";
+            truncation.textContent = current.truncation;
+            board.appendChild(truncation);
+        }
         for (const queue of QUEUES) {
             board.appendChild(queue === "ideas" ? renderIdeaSpace() : renderColumn(queue));
         }

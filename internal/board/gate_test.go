@@ -85,10 +85,55 @@ func TestCanPrune(t *testing.T) {
 		{"PM error", []daemon.TrackerIssuesResult{{TrackerRole: "pm", Err: "x"}}, false},
 		{"PM zero issues", []daemon.TrackerIssuesResult{{TrackerRole: "pm"}}, false},
 		{"PM with issues", []daemon.TrackerIssuesResult{{TrackerRole: "pm", Issues: []tracker.Issue{{Key: "SC-1"}}}}, true},
+		{"PM truncated", []daemon.TrackerIssuesResult{{TrackerRole: "pm", Issues: []tracker.Issue{{Key: "SC-1"}}, Truncated: true}}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, board.CanPrune(tc.results))
+		})
+	}
+}
+
+func TestPrunePrefs_TruncatedFetch_LeavesStoresUntouched(t *testing.T) {
+	// A capped fetch omits the tickets past the cap; pruning against it would
+	// erase their saved order and hidden flags purely because the backlog grew
+	// (SC-1693). The keep set holds only the one fetched key, so an unguarded
+	// prune would drop SC-2/SC-3 — the guard must prevent it.
+	prefs, ideas := seededStores(t)
+	results := []daemon.TrackerIssuesResult{
+		{TrackerRole: "pm", Issues: []tracker.Issue{{Key: "SC-1"}}, Truncated: true},
+	}
+	keep := map[string]struct{}{"SC-1": {}}
+	board.PrunePrefs(results, testProject,
+		board.PruneTarget{Store: prefs, Keep: keep},
+		board.PruneTarget{Store: ideas, Keep: keep},
+	)
+	assert.False(t, board.CanPrune(results))
+	assert.Equal(t, []string{"SC-1", "SC-2", "SC-3"}, prefs.Snapshot(testProject).Columns["product"])
+	_, hidden := prefs.Snapshot(testProject).Hidden["SC-2"]
+	assert.True(t, hidden, "hidden flag must survive a truncated fetch")
+	assert.Equal(t, map[string]int{"SC-9": 3}, ideas.Assignments(testProject))
+}
+
+func TestTruncationNotice(t *testing.T) {
+	tests := []struct {
+		name    string
+		results []daemon.TrackerIssuesResult
+		want    string
+	}{
+		{"no pm result", []daemon.TrackerIssuesResult{{TrackerRole: "engineering"}}, ""},
+		{"complete fetch", []daemon.TrackerIssuesResult{{TrackerRole: "pm", Issues: []tracker.Issue{{Key: "SC-1"}}}}, ""},
+		{
+			name: "truncated fetch names the shown count",
+			results: []daemon.TrackerIssuesResult{
+				{TrackerRole: "pm", Issues: []tracker.Issue{{Key: "SC-1"}, {Key: "SC-2"}}, Truncated: true},
+			},
+			want: "Showing the first 2 tickets — more open tickets exist beyond the fetch cap and are not displayed. Saved order and hidden flags are preserved (pruning is paused) until the full list can be fetched.",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, board.TruncationNotice(tc.results))
 		})
 	}
 }

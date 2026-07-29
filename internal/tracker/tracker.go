@@ -367,6 +367,41 @@ type Lister interface {
 	ListIssues(ctx context.Context, opts ListOptions) ([]Issue, error)
 }
 
+// IssuePage is a page of issues plus the completeness signal a caller needs to
+// act safely on an absence. Truncated is true when the backend applied
+// ListOptions.MaxResults and more issues existed than were returned, so the
+// caller knows the fetch is partial and must not treat a missing key as gone —
+// the board's prune guard depends on this to avoid erasing saved view state for
+// tickets that merely fell past the cap (SC-1693).
+type IssuePage struct {
+	Issues    []Issue
+	Truncated bool
+}
+
+// PagedLister is an optional Lister capability: a backend that enforces
+// ListOptions.MaxResults by returning a bounded page (rather than paging to
+// completion) implements it to report whether the page was cut short. Backends
+// that always return the complete set (they page internally, or ignore the cap)
+// need not implement it — ListIssuesPage treats their result as never
+// truncated. Kept separate from Lister so existing implementations and their
+// callers are undisturbed.
+type PagedLister interface {
+	ListIssuesPage(ctx context.Context, opts ListOptions) (IssuePage, error)
+}
+
+// ListIssuesPage fetches a page of issues and reports truncation, preferring a
+// Lister's optional PagedLister capability. A backend that pages to completion
+// exposes only ListIssues; its result is complete, so it is reported as never
+// truncated. This lets truncation-sensitive callers (board pruning) treat every
+// backend uniformly without a type switch at each call site.
+func ListIssuesPage(ctx context.Context, l Lister, opts ListOptions) (IssuePage, error) {
+	if pl, ok := l.(PagedLister); ok {
+		return pl.ListIssuesPage(ctx, opts)
+	}
+	issues, err := l.ListIssues(ctx, opts)
+	return IssuePage{Issues: issues}, err
+}
+
 // Getter retrieves a single issue by key.
 type Getter interface {
 	GetIssue(ctx context.Context, key string) (*Issue, error)

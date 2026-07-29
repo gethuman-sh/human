@@ -958,6 +958,20 @@ body {
   line-height: 1.5;
 }
 
+/* Partial-fetch affordance shown above a populated board when the backend cap
+   was hit (SC-1693). Spans all columns and reads as guidance, not failure —
+   the board below is real, just incomplete. */
+.board-truncation {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 8px 24px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.85em;
+  line-height: 1.4;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+}
+
 /* Shown on each card while its real stage is still being derived from comments
    (quick titles land in Backlog first). Muted so it reads as "pending
    placement", distinct from the amber "agent running" badge. */

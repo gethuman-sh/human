@@ -41,7 +41,15 @@ type issuesData struct {
 }
 
 type issueConnection struct {
-	Nodes []linearIssue `json:"nodes"`
+	Nodes    []linearIssue `json:"nodes"`
+	PageInfo pageInfo      `json:"pageInfo"`
+}
+
+// pageInfo carries only the truncation signal the board needs. Linear does not
+// follow the cursor here (SC-1693 keeps an explicit cap); HasNextPage true means
+// the backlog exceeds the requested page and the fetch is partial.
+type pageInfo struct {
+	HasNextPage bool `json:"hasNextPage"`
 }
 
 type issueData struct {
