@@ -74,5 +74,5 @@ func (o *OnePassword) createClient() (secretResolver, error) {
 	if o.clientFactory != nil {
 		return o.clientFactory(context.Background())
 	}
-	return nil, errors.WithDetails("1Password SDK requires CGO; use op CLI fallback (vault provider: 1password on WSL)")
+	return nil, errors.WithDetails("1Password SDK unavailable in this build (CGO disabled); resolution falls back to the op CLI — ensure `op` is installed and signed in")
 }

@@ -3,7 +3,6 @@ package vault
 import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/config"
-	"github.com/gethuman-sh/human/internal/platform"
 )
 
 // Config holds the vault configuration from .humanconfig.
@@ -40,10 +39,10 @@ func NewResolverFromConfig(cfg *Config) *Resolver {
 
 	switch cfg.Provider {
 	case "1password", "1pw":
-		if platform.IsWSL() {
-			return NewResolver(NewOpCLI(), NewGhCLI())
-		}
-		return NewResolver(NewOnePassword(cfg.Account), NewGhCLI())
+		// SDK first (works in CGO dev builds), op CLI behind it as the
+		// fallback that works in released CGO-disabled builds on every
+		// platform, then gh:// for GitHub CLI references.
+		return NewResolver(NewOnePassword(cfg.Account), NewOpCLI(), NewGhCLI())
 	case "github", "gh":
 		return NewResolver(NewGhCLI())
 	default:

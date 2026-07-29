@@ -30,7 +30,10 @@ type Resolver struct {
 }
 
 // NewResolver creates a Resolver with the given providers.
-// Providers are tried in order; the first whose CanResolve returns true wins.
+// Providers are tried in order; the first claiming provider that succeeds
+// wins. When a claimant errors, resolution falls through to the next
+// claimant so a later provider (e.g. the op CLI behind the SDK) can still
+// resolve the reference; if every claimant errors, the last error surfaces.
 func NewResolver(providers ...SecretProvider) *Resolver {
 	return &Resolver{
 		providers: providers,
@@ -44,11 +47,24 @@ func (r *Resolver) Resolve(ref string) (string, error) {
 		return ref, nil
 	}
 
+	var lastErr error
+	claimed := false
 	for _, p := range r.providers {
 		if !p.CanResolve(ref) {
 			continue
 		}
-		return p.Resolve(ref)
+		claimed = true
+		val, err := p.Resolve(ref)
+		if err != nil {
+			// Fall through: a later claimant (op CLI) may still resolve it.
+			lastErr = err
+			continue
+		}
+		return val, nil
+	}
+
+	if claimed {
+		return "", lastErr
 	}
 
 	// No provider claims this reference — return as-is.

@@ -94,7 +94,7 @@ jiras:
     key: 1pw://Development/Jira API Key/token
 ```
 
-Secrets are resolved via the 1Password desktop app integration. The 1Password app must be installed and running — it will prompt for biometric or master password authentication. Enable "Integrate with other apps" in 1Password Settings > Developer.
+Secrets are resolved through the 1Password CLI (`op`) on every platform — released binaries are built without CGO, so the in-process SDK is unavailable and the CLI is the working path. Install `op` and sign in (`op signin`); on WSL the Windows `op.exe` is used across the boundary. In CGO-enabled developer builds the in-process SDK (desktop app integration, biometric/master-password auth) is tried first and the CLI is the automatic fallback.
 
 GitHub tokens can instead come straight from the GitHub CLI's keyring with a `gh://` reference — no PAT to copy anywhere:
 
