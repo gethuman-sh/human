@@ -361,7 +361,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		BoardOptioner:      boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
 		BugCreator:         bugCreatorFunc(projectRegistry, vaultResolver),
 		SecurityCreator:    securityCreatorFunc(projectRegistry, vaultResolver),
-		CloseTicketer:      closeTicketerFunc(projectRegistry, vaultResolver),
+		CloseTicketer:      closeTicketerFunc(projectRegistry, vaultResolver, liveBoardAgents, (&dockerAgentCleaner{}).DeleteAgent, logger),
 		FeaturesGenerator:  featuresGeneratorFunc(projectRegistry),
 		FindbugsRunner:     findbugsRunnerFunc(projectRegistry),
 		SecurityRunner:     securityRunnerFunc(projectRegistry),
@@ -2224,12 +2224,20 @@ func resolvePMTransitioner(dir string, lookup config.EnvLookup, resolver *vault.
 	return nil, errors.WithDetails("no PM-role tracker with transition support configured", "dir", dir)
 }
 
-// closeTicketerFunc builds the daemon's CloseTicketer closure: it resolves the
-// PM transitioner by role per request and moves the ticket to its Done status.
-// "done" is the status CATEGORY, not a literal label — the tracker resolves it
-// to the workflow's done state, the same convention `issue start` uses with
-// "started", so no team-specific status name is hardcoded.
-func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.CloseTicketRequest) error {
+// closeTicketerFunc builds the daemon's CloseTicketer closure: it stops any live
+// run claiming the ticket, then resolves the PM transitioner by role per request
+// and moves the ticket to its Done status. "done" is the status CATEGORY, not a
+// literal label — the tracker resolves it to the workflow's done state, the same
+// convention `issue start` uses with "started", so no team-specific status name
+// is hardcoded.
+//
+// Closing IS cancellation (1698): the board close reads to the user as "stop
+// this", so it must actually stop the claiming agent and release its container
+// before the ticket leaves the board — otherwise the run keeps working invisibly
+// against a closed card. The stop precedes the transition so a stop failure
+// still leaves the card open (and thus reachable by the reconcile safety net)
+// rather than closing over a run that refused to die.
+func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, liveAgents func() ([]string, error), stopAgent func(context.Context, string) error, logger zerolog.Logger) func(daemon.CloseTicketRequest) error {
 	return func(req daemon.CloseTicketRequest) error {
 		entries := reg.Entries()
 		if len(entries) == 0 {
@@ -2237,6 +2245,11 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) fu
 		}
 		entry := entries[0]
 		lookup := entry.EnvLookup()
+
+		stopCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		daemon.StopAgentsForPMKey(stopCtx, req.PMKey, liveAgents, stopAgent, logger)
+		cancel()
+
 		transitioner, err := resolvePMTransitioner(entry.Dir, lookup, resolver)
 		if err != nil {
 			return err
