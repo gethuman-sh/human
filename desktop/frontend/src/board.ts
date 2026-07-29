@@ -18,7 +18,7 @@ import {
   trail,
 } from "./fancy.js";
 import { initPermissions, type PermissionRequest } from "./permissions.js";
-import { bugsHeaderHTML, securityHeaderHTML } from "./board-findbugs.js";
+import { bugsHeaderHTML, securityHeaderHTML, gardeningHeaderHTML } from "./board-findbugs.js";
 import {
   initMockupsView,
   showMockups,
@@ -960,8 +960,28 @@ const securitySection: FixSection = {
   dropTarget: "security-fix",
 };
 
-// renderBugs paints both halves of the Bugs & Security view: bugs on top,
-// security below. Every reconcile rebuilds both from the same card list.
+// gardeningSection is the board's third row (SC-1638): same pane + Fix-column
+// grammar as Bugs and Security, but deliberately inert. `match` never claims a
+// card, so the grid renders empty and the count stays 0; `wireHeader` is a
+// no-op (the header has no sweep or quick-add); and `dropTarget` is a value no
+// drop gate recognizes, so dropAllowed() rejects every drop on its Fix column.
+// Wiring findings, a sweep, and drops into this row is a follow-up.
+const gardeningSection: FixSection = {
+  match: () => false,
+  gridStage: "gardening:grid",
+  fixStage: "gardening:fix",
+  gridColClass: "gardening-grid-col",
+  fixColClass: "gardening-fix-col",
+  headerHTML: (count) => gardeningHeaderHTML(count),
+  wireHeader: () => {},
+  emptyText: "No gardening items",
+  pending: () => [],
+  dropTarget: "gardening-fix",
+};
+
+// renderBugs paints the three rows of the Bugs & Security view top-to-bottom:
+// bugs, security, then the inert Gardening row (SC-1638). Every reconcile
+// rebuilds all three from the same card list.
 function renderBugs(): void {
   const host = document.getElementById("bugs");
   if (!host) return;
@@ -969,10 +989,12 @@ function renderBugs(): void {
   host.innerHTML = "";
   renderFixSection(host, bugSection);
   renderFixSection(host, securitySection);
-  // One Deploy control spans both halves at full height (CSS grid area
+  renderFixSection(host, gardeningSection);
+  // One Deploy control spans all three rows at full height (CSS grid area
   // "deploy"). It ships fixed bugs AND vulnerabilities: the drop is kind-
   // agnostic (a ready card of either kind transitions to done), and the click
-  // ships every ready defect at once.
+  // ships every ready defect at once. The Gardening row is inert, so it never
+  // contributes a ready card here.
   host.appendChild(renderDeployControl("defects"));
   restoreColumnScroll(host, scrollByStage);
 }

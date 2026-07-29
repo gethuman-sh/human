@@ -33,3 +33,15 @@ export function securityHeaderHTML(hunting: boolean, count: number): string {
     `<span class="column-count">${count}</span></div>`
   );
 }
+
+// gardeningHeaderHTML builds the Gardening row's header. Unlike the Bugs and
+// Security headers it is intentionally inert (SC-1638): the row carries no
+// sweep control and no quick-add — only the title and a count that always
+// reads 0 until a follow-up wires findings to it. Kept here beside its
+// siblings so the three row headers share one pure, DOM-free seam.
+export function gardeningHeaderHTML(count: number): string {
+  return (
+    `<div class="column-header"><span>Gardening</span>` +
+    `<span class="column-count">${count}</span></div>`
+  );
+}

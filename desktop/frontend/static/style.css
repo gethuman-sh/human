@@ -387,19 +387,21 @@ body {
   background: var(--drop-reject);
 }
 
-/* The Bugs & Security view: two equal halves stacked top (bugs) and bottom
-   (security), each a wide tray of open tickets next to a Fix activity column —
-   same board grammar (columns, cards, drops), scoped to defects and
-   vulnerabilities. A SINGLE Deploy button spans both halves at full height in
-   the right column: the named grid areas place each element regardless of DOM
-   order, and "deploy" occupying both rows makes the button full-height. */
+/* The Bugs & Security view: three equal rows stacked top-to-bottom — bugs,
+   security, then the inert Gardening row (SC-1638) — each a wide tray of open
+   tickets next to a Fix activity column, same board grammar (columns, cards,
+   drops), scoped to defects and vulnerabilities. A SINGLE Deploy button spans
+   all three rows at full height in the right column: the named grid areas place
+   each element regardless of DOM order, and "deploy" occupying every row makes
+   the button full-height. */
 .bugs-view {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(180px, 240px) minmax(80px, 110px);
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
   grid-template-areas:
     "bug-grid bug-fix deploy"
-    "sec-grid sec-fix deploy";
+    "sec-grid sec-fix deploy"
+    "gard-grid gard-fix deploy";
   gap: 10px;
   padding: 12px;
   /* Same containment as .app-main .board: fill the space below the header,
@@ -425,6 +427,12 @@ body {
 }
 .security-fix-col {
   grid-area: sec-fix;
+}
+.gardening-grid-col {
+  grid-area: gard-grid;
+}
+.gardening-fix-col {
+  grid-area: gard-fix;
 }
 .defect-deploy {
   grid-area: deploy;
@@ -460,8 +468,15 @@ body {
   border: 2px solid #7c4dff;
 }
 
-/* The single full-height Deploy control shared by both halves: click ships
-   every fixed bug and vulnerability, and a single ready one of either kind can
+/* SC-1638: the Gardening row's Fix column gets its own leaf-green accent so
+   the three Fix columns (bug red, security violet, gardening green) read as
+   distinct kinds at a glance. The row is inert for now — no drops land here. */
+.column.gardening-fix-col {
+  border: 2px solid #2e7d32;
+}
+
+/* The single full-height Deploy control shared across all three rows: click
+   ships every fixed bug and vulnerability, and a single ready one of either kind can
    be dropped on it too. Styled after .deploy-zone so the view ends on the same
    visual full stop as the board. */
 .defect-deploy {
