@@ -140,7 +140,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 			onHandoff(agentName)
 		}
 		if stage == BoardImplementation {
-			chainReviewAfterCleanBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
+			chainReviewAfterCleanBuild(ctx, pmKey, agentName, errorType, comments, commenter, chainReview, reachable, commitsPresent, diagnose, daemonID, logger)
 		}
 		return
 	}
@@ -184,9 +184,11 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 // container startup). If it already posted a verification-stage marker, the
 // review is accounted for and a second cold review container must NOT launch;
 // only a mid-review death (marker still running) surfaces a retryable review
-// failure. Otherwise it flows into chainReviewAfterBuild's branch/commit-gated
+// failure, its body composed from diagnose exactly like the generic crash path
+// so the tracker carries the real reason instead of a hardcoded sentence
+// (SC-1688). Otherwise it flows into chainReviewAfterBuild's branch/commit-gated
 // chain. A nil chainReview disables chaining entirely.
-func chainReviewAfterCleanBuild(ctx context.Context, pmKey string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, daemonID string, logger zerolog.Logger) {
+func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, daemonID string, logger zerolog.Logger) {
 	if chainReview == nil {
 		return
 	}
@@ -195,7 +197,7 @@ func chainReviewAfterCleanBuild(ctx context.Context, pmKey string, comments []tr
 		// acts on; a review-failed marker is already retryable. Either way, do not
 		// chain a second review. Only a mid-review death needs a retryable marker.
 		if vState == BoardRunning {
-			body := ReviewFailedHeader + "\nreview agent exited before completing the in-container review — retry the review"
+			body := ReviewFailedHeader + "\n" + failureMarkerBody(diagnose, agentName, errorType)
 			if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 				logger.Warn().Err(err).Str("pm", pmKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
 			}

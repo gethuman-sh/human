@@ -4,6 +4,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"io"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -275,17 +276,70 @@ func teeExecOutput(attach devcontainer.ExecAttachResponse, exe *Execution, docke
 	defer func() { _ = w.Close() }()
 	// stdout and stderr both go to the one host log; StdCopy demuxes the frames.
 	_, _ = devcontainer.StdCopy(w, w, attach.Reader)
+
 	// Stream EOF means the exec ended — the only moment anyone knows its exit
-	// code. Best-effort by design: a missing trailer degrades diagnosis, never
-	// the run. Background context because the launch ctx is long gone.
+	// code. Record the outcome and an end-of-run trailer HERE so every exec end,
+	// normal or abnormal, is durably diagnosable independent of container
+	// teardown (SC-1688): an in-container review that dies while its warm
+	// container stays up hits no Manager.Stop/reap and would otherwise leave an
+	// empty log and no outcome.json.
+	exitCode, haveExit := inspectExecExit(docker, execID)
+	writeExecExitTrailer(w, exitCode, haveExit)
+	recordExecOutcome(exe, exitCode, haveExit)
+}
+
+// inspectExecExit reports the ended exec's exit code. haveExit is false when the
+// code cannot be established (no docker client, an ExecInspect error, or a still-
+// running process), so callers never fabricate a numeric code.
+func inspectExecExit(docker devcontainer.DockerClient, execID string) (code int, haveExit bool) {
 	if docker == nil {
-		return
+		return 0, false
 	}
 	inspect, err := docker.ExecInspect(context.Background(), execID)
 	if err != nil || inspect.Running {
+		return 0, false
+	}
+	return inspect.ExitCode, true
+}
+
+// writeExecExitTrailer appends the machine-parsable end-of-run line. A known code
+// is written numerically; an unknown code is written as a non-numeric "unknown"
+// suffix that parseExitTrailer skips — this keeps output.log from ever being a
+// silent 0-byte void (SC-1688) without fabricating a code diagnosis would misread.
+func writeExecExitTrailer(w io.Writer, code int, haveExit bool) {
+	if haveExit {
+		_, _ = fmt.Fprintf(w, "\n%s%d\n", execExitTrailerPrefix, code)
 		return
 	}
-	_, _ = fmt.Fprintf(w, "\n%s%d\n", execExitTrailerPrefix, inspect.ExitCode)
+	_, _ = fmt.Fprintf(w, "\n%sunknown\n", execExitTrailerPrefix)
+}
+
+// recordExecOutcome writes outcome.json from the tee, so the record exists the
+// moment the exec ends regardless of container teardown. A clean exit (code 0)
+// is "completed"; anything else — including an unknown code — is "failed".
+//
+// It never overwrites an outcome.json that already exists. stopLocked's
+// PreserveExecutionArtifacts writes outcome.json{reason:"reaped"} BEFORE
+// stopping/removing the container, which EOFs this same tee; without the
+// guard the tee's own write below would race in afterwards and clobber the
+// authoritative "reaped" classification DiagnoseFailure keys off, mislabeling
+// reaped agents as "failed" (SC-1688). The tee is the sole writer only when
+// no teardown ever runs (an in-container review dying while the warm
+// container stays up) — the case this recording exists to fix.
+func recordExecOutcome(exe *Execution, code int, haveExit bool) {
+	if exe.HasOutcome() {
+		return
+	}
+	reason := "failed"
+	if haveExit && code == 0 {
+		reason = "completed"
+	}
+	_ = exe.RecordOutcome(OutcomeRecord{
+		Reason:     reason,
+		ExitCode:   code,
+		DurationMs: time.Since(exe.Launch.StartedAt).Milliseconds(),
+		EndedAt:    time.Now(),
+	})
 }
 
 // agentLocks serialises lifecycle operations per agent name. Stop/Delete can be
