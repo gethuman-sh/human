@@ -133,6 +133,8 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		furthest, state, latest, anyMarker = qStage, BoardQueued, qChosen, true
 	}
 
+	state = pauseRunningOnOpenOptions(state, furthest, comments)
+
 	if !anyMarker {
 		// No pipeline activity yet: the open ticket waits in Backlog.
 		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
@@ -150,6 +152,20 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.DeployPhase = deployPhaseFor(card, comments)
 	attachOpenOptions(&card, comments)
 	return card
+}
+
+// pauseRunningOnOpenOptions ends a running state when the current stage's own
+// agent stopped on a deliberate [human:options] fork: the card waits on a
+// human, it is not working. Server-side twin of the client's decision-badge
+// branch. Uses the same stage-precise predicate as the failure watcher and
+// reconcile pass (stagePausedOnOptions), so a block naming a stage the card
+// has not reached — a stale or target-relaunch block — never clears an
+// active run (SC-1669).
+func pauseRunningOnOpenOptions(state BoardState, furthest BoardStage, comments []tracker.Comment) BoardState {
+	if state == BoardRunning && stagePausedOnOptions(comments, furthest) {
+		return BoardIdle
+	}
+	return state
 }
 
 // supersededByNewerMarker reports whether the furthest-stage marker may be
