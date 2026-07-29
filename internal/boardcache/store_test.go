@@ -77,9 +77,9 @@ func TestStore_Load_emptySnapshot(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-func TestStore_Save_overwritesPreviousProject(t *testing.T) {
-	// The cache holds exactly one project; saving a new project must evict the
-	// previous one rather than accumulate stale boards.
+func TestStore_Save_accumulatesPerProject(t *testing.T) {
+	// Regression (SC-1654): saving a second project must NOT evict the first —
+	// switching back must still hit the cache instead of a cold spinner.
 	s := newTestStore(t)
 	snapA := json.RawMessage([]byte(`{"cards":[{"key":"a"}]}`))
 	snapB := json.RawMessage([]byte(`{"cards":[{"key":"b"}]}`))
@@ -87,12 +87,27 @@ func TestStore_Save_overwritesPreviousProject(t *testing.T) {
 	require.NoError(t, s.Save("projA", snapA))
 	require.NoError(t, s.Save("projB", snapB))
 
-	_, ok := s.Load("projA")
-	assert.False(t, ok)
-
-	got, ok := s.Load("projB")
+	gotA, ok := s.Load("projA")
 	assert.True(t, ok)
-	assert.JSONEq(t, string(snapB), string(got))
+	assert.JSONEq(t, string(snapA), string(gotA))
+
+	gotB, ok := s.Load("projB")
+	assert.True(t, ok)
+	assert.JSONEq(t, string(snapB), string(gotB))
+}
+
+func TestStore_Migration_v1SingleSlotFoldsIntoProject(t *testing.T) {
+	// A legacy v1 file (single project+snapshot) is read as that project's slot.
+	s := newTestStore(t)
+	require.NoError(t, os.WriteFile(s.path,
+		[]byte(`{"version":1,"project":"cli","snapshot":{"cards":[{"key":"x"}]}}`), 0o600))
+
+	got, ok := s.Load("cli")
+	assert.True(t, ok)
+	assert.JSONEq(t, `{"cards":[{"key":"x"}]}`, string(got))
+
+	_, ok = s.Load("roomer")
+	assert.False(t, ok, "legacy snapshot must not leak into another project")
 }
 
 func TestStore_Save_atomicNoTmpLeft(t *testing.T) {
