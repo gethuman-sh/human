@@ -55,6 +55,12 @@ type BoardCard struct {
 	// It lets the board badge read "PR review…" instead of "deploying…" so the
 	// loop is visible while it runs.
 	DeployPhase string `json:"deploy_phase,omitempty"`
+	// Degraded marks a card whose comment thread could not be read this scan
+	// (a ListComments error/timeout). It is set at the fetch-error site, never
+	// by DeriveBoardCard (which only runs on a successful fetch). Stage/State
+	// carry the last-known placement when available so the board renders the
+	// card locked in place rather than silently demoting it to Backlog (1700).
+	Degraded bool `json:"degraded,omitempty"`
 }
 
 // VerdictFailed reports whether a review verdict blocks the card from moving
