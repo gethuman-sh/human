@@ -145,6 +145,22 @@ export const QUEUED_LABELS: Record<string, string> = {
 // completion. A review that found problems is a WARNING, not a stage failure:
 // the work exists, it just may not advance until a rebuild passes.
 export function badgeInfo(card: QueueCard): BadgeInfo | null {
+  // An open decision block outranks EVERY other classification, including a
+  // stale failed marker: a card parked on a deliberate human fork must never
+  // paint red, even if a *-failed marker also landed on it (the daemon's twin
+  // guard in reconcileStuckRunning stops new spurious markers going forward,
+  // but a marker posted before that fix — or any other race — must still
+  // defer to the open decision here). The `?` glyph reads as a question, not
+  // an error (ticket 1290). This must come before the running/queued
+  // early-returns below too — a card can still read as running or queued
+  // server-side while an open decision sits on it (SC-1669).
+  if (card.options && card.options.length > 0) {
+    return {
+      cls: "decision",
+      text: `? decision needed`,
+      title: `The stage offers ${card.options.length} ways forward — open the card to choose`,
+    };
+  }
   if (card.state === "running") {
     const text =
       card.stage === "done" && card.deployPhase === "pr-review"
@@ -168,20 +184,6 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
       text: `decision recorded — ${verb} picked up`,
       title: "A direction was chosen — a fresh agent will pick up the work",
       spinner: true,
-    };
-  }
-  // An open decision block outranks EVERY other classification, including a
-  // stale failed marker: a card parked on a deliberate human fork must never
-  // paint red, even if a *-failed marker also landed on it (the daemon's twin
-  // guard in reconcileStuckRunning stops new spurious markers going forward,
-  // but a marker posted before that fix — or any other race — must still
-  // defer to the open decision here). The `?` glyph reads as a question, not
-  // an error (ticket 1290).
-  if (card.options && card.options.length > 0) {
-    return {
-      cls: "decision",
-      text: `? decision needed`,
-      title: `The stage offers ${card.options.length} ways forward — open the card to choose`,
     };
   }
   if (card.state === "failed") return { cls: "failed", text: "✕", title: "Stage failed" };
