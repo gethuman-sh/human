@@ -769,37 +769,51 @@ func (a *App) StartIdeation(seed, mode string, restart bool, evolveKey string, e
 }
 
 // CreateIdea quick-captures a title-only idea ticket — the Ideas column's `+`.
-func (a *App) CreateIdea(title string) error {
+// Returns the created ticket's key so the frontend can reconcile the
+// optimistic placeholder by key instead of title (SC-1691).
+func (a *App) CreateIdea(title string) (string, error) {
 	info, err := daemon.ReadInfo()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = daemon.IdeaCreate(info.Addr, info.Token, daemon.IdeaCreateRequest{Title: title})
-	return daemonCause(err)
+	resp, err := daemon.IdeaCreate(info.Addr, info.Token, daemon.IdeaCreateRequest{Title: title})
+	if err != nil {
+		return "", daemonCause(err)
+	}
+	return resp.Key, nil
 }
 
 // CreateBug files a defect ticket from the Bugs pane's `+` dialog. The daemon
 // marks it as a bug the way the PM tracker natively understands, so the card
-// lands in the bug grid on every backend.
-func (a *App) CreateBug(title, description string) error {
+// lands in the bug grid on every backend. Returns the created ticket's key so
+// the frontend can reconcile the optimistic placeholder by key instead of
+// title (SC-1691).
+func (a *App) CreateBug(title, description string) (string, error) {
 	info, err := daemon.ReadInfo()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = daemon.BugCreate(info.Addr, info.Token, daemon.BugCreateRequest{Title: title, Description: description})
-	return daemonCause(err)
+	resp, err := daemon.BugCreate(info.Addr, info.Token, daemon.BugCreateRequest{Title: title, Description: description})
+	if err != nil {
+		return "", daemonCause(err)
+	}
+	return resp.Key, nil
 }
 
 // CreateSecurity files a security ticket from the Security section's `+` dialog.
 // The daemon marks it with the security label so the card lands in the Security
-// half on every backend.
-func (a *App) CreateSecurity(title, description string) error {
+// half on every backend. Returns the created ticket's key so the frontend can
+// reconcile the optimistic placeholder by key instead of title (SC-1691).
+func (a *App) CreateSecurity(title, description string) (string, error) {
 	info, err := daemon.ReadInfo()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = daemon.SecurityCreate(info.Addr, info.Token, daemon.SecurityCreateRequest{Title: title, Description: description})
-	return daemonCause(err)
+	resp, err := daemon.SecurityCreate(info.Addr, info.Token, daemon.SecurityCreateRequest{Title: title, Description: description})
+	if err != nil {
+		return "", daemonCause(err)
+	}
+	return resp.Key, nil
 }
 
 // ReplyIdeation sends the user's answer into the running session.
