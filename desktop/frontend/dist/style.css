@@ -710,6 +710,14 @@ body {
   opacity: 0.5;
 }
 
+/* A card whose markers could not be read this scan (ListComments error):
+   visually locked so a transient fetch failure never reads as idle,
+   actionable Backlog work (ticket 1700). */
+.card.degraded {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /* Floating clone that follows the cursor during a pointer-drag. pointer-events
    must stay none so it never occludes elementFromPoint's drop-target hit-test.
    Positioned by JS at the cursor; translate centres it under the pointer. */
@@ -802,6 +810,13 @@ body {
 /* A durable "fix done, review not yet started" hand-off (SC-429): a neutral
    waiting state — not a warning, not a completion. */
 .badge.await {
+  color: var(--muted);
+}
+
+/* A degraded card's marker fetch failed this scan (ticket 1700): muted like
+   the other non-failure waiting states — it is not a pipeline failure, just
+   an unreadable refresh that will retry. */
+.badge.degraded {
   color: var(--muted);
 }
 

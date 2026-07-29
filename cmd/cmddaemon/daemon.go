@@ -342,7 +342,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		ConnectedPIDs:      connTracker,
 		HookEvents:         hookStore,
 		NetworkEvents:      networkStore,
-		IssueFetcher:       fetchTrackerIssuesFunc(projectRegistry, vaultResolver),
+		IssueFetcher:       fetchTrackerIssuesFunc(projectRegistry, vaultResolver, logger),
 		LiteIssueFetcher:   fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
 		IssueGetter:        daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
 		TrackerDiagnoser:   trackerDiagnoserFunc(projectRegistry, vaultResolver),
@@ -659,7 +659,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		return (&dockerAgentCleaner{}).DeleteAgent(stopCtx, agentName)
 	}
 	go daemon.RunBoardReconcile(ctx,
-		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver),
+		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver, logger),
 		branchReachable, commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		chainReview, advancePRLoop, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
@@ -1450,7 +1450,18 @@ type fetchJob struct {
 	project string
 }
 
-func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() ([]daemon.TrackerIssuesResult, error) {
+func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) func() ([]daemon.TrackerIssuesResult, error) {
+	// lastCards persists across board fetches so a per-ticket fetch failure can
+	// carry the ticket's last-known stage forward (degraded) instead of demoting
+	// it to Backlog (1700). Guarded by mu for the concurrent scan goroutines.
+	var mu sync.Mutex
+	lastCards := make(map[string]daemon.BoardCard)
+	lastKnown := func(key string) (daemon.BoardCard, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		c, ok := lastCards[key]
+		return c, ok
+	}
 	return func() ([]daemon.TrackerIssuesResult, error) {
 		jobs, results, err := listTrackerIssues(reg, resolver)
 		if err != nil {
@@ -1460,7 +1471,19 @@ func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		// Scan PM-tracker comments for [human:ready-for-review] handoffs and
 		// per-PM board state, then propagate them onto the results. See
 		// cli/CLAUDE.md "Review handoff".
-		readyKeys, readyPRs, boardCards := scanReadyForReview(jobs, results)
+		readyKeys, readyPRs, boardCards := scanReadyForReview(jobs, results, logger, lastKnown)
+
+		// Remember every card we could actually derive this scan; a later fetch
+		// error for one of these keys carries its stage forward rather than
+		// dropping the ticket to Backlog.
+		mu.Lock()
+		for k, c := range boardCards {
+			if !c.Degraded {
+				lastCards[k] = c
+			}
+		}
+		mu.Unlock()
+
 		applyScanResults(results, readyKeys, readyPRs, boardCards)
 		return results, nil
 	}
@@ -1625,7 +1648,13 @@ func applyScanResults(results []daemon.TrackerIssuesResult, readyKeys map[string
 // a given result without re-loading instances from disk.
 // cards maps each PM issue key to its derived BoardCard. It is built from the
 // same fetched comments, so no additional tracker round-trip is needed.
-func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (map[string]bool, map[string]string, map[string]daemon.BoardCard) {
+//
+// lastKnown, when non-nil, returns the previously derived (non-degraded) card
+// for a key. A ListComments failure carries that card's stage/state forward,
+// flagged degraded, instead of silently dropping the key — a missing key
+// otherwise renders downstream as an indistinguishable, actionable Backlog
+// card (1700).
+func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult, logger zerolog.Logger, lastKnown func(key string) (daemon.BoardCard, bool)) (map[string]bool, map[string]string, map[string]daemon.BoardCard) {
 	ready := make(map[string]bool)
 	prs := make(map[string]string)
 	cards := make(map[string]daemon.BoardCard)
@@ -1657,6 +1686,24 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult) (
 				defer cancel()
 				comments, err := c.ListComments(ctx, key)
 				if err != nil {
+					// A per-ticket fetch failure must not silently drop the key:
+					// downstream a missing card renders as an actionable Backlog
+					// card indistinguishable from never-worked, letting a user
+					// launch a second pipeline on live work (1700). Log the cause
+					// and emit an explicit degraded card, carrying the last-known
+					// stage forward when we have one.
+					logger.Warn().Str("key", key).Err(err).
+						Msg("board comment fetch failed; rendering degraded card")
+					card := daemon.BoardCard{Degraded: true}
+					if lastKnown != nil {
+						if prev, ok := lastKnown(key); ok {
+							card = prev
+							card.Degraded = true
+						}
+					}
+					mu.Lock()
+					cards[key] = card
+					mu.Unlock()
 					return
 				}
 				card := daemon.DeriveBoardCard(comments, statusType, false)
@@ -2893,7 +2940,7 @@ func boardHasWatchers(events *daemon.HookEventStore) func() bool {
 // pipeline markers) — mirroring scanReadyForReview's fan-out without altering
 // it. Best-effort: a per-ticket error drops that ticket, not the whole tick, so
 // one flaky tracker call never blocks recovery of the rest.
-func boardReconcileListerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) daemon.ReconcileLister {
+func boardReconcileListerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) daemon.ReconcileLister {
 	return func(ctx context.Context) ([]daemon.ReconcileCard, error) {
 		jobs, results, err := listTrackerIssues(reg, resolver)
 		if err != nil {
@@ -2923,6 +2970,11 @@ func boardReconcileListerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resol
 					defer cancel()
 					comments, err := c.ListComments(fetchCtx, key)
 					if err != nil {
+						// Best-effort per SC intent: dropping this ticket from the tick is fine,
+						// but do it visibly — a silent swallow hid a flaky tracker shrinking the
+						// reconcile set (1700).
+						logger.Warn().Str("key", key).Err(err).
+							Msg("reconcile comment fetch failed; skipping ticket this tick")
 						return
 					}
 					mu.Lock()
