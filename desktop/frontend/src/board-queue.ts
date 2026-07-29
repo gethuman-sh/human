@@ -407,3 +407,29 @@ export function deployControlView(cards: QueueCard[], side: DeploySide): DeployC
 export function initialLoadPhase(cacheHit: boolean): "cache" | "quick" {
   return cacheHit ? "cache" : "quick";
 }
+
+// safetyPollShouldReconcile decides whether the 90s safety poll runs its
+// reconcile on a given tick. It intentionally does NOT gate on daemon
+// reachability: the poll exists to bound staleness for tracker writes that emit
+// no daemon event, and the reachability flag can read false while the daemon is
+// alive and Cards() succeeds — gating on it silently removed the only bound
+// (SC-1677). reconcile() has its own error path, so an actually-dead daemon is
+// surfaced by the fetch failure, not pre-empted by this flag.
+export function safetyPollShouldReconcile(_daemonReachable: boolean): boolean {
+  return true;
+}
+
+// safetyReconcileError builds the board state after a safety-poll fetch failure.
+// Blanking a populated board on a transient hiccup would itself present a board
+// that "is not current" (SC-1677), so keep the last-known cards and surface the
+// failure as an explicit staleness banner. An already-empty board shows the
+// plain error unchanged.
+export function safetyReconcileError<C>(
+  prev: { cards: C[]; dockerAvailable: boolean; columnOrder?: Record<string, string[]> },
+  message: string,
+): { cards: C[]; dockerAvailable: boolean; error: string; columnOrder?: Record<string, string[]> } {
+  if (prev.cards.length > 0) {
+    return { ...prev, error: `Board may be stale — ${message}` };
+  }
+  return { cards: [], dockerAvailable: false, error: message };
+}

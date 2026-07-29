@@ -61,6 +61,8 @@ import {
   deployableCards,
   deployControlView,
   initialLoadPhase,
+  safetyPollShouldReconcile,
+  safetyReconcileError,
 } from "./board-queue.js";
 import type { DeploySide } from "./board-queue.js";
 import { buildDeployControl } from "./board-deploy.js";
@@ -2073,7 +2075,7 @@ let reconcileEpoch = 0;
 // reconcile fetches the full board (including derived stages) and renders it. It
 // is the single source of truth after the initial load: board:changed events and
 // post-transition refreshes call it directly.
-async function reconcile(): Promise<void> {
+async function reconcile(opts: { safety?: boolean } = {}): Promise<void> {
   const epoch = ++reconcileEpoch;
   try {
     const data = await go().Cards();
@@ -2087,7 +2089,9 @@ async function reconcile(): Promise<void> {
       .catch(() => false);
   } catch (err) {
     if (epoch !== reconcileEpoch) return;
-    current = { cards: [], dockerAvailable: false, error: errMessage(err) };
+    current = opts.safety
+      ? safetyReconcileError(current, errMessage(err))
+      : { cards: [], dockerAvailable: false, error: errMessage(err) };
   }
   if (pendingIdeas.length) {
     // A fetched Ideas card carrying a pending title IS that capture — the
@@ -2120,7 +2124,9 @@ function startBoardPolling(): void {
   if (boardPollTimer === null) boardPollTimer = setInterval(() => void pollDaemonStatus(), DAEMON_POLL_MS);
   if (safetyPollTimer === null) {
     safetyPollTimer = setInterval(() => {
-      if (daemonReachable) void reconcile();
+      // Runs every tick regardless of the daemonReachable flag — see
+      // safetyPollShouldReconcile / SC-1677. Failures surface via the banner.
+      if (safetyPollShouldReconcile(daemonReachable)) void reconcile({ safety: true });
     }, BOARD_SAFETY_POLL_MS);
   }
 }
