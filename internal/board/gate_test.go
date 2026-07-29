@@ -13,13 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testProject is the fixed project key threaded through every store call in
+// this test file — pruning is project-scoped, but these tests exercise the
+// gate's fetch-trustworthiness logic, not cross-project isolation.
+const testProject = "p"
+
 func seededStores(t *testing.T) (*boardprefs.Store, *ideaspace.Store) {
 	t.Helper()
 	prefs := boardprefs.NewStore(filepath.Join(t.TempDir(), "boardprefs.json"))
-	require.NoError(t, prefs.SetOrder("product", []string{"SC-1", "SC-2", "SC-3"}))
-	require.NoError(t, prefs.SetHidden("SC-2", true))
+	require.NoError(t, prefs.SetOrder(testProject, "product", []string{"SC-1", "SC-2", "SC-3"}))
+	require.NoError(t, prefs.SetHidden(testProject, "SC-2", true))
 	ideas := ideaspace.NewStore(filepath.Join(t.TempDir(), "ideaspace.json"))
-	require.NoError(t, ideas.Set("SC-9", 3))
+	require.NoError(t, ideas.Set(testProject, "SC-9", 3))
 	return prefs, ideas
 }
 
@@ -28,28 +33,28 @@ func TestPrunePrefs_NoPMResult_LeavesStoresUntouched(t *testing.T) {
 	results := []daemon.TrackerIssuesResult{
 		{TrackerName: "eng", TrackerKind: "linear", TrackerRole: "engineering"},
 	}
-	board.PrunePrefs(results,
+	board.PrunePrefs(results, testProject,
 		board.PruneTarget{Store: prefs, Keep: map[string]struct{}{}},
 		board.PruneTarget{Store: ideas, Keep: map[string]struct{}{}},
 	)
 	assert.False(t, board.CanPrune(results))
-	got := prefs.Snapshot()
+	got := prefs.Snapshot(testProject)
 	assert.Equal(t, []string{"SC-1", "SC-2", "SC-3"}, got.Columns["product"])
 	_, hidden := got.Hidden["SC-2"]
 	assert.True(t, hidden, "hidden flag must survive a no-PM-result fetch")
-	assert.Equal(t, map[string]int{"SC-9": 3}, ideas.Assignments())
+	assert.Equal(t, map[string]int{"SC-9": 3}, ideas.Assignments(testProject))
 }
 
 func TestPrunePrefs_FetchError_LeavesStoresUntouched(t *testing.T) {
 	prefs, ideas := seededStores(t)
 	results := []daemon.TrackerIssuesResult{{TrackerRole: "pm", Err: "boom"}}
-	board.PrunePrefs(results,
+	board.PrunePrefs(results, testProject,
 		board.PruneTarget{Store: prefs, Keep: map[string]struct{}{}},
 		board.PruneTarget{Store: ideas, Keep: map[string]struct{}{}},
 	)
 	assert.False(t, board.CanPrune(results))
-	assert.Equal(t, []string{"SC-1", "SC-2", "SC-3"}, prefs.Snapshot().Columns["product"])
-	assert.Equal(t, map[string]int{"SC-9": 3}, ideas.Assignments())
+	assert.Equal(t, []string{"SC-1", "SC-2", "SC-3"}, prefs.Snapshot(testProject).Columns["product"])
+	assert.Equal(t, map[string]int{"SC-9": 3}, ideas.Assignments(testProject))
 }
 
 func TestPrunePrefs_SuccessfulFetch_PrunesVanished(t *testing.T) {
@@ -58,15 +63,45 @@ func TestPrunePrefs_SuccessfulFetch_PrunesVanished(t *testing.T) {
 		{TrackerRole: "pm", Issues: []tracker.Issue{{Key: "SC-1"}}},
 	}
 	keep := map[string]struct{}{"SC-1": {}}
-	board.PrunePrefs(results,
+	board.PrunePrefs(results, testProject,
 		board.PruneTarget{Store: prefs, Keep: keep},
 		board.PruneTarget{Store: ideas, Keep: keep},
 	)
 	assert.True(t, board.CanPrune(results))
-	assert.Equal(t, []string{"SC-1"}, prefs.Snapshot().Columns["product"])
-	_, hidden := prefs.Snapshot().Hidden["SC-2"]
+	assert.Equal(t, []string{"SC-1"}, prefs.Snapshot(testProject).Columns["product"])
+	_, hidden := prefs.Snapshot(testProject).Hidden["SC-2"]
 	assert.False(t, hidden, "hidden flag for a vanished ticket must be pruned")
-	assert.Equal(t, map[string]int{}, ideas.Assignments())
+	assert.Equal(t, map[string]int{}, ideas.Assignments(testProject))
+}
+
+// TestPrunePrefs_SecondProjectFetch_PreservesFirstProject is the regression
+// test for SC-1692: opening a second project must never prune the first
+// project's saved state, since PrunePrefs previously scoped nothing by
+// project at all.
+func TestPrunePrefs_SecondProjectFetch_PreservesFirstProject(t *testing.T) {
+	const projA = "/home/u/cli"
+	const projB = "ROO-1"
+
+	prefs := boardprefs.NewStore(filepath.Join(t.TempDir(), "boardprefs.json"))
+	require.NoError(t, prefs.SetOrder(projA, "product", []string{"42", "48", "49"}))
+	require.NoError(t, prefs.SetHidden(projA, "42", true))
+	ideas := ideaspace.NewStore(filepath.Join(t.TempDir(), "ideaspace.json"))
+	require.NoError(t, ideas.Set(projA, "165", 3))
+
+	results := []daemon.TrackerIssuesResult{
+		{TrackerRole: "pm", Issues: []tracker.Issue{{Key: "ROO-1"}}},
+	}
+	keep := map[string]struct{}{"ROO-1": {}}
+	board.PrunePrefs(results, projB,
+		board.PruneTarget{Store: prefs, Keep: keep},
+		board.PruneTarget{Store: ideas, Keep: keep},
+	)
+
+	got := prefs.Snapshot(projA)
+	assert.Equal(t, []string{"42", "48", "49"}, got.Columns["product"], "project A's column order must survive a project B fetch")
+	_, hidden := got.Hidden["42"]
+	assert.True(t, hidden, "project A's hidden flag must survive a project B fetch")
+	assert.Equal(t, map[string]int{"165": 3}, ideas.Assignments(projA), "project A's idea placement must survive a project B fetch")
 }
 
 func TestCanPrune(t *testing.T) {
