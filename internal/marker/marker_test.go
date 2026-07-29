@@ -95,6 +95,17 @@ func TestValidate_headEnum(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "bug-verify", Head: "NOT DONE"}))
 }
 
+func TestValidate_ticketReviewVerdictEnum(t *testing.T) {
+	// The gate ACTS on every outcome, so the head names what it did. A verdict
+	// outside the enum would be a state no later stage knows how to read.
+	assert.Error(t, Validate(Marker{Type: "ticket-review"}), "verdict head is required")
+	assert.Error(t, Validate(Marker{Type: "ticket-review", Head: "needs-decision"}), "asking is not an outcome")
+	for _, verdict := range []string{"ready", "reframed", "superseded", "escalated", "rejected"} {
+		assert.NoError(t, Validate(Marker{Type: "ticket-review", Head: verdict}), verdict)
+	}
+	assert.NoError(t, Validate(Marker{Type: "ticket-review-started"}))
+}
+
 func TestValidate_unknownTypeAllowed(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "future-stage"}))
 	assert.Error(t, Validate(Marker{Type: "Not A Type"}))
