@@ -88,6 +88,44 @@ func TestCanPrune(t *testing.T) {
 	}
 }
 
+func TestPMRoleNotice(t *testing.T) {
+	tests := []struct {
+		name    string
+		results []daemon.TrackerIssuesResult
+		want    string
+	}{
+		{
+			name:    "pm result present renders normally",
+			results: []daemon.TrackerIssuesResult{{TrackerRole: "pm", TrackerName: "prod"}},
+			want:    "",
+		},
+		{
+			name:    "no trackers at all gives generic hint",
+			results: nil,
+			want:    "No PM-role tracker configured. Add role: pm to a tracker in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
+		},
+		{
+			name: "non-pm tracker is named so the user knows what to annotate",
+			results: []daemon.TrackerIssuesResult{
+				{TrackerName: "work", TrackerKind: "linear", Issues: []tracker.Issue{{Key: "ENG-1"}}},
+			},
+			want: "No PM-role tracker configured. Found work (linear), but none has role: pm — add role: pm to one in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
+		},
+		{
+			name: "errored trackers are excluded from the naming",
+			results: []daemon.TrackerIssuesResult{
+				{TrackerName: "broken", TrackerKind: "jira", Err: "boom"},
+			},
+			want: "No PM-role tracker configured. Add role: pm to a tracker in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, board.PMRoleNotice(tc.results))
+		})
+	}
+}
+
 func TestFirstPMResult(t *testing.T) {
 	pm, ok := board.FirstPMResult([]daemon.TrackerIssuesResult{
 		{TrackerRole: "engineering", TrackerName: "eng"},

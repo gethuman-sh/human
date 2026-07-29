@@ -157,8 +157,13 @@ type Card struct {
 // optional fetch error (surfaced as a banner) and a dockerAvailable flag the
 // frontend uses to disable the agent-launching drop targets.
 type BoardData struct {
-	Cards           []Card `json:"cards"`
-	Error           string `json:"error,omitempty"`
+	Cards []Card `json:"cards"`
+	Error string `json:"error,omitempty"`
+	// Notice is a non-error explanation shown in place of the columns when the
+	// board has nothing to render for a structural reason — chiefly no PM-role
+	// tracker configured (SC-1655). Distinct from Error so the frontend can
+	// style it as guidance rather than a failure.
+	Notice          string `json:"notice,omitempty"`
 	DockerAvailable bool   `json:"dockerAvailable"`
 	// ColumnOrder is the hand-sorted ticket order per queue column (top
 	// first). The frontend sorts each column by it; cards absent from their
@@ -361,8 +366,10 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 	data := BoardData{DockerAvailable: dockerAvailable, ColumnOrder: prefs.Columns}
 	pm, ok := board.FirstPMResult(results)
 	if !ok {
-		// No PM-role tracker configured yet: render five empty columns rather
-		// than erroring, matching the "zero PM issues" requirement.
+		// No PM-role tracker resolved: rather than five silently empty columns
+		// that read as "no work" (SC-1655), surface an explicit notice telling
+		// the user a tracker needs role: pm to appear on the board.
+		data.Notice = board.PMRoleNotice(results)
 		return data
 	}
 	if pm.Err != "" {

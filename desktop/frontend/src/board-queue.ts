@@ -265,6 +265,7 @@ export interface BoardPayload<C> {
   cards?: C[];
   dockerAvailable?: boolean;
   error?: string;
+  notice?: string;
   columnOrder?: Record<string, string[]>;
 }
 
@@ -272,6 +273,7 @@ export interface BoardState<C> {
   cards: C[];
   dockerAvailable: boolean;
   error: string;
+  notice: string;
   columnOrder?: Record<string, string[]>;
 }
 
@@ -285,6 +287,7 @@ export function boardStateFromPayload<C>(payload: BoardPayload<C>, suppressError
     cards: payload.cards || [],
     dockerAvailable: !!payload.dockerAvailable,
     error: suppressError ? "" : payload.error || "",
+    notice: payload.notice || "",
     columnOrder: payload.columnOrder,
   };
 }

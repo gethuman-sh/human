@@ -228,6 +228,7 @@ export function boardStateFromPayload(payload, suppressError = false) {
         cards: payload.cards || [],
         dockerAvailable: !!payload.dockerAvailable,
         error: suppressError ? "" : payload.error || "",
+        notice: payload.notice || "",
         columnOrder: payload.columnOrder,
     };
 }

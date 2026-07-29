@@ -252,7 +252,14 @@ test("boardStateFromPayload normalizes an empty payload (SC-631)", () => {
   assert.deepEqual(state.cards, []);
   assert.equal(state.dockerAvailable, false);
   assert.equal(state.error, "");
+  assert.equal(state.notice, "");
   assert.equal(state.columnOrder, undefined);
+});
+
+test("boardStateFromPayload carries the no-PM-tracker notice through the mapping (SC-1655)", () => {
+  const state = boardStateFromPayload({ notice: "No PM-role tracker configured." });
+  assert.equal(state.notice, "No PM-role tracker configured.");
+  assert.deepEqual(state.cards, []);
 });
 
 // SC-624: a same-column drop inserts the dragged key at the pointer position.

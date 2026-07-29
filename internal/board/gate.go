@@ -3,7 +3,12 @@
 // that decides when local view preferences may be pruned against a fetch.
 package board
 
-import "github.com/gethuman-sh/human/internal/daemon"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/gethuman-sh/human/internal/daemon"
+)
 
 // Pruner is the subset of a local view-preferences store that board pruning
 // drives. Both boardprefs.Store and ideaspace.Store satisfy it.
@@ -28,6 +33,35 @@ func FirstPMResult(results []daemon.TrackerIssuesResult) (daemon.TrackerIssuesRe
 		}
 	}
 	return daemon.TrackerIssuesResult{}, false
+}
+
+// PMRoleNotice explains an empty board that carries no PM-role tracker, so the
+// UI can show why nothing renders instead of five silently empty columns — the
+// SC-1655 defect, where a correctly configured non-Shortcut tracker returns
+// issues that the board discards for lacking the pm role. Only Shortcut infers
+// the pm role for free (see tracker.Instance.InferRole); every other kind needs
+// an explicit `role: pm` in .humanconfig. When trackers were fetched but none
+// carries the role, the message names them so the user knows which entry to
+// annotate; with no trackers at all it gives the generic setup hint. An empty
+// string means a PM-role result exists and the board renders normally.
+func PMRoleNotice(results []daemon.TrackerIssuesResult) string {
+	if _, ok := FirstPMResult(results); ok {
+		return ""
+	}
+	var found []string
+	for _, r := range results {
+		// A tracker that errored is reported through its own error banner, not
+		// as a role-misconfiguration hint — skip it so the notice names only
+		// trackers that genuinely resolved without the pm role.
+		if r.Err != "" {
+			continue
+		}
+		found = append(found, fmt.Sprintf("%s (%s)", r.TrackerName, r.TrackerKind))
+	}
+	if len(found) == 0 {
+		return "No PM-role tracker configured. Add role: pm to a tracker in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\")."
+	}
+	return fmt.Sprintf("No PM-role tracker configured. Found %s, but none has role: pm — add role: pm to one in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").", strings.Join(found, ", "))
 }
 
 // CanPrune reports whether a fetch is trustworthy enough to prune local view

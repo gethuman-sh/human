@@ -926,6 +926,23 @@ body {
   border-top-color: transparent;
 }
 
+/* Shown in place of the columns when the board has nothing to render for a
+   structural reason (no PM-role tracker configured, SC-1655). Centered and
+   muted like the loading state, but wraps long guidance text. */
+.board-notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 24px;
+  max-width: 640px;
+  margin: 0 auto;
+  min-height: calc(100vh - 120px);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 /* Shown on each card while its real stage is still being derived from comments
    (quick titles land in Backlog first). Muted so it reads as "pending
    placement", distinct from the amber "agent running" badge. */

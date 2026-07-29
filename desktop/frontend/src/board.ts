@@ -123,6 +123,10 @@ interface BoardData {
   cards: Card[];
   dockerAvailable: boolean;
   error?: string;
+  // Non-error guidance shown in place of the columns when the board has nothing
+  // to render for a structural reason — chiefly no PM-role tracker configured
+  // (SC-1655), where an empty board would otherwise read as "no work".
+  notice?: string;
   // Hand-sorted ticket order per queue column (top first); cards absent from
   // their queue's list render after it in fetch order.
   columnOrder?: Record<string, string[]>;
@@ -403,7 +407,7 @@ const QUEUE_VERB: Record<string, string> = {
   building: "Build it",
 };
 
-let current: BoardData = { cards: [], dockerAvailable: true, error: "" };
+let current: BoardData = { cards: [], dockerAvailable: true, error: "", notice: "" };
 let dragging: { key: string; title: string; stage: string } | null = null;
 
 // showHidden reveals user-hidden cards (marked with an "H" pill) instead of
@@ -1892,6 +1896,15 @@ function render(): void {
     loading.className = "board-loading";
     loading.innerHTML = `<span class="spinner"></span><span>Loading board…</span>`;
     board.appendChild(loading);
+  } else if (current.notice && current.cards.length === 0) {
+    // No PM-role tracker resolved (SC-1655): show the explicit reason in place
+    // of five empty columns that would read as "no work". Only when there are
+    // genuinely no cards — a configured PM tracker with zero issues still shows
+    // its columns.
+    const notice = document.createElement("div");
+    notice.className = "board-notice";
+    notice.textContent = current.notice;
+    board.appendChild(notice);
   } else {
     for (const queue of QUEUES) {
       board.appendChild(queue === "ideas" ? renderIdeaSpace() : renderColumn(queue));
