@@ -132,7 +132,7 @@ func (m *inspectErrTeeMock) ExecInspect(_ context.Context, _ string) (devcontain
 	return devcontainer.ExecInspectResponse{}, errors.WithDetails("inspect down")
 }
 
-func TestTeeExecOutput_InspectErrorOmitsTrailer(t *testing.T) {
+func TestTeeExecOutput_InspectErrorWritesUnknownTrailer(t *testing.T) {
 	withLogRoot(t)
 	mgr := &Manager{Docker: &inspectErrTeeMock{}}
 	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", "", StartOpts{Name: "tee", Prompt: "p"})
@@ -144,8 +144,46 @@ func TestTeeExecOutput_InspectErrorOmitsTrailer(t *testing.T) {
 	}
 	mgr.teeWG.Wait()
 	data, _ := os.ReadFile(filepath.Join(exe.Dir(), "output.log"))
-	if strings.Contains(string(data), "[human] claude exec exited") {
-		t.Fatalf("trailer must be omitted on inspect error, got %q", string(data))
+	// A non-numeric "unknown" trailer keeps output.log non-empty without
+	// fabricating a code parseExitTrailer would misread.
+	if !strings.Contains(string(data), execExitTrailerPrefix+"unknown") {
+		t.Fatalf("inspect error must still mark the run end, got %q", string(data))
+	}
+	// And the outcome is recorded even when the exit code is unknown.
+	var oc OutcomeRecord
+	if err := readJSONFile(filepath.Join(exe.Dir(), "outcome.json"), &oc); err != nil {
+		t.Fatalf("outcome.json must exist on inspect error: %v", err)
+	}
+	if oc.Reason != "failed" {
+		t.Fatalf("outcome reason = %q, want failed", oc.Reason)
+	}
+}
+
+// TestTeeExecOutput_RecordsOutcomeOnExit is the SC-1688 regression test: a
+// detached exec that ends must produce outcome.json from the tee itself, with
+// the observed exit code — no Manager.Stop or reap required. Pre-fix the tee
+// wrote only output.log, so outcome.json was absent and this fails.
+func TestTeeExecOutput_RecordsOutcomeOnExit(t *testing.T) {
+	withLogRoot(t)
+	mgr := &Manager{Docker: &inspectTeeMock{}}
+	exe, err := mgr.execClaudeDetached(context.Background(), "cid", "vscode", "", "", StartOpts{Name: "tee", Prompt: "p"})
+	if err != nil {
+		t.Fatalf("execClaudeDetached: %v", err)
+	}
+	if exe == nil {
+		t.Fatal("expected non-nil execution")
+	}
+	mgr.teeWG.Wait()
+
+	var oc OutcomeRecord
+	if err := readJSONFile(filepath.Join(exe.Dir(), "outcome.json"), &oc); err != nil {
+		t.Fatalf("outcome.json must exist after the exec ends: %v", err)
+	}
+	if oc.ExitCode != 137 {
+		t.Fatalf("outcome exit code = %d, want 137", oc.ExitCode)
+	}
+	if oc.Reason != "failed" {
+		t.Fatalf("outcome reason = %q, want failed", oc.Reason)
 	}
 }
 

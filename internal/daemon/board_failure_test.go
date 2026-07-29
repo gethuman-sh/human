@@ -424,6 +424,35 @@ func TestHandleBoardAgentExit_MidReviewCrashPostsReviewFailed(t *testing.T) {
 		"a mid-review crash must post a retryable review-failed marker, got %q", c.added[0])
 }
 
+// SC-1688: a mid-review crash must put the diagnosed reason into the
+// review-failed marker instead of the generic "retry the review" text. Pre-fix
+// chainReviewAfterCleanBuild ignored the diagnoser and posted a hardcoded body.
+func TestHandleBoardAgentExit_MidReviewCrash_PostsDiagnosedReason(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+			cmt(ReviewStartedHeader, time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	chain := func(string) error { return nil }
+	diagnose := func(agentName, errorType string) FailureDiagnosis {
+		return FailureDiagnosis{Headline: "command not found: gh", Detail: "exit code: 127"}
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, nil, nil, alwaysReachable, nil, diagnose, nil, StageRetry{}, "", zerolog.Nop())
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.True(t, strings.HasPrefix(c.added[0], ReviewFailedHeader),
+		"must still be a review-failed marker, got %q", c.added[0])
+	assert.Contains(t, c.added[0], "command not found: gh",
+		"marker must carry the diagnosed reason, got %q", c.added[0])
+	assert.NotContains(t, c.added[0], "exited before completing the in-container review",
+		"marker must not fall back to the hardcoded generic body")
+}
+
 func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := NewHookEventStore()
