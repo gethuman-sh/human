@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bugsHeaderHTML, securityHeaderHTML } from "../build/board-findbugs.js";
+import { bugsHeaderHTML, securityHeaderHTML, gardeningHeaderHTML } from "../build/board-findbugs.js";
 
 // 1087: when no sweep is running the header offers the Findbugs button (and the
 // neutral quick-add + count still follow), never the hunting spinner.
@@ -42,4 +42,15 @@ test("scanning security header renders the spinner label, no button", () => {
   assert.match(html, /scanning…/);
   assert.doesNotMatch(html, /class="findsecurity-btn"/);
   assert.match(html, /class="column-count">0</);
+});
+
+// SC-1638: the Gardening header is intentionally inert — it shows only the
+// title and a count, never a sweep control or a quick-add button.
+test("gardening header renders title and count, no sweep or quick-add", () => {
+  const html = gardeningHeaderHTML(0);
+  assert.match(html, /<span>Gardening<\/span>/);
+  assert.match(html, /class="column-count">0</);
+  assert.doesNotMatch(html, /class="add-card"/);
+  assert.doesNotMatch(html, /findbugs-btn/);
+  assert.doesNotMatch(html, /findsecurity-btn/);
 });
