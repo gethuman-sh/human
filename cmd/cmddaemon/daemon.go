@@ -569,21 +569,21 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			To:    daemon.BoardVerification,
 		})
 	}
-	// The pre-merge PR review→fix loop is driven off the reviewer/fixer Stop
-	// events, exactly like chainReview: on each loop-agent exit read the outcome
-	// it recorded (the reviewer's verdict, the fixer's exit) from the state store
-	// and hand it to the loop executor, which decides the next step.
-	advancePRLoop := advancePRLoopFunc(ctx, ds, reviewLaunchGate, logger)
-	// The deploy-fixer (SC-1557) is driven off its Stop event exactly like the PR
-	// loop: on exit read the exit it recorded in stage.deploy-fix and hand it to
-	// AdvanceDeployFix, which re-runs Deploy on `done` or reds the card otherwise.
-	advanceDeployFix := advanceDeployFixFunc(ctx, ds, reviewLaunchGate, logger)
 	// The diagnoser reads the dead run's persisted artifacts so the failed
 	// marker says what actually broke instead of the generic stage line.
 	diagnoseFailure := func(agentName, hookErrorType string) daemon.FailureDiagnosis {
 		d := agent.DiagnoseFailure(agentName, hookErrorType)
 		return daemon.FailureDiagnosis{Headline: d.Headline, Detail: d.Detail}
 	}
+	// The pre-merge PR review→fix loop is driven off the reviewer/fixer Stop
+	// events, exactly like chainReview: on each loop-agent exit read the outcome
+	// it recorded (the reviewer's verdict, the fixer's exit) from the state store
+	// and hand it to the loop executor, which decides the next step.
+	advancePRLoop := advancePRLoopFunc(ctx, ds, diagnoseFailure, reviewLaunchGate, logger)
+	// The deploy-fixer (SC-1557) is driven off its Stop event exactly like the PR
+	// loop: on exit read the exit it recorded in stage.deploy-fix and hand it to
+	// AdvanceDeployFix, which re-runs Deploy on `done` or reds the card otherwise.
+	advanceDeployFix := advanceDeployFixFunc(ctx, ds, reviewLaunchGate, logger)
 	// A daemon only chains a review for a handoff branch it can resolve on its
 	// own machine — a board-context fix leaves its branch local on the machine
 	// that produced it, so a daemon elsewhere leaves the handoff for one that can
@@ -663,7 +663,11 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		branchReachable, commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		closedTicketProbeFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, advancePRLoop, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
+		// The durable re-drive has no exiting agent to attribute — the run it is
+		// recovering from is long gone — so it drives the loop with no run identity
+		// and any escalation falls back to its generic line.
+		chainReview, func(pmKey string) error { return advancePRLoop(pmKey, "", "") },
+		stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
 	// Surface tickets created or edited outside the board (tracker web UI, CLI,
 	// another teammate or daemon) — none raise a board event — by polling the
@@ -2317,15 +2321,29 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, li
 // (the reviewer's verdict, the fixer's exit) and hands it to the loop executor,
 // which decides and runs the next step. Extracted from runDaemonForeground so
 // the state-read + error path lives in its own scope.
-func advancePRLoopFunc(ctx context.Context, ds *daemonState, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
-	return func(pmKey string) error {
-		verdict := readPRReviewVerdict(ctx, pmKey, logger)
-		exit, options, summary := readPRFixReport(ctx, pmKey, logger)
+// The exiting run's name and error type travel with the call so a step that died
+// before recording an outcome can still be explained from its artifacts; both are
+// empty when the durable reconcile pass re-drives a stalled loop, where the agent
+// is long gone (SC-1892).
+func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
+	return func(pmKey, agentName, errorType string) error {
+		verdict, verdictRecorded := readPRReviewVerdict(ctx, pmKey, logger)
+		exit, options, summary, exitRecorded := readPRFixReport(ctx, pmKey, logger)
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 		if err != nil {
 			return err
 		}
-		return deps.AdvancePRLoop(ctx, pmKey, verdict, exit, options, summary)
+		deps.Diagnose = diagnose
+		return deps.AdvancePRLoop(ctx, pmKey, daemon.PRLoopOutcome{
+			ReviewVerdict:  verdict,
+			ReviewRecorded: verdictRecorded,
+			FixExit:        exit,
+			FixRecorded:    exitRecorded,
+			FixOptions:     options,
+			FixSummary:     summary,
+			Agent:          agentName,
+			ErrorType:      errorType,
+		})
 	}
 }
 

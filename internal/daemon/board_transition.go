@@ -130,6 +130,10 @@ type BoardTransitionDeps struct {
 	// close). The zero value is a safe no-op writer, so an un-wired path stays
 	// valid without a logger.
 	Logger zerolog.Logger
+	// Diagnose distills why a dead run died, so a loop step that escalated
+	// without recording an outcome reports the real cause instead of a generic
+	// line. nil disables diagnosis (the package's "nil disables" convention).
+	Diagnose BoardFailureDiagnoser
 	// LaunchGate reports the launch-critical doctor checks currently failing on
 	// this daemon's host (docker, agent-skills, claude-auth). When it returns a
 	// non-empty slice the stage launcher neither claims nor launches — it silently
@@ -556,14 +560,14 @@ func prLoopURL(comments []tracker.Comment) string {
 // decider for the next action, and executes it: launch the reviewer, launch the
 // fixer, un-draft + merge via the existing DeployBranch, or red the card for a
 // human. Human PR review runs out of band and never enters here.
-func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey, reviewVerdict, fixExit string, fixOptions []BoardOption, fixSummary string) error {
+func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, outcome PRLoopOutcome) error {
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading comments for PR loop", "pm", pmKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), card.Branch
-	switch EvaluatePRLoop(comments, reviewVerdict, fixExit) {
+	switch EvaluatePRLoop(comments, outcome.ReviewVerdict, outcome.FixExit) {
 	case PRActionReview:
 		if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(prReviewStartedBody(url, number, branch), d.DaemonID)); err != nil {
 			return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
@@ -583,7 +587,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey, reviewVer
 		// (forge.AdoptOrCreatePullRequest), runs the CI gate, freshness rebase and merge.
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), branch)
 	default: // PRActionEscalate
-		return d.escalatePRLoop(ctx, pmKey, comments, reviewVerdict, fixExit, fixOptions, fixSummary)
+		return d.escalatePRLoop(ctx, pmKey, comments, outcome)
 	}
 }
 
@@ -594,19 +598,20 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey, reviewVer
 // unreviewable PR, an outcome the daemon cannot classify — reds the done stage.
 // Idempotent: a durable re-drive must never re-post the block, so an already-open
 // options block short-circuits.
-func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, comments []tracker.Comment, reviewVerdict, fixExit string, fixOptions []BoardOption, fixSummary string) error {
+func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) error {
 	if _, open := openOptionsBlock(comments); open {
 		return nil
 	}
-	if latestPRLoopStage(comments) == PRStageFix && fixExit != PRFixDone {
+	stage := latestPRLoopStage(comments)
+	if stage == PRStageFix && outcome.FixExit != PRFixDone {
 		var b strings.Builder
 		b.WriteString(OptionsHeader + "\nstage: " + string(BoardImplementation) + "\n")
-		ctxLine := fixSummary
+		ctxLine := outcome.FixSummary
 		if ctxLine == "" {
 			ctxLine = "the PR review→fix loop needs a decision the fixer could not make"
 		}
 		b.WriteString("context: " + ctxLine + "\n")
-		opts := fixOptions
+		opts := outcome.FixOptions
 		if len(opts) == 0 {
 			// A generic single option keeps the block valid (parseOptionsBlock needs
 			// ≥1) so the human can always move the card off the loop.
@@ -619,22 +624,52 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 		return err
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
-		StampDaemon(PRReviewFailedHeader+"\n"+prEscalationReason(reviewVerdict, fixExit), d.DaemonID))
+		StampDaemon(PRReviewFailedHeader+"\n"+prEscalationReason(stage, outcome, d.Diagnose), d.DaemonID))
 	return nil
 }
 
-// prEscalationReason renders the actionable headline the failed marker's badge shows.
-func prEscalationReason(reviewVerdict, fixExit string) string {
+// prEscalationReason renders the actionable headline the failed marker's badge
+// shows.
+//
+// The unrecorded case is kept distinct from every recorded one. A step that
+// wrote nothing did not decide anything — it died, or never got far enough to
+// report — and saying "unreadable outcome" for it sent a human to read a review
+// that was never written. Where a diagnosis of the dead run is available it
+// replaces the generic line entirely, the same way an ordinary stage failure
+// reports its cause (SC-1688); without one — notably the durable reconcile
+// re-drive, which has no agent in hand — the line at least names what was
+// missing instead of implying something unparseable was found.
+func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose BoardFailureDiagnoser) string {
 	switch {
-	case fixExit == ExitNeedsInput:
+	case outcome.FixExit == ExitNeedsInput:
 		return "the PR fixer needs a human decision — read the PR review comments, decide, then re-run Deploy"
-	case reviewVerdict == PRVerdictChanges:
+	case outcome.ReviewVerdict == PRVerdictChanges:
 		return "the machine review did not converge within the round budget — review the PR yourself, then re-run Deploy"
-	case reviewVerdict == PRVerdictUnreviewable:
+	case outcome.ReviewVerdict == PRVerdictUnreviewable:
 		return "the PR could not be reviewed (bad binding or empty diff) — check the PR, then re-run Deploy"
+	case !outcome.stepRecorded(stage):
+		return unrecordedStepReason(stage, outcome, diagnose)
 	default:
-		return "the PR review→fix loop stopped on an unreadable outcome — check the PR and its review, then re-run Deploy"
+		return "the PR review→fix loop stopped on an outcome it could not classify — check the PR and its review, then re-run Deploy"
 	}
+}
+
+// unrecordedStepReason explains a loop step that left no outcome behind.
+func unrecordedStepReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose BoardFailureDiagnoser) string {
+	if outcome.Agent != "" && diagnose != nil {
+		if body := failureMarkerBody(diagnose, outcome.Agent, outcome.ErrorType); body != genericStageFailure {
+			return body
+		}
+	}
+	step, report := "review→fix loop step", "an outcome"
+	switch stage {
+	case PRStageReview:
+		step, report = "PR reviewer", "a verdict"
+	case PRStageFix:
+		step, report = "PR fixer", "an exit"
+	}
+	return "the " + step + " finished without recording " + report +
+		" — its run may have died before reporting; check its log and the PR, then re-run Deploy"
 }
 
 // AdvanceDeployFix is the deploy-fixer's Stop-event driver. On the fixer's exit the

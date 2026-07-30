@@ -288,13 +288,22 @@ func TestHandleBoardAgentExit_prReviewStage_drivesLoop(t *testing.T) {
 	c := &syncCommenter{}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	var advanced []string
-	advance := func(pmKey string) error { advanced = append(advanced, pmKey); return nil }
+	var gotAgent, gotErrorType string
+	advance := func(pmKey, agentName, errorType string) error {
+		advanced = append(advanced, pmKey)
+		gotAgent, gotErrorType = agentName, errorType
+		return nil
+	}
 	var reclaimed string
 	onHandoff := func(agentName string) { reclaimed = agentName }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-prreview", "", commenterFor, nil, advance, nil, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-prreview", "crashed", commenterFor, nil, advance, nil, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
 
 	assert.Equal(t, []string{"SC-1"}, advanced, "the PR loop driver must be invoked once")
+	// A step that dies before recording an outcome can only be explained from its
+	// artifacts, so its identity must reach the driver (SC-1892).
+	assert.Equal(t, "board-SC-1-prreview", gotAgent, "the exiting run's name must reach the loop driver")
+	assert.Equal(t, "crashed", gotErrorType, "the exit's error type must reach the loop driver")
 	assert.Equal(t, "board-SC-1-prreview", reclaimed, "the loop step's worktree must be reclaimed")
 	assert.Empty(t, c.added, "a PR loop exit must not post a generic stage-failed marker")
 }
