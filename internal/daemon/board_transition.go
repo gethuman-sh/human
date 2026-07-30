@@ -210,54 +210,25 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 		return nil
 	}
 
-	// Rework loop: a build whose review failed may be rebuilt. This is the ONE
-	// sanctioned backward move — the executor is re-dispatched with the review
-	// findings, and the resulting handoff chains into a fresh review.
-	if isReworkTransition(req.To, card) {
-		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			executePrompt(dispatchKey(req.PMKey, card),
-				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first"))
+	// A card paused on an open [human:options] decision has exactly one valid
+	// next move — choosing an option (ApplyOption), a click, never a drag. Refuse
+	// every drop on it with a reason the user can act on, rather than letting the
+	// forward-only rule below reject it with an opaque "not the single next stage"
+	// (or, for the done-stage PR-loop escalation before SC-1857 paused it, swallow
+	// the drop as a silent duplicate). The returned error is what the board surfaces
+	// as its refusal banner: a refused move must say why, never appear to do nothing.
+	if awaitingDecision(card) {
+		return errors.WithDetails(
+			"this card is waiting on a decision — choose an option before moving it",
+			"pm", req.PMKey, "stage", string(card.Stage), "to", string(req.To))
 	}
 
-	// Planning retry: a failed planning run is relaunched in place. The retry
-	// gesture targets planning while the card already derives to planning, so
-	// the single-step rule below would reject it and the gesture would launch
-	// nothing (SC-355). A RUNNING planning card never reaches this path — the
-	// idempotency guard above already returned for it.
-	if isPlanningRetry(req.To, card) {
-		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			planPrompt(req.PMKey))
-	}
-
-	// Build retry: the same sanctioned in-place relaunch for a failed
-	// implementation run — without it a failed build is a dead end, since the
-	// rework re-drop requires a failed REVIEW verdict and Retry fix is
-	// bug-pane-only (SC-591). The plan is intact on the ticket; a fresh
-	// executor picks it up.
-	if isBuildRetry(req.To, card) {
-		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			executePrompt(dispatchKey(req.PMKey, card), ""))
-	}
-
-	// Review retry: a stage-failed review is otherwise a dead end. The rework
-	// re-drop keys on a DONE verification with a failing verdict, and a
-	// [human:review-failed] card (state failed) matches neither it nor any
-	// forward move — so a failed binding gate (missing branch, unreachable
-	// commits) could never be retried. Relaunch the review in place, re-bound to
-	// the same handoff (SC-695). A RUNNING review is caught by the idempotency
-	// guard above.
-	if isReviewRetry(req.To, card) {
-		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			reviewPrompt(dispatchKey(req.PMKey, card), card))
-	}
-
-	// Deploy retry: a card sitting on a failed deploy, re-dropped on Deploy, must
-	// re-run the deploy pipeline — the freshness stage rebases the already-reviewed
-	// branch and re-attempts the merge. Without this the forward-only rule below
-	// rejects the same-stage move and a conflicted deploy is a dead end that can
-	// only be escaped by re-implementing already-reviewed work (735).
-	if isDeployRetry(req.To, card) {
-		return d.runDoneStage(ctx, req, card)
+	// Sanctioned non-forward moves — the rework backward step and the in-place
+	// stage retries — are dispatched before the forward-only rule, which would
+	// otherwise reject each as a non-advance. Extracted so ApplyTransition reads
+	// as guards → sanctioned-non-forward → forward, one concern per block.
+	if handled, err := d.dispatchNonForwardMove(ctx, req, card); handled {
+		return err
 	}
 
 	// Forward-only, single-next-stage: the target must be exactly one rank
@@ -282,6 +253,62 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	}
 
 	return d.launchForwardStage(ctx, req, card)
+}
+
+// dispatchNonForwardMove handles the sanctioned moves that are not a single
+// forward step: the one allowed backward move (rework after a failing review)
+// and the in-place stage retries (planning, build, review, deploy). Each targets
+// a stage the card already derives to, which the forward-only rule would reject
+// as a non-advance, so they are resolved here first. handled reports whether the
+// request matched one of them — when false, ApplyTransition falls through to the
+// forward-only path — and err carries that dispatch's own result.
+func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard) (handled bool, err error) {
+	switch {
+	// Rework loop: a build whose review failed may be rebuilt. This is the ONE
+	// sanctioned backward move — the executor is re-dispatched with the review
+	// findings, and the resulting handoff chains into a fresh review.
+	case isReworkTransition(req.To, card):
+		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+			executePrompt(dispatchKey(req.PMKey, card),
+				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first"))
+
+	// Planning retry: a failed planning run is relaunched in place. The retry
+	// gesture targets planning while the card already derives to planning, so
+	// the single-step rule would reject it and the gesture would launch nothing
+	// (SC-355). A RUNNING planning card never reaches this path — the idempotency
+	// guard already returned for it.
+	case isPlanningRetry(req.To, card):
+		return true, d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
+			planPrompt(req.PMKey))
+
+	// Build retry: the same sanctioned in-place relaunch for a failed
+	// implementation run — without it a failed build is a dead end, since the
+	// rework re-drop requires a failed REVIEW verdict and Retry fix is
+	// bug-pane-only (SC-591). The plan is intact on the ticket; a fresh
+	// executor picks it up.
+	case isBuildRetry(req.To, card):
+		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+			executePrompt(dispatchKey(req.PMKey, card), ""))
+
+	// Review retry: a stage-failed review is otherwise a dead end. The rework
+	// re-drop keys on a DONE verification with a failing verdict, and a
+	// [human:review-failed] card (state failed) matches neither it nor any
+	// forward move — so a failed binding gate (missing branch, unreachable
+	// commits) could never be retried. Relaunch the review in place, re-bound to
+	// the same handoff (SC-695). A RUNNING review is caught by the idempotency guard.
+	case isReviewRetry(req.To, card):
+		return true, d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
+			reviewPrompt(dispatchKey(req.PMKey, card), card))
+
+	// Deploy retry: a card sitting on a failed deploy, re-dropped on Deploy, must
+	// re-run the deploy pipeline — the freshness stage rebases the already-reviewed
+	// branch and re-attempts the merge. Without this the forward-only rule rejects
+	// the same-stage move and a conflicted deploy is a dead end that can only be
+	// escaped by re-implementing already-reviewed work (735).
+	case isDeployRetry(req.To, card):
+		return true, d.runDoneStage(ctx, req, card)
+	}
+	return false, nil
 }
 
 // launchForwardStage dispatches an already-sanctioned forward transition to
@@ -1114,6 +1141,16 @@ func isReviewRetry(to BoardStage, card BoardCard) bool {
 // two answering the same question.
 func isDuplicateDrop(to BoardStage, card BoardCard) bool {
 	return card.Stage == to && card.State == BoardRunning
+}
+
+// awaitingDecision reports a card paused on an open [human:options] block: its
+// only valid continuation is choosing an option (ApplyOption), so every drag is
+// refused with an actionable reason instead of the opaque forward-only rejection.
+// DeriveBoardCard attaches the block only while it is genuinely open (its
+// consumption rules retire a pursued or superseded one), so a set Options slice
+// is exactly a live, undecided fork (SC-1857).
+func awaitingDecision(card BoardCard) bool {
+	return len(card.Options) > 0
 }
 
 // isReworkTransition reports the one allowed backward move: re-running the

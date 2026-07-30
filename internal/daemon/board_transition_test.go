@@ -531,6 +531,26 @@ func TestDeriveBoardCardEscalatedLoopLeavesNoBlockingDoneMarker(t *testing.T) {
 	assert.Equal(t, BoardImplementation, card.OptionsStage)
 }
 
+func TestApplyTransitionRefusesDropOnAwaitingDecisionCard(t *testing.T) {
+	// SC-1857 AC3: dropping a card that is refusing the move must surface a reason,
+	// never appear to do nothing. Before the fix this exact escalated thread derived
+	// to done/running and the drop was swallowed by a silent duplicate-drop nil; now
+	// the card is paused on its decision and the drop returns an actionable refusal.
+	c := &fakeCommenter{comments: escalatedLoopAwaitingDecision()}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{}
+	deps := newDeps(c, l, p)
+
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{
+		PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+
+	require.Error(t, err, "a refused drop must not return a silent nil")
+	assert.Contains(t, err.Error(), "waiting on a decision", "the refusal names why, so the board can show it")
+	assert.Zero(t, l.calls, "nothing is launched")
+	assert.Zero(t, p.call, "nothing is deployed")
+	assert.Empty(t, c.added, "a refused move posts no stage marker")
+}
+
 func TestApplyTransitionDoneNoBranch(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:review-complete]", time.Unix(1, 0))}}
 	p := &fakeDeployer{}
