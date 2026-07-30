@@ -1830,6 +1830,135 @@ func TestCiFailureFixable(t *testing.T) {
 	assert.True(t, ciFailureFixable(errors.New("CI checks failed")))
 	assert.False(t, ciFailureFixable(errors.New("timed out waiting for CI checks")))
 	assert.False(t, ciFailureFixable(nil))
+	// An unreadable check state (credential/vault failure) is not a code defect a
+	// fixer can repair — it must never dispatch the fixer (SC-1996 AC4).
+	assert.False(t, ciFailureFixable(markStateUnreadable(
+		errors.New("resolving 1Password secret via CLI: exit status 1"),
+		"could not read the pull request's check state")))
+}
+
+// stateUnreadable must tag only the read-error, and ciFailureHeadline must keep
+// the three outcomes distinct: a credential/vault read failure names an
+// unreadable state and the op-signin remedy, a timeout says the CI did not
+// finish, and a plain failure tells the user to fix the failing checks (SC-1996
+// AC1/AC2/AC3).
+func TestStateUnreadable_And_Headlines(t *testing.T) {
+	unreadable := markStateUnreadable(
+		errors.New("resolving 1Password secret via CLI: exit status 1"),
+		"could not read the pull request's check state")
+	assert.True(t, stateUnreadable(unreadable))
+	assert.False(t, stateUnreadable(errors.New("CI checks failed")))
+	assert.False(t, stateUnreadable(errors.New("timed out waiting for CI checks")))
+
+	credential := ciFailureHeadline(unreadable)
+	assert.Contains(t, credential, "credential")
+	assert.Contains(t, credential, "op signin")
+	assert.NotContains(t, credential, "CI checks failed")
+	assert.NotContains(t, credential, "fix the failing checks")
+
+	timeout := ciFailureHeadline(errors.New("timed out waiting for CI checks"))
+	assert.Contains(t, timeout, "did not finish")
+
+	failing := ciFailureHeadline(errors.New("CI checks failed"))
+	assert.Contains(t, failing, "fix the failing checks")
+}
+
+// A credential/vault read failure at the CI gate must be reported as an
+// unreadable state with the op-signin remedy — never as "CI checks failed" — and
+// must NOT dispatch the deploy-fixer even with a launcher wired and budget free.
+// The PR is fully green; the daemon simply cannot read the token (SC-1996).
+func TestDeployBranch_ChecksUnreadable_ReportsCredentialFailure_NoFixer(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/21", Number: 21},
+		checksErr: errors.New("resolving 1Password secret via CLI: exit status 1")}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var failed, started string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+		if strings.HasPrefix(b, DeployFixStartedHeader) {
+			started = b
+		}
+	}
+	require.NotEmpty(t, failed, "an unreadable check state must red the card, not spin a fixer")
+	assert.Empty(t, started, "no fixer may be dispatched for an unreadable check state")
+	assert.Zero(t, l.calls, "an unreadable state is not a code defect — never launch the fixer")
+	assert.NotContains(t, failed, "CI checks failed")
+	assert.NotContains(t, failed, "fix the failing checks")
+	assert.Contains(t, failed, "credential")
+	assert.Contains(t, failed, "op signin")
+	assert.Contains(t, failed, "resolving 1Password secret", "the raw cause stays in the detail block")
+	assert.Zero(t, p.merged, "an unread head must never be merged")
+}
+
+// The post-rebase forge fallback reads the forge's mergeability verdict; when
+// that read itself fails on a credential/vault error, the deploy must report the
+// unreadable state with the op-signin remedy — not the "conflicts with the base"
+// conflict headline — and must not dispatch the fixer (SC-1996).
+func TestDeployBranch_RebaseFallbackUnreadable_ReportsCredentialFailure_NoFixer(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/22", Number: 22},
+		checks:       []forge.ChecksState{forge.ChecksPassing},
+		ensureErr:    errors.New("rebase hit a conflict"),
+		mergeableErr: errors.New("resolving 1Password secret via CLI: exit status 1")}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var failed, started string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+		if strings.HasPrefix(b, DeployFixStartedHeader) {
+			started = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Empty(t, started)
+	assert.Zero(t, l.calls, "an unreadable mergeability state must not dispatch a fixer")
+	assert.NotContains(t, failed, "conflicts with the base")
+	assert.Contains(t, failed, "op signin")
+	assert.Zero(t, p.merged)
+}
+
+// After the freshness rebase the deploy waits out the forge's mergeability
+// recompute; when that read fails terminally on a credential/vault error, the
+// failure must name the unreadable state and the op-signin remedy rather than
+// claiming the PR is unmergeable (SC-1996).
+func TestDeployBranch_AwaitMergeableUnreadable_ReportsCredentialFailure(t *testing.T) {
+	syncDeploy(t)
+	origInterval, origTimeout := mergeablePollInterval, mergeablePollTimeout
+	mergeablePollInterval, mergeablePollTimeout = time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { mergeablePollInterval, mergeablePollTimeout = origInterval, origTimeout })
+
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/23", Number: 23},
+		checks:       []forge.ChecksState{forge.ChecksPassing},
+		rebased:      true,
+		mergeableErr: errors.New("resolving 1Password secret via CLI: exit status 1")}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.NotContains(t, failed, "unmergeable")
+	assert.Contains(t, failed, "op signin")
+	assert.Zero(t, p.merged)
 }
 
 // The planning dispatch is the pipeline's only entry into building, so the gate

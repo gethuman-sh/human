@@ -807,7 +807,15 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		// merge: it can conflict on an intermediate commit the merge never sees.
 		// Consult the forge's mergeable verdict and the green CI on the
 		// (rebase-aborted, unchanged) tip before redding the card (SC-804).
-		if !d.forgeMergeableFallback(ctx, res) {
+		proceed, readErr := d.forgeMergeableFallback(ctx, res)
+		if readErr != nil {
+			// The fallback could not READ the forge's verdict (a credential/vault
+			// failure): this is not a conflict, so report the unreadable state with
+			// the remedy and never dispatch the fixer on an unknown state (SC-1996).
+			return d.deployFailed(pmKey, res.URL, deployReason(
+				"could not read the pull request's mergeability — "+credentialRemedy, readErr))
+		}
+		if !proceed {
 			return d.deployFailedOrDispatchFixer(ctx, pmKey, res,
 				"the branch conflicts with the base — resolve the conflict on "+branch+" (rebase it onto the base branch), then re-run Deploy",
 				ensureErr, branch)
@@ -829,9 +837,11 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		// The re-push invalidated the forge's cached mergeability; merging
 		// before the recompute settles draws a spurious 405 on a clean branch.
 		if err := d.awaitMergeable(ctx, res.Number); err != nil {
-			return d.deployFailed(pmKey, res.URL, deployReason(
-				"the forge still reports the pull request unmergeable after the freshness rebase — open the PR to see why, then re-run Deploy",
-				err))
+			headline := "the forge still reports the pull request unmergeable after the freshness rebase — open the PR to see why, then re-run Deploy"
+			if stateUnreadable(err) {
+				headline = "could not read the pull request's mergeability — " + credentialRemedy
+			}
+			return d.deployFailed(pmKey, res.URL, deployReason(headline, err))
 		}
 	}
 	if err := d.mergeWithRetry(ctx, res.Number); err != nil {
@@ -861,8 +871,45 @@ func deployReason(headline string, cause error) string {
 	return headline + "\n\n" + errors.CauseChain(cause)
 }
 
-// ciFailureHeadline maps the CI gate's two failure modes to their next step.
+// deployStateUnreadableDetail tags a deploy error whose real cause is that the
+// daemon could not READ the state it was gating on (an expired 1Password/vault
+// session makes the token unreadable), as opposed to reading a genuine negative
+// verdict. It is the structured "UNKNOWN / could-not-determine" category that
+// keeps a credential failure from masquerading as a check failure or a conflict
+// (SC-1996), classified via errors.AllDetails like isAlreadyExists reads
+// statusCode (internal/forge/forge.go).
+const deployStateUnreadableDetail = "deployStateUnreadable"
+
+// credentialRemedy is the shared next-step for every unreadable-state headline:
+// it names the failure as a credential/vault problem, disowns the two verdicts
+// it must never be mistaken for (a check failure, a conflict), and gives the
+// concrete remedy so the operator acts on the real cause instead of chasing a
+// green PR's phantom failure.
+const credentialRemedy = "this is a credential or vault failure (e.g. an expired 1Password/op session), not a check failure; restore access (re-run `op signin`), then re-run Deploy"
+
+// markStateUnreadable wraps a read error with the UNKNOWN-outcome tag, preserving
+// the cause chain (walked by CauseChain into the detail block) while giving a
+// machine-readable signal the routing reads to steer away from the CI-failure
+// headline and the fixer.
+func markStateUnreadable(cause error, message string, details ...any) error {
+	return errors.WrapWithDetails(cause, message, append(details, deployStateUnreadableDetail, true)...)
+}
+
+// stateUnreadable reports whether an error is the UNKNOWN could-not-determine
+// outcome — a state the daemon failed to read rather than a verdict it read.
+func stateUnreadable(err error) bool {
+	unreadable, _ := errors.AllDetails(err)[deployStateUnreadableDetail].(bool)
+	return unreadable
+}
+
+// ciFailureHeadline maps the CI gate's failure modes to their next step. An
+// unreadable state is neither a failing check nor a timeout: it is a credential
+// read failure the operator fixes by restoring vault access, so it never claims
+// the checks failed (SC-1996).
 func ciFailureHeadline(err error) string {
+	if stateUnreadable(err) {
+		return "could not read the pull request's check state — " + credentialRemedy
+	}
 	if strings.Contains(err.Error(), "timed out") {
 		return "CI did not finish within the deploy window — check the PR's checks, then re-run Deploy"
 	}
@@ -870,10 +917,11 @@ func ciFailureHeadline(err error) string {
 }
 
 // ciFailureFixable reports whether a CI gate error is a genuine check FAILURE a
-// fixer can repair (lint/test), as opposed to a gate timeout — a timeout is an
-// infra/slowness signal with nothing for a code fixer to change.
+// fixer can repair (lint/test), as opposed to a gate timeout or an unreadable
+// state. A timeout is an infra/slowness signal and an unreadable state is a
+// credential failure — neither has anything for a code fixer to change (SC-1996).
 func ciFailureFixable(err error) bool {
-	return err != nil && !strings.Contains(err.Error(), "timed out")
+	return err != nil && !strings.Contains(err.Error(), "timed out") && !stateUnreadable(err)
 }
 
 // awaitMergeable waits for the forge's asynchronous mergeability recompute to
@@ -890,7 +938,10 @@ func (d BoardTransitionDeps) awaitMergeable(ctx context.Context, number int) err
 		}
 		if time.Now().After(deadline) {
 			if err != nil {
-				return err
+				// A persistent read error is an unreadable state, not a verdict of
+				// unmergeable — tag it UNKNOWN so the card reports a credential
+				// failure rather than blaming the branch (SC-1996).
+				return markStateUnreadable(err, "could not read the pull request's mergeability", "pr", number)
 			}
 			return errors.WithDetails("forge reports the pull request unmergeable", "pr", number)
 		}
@@ -940,16 +991,24 @@ func isTransientMergeRefusal(err error) bool {
 }
 
 // forgeMergeableFallback reports whether the deploy may proceed to the merge
-// despite a failed mechanical rebase: true only when the forge reports the PR
-// mergeable AND CI is green on the tip. Any read error is treated as "do not
-// proceed" so the card reds rather than merging on an unknown state (SC-804).
-func (d BoardTransitionDeps) forgeMergeableFallback(ctx context.Context, res PRResult) bool {
+// despite a failed mechanical rebase: proceed is true only when the forge reports
+// the PR mergeable AND CI is green on the tip. A read error is returned distinctly
+// as readErr (tagged UNKNOWN) rather than folded into proceed=false, so the caller
+// can tell "could not determine" from "determined not mergeable" and never blame a
+// conflict for a credential failure (SC-804, SC-1996).
+func (d BoardTransitionDeps) forgeMergeableFallback(ctx context.Context, res PRResult) (proceed bool, readErr error) {
 	mergeable, err := d.Deployer.PullRequestMergeable(ctx, d.WorkspaceDir, res.Number)
-	if err != nil || !mergeable {
-		return false
+	if err != nil {
+		return false, markStateUnreadable(err, "could not read the pull request's mergeability", "pr", res.Number)
+	}
+	if !mergeable {
+		return false, nil
 	}
 	state, err := d.Deployer.PullRequestChecks(ctx, d.WorkspaceDir, res.Number)
-	return err == nil && state == forge.ChecksPassing
+	if err != nil {
+		return false, markStateUnreadable(err, "could not read the pull request's check state", "pr", res.URL)
+	}
+	return state == forge.ChecksPassing, nil
 }
 
 // closeTicketBestEffort runs the automated post-merge close. It never fails the
@@ -987,7 +1046,10 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 	for {
 		state, err := d.Deployer.PullRequestChecks(ctx, d.WorkspaceDir, res.Number)
 		if err != nil {
-			return err
+			// A read error is not a check verdict: tag it UNKNOWN so the routing
+			// reports a credential failure instead of "CI checks failed" and never
+			// dispatches the fixer on a green PR (SC-1996).
+			return markStateUnreadable(err, "could not read the pull request's check state", "pr", res.URL)
 		}
 		switch state {
 		case forge.ChecksPassing:
