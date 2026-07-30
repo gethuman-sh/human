@@ -110,14 +110,22 @@ triage report kept (never for the excluded false positives).
 
 3. For EACH finding in the report, in report order (Critical → High → Medium →
    Low; the report is already ranked by severity and confidence), file one bug
-   ticket:
+   ticket.
+
+   **Authoring principle:** describe the *outcome* and the *evidence* for it.
+   Name the parts involved, but do not dictate the remedy — a prescribed fix
+   silently becomes the reviewer's acceptance criterion, so a cheaper or more
+   correct approach reads as a deviation from spec. Do not rely on a `file:line`
+   to carry meaning either: it rots between scan and fix, and a stale pointer
+   must not read as a failed criterion. State what must become true and let the
+   fixer choose how.
 
     ```bash
     human <pm.type> issue create --type Bug --project=<pm.project> \
       "<finding title>" \
       --description "$(cat <<'BUG_EOF'
     **Severity**: <severity> · **Confidence**: <confidence>
-    **Location**: <file>:<line> (<category>)
+    **Observed at** (as of the scan; may have moved — a pointer, not a spec): <file>:<line> (<category>)
 
     <description>
 
@@ -128,15 +136,17 @@ triage report kept (never for the excluded false positives).
     <evidence>
     ```
 
-    **Suggested fix**:
-    ```
-    <suggested fix>
-    ```
+    **Expected behaviour** (what must become true, however achieved): <outcome>
+
+    **Required approach** (only when an approach is mandatory — state the reason): <constraint + why>
 
     _Filed automatically by the Findbugs sweep._
     BUG_EOF
     )"
     ```
+
+   Emit the `**Required approach**` line only when a specific approach is
+   genuinely mandatory (state the reason); omit it entirely otherwise.
 
    `--type Bug` maps to the tracker's native defect marker, so each ticket lands
    in the Bugs pane exactly like a hand-filed bug.

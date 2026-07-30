@@ -17,7 +17,7 @@ Read these files from `.human/bugs/`:
 - `.bugs-candidates.md` — all candidate findings from all iterations
 - `.findbugs-recon.md` — for context on technologies and codebase structure
 
-Each candidate in `.bugs-candidates.md` is a block appended by `human pipeline append`: a `### C-NNN: <title>` heading, then a `- location: <file>:<line> (<category>)` line, then the reporting agent's body markdown (source, severity, confidence, evidence, reasoning, suggested fix).
+Each candidate in `.bugs-candidates.md` is a block appended by `human pipeline append`: a `### C-NNN: <title>` heading, then a `- location: <file>:<line> (<category>)` line, then the reporting agent's body markdown (source, severity, confidence, evidence, reasoning, expected behaviour).
 
 ### 2. Validate each finding
 
@@ -76,10 +76,8 @@ Write the final report to `$REPORT`:
   <actual code from re-read>
   ```
 - **Impact**: <what goes wrong when this bug triggers>
-- **Suggested fix**:
-  ```
-  <corrected code>
-  ```
+- **Expected behaviour**: <what must become true — the outcome, not a dictated remedy>
+- **Required approach** (reason: ...): <include only when a specific approach is genuinely mandatory; state the reason. Omit otherwise.>
 
 ## High
 
