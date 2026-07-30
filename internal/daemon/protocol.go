@@ -132,3 +132,114 @@ type PendingConfirm struct {
 	CreatedAt string `json:"created_at"`
 	ClientPID int    `json:"client_pid"` // PID of the Claude instance that triggered the operation
 }
+
+// --- Board view (the composed, frontend-facing board) ---
+//
+// These live here, beside TrackerIssuesResult and BoardCard, because they are
+// WIRE types: the daemon composes the board and returns it. They cannot live in
+// internal/board, which already imports this package — that would cycle.
+// The desktop aliases them (BoardData/Card) so its code and the frontend's JSON
+// shape are unchanged.
+// Card is the flat, frontend-facing shape of one board ticket: a PM issue joined
+// with its derived BoardCard. The frontend renders columns purely from these —
+// it never re-derives a stage from comments.
+type BoardViewCard struct {
+	Key            string `json:"key"`
+	Title          string `json:"title"`
+	URL            string `json:"url"`
+	Stage          string `json:"stage"`
+	State          string `json:"state"`
+	EngineeringKey string `json:"engineeringKey,omitempty"`
+	Branch         string `json:"branch,omitempty"`
+	PRURL          string `json:"prURL,omitempty"`
+	Error          string `json:"error,omitempty"`
+	// Verdict is the latest review's verdict line; a failing verdict pins the
+	// card in the Code lane with a warning instead of letting it advance.
+	Verdict string `json:"verdict,omitempty"`
+	// StageEnteredAt is when the newest marker of the card's current stage
+	// landed (RFC3339); the board's age badge renders how long the card has
+	// been sitting. Empty when the card has no derived stage yet.
+	StageEnteredAt string `json:"stageEnteredAt,omitempty"`
+	// DeployPhase names the done-stage sub-phase ("pr-review" while the machine
+	// review→fix loop runs, empty for a plain deploy) so the badge reads "PR
+	// review…" instead of "deploying…". Populated by the explicit field copy
+	// below — the daemon→desktop hop is a Go copy, not a JSON re-tag.
+	DeployPhase string `json:"deployPhase,omitempty"`
+	// Degraded marks a card whose markers could not be read this scan (a
+	// ListComments error). The frontend renders it locked — non-draggable and
+	// non-launchable — so a transient fetch failure never presents as idle,
+	// actionable Backlog work (1700).
+	Degraded bool `json:"degraded,omitempty"`
+	// Labels and Description feed the Ideas→Backlog promotion: labels tell
+	// the evolve session which idea labels to remove, the description seeds
+	// the ideation conversation alongside the title.
+	Labels      []string `json:"labels,omitempty"`
+	Description string   `json:"description,omitempty"`
+	// Assignee is the ticket owner shown in the detail panel. Display-only:
+	// the board never assigns; empty renders as "Unassigned" in the frontend.
+	Assignee string `json:"assignee,omitempty"`
+	// Tracker/TrackerKind are the instance name and provider kind the issue
+	// was listed from. The detail panel passes them back to GetIssueDetail so
+	// the daemon resolves the exact instance — bare numeric keys are ambiguous
+	// across kinds, and names can repeat across provider sections.
+	Tracker     string `json:"tracker,omitempty"`
+	TrackerKind string `json:"trackerKind,omitempty"`
+	// IdeaColumn is the idea-space sub-column (0 loosest … 4 most concrete)
+	// for cards in the Ideas stage. Locally persisted preference, never
+	// tracker state; the zero value is the leftmost column, so an idea with
+	// no saved placement starts loose by default.
+	IdeaColumn int `json:"ideaColumn"`
+	// Bug marks a defect ticket (bug label or bug issue type, see
+	// tracker.Issue.IsBug). Bug cards render in the Bugs pane instead of the
+	// workflow board's columns.
+	Bug bool `json:"bug,omitempty"`
+	// Security marks a security ticket (security label or type, see
+	// tracker.Issue.IsSecurity). Security cards render in the Security half of
+	// the Bugs pane. A ticket is never both a bug and security — the tokens are
+	// disjoint — so the two flags are mutually exclusive.
+	Security bool `json:"security,omitempty"`
+	// Hidden marks a ticket the user parked off the board (right-click →
+	// Hide). Locally persisted view preference, never tracker state; the
+	// frontend filters hidden cards out unless the user reveals them.
+	Hidden bool `json:"hidden,omitempty"`
+	// Options carries the card's open decision block: a stage ended in a fork
+	// and a human must pick a direction. OptionsContext is the one-line why.
+	Options        []BoardOption `json:"options,omitempty"`
+	OptionsContext string        `json:"optionsContext,omitempty"`
+	// MockupSlug/MockupState link the card to a locally generated mockup set:
+	// "ready" once mockups/<slug>/index.json is valid, "creating" while a
+	// launched generation has not produced it yet. Local file state — never
+	// tracker state — so browsing or generating mocks leaves no trace on the
+	// ticket.
+	MockupSlug  string `json:"mockupSlug,omitempty"`
+	MockupState string `json:"mockupState,omitempty"`
+	// MockupChosenSlug/MockupChosenFile pin the ticket's chosen winner mockup
+	// (a leaf group's slug + option file) when one has been marked, so the card
+	// can surface that a design direction is selected and the viewer can
+	// highlight the root→winner path. Empty when no winner is chosen.
+	MockupChosenSlug string `json:"mockupChosenSlug,omitempty"`
+	MockupChosenFile string `json:"mockupChosenFile,omitempty"`
+}
+
+// BoardData is the full payload the frontend renders: the flat card list plus an
+// optional fetch error (surfaced as a banner) and a dockerAvailable flag the
+// frontend uses to disable the agent-launching drop targets.
+type BoardView struct {
+	Cards []BoardViewCard `json:"cards"`
+	Error string          `json:"error,omitempty"`
+	// Notice is a non-error explanation shown in place of the columns when the
+	// board has nothing to render for a structural reason — chiefly no PM-role
+	// tracker configured (SC-1655). Distinct from Error so the frontend can
+	// style it as guidance rather than a failure.
+	Notice string `json:"notice,omitempty"`
+	// Truncation is a non-error affordance shown alongside the columns when the
+	// fetch hit the backend's cap and more tickets exist than are displayed
+	// (SC-1693). Unlike Notice it accompanies a populated board rather than
+	// replacing empty columns, so the user knows the list is partial.
+	Truncation      string `json:"truncation,omitempty"`
+	DockerAvailable bool   `json:"dockerAvailable"`
+	// ColumnOrder is the hand-sorted ticket order per queue column (top
+	// first). The frontend sorts each column by it; cards absent from their
+	// queue's list render after it in fetch order.
+	ColumnOrder map[string][]string `json:"columnOrder,omitempty"`
+}

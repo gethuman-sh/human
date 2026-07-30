@@ -32,7 +32,6 @@ import (
 	"github.com/gethuman-sh/human/internal/ideaspace"
 	"github.com/gethuman-sh/human/internal/pipeline"
 	"github.com/gethuman-sh/human/internal/recentprojects"
-	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // App is the Go backend bound into the webview via options.App.Bind. Every
@@ -77,109 +76,14 @@ func NewApp() *App {
 	}
 }
 
-// Card is the flat, frontend-facing shape of one board ticket: a PM issue joined
-// with its derived BoardCard. The frontend renders columns purely from these —
-// it never re-derives a stage from comments.
-type Card struct {
-	Key            string `json:"key"`
-	Title          string `json:"title"`
-	URL            string `json:"url"`
-	Stage          string `json:"stage"`
-	State          string `json:"state"`
-	EngineeringKey string `json:"engineeringKey,omitempty"`
-	Branch         string `json:"branch,omitempty"`
-	PRURL          string `json:"prURL,omitempty"`
-	Error          string `json:"error,omitempty"`
-	// Verdict is the latest review's verdict line; a failing verdict pins the
-	// card in the Code lane with a warning instead of letting it advance.
-	Verdict string `json:"verdict,omitempty"`
-	// StageEnteredAt is when the newest marker of the card's current stage
-	// landed (RFC3339); the board's age badge renders how long the card has
-	// been sitting. Empty when the card has no derived stage yet.
-	StageEnteredAt string `json:"stageEnteredAt,omitempty"`
-	// DeployPhase names the done-stage sub-phase ("pr-review" while the machine
-	// review→fix loop runs, empty for a plain deploy) so the badge reads "PR
-	// review…" instead of "deploying…". Populated by the explicit field copy
-	// below — the daemon→desktop hop is a Go copy, not a JSON re-tag.
-	DeployPhase string `json:"deployPhase,omitempty"`
-	// Degraded marks a card whose markers could not be read this scan (a
-	// ListComments error). The frontend renders it locked — non-draggable and
-	// non-launchable — so a transient fetch failure never presents as idle,
-	// actionable Backlog work (1700).
-	Degraded bool `json:"degraded,omitempty"`
-	// Labels and Description feed the Ideas→Backlog promotion: labels tell
-	// the evolve session which idea labels to remove, the description seeds
-	// the ideation conversation alongside the title.
-	Labels      []string `json:"labels,omitempty"`
-	Description string   `json:"description,omitempty"`
-	// Assignee is the ticket owner shown in the detail panel. Display-only:
-	// the board never assigns; empty renders as "Unassigned" in the frontend.
-	Assignee string `json:"assignee,omitempty"`
-	// Tracker/TrackerKind are the instance name and provider kind the issue
-	// was listed from. The detail panel passes them back to GetIssueDetail so
-	// the daemon resolves the exact instance — bare numeric keys are ambiguous
-	// across kinds, and names can repeat across provider sections.
-	Tracker     string `json:"tracker,omitempty"`
-	TrackerKind string `json:"trackerKind,omitempty"`
-	// IdeaColumn is the idea-space sub-column (0 loosest … 4 most concrete)
-	// for cards in the Ideas stage. Locally persisted preference, never
-	// tracker state; the zero value is the leftmost column, so an idea with
-	// no saved placement starts loose by default.
-	IdeaColumn int `json:"ideaColumn"`
-	// Bug marks a defect ticket (bug label or bug issue type, see
-	// tracker.Issue.IsBug). Bug cards render in the Bugs pane instead of the
-	// workflow board's columns.
-	Bug bool `json:"bug,omitempty"`
-	// Security marks a security ticket (security label or type, see
-	// tracker.Issue.IsSecurity). Security cards render in the Security half of
-	// the Bugs pane. A ticket is never both a bug and security — the tokens are
-	// disjoint — so the two flags are mutually exclusive.
-	Security bool `json:"security,omitempty"`
-	// Hidden marks a ticket the user parked off the board (right-click →
-	// Hide). Locally persisted view preference, never tracker state; the
-	// frontend filters hidden cards out unless the user reveals them.
-	Hidden bool `json:"hidden,omitempty"`
-	// Options carries the card's open decision block: a stage ended in a fork
-	// and a human must pick a direction. OptionsContext is the one-line why.
-	Options        []daemon.BoardOption `json:"options,omitempty"`
-	OptionsContext string               `json:"optionsContext,omitempty"`
-	// MockupSlug/MockupState link the card to a locally generated mockup set:
-	// "ready" once mockups/<slug>/index.json is valid, "creating" while a
-	// launched generation has not produced it yet. Local file state — never
-	// tracker state — so browsing or generating mocks leaves no trace on the
-	// ticket.
-	MockupSlug  string `json:"mockupSlug,omitempty"`
-	MockupState string `json:"mockupState,omitempty"`
-	// MockupChosenSlug/MockupChosenFile pin the ticket's chosen winner mockup
-	// (a leaf group's slug + option file) when one has been marked, so the card
-	// can surface that a design direction is selected and the viewer can
-	// highlight the root→winner path. Empty when no winner is chosen.
-	MockupChosenSlug string `json:"mockupChosenSlug,omitempty"`
-	MockupChosenFile string `json:"mockupChosenFile,omitempty"`
-}
+// Card and BoardData are the frontend-facing board shapes. They are ALIASES of
+// the daemon's wire types (moved there so the daemon can compose and return the
+// board; internal/board already imports internal/daemon, so the types could not
+// live alongside Compose without cycling). Aliases rather than new types so every
+// existing reference and the frontend's JSON shape stay byte-identical.
+type Card = daemon.BoardViewCard
 
-// BoardData is the full payload the frontend renders: the flat card list plus an
-// optional fetch error (surfaced as a banner) and a dockerAvailable flag the
-// frontend uses to disable the agent-launching drop targets.
-type BoardData struct {
-	Cards []Card `json:"cards"`
-	Error string `json:"error,omitempty"`
-	// Notice is a non-error explanation shown in place of the columns when the
-	// board has nothing to render for a structural reason — chiefly no PM-role
-	// tracker configured (SC-1655). Distinct from Error so the frontend can
-	// style it as guidance rather than a failure.
-	Notice string `json:"notice,omitempty"`
-	// Truncation is a non-error affordance shown alongside the columns when the
-	// fetch hit the backend's cap and more tickets exist than are displayed
-	// (SC-1693). Unlike Notice it accompanies a populated board rather than
-	// replacing empty columns, so the user knows the list is partial.
-	Truncation      string `json:"truncation,omitempty"`
-	DockerAvailable bool   `json:"dockerAvailable"`
-	// ColumnOrder is the hand-sorted ticket order per queue column (top
-	// first). The frontend sorts each column by it; cards absent from their
-	// queue's list render after it in fetch order.
-	ColumnOrder map[string][]string `json:"columnOrder,omitempty"`
-}
+type BoardData = daemon.BoardView
 
 // Cards fetches the current board state from the daemon and flattens the single
 // PM-role result into a card list, dropping hidden cards. v1 is single
@@ -380,136 +284,33 @@ func (a *App) CachedCards() CachedBoard {
 	return CachedBoard{Hit: true, Data: data}
 }
 
-// boardFromResults flattens the single PM-role result into the frontend card
-// list. It is shared by Cards() (results carry derived BoardCards) and
-// CardsQuick() (results carry titles only, so every non-hidden issue lands in
-// Backlog). A PM issue with no derived card is hidden when its status is
-// done/closed and placed in Backlog otherwise, mirroring daemon.DeriveBoardCard's
-// marker-less decision so the quick pass and full pass agree on what to show.
+// boardFromResults composes the shared board and then applies this viewer's own
+// overlay. The split is the point: Compose produces what is true of the project,
+// applyLocal adds what is true only of the person looking.
 func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs) BoardData {
-	data := BoardData{DockerAvailable: dockerAvailable, ColumnOrder: prefs.Columns}
-	pm, ok := board.FirstPMResult(results)
-	if !ok {
-		// No PM-role tracker resolved: rather than five silently empty columns
-		// that read as "no work" (SC-1655), surface an explicit notice telling
-		// the user a tracker needs role: pm to appear on the board.
-		data.Notice = board.PMRoleNotice(results)
-		return data
-	}
-	if pm.Err != "" {
-		data.Error = pm.Err
-	}
-	// A capped fetch renders a full board that silently omits the overflow; the
-	// affordance tells the user the list is partial (and that their saved state
-	// is preserved because pruning paused). See board.CanPrune / SC-1693.
-	data.Truncation = board.TruncationNotice(results)
+	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs)
+}
 
-	for _, issue := range pm.Issues {
-		card := pm.BoardCards[issue.Key]
-		if card.Degraded {
-			// Could not read this ticket's markers this scan: render it locked in
-			// its last-known column (or the Backlog position when we have no
-			// prior stage), never as a silent actionable Backlog card (1700).
-			stage := card.Stage
-			if stage == "" || stage == daemon.BoardHidden {
-				stage = daemon.BoardBacklog
-			}
-			ideaCol := 0
-			if stage == daemon.BoardIdeas {
-				ideaCol = ideaCols[issue.Key]
-			}
-			mock := mocks[issue.Key]
-			_, hidden := prefs.Hidden[issue.Key]
-			data.Cards = append(data.Cards, Card{
-				Key:              issue.Key,
-				Title:            issue.Title,
-				URL:              issue.URL,
-				Stage:            string(stage),
-				State:            string(card.State),
-				Degraded:         true,
-				EngineeringKey:   card.EngineeringKey,
-				Branch:           card.Branch,
-				PRURL:            card.PRURL,
-				Error:            card.Error,
-				Verdict:          card.Verdict,
-				StageEnteredAt:   formatStageTime(card.StageEnteredAt),
-				DeployPhase:      card.DeployPhase,
-				Labels:           issue.Labels,
-				Description:      issue.Description,
-				Assignee:         issue.Assignee,
-				Tracker:          pm.TrackerName,
-				TrackerKind:      pm.TrackerKind,
-				Bug:              issue.IsBug(),
-				Security:         issue.IsSecurity(),
-				Hidden:           hidden,
-				IdeaColumn:       ideaCol,
-				Options:          card.Options,
-				OptionsContext:   card.OptionsContext,
-				MockupSlug:       mock.Slug,
-				MockupState:      mock.State,
-				MockupChosenSlug: mock.ChosenSlug,
-				MockupChosenFile: mock.ChosenFile,
-			})
-			continue
-		}
-		stage := card.Stage
-		if stage == "" {
-			// No derived card (quick fetch, or a marker-less ticket): a
-			// done/closed ticket that never entered the pipeline is hidden;
-			// ideas sit in the Ideas column by their label alone; everything
-			// else sits in Backlog. Mirrors daemon.DeriveBoardCard so the
-			// quick pass and full pass agree.
-			if issue.StatusType == tracker.CategoryDone || issue.StatusType == tracker.CategoryClosed {
-				continue
-			}
-			if issue.IsIdea() {
-				stage = daemon.BoardIdeas
-			} else {
-				stage = daemon.BoardBacklog
-			}
-		}
-		if stage == daemon.BoardHidden {
-			// Closed PM ticket that never entered the pipeline — not shown.
-			continue
-		}
-		ideaCol := 0
-		if stage == daemon.BoardIdeas {
+// applyLocal fills the fields Compose deliberately leaves blank because they
+// belong to the viewer, not the project: the idea-space sub-column, the locally
+// generated mockup links, the hand-sorted column order, and the hide flag.
+//
+// Hidden cards are marked, not dropped — the frontend filters them so a user can
+// reveal them without a refetch, which is why Compose returns them at all.
+func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs) BoardData {
+	view.ColumnOrder = prefs.Columns
+	for i := range view.Cards {
+		c := &view.Cards[i]
+		if c.Stage == string(daemon.BoardIdeas) {
 			// Missing key → zero value → leftmost column, the loose default.
-			ideaCol = ideaCols[issue.Key]
+			c.IdeaColumn = ideaCols[c.Key]
 		}
-		mock := mocks[issue.Key]
-		_, hidden := prefs.Hidden[issue.Key]
-		data.Cards = append(data.Cards, Card{
-			Key:              issue.Key,
-			Title:            issue.Title,
-			URL:              issue.URL,
-			Stage:            string(stage),
-			State:            string(card.State),
-			EngineeringKey:   card.EngineeringKey,
-			Branch:           card.Branch,
-			PRURL:            card.PRURL,
-			Error:            card.Error,
-			Verdict:          card.Verdict,
-			StageEnteredAt:   formatStageTime(card.StageEnteredAt),
-			DeployPhase:      card.DeployPhase,
-			Labels:           issue.Labels,
-			Description:      issue.Description,
-			Assignee:         issue.Assignee,
-			Tracker:          pm.TrackerName,
-			TrackerKind:      pm.TrackerKind,
-			Bug:              issue.IsBug(),
-			Security:         issue.IsSecurity(),
-			Hidden:           hidden,
-			IdeaColumn:       ideaCol,
-			Options:          card.Options,
-			OptionsContext:   card.OptionsContext,
-			MockupSlug:       mock.Slug,
-			MockupState:      mock.State,
-			MockupChosenSlug: mock.ChosenSlug,
-			MockupChosenFile: mock.ChosenFile,
-		})
+		mock := mocks[c.Key]
+		c.MockupSlug, c.MockupState = mock.Slug, mock.State
+		c.MockupChosenSlug, c.MockupChosenFile = mock.ChosenSlug, mock.ChosenFile
+		_, c.Hidden = prefs.Hidden[c.Key]
 	}
-	return data
+	return view
 }
 
 // formatStageTime renders a marker time for the frontend, empty when the card
