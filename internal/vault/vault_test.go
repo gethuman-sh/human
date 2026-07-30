@@ -174,6 +174,37 @@ func TestResolver_Resolve_expiredCacheNotServed(t *testing.T) {
 	assert.Contains(t, err.Error(), "session expired")
 }
 
+// SC-2039 review follow-up: an entry whose own ref is never re-requested
+// must still be evicted once its TTL passes, not held for the process
+// lifetime. remember() sweeps every expired entry (not just the one it is
+// storing), so a later successful resolve of a *different* ref evicts it.
+func TestResolver_Resolve_expiredEntryNotRetainedWithoutBeingReRequested(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve:    func(string) (string, error) { return "secret", nil },
+	}
+	now := time.Unix(0, 0)
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+
+	// Resolve a ref once; it is never asked for again.
+	_, err := r.Resolve("1pw://vault/stale/field")
+	require.NoError(t, err)
+	require.Len(t, r.cache, 1)
+
+	// Advance past the TTL and resolve an unrelated ref. The stale entry
+	// must be swept even though nothing ever re-requested it.
+	now = now.Add(2 * time.Minute)
+	_, err = r.Resolve("1pw://vault/other/field")
+	require.NoError(t, err)
+
+	r.mu.Lock()
+	_, stillCached := r.cache["1pw://vault/stale/field"]
+	r.mu.Unlock()
+	assert.False(t, stillCached, "expired entry must not be retained past its TTL")
+}
+
 // A non-positive TTL disables caching, restoring strict no-persistence.
 func TestResolver_Resolve_cachingDisabledByZeroTTL(t *testing.T) {
 	fail := false

@@ -41,8 +41,11 @@ type SecretProvider interface {
 // loss of access from invalidating a secret that already resolved in the same
 // run (SC-2039): the deploy step that reads a credential it read at push time
 // survives the lapse instead of failing on an unrelated stale read. The cache
-// lives only in daemon memory, never on disk, and each entry is dropped once
-// its TTL passes.
+// lives only in daemon memory, never on disk. Every entry is TTL-bounded:
+// remember sweeps expired entries on each successful resolve (so a ref that
+// is never re-requested does not linger past its TTL just because nobody
+// asked for it again), and cached additionally drops its own entry on a
+// stale read.
 type Resolver struct {
 	providers []SecretProvider
 
@@ -114,14 +117,32 @@ func (r *Resolver) Resolve(ref string) (string, error) {
 }
 
 // remember stores a freshly resolved value as a lapse fallback for the TTL
-// window. A non-positive TTL disables caching so no plaintext persists.
+// window. A non-positive TTL disables caching so no plaintext persists. It
+// also sweeps every expired entry from the cache, not just ref's: a secret
+// that resolves once and is never requested again would otherwise never be
+// evicted, since cached() only prunes the single key it is asked to read.
+// Sweeping here means eviction rides on any subsequent successful resolve
+// (of any reference), so plaintext does not outlive its TTL just because its
+// own ref happens not to be re-requested.
 func (r *Resolver) remember(ref, val string) {
 	if r.ttl <= 0 {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.sweepExpiredLocked()
 	r.cache[ref] = cachedSecret{value: val, expiresAt: r.now().Add(r.ttl)}
+}
+
+// sweepExpiredLocked deletes every cache entry whose TTL has passed. Callers
+// must hold r.mu.
+func (r *Resolver) sweepExpiredLocked() {
+	now := r.now()
+	for k, entry := range r.cache {
+		if !now.Before(entry.expiresAt) {
+			delete(r.cache, k)
+		}
+	}
 }
 
 // cached returns a still-fresh cached value for ref. An expired entry is
