@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -82,7 +81,7 @@ func openOptionsBlock(comments []tracker.Comment) (tracker.Comment, bool) {
 	var found bool
 	for _, c := range comments {
 		if strings.HasPrefix(strings.TrimSpace(c.Body), OptionsHeader) &&
-			(!found || c.Created.After(latest.Created)) {
+			(!found || commentNewer(c, latest)) {
 			latest = c
 			found = true
 		}
@@ -91,7 +90,7 @@ func openOptionsBlock(comments []tracker.Comment) (tracker.Comment, bool) {
 		return tracker.Comment{}, false
 	}
 	for _, c := range comments {
-		if !c.Created.After(latest.Created) {
+		if !commentNewer(c, latest) {
 			continue
 		}
 		if strings.HasPrefix(strings.TrimSpace(c.Body), OptionChosenHeader) {
@@ -117,10 +116,10 @@ func optionChosenQueued(comments []tracker.Comment) (BoardStage, tracker.Comment
 	if !ok {
 		return "", tracker.Comment{}, false
 	}
-	if hasLaterMarker(comments, chosen.Created) {
+	if hasLaterMarker(comments, chosen) {
 		return "", tracker.Comment{}, false
 	}
-	block, ok := latestOptionsBlockAtOrBefore(comments, chosen.Created)
+	block, ok := latestOptionsBlockAtOrBefore(comments, chosen)
 	if !ok {
 		return "", tracker.Comment{}, false
 	}
@@ -137,7 +136,7 @@ func latestOptionChosen(comments []tracker.Comment) (tracker.Comment, bool) {
 	var have bool
 	for _, c := range comments {
 		if strings.HasPrefix(strings.TrimSpace(c.Body), OptionChosenHeader) &&
-			(!have || c.Created.After(chosen.Created)) {
+			(!have || commentNewer(c, chosen)) {
 			chosen, have = c, true
 		}
 	}
@@ -145,11 +144,11 @@ func latestOptionChosen(comments []tracker.Comment) (tracker.Comment, bool) {
 }
 
 // hasLaterMarker reports whether any classified board marker lands strictly
-// after since — used to detect a started/terminal marker that supersedes a
-// recorded decision (latest-wins).
-func hasLaterMarker(comments []tracker.Comment, since time.Time) bool {
+// after the decision comment — used to detect a started/terminal marker that
+// supersedes a recorded decision (latest-wins).
+func hasLaterMarker(comments []tracker.Comment, since tracker.Comment) bool {
 	for _, c := range comments {
-		if !c.Created.After(since) {
+		if !commentNewer(c, since) {
 			continue
 		}
 		if _, _, ok := ClassifyMarker(c.Body); ok {
@@ -160,16 +159,17 @@ func hasLaterMarker(comments []tracker.Comment, since time.Time) bool {
 }
 
 // latestOptionsBlockAtOrBefore returns the newest [human:options] block posted
-// at or before until — the block a decision at that time would have consumed.
-func latestOptionsBlockAtOrBefore(comments []tracker.Comment, until time.Time) (tracker.Comment, bool) {
+// at or before the decision comment — the block a decision at that time would
+// have consumed.
+func latestOptionsBlockAtOrBefore(comments []tracker.Comment, until tracker.Comment) (tracker.Comment, bool) {
 	var block tracker.Comment
 	var have bool
 	for _, c := range comments {
-		if c.Created.After(until) {
+		if commentNewer(c, until) {
 			continue
 		}
 		if strings.HasPrefix(strings.TrimSpace(c.Body), OptionsHeader) &&
-			(!have || c.Created.After(block.Created)) {
+			(!have || commentNewer(c, block)) {
 			block, have = c, true
 		}
 	}

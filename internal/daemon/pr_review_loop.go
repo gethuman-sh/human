@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"strings"
-	"time"
 
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -105,7 +104,7 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int) PRLo
 // move the loop.
 func latestPRLoopStage(comments []tracker.Comment) PRLoopStage {
 	stage := PRStageNone
-	var latest time.Time
+	var latest tracker.Comment
 	found := false
 	for _, c := range comments {
 		trimmed := strings.TrimSpace(c.Body)
@@ -118,8 +117,8 @@ func latestPRLoopStage(comments []tracker.Comment) PRLoopStage {
 		default:
 			continue
 		}
-		if !found || c.Created.After(latest) {
-			latest, stage, found = c.Created, s, true
+		if !found || commentNewer(c, latest) {
+			latest, stage, found = c, s, true
 		}
 	}
 	return stage

@@ -50,12 +50,46 @@ func TestLatestStartedFor(t *testing.T) {
 		cmt("[human:planning-started]", time.Unix(30, 0)),
 		cmt("[human:implementation-started]", time.Unix(20, 0)),
 	}
-	at, ok := latestStartedFor(comments, BoardPlanning)
+	c, ok := latestStartedFor(comments, BoardPlanning)
 	require.True(t, ok)
-	assert.Equal(t, time.Unix(30, 0), at)
+	assert.Equal(t, time.Unix(30, 0), c.Created)
 
 	_, ok = latestStartedFor(comments, BoardVerification)
 	assert.False(t, ok)
+}
+
+func TestCommentNewer(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(1001, 0)
+	// Later Created always wins regardless of ID.
+	assert.True(t, commentNewer(tracker.Comment{ID: "1", Created: t1}, tracker.Comment{ID: "9", Created: t0}))
+	// Same second: higher comment ID wins.
+	assert.True(t, commentNewer(tracker.Comment{ID: "1681", Created: t0}, tracker.Comment{ID: "1680", Created: t0}))
+	assert.False(t, commentNewer(tracker.Comment{ID: "1680", Created: t0}, tracker.Comment{ID: "1681", Created: t0}))
+	// Same second, equal/empty ids: degrades to false (first-seen wins), matching .After.
+	assert.False(t, commentNewer(tracker.Comment{Created: t0}, tracker.Comment{Created: t0}))
+}
+
+// SC-1701 (comment 1704): a fresh claim that ties in the same second as an
+// unrelated *-started for the stage but carries a HIGHER comment ID is genuinely
+// newer than that launch, so it must stay live rather than being dropped as
+// fulfilled.
+func TestLiveClaimIDs_sameSecondClaimAfterStartedStaysLive(t *testing.T) {
+	tie := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		{ID: "10", Body: ImplementationStartedHeader, Created: tie},
+		claimComment("11", BoardImplementation, "d1", tie),
+	}
+	ids := liveClaimIDs(comments, BoardImplementation, tie)
+	assert.Equal(t, []string{"11"}, ids)
+
+	// A claim with a LOWER id than the started marker was posted before the
+	// launch and is correctly fulfilled.
+	older := []tracker.Comment{
+		{ID: "11", Body: ImplementationStartedHeader, Created: tie},
+		claimComment("10", BoardImplementation, "d1", tie),
+	}
+	assert.Empty(t, liveClaimIDs(older, BoardImplementation, tie))
 }
 
 func TestClaimWon_singleClaimWins(t *testing.T) {

@@ -59,7 +59,7 @@ func latestSectionComment(comments []tracker.Comment, header string) string {
 		if !strings.HasPrefix(trimmed, header) {
 			continue
 		}
-		if !haveLatest || c.Created.After(latest.Created) {
+		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
 			body = strings.TrimSpace(strings.TrimPrefix(trimmed, header))
@@ -80,7 +80,7 @@ func latestFailureReason(comments []tracker.Comment) string {
 		if !ok || state != BoardFailed {
 			continue
 		}
-		if !haveLatest || c.Created.After(latest.Created) {
+		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
 		}
@@ -91,7 +91,7 @@ func latestFailureReason(comments []tracker.Comment) string {
 	// Agree with the card (DeriveBoardCard): a failure reason is shown only while
 	// the *-failed marker is the ticket's newest marker. A strictly-newer marker
 	// anywhere supersedes it (SC-910).
-	if newest, _, _, ok := latestMarkerOverall(comments); ok && newest.Created.After(latest.Created) {
+	if newest, _, _, ok := latestMarkerOverall(comments); ok && commentNewer(newest, latest) {
 		return ""
 	}
 	return failureBody(latest.Body)

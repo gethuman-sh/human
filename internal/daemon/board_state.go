@@ -123,7 +123,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		// the stale red; the card follows the ticket's current activity rather than a
 		// terminal failure the pipeline already moved past (SC-910).
 		if supersededByNewerMarker(state, furthest, comments) {
-			if newest, newestStage, newestState, ok := latestMarkerOverall(comments); ok && newest.Created.After(latest.Created) {
+			if newest, newestStage, newestState, ok := latestMarkerOverall(comments); ok && commentNewer(newest, latest) {
 				furthest, state, latest = newestStage, newestState, newest
 			}
 		}
@@ -248,7 +248,7 @@ func latestStateInStage(comments []tracker.Comment, stage BoardStage) (BoardStat
 		if !ok || s != stage {
 			continue
 		}
-		if !haveLatest || c.Created.After(latest.Created) {
+		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
 			state = st
@@ -272,7 +272,7 @@ func latestMarkerOverall(comments []tracker.Comment) (tracker.Comment, BoardStag
 		if !ok {
 			continue
 		}
-		if !have || c.Created.After(latest.Created) {
+		if !have || commentNewer(c, latest) {
 			latest, stage, state, have = c, st, s, true
 		}
 	}
@@ -291,7 +291,7 @@ func latestPlanComment(comments []tracker.Comment) (string, bool) {
 		if !strings.HasPrefix(trimmed, PlanCommentHeader) {
 			continue
 		}
-		if !haveLatest || c.Created.After(latest.Created) {
+		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
 			body = strings.TrimSpace(strings.TrimPrefix(trimmed, PlanCommentHeader))
@@ -319,7 +319,7 @@ func firstEngineeringKey(comments []tracker.Comment) string {
 		if k == "" {
 			continue
 		}
-		if !haveLatest || c.Created.After(latest.Created) {
+		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
 			key = k
@@ -339,7 +339,7 @@ func latestPrefixedLine(comments []tracker.Comment, header, prefix string) strin
 		if !strings.HasPrefix(strings.TrimSpace(c.Body), header) {
 			continue
 		}
-		if !haveLatest || c.Created.After(latest.Created) {
+		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
 			value = parsePrefixedLine(c.Body, prefix)
@@ -360,7 +360,7 @@ func latestHandoffBody(comments []tracker.Comment) string {
 		if !strings.HasPrefix(strings.TrimSpace(c.Body), ReadyForReviewHeader) {
 			continue
 		}
-		if !haveLatest || c.Created.After(latest.Created) {
+		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
 			body = c.Body

@@ -1162,7 +1162,7 @@ func latestStageState(comments []tracker.Comment, stage BoardStage) (ok bool, st
 		if !isMarker || st != stage {
 			continue
 		}
-		if !haveLatest || c.Created.After(latest.Created) {
+		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
 			state = s
