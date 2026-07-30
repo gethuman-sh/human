@@ -1468,10 +1468,24 @@ func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		c, ok := lastCards[key]
 		return c, ok
 	}
+	// lastResults is the newest listing that actually produced issues. A refresh
+	// that fails outright serves this instead of nothing: an empty board is
+	// indistinguishable from having no work at all, which is the false
+	// impression the whole board is built to avoid (SC-2005). The failure still
+	// rides along as an error result, so the board says it is stale rather than
+	// quietly presenting old cards as current.
+	var lastResults []daemon.TrackerIssuesResult
 	return func() ([]daemon.TrackerIssuesResult, error) {
 		jobs, results, err := listTrackerIssues(reg, resolver)
 		if err != nil {
-			return nil, err
+			mu.Lock()
+			stale := lastResults
+			mu.Unlock()
+			served, serveErr := staleListing(stale, err)
+			if serveErr == nil {
+				logger.Warn().Err(err).Msg("board fetch failed; serving the last good listing marked stale")
+			}
+			return served, serveErr
 		}
 
 		// Scan PM-tracker comments for [human:ready-for-review] handoffs and
@@ -1491,8 +1505,48 @@ func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 		mu.Unlock()
 
 		applyScanResults(results, readyKeys, readyPRs, boardCards)
+		// Only a listing that actually produced issues is worth falling back to:
+		// remembering an all-error listing would let one bad refresh become the
+		// "last good" one and pin the board empty.
+		if anyIssues(results) {
+			mu.Lock()
+			lastResults = results
+			mu.Unlock()
+		}
 		return results, nil
 	}
+}
+
+// anyIssues reports whether a listing carried at least one issue.
+func anyIssues(results []daemon.TrackerIssuesResult) bool {
+	for _, r := range results {
+		if len(r.Issues) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// staleListing decides what a failed refresh should serve. With a remembered
+// listing it serves that, plus an error result announcing the staleness — the
+// board keeps its cards AND says they are not current. With nothing remembered
+// it surfaces the failure, because there is nothing truer to show than "this
+// did not work".
+//
+// The announcement is not optional: trading a blank board for a silently stale
+// one that looks healthy would replace a visible problem with an invisible one.
+// The remembered listing is copied so a caller cannot mutate the fallback that
+// later refreshes still depend on.
+func staleListing(stale []daemon.TrackerIssuesResult, err error) ([]daemon.TrackerIssuesResult, error) {
+	if len(stale) == 0 {
+		return nil, err
+	}
+	out := make([]daemon.TrackerIssuesResult, len(stale), len(stale)+1)
+	copy(out, stale)
+	return append(out, daemon.TrackerIssuesResult{
+		Project: "refresh",
+		Err:     "showing the last successful fetch — this refresh failed: " + err.Error(),
+	}), nil
 }
 
 // fetchTrackerIssuesLiteFunc returns a fetcher that lists issue titles only,
@@ -1555,11 +1609,16 @@ func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func
 func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([]fetchJob, []daemon.TrackerIssuesResult, error) {
 	// Collect all (instance, project) pairs first.
 	var jobs []fetchJob
+	// loadFailures are credential/config failures that cost us whole instances.
+	// They are carried to the end and appended as visible error results rather
+	// than aborting: one provider's momentary credential failure used to erase
+	// every OTHER provider's cards, blanking the board (SC-2005). Secrets are
+	// deliberately never cached, so this load runs on every refresh and any blip
+	// took the whole board down with it.
+	var loadFailures []error
 	for _, entry := range reg.Entries() {
-		instances, err := cmdutil.LoadAllInstancesWithResolver(entry.Dir, entry.EnvLookup(), resolver)
-		if err != nil {
-			return nil, nil, err
-		}
+		instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
+		loadFailures = append(loadFailures, failures...)
 		for _, inst := range instances {
 			projects := inst.Projects
 			if len(projects) == 0 {
@@ -1611,6 +1670,18 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 		}(i, job)
 	}
 	wg.Wait()
+
+	// A tracker we could not even build carries no issues, so it appends as a
+	// pure error result: the board shows the failure without losing the
+	// trackers that did load. No fetchJob is added for it — jobs and results
+	// stay 1:1, and the comment-scan fan-out skips it on the empty role.
+	for _, err := range loadFailures {
+		results = append(results, daemon.TrackerIssuesResult{
+			Project: "credentials",
+			Err:     err.Error(),
+		})
+		jobs = append(jobs, fetchJob{})
+	}
 
 	// Record which project each PM-role key was fetched from so keyed
 	// board-action closures can route a request to its owning project

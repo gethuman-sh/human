@@ -114,6 +114,39 @@ func LoadAllInstancesWithResolver(dir string, lookup config.EnvLookup, resolver 
 	return all, nil
 }
 
+// LoadAllInstancesTolerant is LoadAllInstancesWithResolver for callers that
+// would rather render the trackers that DID load than nothing at all: it
+// returns every instance it could build plus the failures it hit, instead of
+// abandoning the whole set at the first one.
+//
+// The strict variant is right where a caller needs one specific tracker and a
+// missing credential means it cannot proceed. It is wrong for the board's
+// listing, where one provider's momentary credential failure erased every other
+// provider's cards too (SC-2005) — secrets are deliberately never cached, so
+// that lookup runs on every refresh and any blip took the board down with it.
+//
+// The failures are returned rather than logged so the caller can surface them:
+// a partial board must SAY it is partial, never quietly present fewer trackers
+// as if that were all there is.
+func LoadAllInstancesTolerant(dir string, lookup config.EnvLookup, resolver *vault.Resolver) ([]tracker.Instance, []error) {
+	dir = config.ResolveDir(dir)
+	var resolveFunc config.SecretResolveFunc
+	if resolver != nil {
+		resolveFunc = resolver.Resolve
+	}
+	var all []tracker.Instance
+	var failures []error
+	for _, load := range allLoadersWithResolver {
+		instances, err := load(dir, lookup, resolveFunc)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		all = append(all, instances...)
+	}
+	return all, failures
+}
+
 // InstanceFromFlags builds a tracker instance from root persistent flags,
 // returning nil when insufficient flags are provided.
 func InstanceFromFlags(cmd *cobra.Command) *tracker.Instance {
