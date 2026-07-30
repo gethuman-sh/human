@@ -15,7 +15,7 @@ import { initMockupsView, showMockups, setPendingMockupSlug, setChosenMockup, } 
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, initialLoadPhase, safetyPollShouldReconcile, safetyReconcileError, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, } from "./board-queue.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
@@ -1691,31 +1691,16 @@ async function pollDoctor() {
         led.title = [header, ...lines].join("\n");
     }
 }
-// initialLoad renders the board on startup with stale-while-revalidate: it first
-// paints the last-known cached snapshot instantly (a cold open, including after a
-// restart, shows the previous board rather than a spinner), then the full
-// reconcile below silently swaps in fresh data. On a cache miss it falls back to
-// the original spinner → quick-titles → reconcile path. reconcile() persists each
-// full fetch as the next snapshot (App.Cards).
+// initialLoad renders the board on startup: spinner → quick titles → full
+// reconcile.
+//
+// The board no longer keeps its own snapshot to paint from. The daemon owns the
+// last-known board and serves it (stale-marked) when a refresh fails, so
+// instant-paint is answered by the machine that actually knows what the board
+// last looked like. Without a daemon there is nothing to show and the fetch
+// error says so — an empty board would read as "there is no work" (SC-2132).
 async function initialLoad() {
-    let painted = false;
-    try {
-        const cached = await go().CachedCards();
-        if (initialLoadPhase(cached.hit) === "cache") {
-            // Cached cards already carry real stages, so no spinner and no
-            // per-card resolving badge (stagesLoading stays false) — the paint must
-            // look identical to a live view, with no staleness cue.
-            current = boardStateFromPayload(cached.data, true);
-            boardLoading = false;
-            stagesLoading = false;
-            painted = true;
-            render();
-        }
-    }
-    catch {
-        // Cache read failed (e.g. bindings not ready): fall through to the live path.
-    }
-    if (!painted) {
+    {
         boardLoading = true;
         render();
         try {
