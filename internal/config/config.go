@@ -37,6 +37,25 @@ func ReadProjectName(dir string) string {
 	return v.GetString("project")
 }
 
+// BoardParticipates reports whether this machine should do autonomous board work
+// (chaining reviews, re-driving loops, reclaiming stuck stages) for the project
+// rooted at dir. Whether a machine participates in a project's work is its
+// operator's decision, not a default that follows from being able to see the
+// tracker (SC-2047). The knob is the "board.participate" field in .humanconfig;
+// it DEFAULTS TO TRUE when unset or the config is missing, so a machine that says
+// nothing keeps today's behaviour and only an explicit "board.participate: false"
+// opts a registered project out of driving.
+func BoardParticipates(dir string) bool {
+	v, err := readConfig(dir)
+	if err != nil || v == nil {
+		return true
+	}
+	if !v.IsSet("board.participate") {
+		return true
+	}
+	return v.GetBool("board.participate")
+}
+
 // ConfigFileNames are the accepted project-config filenames, in the order
 // viper's readConfig probes them via SetConfigName. Exported so callers that
 // only need to check for a config file's presence (e.g. the desktop app's

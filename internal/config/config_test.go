@@ -84,6 +84,33 @@ func TestReadProjectName_missingFile(t *testing.T) {
 	assert.Equal(t, "", name)
 }
 
+// Participation defaults to true so a machine that configures nothing keeps
+// today's behaviour: an absent config, an absent field, and an explicit true all
+// participate; only an explicit false opts the project out (SC-2047).
+func TestBoardParticipates(t *testing.T) {
+	t.Run("missing file participates", func(t *testing.T) {
+		assert.True(t, BoardParticipates(t.TempDir()))
+	})
+
+	t.Run("missing field participates", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("project: infra\n"), 0o644))
+		assert.True(t, BoardParticipates(dir))
+	})
+
+	t.Run("explicit true participates", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("board:\n  participate: true\n"), 0o644))
+		assert.True(t, BoardParticipates(dir))
+	})
+
+	t.Run("explicit false opts out", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("board:\n  participate: false\n"), 0o644))
+		assert.False(t, BoardParticipates(dir))
+	})
+}
+
 func TestHasConfigFile_found(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("project: infra\n"), 0o644))

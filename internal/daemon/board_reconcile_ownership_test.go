@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,61 +11,69 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
-// A peer daemon's live card, seen by a SECOND daemon whose local liveAgents is
-// empty, must be spared: past the 15m local grace but under the 2h foreign
-// grace, the foreign owner's healthy run is invisible here and must not be
-// reddened (SC-1450 / SC-1387).
-func TestReconcileStuckRunning_SparesForeignCardUnderForeignGrace(t *testing.T) {
+// A running stage stamped by a PEER daemon is bound to that machine: this daemon's
+// machine-local liveAgents() cannot see the peer's healthy run, so it must never
+// red the card — not now, not ever, regardless of how long it has sat. Ownership
+// ends by finishing the work or by explicit release, never by a distant machine's
+// timeout (SC-2047). The card never reaches the pass because the forTakeover gate
+// excludes a foreign-owned stage by identity, which is what lets the delay-only
+// StuckRunningForeignGrace be retired rather than merely lengthened.
+func TestReconcileStuckRunning_NeverTakesOverAForeignOwnedStage(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
-	cards := []ReconcileCard{{
+	foreign := []ReconcileCard{{
 		Key: "SC-1",
 		Comments: []tracker.Comment{cmt(
 			StampDaemon(ImplementationStartedHeader, "peerAAAA"),
-			now.Add(-StuckRunningGrace-time.Minute))},
+			// Aged well past any historical grace: elapsed time must not matter.
+			now.Add(-72*time.Hour))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
 
-	assert.Equal(t, 0, n, "a foreign-owned card under the foreign grace must not be reddened")
-	assert.Empty(t, posted)
+	n := reconcileStuckRunning(context.Background(), takeoverSetAs(foreign, alwaysReachable, "thisBBBB"),
+		liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+
+	assert.Equal(t, 0, n, "a stage owned by a peer daemon is never reddened from a distance")
+	assert.Empty(t, posted, "no failed marker may be posted for a peer machine's running stage")
 }
 
-// A foreign-owned card aged past the 2h foreign grace is treated as genuinely
-// abandoned (its owner is gone) and still recovers, so a dead peer never
-// dead-ends a card forever.
-func TestReconcileStuckRunning_RedsForeignCardPastForeignGrace(t *testing.T) {
-	now := time.Unix(1_000_000, 0)
-	cards := []ReconcileCard{{
-		Key: "SC-1",
-		Comments: []tracker.Comment{cmt(
-			StampDaemon(ImplementationStartedHeader, "peerAAAA"),
-			now.Add(-StuckRunningForeignGrace-time.Minute))},
-	}}
-	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
-
-	assert.Equal(t, 1, n)
-	assert.Len(t, posted, 1)
-	assert.True(t, strings.HasPrefix(posted[0].Body, ImplementationFailedHeader))
-}
-
-// The owning daemon still polices its OWN card at the 15m local grace with real
-// local-liveness evidence (empty liveAgents => its agent is gone), so a
-// genuinely dead own-card recovers promptly.
+// The owning daemon still polices its OWN running stage at the local grace with
+// real machine-local liveness evidence (empty liveAgents => its agent is gone),
+// so a genuinely dead own-card recovers promptly. The gate admits it because its
+// stamp matches this daemon's id.
 func TestReconcileStuckRunning_RedsOwnCardAtLocalGrace(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
-	cards := []ReconcileCard{{
+	own := []ReconcileCard{{
 		Key: "SC-1",
 		Comments: []tracker.Comment{cmt(
 			StampDaemon(ImplementationStartedHeader, "thisBBBB"),
 			now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+
+	n := reconcileStuckRunning(context.Background(), takeoverSetAs(own, alwaysReachable, "thisBBBB"),
+		liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
+	assert.Len(t, posted, 1)
+}
+
+// An UNSTAMPED running stage (a single-daemon board, or a legacy marker predating
+// daemon stamping) has no owner to bind to, so it stays this machine's to red at
+// the local grace — the backward-compatible path that keeps single-daemon boards
+// unchanged.
+func TestReconcileStuckRunning_RedsUnstampedCardAtLocalGrace(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	unstamped := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{cmt(
+			ImplementationStartedHeader,
+			now.Add(-StuckRunningGrace-time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+
+	n := reconcileStuckRunning(context.Background(), takeoverSetAs(unstamped, alwaysReachable, "thisBBBB"),
+		liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+
+	assert.Equal(t, 1, n, "an unstamped stage has no owner and stays takeable")
 	assert.Len(t, posted, 1)
 }

@@ -22,16 +22,6 @@ var BoardReconcileInterval = 2 * time.Minute
 // stage agent is treated as a dead-end.
 var StuckRunningGrace = 15 * time.Minute
 
-// StuckRunningForeignGrace is the far longer grace a running card owned by a
-// DIFFERENT daemon (its deciding marker stamped with a peer's id) gets before
-// this daemon is willing to red it. Machine-local liveAgents() cannot see a
-// peer's healthy run, so a foreign-owned card is only reddened once it has sat
-// long enough that the owner is almost certainly gone — sparing a live peer run
-// while still recovering a truly-abandoned card. An unstamped marker is never
-// foreign and keeps the local StuckRunningGrace (single-daemon boards
-// unchanged). SC-1450.
-var StuckRunningForeignGrace = 2 * time.Hour
-
 // BoardReconcileJitter is the fraction of the interval added/subtracted at
 // random each cycle so independently started daemons do not converge on the
 // same reconcile instant and stampede one orphaned handoff (SC-660 rule 6).
@@ -102,24 +92,26 @@ type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, participates ProjectParticipation, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
 
 	logger.Info().Msg("board reconcile started")
 
+	gate := WorkGate{reachable: reachable, participates: participates, daemonID: daemonID}
+
 	// Recover a restart-orphaned handoff immediately, before the first wait. The
 	// jitter applies only to subsequent cycles, so a restart-orphan is never made
 	// to wait a full interval.
-	reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, closedProbe, chainReview, driveLoop, retry, progress, stopAgent, daemonID, logger)
+	reconcileOnce(ctx, listCards, gate, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, closedProbe, chainReview, driveLoop, retry, progress, stopAgent, daemonID, logger)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
-			reconcileOnce(ctx, listCards, reachable, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, closedProbe, chainReview, driveLoop, retry, progress, stopAgent, daemonID, logger)
+			reconcileOnce(ctx, listCards, gate, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, closedProbe, chainReview, driveLoop, retry, progress, stopAgent, daemonID, logger)
 		}
 	}
 }
@@ -142,13 +134,21 @@ func jitteredInterval(d time.Duration, fraction float64) time.Duration {
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
 		return
 	}
-	if n := reconcileOrphanedHandoffs(cards, reachable, commitsPresent, chainReview, logger); n > 0 {
+	// The by-construction choke point (SC-2047): every work-driving pass below is
+	// handed cards ONLY through the gate — forReview for the ones that continue a
+	// finished-and-handed-off stage, forTakeover for the one that reds and
+	// relaunches a still-running stage. Neither can see the raw board, so a path
+	// added here cannot act on work this machine cannot reach or does not own; the
+	// two machine-local passes (a read-only forge probe and this machine's own
+	// orphaned containers) keep the raw list because they act on nothing that
+	// lives on another disk.
+	if n := reconcileOrphanedHandoffs(gate.forReview(cards), commitsPresent, chainReview, logger); n > 0 {
 		logger.Info().Int("launched", n).Msg("board reconcile: chained review for orphaned handoffs")
 	}
 	if n := reconcileShippedFailures(ctx, cards, mergedProbe, postDeployed, logger); n > 0 {
@@ -157,10 +157,10 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 	// The PR-loop re-drive runs BEFORE the stuck-running pass so a loop card
 	// stranded by a restart is re-driven rather than reddened — the stuck pass
 	// also skips it (doneStageLoopActive), but ordering makes the ownership clear.
-	if n := reconcilePRLoops(ctx, cards, liveAgents, driveLoop, logger); n > 0 {
+	if n := reconcilePRLoops(ctx, gate.forReview(cards), liveAgents, driveLoop, logger); n > 0 {
 		logger.Info().Int("redriven", n).Msg("board reconcile: re-drove stalled PR review→fix loops")
 	}
-	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, reachable, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
+	if n := reconcileStuckRunning(ctx, gate.forTakeover(cards), liveAgents, postFailed, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
 	}
 	// Last: the passes above all act on cards that are still ON the board, while
@@ -204,7 +204,14 @@ func doneStageLoopActive(comments []tracker.Comment) bool {
 // Stop event). driveLoop re-reads the recorded state and advances or escalates,
 // idempotently (AdvancePRLoop's escalate no-ops on an already-open options
 // block, and the alive-guard prevents racing a second launch). nil deps disable it.
-func reconcilePRLoops(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, driveLoop func(pmKey string) error, logger zerolog.Logger) int {
+//
+// It receives DrivableCards from the forReview gate, so it only ever sees loop
+// cards whose branch this machine can obtain: a loop re-drive walks the producing
+// machine's branch toward the credentialed Deploy that publishes it, and a daemon
+// that cannot reach that branch is not handed the card at all (SC-2047). This is
+// the by-construction replacement for the per-path reachability check the loop
+// re-drive was missing — the gate is now the only way a card reaches this pass.
+func reconcilePRLoops(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, driveLoop func(pmKey string) error, logger zerolog.Logger) int {
 	if driveLoop == nil || liveAgents == nil {
 		return 0
 	}
@@ -218,7 +225,7 @@ func reconcilePRLoops(ctx context.Context, cards []ReconcileCard, liveAgents Liv
 		alive[n] = struct{}{}
 	}
 	redriven := 0
-	for _, card := range cards {
+	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
 		if derived.Stage != BoardDoneStage || derived.State != BoardRunning {
 			continue
@@ -270,7 +277,16 @@ func stuckRunningCandidate(derived BoardCard, comments []tracker.Comment) bool {
 // once the *-failed marker lands the card derives BoardFailed, so the next tick
 // skips it and never double-posts. Reuses DeriveBoardCard verbatim so detection
 // can never disagree with the board's rendered state. Returns the number reddened.
-func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, reachable BranchReachable, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) int {
+//
+// It receives DrivableCards from the forTakeover gate, so every card it sees is
+// already this machine's to red: the project is one it participates in, the stage
+// is not owned by a peer daemon, and the branch (if any) resolves here. That is
+// why this pass no longer weighs a foreign grace or a reachability predicate — the
+// single local StuckRunningGrace with real machine-local liveness evidence is
+// correct for every card that reaches it, because a card owned elsewhere never
+// does (SC-2047: ownership binds a running stage to its machine, so the
+// delay-only StuckRunningForeignGrace is retired rather than lengthened).
+func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) int {
 	if liveAgents == nil || postFailed == nil {
 		return 0
 	}
@@ -287,20 +303,17 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 	}
 
 	reddened := 0
-	for _, card := range cards {
+	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
-		if !stuckCardIsOursToRed(derived, card, reachable, logger) {
+		if !stuckCardIsOursToRed(derived, card) {
 			continue
 		}
 		header := failedHeaderFor(derived.Stage)
 		if header == "" {
 			continue
 		}
-		if now.Sub(derived.StageEnteredAt) < stuckRunningGraceFor(derived.StageDaemonID, daemonID) {
-			// Young enough to still be genuine in-flight work. A stage owned by a
-			// peer daemon gets the far longer foreign grace: this daemon's
-			// machine-local liveAgents() cannot see the peer's healthy run, so
-			// reddening it at the local 15m would duplicate live work (SC-1450).
+		if now.Sub(derived.StageEnteredAt) < StuckRunningGrace {
+			// Young enough to still be genuine in-flight work.
 			continue
 		}
 		agentName := agentNameFor(card.Key, derived.Stage)
@@ -345,19 +358,6 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 	return reddened
 }
 
-// stuckRunningGraceFor picks how long a running card may sit before this daemon
-// will red it. A card whose deciding marker is stamped with a DIFFERENT daemon
-// (foreign-owned) gets StuckRunningForeignGrace, because this daemon cannot see
-// the owner's live agent and must not red a healthy peer run. An unstamped
-// stage (empty stageDaemonID) or this daemon's own stage keeps the local
-// StuckRunningGrace with its real machine-local liveness evidence (SC-1450).
-func stuckRunningGraceFor(stageDaemonID, daemonID string) time.Duration {
-	if stageDaemonID != "" && stageDaemonID != daemonID {
-		return StuckRunningForeignGrace
-	}
-	return StuckRunningGrace
-}
-
 // cardPausedOnOwnStage reports whether a card carries an open [human:options]
 // block for its OWN running stage — the durable reconcile pass's twin of the
 // live path's stagePausedOnOptions guard, expressed over the already-derived
@@ -366,12 +366,14 @@ func cardPausedOnOwnStage(derived BoardCard) bool {
 	return len(derived.Options) > 0 && derived.OptionsStage == derived.Stage
 }
 
-// stuckCardIsOursToRed collects the three reasons a card must be left alone
-// before any hang judgement is made: it is not a stuck-running candidate, it is
-// deliberately paused on a human decision, or its work lives on another machine.
-// Kept together so the "leave it alone" cases read as one unit and the caller
-// stays a decision about hangs rather than a wall of guards.
-func stuckCardIsOursToRed(derived BoardCard, card ReconcileCard, reachable BranchReachable, logger zerolog.Logger) bool {
+// stuckCardIsOursToRed collects the two reasons a card that already reached this
+// pass must STILL be left alone before any hang judgement is made: it is not a
+// stuck-running candidate, or it is deliberately paused on a human decision. The
+// third historical reason — the card's work lives on another machine — is no
+// longer weighed here: it is now enforced upstream by the forTakeover gate, which
+// never hands this pass a card owned elsewhere or a branch it cannot reach
+// (SC-2047). Kept together so the "leave it alone" cases read as one unit.
+func stuckCardIsOursToRed(derived BoardCard, card ReconcileCard) bool {
 	// Only a running card with no active PR loop is a stuck-running candidate.
 	// A mid-flight review→fix loop is owned by reconcilePRLoops, not this hang
 	// detector: its half-agents come and go between rounds, so the absence of a
@@ -386,20 +388,6 @@ func stuckCardIsOursToRed(derived BoardCard, card ReconcileCard, reachable Branc
 	// guard the durable reconcile pass reddens the pause and loops
 	// re-planning forever (1290, the planning twin of SC-751).
 	if cardPausedOnOwnStage(derived) {
-		return false
-	}
-	// A card whose branch this machine cannot resolve is not this machine's to
-	// declare dead. Reddening it retries the stage HERE, against work that lives
-	// somewhere else — the peer's run is killed off mid-flight and the retry then
-	// fails on a branch it cannot check out (SC-1450).
-	//
-	// This is the hard half of that guard. StuckRunningForeignGrace is a clock:
-	// it delays a wrong takeover, it cannot prevent one, and it only helps when
-	// the deciding marker happens to carry a peer's id. Reachability is a fact
-	// about this disk that no elapsed time changes.
-	if !branchActionableHere(derived, reachable) {
-		logger.Debug().Str("pm", card.Key).Str("branch", derived.Branch).
-			Msg("board reconcile: stuck card's branch is unreachable here, leaving it for the machine that owns it")
 		return false
 	}
 	return true
@@ -483,26 +471,19 @@ func reconcileShippedFailures(ctx context.Context, cards []ReconcileCard, merged
 // live hook event and a reconcile tick race, the second call is a no-op at the
 // transition layer — the two can never double-launch a review.
 //
-// A reachability gate guards the chain: a review is chained only for a handoff
+// The reachability gate guarding the chain now lives upstream: this pass receives
+// DrivableCards from the forReview gate, so a review is chained only for a handoff
 // whose branch this machine can resolve (local ref or on origin). A board-context
 // fix leaves its branch local on the machine that produced it, so a daemon on
-// another machine skips that handoff and leaves it for one that can reach the
-// branch — never starting a review it could never satisfy (SC-652). Returns the
+// another machine is never handed that card and leaves it for one that can reach
+// the branch — never starting a review it could never satisfy (SC-652, now
+// enforced by construction rather than a per-path check, SC-2047). Returns the
 // number of reviews launched.
-func reconcileOrphanedHandoffs(cards []ReconcileCard, reachable BranchReachable, commitsPresent CommitsPresent, chainReview func(pmKey string) error, logger zerolog.Logger) int {
+func reconcileOrphanedHandoffs(drivable DrivableCards, commitsPresent CommitsPresent, chainReview func(pmKey string) error, logger zerolog.Logger) int {
 	launched := 0
-	for _, card := range cards {
+	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
 		if derived.Stage != BoardImplementation || derived.State != BoardDone {
-			continue
-		}
-		// A daemon only chains a review for a branch it can actually resolve on
-		// this machine; a handoff branch left local on another machine is left for
-		// a daemon that can reach it, rather than starting a review that can never
-		// check out the code (SC-652).
-		if reachable != nil && !reachable(derived.Branch) {
-			logger.Debug().Str("pm", card.Key).Str("branch", derived.Branch).
-				Msg("board reconcile: handoff branch unreachable on this machine, leaving for a daemon that can reach it")
 			continue
 		}
 		// Skip-and-leave on a phantom-commit handoff: the durable reconcile pass is
