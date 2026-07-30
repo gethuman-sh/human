@@ -62,7 +62,7 @@ func TestListIssues_happy(t *testing.T) {
 	// "Done" story filtered out by default
 	require.Len(t, issues, 2)
 
-	assert.Equal(t, "1", issues[0].Key)
+	assert.Equal(t, "SC-1", issues[0].Key)
 	assert.Equal(t, "Bug report", issues[0].Title)
 	assert.Equal(t, "To Do", issues[0].Status)
 	assert.Equal(t, tracker.CategoryUnstarted, issues[0].StatusType)
@@ -70,7 +70,7 @@ func TestListIssues_happy(t *testing.T) {
 	assert.Equal(t, "Alice", issues[0].Assignee)
 	assert.Equal(t, "Bob", issues[0].Reporter)
 
-	assert.Equal(t, "2", issues[1].Key)
+	assert.Equal(t, "SC-2", issues[1].Key)
 	assert.Equal(t, "Feature request", issues[1].Title)
 	assert.Equal(t, "In Progress", issues[1].Status)
 	assert.Equal(t, tracker.CategoryStarted, issues[1].StatusType)
@@ -224,7 +224,7 @@ func TestGetIssue_happy(t *testing.T) {
 	issue, err := client.GetIssue(context.Background(), "42")
 
 	require.NoError(t, err)
-	assert.Equal(t, "42", issue.Key)
+	assert.Equal(t, "SC-42", issue.Key)
 	assert.Equal(t, "The answer", issue.Title)
 	assert.Equal(t, "In Progress", issue.Status)
 	assert.Equal(t, "feature", issue.Type)
@@ -284,8 +284,28 @@ func TestGetIssue_shortcutDisplayKey(t *testing.T) {
 	issue, err := client.GetIssue(context.Background(), "SC-879")
 
 	require.NoError(t, err)
-	assert.Equal(t, "879", issue.Key)
+	assert.Equal(t, "SC-879", issue.Key)
 	assert.Equal(t, "Display key story", issue.Title)
+}
+
+// A ticket has ONE identity: the key this client emits must be a key it accepts
+// back, unchanged, with no translation step in between. When it emitted the bare
+// story ID while everything user- and agent-facing used the "SC-nnn" display
+// form, two spellings of one ticket were in circulation and any handover that
+// wrote one and read the other was silently lost (SC-1892).
+func TestStoryKeyRoundTripsThroughParseStoryID(t *testing.T) {
+	key := storyKey(1892)
+	assert.Equal(t, "SC-1892", key, "the emitted key is the display form Shortcut itself prints")
+
+	id, err := parseStoryID(key)
+	require.NoError(t, err, "a key this client emitted must be one it accepts")
+	assert.Equal(t, int64(1892), id)
+
+	// The bare form stays readable: older commits, markers and stored state
+	// contain it, and they must not become unresolvable.
+	bare, err := parseStoryID("1892")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1892), bare)
 }
 
 func TestCreateIssue_happy(t *testing.T) {
@@ -327,7 +347,7 @@ func TestCreateIssue_happy(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "99", issue.Key)
+	assert.Equal(t, "SC-99", issue.Key)
 	assert.Equal(t, "Human", issue.Project)
 	assert.Equal(t, "New story", issue.Title)
 	assert.Equal(t, "Some description", issue.Description)
@@ -371,7 +391,7 @@ func TestCreateIssue_withoutDescription(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "100", issue.Key)
+	assert.Equal(t, "SC-100", issue.Key)
 	// Only name, no description
 	assert.Equal(t, "No desc", gotBody["name"])
 	_, hasDesc := gotBody["description"]
@@ -901,7 +921,7 @@ func TestEditIssue_happy(t *testing.T) {
 	issue, err := client.EditIssue(context.Background(), "123", tracker.EditOptions{Title: &title})
 
 	require.NoError(t, err)
-	assert.Equal(t, "123", issue.Key)
+	assert.Equal(t, "SC-123", issue.Key)
 	assert.Equal(t, "Updated Title", issue.Title)
 }
 
@@ -1324,8 +1344,8 @@ func TestCreateIssue_withParent(t *testing.T) {
 		ParentKey: "42",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "99", issue.Key)
-	assert.Equal(t, "42", issue.ParentKey)
+	assert.Equal(t, "SC-99", issue.Key)
+	assert.Equal(t, "SC-42", issue.ParentKey)
 	assert.Equal(t, float64(42), gotBody["parent_story_id"])
 }
 
@@ -1356,7 +1376,7 @@ func TestGetIssue_withParent(t *testing.T) {
 	client := New(srv.URL, "tok-test")
 	issue, err := client.GetIssue(context.Background(), "99")
 	require.NoError(t, err)
-	assert.Equal(t, "42", issue.ParentKey)
+	assert.Equal(t, "SC-42", issue.ParentKey)
 }
 
 func TestListIssues_labelsMapped(t *testing.T) {
