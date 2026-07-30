@@ -274,7 +274,7 @@ func TestReconcileStuckRunning_FailsAgedRunningOrphanWithNoAgent(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -292,7 +292,7 @@ func TestReconcileStuckRunning_SkipsWithinGrace(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -308,7 +308,7 @@ func TestReconcileStuckRunning_SkipsWhenAgentAlive(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 	live := liveAgents(agentNameFor("SC-1", BoardImplementation))
-	n := reconcileStuckRunning(context.Background(), cards, live, capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, live, capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -326,7 +326,7 @@ func TestReconcileStuckRunning_SkipsNonRunning(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -341,7 +341,7 @@ func TestReconcileStuckRunning_CoversVerificationStage(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:review-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -357,7 +357,7 @@ func TestReconcileStuckRunning_NilListerDisables(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, nil, capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, nil, capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -379,7 +379,7 @@ func TestReconcileStuckRunning_SkipsJustDecidedCard(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n, "a just-decided card must never be reddened")
 	assert.Empty(t, posted)
@@ -454,7 +454,7 @@ func TestReconcileStuckRunning_SkipsActiveLoop(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n, "a mid-flight PR loop must never be reddened by the stuck pass")
 	assert.Empty(t, posted)

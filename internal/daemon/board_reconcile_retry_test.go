@@ -33,7 +33,7 @@ func TestReconcileStuckRunning_RelaunchesAfterReddening(t *testing.T) {
 	}
 
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+		capturingPoster(&posted), alwaysReachable, retry, nil, nil, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 1, n, "the card is reddened")
 	require.Len(t, posted, 1, "the failed marker is the trail record")
@@ -68,7 +68,7 @@ func TestReconcileStuckRunning_OpenSameStageOptionsIsCleanPause(t *testing.T) {
 	}
 
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+		capturingPoster(&posted), alwaysReachable, retry, nil, nil, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 0, n, "an open same-stage options block is a clean pause, not a hang")
 	require.Empty(t, posted, "no failed marker for a card parked on its own decision")
@@ -98,7 +98,7 @@ func TestReconcileStuckRunning_OpenOptionsForOtherStageStillReddens(t *testing.T
 	}
 
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+		capturingPoster(&posted), alwaysReachable, retry, nil, nil, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 1, n, "an options block for a different stage does not excuse a genuine hang")
 	require.Len(t, posted, 1, "the failed marker is the trail record")
@@ -123,7 +123,7 @@ func TestReconcileStuckRunning_RelaunchRespectsTheBudget(t *testing.T) {
 	}
 
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+		capturingPoster(&posted), alwaysReachable, retry, nil, nil, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 1, n, "the card is still reddened for a human")
 	require.Empty(t, relaunched, "a spent budget stops the automatic relaunch")

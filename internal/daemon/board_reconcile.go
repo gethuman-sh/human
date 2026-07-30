@@ -160,7 +160,7 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, reachable Bra
 	if n := reconcilePRLoops(ctx, cards, liveAgents, driveLoop, logger); n > 0 {
 		logger.Info().Int("redriven", n).Msg("board reconcile: re-drove stalled PR review→fix loops")
 	}
-	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
+	if n := reconcileStuckRunning(ctx, cards, liveAgents, postFailed, reachable, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
 	}
 	// Last: the passes above all act on cards that are still ON the board, while
@@ -270,7 +270,7 @@ func stuckRunningCandidate(derived BoardCard, comments []tracker.Comment) bool {
 // once the *-failed marker lands the card derives BoardFailed, so the next tick
 // skips it and never double-posts. Reuses DeriveBoardCard verbatim so detection
 // can never disagree with the board's rendered state. Returns the number reddened.
-func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) int {
+func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, reachable BranchReachable, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) int {
 	if liveAgents == nil || postFailed == nil {
 		return 0
 	}
@@ -289,20 +289,7 @@ func reconcileStuckRunning(ctx context.Context, cards []ReconcileCard, liveAgent
 	reddened := 0
 	for _, card := range cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
-		// Only a running card with no active PR loop is a stuck-running candidate.
-		// A mid-flight review→fix loop is owned by reconcilePRLoops, not this hang
-		// detector: its half-agents come and go between rounds, so the absence of a
-		// live agent here is normal rather than a dead-end.
-		if !stuckRunningCandidate(derived, card.Comments) {
-			continue
-		}
-		// An open [human:options] block for the card's OWN running stage is a
-		// deliberate human pause, not a hang — the live failure path already
-		// treats it as a clean pause (stagePausedOnOptions). [human:options] is
-		// not a state marker, so the card stays BoardRunning; without this twin
-		// guard the durable reconcile pass reddens the pause and loops
-		// re-planning forever (1290, the planning twin of SC-751).
-		if cardPausedOnOwnStage(derived) {
+		if !stuckCardIsOursToRed(derived, card, reachable, logger) {
 			continue
 		}
 		header := failedHeaderFor(derived.Stage)
@@ -377,6 +364,61 @@ func stuckRunningGraceFor(stageDaemonID, daemonID string) time.Duration {
 // board card rather than raw comments (1290).
 func cardPausedOnOwnStage(derived BoardCard) bool {
 	return len(derived.Options) > 0 && derived.OptionsStage == derived.Stage
+}
+
+// stuckCardIsOursToRed collects the three reasons a card must be left alone
+// before any hang judgement is made: it is not a stuck-running candidate, it is
+// deliberately paused on a human decision, or its work lives on another machine.
+// Kept together so the "leave it alone" cases read as one unit and the caller
+// stays a decision about hangs rather than a wall of guards.
+func stuckCardIsOursToRed(derived BoardCard, card ReconcileCard, reachable BranchReachable, logger zerolog.Logger) bool {
+	// Only a running card with no active PR loop is a stuck-running candidate.
+	// A mid-flight review→fix loop is owned by reconcilePRLoops, not this hang
+	// detector: its half-agents come and go between rounds, so the absence of a
+	// live agent here is normal rather than a dead-end.
+	if !stuckRunningCandidate(derived, card.Comments) {
+		return false
+	}
+	// An open [human:options] block for the card's OWN running stage is a
+	// deliberate human pause, not a hang — the live failure path already
+	// treats it as a clean pause (stagePausedOnOptions). [human:options] is
+	// not a state marker, so the card stays BoardRunning; without this twin
+	// guard the durable reconcile pass reddens the pause and loops
+	// re-planning forever (1290, the planning twin of SC-751).
+	if cardPausedOnOwnStage(derived) {
+		return false
+	}
+	// A card whose branch this machine cannot resolve is not this machine's to
+	// declare dead. Reddening it retries the stage HERE, against work that lives
+	// somewhere else — the peer's run is killed off mid-flight and the retry then
+	// fails on a branch it cannot check out (SC-1450).
+	//
+	// This is the hard half of that guard. StuckRunningForeignGrace is a clock:
+	// it delays a wrong takeover, it cannot prevent one, and it only helps when
+	// the deciding marker happens to carry a peer's id. Reachability is a fact
+	// about this disk that no elapsed time changes.
+	if !branchActionableHere(derived, reachable) {
+		logger.Debug().Str("pm", card.Key).Str("branch", derived.Branch).
+			Msg("board reconcile: stuck card's branch is unreachable here, leaving it for the machine that owns it")
+		return false
+	}
+	return true
+}
+
+// branchActionableHere reports whether THIS machine could actually act on the
+// card, by the only test that is a fact rather than a judgement: can it resolve
+// the card's branch.
+//
+// A card with no branch yet — planning, or a build that has not handed off — is
+// treated as actionable, because there is no fact to consult and refusing would
+// disable the hang detector for every early stage. Those cards keep the older,
+// softer protection (the grace plus the liveness probe). A nil predicate
+// disables the gate, matching the package's "nil disables" convention.
+func branchActionableHere(derived BoardCard, reachable BranchReachable) bool {
+	if reachable == nil || derived.Branch == "" {
+		return true
+	}
+	return reachable(derived.Branch)
 }
 
 // stuckRunningReason is the one-line badge text for a card the stuck-running
