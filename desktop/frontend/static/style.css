@@ -102,6 +102,14 @@ body {
   box-shadow: 0 0 6px var(--done);
 }
 
+/* Amber: something is failing but nothing blocks new work — an advisory or a
+   momentary blip. Visible in the needs-attention register, never the red
+   outage alarm reserved for a genuine hard stop (SC-1991). */
+.rail-led.warn {
+  background: var(--running);
+  box-shadow: 0 0 6px var(--running);
+}
+
 .rail-led.fail {
   background: var(--failed);
   box-shadow: 0 0 6px var(--failed);
