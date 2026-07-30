@@ -15,6 +15,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/vault"
 )
 
 // ErrAgentAlreadyRunning is the AgentLauncher-boundary sentinel for a benign
@@ -505,6 +506,9 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 		Draft:        true,
 	})
 	if err != nil {
+		if reason, ok := secretStoreFailureHeadline(err); ok {
+			return d.deployFailed(pmKey, "", deployReason(reason, err))
+		}
 		return d.deployFailed(pmKey, "", deployReason(
 			"could not push "+card.Branch+" and open its draft pull request — check the branch and forge access, then re-run Deploy", err))
 	}
@@ -783,6 +787,9 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		Body:         prBody,
 	})
 	if err != nil {
+		if reason, ok := secretStoreFailureHeadline(err); ok {
+			return d.deployFailed(pmKey, "", deployReason(reason, err))
+		}
 		return d.deployFailed(pmKey, "", deployReason(
 			"could not push "+branch+" and open its pull request — check the branch and forge access, then re-run Deploy",
 			err))
@@ -902,11 +909,33 @@ func stateUnreadable(err error) bool {
 	return unreadable
 }
 
-// ciFailureHeadline maps the CI gate's failure modes to their next step. An
-// unreadable state is neither a failing check nor a timeout: it is a credential
-// read failure the operator fixes by restoring vault access, so it never claims
-// the checks failed (SC-1996).
+// secretStoreFailureHeadline returns an actionable deploy-failed headline for a
+// secret-store failure and true when err is one, so a failed secret read is
+// never reported as a branch, forge, or CI failure and is never handed to a code
+// fixer (SC-2042). Returns ("", false) for any non-secret error.
+func secretStoreFailureHeadline(err error) (string, bool) {
+	switch {
+	case vault.IsAuthFailure(err):
+		return "the secret store is not authenticated — sign in on the daemon host (op signin / gh auth login), then re-run Deploy", true
+	case vault.IsStoreUnreachable(err):
+		return "the secret store is unreachable — check its CLI is installed and reachable on the daemon host, then re-run Deploy", true
+	case vault.IsSecretMissing(err):
+		return "a configured secret reference could not be found in the store — fix the reference in .humanconfig, then re-run Deploy", true
+	case stderrors.Is(err, vault.ErrCauseUndetermined):
+		return "reading a configured secret failed — check the secret store on the daemon host, then re-run Deploy", true
+	}
+	return "", false
+}
+
+// ciFailureHeadline maps the CI gate's failure modes to their next step. A
+// secret-store failure (SC-2042) and an unreadable state (SC-1996) are both
+// credential/read failures the operator fixes outside the branch, never a
+// failing check the checks themselves reported — so neither ever claims the
+// checks failed.
 func ciFailureHeadline(err error) string {
+	if reason, ok := secretStoreFailureHeadline(err); ok {
+		return reason
+	}
 	if stateUnreadable(err) {
 		return "could not read the pull request's check state — " + credentialRemedy
 	}
@@ -917,10 +946,14 @@ func ciFailureHeadline(err error) string {
 }
 
 // ciFailureFixable reports whether a CI gate error is a genuine check FAILURE a
-// fixer can repair (lint/test), as opposed to a gate timeout or an unreadable
-// state. A timeout is an infra/slowness signal and an unreadable state is a
-// credential failure — neither has anything for a code fixer to change (SC-1996).
+// fixer can repair (lint/test), as opposed to a gate timeout, an unreadable
+// state, or a secret-store failure. A timeout is an infra/slowness signal, an
+// unreadable state and a secret-store failure are both credential failures —
+// none of the three has anything for a code fixer to change (SC-1996, SC-2042).
 func ciFailureFixable(err error) bool {
+	if _, ok := secretStoreFailureHeadline(err); ok {
+		return false // a failed secret read is not a code defect
+	}
 	return err != nil && !strings.Contains(err.Error(), "timed out") && !stateUnreadable(err)
 }
 

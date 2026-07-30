@@ -68,15 +68,18 @@ func (g *GhCLI) Resolve(ref string) (string, error) {
 		// it turns an opaque "exit status 1" into the actual gh diagnostic
 		// (e.g. "not logged in to any hosts").
 		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
-			return "", errors.WrapWithDetails(err, "resolving GitHub token via gh CLI",
-				"ref", ref, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
+			diag := strings.TrimSpace(string(exitErr.Stderr))
+			return "", tagCause(classifySecretStderr(diag), "GitHub CLI gh could not read "+ref+": "+diag,
+				"ref", ref, "stderr", diag)
 		}
-		return "", errors.WrapWithDetails(err, "resolving GitHub token via gh CLI", "ref", ref)
+		return "", tagCause(ErrCauseUndetermined, "resolving GitHub token via gh CLI: "+err.Error(), "ref", ref)
 	}
 
 	token := strings.TrimSpace(string(out))
 	if token == "" {
-		return "", errors.WithDetails("gh CLI returned an empty token", "ref", ref)
+		// gh exits 0 with an empty token when the host has no session — that is a
+		// not-authenticated condition, not an empty secret.
+		return "", tagCause(ErrNotAuthenticated, "gh CLI returned an empty token for "+ref+" — run gh auth login on the daemon host", "ref", ref)
 	}
 	return token, nil
 }

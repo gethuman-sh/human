@@ -12,8 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	humanerrors "github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/vault"
 )
 
 // fakeCommenter records AddComment bodies and returns canned ListComments. It
@@ -1624,6 +1626,66 @@ func TestDeployBranch_CIFailure_DispatchesFixer(t *testing.T) {
 	assert.Equal(t, "board-SC-1-deployfix", l.name)
 	assert.Equal(t, "/human-deploy-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
 	assert.Zero(t, p.merged, "the deploy must not merge a CI-failed head")
+}
+
+// SC-2042: a secret-store auth failure surfaced at the CI gate must be reported
+// as an authentication problem and must NOT be handed to the code fixer — the
+// suite is green; there is nothing to fix. Before the fix, ciFailureFixable
+// returns true for this error and a fixer is dispatched (this test fails RED).
+func TestDeployBranch_SecretStoreAuthFailure_NotFixable(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	authErr := humanerrors.WrapWithDetails(vault.ErrNotAuthenticated,
+		"1Password CLI op could not read 1pw://Private/Shortcut Token/notesPlain: not signed in")
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7}, checksErr: authErr}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	assert.Zero(t, l.calls, "an auth failure is not code-fixable — no fixer may be dispatched")
+	assert.Zero(t, p.merged, "a failed secret read must not merge")
+
+	var failed, started string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+		if strings.HasPrefix(b, DeployFixStartedHeader) {
+			started = b
+		}
+	}
+	require.NotEmpty(t, failed, "the failure must red the card with a deploy-failed marker")
+	assert.Empty(t, started, "no deploy-fix must be started")
+	headline, _, _ := strings.Cut(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n")
+	assert.Contains(t, strings.ToLower(headline), "authenticat",
+		"the headline must state authentication is the problem")
+	assert.NotContains(t, headline, "CI checks failed",
+		"a failed secret read must not be reported as a CI failure")
+}
+
+// SC-2042: the same error on the push/PR path must be reported as a secret-store
+// problem, not as "check the branch and forge access".
+func TestDeployBranch_SecretStoreAuthFailure_PushPath(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	authErr := humanerrors.WrapWithDetails(vault.ErrNotAuthenticated,
+		"GitHub CLI gh is not logged in")
+	p := &fakeDeployer{prErr: authErr}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	headline, _, _ := strings.Cut(strings.TrimPrefix(failed, DeployFailedHeader+"\n"), "\n")
+	assert.Contains(t, strings.ToLower(headline), "authenticat")
+	assert.NotContains(t, headline, "check the branch and forge access")
 }
 
 // The CLI deploy path wires no launcher: a failing CI gate stays terminal (AD4),
