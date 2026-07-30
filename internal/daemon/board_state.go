@@ -166,12 +166,36 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 // branch. Uses the same stage-precise predicate as the failure watcher and
 // reconcile pass (stagePausedOnOptions), so a block naming a stage the card
 // has not reached — a stale or target-relaunch block — never clears an
-// active run (SC-1669).
+// active run (SC-1669). The done-stage PR-loop escalation is the one sanctioned
+// exception to that stage-precision (loopEscalatedToDecision), because it posts
+// its block against a different stage by design.
 func pauseRunningOnOpenOptions(state BoardState, furthest BoardStage, comments []tracker.Comment) BoardState {
-	if state == BoardRunning && stagePausedOnOptions(comments, furthest) {
+	if state == BoardRunning && (stagePausedOnOptions(comments, furthest) || loopEscalatedToDecision(furthest, comments)) {
 		return BoardIdle
 	}
 	return state
+}
+
+// loopEscalatedToDecision reports the SC-1857 case: the done-stage PR review→fix
+// loop escalated to a [human:options] decision. The escalation posts its block
+// against the IMPLEMENTATION stage (the rebuild target), so the stage-precise
+// stagePausedOnOptions never matches it while the card's furthest stage is done
+// — and the stranded [human:pr-fix-started] marker would otherwise keep the card
+// reading done/running forever, a phantom "deploying…" spinner that also
+// swallowed every later Deploy drop as a duplicate.
+//
+// An open options block in the presence of a live loop is necessarily that
+// escalation: a later RUNNING loop marker would have consumed any earlier block
+// (openOptionsBlock's consumption rule), so an open block can only be newer than
+// the loop that stranded the done stage. Pausing lets the card surface its
+// decision instead of the spinner, and frees a later Deploy drop to fall through
+// to a visible refusal rather than a silent duplicate-drop no-op.
+func loopEscalatedToDecision(furthest BoardStage, comments []tracker.Comment) bool {
+	if furthest != BoardDoneStage || !doneStageLoopActive(comments) {
+		return false
+	}
+	_, open := openOptionsBlock(comments)
+	return open
 }
 
 // supersededByNewerMarker reports whether the furthest-stage marker may be
