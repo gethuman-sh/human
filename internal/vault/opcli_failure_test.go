@@ -77,6 +77,18 @@ func TestOpFailure_SurfacesOpsDiagnostic(t *testing.T) {
 	details := errors.AllDetails(err)
 	assert.Equal(t, "[ERROR] not signed in", details["stderr"], "stderr is also attached for the log")
 	assert.Equal(t, testRef, details["ref"])
+	assert.True(t, IsAuthFailure(err), "a signed-out op stderr is a not-authenticated failure (SC-2042)")
+}
+
+// An item-not-found stderr is a missing-secret failure, distinct from a
+// signed-out session — callers must be able to tell them apart (SC-2042).
+func TestOpFailure_ItemMissing(t *testing.T) {
+	err := resolveWith(t, func(context.Context) ([]byte, error) {
+		return nil, exitErrorWithStderr(t, `[ERROR] "Shortcut Token" isn't an item`)
+	})
+
+	assert.True(t, IsSecretMissing(err))
+	assert.Contains(t, err.Error(), testRef)
 }
 
 // A missing binary is a permanent misconfiguration, not a blip, and its remedy
@@ -88,6 +100,7 @@ func TestOpFailure_MissingBinaryIsNamedAsSuch(t *testing.T) {
 
 	assert.Contains(t, err.Error(), "not found on PATH")
 	assert.Contains(t, err.Error(), testRef)
+	assert.True(t, IsStoreUnreachable(err), "an absent binary is a store-unreachable failure (SC-2042)")
 }
 
 // An exit status with nothing on stderr must still say something better than a
@@ -107,4 +120,5 @@ func TestOpFailure_ContextErrorReportsTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "timed out")
 	assert.Contains(t, err.Error(), testRef)
 	assert.Contains(t, err.Error(), opTimeout.String())
+	assert.True(t, IsStoreUnreachable(err), "a timeout is a store-unreachable failure (SC-2042)")
 }

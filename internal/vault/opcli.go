@@ -103,13 +103,13 @@ func opFailure(binary, ref string, err error, ctxErr error) error {
 	details := []any{"ref", ref, "binary", binary}
 	switch {
 	case ctxErr != nil:
-		return errors.WrapWithDetails(err,
+		return tagCause(ErrStoreUnreachable,
 			"1Password CLI "+binary+" timed out after "+opTimeout.String()+" reading "+ref+
 				" — the CLI is unresponsive or waiting on an unlock prompt",
 			append(details, "timeout", opTimeout.String())...)
 
 	case stderrors.Is(err, exec.ErrNotFound):
-		return errors.WrapWithDetails(err,
+		return tagCause(ErrStoreUnreachable,
 			"1Password CLI "+binary+" not found on PATH, needed to read "+ref+
 				" — install it, or use env vars instead of a 1pw:// reference",
 			details...)
@@ -123,10 +123,10 @@ func opFailure(binary, ref string, err error, ctxErr error) error {
 		if diag == "" {
 			diag = "no diagnostic on stderr"
 		}
-		return errors.WrapWithDetails(err,
+		return tagCause(classifySecretStderr(diag),
 			"1Password CLI "+binary+" could not read "+ref+": "+diag,
 			append(details, "stderr", diag, "exit_code", exitErr.ExitCode())...)
 	}
-	return errors.WrapWithDetails(err,
+	return tagCause(ErrCauseUndetermined,
 		"1Password CLI "+binary+" could not read "+ref+": "+err.Error(), details...)
 }
