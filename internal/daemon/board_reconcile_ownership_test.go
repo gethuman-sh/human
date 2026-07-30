@@ -26,7 +26,7 @@ func TestReconcileStuckRunning_SparesForeignCardUnderForeignGrace(t *testing.T) 
 	}}
 	var posted []struct{ Key, Body string }
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+		capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n, "a foreign-owned card under the foreign grace must not be reddened")
 	assert.Empty(t, posted)
@@ -45,7 +45,7 @@ func TestReconcileStuckRunning_RedsForeignCardPastForeignGrace(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+		capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -65,7 +65,7 @@ func TestReconcileStuckRunning_RedsOwnCardAtLocalGrace(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 	n := reconcileStuckRunning(context.Background(), cards, liveAgents(),
-		capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+		capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
