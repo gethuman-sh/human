@@ -1618,6 +1618,15 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 	var loadFailures []error
 	for _, entry := range reg.Entries() {
 		instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
+		for _, failure := range failures {
+			// LogError renders the full cause chain AND the attached details (the
+			// secret reference, op's stderr, the exit code). Only the outermost
+			// message survives to the board banner, so the log is the one place
+			// the whole diagnosis lands — without it a recurring credential blip
+			// leaves nothing to debug after the fact (SC-2005).
+			errors.LogError(failure).Str("dir", entry.Dir).
+				Msg("board listing: tracker instances failed to load, continuing without them")
+		}
 		loadFailures = append(loadFailures, failures...)
 		for _, inst := range instances {
 			projects := inst.Projects

@@ -54,7 +54,12 @@ func TestOpCLI_Resolve_error(t *testing.T) {
 
 	_, err := op.Resolve("1pw://vault/item/field")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "resolving 1Password secret via CLI")
+	// The message must identify the binary, the reference and the cause: it is
+	// the only part that survives to a board banner, and the old wording
+	// ("resolving 1Password secret via CLI") named none of the three (SC-2005).
+	assert.Contains(t, err.Error(), "op.exe")
+	assert.Contains(t, err.Error(), "1pw://vault/item/field")
+	assert.Contains(t, err.Error(), "command failed")
 }
 
 func TestOpCLI_Resolve_translatesPrefix(t *testing.T) {

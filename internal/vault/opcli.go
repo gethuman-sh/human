@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	stderrors "errors"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -16,6 +17,11 @@ import (
 // and flag introducers so no value that slips past the prefix check
 // can reach the CLI as a rogue argument.
 var opRefPattern = regexp.MustCompile(`^op://[A-Za-z0-9 _./\-]+$`)
+
+// opTimeout bounds one op invocation. It must be generous enough for a cold
+// CLI start and an unlock round-trip, yet short enough that an unresponsive
+// CLI does not stall every caller waiting on a secret.
+const opTimeout = 30 * time.Second
 
 // OpCLI resolves 1pw:// secret references by shelling out to the 1Password CLI.
 // It is the fallback behind the in-process SDK on every platform: released
@@ -63,7 +69,7 @@ func (o *OpCLI) Resolve(ref string) (string, error) {
 			"ref", ref)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
 	defer cancel()
 
 	var out []byte
@@ -74,13 +80,53 @@ func (o *OpCLI) Resolve(ref string) (string, error) {
 		out, err = exec.CommandContext(ctx, o.Binary, "read", sdkRef).Output() // #nosec G204 -- binary is a static default, ref is from config
 	}
 	if err != nil {
-		// .Output() stashes the command's stderr on *exec.ExitError; surfacing
-		// it turns an opaque "exit status 1" into the actual op diagnostic.
-		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
-			return "", errors.WrapWithDetails(err, "resolving 1Password secret via CLI",
-				"ref", ref, "stderr", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		return "", errors.WrapWithDetails(err, "resolving 1Password secret via CLI", "ref", ref)
+		return "", opFailure(o.Binary, ref, err, ctx.Err())
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// opFailure builds the error for a failed op invocation.
+//
+// The MESSAGE has to carry the diagnosis, not just the attached details: only
+// err.Error() survives the daemon→client hops, so a board banner shows the
+// message alone. The old one — "resolving 1Password secret via CLI" — named no
+// secret, no cause and no remedy, so a transient blip and a permanently signed-out
+// CLI were indistinguishable, and with several references configured it did not
+// even say WHICH one failed (SC-2005).
+//
+// The reference is safe to show: it is a vault/item/field path that already sits
+// in .humanconfig, never the secret it points at. op's own stderr is included
+// because it is the line that actually tells you what to do ("not signed in",
+// "item not found"), and the distinct failure shapes — binary absent, timed out,
+// non-zero exit — are separated because their remedies are different.
+func opFailure(binary, ref string, err error, ctxErr error) error {
+	details := []any{"ref", ref, "binary", binary}
+	switch {
+	case ctxErr != nil:
+		return errors.WrapWithDetails(err,
+			"1Password CLI "+binary+" timed out after "+opTimeout.String()+" reading "+ref+
+				" — the CLI is unresponsive or waiting on an unlock prompt",
+			append(details, "timeout", opTimeout.String())...)
+
+	case stderrors.Is(err, exec.ErrNotFound):
+		return errors.WrapWithDetails(err,
+			"1Password CLI "+binary+" not found on PATH, needed to read "+ref+
+				" — install it, or use env vars instead of a 1pw:// reference",
+			details...)
+	}
+
+	// .Output() stashes the command's stderr on *exec.ExitError; surfacing it
+	// turns an opaque "exit status 1" into op's actual diagnostic.
+	var exitErr *exec.ExitError
+	if stderrors.As(err, &exitErr) {
+		diag := strings.TrimSpace(string(exitErr.Stderr))
+		if diag == "" {
+			diag = "no diagnostic on stderr"
+		}
+		return errors.WrapWithDetails(err,
+			"1Password CLI "+binary+" could not read "+ref+": "+diag,
+			append(details, "stderr", diag, "exit_code", exitErr.ExitCode())...)
+	}
+	return errors.WrapWithDetails(err,
+		"1Password CLI "+binary+" could not read "+ref+": "+err.Error(), details...)
 }
