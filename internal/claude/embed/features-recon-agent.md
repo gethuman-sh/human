@@ -21,16 +21,19 @@ does the product framing.
    synthesis organize by value pillars rather than subsystems — capture the marketing framing, not
    just "it's a CLI tool."
 
-2. **Map the capability inventory** — A *capability* is something the product does; find them the way
-   that fits the project:
-   - **Per-module capability lists** — Many projects document capabilities in per-package/module
-     `README.md` files. Glob for them (`**/README.md`) and read their bullet lists; each bullet is
-     usually one capability. This is the richest source when present.
+2. **Map the capability inventory** — A *capability* is something the product does. **Code is the
+   authority**: derive every capability from the code itself and confirm each one against the source.
+   Find them the way that fits the project:
    - **CLI commands** — command/subcommand registrations (cobra `AddCommand`, click, argparse, …).
    - **Web/API** — route and handler definitions.
    - **Library** — exported/public interfaces and functions.
    - **UI** — routes, pages, views, panes.
-   Use Glob and Grep; confirm against code. For each capability capture: a short **name**, a terse
+   - **Per-module `README.md` prose (supporting context only)** — Per-package/module `README.md`
+     files can help you *name* a functional area or understand its product framing, but they are
+     unverified hand-written prose that drifts from the code. Treat them as context, never as a
+     source of record: a README bullet is **not** evidence a capability exists. Never list a
+     capability that you cannot point to in the code, even if a README claims it.
+   Use Glob and Grep; confirm every capability against code. For each capability capture: a short **name**, a terse
    **one-line description**, its **representative file paths** (synthesis needs these to map commits
    and tickets), and a **user-facing vs. plumbing** flag — mark it *plumbing* when it is an internal
    enabler a customer/PM would never discuss (CLI flag parsing, banners, platform/OS detection,
