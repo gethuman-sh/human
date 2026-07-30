@@ -567,7 +567,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), card.Branch
-	switch EvaluatePRLoop(comments, outcome.ReviewVerdict, outcome.FixExit) {
+	switch EvaluatePRLoop(comments, outcome.ReviewVerdict, outcome.FixExit, outcome.FixPushed) {
 	case PRActionReview:
 		if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(prReviewStartedBody(url, number, branch), d.DaemonID)); err != nil {
 			return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
@@ -643,6 +643,11 @@ func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Board
 	switch {
 	case outcome.FixExit == ExitNeedsInput:
 		return "the PR fixer needs a human decision — read the PR review comments, decide, then re-run Deploy"
+	// A fix that committed but could not push leaves the reviewed head still the
+	// stale pre-fix one — the loop must not re-review that, or it silently
+	// approves work it never saw (SC-1760).
+	case outcome.FixExit == PRFixDone && !outcome.FixPushed:
+		return "the PR fixer committed its change but could not push it, so the review would re-read the unfixed head — push the fixer's branch (or grant it push access), then re-run Deploy"
 	case outcome.ReviewVerdict == PRVerdictChanges:
 		return "the machine review did not converge within the round budget — review the PR yourself, then re-run Deploy"
 	case outcome.ReviewVerdict == PRVerdictUnreviewable:

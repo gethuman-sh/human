@@ -28,14 +28,17 @@ func readPRReviewVerdict(ctx context.Context, pmKey string, logger zerolog.Logge
 	return v.Verdict, recorded
 }
 
-// readPRFixReport loads the fixer's stage.pr-fix report: its exit, the optional
-// enumerated directions it recorded on needs-input, and a one-line context
-// (deferred comments, else the summary) for the options block, plus whether a
-// report was found at all. Absent fields stay zero — the loop driver treats a
-// missing exit as escalate.
-func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary string, recorded bool) {
+// readPRFixReport loads the fixer's stage.pr-fix report: its exit, whether it
+// pushed its work, the optional enumerated directions it recorded on
+// needs-input, and a one-line context (deferred comments, else the summary) for
+// the options block, plus whether a report was found at all. Absent fields stay
+// zero — the loop driver treats a missing exit as escalate, and a missing/false
+// `pushed` as an unshipped fix the convergence guard must escalate rather than
+// re-review (SC-1760).
+func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (exit string, pushed bool, options []daemon.BoardOption, summary string, recorded bool) {
 	var v struct {
 		Exit     string               `json:"exit"`
+		Pushed   bool                 `json:"pushed"`
 		Options  []daemon.BoardOption `json:"options"`
 		Deferred string               `json:"deferred"`
 		Summary  string               `json:"summary"`
@@ -45,7 +48,7 @@ func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (
 	if summary == "" {
 		summary = v.Summary
 	}
-	return v.Exit, v.Options, summary, recorded
+	return v.Exit, v.Pushed, v.Options, summary, recorded
 }
 
 // readDeployFixExit returns the deploy fixer's exit recorded in stage.deploy-fix

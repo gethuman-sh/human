@@ -42,7 +42,7 @@ func TestAdvancePRLoop_reviewApproved_merges(t *testing.T) {
 	var closed string
 	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: PRVerdictApproved, ReviewRecorded: true, FixExit: "", FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: PRVerdictApproved, ReviewRecorded: true, FixExit: "", FixPushed: true, FixRecorded: true}))
 
 	assert.Equal(t, 7, p.markedReady, "the approved PR must be un-drafted before merge")
 	assert.Equal(t, 1, p.merged, "the un-drafted PR must merge")
@@ -56,7 +56,7 @@ func TestAdvancePRLoop_changesRequested_launchesFixer(t *testing.T) {
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true, FixExit: "", FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true, FixExit: "", FixPushed: true, FixRecorded: true}))
 
 	_, ok := posted(c, PRFixStartedHeader)
 	assert.True(t, ok, "a pr-fix-started marker must be posted")
@@ -73,7 +73,7 @@ func TestAdvancePRLoop_fixDone_launchesReviewer(t *testing.T) {
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: PRFixDone, FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: PRFixDone, FixPushed: true, FixRecorded: true}))
 
 	_, ok := posted(c, PRReviewStartedHeader)
 	assert.True(t, ok, "a fresh pr-review-started marker must be posted")
@@ -87,7 +87,7 @@ func TestAdvancePRLoop_budgetExhausted_escalates(t *testing.T) {
 	p := &fakeDeployer{}
 	deps := newDeps(c, l, p)
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true, FixExit: "", FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true, FixExit: "", FixPushed: true, FixRecorded: true}))
 
 	failed, ok := posted(c, PRReviewFailedHeader)
 	require.True(t, ok, "the budget-exhausted loop must escalate")
@@ -105,7 +105,7 @@ func TestAdvancePRLoop_fixNeedsInput_escalates(t *testing.T) {
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: ExitNeedsInput, FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: ExitNeedsInput, FixPushed: false, FixRecorded: true}))
 
 	// A fixer needs-input is a DECISION: it escalates to a [human:options] block,
 	// not a red failed marker, so each direction is a clickable board choice.
@@ -131,6 +131,7 @@ func TestAdvancePRLoop_fixNeedsInput_withOptions(t *testing.T) {
 
 	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{
 		FixExit:     ExitNeedsInput,
+		FixPushed:   false,
 		FixRecorded: true,
 		FixOptions:  []BoardOption{{ID: "1", Label: "A"}, {ID: "2", Label: "B"}},
 		FixSummary:  "deferred X",
@@ -157,11 +158,36 @@ func TestAdvancePRLoop_escalateIdempotent(t *testing.T) {
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: ExitNeedsInput, FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: ExitNeedsInput, FixPushed: false, FixRecorded: true}))
 
 	// A durable re-drive over a loop that already escalated must not double-post.
 	assert.Empty(t, c.added, "an already-open options block short-circuits the escalation")
 	assert.Zero(t, l.calls)
+}
+
+// Convergence guard: a fixer that completed but could not push left the
+// reviewed head unchanged, so a re-review would reproduce the same finding
+// forever. The loop must red the card with an actionable reason rather than
+// spin (SC-1760).
+func TestAdvancePRLoop_fixDoneButNotPushed_escalates(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: PRFixDone, FixPushed: false, FixRecorded: true}))
+
+	// It is not a decision (no options block) — it is a shipping failure the
+	// board must show as a red card so a human pushes the branch.
+	_, optionsPosted := posted(c, OptionsHeader)
+	assert.False(t, optionsPosted, "an unshipped fix is not a decision")
+	failed, ok := posted(c, PRReviewFailedHeader)
+	require.True(t, ok, "an unpushed fix must red the card")
+	assert.Contains(t, failed, "could not push")
+	assert.Zero(t, l.calls, "the guard must launch no re-review")
 }
 
 func TestAdvancePRLoop_unreadableVerdict_escalates(t *testing.T) {
@@ -169,7 +195,7 @@ func TestAdvancePRLoop_unreadableVerdict_escalates(t *testing.T) {
 	p := &fakeDeployer{}
 	deps := newDeps(c, &fakeLauncher{}, p)
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: "", FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: "", FixPushed: false, FixRecorded: true}))
 
 	_, ok := posted(c, PRReviewFailedHeader)
 	assert.True(t, ok, "an unreadable verdict must escalate rather than merge")
@@ -182,7 +208,7 @@ func TestAdvancePRLoop_markReadyFails_deployFailed(t *testing.T) {
 	p := &fakeDeployer{markReadyErr: errors.New("graphql: could not un-draft")}
 	deps := newDeps(c, &fakeLauncher{}, p)
 
-	err := deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: PRVerdictApproved, ReviewRecorded: true, FixExit: "", FixRecorded: true})
+	err := deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: PRVerdictApproved, ReviewRecorded: true, FixExit: "", FixPushed: true, FixRecorded: true})
 	require.Error(t, err)
 
 	failed, ok := posted(c, DeployFailedHeader)

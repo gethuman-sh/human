@@ -46,8 +46,9 @@ func TestReadPRFixReport_readsField(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"done","pushed":true}`)
 
-	exit, options, summary, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
+	exit, pushed, options, summary, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
 	assert.Equal(t, "done", exit)
+	assert.True(t, pushed, "the fixer's pushed flag must round-trip so the convergence guard can read it")
 	assert.Empty(t, options)
 	assert.Empty(t, summary)
 }
@@ -56,8 +57,9 @@ func TestReadPRFixReport_needsInput(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"needs-input","pushed":false}`)
 
-	exit, _, _, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
+	exit, pushed, _, _, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
 	assert.Equal(t, "needs-input", exit)
+	assert.False(t, pushed, "a fix that did not push must report pushed=false")
 }
 
 // The fixer's enumerated directions and its context line (deferred, else
@@ -67,7 +69,7 @@ func TestReadPRFixReport_optionsAndDeferredContext(t *testing.T) {
 	writeRawReport(t, "SC-1", "stage.pr-fix",
 		`{"exit":"needs-input","options":[{"id":"1","label":"A"},{"id":"2","label":"B"}],"deferred":"blocked on X","summary":"one line"}`)
 
-	exit, options, summary, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
+	exit, _, options, summary, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
 	assert.Equal(t, "needs-input", exit)
 	require.Len(t, options, 2)
 	assert.Equal(t, "A", options[0].Label)
@@ -81,6 +83,6 @@ func TestReadPRFixReport_summaryContextFallback(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-fix", `{"exit":"needs-input","summary":"one line"}`)
 
-	_, _, summary, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
+	_, _, _, summary, _ := readPRFixReport(context.Background(), "SC-1", zerolog.Nop())
 	assert.Equal(t, "one line", summary)
 }

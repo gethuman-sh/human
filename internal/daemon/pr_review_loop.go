@@ -59,15 +59,20 @@ const (
 // NextPRLoopAction is the loop's transition function. `stage` is the step that
 // just finished and `outcome` its recorded field — the reviewer's verdict
 // (approved | changes-requested | unreviewable) or the fixer's exit
-// (done | needs-input). `round` is the number of reviews completed so far and
-// `budget` the maximum (DefaultPRReviewRounds when non-positive).
+// (done | needs-input). `fixPushed` reports whether a completed fix actually
+// pushed its work; it matters only when `stage` is PRStageFix. `round` is the
+// number of reviews completed so far and `budget` the maximum
+// (DefaultPRReviewRounds when non-positive).
 //
-// Two safety rules are baked in. An unrecognized outcome escalates rather than
-// proceeds: the loop must never merge on a state it cannot read. And a
+// Three safety rules are baked in. An unrecognized outcome escalates rather than
+// proceeds: the loop must never merge on a state it cannot read. A
 // changes-requested review at the round budget escalates instead of fixing
 // again, so a disagreement the fixer cannot close reaches a human in bounded
-// time rather than looping.
-func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int) PRLoopAction {
+// time rather than looping. And the convergence guard: a fix that completed but
+// did not push left the reviewed head unchanged, so re-reviewing it would
+// reproduce the same finding forever — that escalates rather than spinning, so
+// the loop fails loudly (SC-1760).
+func NextPRLoopAction(stage PRLoopStage, outcome string, fixPushed bool, round, budget int) PRLoopAction {
 	if budget <= 0 {
 		budget = DefaultPRReviewRounds
 	}
@@ -87,10 +92,15 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int) PRLo
 			return PRActionEscalate
 		}
 	case PRStageFix:
-		if outcome == PRFixDone {
-			return PRActionReview
+		if outcome != PRFixDone {
+			return PRActionEscalate // needs-input, or unclassifiable
 		}
-		return PRActionEscalate // needs-input, or unclassifiable
+		if !fixPushed {
+			// Convergence guard: the fix never reached the head the reviewer
+			// reads, so another review would find the same defect. Escalate.
+			return PRActionEscalate
+		}
+		return PRActionReview
 	default:
 		return PRActionEscalate
 	}
@@ -154,6 +164,7 @@ type PRLoopOutcome struct {
 	ReviewVerdict  string
 	ReviewRecorded bool
 	FixExit        string
+	FixPushed      bool
 	FixRecorded    bool
 	FixOptions     []BoardOption
 	FixSummary     string
@@ -177,12 +188,12 @@ func (o PRLoopOutcome) stepRecorded(stage PRLoopStage) bool {
 // EvaluatePRLoop bridges the recorded board state to the decider: it reads which
 // loop step last ran (from the markers) and how many review rounds have
 // completed, pairs the step with the outcome that step recorded — the reviewer's
-// verdict or the fixer's exit, which live in the state store, not the comment
-// thread, so the caller supplies them — and returns the next action. Keeping the
-// bridge pure lets the marker/state → action mapping be tested without a daemon;
-// the caller executes the action (launch an agent, mark-ready + merge, or red
-// the card).
-func EvaluatePRLoop(comments []tracker.Comment, reviewVerdict, fixExit string) PRLoopAction {
+// verdict or the fixer's exit and whether that fix pushed, which live in the
+// state store, not the comment thread, so the caller supplies them — and returns
+// the next action. Keeping the bridge pure lets the marker/state → action
+// mapping be tested without a daemon; the caller executes the action (launch an
+// agent, mark-ready + merge, or red the card).
+func EvaluatePRLoop(comments []tracker.Comment, reviewVerdict, fixExit string, fixPushed bool) PRLoopAction {
 	stage := latestPRLoopStage(comments)
 	var outcome string
 	switch stage {
@@ -191,5 +202,5 @@ func EvaluatePRLoop(comments []tracker.Comment, reviewVerdict, fixExit string) P
 	case PRStageFix:
 		outcome = fixExit
 	}
-	return NextPRLoopAction(stage, outcome, prReviewRounds(comments), DefaultPRReviewRounds)
+	return NextPRLoopAction(stage, outcome, fixPushed, prReviewRounds(comments), DefaultPRReviewRounds)
 }
