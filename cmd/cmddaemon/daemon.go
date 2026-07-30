@@ -1453,6 +1453,7 @@ func warnTopologyDivergence(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 type fetchJob struct {
 	inst    tracker.Instance
 	project string
+	dir     string
 }
 
 func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) func() ([]daemon.TrackerIssuesResult, error) {
@@ -1511,11 +1512,10 @@ func fetchTrackerIssuesLiteFunc(reg *daemon.ProjectRegistry, resolver *vault.Res
 // Shortcut) return slim payloads without descriptions.
 func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.IssueDetailRequest) (*daemon.IssueDetailFetch, error) {
 	return func(req daemon.IssueDetailRequest) (*daemon.IssueDetailFetch, error) {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return nil, errors.WithDetails("no project registered for issue detail")
+		entry, err := reg.EntryForKey(req.Key)
+		if err != nil {
+			return nil, err
 		}
-		entry := entries[0]
 		instances, err := cmdutil.LoadAllInstancesWithResolver(entry.Dir, entry.EnvLookup(), resolver)
 		if err != nil {
 			return nil, err
@@ -1566,7 +1566,7 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 				projects = []string{""}
 			}
 			for _, p := range projects {
-				jobs = append(jobs, fetchJob{inst: inst, project: p})
+				jobs = append(jobs, fetchJob{inst: inst, project: p, dir: entry.Dir})
 			}
 		}
 	}
@@ -1611,6 +1611,22 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 		}(i, job)
 	}
 	wg.Wait()
+
+	// Record which project each PM-role key was fetched from so keyed
+	// board-action closures can route a request to its owning project
+	// instead of defaulting to a fixed one (SC-1694). Skip error results —
+	// an origin from a failed fetch would be stale by construction.
+	var origins []daemon.KeyOrigin
+	for i := range results {
+		if results[i].TrackerRole != "pm" || results[i].Err != "" {
+			continue
+		}
+		for _, iss := range results[i].Issues {
+			origins = append(origins, daemon.KeyOrigin{Key: iss.Key, Dir: jobs[i].dir})
+		}
+	}
+	reg.SetOrigins(origins)
+
 	return jobs, results, nil
 }
 
@@ -1865,16 +1881,18 @@ func translateLaunchErr(err error) error {
 }
 
 // boardProjectDir resolves the single registered project's directory, the repo
-// the board's git probes run against. ok is false when no project is registered.
+// the board's git probes run against. ok is false when no project is registered,
+// or when more than one is: these probes carry no card key to route by, so a
+// multi-project daemon skips them rather than guessing a fixed project (SC-1694).
 func boardProjectDir(projects *daemon.ProjectRegistry) (string, bool) {
 	if projects == nil {
 		return "", false
 	}
-	entries := projects.Entries()
-	if len(entries) == 0 {
+	entry, err := projects.SoleEntry()
+	if err != nil {
 		return "", false
 	}
-	return entries[0].Dir, true
+	return entry.Dir, true
 }
 
 // boardBranchReachable reports whether a handoff branch resolves on this machine
@@ -2170,15 +2188,14 @@ func resolveForge(dir string, lookup config.EnvLookup, resolver *vault.Resolver)
 // parseable number, returns (false, err) so the reconcile pass leaves the card
 // untouched rather than clearing a red on an unknown state (SC-910).
 func boardPRMerged(ctx context.Context, projects *daemon.ProjectRegistry, resolver *vault.Resolver, prURL string) (bool, error) {
-	entries := projects.Entries()
-	if len(entries) == 0 {
-		return false, errors.WithDetails("no project registered for board reconcile")
+	entry, err := projects.SoleEntry()
+	if err != nil {
+		return false, err
 	}
 	number, ok := forge.PullRequestNumberFromURL(prURL)
 	if !ok {
 		return false, errors.WithDetails("could not parse pull request number", "pr", prURL)
 	}
-	entry := entries[0]
 	creator, repo, err := resolveForge(entry.Dir, entry.EnvLookup(), resolver)
 	if err != nil {
 		return false, err
@@ -2239,11 +2256,10 @@ func resolvePMGetter(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 // not tell", because only the former may stop a live run (1698).
 func closedTicketProbeFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) daemon.ClosedTicketProbe {
 	return func(ctx context.Context, pmKey string) (bool, error) {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return false, errors.WithDetails("no project registered for the closed-ticket probe", "pm", pmKey)
+		entry, err := reg.EntryForKey(pmKey)
+		if err != nil {
+			return false, err
 		}
-		entry := entries[0]
 		getter, err := resolvePMGetter(entry.Dir, entry.EnvLookup(), resolver)
 		if err != nil {
 			return false, err
@@ -2294,11 +2310,10 @@ func resolvePMTransitioner(dir string, lookup config.EnvLookup, resolver *vault.
 // cards only — rather than closing over a run that refused to die.
 func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, liveAgents func() ([]string, error), stopAgent func(context.Context, string) error, logger zerolog.Logger) func(daemon.CloseTicketRequest) error {
 	return func(req daemon.CloseTicketRequest) error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for close ticket")
+		entry, err := reg.EntryForKey(req.PMKey)
+		if err != nil {
+			return err
 		}
-		entry := entries[0]
 		lookup := entry.EnvLookup()
 
 		stopCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -2329,7 +2344,7 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 	return func(pmKey, agentName, errorType string) error {
 		verdict, verdictRecorded := readPRReviewVerdict(ctx, pmKey, logger)
 		exit, options, summary, exitRecorded := readPRFixReport(ctx, pmKey, logger)
-		deps, err := boardTransitionDepsFor(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 		if err != nil {
 			return err
 		}
@@ -2353,7 +2368,7 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
 	return func(pmKey string) error {
 		exit := readDeployFixExit(ctx, pmKey, logger)
-		deps, err := boardTransitionDepsFor(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -2366,12 +2381,11 @@ func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(
 // and the forge publisher against the resolved project dir. Shared by the
 // board-transition and board-fix closures so both routes drive the exact same
 // engine.
-func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) (daemon.BoardTransitionDeps, error) {
-	entries := reg.Entries()
-	if len(entries) == 0 {
-		return daemon.BoardTransitionDeps{}, errors.WithDetails("no project registered for board transition")
+func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) (daemon.BoardTransitionDeps, error) {
+	entry, err := reg.EntryForKey(pmKey)
+	if err != nil {
+		return daemon.BoardTransitionDeps{}, err
 	}
-	entry := entries[0]
 	lookup := entry.EnvLookup()
 	commenter, err := resolvePMCommenter(entry.Dir, lookup, resolver)
 	if err != nil {
@@ -2401,7 +2415,7 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, resolver *vault.Resolve
 // the Docker launcher and forge publisher against the resolved project dir.
 func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardTransitionRequest) error {
 	return func(req daemon.BoardTransitionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -2416,7 +2430,7 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 // chosen option and relaunches the block's stage with the choice injected.
 func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardOptionRequest) error {
 	return func(req daemon.BoardOptionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -2426,7 +2440,7 @@ func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, da
 
 func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardFixRequest) error {
 	return func(req daemon.BoardFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -2440,7 +2454,7 @@ func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemo
 // containerized agent path.
 func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.SecurityFixRequest) error {
 	return func(req daemon.SecurityFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, resolver, daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
@@ -2457,11 +2471,10 @@ func bugCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(
 		if err := daemon.ValidateBugCreate(req); err != nil {
 			return daemon.BugCreateResponse{}, err
 		}
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return daemon.BugCreateResponse{}, errors.WithDetails("no project registered for bug creation")
+		entry, err := reg.SoleEntry()
+		if err != nil {
+			return daemon.BugCreateResponse{}, err
 		}
-		entry := entries[0]
 		creator, project, err := resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
 		if err != nil {
 			return daemon.BugCreateResponse{}, err
@@ -2493,11 +2506,10 @@ func securityCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) 
 		if err := daemon.ValidateSecurityCreate(req); err != nil {
 			return daemon.SecurityCreateResponse{}, err
 		}
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return daemon.SecurityCreateResponse{}, errors.WithDetails("no project registered for security creation")
+		entry, err := reg.SoleEntry()
+		if err != nil {
+			return daemon.SecurityCreateResponse{}, err
 		}
-		entry := entries[0]
 		creator, project, err := resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
 		if err != nil {
 			return daemon.SecurityCreateResponse{}, err
@@ -2524,11 +2536,10 @@ func securityCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) 
 // Generate/Refresh button reuses the same containerized agent path.
 func featuresGeneratorFunc(reg *daemon.ProjectRegistry) func() error {
 	return func() error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for feature generation")
+		entry, err := reg.SoleEntry()
+		if err != nil {
+			return err
 		}
-		entry := entries[0]
 		// Tear down any prior "features" agent first so Generate/Refresh is
 		// idempotent — Manager.Start refuses to start over a still-running agent,
 		// so without this a second click fails with "agent already running".
@@ -2547,11 +2558,10 @@ func featuresGeneratorFunc(reg *daemon.ProjectRegistry) func() error {
 // files each surviving finding as a bug ticket, so the button needs no argument.
 func findbugsRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 	return func() error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for findbugs sweep")
+		entry, err := reg.SoleEntry()
+		if err != nil {
+			return err
 		}
-		entry := entries[0]
 		// Tear down any prior "findbugs" agent first so a re-click after a stale
 		// or crashed run is idempotent — Manager.Start refuses to start over a
 		// still-running agent.
@@ -2570,11 +2580,10 @@ func findbugsRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 // button needs no argument.
 func securityRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 	return func() error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for security sweep")
+		entry, err := reg.SoleEntry()
+		if err != nil {
+			return err
 		}
-		entry := entries[0]
 		// Tear down any prior "findsecurity" agent first so a re-click after a
 		// stale or crashed run is idempotent — Manager.Start refuses to start over
 		// a still-running agent.
@@ -2594,11 +2603,10 @@ func securityRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 // the launch fails, so the menu never sticks on a set that was never started.
 func mockupsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateMocksRequest) error {
 	return func(req daemon.CreateMocksRequest) error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for mock creation")
+		entry, err := reg.EntryForKey(req.PMKey)
+		if err != nil {
+			return err
 		}
-		entry := entries[0]
 		slug := mockups.SlugFor(req.PMKey)
 		if slug == "" {
 			return errors.WithDetails("cannot derive mockup slug", "pm_key", req.PMKey)
@@ -2687,11 +2695,10 @@ func nextVariationSlug(projectDir, parentSlug, parentFile string) string {
 // back so navigation never shows a group that was never started.
 func variationsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateVariationsRequest) error {
 	return func(req daemon.CreateVariationsRequest) error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for variation creation")
+		entry, err := reg.EntryForKey(req.PMKey)
+		if err != nil {
+			return err
 		}
-		entry := entries[0]
 		if req.ParentSlug == "" || req.ParentFile == "" {
 			return errors.WithDetails("variation requires a parent slug and file",
 				"parent_slug", req.ParentSlug, "parent_file", req.ParentFile)
@@ -2749,11 +2756,10 @@ func variationsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateVariat
 // empty.
 func mockupChooserFunc(reg *daemon.ProjectRegistry) func(daemon.ChooseMockupRequest) error {
 	return func(req daemon.ChooseMockupRequest) error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for mockup selection")
+		entry, err := reg.EntryForKey(req.PMKey)
+		if err != nil {
+			return err
 		}
-		entry := entries[0]
 		store := mockups.NewStore(mockups.PathIn(entry.Dir))
 		if req.Slug == "" {
 			return store.ClearChoice(req.PMKey)
@@ -2774,11 +2780,10 @@ func mockupChooserFunc(reg *daemon.ProjectRegistry) func(daemon.ChooseMockupRequ
 // dangling choice survives.
 func mockupPrunerFunc(reg *daemon.ProjectRegistry) func(daemon.PruneMockupRequest) error {
 	return func(req daemon.PruneMockupRequest) error {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return errors.WithDetails("no project registered for mockup pruning")
+		entry, err := reg.EntryForKey(req.PMKey)
+		if err != nil {
+			return err
 		}
-		entry := entries[0]
 		if req.Slug == "" {
 			return errors.WithDetails("prune requires a group slug")
 		}
@@ -2865,9 +2870,9 @@ type claudeTurnOutput struct {
 }
 
 func (r hostClaudeIdeationRunner) Run(ctx context.Context, resumeID, prompt string) (daemon.IdeationTurn, error) {
-	entries := r.reg.Entries()
-	if len(entries) == 0 {
-		return daemon.IdeationTurn{}, errors.WithDetails("no project registered for ideation")
+	entry, err := r.reg.SoleEntry()
+	if err != nil {
+		return daemon.IdeationTurn{}, err
 	}
 	// Read-only tool allowlist: the agent may inspect the repo but nothing
 	// else; the daemon, not the agent, writes the ticket. Single argv element
@@ -2877,7 +2882,7 @@ func (r hostClaudeIdeationRunner) Run(ctx context.Context, resumeID, prompt stri
 		args = append(args, "--resume", resumeID)
 	}
 	cmd := exec.CommandContext(ctx, "claude", args...) // #nosec G204 -- fixed binary, prompt is a discrete argv element
-	cmd.Dir = entries[0].Dir
+	cmd.Dir = entry.Dir
 	out, err := cmd.Output()
 	// Live-verified (CLI 2.1.193): on turn failure claude exits non-zero,
 	// writes the result JSON with is_error:true and the cause in `result` to
@@ -2955,11 +2960,7 @@ func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 // reaches the board through the existing subscribe/refetch loop.
 func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, store daemon.IdeationStore, logger zerolog.Logger) *daemon.IdeationEngine {
 	firstEntry := func() (daemon.ProjectEntry, error) {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return daemon.ProjectEntry{}, errors.WithDetails("no project registered for ideation")
-		}
-		return entries[0], nil
+		return reg.SoleEntry()
 	}
 	return &daemon.IdeationEngine{
 		Runner: hostClaudeIdeationRunner{reg: reg},
@@ -3008,11 +3009,10 @@ func restoreIdeationSession(engine *daemon.IdeationEngine, store daemon.Ideation
 // boardPMCommenterFunc resolves the PM commenter for the board failure watcher.
 func boardPMCommenterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() (tracker.Commenter, error) {
 	return func() (tracker.Commenter, error) {
-		entries := reg.Entries()
-		if len(entries) == 0 {
-			return nil, errors.WithDetails("no project registered for board failure watch")
+		entry, err := reg.SoleEntry()
+		if err != nil {
+			return nil, err
 		}
-		entry := entries[0]
 		return resolvePMCommenter(entry.Dir, entry.EnvLookup(), resolver)
 	}
 }
