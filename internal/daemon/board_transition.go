@@ -885,7 +885,7 @@ const deployStateUnreadableDetail = "deployStateUnreadable"
 // it must never be mistaken for (a check failure, a conflict), and gives the
 // concrete remedy so the operator acts on the real cause instead of chasing a
 // green PR's phantom failure.
-const credentialRemedy = "this is a credential or vault failure (e.g. an expired 1Password/op session), not a check failure; restore access (re-run `op signin`), then re-run Deploy"
+const credentialRemedy = "this is a credential or vault failure (e.g. an expired 1Password/op session), not a check failure; restore access (re-run `op signin`), then re-run Deploy" // #nosec G101 -- remedy text, not a credential
 
 // markStateUnreadable wraps a read error with the UNKNOWN-outcome tag, preserving
 // the cause chain (walked by CauseChain into the detail block) while giving a
