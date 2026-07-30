@@ -285,7 +285,7 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	}
 
 	return &tracker.Issue{
-		Key:         strconv.FormatInt(story.ID, 10),
+		Key:         storyKey(story.ID),
 		Project:     issue.Project,
 		Title:       story.Name,
 		Description: story.Description,
@@ -810,15 +810,22 @@ func normalizeStoryType(t string) string {
 	return ""
 }
 
+// keyPrefix is Shortcut's fixed universal display prefix. Shortcut has no
+// per-workspace project prefix, so this is hardcoded rather than configured —
+// mirroring tracker.shortcutDisplayRe, which recognises the same form.
+const keyPrefix = "SC-"
+
 // parseStoryID parses a string story ID into an int64. It accepts both the bare
 // numeric key and the tool's own "SC-nnn" display form (case-insensitive), so
 // every entry point that funnels through here — Get/Edit/Comment/Link — resolves
-// keys copied out of commits, markers and PR titles. The original key is kept in
+// keys copied out of commits, markers and PR titles. Keys emitted by this client
+// always carry the prefix; the bare form is still accepted because it is what
+// older commits, markers and stored state contain. The original key is kept in
 // the error so a bad "SC-abc" still reports what the caller passed.
 func parseStoryID(key string) (int64, error) {
 	numeric := key
-	if len(key) > 3 && strings.EqualFold(key[:3], "sc-") {
-		numeric = key[3:]
+	if len(key) > len(keyPrefix) && strings.EqualFold(key[:len(keyPrefix)], keyPrefix) {
+		numeric = key[len(keyPrefix):]
 	}
 	id, err := strconv.ParseInt(numeric, 10, 64)
 	if err != nil || id <= 0 {
@@ -847,7 +854,7 @@ func (c *Client) toTrackerIssue(ctx context.Context, story scStory, project stri
 	reporter, _ := c.resolveMemberName(ctx, story.RequestedByID)
 
 	issue := tracker.Issue{
-		Key:         strconv.FormatInt(story.ID, 10),
+		Key:         storyKey(story.ID),
 		Project:     project,
 		Type:        story.StoryType,
 		Title:       story.Name,
@@ -866,13 +873,27 @@ func (c *Client) toTrackerIssue(ctx context.Context, story scStory, project stri
 	return issue, nil
 }
 
+// storyKey renders a story ID as this tracker's issue key: the prefixed display
+// form Shortcut itself prints, which is the ONLY form the rest of the tool sees.
+//
+// A bare story ID was previously handed out as the key, which made a ticket's
+// identity ambiguous: everything user- and agent-facing (commits, markers, the
+// ticket's own commands) uses "SC-nnn", so a bare "nnn" left two spellings of
+// one ticket in circulation and any handover that wrote one and read the other
+// was silently lost (SC-1892). Emitting the display form here — the one place a
+// story becomes an issue — leaves exactly one identity, and lets every consumer
+// treat the key as an opaque string rather than guessing at its syntax.
+func storyKey(id int64) string {
+	return keyPrefix + strconv.FormatInt(id, 10)
+}
+
 // parentStoryKey renders a parent story ID as a tracker issue key, or "" when
 // the story has no parent.
 func parentStoryKey(id *int64) string {
 	if id == nil {
 		return ""
 	}
-	return strconv.FormatInt(*id, 10)
+	return storyKey(*id)
 }
 
 // toTrackerComment converts a Shortcut comment to a tracker.Comment.

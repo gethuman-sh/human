@@ -136,6 +136,44 @@ func prReviewRounds(comments []tracker.Comment) int {
 	return n
 }
 
+// PRLoopOutcome is what the loop step that just finished left behind: the
+// reviewer's verdict or the fixer's exit, plus whether either was RECORDED AT
+// ALL. That last distinction is the point of the type. An agent that crashed
+// before writing anything and an agent that deliberately reported something the
+// daemon cannot classify both escalate, but they are different failures and the
+// ticket must be able to say which — the same distinction mayRelaunch already
+// draws for ordinary stages (board_retry.go). Carried as one value rather than
+// six positional arguments, which is how the recorded/unrecorded pairs stayed
+// impossible to tell apart.
+//
+// Agent and ErrorType identify the exited run so the escalation can carry a real
+// diagnosis. Both are empty when the loop is re-driven by the durable reconcile
+// pass, where the agent is long gone — the marker then falls back to its generic
+// line, which is the honest answer there.
+type PRLoopOutcome struct {
+	ReviewVerdict  string
+	ReviewRecorded bool
+	FixExit        string
+	FixRecorded    bool
+	FixOptions     []BoardOption
+	FixSummary     string
+	Agent          string
+	ErrorType      string
+}
+
+// stepRecorded reports whether the step that just ran recorded its outcome.
+// PRStageNone has no step behind it, so nothing is missing.
+func (o PRLoopOutcome) stepRecorded(stage PRLoopStage) bool {
+	switch stage {
+	case PRStageReview:
+		return o.ReviewRecorded
+	case PRStageFix:
+		return o.FixRecorded
+	default:
+		return true
+	}
+}
+
 // EvaluatePRLoop bridges the recorded board state to the decider: it reads which
 // loop step last ran (from the markers) and how many review rounds have
 // completed, pairs the step with the outcome that step recorded — the reviewer's
