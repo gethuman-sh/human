@@ -35,6 +35,35 @@ func claudeAuthRegistryRefresh(t *testing.T, expiresAtMS int64, refreshToken str
 	return reg
 }
 
+// buildDoctorChecks must classify every probe: the gating set is the launch
+// gate's own critical list (one source of truth), and the credential check —
+// the one that reaches out to tracker APIs/vault — is transient, so a blip is
+// never raised as a system fault (SC-1991).
+func TestBuildDoctorChecks_Classification(t *testing.T) {
+	reg, err := daemon.NewProjectRegistry([]string{t.TempDir()})
+	require.NoError(t, err)
+
+	checks := buildDoctorChecks(reg, nil, doctorPersistence{})
+
+	byID := make(map[string]daemon.DoctorCheckDef, len(checks))
+	for _, c := range checks {
+		byID[c.ID] = c
+	}
+
+	gating := make(map[string]bool, len(daemon.LaunchCriticalChecks))
+	for _, id := range daemon.LaunchCriticalChecks {
+		gating[id] = true
+	}
+	for id, def := range byID {
+		assert.Equalf(t, gating[id], def.Gating, "gating flag for %q must match LaunchCriticalChecks", id)
+	}
+
+	assert.True(t, byID["trackers"].Transient, "the credential check must be transient")
+	assert.False(t, byID["ca-cert"].Transient, "a local-file check must not be transient")
+	assert.True(t, byID["docker"].Gating)
+	assert.False(t, byID["trackers"].Gating, "the credential check gates nothing")
+}
+
 // An absent CA is a fresh install (generated on first proxy use) — only a
 // present-but-unparseable file is the ticket-428 failure that must go red.
 func TestCheckCACert(t *testing.T) {

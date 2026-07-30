@@ -274,11 +274,19 @@ interface DoctorCheck {
   id: string;
   name: string;
   ok: boolean;
+  gating?: boolean;
+  // "ok" | "blocking" | "degraded" | "transient" — a failing check's real
+  // consequence (SC-1991). Absent on older daemons; treat as unclassified.
+  severity?: string;
   detail?: string;
 }
 
 interface DoctorData {
   healthy: boolean;
+  // blocked is the work-can-start verdict: true only when a gating check is
+  // persistently failing. Only this may paint the LED as a hard stop (SC-1991).
+  blocked?: boolean;
+  summary?: string;
   checkedAt?: string;
   checks: DoctorCheck[];
 }
@@ -2070,8 +2078,13 @@ async function pollDaemonStatus(): Promise<void> {
   void pollDoctor();
 }
 
-// pollDoctor drives the rail LED: green when every substrate check passes,
-// red otherwise, with the failing checks (and their fixes) in the tooltip.
+// pollDoctor drives the rail LED in three states, so a failure is shown with
+// its real weight rather than every failure reading as an outage (SC-1991):
+//   - green  ("ok")   every check passes.
+//   - amber  ("warn") something is failing but nothing blocks new work — an
+//     advisory or a momentary blip; visible, never an alarm.
+//   - red    ("fail") a gating check is persistently failing — work genuinely
+//     cannot start. This is the only hard stop.
 // The daemon caches check results, so polling at the daemon-status cadence is
 // cheap and the LED reflects reality within seconds.
 async function pollDoctor(): Promise<void> {
@@ -2081,15 +2094,27 @@ async function pollDoctor(): Promise<void> {
   try {
     doctor = await go().Doctor();
   } catch {
-    doctor = { healthy: false, checks: [{ id: "daemon", name: "daemon", ok: false, detail: "not reachable" }] };
+    doctor = { healthy: false, blocked: true, checks: [{ id: "daemon", name: "daemon", ok: false, severity: "blocking", detail: "not reachable" }] };
   }
   const failing = (doctor.checks ?? []).filter((c) => !c.ok);
+  // Prefer the daemon's own verdict; fall back to deriving it from severities
+  // so an older daemon (no `blocked`/`severity`) still degrades sensibly:
+  // unclassified failures are treated as blocking, preserving prior behaviour.
+  const blocked =
+    doctor.blocked ?? failing.some((c) => !c.severity || c.severity === "blocking");
   const healthy = doctor.healthy && failing.length === 0;
   led.classList.toggle("ok", healthy);
-  led.classList.toggle("fail", !healthy);
-  led.title = healthy
-    ? "All systems go"
-    : failing.map((c) => `${c.name}: ${c.detail || "failing"}`).join("\n") || "System health unknown";
+  led.classList.toggle("warn", !healthy && !blocked);
+  led.classList.toggle("fail", blocked);
+  if (healthy) {
+    led.title = "All systems go";
+  } else {
+    const lines = failing.map((c) => `${c.name}: ${c.detail || "failing"}`);
+    const header = blocked
+      ? "New work is blocked:"
+      : "Advisory — work can start, nothing is blocked:";
+    led.title = [header, ...lines].join("\n");
+  }
 }
 
 // initialLoad renders the board on startup with stale-while-revalidate: it first

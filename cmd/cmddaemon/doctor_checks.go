@@ -32,8 +32,13 @@ type doctorPersistence struct {
 // ticket (SC-514; regressions 428/478 are the motivating incidents).
 func buildDoctorChecks(reg *daemon.ProjectRegistry, resolver *vault.Resolver, persist doctorPersistence) []daemon.DoctorCheckDef {
 	diagnose := trackerDiagnoserFunc(reg, resolver)
-	return []daemon.DoctorCheckDef{
-		{ID: "trackers", Name: "tracker credentials", Run: func(context.Context) (bool, string) {
+	checks := []daemon.DoctorCheckDef{
+		// The credential check reaches out to tracker APIs and the vault agent,
+		// any of which can fail for a moment and then succeed. It gates nothing
+		// (a dropped instance empties the board but stops no in-flight work), so
+		// it is Transient and non-gating: a blip must not raise a system alarm
+		// (SC-1991, the motivating incident).
+		{ID: "trackers", Name: "tracker credentials", Transient: true, Run: func(context.Context) (bool, string) {
 			return checkTrackers(reg, diagnose)
 		}},
 		{ID: "docker", Name: "docker engine", Run: checkDocker},
@@ -53,6 +58,17 @@ func buildDoctorChecks(reg *daemon.ProjectRegistry, resolver *vault.Resolver, pe
 			return checkPersistence(persist)
 		}},
 	}
+	// Gating is derived from the launch gate's own critical set, so the report's
+	// notion of "blocks work" and the launch-refusal path never drift apart
+	// (SC-1991).
+	gating := make(map[string]bool, len(daemon.LaunchCriticalChecks))
+	for _, id := range daemon.LaunchCriticalChecks {
+		gating[id] = true
+	}
+	for i := range checks {
+		checks[i].Gating = gating[checks[i].ID]
+	}
+	return checks
 }
 
 // caCertPath is the well-known proxy CA location the containers mount

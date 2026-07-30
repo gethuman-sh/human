@@ -29,22 +29,30 @@ func BuildDoctorCmd() *cobra.Command {
 
 			info, err := daemon.ReadInfo()
 			if err != nil || !info.IsReachable() {
-				printCheck(out, false, "daemon", "not reachable — start it with 'human daemon'")
+				// An unreachable daemon is a genuine hard stop — nothing can run.
+				printCheck(out, daemon.DoctorCheck{Name: "daemon", OK: false, Severity: daemon.SeverityBlocking}, "not reachable — start it with 'human daemon'")
 				return errors.WithDetails("daemon not reachable")
 			}
-			printCheck(out, true, "daemon", "reachable at "+info.Addr)
+			printCheck(out, daemon.DoctorCheck{Name: "daemon", OK: true}, "reachable at "+info.Addr)
 
 			data, err := daemon.GetDoctor(info.Addr, info.Token, refresh)
 			if err != nil {
 				return errors.WrapWithDetails(err, "querying daemon doctor")
 			}
 			for _, c := range data.Checks {
-				printCheck(out, c.OK, c.Name, c.Detail)
+				printCheck(out, c, c.Detail)
 			}
-			if !data.Healthy {
-				return errors.WithDetails("substrate unhealthy — agent launches on failing checks are blocked")
+			// Only a genuinely blocked substrate is a hard stop. A failing
+			// non-gating or momentary check is reported as it happened —
+			// visibly, but never as an outage that halts launches (SC-1991).
+			if data.Blocked {
+				return errors.WithDetails("substrate blocked — " + data.Summary)
 			}
-			_, _ = fmt.Fprintln(out, "\nAll systems go.")
+			summary := data.Summary
+			if summary == "" {
+				summary = "all systems go"
+			}
+			_, _ = fmt.Fprintf(out, "\n%s\n", summary)
 			return nil
 		},
 	}
@@ -52,13 +60,22 @@ func BuildDoctorCmd() *cobra.Command {
 	return cmd
 }
 
-func printCheck(out io.Writer, ok bool, name, detail string) {
+// printCheck renders one check line. A passing check gets a check mark; a
+// failing one is marked by its real consequence — a blocking failure is loud
+// (✗), while a merely advisory or momentary one is a softer note (!) so the
+// output does not read every failure as a hard stop (SC-1991).
+func printCheck(out io.Writer, c daemon.DoctorCheck, detail string) {
 	mark := "✓"
-	if !ok {
-		mark = "✗"
+	if !c.OK {
+		switch c.Severity {
+		case daemon.SeverityBlocking:
+			mark = "✗"
+		default:
+			mark = "!"
+		}
 	}
 	if detail != "" {
 		detail = " — " + detail
 	}
-	_, _ = fmt.Fprintf(out, "%s %s%s\n", mark, name, detail)
+	_, _ = fmt.Fprintf(out, "%s %s%s\n", mark, c.Name, detail)
 }
