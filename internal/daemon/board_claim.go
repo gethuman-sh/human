@@ -103,15 +103,15 @@ func claimWon(comments []tracker.Comment, stage BoardStage, myClaimID, myDaemonI
 // elapses with no such marker (the claimant crashed before launching). Only live
 // claims contend, so a fulfilled or dead claim never wedges the stage.
 func liveClaimIDs(comments []tracker.Comment, stage BoardStage, now time.Time) []string {
-	startedAt, hasStarted := latestStartedFor(comments, stage)
+	startedComment, hasStarted := latestStartedFor(comments, stage)
 	var ids []string
 	for _, c := range comments {
 		st, ok := claimStage(c.Body)
 		if !ok || st != stage {
 			continue
 		}
-		if hasStarted && !c.Created.After(startedAt) {
-			continue // fulfilled: the stage's launch already happened
+		if hasStarted && !commentNewer(c, startedComment) {
+			continue // fulfilled: the stage's launch is newer-or-equal to this claim
 		}
 		if now.Sub(c.Created) > ClaimTTL {
 			continue // expired: claimant crashed before posting *-started
@@ -121,19 +121,19 @@ func liveClaimIDs(comments []tracker.Comment, stage BoardStage, now time.Time) [
 	return ids
 }
 
-// latestStartedFor returns the newest *-started marker time for a stage, reusing
+// latestStartedFor returns the newest *-started marker comment for a stage, reusing
 // ClassifyMarker so "started" is defined exactly as the board derives it. ok is
 // false when the stage has never been launched.
-func latestStartedFor(comments []tracker.Comment, stage BoardStage) (time.Time, bool) {
-	var newest time.Time
+func latestStartedFor(comments []tracker.Comment, stage BoardStage) (tracker.Comment, bool) {
+	var newest tracker.Comment
 	found := false
 	for _, c := range comments {
 		st, state, ok := ClassifyMarker(c.Body)
 		if !ok || st != stage || state != BoardRunning {
 			continue
 		}
-		if !found || c.Created.After(newest) {
-			newest = c.Created
+		if !found || commentNewer(c, newest) {
+			newest = c
 			found = true
 		}
 	}
@@ -151,7 +151,7 @@ func newestOwnClaimID(comments []tracker.Comment, stage BoardStage, daemonID str
 		if !ok || st != stage || ParseDaemonID(c.Body) != daemonID {
 			continue
 		}
-		if !found || c.Created.After(newest.Created) {
+		if !found || commentNewer(c, newest) {
 			newest = c
 			found = true
 		}
@@ -191,4 +191,18 @@ func claimIDLess(a, b string) bool {
 		return ai.Cmp(bi) < 0
 	}
 	return a < b
+}
+
+// commentNewer reports whether comment a is more recent than b under the board's
+// total order: primary key Created (later wins), tie broken by the server-assigned
+// comment ID (higher id = later post wins), reusing claimIDLess's big.Int/byte-wise
+// order. Same-second markers therefore resolve on the monotonic id rather than the
+// tracker's unstable slice order (SC-1701). Equal Created with equal or absent ids
+// yields false, preserving the strict-.After first-seen-wins behaviour for backends
+// that do not populate an id.
+func commentNewer(a, b tracker.Comment) bool {
+	if a.Created.Equal(b.Created) {
+		return claimIDLess(b.ID, a.ID)
+	}
+	return a.Created.After(b.Created)
 }
