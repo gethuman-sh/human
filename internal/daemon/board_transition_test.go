@@ -498,6 +498,59 @@ func TestApplyTransitionRunningDeployStillIdempotent(t *testing.T) {
 	assert.Empty(t, c.added)
 }
 
+// escalatedLoopAwaitingDecision is the SC-1857 thread at the moment the PR
+// review→fix loop escalates to a [human:options] decision and BEFORE any human
+// choice: the escalation posts its block against the implementation stage, and
+// [human:pr-fix-started] is left as the newest done-stage marker. Nothing later
+// exists yet to retire it.
+func escalatedLoopAwaitingDecision() []tracker.Comment {
+	return []tracker.Comment{
+		cmt("[human:pr-review-started]\nnumber: 257\nbranch: autofix/x", time.Unix(1, 0)),
+		cmt("[human:pr-fix-started]", time.Unix(2, 0)),
+		cmt("[human:options]\nstage: implementation\ncontext: the fixer needs a decision\n1: Rebuild the branch", time.Unix(3, 0)),
+	}
+}
+
+func TestDeriveBoardCardEscalatedLoopLeavesNoBlockingDoneMarker(t *testing.T) {
+	// SC-1857 AC2: a loop escalated to options must leave no done-stage marker
+	// that reads "running" and so blocks a later deploy. The stranded
+	// [human:pr-fix-started] still scans raw as done/running, but the derived card
+	// — the authority the board and the drop guard both read — pauses on the open
+	// decision instead, exposing the options rather than a phantom deploy spinner.
+	comments := escalatedLoopAwaitingDecision()
+
+	_, raw := latestStageState(comments, BoardDoneStage)
+	require.Equal(t, BoardRunning, raw, "the stranded loop marker still scans raw as running")
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardIdle, card.State, "the escalated loop pauses on its decision, it is not running")
+	assert.False(t, isDuplicateDrop(BoardDoneStage, card), "no done-stage marker blocks a later deploy")
+	assert.Empty(t, card.DeployPhase, "a paused decision is not a mid-flight deploy")
+	require.NotEmpty(t, card.Options, "the decision surfaces on the card")
+	assert.Equal(t, BoardImplementation, card.OptionsStage)
+}
+
+func TestApplyTransitionRefusesDropOnAwaitingDecisionCard(t *testing.T) {
+	// SC-1857 AC3: dropping a card that is refusing the move must surface a reason,
+	// never appear to do nothing. Before the fix this exact escalated thread derived
+	// to done/running and the drop was swallowed by a silent duplicate-drop nil; now
+	// the card is paused on its decision and the drop returns an actionable refusal.
+	c := &fakeCommenter{comments: escalatedLoopAwaitingDecision()}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{}
+	deps := newDeps(c, l, p)
+
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{
+		PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+
+	require.Error(t, err, "a refused drop must not return a silent nil")
+	assert.Contains(t, err.Error(), "waiting on a decision", "the refusal names why, so the board can show it")
+	assert.Zero(t, l.calls, "nothing is launched")
+	assert.Zero(t, p.call, "nothing is deployed")
+	assert.Empty(t, c.added, "a refused move posts no stage marker")
+}
+
 func TestApplyTransitionDoneNoBranch(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{cmt("[human:review-complete]", time.Unix(1, 0))}}
 	p := &fakeDeployer{}
