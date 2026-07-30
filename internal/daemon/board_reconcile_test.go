@@ -17,6 +17,26 @@ import (
 // machine, matching the fixer-and-reviewer-share-a-machine invariant.
 func alwaysReachable(string) bool { return true }
 
+// reviewSet and takeoverSet build the DrivableCards a work-driving pass is handed
+// in production, applying the same WorkGate reconcileOnce applies. A test that
+// exercises the reachability/ownership gate passes neverReachable or a foreign
+// daemon id and asserts the card never reaches the pass; a test not exercising
+// the gate passes alwaysReachable so every card is admitted. This keeps the tests
+// honest about where the gate lives now — in the collection, not the pass.
+func reviewSet(cards []ReconcileCard, reachable BranchReachable) DrivableCards {
+	return WorkGate{reachable: reachable}.forReview(cards)
+}
+
+func takeoverSet(cards []ReconcileCard, reachable BranchReachable) DrivableCards {
+	return WorkGate{reachable: reachable}.forTakeover(cards)
+}
+
+// takeoverSetAs is takeoverSet with this machine's daemon id supplied, so the
+// pre-branch ownership arm (a stage stamped by a peer is not ours) can be pinned.
+func takeoverSetAs(cards []ReconcileCard, reachable BranchReachable, daemonID string) DrivableCards {
+	return WorkGate{reachable: reachable, daemonID: daemonID}.forTakeover(cards)
+}
+
 // An orphaned handoff — a [human:ready-for-review] with no subsequent review
 // marker — is exactly the card the live fix→review chain missed on restart, so
 // the reconcile pass must launch its review.
@@ -26,7 +46,7 @@ func TestReconcileOrphanedHandoffs_LaunchesReviewForOrphan(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
 	}}
 	var chained []string
-	n := reconcileOrphanedHandoffs(cards, alwaysReachable, nil, func(pmKey string) error {
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), nil, func(pmKey string) error {
 		chained = append(chained, pmKey)
 		return nil
 	}, zerolog.Nop())
@@ -47,7 +67,7 @@ func TestReconcileOrphanedHandoffs_SkipsWhenReviewStarted(t *testing.T) {
 		},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(cards, alwaysReachable, nil, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -64,7 +84,7 @@ func TestReconcileOrphanedHandoffs_SkipsWhenReviewComplete(t *testing.T) {
 		},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(cards, alwaysReachable, nil, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -78,7 +98,7 @@ func TestReconcileOrphanedHandoffs_SkipsRunningBuild(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", time.Unix(1, 0))},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(cards, alwaysReachable, nil, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -95,7 +115,7 @@ func TestReconcileOrphanedHandoffs_SkipsUnreachableBranch(t *testing.T) {
 	}}
 	unreachable := func(string) bool { return false }
 	called := false
-	n := reconcileOrphanedHandoffs(cards, unreachable, nil, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, unreachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -110,7 +130,7 @@ func TestReconcileOrphanedHandoffs_PassesHandoffBranchToProbe(t *testing.T) {
 	}}
 	var probed string
 	reachable := func(branch string) bool { probed = branch; return true }
-	n := reconcileOrphanedHandoffs(cards, reachable, nil, func(string) error { return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, reachable), nil, func(string) error { return nil }, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, "autofix/sc-1", probed)
@@ -131,7 +151,7 @@ func TestReconcileOrphanedHandoffs_SkipsPhantomCommits(t *testing.T) {
 		return false
 	}
 	called := false
-	n := reconcileOrphanedHandoffs(cards, alwaysReachable, commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called, "a phantom-commit handoff must not chain a review")
@@ -148,7 +168,7 @@ func TestReconcileOrphanedHandoffs_ChainsWhenCommitsPresent(t *testing.T) {
 	}}
 	commitsPresent := func(string, []string) bool { return true }
 	called := false
-	n := reconcileOrphanedHandoffs(cards, alwaysReachable, commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.True(t, called)
@@ -171,7 +191,7 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, nil, chain, nil, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, nil, nil, chain, nil, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
 
 	select {
 	case pmKey := <-chained:
@@ -274,7 +294,7 @@ func TestReconcileStuckRunning_FailsAgedRunningOrphanWithNoAgent(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -292,7 +312,7 @@ func TestReconcileStuckRunning_SkipsWithinGrace(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -308,7 +328,7 @@ func TestReconcileStuckRunning_SkipsWhenAgentAlive(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 	live := liveAgents(agentNameFor("SC-1", BoardImplementation))
-	n := reconcileStuckRunning(context.Background(), cards, live, capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), live, capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -326,7 +346,7 @@ func TestReconcileStuckRunning_SkipsNonRunning(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -341,7 +361,7 @@ func TestReconcileStuckRunning_CoversVerificationStage(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:review-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -357,7 +377,7 @@ func TestReconcileStuckRunning_NilListerDisables(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, nil, capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), nil, capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -379,7 +399,7 @@ func TestReconcileStuckRunning_SkipsJustDecidedCard(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n, "a just-decided card must never be reddened")
 	assert.Empty(t, posted)
@@ -399,7 +419,7 @@ func TestReconcilePRLoop_RedrivesStalled(t *testing.T) {
 	var driven []string
 	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
 
-	n := reconcilePRLoops(context.Background(), cards, liveAgents(), drive, zerolog.Nop())
+	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), liveAgents(), drive, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, []string{"SC-1"}, driven)
@@ -419,7 +439,7 @@ func TestReconcilePRLoop_SkipsWhenAgentAlive(t *testing.T) {
 	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
 	live := liveAgents(agentNameFor("SC-1", prReviewAgentStage))
 
-	n := reconcilePRLoops(context.Background(), cards, live, drive, zerolog.Nop())
+	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), live, drive, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, driven)
@@ -435,7 +455,7 @@ func TestReconcilePRLoop_SkipsPlainDeploy(t *testing.T) {
 	var driven []string
 	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
 
-	n := reconcilePRLoops(context.Background(), cards, liveAgents(), drive, zerolog.Nop())
+	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), liveAgents(), drive, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, driven)
@@ -454,7 +474,7 @@ func TestReconcileStuckRunning_SkipsActiveLoop(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), cards, liveAgents(), capturingPoster(&posted), alwaysReachable, StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
 
 	assert.Equal(t, 0, n, "a mid-flight PR loop must never be reddened by the stuck pass")
 	assert.Empty(t, posted)

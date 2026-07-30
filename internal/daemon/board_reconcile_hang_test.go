@@ -41,8 +41,8 @@ func TestReconcileStuckRunning_HungAgentIsStoppedReddenedAndRelaunched(t *testin
 		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), runningCard(now),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), alwaysReachable, retry,
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
 		progressAt(now.Add(-ThinkingIdleGrace-time.Minute), false, false),
 		func(name string) error { stopped = append(stopped, name); return nil },
 		"d1", now, zerolog.Nop())
@@ -60,8 +60,8 @@ func TestReconcileStuckRunning_ActiveAgentIsLeftAlone(t *testing.T) {
 	var posted []struct{ Key, Body string }
 	var stopped []string
 
-	n := reconcileStuckRunning(context.Background(), runningCard(now),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), alwaysReachable, StageRetry{},
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
 		progressAt(now.Add(-10*time.Second), false, false),
 		func(name string) error { stopped = append(stopped, name); return nil },
 		"d1", now, zerolog.Nop())
@@ -78,8 +78,8 @@ func TestReconcileStuckRunning_LongToolCallIsNotAHang(t *testing.T) {
 	var posted []struct{ Key, Body string }
 	var stopped []string
 
-	n := reconcileStuckRunning(context.Background(), runningCard(now),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), alwaysReachable, StageRetry{},
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
 		progressAt(now.Add(-10*time.Minute), true, false), // inside a tool call
 		func(name string) error { stopped = append(stopped, name); return nil },
 		"d1", now, zerolog.Nop())
@@ -94,8 +94,8 @@ func TestReconcileStuckRunning_BlockedAgentIsNotHung(t *testing.T) {
 	var posted []struct{ Key, Body string }
 	var stopped []string
 
-	n := reconcileStuckRunning(context.Background(), runningCard(now),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), alwaysReachable, StageRetry{},
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
 		progressAt(now.Add(-time.Hour), false, true), // blocked on a human
 		func(name string) error { stopped = append(stopped, name); return nil },
 		"d1", now, zerolog.Nop())
@@ -111,15 +111,15 @@ func TestReconcileStuckRunning_UnknownProgressLeavesLiveWorkAlone(t *testing.T) 
 	var posted []struct{ Key, Body string }
 
 	unknown := func(string) (AgentProgress, bool) { return AgentProgress{}, false }
-	n := reconcileStuckRunning(context.Background(), runningCard(now),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), alwaysReachable, StageRetry{},
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
 		unknown, func(string) error { return nil }, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 0, n)
 
 	// Same when no probe is wired at all — previous behaviour, unchanged.
-	n = reconcileStuckRunning(context.Background(), runningCard(now),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), alwaysReachable, StageRetry{},
+	n = reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
 		nil, nil, "d1", now, zerolog.Nop())
 	require.Equal(t, 0, n)
 }
@@ -137,8 +137,8 @@ func TestReconcileStuckRunning_FailedStopDoesNotRelaunch(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), runningCard(now),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), alwaysReachable, retry,
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
 		progressAt(now.Add(-time.Hour), false, false),
 		func(string) error { return errors.New("docker unavailable") },
 		"d1", now, zerolog.Nop())

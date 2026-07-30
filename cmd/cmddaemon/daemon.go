@@ -660,7 +660,10 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	go daemon.RunBoardReconcile(ctx,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver, logger),
-		branchReachable, commitsPresent, prMerged, postDeployed,
+		// A nil participation predicate means "participate in every visible
+		// project" — the backward-compatible default. A machine that opts into a
+		// narrower set supplies a predicate here (SC-2047 opt-in participation).
+		branchReachable, boardParticipation(ds.srv.Projects), commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		closedTicketProbeFunc(ds.srv.Projects, ds.vaultResolver),
 		// The durable re-drive has no exiting agent to attribute — the run it is
@@ -1973,6 +1976,28 @@ func boardProjectDir(projects *daemon.ProjectRegistry) (string, bool) {
 		return "", false
 	}
 	return entry.Dir, true
+}
+
+// boardParticipation returns the predicate the reconcile gate consults to decide
+// whether THIS machine should drive a card's project at all. It routes the card's
+// PM key to its registered project and reads that project's "board.participate"
+// flag, which defaults to true — so a machine that configures nothing keeps
+// today's behaviour and only an explicit opt-out stands a registered project down
+// (SC-2047 opt-in participation). A key that cannot be routed to a single project
+// (unrecorded, or ambiguous across projects) is treated as NOT this machine's to
+// drive: acting on work it cannot even attribute to one project is exactly the
+// cross-project overreach the opt-in is meant to prevent.
+func boardParticipation(projects *daemon.ProjectRegistry) daemon.ProjectParticipation {
+	if projects == nil {
+		return nil
+	}
+	return func(pmKey string) bool {
+		entry, err := projects.EntryForKey(pmKey)
+		if err != nil {
+			return false
+		}
+		return config.BoardParticipates(entry.Dir)
+	}
 }
 
 // boardBranchReachable reports whether a handoff branch resolves on this machine
