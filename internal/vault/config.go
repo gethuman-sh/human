@@ -1,6 +1,9 @@
 package vault
 
 import (
+	"strings"
+	"time"
+
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/config"
 )
@@ -9,6 +12,10 @@ import (
 type Config struct {
 	Provider string `mapstructure:"provider"`
 	Account  string `mapstructure:"account"`
+	// CacheTTL bounds how long a resolved secret is kept in memory as a lapse
+	// fallback, as a Go duration string (e.g. "15m", "0" to disable). Empty
+	// means DefaultCacheTTL.
+	CacheTTL string `mapstructure:"cache_ttl"`
 }
 
 // ReadConfig reads the vault section from .humanconfig in dir.
@@ -24,7 +31,28 @@ func ReadConfig(dir string) (*Config, error) {
 	if cfg.Provider == "" {
 		return nil, nil
 	}
+	// Surface a malformed cache_ttl as a config error rather than silently
+	// falling back, so the operator sees the mistake.
+	if strings.TrimSpace(cfg.CacheTTL) != "" {
+		if _, err := time.ParseDuration(cfg.CacheTTL); err != nil {
+			return nil, errors.WrapWithDetails(err, "parsing vault cache_ttl", "value", cfg.CacheTTL)
+		}
+	}
 	return &cfg, nil
+}
+
+// cacheTTL returns the configured cache TTL, or DefaultCacheTTL when unset.
+// The value is validated at ReadConfig time, so a parse failure here falls
+// back to the default rather than propagating.
+func (c *Config) cacheTTL() time.Duration {
+	if strings.TrimSpace(c.CacheTTL) == "" {
+		return DefaultCacheTTL
+	}
+	d, err := time.ParseDuration(c.CacheTTL)
+	if err != nil {
+		return DefaultCacheTTL
+	}
+	return d
 }
 
 // NewResolverFromConfig creates a Resolver based on the vault configuration.
@@ -37,15 +65,18 @@ func NewResolverFromConfig(cfg *Config) *Resolver {
 		return nil
 	}
 
+	var r *Resolver
 	switch cfg.Provider {
 	case "1password", "1pw":
 		// SDK first (works in CGO dev builds), op CLI behind it as the
 		// fallback that works in released CGO-disabled builds on every
 		// platform, then gh:// for GitHub CLI references.
-		return NewResolver(NewOnePassword(cfg.Account), NewOpCLI(), NewGhCLI())
+		r = NewResolver(NewOnePassword(cfg.Account), NewOpCLI(), NewGhCLI())
 	case "github", "gh":
-		return NewResolver(NewGhCLI())
+		r = NewResolver(NewGhCLI())
 	default:
 		return nil
 	}
+	r.ttl = cfg.cacheTTL()
+	return r
 }
