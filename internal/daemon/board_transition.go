@@ -567,7 +567,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), card.Branch
-	switch EvaluatePRLoop(comments, outcome.ReviewVerdict, outcome.FixExit) {
+	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
 		if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(prReviewStartedBody(url, number, branch), d.DaemonID)); err != nil {
 			return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
@@ -641,6 +641,8 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 // missing instead of implying something unparseable was found.
 func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose BoardFailureDiagnoser) string {
 	switch {
+	case stage == PRStageFix && outcome.FixExit == PRFixDone && outcome.headStalled():
+		return "the PR fixer recorded done but added no commit — the reviewed head is unchanged, so another review would loop; check the fixer's log and the PR, then re-run Deploy"
 	case outcome.FixExit == ExitNeedsInput:
 		return "the PR fixer needs a human decision — read the PR review comments, decide, then re-run Deploy"
 	case outcome.ReviewVerdict == PRVerdictChanges:

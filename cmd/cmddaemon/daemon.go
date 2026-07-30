@@ -2342,8 +2342,8 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, li
 // is long gone (SC-1892).
 func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
 	return func(pmKey, agentName, errorType string) error {
-		verdict, verdictRecorded := readPRReviewVerdict(ctx, pmKey, logger)
-		exit, options, summary, exitRecorded := readPRFixReport(ctx, pmKey, logger)
+		verdict, reviewHead, verdictRecorded := readPRReviewVerdict(ctx, pmKey, logger)
+		exit, options, summary, fixHead, exitRecorded := readPRFixReport(ctx, pmKey, logger)
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 		if err != nil {
 			return err
@@ -2352,8 +2352,10 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 		return deps.AdvancePRLoop(ctx, pmKey, daemon.PRLoopOutcome{
 			ReviewVerdict:  verdict,
 			ReviewRecorded: verdictRecorded,
+			ReviewHead:     reviewHead,
 			FixExit:        exit,
 			FixRecorded:    exitRecorded,
+			FixHead:        fixHead,
 			FixOptions:     options,
 			FixSummary:     summary,
 			Agent:          agentName,

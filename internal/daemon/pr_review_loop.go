@@ -8,10 +8,13 @@ import (
 
 // The pre-merge PR review→fix loop. Once a deploy opens the PR, the daemon runs
 // the human-pr-reviewer and human-pr-fixer agents in alternation against it: the
-// reviewer posts its findings as PR comments and records a verdict, the fixer
-// addresses them and pushes, and the reviewer runs again — until the review is
-// clean, a human decision is needed, or the round budget is spent. Human review
-// happens out of band and never gates this loop.
+// reviewer records its findings and a verdict, the fixer addresses them and
+// commits on the LOCAL branch, and the reviewer re-reads that local commit —
+// until the review is clean, a human decision is needed, or the round budget is
+// spent. The fixer does not push (board containers hold no push credentials); the
+// daemon ships the branch only at merge, so the reviewer reading the local ref
+// rather than the stale pushed head is what lets the loop converge at all
+// (SC-1760). Human review happens out of band and never gates this loop.
 //
 // This file is the pure decider: given the step that just finished and its
 // recorded outcome, it names the next action. Reading the state and executing
@@ -153,12 +156,32 @@ func prReviewRounds(comments []tracker.Comment) int {
 type PRLoopOutcome struct {
 	ReviewVerdict  string
 	ReviewRecorded bool
-	FixExit        string
-	FixRecorded    bool
-	FixOptions     []BoardOption
-	FixSummary     string
-	Agent          string
-	ErrorType      string
+	// ReviewHead is the branch-tip SHA the reviewer actually read. Under the
+	// local-ref review model the reviewer reviews the fixer's LOCAL commit, so
+	// this is the local branch tip, not origin's — the pushed head is stale by
+	// design until the daemon ships the branch at merge (SC-1760).
+	ReviewHead  string
+	FixExit     string
+	FixRecorded bool
+	// FixHead is the branch-tip SHA the fixer left behind. When it equals the
+	// head the preceding review already read, the fixer produced no new commit
+	// and a re-review would only reproduce the same findings — the convergence
+	// guard escalates instead of looping.
+	FixHead    string
+	FixOptions []BoardOption
+	FixSummary string
+	Agent      string
+	ErrorType  string
+}
+
+// headStalled reports the convergence-guard condition: the fixer finished but the
+// branch tip it left is the very SHA the preceding review already read, so the
+// fixer added no commit. Re-reviewing an unchanged head is the exact non-
+// converging loop SC-1760 exists to break — it must escalate loudly, not spin.
+// A missing FixHead is not a stall: it means the fixer did not record a head, and
+// the loop's other rules (unrecorded/needs-input) decide that case.
+func (o PRLoopOutcome) headStalled() bool {
+	return o.FixHead != "" && o.FixHead == o.ReviewHead
 }
 
 // stepRecorded reports whether the step that just ran recorded its outcome.
@@ -178,18 +201,28 @@ func (o PRLoopOutcome) stepRecorded(stage PRLoopStage) bool {
 // loop step last ran (from the markers) and how many review rounds have
 // completed, pairs the step with the outcome that step recorded — the reviewer's
 // verdict or the fixer's exit, which live in the state store, not the comment
-// thread, so the caller supplies them — and returns the next action. Keeping the
-// bridge pure lets the marker/state → action mapping be tested without a daemon;
-// the caller executes the action (launch an agent, mark-ready + merge, or red
-// the card).
-func EvaluatePRLoop(comments []tracker.Comment, reviewVerdict, fixExit string) PRLoopAction {
+// thread, so the caller supplies them via `outcome` — and returns the next
+// action. Keeping the bridge pure lets the marker/state → action mapping be
+// tested without a daemon; the caller executes the action (launch an agent,
+// mark-ready + merge, or red the card).
+//
+// On top of the pure transition it enforces the convergence guard: a fix that
+// finished `done` but left the branch tip on the SAME SHA the preceding review
+// read (headStalled) escalates instead of re-reviewing, so a fixer that produced
+// no new commit fails loudly rather than driving an endless review→fix loop
+// (SC-1760).
+func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAction {
 	stage := latestPRLoopStage(comments)
-	var outcome string
+	var step string
 	switch stage {
 	case PRStageReview:
-		outcome = reviewVerdict
+		step = outcome.ReviewVerdict
 	case PRStageFix:
-		outcome = fixExit
+		step = outcome.FixExit
 	}
-	return NextPRLoopAction(stage, outcome, prReviewRounds(comments), DefaultPRReviewRounds)
+	action := NextPRLoopAction(stage, step, prReviewRounds(comments), DefaultPRReviewRounds)
+	if stage == PRStageFix && action == PRActionReview && outcome.headStalled() {
+		return PRActionEscalate
+	}
+	return action
 }

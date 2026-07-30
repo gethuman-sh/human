@@ -81,6 +81,33 @@ func TestAdvancePRLoop_fixDone_launchesReviewer(t *testing.T) {
 	assert.Equal(t, "/human-pr-review SC-1 --pr=7 --branch=feat/x", l.prompt)
 }
 
+// A done fix that left the reviewed head unchanged (no new commit) must red the
+// card rather than re-review the same head forever — the SC-1760 convergence
+// guard. It is a loud failure, not a human decision, so it reds the card rather
+// than posting an options block.
+func TestAdvancePRLoop_fixDoneUnchangedHead_escalates(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+	}}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{}
+	deps := newDeps(c, l, p)
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{
+		FixExit: PRFixDone, FixRecorded: true, ReviewHead: "abc123", FixHead: "abc123",
+	}))
+
+	failed, ok := posted(c, PRReviewFailedHeader)
+	require.True(t, ok, "an unchanged-head fix must escalate, not re-review")
+	assert.Contains(t, failed, "added no commit")
+	_, optionsPosted := posted(c, OptionsHeader)
+	assert.False(t, optionsPosted, "a stalled done fix reds the card, it is not a decision fork")
+	assert.Zero(t, l.calls, "escalation must launch no reviewer")
+	assert.Zero(t, p.merged, "escalation must never merge")
+}
+
 func TestAdvancePRLoop_budgetExhausted_escalates(t *testing.T) {
 	c := &fakeCommenter{comments: reviewStartedComments(DefaultPRReviewRounds, "https://example/pr/7", 7, "feat/x")}
 	l := &fakeLauncher{}
