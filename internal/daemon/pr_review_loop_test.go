@@ -72,31 +72,46 @@ func TestEvaluatePRLoop(t *testing.T) {
 	cases := []struct {
 		name     string
 		comments []tracker.Comment
-		verdict  string
-		fixExit  string
+		outcome  PRLoopOutcome
 		want     PRLoopAction
 	}{
-		{"no loop markers reviews first", nil, "", "", PRActionReview},
-		{"review approved merges", []tracker.Comment{rev(t0)}, PRVerdictApproved, "", PRActionMerge},
-		{"review changes below budget fixes", []tracker.Comment{rev(t0)}, PRVerdictChanges, "", PRActionFix},
+		{"no loop markers reviews first", nil, PRLoopOutcome{}, PRActionReview},
+		{"review approved merges", []tracker.Comment{rev(t0)}, PRLoopOutcome{ReviewVerdict: PRVerdictApproved}, PRActionMerge},
+		{"review changes below budget fixes", []tracker.Comment{rev(t0)}, PRLoopOutcome{ReviewVerdict: PRVerdictChanges}, PRActionFix},
 		{"review changes at budget escalates",
-			[]tracker.Comment{rev(t0), rev(t1), rev(t2)}, PRVerdictChanges, "", PRActionEscalate},
+			[]tracker.Comment{rev(t0), rev(t1), rev(t2)}, PRLoopOutcome{ReviewVerdict: PRVerdictChanges}, PRActionEscalate},
 		{"fix done re-reviews",
-			[]tracker.Comment{rev(t0), fix(t1)}, "", PRFixDone, PRActionReview},
+			[]tracker.Comment{rev(t0), fix(t1)}, PRLoopOutcome{FixExit: PRFixDone}, PRActionReview},
 		{"fix needs-input escalates",
-			[]tracker.Comment{rev(t0), fix(t1)}, "", ExitNeedsInput, PRActionEscalate},
+			[]tracker.Comment{rev(t0), fix(t1)}, PRLoopOutcome{FixExit: ExitNeedsInput}, PRActionEscalate},
 		// The newest loop marker names the step that just finished, so a fix after
 		// a review is evaluated as a fix (its exit), not the stale review verdict.
 		{"latest marker decides the step",
-			[]tracker.Comment{rev(t1), fix(t2)}, PRVerdictApproved, PRFixDone, PRActionReview},
+			[]tracker.Comment{rev(t1), fix(t2)}, PRLoopOutcome{ReviewVerdict: PRVerdictApproved, FixExit: PRFixDone}, PRActionReview},
 		// Deploy-stage markers share the done stage but never move the loop.
 		{"deploy markers are ignored",
-			[]tracker.Comment{cmt(DeployStartedHeader, t0), rev(t1)}, PRVerdictApproved, "", PRActionMerge},
+			[]tracker.Comment{cmt(DeployStartedHeader, t0), rev(t1)}, PRLoopOutcome{ReviewVerdict: PRVerdictApproved}, PRActionMerge},
+
+		// Convergence guard (SC-1760): a done fix that left the branch tip on the
+		// SHA the preceding review already read added no commit — re-reviewing it
+		// would loop, so it escalates.
+		{"fix done with unchanged head escalates",
+			[]tracker.Comment{rev(t0), fix(t1)},
+			PRLoopOutcome{FixExit: PRFixDone, ReviewHead: "abc123", FixHead: "abc123"}, PRActionEscalate},
+		// A done fix that advanced the head re-reviews the new commit as normal.
+		{"fix done with a new head re-reviews",
+			[]tracker.Comment{rev(t0), fix(t1)},
+			PRLoopOutcome{FixExit: PRFixDone, ReviewHead: "abc123", FixHead: "def456"}, PRActionReview},
+		// An empty FixHead is not a stall — the fixer recorded no head, so the
+		// ordinary done→review rule stands rather than a false convergence trip.
+		{"fix done without a recorded head re-reviews",
+			[]tracker.Comment{rev(t0), fix(t1)},
+			PRLoopOutcome{FixExit: PRFixDone, ReviewHead: "abc123", FixHead: ""}, PRActionReview},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := EvaluatePRLoop(tc.comments, tc.verdict, tc.fixExit)
+			got := EvaluatePRLoop(tc.comments, tc.outcome)
 			if got != tc.want {
 				t.Fatalf("EvaluatePRLoop() = %d, want %d", got, tc.want)
 			}

@@ -18,34 +18,42 @@ import (
 // escalate; only the message differs (SC-1892).
 //
 // The reviewer's report carries non-string fields (a blocking count), so it is
-// read into a typed struct with only the needed scalar rather than a
+// read into a typed struct with only the needed scalars rather than a
 // map[string]string, which json.Unmarshal rejects on the first non-string value.
-func readPRReviewVerdict(ctx context.Context, pmKey string, logger zerolog.Logger) (verdict string, recorded bool) {
+//
+// head is the branch-tip SHA the reviewer actually read (the local ref, not
+// origin's — SC-1760). The loop's convergence guard compares it against the head
+// the following fix leaves behind, so a fix that adds no commit escalates instead
+// of driving an endless re-review.
+func readPRReviewVerdict(ctx context.Context, pmKey string, logger zerolog.Logger) (verdict, head string, recorded bool) {
 	var v struct {
 		Verdict string `json:"verdict"`
+		Head    string `json:"head"`
 	}
 	recorded = readStageReport(ctx, pmKey, "stage.pr-review", &v, logger)
-	return v.Verdict, recorded
+	return v.Verdict, v.Head, recorded
 }
 
 // readPRFixReport loads the fixer's stage.pr-fix report: its exit, the optional
-// enumerated directions it recorded on needs-input, and a one-line context
-// (deferred comments, else the summary) for the options block, plus whether a
-// report was found at all. Absent fields stay zero — the loop driver treats a
-// missing exit as escalate.
-func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary string, recorded bool) {
+// enumerated directions it recorded on needs-input, a one-line context (deferred
+// comments, else the summary) for the options block, the branch-tip SHA it left
+// behind (head — fed to the loop's convergence guard), plus whether a report was
+// found at all. Absent fields stay zero — the loop driver treats a missing exit
+// as escalate.
+func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary, head string, recorded bool) {
 	var v struct {
 		Exit     string               `json:"exit"`
 		Options  []daemon.BoardOption `json:"options"`
 		Deferred string               `json:"deferred"`
 		Summary  string               `json:"summary"`
+		Head     string               `json:"head"`
 	}
 	recorded = readStageReport(ctx, pmKey, "stage.pr-fix", &v, logger)
 	summary = v.Deferred
 	if summary == "" {
 		summary = v.Summary
 	}
-	return v.Exit, v.Options, summary, recorded
+	return v.Exit, v.Options, summary, v.Head, recorded
 }
 
 // readDeployFixExit returns the deploy fixer's exit recorded in stage.deploy-fix
