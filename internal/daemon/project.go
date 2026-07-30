@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/config"
@@ -37,10 +38,23 @@ func (p ProjectEntry) EnvLookup() config.EnvLookup {
 	}
 }
 
+// KeyOrigin binds a PM issue key to the project directory the daemon fetched it
+// from. SetOrigins consumes a fresh slice each board fetch.
+type KeyOrigin struct {
+	Key string
+	Dir string
+}
+
 // ProjectRegistry maps project directories to their config entries.
-// It is created at daemon startup and is read-only thereafter (no mutex needed).
+// entries is built once at daemon startup and is read-only thereafter. origins
+// is a mutable per-fetch index (guarded by mu) recording which project each PM
+// issue key was last seen in, so board-action closures can route a request by
+// its key instead of defaulting to a fixed project (SC-1694).
 type ProjectRegistry struct {
 	entries []ProjectEntry
+
+	mu      sync.RWMutex
+	origins map[string]map[string]struct{}
 }
 
 // NewProjectRegistry creates a registry from a list of project directories.
@@ -105,6 +119,77 @@ func (r *ProjectRegistry) Entries() []ProjectEntry {
 // Single returns true if there is exactly one registered project (backward compat mode).
 func (r *ProjectRegistry) Single() bool {
 	return len(r.entries) == 1
+}
+
+// SetOrigins replaces the key origin index wholesale with the given slice,
+// recorded from the most recent issue fetch. It is a full replace, not a
+// merge — stale keys from a prior fetch (e.g. a ticket moved trackers, or a
+// project was unregistered) must not linger and misroute a later action.
+func (r *ProjectRegistry) SetOrigins(origins []KeyOrigin) {
+	index := make(map[string]map[string]struct{}, len(origins))
+	for _, o := range origins {
+		dirs, ok := index[o.Key]
+		if !ok {
+			dirs = make(map[string]struct{}, 1)
+			index[o.Key] = dirs
+		}
+		dirs[o.Dir] = struct{}{}
+	}
+
+	r.mu.Lock()
+	r.origins = index
+	r.mu.Unlock()
+}
+
+// EntryForKey resolves the ProjectEntry that owns the given PM issue key.
+//
+// In the common single-project setup it always resolves to the sole entry,
+// even before any origin has been recorded, preserving existing behavior.
+// In a multi-project setup it requires the key to have been recorded by
+// SetOrigins from exactly one project; an unrecorded key (no fetch yet) or a
+// key seen in more than one project (overlapping key spaces) is refused
+// rather than defaulting to entries[0] — the bug this fixes (SC-1694).
+func (r *ProjectRegistry) EntryForKey(key string) (ProjectEntry, error) {
+	if len(r.entries) == 1 {
+		return r.entries[0], nil
+	}
+	if len(r.entries) == 0 {
+		return ProjectEntry{}, errors.WithDetails("no project registered")
+	}
+
+	r.mu.RLock()
+	dirs, ok := r.origins[key]
+	r.mu.RUnlock()
+
+	if !ok || len(dirs) == 0 {
+		return ProjectEntry{}, errors.WithDetails("could not determine which project owns this key; refresh the board and try again", "key", key)
+	}
+	if len(dirs) > 1 {
+		return ProjectEntry{}, errors.WithDetails("key is ambiguous across multiple registered projects", "key", key)
+	}
+
+	var dir string
+	for d := range dirs {
+		dir = d
+	}
+	for _, e := range r.entries {
+		if e.Dir == dir {
+			return e, nil
+		}
+	}
+	return ProjectEntry{}, errors.WithDetails("recorded project origin is no longer registered", "key", key, "dir", dir)
+}
+
+// SoleEntry resolves keyless project-wide actions (bug-create, ideation, board
+// git probes, ...) that carry no card to route by. It resolves in the common
+// single-project setup and errors in a multi-project setup rather than
+// silently binding a fixed project (SC-1694) — correctly routing these
+// requires a wire-protocol/frontend change, out of scope here.
+func (r *ProjectRegistry) SoleEntry() (ProjectEntry, error) {
+	if len(r.entries) != 1 {
+		return ProjectEntry{}, errors.WithDetails("this action carries no card key and requires exactly one registered project", "registered", len(r.entries))
+	}
+	return r.entries[0], nil
 }
 
 // pathHasPrefix reports whether path starts with prefix as a directory boundary.

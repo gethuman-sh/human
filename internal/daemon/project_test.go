@@ -245,6 +245,98 @@ func TestProjectEntry_EnvLookup_NameUppercased(t *testing.T) {
 	assert.Equal(t, "scoped-tok", val)
 }
 
+// twoProjectRegistry builds a registry with two distinct registered project
+// directories. Entries are length-sorted by NewProjectRegistry, so callers
+// must not assume creation order maps to Entries() order.
+func twoProjectRegistry(t *testing.T) *ProjectRegistry {
+	t.Helper()
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dirA, ".humanconfig.yaml"), []byte("project: alpha\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dirB, ".humanconfig.yaml"), []byte("project: beta\n"), 0o644))
+
+	reg, err := NewProjectRegistry([]string{dirA, dirB})
+	require.NoError(t, err)
+	return reg
+}
+
+// oneProjectRegistry builds a registry with a single registered project directory.
+func oneProjectRegistry(t *testing.T) *ProjectRegistry {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("project: solo\n"), 0o644))
+
+	reg, err := NewProjectRegistry([]string{dir})
+	require.NoError(t, err)
+	return reg
+}
+
+func TestProjectRegistry_EntryForKey_routesByRecordedOrigin(t *testing.T) {
+	// Two registered projects; SC-2 was served from project B on the last fetch.
+	reg := twoProjectRegistry(t)
+	a, b := reg.Entries()[0].Dir, reg.Entries()[1].Dir
+	reg.SetOrigins([]KeyOrigin{{Key: "SC-1", Dir: a}, {Key: "SC-2", Dir: b}})
+
+	got, err := reg.EntryForKey("SC-2")
+	require.NoError(t, err)
+	assert.Equal(t, b, got.Dir, "SC-2 must route to the project it was fetched from, not entries[0]")
+
+	got, err = reg.EntryForKey("SC-1")
+	require.NoError(t, err)
+	assert.Equal(t, a, got.Dir)
+}
+
+func TestProjectRegistry_EntryForKey_unknownKeyErrors(t *testing.T) {
+	reg := twoProjectRegistry(t)
+	_, err := reg.EntryForKey("SC-999")
+	require.Error(t, err) // must NOT default to entries[0]
+}
+
+func TestProjectRegistry_EntryForKey_ambiguousKeyErrors(t *testing.T) {
+	reg := twoProjectRegistry(t)
+	a, b := reg.Entries()[0].Dir, reg.Entries()[1].Dir
+	reg.SetOrigins([]KeyOrigin{{Key: "ROO-1", Dir: a}, {Key: "ROO-1", Dir: b}})
+	_, err := reg.EntryForKey("ROO-1")
+	require.Error(t, err) // overlapping key space: refuse to route
+}
+
+func TestProjectRegistry_EntryForKey_singleProjectAlwaysResolves(t *testing.T) {
+	reg := oneProjectRegistry(t) // single entry; no origins recorded
+	got, err := reg.EntryForKey("ANY-1")
+	require.NoError(t, err)
+	assert.Equal(t, reg.Entries()[0].Dir, got.Dir)
+}
+
+func TestProjectRegistry_SoleEntry(t *testing.T) {
+	one := oneProjectRegistry(t)
+	got, err := one.SoleEntry()
+	require.NoError(t, err)
+	assert.Equal(t, one.Entries()[0].Dir, got.Dir)
+
+	two := twoProjectRegistry(t)
+	_, err = two.SoleEntry()
+	require.Error(t, err) // keyless action + multi-project => loud error, no default
+}
+
+func TestProjectRegistry_SetOrigins_replacesAtomically(t *testing.T) {
+	reg := twoProjectRegistry(t)
+	a, b := reg.Entries()[0].Dir, reg.Entries()[1].Dir
+
+	reg.SetOrigins([]KeyOrigin{{Key: "SC-1", Dir: a}})
+	got, err := reg.EntryForKey("SC-1")
+	require.NoError(t, err)
+	assert.Equal(t, a, got.Dir)
+
+	// A fresh fetch replaces the whole index — stale keys must vanish.
+	reg.SetOrigins([]KeyOrigin{{Key: "SC-2", Dir: b}})
+	_, err = reg.EntryForKey("SC-1")
+	require.Error(t, err, "stale origin from a previous fetch must not persist")
+
+	got, err = reg.EntryForKey("SC-2")
+	require.NoError(t, err)
+	assert.Equal(t, b, got.Dir)
+}
+
 func TestProjectEntry_EnvLookup_DifferentProjectsDifferentTokens(t *testing.T) {
 	entryA := ProjectEntry{Name: "alpha", Dir: "/projects/alpha"}
 	entryB := ProjectEntry{Name: "beta", Dir: "/projects/beta"}
