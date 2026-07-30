@@ -16,7 +16,7 @@ require (
 	github.com/hanwen/go-fuse/v2 v2.11.0
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/moby/moby/api v1.55.0
-	github.com/moby/moby/client v0.5.0
+	github.com/moby/moby/client v0.5.1
 	github.com/odvcencio/gotreesitter v0.46.0
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/afero v1.15.0
