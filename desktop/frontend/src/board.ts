@@ -767,7 +767,7 @@ function showCardMenu(card: Card, x: number, y: number): void {
   closeItem.textContent = "Close ticket";
   closeItem.addEventListener("click", () => {
     menu.remove();
-    void requestClose(card.key, card.title);
+    void requestClose(card.key, card.title, card.state === "running");
   });
   menu.appendChild(closeItem);
 
@@ -1808,13 +1808,18 @@ async function transition(key: string, title: string, from: string, to: string):
 }
 
 // requestClose confirms in-app (never the OS dialog) before closing, so a stray
-// drop cannot silently close a ticket.
-async function requestClose(key: string, title: string): Promise<void> {
-  const ok = await confirmDialog(
-    `Close ticket ${key}?`,
-    `“${title}” will be marked Done and removed from the board.`,
-    "Close ticket",
-  );
+// drop cannot silently close a ticket. When a run is live, the dialog says so
+// explicitly: closing IS cancellation (1698), so the confirm must not read as a
+// harmless "mark Done" when it will actually stop work in progress.
+async function requestClose(
+  key: string,
+  title: string,
+  running: boolean,
+): Promise<void> {
+  const body = running
+    ? `“${title}” has a live run. Closing will stop the run — its container is released and any uncommitted work is discarded — and mark the ticket Done.`
+    : `“${title}” will be marked Done and removed from the board.`;
+  const ok = await confirmDialog(`Close ticket ${key}?`, body, "Close ticket");
   if (ok) await closeTicket(key);
 }
 

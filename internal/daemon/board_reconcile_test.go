@@ -171,7 +171,7 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, chain, nil, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, nil, chain, nil, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
 
 	select {
 	case pmKey := <-chained:
