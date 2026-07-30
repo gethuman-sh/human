@@ -5,6 +5,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/gethuman-sh/human/internal/vault"
 )
 
 // CredSpec describes the credentials required for a tracker kind.
@@ -70,7 +72,7 @@ type TrackerStatus struct {
 	Kind     string   // tracker kind, e.g. "linear", "jira"
 	Label    string   // human-readable name, e.g. "Linear", "Jira"
 	Working  bool     // true when all required credentials are present (and not vault refs)
-	VaultRef bool     // true when credentials are vault references (e.g. 1pw://) — unverified
+	VaultRef bool     // true when credentials are vault references (1pw://, gh://, …) — unverified
 	Missing  []string // env var names for missing credentials (empty when Working)
 	// Role is the role DECLARED in .humanconfig ("pm", "engineering", or empty).
 	// Captured independently of credential resolution so topology divergence — a
@@ -187,15 +189,23 @@ func DiagnoseTrackers(dir string, unmarshal func(dir, section string, target any
 
 // diagnoseMissing returns env var names for credentials not provided by
 // the config file, per-instance env vars, or global env vars.
-// The second return value is true if any credential is a vault reference
-// (e.g. 1pw://) that cannot be verified without vault resolution.
+// The second return value is true if any credential is a vault REFERENCE (1pw://,
+// gh://, or any scheme the vault adds later) rather than a literal secret — a
+// pointer whose target nothing here has resolved, so it must never be reported
+// as verified.
 func diagnoseMissing(spec CredSpec, entry diagnoseEntry, getenv func(string) string) ([]string, bool) {
 	var missing []string
 	vaultRef := false
 	for _, suffix := range spec.Required {
 		val := entry.fieldValue(suffix)
 		if val != "" {
-			if strings.HasPrefix(val, "1pw://") {
+			// Ask the vault what counts as a reference rather than restating it: a
+			// hardcoded "1pw://" test missed gh:// entirely, so a credential that
+			// is only a POINTER at the GitHub CLI's keyring was classified as a
+			// present, verified secret. That is a false all-clear — the health
+			// report said the tracker was fine while nothing had resolved it — and
+			// it silently widened with every reference scheme added since (SC-1973).
+			if vault.IsSecretRef(val) {
 				vaultRef = true
 			}
 			continue
