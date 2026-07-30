@@ -236,6 +236,25 @@ func TestFailureBody(t *testing.T) {
 	})
 }
 
+// SC-1701: two classified markers for one stage sharing a one-second Created
+// time must resolve on the monotonic comment ID (higher ID = newer), not on the
+// order the tracker returned the slice in. review-failed(1680) then
+// review-started(1681) at the same second: 1681 is genuinely newer, so both
+// orderings must derive running.
+func TestDeriveBoardCard_sameSecondTieBreaksOnID(t *testing.T) {
+	tie := time.Date(2026, 7, 29, 11, 59, 53, 0, time.UTC)
+	failed := tracker.Comment{ID: "1680", Body: ReviewFailedHeader + "\nreview failed", Created: tie}
+	started := tracker.Comment{ID: "1681", Body: ReviewStartedHeader, Created: tie}
+
+	forward := DeriveBoardCard([]tracker.Comment{failed, started}, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardVerification, forward.Stage)
+	assert.Equal(t, BoardRunning, forward.State)
+
+	reversed := DeriveBoardCard([]tracker.Comment{started, failed}, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardVerification, reversed.Stage)
+	assert.Equal(t, BoardRunning, reversed.State)
+}
+
 func TestDeriveBoardCard_HasPlan(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	t1 := time.Unix(2000, 0)
