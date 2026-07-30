@@ -61,6 +61,19 @@ func newInterceptTestEnv(t *testing.T) *interceptTestEnv {
 	}
 }
 
+// withLogMode pins the global traffic log mode for one test and restores
+// whatever was there before. The mode is process-global, so a test that
+// restores a hard-coded value instead of the previous one silently changes the
+// environment every later test runs in — and a test that leaks full logging
+// makes any subsequent MITM test write traffic files asynchronously into its
+// t.TempDir, racing Go's cleanup.
+func withLogMode(t *testing.T, mode LogMode) {
+	t.Helper()
+	prev := GetLogMode()
+	SetLogMode(mode)
+	t.Cleanup(func() { SetLogMode(prev) })
+}
+
 // startUpstreamTLS starts a mock TLS server that handles connections with handler.
 // Returns the listener address.
 func startUpstreamTLS(t *testing.T, env *interceptTestEnv, hostname string, handler func(net.Conn)) net.Listener {
@@ -210,9 +223,7 @@ func TestLogMode_MetaStripsBody(t *testing.T) {
 		},
 	}
 
-	// Set meta mode.
-	SetLogMode(LogModeMeta)
-	defer SetLogMode(LogModeFull) // restore
+	withLogMode(t, LogModeMeta)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -276,8 +287,7 @@ func TestLogMode_OffSkipsLogging(t *testing.T) {
 		},
 	}
 
-	SetLogMode(LogModeOff)
-	defer SetLogMode(LogModeFull)
+	withLogMode(t, LogModeOff)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

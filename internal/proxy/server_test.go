@@ -269,6 +269,13 @@ func TestServer_interceptedConnectionMITM(t *testing.T) {
 	env := newInterceptTestEnv(t)
 	hostname := "intercept.example.com"
 
+	// This test asserts routing, not logging. Pin logging off rather than
+	// inheriting the global mode: the interceptor logs on the serving
+	// goroutine, which outlives the request, so an inherited full mode would
+	// let a traffic write land in env.LogDir after the test returned and race
+	// the t.TempDir cleanup that is removing it.
+	withLogMode(t, LogModeOff)
+
 	policy, err := NewPolicy(ModeAllow, []string{hostname, "passthrough.example.com"})
 	require.NoError(t, err)
 
