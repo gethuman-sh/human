@@ -31,9 +31,9 @@ func TestNewOpCLI_binaryByPlatform(t *testing.T) {
 
 func TestOpCLI_Resolve_success(t *testing.T) {
 	op := &OpCLI{
-		Binary: "op.exe",
+		Binary: "op",
 		runner: func(_ context.Context, binary string, args ...string) ([]byte, error) {
-			assert.Equal(t, "op.exe", binary)
+			assert.Equal(t, "op", binary)
 			assert.Equal(t, []string{"read", "op://DevVault/GitHub PAT/token"}, args)
 			return []byte("my-secret-token\n"), nil
 		},
@@ -46,7 +46,7 @@ func TestOpCLI_Resolve_success(t *testing.T) {
 
 func TestOpCLI_Resolve_error(t *testing.T) {
 	op := &OpCLI{
-		Binary: "op.exe",
+		Binary: "op",
 		runner: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 			return nil, errors.WithDetails("command failed")
 		},
@@ -54,13 +54,18 @@ func TestOpCLI_Resolve_error(t *testing.T) {
 
 	_, err := op.Resolve("1pw://vault/item/field")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "resolving 1Password secret via CLI")
+	// The message must identify the binary, the reference and the cause: it is
+	// the only part that survives to a board banner, and the old wording
+	// ("resolving 1Password secret via CLI") named none of the three (SC-2005).
+	assert.Contains(t, err.Error(), "1Password CLI op could not read")
+	assert.Contains(t, err.Error(), "1pw://vault/item/field")
+	assert.Contains(t, err.Error(), "command failed")
 }
 
 func TestOpCLI_Resolve_translatesPrefix(t *testing.T) {
 	var capturedArgs []string
 	op := &OpCLI{
-		Binary: "op.exe",
+		Binary: "op",
 		runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			capturedArgs = args
 			return []byte("the-password"), nil
