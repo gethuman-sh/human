@@ -413,6 +413,31 @@ func getTrackerIssues(addr, token, command string) ([]TrackerIssuesResult, error
 	return results, nil
 }
 
+// GetBoardView fetches the composed board from the daemon — the project-wide
+// picture, with the caller's own overlay (hidden cards, column order, local
+// mockups) still to be applied.
+//
+// Any error means "this daemon did not give me a board", and the caller falls
+// back to fetching raw results and composing them itself. That covers version
+// skew — desktop and daemon are separate binaries and routinely run at different
+// versions, and a daemon predating this route answers with a command-not-found
+// from the CLI forwarder — without inspecting the message to decide.
+//
+// Classifying the cause by matching error text was the obvious alternative and
+// is deliberately not used: the fallback path re-runs the same fetch, so a
+// genuine failure surfaces there anyway and nothing is masked by trying it.
+func GetBoardView(addr, token string) (BoardView, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"board-view"})
+	if err != nil {
+		return BoardView{}, err
+	}
+	var view BoardView
+	if err := json.Unmarshal(out, &view); err != nil {
+		return BoardView{}, errors.WrapWithDetails(err, "invalid board view JSON")
+	}
+	return view, nil
+}
+
 // BoardTransition asks the daemon to advance a card one pipeline stage. The
 // request is sent as a single JSON arg so multi-word PM titles survive arg
 // splitting on the daemon side.

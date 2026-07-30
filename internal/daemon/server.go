@@ -57,6 +57,12 @@ type Server struct {
 	NetworkEvents    *NetworkEventStore                    // in-memory ambient network activity buffer; nil disables
 	IssueFetcher     func() ([]TrackerIssuesResult, error) // injected; fetches issues from configured trackers
 	LiteIssueFetcher func() ([]TrackerIssuesResult, error) // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
+	// BoardViewFetcher returns the composed board: the project-wide picture with
+	// every viewer's personal overlay left off. Injected because the composer
+	// (internal/board) imports this package — calling it directly would cycle.
+	// nil disables the board-view route, which is what an older client falls
+	// back from.
+	BoardViewFetcher func() (BoardView, error)
 	// IssueGetter fetches one full issue for the board's detail panel plus its
 	// comment-sourced extras (review findings, failure reason, fix summary).
 	// List endpoints on some trackers (e.g. Shortcut) return slim payloads
@@ -452,6 +458,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"network-events":      func() { s.handleNetworkEvents(conn) },
 		"tracker-diagnose":    func() { s.handleTrackerDiagnose(conn, projectDir) },
 		"tracker-issues":      func() { s.handleTrackerIssues(conn) },
+		"board-view":          func() { s.handleBoardView(conn) },
 		"tracker-issues-lite": func() { s.handleTrackerIssuesLite(conn) },
 		"tracker-issue":       func() { s.handleTrackerIssue(conn, args[1:]) },
 		"pending-confirms":    func() { s.handlePendingConfirms(conn) },
@@ -573,6 +580,33 @@ func (s *Server) handleTrackerDiagnose(conn net.Conn, projectDir string) {
 // including each PM ticket's derived board stage (the comment-scan phase).
 func (s *Server) handleTrackerIssues(conn net.Conn) {
 	s.writeIssueResults(conn, s.IssueFetcher)
+}
+
+// handleBoardView returns the composed board — the same picture for every
+// viewer, with each viewer's own overlay (hidden cards, column order, local
+// mockups) left to the client.
+//
+// Composing here rather than in the client is the point: the board is not the
+// only thing that needs the current picture, and a client that assembles its own
+// leaves every other consumer to rebuild it or go without. The composer itself
+// lives in internal/board, which imports this package, so it arrives as an
+// injected closure rather than a direct call.
+func (s *Server) handleBoardView(conn net.Conn) {
+	if s.BoardViewFetcher == nil {
+		s.writeError(conn, "board view not available", 1)
+		return
+	}
+	view, err := s.BoardViewFetcher()
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	data, err := json.Marshal(view)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	_ = json.NewEncoder(conn).Encode(Response{Stdout: string(data) + "\n"})
 }
 
 // handleTrackerIssuesLite returns issue titles only, skipping the per-ticket

@@ -96,12 +96,12 @@ func (a *App) Cards() (BoardData, error) {
 		return BoardData{}, err
 	}
 
-	results, err := daemon.GetTrackerIssues(info.Addr, info.Token)
+	view, results, err := a.boardView(info)
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	data := boardFromResults(results, dockerAvailable(), a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project))
+	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project))
 	board.PrunePrefs(results, project,
 		board.PruneTarget{Store: a.prefs, Keep: boardPrefsKeep(data)},
 		board.PruneTarget{Store: a.ideas, Keep: ideaSpaceKeep(data)},
@@ -282,6 +282,25 @@ func (a *App) CachedCards() CachedBoard {
 		return CachedBoard{}
 	}
 	return CachedBoard{Hit: true, Data: data}
+}
+
+// boardView gets the composed board from the daemon, which is the machine that
+// should own it. It also returns the raw results, because pref pruning still
+// needs to see every tracker's outcome — the composed view is PM-only by design.
+//
+// The fallback covers a daemon older than the board-view route: compose locally
+// from the same raw results. Same function, same output — only the machine doing
+// the work differs, so a version-skewed pair still renders a correct board
+// rather than nothing.
+func (a *App) boardView(info daemon.DaemonInfo) (daemon.BoardView, []daemon.TrackerIssuesResult, error) {
+	results, err := daemon.GetTrackerIssues(info.Addr, info.Token)
+	if err != nil {
+		return daemon.BoardView{}, nil, err
+	}
+	if view, vErr := daemon.GetBoardView(info.Addr, info.Token); vErr == nil {
+		return view, results, nil
+	}
+	return board.Compose(results, dockerAvailable()), results, nil
 }
 
 // boardFromResults composes the shared board and then applies this viewer's own

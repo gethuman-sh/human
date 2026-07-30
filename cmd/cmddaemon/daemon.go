@@ -26,6 +26,7 @@ import (
 	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/agentstate"
 	"github.com/gethuman-sh/human/internal/audit"
+	"github.com/gethuman-sh/human/internal/board"
 	"github.com/gethuman-sh/human/internal/botidentity"
 	"github.com/gethuman-sh/human/internal/chrome"
 	"github.com/gethuman-sh/human/internal/claude"
@@ -331,6 +332,11 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	launchGate := func(ctx context.Context) []daemon.DoctorCheck {
 		return doctor.Blockers(ctx, daemon.LaunchCriticalChecks)
 	}
+	// One fetcher instance, shared by the raw-results route and the composed
+	// board: the closure carries the last-known cards and the last good listing
+	// (1700, SC-2005), so a second instance would split that memory in half and
+	// each route would degrade with only its own history.
+	issueFetcher := fetchTrackerIssuesFunc(projectRegistry, vaultResolver, logger)
 
 	srv := &daemon.Server{
 		Addr:               addr,
@@ -342,8 +348,9 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		ConnectedPIDs:      connTracker,
 		HookEvents:         hookStore,
 		NetworkEvents:      networkStore,
-		IssueFetcher:       fetchTrackerIssuesFunc(projectRegistry, vaultResolver, logger),
+		IssueFetcher:       issueFetcher,
 		LiteIssueFetcher:   fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
+		BoardViewFetcher:   boardViewFunc(issueFetcher, doctor),
 		IssueGetter:        daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
 		TrackerDiagnoser:   trackerDiagnoserFunc(projectRegistry, vaultResolver),
 		Doctor:             doctor,
@@ -1602,6 +1609,27 @@ func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func
 			extras = daemon.BuildIssueDetailExtras(comments)
 		}
 		return &daemon.IssueDetailFetch{Issue: *issue, Extras: extras}, nil
+	}
+}
+
+// boardViewFunc builds the daemon's composed-board fetcher: the same listing the
+// raw route serves, run through board.Compose so every consumer reads one
+// picture instead of assembling its own.
+//
+// Docker availability is read from THIS host's doctor check rather than probed
+// by whoever renders the board. Docker matters because it is where agents
+// launch, which is this machine — a client probing its own engine answers a
+// question about the wrong computer (SC-2132).
+func boardViewFunc(fetch func() ([]daemon.TrackerIssuesResult, error), doctor *daemon.DoctorRunner) func() (daemon.BoardView, error) {
+	return func() (daemon.BoardView, error) {
+		results, err := fetch()
+		if err != nil {
+			return daemon.BoardView{}, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		dockerOK := len(doctor.Blockers(ctx, []string{"docker"})) == 0
+		return board.Compose(results, dockerOK), nil
 	}
 }
 
