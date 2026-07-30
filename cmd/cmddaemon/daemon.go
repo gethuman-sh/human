@@ -662,6 +662,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver, logger),
 		branchReachable, commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
+		closedTicketProbeFunc(ds.srv.Projects, ds.vaultResolver),
 		chainReview, advancePRLoop, stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
 	// Surface tickets created or edited outside the board (tracker web UI, CLI,
@@ -2202,6 +2203,55 @@ func resolvePMCommenter(dir string, lookup config.EnvLookup, resolver *vault.Res
 		}
 	}
 	return nil, errors.WithDetails("no PM-role tracker with comment support configured", "dir", dir)
+}
+
+// resolvePMGetter resolves the PM-role tracker.Getter for a workspace.
+// Role-based selection (InferRole()=="pm"), never key prefix — mirrors
+// resolvePMCommenter. tracker.Provider embeds Getter, so the PM instance
+// satisfies it.
+func resolvePMGetter(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.Getter, error) {
+	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		if inst.InferRole() != "pm" {
+			continue
+		}
+		if g, ok := inst.Provider.(tracker.Getter); ok {
+			return g, nil
+		}
+	}
+	return nil, errors.WithDetails("no PM-role tracker with fetch support configured", "dir", dir)
+}
+
+// closedTicketProbeFunc builds the reconcile pass's ClosedTicketProbe: it fetches
+// one PM ticket by key and reports whether its status has landed in the done or
+// closed category — the same categories DeriveBoardCard hides the card on.
+//
+// It is asked only about a key no open card matched, so it stays off the hot
+// path entirely on a healthy board. Every failure propagates as an error rather
+// than a false: the caller must be able to tell "confirmed closed" from "could
+// not tell", because only the former may stop a live run (1698).
+func closedTicketProbeFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) daemon.ClosedTicketProbe {
+	return func(ctx context.Context, pmKey string) (bool, error) {
+		entries := reg.Entries()
+		if len(entries) == 0 {
+			return false, errors.WithDetails("no project registered for the closed-ticket probe", "pm", pmKey)
+		}
+		entry := entries[0]
+		getter, err := resolvePMGetter(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			return false, err
+		}
+		fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		issue, err := getter.GetIssue(fetchCtx, pmKey)
+		if err != nil {
+			return false, errors.WrapWithDetails(err, "fetching PM ticket to confirm it is closed", "pm", pmKey)
+		}
+		return issue.StatusType == tracker.CategoryDone || issue.StatusType == tracker.CategoryClosed, nil
+	}
 }
 
 // resolvePMTransitioner resolves the PM-role tracker.Transitioner for a
