@@ -9,5 +9,6 @@ Instead of pasting real API tokens into your config, you write a short reference
 - Resolves via the 1Password CLI (`op`) on every platform — released binaries are built without CGO, so the in-process SDK is unavailable and the CLI is the working path (`op.exe` on WSL)
 - In CGO-enabled developer builds, unlocks via the 1Password desktop app prompt first, falling back to the CLI automatically
 - Passes plain non-secret values through untouched
-- Never caches secrets, fetching them fresh each time
+- Fetches every secret fresh while the store is reachable (so rotations are picked up immediately); a successfully resolved value is kept in daemon memory only as a lapse fallback, served only when a later fetch fails because the credential session lapsed — so work whose secret already resolved this run is not failed by an unrelated stale read
+- Bounds that fallback with a TTL (default 15m, in memory only, never written to disk); set `cache_ttl` in the `vault` config to tighten it, or `cache_ttl: 0` to disable the fallback entirely and fetch strictly fresh every time
 - Runs without vault resolution when none is configured

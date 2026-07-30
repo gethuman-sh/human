@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,44 @@ func TestReadConfig_parseErrorPropagates(t *testing.T) {
 	cfg, err := ReadConfig(dir)
 	require.Error(t, err)
 	assert.Nil(t, cfg)
+}
+
+func TestReadConfig_cacheTTLValid(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "vault:\n  provider: 1password\n  cache_ttl: 5m\n")
+
+	cfg, err := ReadConfig(dir)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "5m", cfg.CacheTTL)
+	assert.Equal(t, 5*time.Minute, cfg.cacheTTL())
+}
+
+func TestReadConfig_cacheTTLInvalidErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "vault:\n  provider: 1password\n  cache_ttl: notaduration\n")
+
+	cfg, err := ReadConfig(dir)
+	require.Error(t, err)
+	assert.Nil(t, cfg)
+	assert.Contains(t, err.Error(), "cache_ttl")
+}
+
+func TestConfig_cacheTTLDefaultsWhenUnset(t *testing.T) {
+	cfg := &Config{Provider: "1password"}
+	assert.Equal(t, DefaultCacheTTL, cfg.cacheTTL())
+}
+
+func TestNewResolverFromConfig_appliesCacheTTL(t *testing.T) {
+	r := NewResolverFromConfig(&Config{Provider: "1password", CacheTTL: "1m"})
+	require.NotNil(t, r)
+	assert.Equal(t, time.Minute, r.ttl)
+}
+
+func TestNewResolverFromConfig_defaultCacheTTL(t *testing.T) {
+	r := NewResolverFromConfig(&Config{Provider: "github"})
+	require.NotNil(t, r)
+	assert.Equal(t, DefaultCacheTTL, r.ttl)
 }
 
 func TestNewResolverFromConfig_nil(t *testing.T) {

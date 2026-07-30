@@ -3,6 +3,7 @@ package vault
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,6 +104,148 @@ func TestResolver_Resolve_allClaimantsFail(t *testing.T) {
 	_, err := r.Resolve("1pw://vault/item/field")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "last failed")
+}
+
+// SC-2039: once a secret resolves, a later credential lapse (every claimant
+// erroring) must serve the still-fresh cached value instead of failing a step
+// whose secret already resolved this run.
+func TestResolver_Resolve_lapseServesCachedValue(t *testing.T) {
+	fail := false
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			if fail {
+				return "", errors.WithDetails("session expired")
+			}
+			return "secret", nil
+		},
+	}
+	r := NewResolver(provider)
+
+	val, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "secret", val)
+
+	// The store lapses; the value was resolved moments ago and is unchanged.
+	fail = true
+	val, err = r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "secret", val)
+}
+
+// A lapse with nothing cached still surfaces as the underlying error.
+func TestResolver_Resolve_lapseWithoutCacheErrors(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve:    func(string) (string, error) { return "", errors.WithDetails("session expired") },
+	}
+	r := NewResolver(provider)
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session expired")
+}
+
+// An expired cache entry is not served: plaintext must not outlive its TTL.
+func TestResolver_Resolve_expiredCacheNotServed(t *testing.T) {
+	fail := false
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			if fail {
+				return "", errors.WithDetails("session expired")
+			}
+			return "secret", nil
+		},
+	}
+	now := time.Unix(0, 0)
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+
+	// Advance past the TTL, then lapse: the stale entry must be dropped, not served.
+	now = now.Add(2 * time.Minute)
+	fail = true
+	_, err = r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session expired")
+}
+
+// SC-2039 review follow-up: an entry whose own ref is never re-requested
+// must still be evicted once its TTL passes, not held for the process
+// lifetime. remember() sweeps every expired entry (not just the one it is
+// storing), so a later successful resolve of a *different* ref evicts it.
+func TestResolver_Resolve_expiredEntryNotRetainedWithoutBeingReRequested(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve:    func(string) (string, error) { return "secret", nil },
+	}
+	now := time.Unix(0, 0)
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+
+	// Resolve a ref once; it is never asked for again.
+	_, err := r.Resolve("1pw://vault/stale/field")
+	require.NoError(t, err)
+	require.Len(t, r.cache, 1)
+
+	// Advance past the TTL and resolve an unrelated ref. The stale entry
+	// must be swept even though nothing ever re-requested it.
+	now = now.Add(2 * time.Minute)
+	_, err = r.Resolve("1pw://vault/other/field")
+	require.NoError(t, err)
+
+	r.mu.Lock()
+	_, stillCached := r.cache["1pw://vault/stale/field"]
+	r.mu.Unlock()
+	assert.False(t, stillCached, "expired entry must not be retained past its TTL")
+}
+
+// A non-positive TTL disables caching, restoring strict no-persistence.
+func TestResolver_Resolve_cachingDisabledByZeroTTL(t *testing.T) {
+	fail := false
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			if fail {
+				return "", errors.WithDetails("session expired")
+			}
+			return "secret", nil
+		},
+	}
+	r := NewResolver(provider)
+	r.ttl = 0
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+
+	fail = true
+	_, err = r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+}
+
+// A successful resolution refreshes the cache: a value read again while the
+// store is up wins over an older cached one, and rotations are picked up.
+func TestResolver_Resolve_successRefreshesCache(t *testing.T) {
+	current := "first"
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve:    func(string) (string, error) { return current, nil },
+	}
+	r := NewResolver(provider)
+
+	val, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "first", val)
+
+	current = "rotated"
+	val, err = r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "rotated", val)
 }
 
 func TestResolveField_nilResolver(t *testing.T) {
