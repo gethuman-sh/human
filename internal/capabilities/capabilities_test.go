@@ -30,6 +30,51 @@ func TestDetect_BoardAgentMayNotShip(t *testing.T) {
 	require.Contains(t, set.Reason, "no push credentials")
 }
 
+// The PR-review→fix loop's fixer is the one board stage that must push: it
+// commits the reviewer's change to its own PR branch and the reviewer re-reads
+// the pushed head, so a fixer that cannot push deadlocks the loop (SC-1760). It
+// may push (with a reachable remote) but still may neither open a PR nor deploy.
+func TestDetect_BoardPRFixerMayPushItsOwnBranch(t *testing.T) {
+	set := Detect(withAgent("board-SC-1760-prfix"), hasRemote)
+
+	require.True(t, set.BoardContext)
+	require.True(t, set.CanPush, "the fixer must push its own PR branch so the loop converges")
+	require.False(t, set.CanOpenPR, "opening PRs stays the Deploy stage's")
+	require.False(t, set.OwnsDeploy, "deploying stays the Deploy stage's")
+	require.Equal(t, WorkspaceBindMounted, set.Workspace)
+	require.Contains(t, set.Reason, "PR-fixer")
+}
+
+// The fixer's push is gated on the same reachable-remote probe a standalone run
+// passes: a container with no usable remote still withholds push, since a
+// withheld capability is a boundary while a wrongly granted one fails at push.
+func TestDetect_BoardPRFixerWithoutARemoteCannotPush(t *testing.T) {
+	set := Detect(withAgent("board-SC-1760-prfix"), noRemote)
+
+	require.True(t, set.BoardContext)
+	require.False(t, set.CanPush)
+	require.Contains(t, set.Reason, "no reachable remote")
+}
+
+// A nil probe withholds the fixer's push exactly as it does a standalone run's:
+// guessing "yes" ends with a push from a container that cannot reach its remote.
+func TestDetect_BoardPRFixerNilProbeWithholdsPush(t *testing.T) {
+	set := Detect(withAgent("board-SC-1760-prfix"), nil)
+
+	require.False(t, set.CanPush)
+	require.NotEmpty(t, set.Reason)
+}
+
+// The carve-out is the fixer alone: every other board stage stays
+// credential-restricted even with a reachable remote.
+func TestDetect_OtherBoardStagesStillMayNotPush(t *testing.T) {
+	for _, stage := range []string{"implementation", "prreview", "deploy", "deployfix"} {
+		set := Detect(withAgent("board-SC-1760-"+stage), hasRemote)
+		require.Falsef(t, set.CanPush, "stage %q must not push from a board container", stage)
+		require.Contains(t, set.Reason, "no push credentials")
+	}
+}
+
 // The board signal is the daemon's agent-name prefix; an agent named anything
 // else is a standalone run.
 func TestDetect_StandaloneRunMayShip(t *testing.T) {
