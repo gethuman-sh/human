@@ -88,7 +88,8 @@ func TestListIssues_all(t *testing.T) {
 			_, _ = fmt.Fprint(w, `[
 				{"id":1,"name":"Active item","story_type":"feature","workflow_state_id":500,"owner_ids":[],"requested_by_id":""},
 				{"id":2,"name":"Done item","story_type":"feature","workflow_state_id":502,"owner_ids":[],"requested_by_id":""},
-				{"id":3,"name":"Archived item","story_type":"chore","workflow_state_id":500,"archived":true,"owner_ids":[],"requested_by_id":""}
+				{"id":3,"name":"Abandoned item","story_type":"chore","workflow_state_id":500,"archived":true,"owner_ids":[],"requested_by_id":""},
+				{"id":4,"name":"Filed away item","story_type":"feature","workflow_state_id":502,"archived":true,"owner_ids":[],"requested_by_id":""}
 			]`)
 
 		case "/api/v3/workflows":
@@ -105,16 +106,25 @@ func TestListIssues_all(t *testing.T) {
 
 	client := New(srv.URL, "tok-test")
 
-	// IncludeAll=true: all 3 stories returned
+	// IncludeAll=true asks for the RECORD: everything that happened, except work
+	// that was archived without ever being done. Archiving and finishing are
+	// separate fields in Shortcut, so an archived-but-unstarted story is work
+	// somebody abandoned — surfacing it reads as if the work exists or is
+	// planned, which misleads worse than not finding it (SC-2132).
 	issues, err := client.ListIssues(context.Background(), tracker.ListOptions{
 		Project:    "Human",
 		MaxResults: 50,
 		IncludeAll: true,
 	})
 	require.NoError(t, err)
-	require.Len(t, issues, 3)
+	titles := make([]string, 0, len(issues))
+	for _, i := range issues {
+		titles = append(titles, i.Title)
+	}
+	assert.ElementsMatch(t, []string{"Active item", "Done item", "Filed away item"}, titles)
+	assert.NotContains(t, titles, "Abandoned item", "archived without being done is abandoned work")
 
-	// IncludeAll=false (default): only active story returned
+	// IncludeAll=false asks for live work: neither finished nor put away.
 	client2 := New(srv.URL, "tok-test")
 	filtered, err := client2.ListIssues(context.Background(), tracker.ListOptions{
 		Project:    "Human",
