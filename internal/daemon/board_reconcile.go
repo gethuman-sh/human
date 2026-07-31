@@ -358,12 +358,14 @@ func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgen
 	return reddened
 }
 
-// cardPausedOnOwnStage reports whether a card carries an open [human:options]
-// block for its OWN running stage — the durable reconcile pass's twin of the
-// live path's stagePausedOnOptions guard, expressed over the already-derived
-// board card rather than raw comments (1290).
-func cardPausedOnOwnStage(derived BoardCard) bool {
-	return len(derived.Options) > 0 && derived.OptionsStage == derived.Stage
+// cardPausedOnOpenOptions reports whether a card carries an open
+// [human:options] block naming its own running stage or an EARLIER stage that
+// answering the question would rework — the durable reconcile pass's twin of
+// the live path's stagePausedOnOptions guard, expressed over the
+// already-derived board card rather than raw comments (1290, generalized to
+// rework questions by SC-1957).
+func cardPausedOnOpenOptions(derived BoardCard) bool {
+	return len(derived.Options) > 0 && stageRank[derived.OptionsStage] <= stageRank[derived.Stage]
 }
 
 // stuckCardIsOursToRed collects the two reasons a card that already reached this
@@ -381,13 +383,14 @@ func stuckCardIsOursToRed(derived BoardCard, card ReconcileCard) bool {
 	if !stuckRunningCandidate(derived, card.Comments) {
 		return false
 	}
-	// An open [human:options] block for the card's OWN running stage is a
-	// deliberate human pause, not a hang — the live failure path already
-	// treats it as a clean pause (stagePausedOnOptions). [human:options] is
-	// not a state marker, so the card stays BoardRunning; without this twin
-	// guard the durable reconcile pass reddens the pause and loops
-	// re-planning forever (1290, the planning twin of SC-751).
-	if cardPausedOnOwnStage(derived) {
+	// An open [human:options] block naming the card's own running stage, or an
+	// earlier stage the answer would rework, is a deliberate human pause, not a
+	// hang — the live failure path already treats it as a clean pause
+	// (stagePausedOnOptions). [human:options] is not a state marker, so the card
+	// stays BoardRunning; without this twin guard the durable reconcile pass
+	// reddens the pause and loops re-planning forever (1290, the planning twin
+	// of SC-751; generalized to late-stage rework questions by SC-1957).
+	if cardPausedOnOpenOptions(derived) {
 		return false
 	}
 	return true

@@ -251,22 +251,28 @@ func driveDeployFixExit(pmKey string, stage BoardStage, agentName string, advanc
 }
 
 // stagePausedOnOptions reports whether the exiting stage left an open
-// [human:options] block naming its OWN stage — a deliberate up-front pause for a
+// [human:options] block naming its OWN stage, or an EARLIER stage that
+// answering the question would rework — either is a deliberate pause for a
 // human decision, not a crash. The block stays open until the human picks
-// (ApplyOption then relaunches this same stage with the choice injected).
+// (ApplyOption then relaunches the named stage with the choice injected).
 // Posting a *-failed marker for such an exit would red the card and loop
 // re-planning forever — the planning twin of the stranded-run class SC-731 fixed
 // for worktrees (SC-751). openOptionsBlock's consumption rules guarantee the
 // block belongs to THIS run: a later stage-started marker would have closed it.
-// The check is stage-precise so an unrelated other-stage block never suppresses
-// a real crash.
+// A block naming a stage the card has not yet reached is a stale or
+// target-relaunch block, not a pause (SC-1669), so the rank check is
+// at-or-before rather than equality — SC-1957's fix for the systematic loss of
+// late-stage rework questions the strict equality caused.
 func stagePausedOnOptions(comments []tracker.Comment, stage BoardStage) bool {
 	block, ok := openOptionsBlock(comments)
 	if !ok {
 		return false
 	}
-	optStage, _, _ := parseOptionsBlock(block.Body)
-	return optStage == stage
+	optStage, _, opts := parseOptionsBlock(block.Body)
+	if len(opts) == 0 {
+		return false
+	}
+	return stageRank[optStage] <= stageRank[stage]
 }
 
 // chainReviewAfterBuild flows a cleanly finished build into its review, guarding
