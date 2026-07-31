@@ -8,7 +8,8 @@
 - Create bug tickets tracker-agnostically: a bug-typed create maps to each backend's native defect marker — issue type Bug on Jira and Azure DevOps, story type bug on Shortcut, the bug label/tag on Linear, GitHub, GitLab, and ClickUp
 - Classify security tickets tracker-agnostically (`IsSecurity`, mirroring `IsBug`): a `security` token in the type or any label marks a vulnerability, disjoint from bug. No backend has a universal native security type, so a security-typed create carries the `security` label, which every tracker recognises
 - Read and add comments on an issue
-- Link two related issues ("relates to"; on GitHub, recorded as a cross-reference comment)
+- Link two related issues ("relates to"; on GitHub, recorded as a cross-reference comment), and remove a link again
+- Record which of two tickets must finish first (`human link A B --blocks`) and read the ordering back, so work that waits is not started. Only backends that can express direction accept it — the rest refuse rather than storing a weaker link that would look the same and order nothing
 - Move an issue to a new status
 - Finish or close an issue semantically (`human done KEY`, `human close KEY`) — the done/closed-type status is picked from the workflow, no status name needed
 - Promote an idea ticket (`human idea promote KEY`) — strips the `human/idea`/`idea` labels, keeping key and history
