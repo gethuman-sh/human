@@ -43,6 +43,7 @@ import (
 	"github.com/gethuman-sh/human/internal/messaging/telegram"
 	"github.com/gethuman-sh/human/internal/mockups"
 	"github.com/gethuman-sh/human/internal/proxy"
+	"github.com/gethuman-sh/human/internal/recall"
 	"github.com/gethuman-sh/human/internal/stats"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
@@ -695,6 +696,11 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		ds.srv.LiteIssueFetcher, ds.srv.PokeBoard,
 		boardHasWatchers(ds.srv.HookEvents),
 		daemon.BoardFreshnessInterval, logger)
+
+	// Keep the searchable ticket record current, so an agent's "is this already
+	// being handled?" check has something to find. It was fed only by a hand-run
+	// command and held nothing for months (SC-2132).
+	go RunRecallSync(ctx, ds.srv.Projects, ds.vaultResolver, recall.DefaultDBPath(), RecallSyncInterval, logger)
 
 	// Watch the binary so a rebuild re-execs into the new build, handing over the
 	// live sockets (no client sees a refused connection) and draining in-flight
