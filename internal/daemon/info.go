@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/spf13/afero"
@@ -41,6 +42,12 @@ type DaemonInfo struct {
 	// omitempty preserves backward-compatibility with daemon.json files
 	// written by older builds that do not emit this field.
 	Version string `json:"version,omitempty"`
+	// Commit is the source revision the running daemon was built from. It exists
+	// because process hardening closes /proc to the owning user (SC-2183): the
+	// only way to tell which build a daemon is running used to be inspecting it
+	// from outside, and taking that away without replacing it would trade one
+	// silent failure for another. Empty when the binary carries no VCS stamp.
+	Commit string `json:"commit,omitempty"`
 	// Protocol advertises the wire protocol the daemon speaks so clients can
 	// refuse a too-old daemon with one clear error instead of a cryptic
 	// unknown-command failure. Zero (older daemon.json) disables that check.
@@ -50,6 +57,33 @@ type DaemonInfo struct {
 	// omitempty keeps daemon.json written by older builds unmarshalling cleanly.
 	DaemonID string        `json:"daemon_id,omitempty"`
 	Projects []ProjectInfo `json:"projects,omitempty"`
+}
+
+// BuildRevision reports the source revision this binary was built from, read
+// from the VCS stamp the Go toolchain embeds. It is the same value `go version
+// -m` prints, so a daemon can answer the question its own /proc entry no longer
+// will. Empty when the binary carries no stamp (a build from a dirty tree with
+// stamping off, or an unusual build path).
+func BuildRevision() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	rev, dirty := "", false
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			rev = setting.Value
+		case "vcs.modified":
+			dirty = setting.Value == "true"
+		}
+	}
+	if rev != "" && dirty {
+		// A dirty build is not the revision it names, and saying so is the whole
+		// point of reporting provenance at all.
+		return rev + "+dirty"
+	}
+	return rev
 }
 
 // InfoPath returns the default path for the daemon info file (~/.human/daemon.json).

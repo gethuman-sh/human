@@ -241,6 +241,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		Token:      token,
 		PID:        os.Getpid(),
 		Version:    version,
+		Commit:     daemon.BuildRevision(),
 		Protocol:   daemon.Protocol,
 		DaemonID:   daemonID,
 		Projects:   projectInfos,
@@ -253,6 +254,12 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	logger := newDaemonLogger(debug)
+	// Before the first secret is resolved into this process: it is about to hold
+	// every tracker credential on the machine, and a crash file or a same-user
+	// debugger would publish all of them at once (SC-2183). The dumpable flag
+	// resets on execve, so a self-restart child runs this again on its own way
+	// up rather than inheriting the parent's protection.
+	daemon.HardenProcess(logger)
 	vaultResolver := buildVaultResolver(projectRegistry, logger)
 
 	// Turn a silent split->single topology fallback into a loud startup signal:
@@ -948,10 +955,11 @@ func buildDaemonStatusCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			pid, pidAlive := ReadAlivePid()
 
-			if !cmd.Flags().Changed("addr") {
-				if info, err := daemon.ReadInfo(); err == nil {
-					addr = info.Addr
-				}
+			// Read once and keep it: the address, and the build the daemon
+			// reports for itself.
+			info, infoErr := daemon.ReadInfo()
+			if infoErr == nil && !cmd.Flags().Changed("addr") {
+				addr = info.Addr
 			}
 
 			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
@@ -969,6 +977,12 @@ func buildDaemonStatusCmd() *cobra.Command {
 				_, _ = fmt.Fprintf(out, "Daemon is running (PID %d) and reachable at %s\n", pid, addr)
 			} else {
 				_, _ = fmt.Fprintln(out, "Daemon is reachable at", addr)
+			}
+			// The daemon reports its own build because hardening closes off the
+			// /proc entry this used to be read from (SC-2183). Without it, "is
+			// the daemon running the code I just built?" has no answer.
+			if info.Commit != "" {
+				_, _ = fmt.Fprintf(out, "Build: %s (%s)\n", info.Version, info.Commit)
 			}
 
 			// Show registered projects if available.
