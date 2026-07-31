@@ -90,6 +90,23 @@ func syncInstance(ctx context.Context, store Store, inst *tracker.Instance, full
 	return nil
 }
 
+// detailFor returns the issue to index, re-fetching it only when the listing
+// did not already carry what the index needs.
+//
+// The description is the whole reason for a second call — it is the full-text
+// payload, and the field a slim list response omits. Some backends already
+// return it (Shortcut's list carries Title, Status, Assignee, URL and
+// Description), so re-fetching every listed issue there turned a one-call sync
+// into N+1 for nothing. Others genuinely return slim payloads, which is why the
+// detail panel re-fetches at all — so this asks only when the answer is missing
+// rather than assuming either way (SC-2132).
+func detailFor(ctx context.Context, p tracker.Provider, issue tracker.Issue) (*tracker.Issue, error) {
+	if issue.Description != "" {
+		return &issue, nil
+	}
+	return p.GetIssue(ctx, issue.Key)
+}
+
 // syncProject fetches and indexes issues for a single project (or all projects when project is "").
 func syncProject(ctx context.Context, store Store, inst *tracker.Instance, project string, fullSync, incremental bool, lastIndexed time.Time, logger io.Writer, result *SyncResult, seen map[string]bool) {
 	opts := tracker.ListOptions{
@@ -123,7 +140,7 @@ func syncProject(ctx context.Context, store Store, inst *tracker.Instance, proje
 	}
 
 	for _, issue := range issues {
-		full, fErr := inst.Provider.GetIssue(ctx, issue.Key)
+		full, fErr := detailFor(ctx, inst.Provider, issue)
 		if fErr != nil {
 			_, _ = fmt.Fprintf(logger, "  Error fetching %s: %v\n", issue.Key, fErr)
 			result.Errors++
