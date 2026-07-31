@@ -3,6 +3,7 @@ package recall
 import (
 	"context"
 	"database/sql"
+	stderrors "errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +13,27 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
 )
 
+// DefaultStaleAfter is how old the newest indexed entry may be before a search
+// refuses to answer. It bounds the window in which "no results" could mean "the
+// index stopped being updated" — long enough that a hand-run index is not
+// constantly rejected, short enough that a broken sync surfaces the same day.
+const DefaultStaleAfter = 24 * time.Hour
+
+// ErrIndexEmpty means the index holds nothing, so a search cannot distinguish
+// "no such ticket" from "nobody has indexed yet".
+var ErrIndexEmpty = stderrors.New("search index is empty — nothing has been indexed yet; run `human index` or start the daemon")
+
+// ErrIndexStale means the newest entry is older than StaleAfter, so the index
+// may be missing everything recent.
+var ErrIndexStale = stderrors.New("search index is stale — its newest entry is older than the freshness limit")
+
 // SQLiteStore implements Store using SQLite with FTS5 full-text search.
 type SQLiteStore struct {
 	db *sql.DB
+	// StaleAfter bounds how old the index may be before Search refuses. Zero
+	// disables the check. Callers that genuinely want a possibly-stale answer
+	// set it to zero deliberately, rather than getting one by accident.
+	StaleAfter time.Duration
 }
 
 // NewSQLiteStore opens (or creates) a SQLite database at dbPath and ensures
@@ -49,7 +68,7 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, errors.WrapWithDetails(err, "set WAL mode")
 	}
 
-	s := &SQLiteStore{db: db}
+	s := &SQLiteStore{db: db, StaleAfter: DefaultStaleAfter}
 	if err := s.ensureSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -199,8 +218,17 @@ func (s *SQLiteStore) SearchWithKind(ctx context.Context, query, kind string, li
 	ftsQuery := sanitizeFTSQuery(query)
 	// A blank or punctuation-only query sanitizes to "", which FTS5 rejects as
 	// a syntax error; treat it as "no results" rather than surfacing raw SQL.
+	// This is a fault in the question, not in the index, so it is checked first.
 	if ftsQuery == "" {
 		return nil, nil
+	}
+	// Refuse to answer from an index that cannot be trusted to hold the answer.
+	// An empty or long-stale index returns "no results" for everything, which a
+	// caller reads as "there is no such ticket" — and that is exactly how the
+	// same work came to be done twice. "I could not look" must never render as
+	// "there is nothing there" (SC-2132).
+	if err := s.usable(ctx); err != nil {
+		return nil, err
 	}
 
 	var rows *sql.Rows
@@ -359,5 +387,41 @@ func sanitizeFTSQuery(query string) string {
 		w = strings.ReplaceAll(w, `"`, `""`)
 		words[i] = `"` + w + `"`
 	}
-	return strings.Join(words, " ")
+	// Joined with OR, not with a space. FTS5 reads adjacent terms as an implicit
+	// AND, so a question phrased in a sentence required EVERY word to appear and
+	// returned nothing — the caller then concluded there was no such ticket. Any
+	// term may match and bm25 ranks the best overlap first, which is what makes
+	// a natural-language question usable against a keyword index (SC-2132).
+	return strings.Join(words, " OR ")
+}
+
+// usable reports whether the index can be trusted to answer at all: it must
+// hold something, and that something must not be older than StaleAfter. The
+// caller distinguishes these from an honest empty result.
+func (s *SQLiteStore) usable(ctx context.Context) error {
+	var count int
+	var newest sql.NullString
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*), MAX(indexed_at) FROM entries",
+	).Scan(&count, &newest); err != nil {
+		return errors.WrapWithDetails(err, "checking index health")
+	}
+	if count == 0 {
+		return ErrIndexEmpty
+	}
+	if s.StaleAfter <= 0 || !newest.Valid {
+		return nil
+	}
+	indexedAt, err := time.Parse("2006-01-02 15:04:05", newest.String)
+	if err != nil {
+		// An unparseable timestamp is not evidence of freshness, but it is also
+		// not evidence of staleness — do not block the search on it.
+		return nil
+	}
+	if time.Since(indexedAt) > s.StaleAfter {
+		return errors.WrapWithDetails(ErrIndexStale,
+			"search index is stale — run `human index` or check the daemon's sync",
+			"newest_entry", newest.String, "limit", s.StaleAfter.String())
+	}
+	return nil
 }
