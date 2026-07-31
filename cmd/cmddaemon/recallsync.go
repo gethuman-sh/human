@@ -11,6 +11,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/recall"
+	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
 )
 
@@ -57,6 +58,32 @@ func RunRecallSync(ctx context.Context, reg *daemon.ProjectRegistry, resolver *v
 	}
 }
 
+// ticketSources keeps the instances that actually hold this project's tickets.
+//
+// A configured tracker is not automatically a ticket source: a GitHub entry may
+// exist purely for pull requests, and it answers a ticket listing by searching
+// every issue the token can see — expensive, unrelated to the record, and rate
+// limited. Observed live: the scheduled sync tripped GitHub's secondary rate
+// limit every pass while contributing nothing (SC-2132).
+//
+// A tracker earns a role by carrying this project's pipeline work, so role is
+// the signal for "these are our tickets". A team whose tracker IS GitHub sets
+// role: pm and is indexed exactly as before.
+//
+// The manual `human index` is deliberately left alone: someone running it by
+// hand has said what they want indexed, and may well want a roleless tracker in
+// their record. Only the unattended pass is conservative.
+func ticketSources(instances []tracker.Instance) []tracker.Instance {
+	out := instances[:0:0]
+	for _, inst := range instances {
+		if inst.InferRole() == "" {
+			continue
+		}
+		out = append(out, inst)
+	}
+	return out
+}
+
 // recallSyncOnce refreshes the record for every registered project. A failure
 // for one project or one tracker never stops the others: a stale record is
 // recoverable, a loop that died is not.
@@ -76,6 +103,7 @@ func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *
 			errors.LogError(failure).Str("dir", entry.Dir).
 				Msg("recall sync: tracker instances failed to load, continuing without them")
 		}
+		instances = ticketSources(instances)
 		if len(instances) == 0 {
 			continue
 		}
