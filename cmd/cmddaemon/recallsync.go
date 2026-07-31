@@ -58,17 +58,30 @@ func RunRecallSync(ctx context.Context, reg *daemon.ProjectRegistry, resolver *v
 	}
 	logger.Info().Msg("recall sync started")
 
-	// Startup is always a delta. The daemon re-execs on every rebuild, so a full
-	// pass here would mean a complete re-fetch every few minutes during an
-	// active session.
-	recallSyncOnce(ctx, reg, resolver, dbPath, false, logger)
-	for pass := 1; ; pass++ {
+	recallSyncLoop(ctx, interval, RecallFullSyncEvery, func(full bool) {
+		recallSyncOnce(ctx, reg, resolver, dbPath, full, logger)
+	})
+}
+
+// recallSyncLoop drives the schedule: an immediate pass, then one per interval,
+// with every fullEvery-th pass running full.
+//
+// Separated from the work it drives so the schedule itself can be exercised —
+// timing wrapped around a function that opens a database and calls a tracker is
+// otherwise only testable by re-implementing the arithmetic in the test, which
+// proves nothing about the loop.
+//
+// The first pass is never full: the daemon re-execs on every rebuild, so a full
+// pass at startup would mean a complete re-fetch every few minutes during an
+// active session. A non-positive fullEvery disables full passes entirely.
+func recallSyncLoop(ctx context.Context, interval time.Duration, fullEvery int, pass func(full bool)) {
+	pass(false)
+	for n := 1; ; n++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(daemon.JitteredInterval(interval, RecallSyncJitter)):
-			full := RecallFullSyncEvery > 0 && pass%RecallFullSyncEvery == 0
-			recallSyncOnce(ctx, reg, resolver, dbPath, full, logger)
+			pass(fullEvery > 0 && n%fullEvery == 0)
 		}
 	}
 }
