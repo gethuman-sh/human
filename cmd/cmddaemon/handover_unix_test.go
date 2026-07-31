@@ -5,7 +5,9 @@ package cmddaemon
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,66 @@ import (
 
 	"github.com/rs/zerolog"
 )
+
+// newLocalListenerSet binds three real loopback TCP listeners so reexecChild's
+// files() has genuine sockets to duplicate for the (never-arriving) child.
+func newLocalListenerSet(t *testing.T) *listenerSet {
+	t.Helper()
+	mk := func() net.Listener {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("binding test listener: %v", err)
+		}
+		return ln
+	}
+	return &listenerSet{daemon: mk(), proxy: mk(), chrome: mk()}
+}
+
+// TestReexecChildFailedHandoverReapsAndRestoresIdentity pins the SC-2138 fix: a
+// child that never signals ready must not leave the parent's identity naming a
+// dead process, and must not leave a zombie behind. reexecChild has to time out,
+// leave handedOver false, call restoreIdentity, and reap the child (ProcessState
+// set) rather than Kill-and-walk-away.
+func TestReexecChildFailedHandoverReapsAndRestoresIdentity(t *testing.T) {
+	ls := newLocalListenerSet(t)
+	defer func() {
+		_ = ls.daemon.Close()
+		_ = ls.proxy.Close()
+		_ = ls.chrome.Close()
+	}()
+
+	var restored, handedOver atomic.Bool
+	var captured *exec.Cmd
+	c := &handoverCoordinator{
+		logger:       zerolog.Nop(),
+		listeners:    ls,
+		handedOver:   &handedOver,
+		readyTimeout: 100 * time.Millisecond,
+		// A child that serves-not: it sleeps and never signals ready, so the
+		// parent's readiness wait times out.
+		buildChildCmd: func(_ int, extra []*os.File) *exec.Cmd {
+			cmd := exec.Command("sleep", "60") // #nosec G204 -- fixed test command
+			cmd.ExtraFiles = extra
+			captured = cmd
+			return cmd
+		},
+		restoreIdentity: func() { restored.Store(true) },
+	}
+
+	err := reexecChild(context.Background(), c)
+	if err == nil {
+		t.Fatal("reexecChild = nil, want a timeout error for a child that never reported ready")
+	}
+	if handedOver.Load() {
+		t.Fatal("handedOver was set on a failed handover")
+	}
+	if !restored.Load() {
+		t.Fatal("restoreIdentity was not called on a failed handover — on-disk identity left naming the dead child")
+	}
+	if captured == nil || captured.ProcessState == nil {
+		t.Fatal("child was not reaped (ProcessState nil) — a zombie was left behind")
+	}
+}
 
 func bs(size int64, unixSec int64) binStat {
 	return binStat{size: size, mtime: time.Unix(unixSec, 0)}
