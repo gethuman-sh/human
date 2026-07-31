@@ -6,6 +6,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -100,6 +101,29 @@ func detailFor(ctx context.Context, p tracker.Provider, issue tracker.Issue) (*t
 	return p.GetIssue(ctx, issue.Key)
 }
 
+// planBody returns the ticket's latest attached plan, or "" when it has none or
+// the backend cannot serve comments.
+//
+// Best-effort by design: a ticket whose comments cannot be read is still worth
+// indexing by title and description, and one unreadable thread must never cost
+// the whole sync. A provider that is not a Commenter simply has no plans to
+// find.
+func planBody(ctx context.Context, p tracker.Provider, key string) string {
+	commenter, ok := p.(tracker.Commenter)
+	if !ok {
+		return ""
+	}
+	comments, err := commenter.ListComments(ctx, key)
+	if err != nil {
+		return ""
+	}
+	m, found := marker.Latest(comments, "plan")
+	if !found {
+		return ""
+	}
+	return m.Body
+}
+
 // syncProject fetches and indexes issues for a single project (or all projects when project is "").
 func syncProject(ctx context.Context, store Store, inst *tracker.Instance, project string, fullSync, incremental bool, lastIndexed time.Time, logger io.Writer, result *SyncResult, seen map[string]bool) {
 	opts := tracker.ListOptions{
@@ -157,6 +181,11 @@ func syncProject(ctx context.Context, store Store, inst *tracker.Instance, proje
 		if entryURL == "" {
 			entryURL = inst.URL
 		}
+		// The plan is where a ticket says what it will CHANGE, which is the only
+		// signal that connects two tickets describing one problem in different
+		// words. Indexed as text so it is searchable, and its paths recorded so
+		// "who else is changing this file" is an exact answer (SC-2132).
+		plan := planBody(ctx, inst.Provider, issue.Key)
 		entry := Entry{
 			Key:      issue.Key,
 			Source:   inst.Name,
@@ -166,8 +195,9 @@ func syncProject(ctx context.Context, store Store, inst *tracker.Instance, proje
 			Status:   full.Status,
 			Assignee: full.Assignee,
 			URL:      entryURL,
+			Files:    ExtractFilePaths(plan),
 		}
-		if uErr := store.UpsertEntry(ctx, entry, full.Description); uErr != nil {
+		if uErr := store.UpsertEntry(ctx, entry, full.Description+"\n"+plan); uErr != nil {
 			_, _ = fmt.Fprintf(logger, "  Error indexing %s: %v\n", issue.Key, uErr)
 			result.Errors++
 			continue

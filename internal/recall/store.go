@@ -16,6 +16,10 @@ type Entry struct {
 	Assignee  string    `json:"assignee"`
 	URL       string    `json:"url"` // instance base URL
 	IndexedAt time.Time `json:"indexed_at"`
+	// Files are the source paths this ticket's plan names. They make overlap a
+	// fact rather than a keyword guess: two tickets describing one problem
+	// routinely share no words, only the code they will change.
+	Files []string `json:"files,omitempty"`
 }
 
 // Stats summarises the current state of the index.
@@ -30,6 +34,10 @@ type Stats struct {
 type Store interface {
 	UpsertEntry(ctx context.Context, entry Entry, description string) error
 	DeleteEntry(ctx context.Context, key, source string) error
+	// SearchByFile returns entries whose plan names the given source path.
+	// Exact, because the point is to answer "who else is changing this file"
+	// without the fuzziness of matching a path as free text.
+	SearchByFile(ctx context.Context, path string, limit int) ([]Entry, error)
 	// Search returns up to limit matching entries across all kinds.
 	Search(ctx context.Context, query string, limit int) ([]Entry, error)
 	// SearchWithKind returns up to limit matching entries restricted

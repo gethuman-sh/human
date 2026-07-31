@@ -56,7 +56,7 @@ func TestRunSearch_agentOutput(t *testing.T) {
 	seedStore(t, store)
 
 	var buf bytes.Buffer
-	err := RunSearch(context.Background(), &buf, "retry", 10, "", false, false, deps)
+	err := RunSearch(context.Background(), &buf, "retry", 10, "", "", false, false, deps)
 	if err != nil {
 		t.Fatalf("RunSearch: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestRunSearch_jsonOutput(t *testing.T) {
 	seedStore(t, store)
 
 	var buf bytes.Buffer
-	err := RunSearch(context.Background(), &buf, "retry", 10, "", true, false, deps)
+	err := RunSearch(context.Background(), &buf, "retry", 10, "", "", true, false, deps)
 	if err != nil {
 		t.Fatalf("RunSearch: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRunSearch_tableOutput(t *testing.T) {
 	seedStore(t, store)
 
 	var buf bytes.Buffer
-	err := RunSearch(context.Background(), &buf, "retry", 10, "", false, true, deps)
+	err := RunSearch(context.Background(), &buf, "retry", 10, "", "", false, true, deps)
 	if err != nil {
 		t.Fatalf("RunSearch: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestRunSearch_noResults(t *testing.T) {
 	seedStore(t, store)
 
 	var buf bytes.Buffer
-	err := RunSearch(context.Background(), &buf, "nonexistent", 10, "", false, false, deps)
+	err := RunSearch(context.Background(), &buf, "nonexistent", 10, "", "", false, false, deps)
 	if err != nil {
 		t.Fatalf("RunSearch: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestRunSearch_notionPageOutput(t *testing.T) {
 	}, "authentication specification content"))
 
 	var buf bytes.Buffer
-	err := RunSearch(context.Background(), &buf, "Auth Spec", 10, "", false, false, deps)
+	err := RunSearch(context.Background(), &buf, "Auth Spec", 10, "", "", false, false, deps)
 	if err != nil {
 		t.Fatalf("RunSearch: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestRunSearch_notionDatabaseOutput(t *testing.T) {
 	}, "Name: Auth | Status: Done"))
 
 	var buf bytes.Buffer
-	err := RunSearch(context.Background(), &buf, "Roadmap", 10, "", false, false, deps)
+	err := RunSearch(context.Background(), &buf, "Roadmap", 10, "", "", false, false, deps)
 	if err != nil {
 		t.Fatalf("RunSearch: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestRunSearch_sourceFilter(t *testing.T) {
 	}, "auth specification"))
 
 	var buf bytes.Buffer
-	err := RunSearch(context.Background(), &buf, "auth", 10, "notion", false, false, deps)
+	err := RunSearch(context.Background(), &buf, "auth", 10, "notion", "", false, false, deps)
 	if err != nil {
 		t.Fatalf("RunSearch: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestRunSearch_mixedResults(t *testing.T) {
 	}, "auth specification"))
 
 	var buf bytes.Buffer
-	err := RunSearch(context.Background(), &buf, "auth", 10, "", false, false, deps)
+	err := RunSearch(context.Background(), &buf, "auth", 10, "", "", false, false, deps)
 	if err != nil {
 		t.Fatalf("RunSearch: %v", err)
 	}

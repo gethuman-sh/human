@@ -6,6 +6,7 @@ import (
 	"io"
 	"text/tabwriter"
 
+	"github.com/gethuman-sh/human/errors"
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
@@ -65,6 +66,7 @@ func BuildSearchCmd(deps IndexDeps) *cobra.Command {
 	var (
 		limit    int
 		source   string
+		file     string
 		jsonOut  bool
 		tableOut bool
 	)
@@ -73,14 +75,22 @@ func BuildSearchCmd(deps IndexDeps) *cobra.Command {
 		Use:   "search QUERY",
 		Short: "Search the local issue index",
 		Long:  "Full-text search across all indexed tracker issues and Notion pages. Run 'human index' first to build the recall.",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return RunSearch(cmd.Context(), cmd.OutOrStdout(), args[0], limit, source, jsonOut, tableOut, deps)
+			query := ""
+			if len(args) > 0 {
+				query = args[0]
+			}
+			if query == "" && file == "" {
+				return errors.WithDetails("search needs a QUERY or --file")
+			}
+			return RunSearch(cmd.Context(), cmd.OutOrStdout(), query, limit, source, file, jsonOut, tableOut, deps)
 		},
 	}
 
 	cmd.Flags().IntVar(&limit, "limit", 20, "Maximum number of results")
 	cmd.Flags().StringVar(&source, "source", "", "Filter results by kind (e.g. notion, jira)")
+	cmd.Flags().StringVar(&file, "file", "", "Find tickets whose plan names this exact source path (e.g. internal/daemon/board_transition.go)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&tableOut, "table", false, "Output as table")
 
@@ -156,7 +166,7 @@ func syncNotion(ctx context.Context, out io.Writer, store recall.Store, deps Ind
 }
 
 // RunSearch opens the store and searches.
-func RunSearch(ctx context.Context, out io.Writer, query string, limit int, source string, jsonOut, tableOut bool, deps IndexDeps) error {
+func RunSearch(ctx context.Context, out io.Writer, query string, limit int, source, file string, jsonOut, tableOut bool, deps IndexDeps) error {
 	store, err := deps.NewStore(deps.DBPath())
 	if err != nil {
 		return err
@@ -168,9 +178,15 @@ func RunSearch(ctx context.Context, out io.Writer, query string, limit int, sour
 	// LIMIT can hide matching results when the top-ranked hits belong
 	// to a different kind.
 	var entries []recall.Entry
-	if source != "" {
+	switch {
+	case file != "":
+		// Exact path lookup, not free text: asking "who else is changing this
+		// file" through FTS returns a ranking of tickets that merely share the
+		// path's common words (SC-2132).
+		entries, err = store.SearchByFile(ctx, file, limit)
+	case source != "":
 		entries, err = store.SearchWithKind(ctx, query, source, limit)
-	} else {
+	default:
 		entries, err = store.Search(ctx, query, limit)
 	}
 	if err != nil {

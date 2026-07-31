@@ -74,7 +74,7 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
    ```bash
    human search "<the subject, not the ticket's wording>" --json --limit 20
    human search "<the subsystem or component>" --json --limit 20
-   human search "<a file or symbol the work will touch>" --json --limit 20
+   human search --file "<a path the work will touch>" --json   # exact: who else is changing this file
    human search "<an error string or symptom involved>" --json --limit 20
    ```
 
