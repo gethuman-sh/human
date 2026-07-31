@@ -302,6 +302,14 @@ func stagePausedOnOptions(comments []tracker.Comment, stage BoardStage) bool {
 	if len(opts) == 0 {
 		return false
 	}
+	// A well-formed block naming a stage the board cannot resume is a
+	// configuration error, not a normal pause: it must never draw a *-failed
+	// marker or a relaunch (that loop is exactly what hid the ticket-review gate's
+	// decision), so treat it as a clean stop here — the card surfaces the error
+	// through derivation instead (attachOpenOptions, SC-2137).
+	if !optionStages[optStage] {
+		return true
+	}
 	return stageRank[optStage] <= stageRank[stage]
 }
 

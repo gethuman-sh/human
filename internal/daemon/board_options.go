@@ -26,12 +26,26 @@ type BoardOption struct {
 }
 
 // optionStages are the stages an options block may relaunch — exactly the
-// agent-launching stages. A block naming anything else is ignored so a typo
-// can never dispatch the done stage or nothing at all.
+// agent-launching stages. A block naming anything else is not silently dropped
+// (see parseOptionsBlock / attachOpenOptions): it surfaces as a visible card
+// error so a typo, or a new pipeline stage that forgets to register here, cannot
+// vanish (SC-2137).
 var optionStages = map[BoardStage]bool{
 	BoardPlanning:       true,
 	BoardImplementation: true,
 	BoardVerification:   true,
+}
+
+// optionStageAliases resolves a decision block's stage: field to the board stage
+// that owns it, for gate phases that run INSIDE another stage's dispatch rather
+// than as a column of their own. The ticket-review gate runs as the first phase
+// of the planning stage (planPrompt), so a decision it raises ("stage:
+// ticket-review") resumes planning — which re-runs the gate — and renders in the
+// planning column it already occupies while the gate runs. Without this the
+// gate's decision named a stage no whitelist listed and was parsed to nothing,
+// so it never reached the board (SC-2137).
+var optionStageAliases = map[BoardStage]BoardStage{
+	BoardTicketReview: BoardPlanning,
 }
 
 // parseOptionsBlock extracts (stage, context, options) from an options
@@ -43,9 +57,15 @@ var optionStages = map[BoardStage]bool{
 //	1: <option label>
 //	2: <option label>
 //
-// A missing or non-agent stage invalidates the whole block (empty return).
+// The returned stage is CANONICAL: a gate alias (optionStageAliases, e.g.
+// ticket-review → planning) is resolved here so every caller sees the board
+// stage the decision resumes. A block with no stage line or no options is
+// malformed and returns empty; a well-formed block naming a stage the board
+// cannot resume is NOT dropped — it is returned as-is so callers surface it as a
+// visible error rather than letting it vanish (SC-2137). Resumability is a
+// separate check (optionStages[stage]), never conflated with "well-formed".
 func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
-	var stage BoardStage
+	var raw BoardStage
 	var context string
 	var opts []BoardOption
 	for line := range strings.SplitSeq(body, "\n") {
@@ -54,7 +74,7 @@ func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
 		case strings.HasPrefix(line, "["):
 			// The [human:options] header itself (and any stray marker line).
 		case strings.HasPrefix(line, "stage:"):
-			stage = BoardStage(strings.TrimSpace(strings.TrimPrefix(line, "stage:")))
+			raw = BoardStage(strings.TrimSpace(strings.TrimPrefix(line, "stage:")))
 		case strings.HasPrefix(line, "context:"):
 			context = strings.TrimSpace(strings.TrimPrefix(line, "context:"))
 		default:
@@ -67,8 +87,15 @@ func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
 			}
 		}
 	}
-	if !optionStages[stage] || len(opts) == 0 {
+	// A block with no stage line or no options is not a decision — ignore it. An
+	// unrecognized-but-well-formed stage is deliberately kept (see doc): the
+	// silent drop is exactly the defect this ticket removes.
+	if raw == "" || len(opts) == 0 {
 		return "", "", nil
+	}
+	stage := raw
+	if canon, ok := optionStageAliases[raw]; ok {
+		stage = canon
 	}
 	return stage, context, opts
 }
@@ -124,7 +151,10 @@ func optionChosenQueued(comments []tracker.Comment) (BoardStage, tracker.Comment
 		return "", tracker.Comment{}, false
 	}
 	stage, _, opts := parseOptionsBlock(block.Body)
-	if len(opts) == 0 {
+	// Only a resumable stage synthesizes a queued placement — an unrecognized
+	// stage cannot be relaunched, so there is no pending relaunch to represent
+	// (it surfaces as a card error instead, SC-2137).
+	if len(opts) == 0 || !optionStages[stage] {
 		return "", tracker.Comment{}, false
 	}
 	return stage, chosen, true
@@ -200,6 +230,13 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 		return errors.WithDetails("no open decision on this ticket — the options were already pursued or superseded", "pm", req.PMKey)
 	}
 	stage, _, opts := parseOptionsBlock(block.Body)
+	// A well-formed block naming a stage the board cannot resume must not be
+	// silently launched into the wrong stage (startedHeaderFor/stagePrompt would
+	// otherwise fall through to their implementation defaults). The card already
+	// shows this as an error (attachOpenOptions); refuse the choice loudly too.
+	if !optionStages[stage] {
+		return errors.WithDetails("decision names a stage the board cannot resume", "pm", req.PMKey, "stage", string(stage))
+	}
 	chosen, ok := findOption(opts, req.OptionID)
 	if !ok {
 		return errors.WithDetails("unknown option id", "pm", req.PMKey, "option", req.OptionID)
@@ -228,10 +265,18 @@ func findOption(opts []BoardOption, id string) (BoardOption, bool) {
 
 // stagePrompt is the stage's normal dispatch prompt — an option relaunch runs
 // the same skill the stage always runs, plus the direction suffix.
+//
+// Planning uses planPrompt, not a bare /human-plan, so a resumed planning
+// decision re-runs the ticket-review gate exactly like every other planning
+// launch (the forward move and the in-place retry both use planPrompt). This is
+// what lets a ticket-review decision — aliased to planning — resume the gate: no
+// [human:ticket-review] verdict exists yet, so planPrompt re-runs the gate with
+// the choice injected; a plain planning decision already carries a verdict, so
+// planPrompt skips the gate and goes straight to planning (SC-2137).
 func stagePrompt(stage BoardStage, pmKey string, card BoardCard) string {
 	switch stage {
 	case BoardPlanning:
-		return "/human-plan " + pmKey
+		return planPrompt(pmKey)
 	case BoardVerification:
 		return "/human-review " + dispatchKey(pmKey, card)
 	default:
@@ -252,7 +297,11 @@ func startedHeaderFor(stage BoardStage) string {
 }
 
 // attachOpenOptions decorates a derived card with the latest unconsumed
-// options block, if any.
+// options block, if any. A well-formed block naming a stage the board cannot
+// resume is surfaced as a visible card error instead of being attached as a
+// clickable decision: dropping it is how the ticket-review gate's decision
+// stayed invisible, so an unregistered stage now reds the card loudly rather
+// than vanishing (SC-2137).
 func attachOpenOptions(card *BoardCard, comments []tracker.Comment) {
 	block, ok := openOptionsBlock(comments)
 	if !ok {
@@ -260,6 +309,11 @@ func attachOpenOptions(card *BoardCard, comments []tracker.Comment) {
 	}
 	stage, context, opts := parseOptionsBlock(block.Body)
 	if len(opts) == 0 {
+		return
+	}
+	if !optionStages[stage] {
+		card.State = BoardFailed
+		card.Error = "decision block names stage \"" + string(stage) + "\" the board cannot resume"
 		return
 	}
 	card.Options = opts
