@@ -2,7 +2,7 @@ package cmddaemon
 
 import (
 	"context"
-	"io"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -79,13 +79,23 @@ func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *
 		if len(instances) == 0 {
 			continue
 		}
-		// Sync's own progress prose goes nowhere; the outcome is logged as data.
-		res, sErr := recall.Sync(ctx, store, instances, false, io.Discard)
+		// Capture the sync's own prose rather than discarding it: a count of
+		// errors with no way to learn what failed is the shape of problem this
+		// work exists to remove, and discarding the detail put it right back.
+		var detail strings.Builder
+		res, sErr := recall.Sync(ctx, store, instances, false, &detail)
 		if sErr != nil {
-			logger.Warn().Err(sErr).Str("dir", entry.Dir).Msg("recall sync: failed")
+			logger.Warn().Err(sErr).Str("dir", entry.Dir).Str("detail", detail.String()).
+				Msg("recall sync: failed")
 			continue
 		}
-		logger.Info().Int("indexed", res.Indexed).Int("errors", res.Errors).
+		event := logger.Info()
+		if res.Errors > 0 {
+			// The count alone is unactionable; the prose names the tracker and
+			// the ticket that failed.
+			event = logger.Warn().Str("detail", strings.TrimSpace(detail.String()))
+		}
+		event.Int("indexed", res.Indexed).Int("errors", res.Errors).Int("pruned", res.Pruned).
 			Str("dir", entry.Dir).Msg("recall sync: refreshed the ticket record")
 	}
 }
