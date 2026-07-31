@@ -36,6 +36,8 @@ human <TRACKER> issue comment list <TICKET_KEY>
    - Otherwise `human plan show <key>`: prints the ticket's `[human:plan]` comment if present — that is the plan.
    - Otherwise fall back to `.human/bugs/<key>.md` (a bug analysis with a fix plan).
    - If no source provides a plan, stop and report that a plan must be created first with `/human-plan` or `/human-bug-plan`.
+
+   **"I could not read the plan" is not "there is no plan."** The two failures look alike from here and mean opposite things: one asks for a plan to be written, the other asks for the tracker to come back. `human plan show` says which — a missing plan reports `no [human:plan] comment on ticket`, while an unreachable tracker reports a credential or transport error naming the store. Only the first is an absence. On the second, end the run `retryable` naming the store that failed, and change nothing: re-planning a ticket that already has a plan discards a human's work over a timeout, and it is the same mistake as an empty search index answering "nothing found".
 2. **Parse ticket keys** from the plan header:
    - `**PM ticket**: <PM_KEY>` — the original PM ticket
    - `**Engineering ticket**: <ENG_KEY>` — present only in split topology
