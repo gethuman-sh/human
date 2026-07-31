@@ -448,3 +448,43 @@ func TestDeriveBoardCard_RebuildSupersedesLoopMarker(t *testing.T) {
 	assert.Equal(t, BoardRunning, card.State)
 	assert.Empty(t, card.DeployPhase)
 }
+
+// SC-1957: a question raised late in a card's life deliberately names an
+// EARLIER rework stage — answering it means going back and redoing that
+// work. That is still a deliberate human pause, not a hang, so the card must
+// derive BoardIdle with the question attached rather than staying
+// BoardRunning (which is exactly what let recovery erase it before).
+func TestDeriveBoardCard_OpenEarlierStageOptionsIsWaiting(t *testing.T) {
+	base := time.Unix(1, 0)
+	comments := []tracker.Comment{
+		cmt(ImplementationStartedHeader, base),
+		cmt("[human:options]\nstage: planning\ncontext: rework?\n1: a\n2: b\n3: c", base.Add(time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardImplementation, card.Stage)
+	assert.Equal(t, BoardIdle, card.State, "an earlier-stage rework question must pause, not keep running")
+	assert.Len(t, card.Options, 3)
+	assert.Equal(t, BoardPlanning, card.OptionsStage)
+}
+
+// SC-1957 residual safety net: even if a card was already reddened by a
+// *-failed marker before the fix (or by some other future path), an open
+// at-or-before options block newer than that failure must still surface as
+// waiting-on-human rather than a plain failure — the third acceptance
+// criterion, "where a question is erased anyway, that should be visible".
+func TestDeriveBoardCard_FailedWithOpenOptionsSurfacesAsWaiting(t *testing.T) {
+	base := time.Unix(1, 0)
+	comments := []tracker.Comment{
+		cmt(ImplementationStartedHeader, base),
+		cmt("[human:options]\nstage: planning\ncontext: rework?\n1: a\n2: b", base.Add(time.Minute)),
+		cmt("[human:implementation-failed]\nstale hang", base.Add(2*time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardIdle, card.State, "an open question surviving a stale failure must surface, not stay red")
+	assert.Empty(t, card.Error)
+	assert.Len(t, card.Options, 2)
+}

@@ -75,10 +75,11 @@ func TestReconcileStuckRunning_OpenSameStageOptionsIsCleanPause(t *testing.T) {
 	require.Empty(t, relaunched, "nothing to relaunch — the card is not dead, it is waiting on a human")
 }
 
-// 1290 stage-precision companion: an open options block naming a DIFFERENT
-// stage does not belong to this run, so a genuine hang must still be
-// reddened — the guard must not swallow unrelated dead ends.
-func TestReconcileStuckRunning_OpenOptionsForOtherStageStillReddens(t *testing.T) {
+// 1957: a question raised late in a card's life deliberately names an
+// EARLIER rework stage — answering it means going back and redoing that
+// work. That is still a deliberate human pause, not a hang: reconcile must
+// not red-and-relaunch a card parked on a question about an earlier phase.
+func TestReconcileStuckRunning_OpenOptionsForEarlierStageIsCleanPause(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	started := now.Add(-StuckRunningGrace - time.Minute)
 	cards := []ReconcileCard{{
@@ -100,9 +101,9 @@ func TestReconcileStuckRunning_OpenOptionsForOtherStageStillReddens(t *testing.T
 	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
 		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
 
-	require.Equal(t, 1, n, "an options block for a different stage does not excuse a genuine hang")
-	require.Len(t, posted, 1, "the failed marker is the trail record")
-	require.Equal(t, []BoardStage{BoardImplementation}, relaunched, "the hang is still relaunched under the bounded budget")
+	require.Equal(t, 0, n, "an open earlier-stage options block is a clean pause, not a hang")
+	require.Empty(t, posted, "no failed marker for a card parked on a question about an earlier phase")
+	require.Empty(t, relaunched, "nothing to relaunch — the card is not dead, it is waiting on a human")
 }
 
 // The shared budget bounds both paths together: once the count is spent, the
