@@ -92,6 +92,15 @@ func (s *SQLiteStore) ensureSchema() error {
 			UNIQUE (key, source)
 		);
 
+		CREATE TABLE IF NOT EXISTS entry_files (
+			key    TEXT NOT NULL,
+			source TEXT NOT NULL,
+			path   TEXT NOT NULL,
+			PRIMARY KEY (key, source, path)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_entry_files_path ON entry_files (path);
+
 		CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
 			key,
 			title,
@@ -168,6 +177,23 @@ func (s *SQLiteStore) UpsertEntry(ctx context.Context, entry Entry, description 
 		return errors.WrapWithDetails(err, "check existing entry", "key", entry.Key)
 	}
 
+	// Replace this entry's path set wholesale: a re-planned ticket touches a
+	// different set of files, and a stale path would report an overlap that no
+	// longer exists.
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM entry_files WHERE key = ? AND source = ?", entry.Key, entry.Source,
+	); err != nil {
+		return errors.WrapWithDetails(err, "clear entry files", "key", entry.Key)
+	}
+	for _, path := range entry.Files {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO entry_files (key, source, path) VALUES (?, ?, ?)",
+			entry.Key, entry.Source, path,
+		); err != nil {
+			return errors.WrapWithDetails(err, "insert entry file", "key", entry.Key, "path", path)
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -196,12 +222,54 @@ func (s *SQLiteStore) DeleteEntry(ctx context.Context, key, source string) error
 	if _, err := tx.ExecContext(ctx, "DELETE FROM entries WHERE id = ?", id); err != nil {
 		return errors.WrapWithDetails(err, "delete entry", "key", key)
 	}
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM entry_files WHERE key = ? AND source = ?", key, source,
+	); err != nil {
+		return errors.WrapWithDetails(err, "delete entry files", "key", key)
+	}
 	return tx.Commit()
 }
 
 // Search performs a full-text search and returns matching entries ranked by BM25.
 func (s *SQLiteStore) Search(ctx context.Context, query string, limit int) ([]Entry, error) {
 	return s.SearchWithKind(ctx, query, "", limit)
+}
+
+// SearchByFile returns the entries whose plan names path.
+//
+// Exact match, deliberately. Asking "who else is changing this file" through
+// full text does not work: the tokenizer splits internal/daemon/board_transition.go
+// into "internal", "daemon", "board", "transition", "go" — words common enough
+// to match much of the backlog — so the answer would be a ranking rather than a
+// fact. This is the query that connects two tickets describing one problem in
+// different words (SC-2132).
+//
+// It reports the index's usable state exactly as Search does: a lookup against
+// an empty or stale record must not read as "nobody else is touching it".
+func (s *SQLiteStore) SearchByFile(ctx context.Context, path string, limit int) ([]Entry, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	if err := s.usable(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.key, e.source, e.kind, e.project, e.title, e.status, e.assignee, e.url, e.indexed_at
+		FROM entry_files f
+		JOIN entries e ON e.key = f.key AND e.source = f.source
+		WHERE f.path = ?
+		ORDER BY e.indexed_at DESC
+		LIMIT ?
+	`, path, limit)
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "search index by file", "path", path)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanEntries(rows)
 }
 
 // SearchWithKind performs a full-text search filtered by entries.kind.
@@ -257,6 +325,11 @@ func (s *SQLiteStore) SearchWithKind(ctx context.Context, query, kind string, li
 	}
 	defer func() { _ = rows.Close() }()
 
+	return scanEntries(rows)
+}
+
+// scanEntries reads the shared entry column list every search selects.
+func scanEntries(rows *sql.Rows) ([]Entry, error) {
 	var entries []Entry
 	for rows.Next() {
 		var e Entry
