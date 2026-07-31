@@ -29,6 +29,8 @@ shortcuts:
     description: "Product development stories and epics"
     # url: https://api.app.shortcut.com  # optional, this is the default
     # token comes from env: export SHORTCUT_WORK_TOKEN=xxx
+    # projects: []          # board scope — empty shows ALL work
+    # create_in: team-a     # where new tickets are filed (defaults to projects[0])
 
 notions:
   - name: work
