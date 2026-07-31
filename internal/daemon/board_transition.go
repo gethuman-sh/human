@@ -141,6 +141,11 @@ type BoardTransitionDeps struct {
 	// leaves the work for a healthy daemon, and the failure surfaces only on this
 	// host (doctor / rail LED), never as a ticket marker (SC-912). nil disables.
 	LaunchGate func(ctx context.Context) []DoctorCheck
+	// BlockedBy reports the still-open issues pmKey must wait for. It resolves
+	// each blocker's real status, so a finished blocker is simply absent from
+	// the result — the gate never has to guess what "open" means. nil disables
+	// the gate (the package's "nil disables" convention).
+	BlockedBy func(ctx context.Context, pmKey string) ([]string, error)
 }
 
 // sanitizeRe drops characters that are invalid in an agent name (alphanumeric,
@@ -425,6 +430,15 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 				Msg("board stage launch skipped: launch-critical doctor check failing; leaving work for a healthy daemon")
 			return nil
 		}
+	}
+	// Dependency gate: work someone deliberately sequenced behind another
+	// ticket does not start while that ticket is open. Like the launch gate it
+	// refuses before the claim, so nothing is claimed and the card stays
+	// cleanly unstarted — but unlike it, the refusal is reported to the caller:
+	// no other daemon can serve this stage either, so a silent skip would be a
+	// card that never starts for a reason nobody can see.
+	if err := d.refuseIfBlocked(ctx, pmKey, stage); err != nil {
+		return err
 	}
 	// Claim before start: with several daemons on one board, arbitrate who
 	// launches this stage so the work is picked up exactly once (SC-660 rule 2).
