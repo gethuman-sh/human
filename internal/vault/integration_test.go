@@ -131,9 +131,11 @@ func TestReadConfig_andNewResolver(t *testing.T) {
 
 	resolver := NewResolverFromConfig(cfg)
 	require.NotNil(t, resolver)
-	// The resolver has the 1Password SDK, the op CLI fallback behind it, and
-	// the always-on GitHub CLI.
-	assert.Len(t, resolver.providers, 3)
+	// The resolver has the op CLI and the always-on GitHub CLI. The in-process
+	// SDK that used to sit in front of the op CLI is gone (SC-2183): it reached
+	// the same desktop app by a second route, so it was a second implementation
+	// of the working path rather than a capability of its own.
+	assert.Len(t, resolver.providers, 2)
 }
 
 func TestResolver_concurrentAccess(t *testing.T) {

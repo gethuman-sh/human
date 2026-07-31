@@ -13,6 +13,11 @@ builds:
     binary: human
     env:
       - CGO_ENABLED=0
+      # runtime/secret erases the working copies made while reading a
+      # credential (SC-2183). Experimental, hence selected by build tag — a
+      # build without it compiles a stub. Set here so a released binary is not
+      # less protected than one built from source.
+      - GOEXPERIMENT=runtimesecret
     ldflags:
       - -s -w
       - -X main.version={{.Version}}

@@ -13,6 +13,18 @@ fmt:
 fmt-check:
 	@unformatted=$$(go tool goimports -l $$(git ls-files '*.go')); if [ -n "$$unformatted" ]; then echo "unformatted files (run 'make fmt'):"; echo "$$unformatted"; exit 1; fi
 
+# runtime/secret erases the working copies made while reading a credential
+# (SC-2183). It is experimental, so it is selected by build tag: without this
+# the build compiles a stub and behaves exactly as before. Release builds set
+# the same variable (.goreleaser.yaml) so a shipped binary is not less protected
+# than a locally built one. Override with `make build GOEXPERIMENT=` to opt out.
+#
+# Enabling this used to segfault the daemon: the erasure fought the WebAssembly
+# runtime inside the 1Password SDK. That SDK is gone, and with it the only wasm
+# in this binary — check `go version -m` before assuming it is safe to add back.
+GOEXPERIMENT ?= runtimesecret
+export GOEXPERIMENT
+
 build:
 	go build -ldflags "-X main.version=dev -X main.commit=$$(git rev-parse --short HEAD) -X main.date=$$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o bin/human .
 

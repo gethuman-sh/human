@@ -69,14 +69,12 @@ func TestResolver_Resolve_multipleProviders(t *testing.T) {
 	assert.Equal(t, "correct", val)
 }
 
-// Reproduces SC-1653: on a released (CGO_ENABLED=0) non-WSL build the SDK
-// provider fails to initialize; the resolver must fall through to the op CLI
-// behind it rather than surfacing "initializing 1Password SDK".
-func TestResolver_Resolve_fallsThroughToCLIWhenSDKFails(t *testing.T) {
-	sdk := NewOnePassword("my-account")
-	sdk.clientFactory = func(_ context.Context) (secretResolver, error) {
-		return nil, errors.WithDetails("initializing 1Password SDK")
-	}
+// Reproduces SC-1653, which was a released build failing to resolve because the
+// in-process SDK sat in front of the op CLI and could not initialise. The SDK
+// is gone (SC-2183) and this is what replaced it: one provider, the same on
+// every build, translating the user-facing 1pw:// reference into the op:// form
+// the CLI expects.
+func TestResolver_Resolve_onePasswordRefGoesThroughTheCLI(t *testing.T) {
 	cli := &OpCLI{
 		Binary: "op",
 		runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
@@ -84,9 +82,10 @@ func TestResolver_Resolve_fallsThroughToCLIWhenSDKFails(t *testing.T) {
 			return []byte("resolved-secret\n"), nil
 		},
 	}
-	r := NewResolver(sdk, cli, NewGhCLI())
+	r := NewResolver(cli, NewGhCLI())
 
 	val, err := r.Resolve("1pw://Development/GitHub PAT/token")
+
 	require.NoError(t, err)
 	assert.Equal(t, "resolved-secret", val)
 }
