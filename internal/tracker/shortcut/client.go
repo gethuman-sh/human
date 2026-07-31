@@ -867,10 +867,55 @@ func (c *Client) toTrackerIssue(ctx context.Context, story scStory, project stri
 		Labels:      labelNames(story.Labels),
 	}
 	issue.ParentKey = parentStoryKey(story.ParentStoryID)
+	issue.Links = storyLinks(story)
 	if story.UpdatedAt != "" {
 		issue.UpdatedAt, _ = time.Parse(time.RFC3339, story.UpdatedAt)
 	}
 	return issue, nil
+}
+
+// storyLinks converts Shortcut's relationships into direction-resolved links.
+//
+// Shortcut states a relation as subject-verb-object — with verb "blocks",
+// SubjectID blocks ObjectID — and sends the same record to both stories. Which
+// end THIS story sits on is therefore decided here, by comparing its own ID,
+// rather than left for callers to work out from raw identifiers. A caller that
+// got that backwards would gate the wrong ticket: stalling work that was ready
+// and releasing work that was not.
+//
+// A relation naming neither this story, or carrying a verb we do not model, is
+// dropped: reporting a relationship we cannot describe is worse than reporting
+// none, because the gate would act on it.
+func storyLinks(story scStory) []tracker.IssueLink {
+	var links []tracker.IssueLink
+	for _, l := range story.StoryLinks {
+		kind, ok := linkKindFor(l.Verb)
+		if !ok {
+			continue
+		}
+		switch story.ID {
+		case l.SubjectID:
+			links = append(links, tracker.IssueLink{Key: storyKey(l.ObjectID), Kind: kind})
+		case l.ObjectID:
+			links = append(links, tracker.IssueLink{Key: storyKey(l.SubjectID), Kind: kind, Inbound: true})
+		}
+	}
+	return links
+}
+
+// linkKindFor maps Shortcut's verb vocabulary onto ours. "duplicates" is
+// deliberately unmapped: it says two tickets are the same work, not that one
+// waits for the other, and treating it as a blocker would stall a card behind
+// its own duplicate.
+func linkKindFor(verb string) (tracker.LinkKind, bool) {
+	switch strings.ToLower(strings.TrimSpace(verb)) {
+	case "blocks":
+		return tracker.LinkBlocks, true
+	case "relates to":
+		return tracker.LinkRelated, true
+	default:
+		return "", false
+	}
 }
 
 // storyKey renders a story ID as this tracker's issue key: the prefixed display

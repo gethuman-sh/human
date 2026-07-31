@@ -233,6 +233,56 @@ type Issue struct {
 	UpdatedAt   time.Time `json:"updated_at"`           // last modification timestamp
 	ParentKey   string    `json:"parent_key,omitempty"` // parent issue key (subtask support)
 	Labels      []string  `json:"labels,omitempty"`     // tags/labels on the issue
+	// Links are this issue's relationships to others. Empty on backends that
+	// cannot report them, which is a correct answer rather than a gap.
+	Links []IssueLink `json:"links,omitempty"`
+}
+
+// LinkKind names a relationship between two issues.
+//
+// The distinction is load-bearing rather than cosmetic: only a directional link
+// can express that one piece of work must finish before another starts, and
+// only that can gate anything. A symmetric "related" records an association and
+// implies no order.
+type LinkKind string
+
+const (
+	// LinkRelated is a symmetric association: these two issues concern each
+	// other, in no particular order.
+	LinkRelated LinkKind = "related"
+	// LinkBlocks is directional: the subject must be finished before the object
+	// can proceed.
+	LinkBlocks LinkKind = "blocks"
+)
+
+// IssueLink is one relationship, seen from the issue that carries it.
+//
+// Direction is resolved here, at the provider boundary, and never left for
+// consumers to derive from raw subject/object identifiers. Every place that
+// re-derives it is a chance to get it backwards, and a reversed blocker gates
+// the wrong ticket — stalling work that was ready while releasing work that was
+// not.
+type IssueLink struct {
+	// Key identifies the issue at the other end.
+	Key string `json:"key"`
+	// Kind is the relationship. For LinkRelated, Inbound carries no meaning.
+	Kind LinkKind `json:"kind"`
+	// Inbound reports the direction for a blocking link: true means the OTHER
+	// issue blocks this one, so this issue is the one that must wait.
+	Inbound bool `json:"inbound,omitempty"`
+}
+
+// BlockedBy returns the keys of issues that must finish before this one can
+// proceed. It reads the links; it does not know whether those issues are still
+// open, which is the caller's to establish.
+func (i Issue) BlockedBy() []string {
+	var keys []string
+	for _, l := range i.Links {
+		if l.Kind == LinkBlocks && l.Inbound {
+			keys = append(keys, l.Key)
+		}
+	}
+	return keys
 }
 
 // IsBug reports whether this issue represents a defect, normalised across
