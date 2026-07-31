@@ -418,16 +418,6 @@ export function deployControlView(cards: QueueCard[], side: DeploySide): DeployC
   };
 }
 
-// initialLoadPhase decides the startup render path from whether a cached
-// snapshot was available. A hit paints the last-known board instantly and takes
-// the "cache" path, SKIPPING the titles-only quick pass — running it after a
-// cache paint would regress every card to Backlog and flicker. A miss takes the
-// "quick" path (spinner + titles). Either way the full reconcile runs afterward
-// and silently swaps in fresh data (stale-while-revalidate).
-export function initialLoadPhase(cacheHit: boolean): "cache" | "quick" {
-  return cacheHit ? "cache" : "quick";
-}
-
 // safetyPollShouldReconcile decides whether the 90s safety poll runs its
 // reconcile on a given tick. It intentionally does NOT gate on daemon
 // reachability: the poll exists to bound staleness for tracker writes that emit

@@ -26,6 +26,8 @@ import (
 	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/agentstate"
 	"github.com/gethuman-sh/human/internal/audit"
+	"github.com/gethuman-sh/human/internal/board"
+	"github.com/gethuman-sh/human/internal/boardcache"
 	"github.com/gethuman-sh/human/internal/botidentity"
 	"github.com/gethuman-sh/human/internal/chrome"
 	"github.com/gethuman-sh/human/internal/claude"
@@ -41,6 +43,7 @@ import (
 	"github.com/gethuman-sh/human/internal/messaging/telegram"
 	"github.com/gethuman-sh/human/internal/mockups"
 	"github.com/gethuman-sh/human/internal/proxy"
+	"github.com/gethuman-sh/human/internal/recall"
 	"github.com/gethuman-sh/human/internal/stats"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
@@ -331,6 +334,11 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	launchGate := func(ctx context.Context) []daemon.DoctorCheck {
 		return doctor.Blockers(ctx, daemon.LaunchCriticalChecks)
 	}
+	// One fetcher instance, shared by the raw-results route and the composed
+	// board: the closure carries the last-known cards and the last good listing
+	// (1700, SC-2005), so a second instance would split that memory in half and
+	// each route would degrade with only its own history.
+	issueFetcher := fetchTrackerIssuesFunc(projectRegistry, vaultResolver, logger)
 
 	srv := &daemon.Server{
 		Addr:               addr,
@@ -342,8 +350,9 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		ConnectedPIDs:      connTracker,
 		HookEvents:         hookStore,
 		NetworkEvents:      networkStore,
-		IssueFetcher:       fetchTrackerIssuesFunc(projectRegistry, vaultResolver, logger),
+		IssueFetcher:       issueFetcher,
 		LiteIssueFetcher:   fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
+		BoardViewFetcher:   boardViewFunc(issueFetcher, doctor, projectRegistry, boardcache.NewStore(boardcache.DefaultPath()), logger),
 		IssueGetter:        daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
 		TrackerDiagnoser:   trackerDiagnoserFunc(projectRegistry, vaultResolver),
 		Doctor:             doctor,
@@ -1602,6 +1611,124 @@ func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func
 			extras = daemon.BuildIssueDetailExtras(comments)
 		}
 		return &daemon.IssueDetailFetch{Issue: *issue, Extras: extras}, nil
+	}
+}
+
+// boardViewFunc builds the daemon's composed-board fetcher: the same listing the
+// raw route serves, run through board.Compose so every consumer reads one
+// picture instead of assembling its own.
+//
+// Docker availability is read from THIS host's doctor check rather than probed
+// by whoever renders the board. Docker matters because it is where agents
+// launch, which is this machine — a client probing its own engine answers a
+// question about the wrong computer (SC-2132).
+func boardViewFunc(fetch func() ([]daemon.TrackerIssuesResult, error), doctor *daemon.DoctorRunner, reg *daemon.ProjectRegistry, cache *boardcache.Store, logger zerolog.Logger) func() (daemon.BoardView, error) {
+	return func() (daemon.BoardView, error) {
+		project := boardProjectKey(reg)
+		results, err := fetch()
+		if err != nil {
+			return serveLastGoodView(cache, project, err, logger)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		dockerOK := len(doctor.Blockers(ctx, []string{"docker"})) == 0
+		view := board.Compose(results, dockerOK)
+		indexBoardView(ctx, view, recall.DefaultDBPath(), logger)
+		rememberBoardView(cache, project, view, logger)
+		return view, nil
+	}
+}
+
+// boardProjectKey names the project a board snapshot belongs to, keyed the same
+// way the desktop keyed it: the first registered project's directory. The
+// per-project key is load-bearing — a global one evicted another project's
+// snapshot on every save (SC-1654/1692).
+func boardProjectKey(reg *daemon.ProjectRegistry) string {
+	if entries := reg.Entries(); len(entries) > 0 {
+		return entries[0].Dir
+	}
+	return ""
+}
+
+// serveLastGoodView answers a failed compose with the last board that worked,
+// marked stale, rather than with nothing.
+//
+// An empty board is indistinguishable from having no work at all, which is the
+// impression the whole board exists to avoid — so a refresh that cannot complete
+// must not present as a clean, empty workspace. This supersedes the
+// results-level fallback (SC-2005) by sitting one layer up: it survives a
+// failure to COMPOSE, not only a failure to fetch.
+//
+// Nothing remembered means nothing truer to show than the failure itself.
+func serveLastGoodView(cache *boardcache.Store, project string, cause error, logger zerolog.Logger) (daemon.BoardView, error) {
+	raw, ok := cache.Load(project)
+	if !ok {
+		return daemon.BoardView{}, cause
+	}
+	var view daemon.BoardView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return daemon.BoardView{}, cause
+	}
+	logger.Warn().Err(cause).Msg("board view: refresh failed, serving the last good board marked stale")
+	view.Error = "showing the last board that loaded — this refresh failed: " + cause.Error()
+	return view, nil
+}
+
+// rememberBoardView keeps the last board that actually carried work, so a later
+// failure has something true to fall back on. A board with no cards is not
+// remembered: one bad refresh would otherwise become the "last good" one and pin
+// the board empty for good. Best-effort — a cache write must never fail a fetch.
+func rememberBoardView(cache *boardcache.Store, project string, view daemon.BoardView, logger zerolog.Logger) {
+	if len(view.Cards) == 0 {
+		return
+	}
+	raw, err := json.Marshal(view)
+	if err != nil {
+		return
+	}
+	if err := cache.Save(project, raw); err != nil {
+		logger.Debug().Err(err).Msg("board view: cannot persist the last good board")
+	}
+}
+
+// indexBoardView keeps the searchable ticket record current from a fetch that
+// has already happened.
+//
+// The index is what every agent consults to find out whether a problem is
+// already being worked on, and it was fed only by a hand-run command — so it sat
+// empty for months while the board beside it stayed minutes-fresh. Two copies of
+// one fetch, one of them nobody owned. Writing here costs no extra tracker calls
+// and makes the record as current as the board.
+//
+// Deliberately partial: this covers the open PM tickets the board shows, not
+// closed ones, and it carries no comment text — TrackerIssuesResult does not
+// include comments, they are consumed deriving stages and discarded. Closed
+// tickets and plan bodies still need their own path.
+//
+// Best-effort throughout: an index write must never fail a board fetch.
+func indexBoardView(ctx context.Context, view daemon.BoardView, dbPath string, logger zerolog.Logger) {
+	if len(view.Cards) == 0 {
+		return
+	}
+	store, err := recall.NewSQLiteStore(dbPath)
+	if err != nil {
+		logger.Debug().Err(err).Msg("board index: cannot open the recall store")
+		return
+	}
+	defer func() { _ = store.Close() }()
+	for _, c := range view.Cards {
+		entry := recall.Entry{
+			Key:      c.Key,
+			Source:   c.Tracker,
+			Kind:     c.TrackerKind,
+			Title:    c.Title,
+			Status:   c.Stage,
+			Assignee: c.Assignee,
+			URL:      c.URL,
+		}
+		if err := store.UpsertEntry(ctx, entry, c.Description); err != nil {
+			logger.Debug().Err(err).Str("key", c.Key).Msg("board index: cannot upsert entry")
+		}
 	}
 }
 

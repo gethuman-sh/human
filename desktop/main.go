@@ -110,10 +110,15 @@ func (a *App) backoff(ctx context.Context) {
 	}
 }
 
-// dockerAvailable reports whether a Docker engine is reachable. The frontend
-// uses this to disable the agent-launching drop targets (planning, impl,
-// verification) with a tooltip while leaving the Done drop zone enabled, since
-// Done only pushes a branch and opens a PR.
+// dockerAvailable reports whether a Docker engine is reachable ON THIS MACHINE.
+// The frontend uses the flag to disable the agent-launching drop targets
+// (planning, impl, verification) with a tooltip while leaving the Done drop zone
+// enabled, since Done only pushes a branch and opens a PR.
+//
+// This is the FALLBACK answer only. The flag describes the host that launches
+// agents, which is the daemon's — so the composed board carries the daemon's own
+// doctor verdict, and this local probe is used just when composing locally
+// against a daemon too old to serve one (SC-2132).
 func dockerAvailable() bool {
 	dc, err := devcontainer.NewDockerClient()
 	if err != nil {
