@@ -30,7 +30,7 @@ gh api repos/{owner}/{repo}/pulls/<PR>/comments --paginate \
 
 ## Why you do NOT push
 
-You have no push credentials in board context, and you do not need them. The reviewer reads your **local** commit directly (SC-1760), and the daemon ships the branch — pushing and merging with the host's credentials — only once the review passes. A local commit is the complete, expected deliverable; do not treat the inability to push as a failure.
+You have no push credentials in board context, and you do not need them. The reviewer reads your **local** commit directly, and the daemon ships the branch — pushing and merging with the host's credentials — only once the review passes. A local commit is the complete, expected deliverable; do not treat the inability to push as a failure.
 
 ## Process
 

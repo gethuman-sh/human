@@ -12,7 +12,7 @@ This is the security counterpart to **human-autofix**: it shares the same pipeli
 
 The run does **not** end at the review handoff: exactly like the bug flow, the skill chains the fix into a review and, on a passing verdict, drives the same deploy pipeline (push → PR → CI gate → merge → close). A failing review or a red CI gate stops the run honestly with the handoff left standing for a human.
 
-**Board-context exception**: when `<BOARD_CONTEXT>` is true (launched with `--board`; `HUMAN_AGENT_NAME` starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The container holds no push/PR credentials and the Deploy button owns shipping, so **end after the review (Step 7.3) and skip Step 8 (deploy) entirely**. The review runs **inline, in this warm container** (Steps 7.2–7.3) — one container startup, not two (SC-782). Do NOT push, open, or merge a PR in board context.
+**Board-context exception**: when `<BOARD_CONTEXT>` is true (launched with `--board`; `HUMAN_AGENT_NAME` starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The container holds no push/PR credentials and the Deploy button owns shipping, so **end after the review (Step 7.3) and skip Step 8 (deploy) entirely**. The review runs **inline, in this warm container** (Steps 7.2–7.3) — one container startup, not two. Do NOT push, open, or merge a PR in board context.
 
 This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — reach a verdict and act on it. Every run ends in exactly one verdict: **confirmed**, **not-a-bug** (not a real vulnerability), or **undetermined**.
 
@@ -248,7 +248,7 @@ The command derives `commits:` and `daemon:`, verifies every SHA is reachable on
 
 ### 7.2 Security review by the reviewer agent
 
-Chain straight into the review. This runs **inline in this same warm container in board context too** (SC-782). Post the started marker, then dispatch the reviewer **with a security lens**:
+Chain straight into the review. This runs **inline in this same warm container in board context too**. Post the started marker, then dispatch the reviewer **with a security lens**:
 
 ```bash
 human marker post <SEC_KEY> review-started

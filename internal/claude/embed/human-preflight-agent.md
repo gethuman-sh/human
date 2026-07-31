@@ -111,7 +111,7 @@ A question is admissible **only** if all three hold:
 Ask about **scope forks and product intent**. Never about implementation choices you can make yourself.
 
 Ordering is admissible on the same terms: two open tickets aimed at the same code are a fork about which
-one the product wants first, and the options read as *"SC-1234 goes first"* / *"this goes first"* /
+one the product wants first, and the options read as *"<TICKET_KEY> goes first"* / *"this goes first"* /
 *"they do not overlap — run both"*.
 
 If you cannot name what you searched, you have not earned the question. Go read more.
