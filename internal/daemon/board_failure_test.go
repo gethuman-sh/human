@@ -966,6 +966,75 @@ func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 	})
 }
 
+// SC-2302: the pre-planning ticket-review gate runs UNDER the planning agent
+// but files its verdict as a [human:ticket-review] marker classified to the
+// BACKLOG stage. A deliberate hard-stop verdict (rejected/superseded/escalated)
+// is the gate correctly refusing to start work — a clean stop, not a crash. The
+// watcher must post NO planning-failed marker, must NOT chain a review, and must
+// reclaim the run's worktree (onHandoff fired) exactly like every other clean
+// ending. Because the marker is classified to backlog, scoping the clean-stop
+// check to the running (planning) stage misses it — the fix reads the verdict
+// stage-agnostically via deliberateStopRecorded.
+func assertTicketReviewVerdictIsCleanStop(t *testing.T, verdict string) {
+	t.Helper()
+	withInstantBoardExitRecheck(t)
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt(PlanningStartedHeader, time.Unix(1, 0)),
+			cmt(TicketReviewedHeader+" "+verdict, time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var chained []string
+	chain := func(pmKey string) error { chained = append(chained, pmKey); return nil }
+	var reclaimed string
+	onHandoff := func(agentName string) { reclaimed = agentName }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "crashed", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
+
+	c.mu.Lock()
+	assert.Empty(t, c.added, "a deliberate %s stop must post no failed marker", verdict)
+	c.mu.Unlock()
+	assert.Empty(t, chained, "a deliberate %s stop must not chain a review", verdict)
+	assert.Equal(t, "board-SC-1-planning", reclaimed, "a deliberate %s stop must reclaim the worktree", verdict)
+}
+
+func TestRunBoardFailureWatch_TicketReviewRejectedIsCleanStop(t *testing.T) {
+	assertTicketReviewVerdictIsCleanStop(t, "rejected")
+}
+
+func TestRunBoardFailureWatch_TicketReviewSupersededIsCleanStop(t *testing.T) {
+	assertTicketReviewVerdictIsCleanStop(t, "superseded")
+}
+
+func TestRunBoardFailureWatch_TicketReviewEscalatedIsCleanStop(t *testing.T) {
+	assertTicketReviewVerdictIsCleanStop(t, "escalated")
+}
+
+// SC-2302 guard: the distinction follows the verdict, not the mere presence of a
+// ticket-review marker. `ready` (and `reframed`) mean the ticket is fine and the
+// work continues into planning. A planning agent that carries a `ready` verdict
+// but dies before posting [human:plan-ready] is a genuine crash and MUST still
+// post a planning-failed marker — proving deliberateStopRecorded does not swallow
+// the non-stop verdicts.
+func TestRunBoardFailureWatch_TicketReviewReadyThenCrashStillFails(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt(PlanningStartedHeader, time.Unix(1, 0)),
+			cmt(TicketReviewedHeader+" ready", time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "crashed", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1, "a ready verdict that then crashes must still surface a real failure")
+	assert.Contains(t, c.added[0], PlanningFailedHeader)
+}
+
 // A deploy-fixer's Stop event routes to AdvanceDeployFix (reclaiming its
 // worktree first) and is fully handled there — never falling through to the
 // generic stage-failure diagnoser that would red the card.
