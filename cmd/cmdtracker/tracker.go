@@ -133,11 +133,7 @@ func toEntry(inst *tracker.Instance) *TrackerEntry {
 	if inst == nil {
 		return nil
 	}
-	project := ""
-	if len(inst.Projects) > 0 {
-		project = inst.Projects[0]
-	}
-	return &TrackerEntry{Name: inst.Name, Type: inst.Kind, URL: inst.URL, User: inst.User, Role: inst.InferRole(), Project: project, Description: inst.Description}
+	return &TrackerEntry{Name: inst.Name, Type: inst.Kind, URL: inst.URL, User: inst.User, Role: inst.InferRole(), Project: inst.FilingTarget(), Description: inst.Description}
 }
 
 // PrintTopologyTable prints a topology result as a table.

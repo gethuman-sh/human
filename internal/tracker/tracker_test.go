@@ -802,6 +802,30 @@ func TestInferRole_SC254(t *testing.T) {
 	}
 }
 
+// TestInstance_FilingTarget pins the split between board scope (Projects) and
+// where new tickets are filed (CreateIn): an explicit CreateIn always wins, and
+// an empty CreateIn falls back to the first indexed project so legacy
+// single-knob configs are unchanged (SC-1959).
+func TestInstance_FilingTarget(t *testing.T) {
+	cases := []struct {
+		name     string
+		projects []string
+		createIn string
+		want     string
+	}{
+		{"projects only defaults to first", []string{"team-a", "team-b"}, "", "team-a"},
+		{"create_in wins over projects", []string{"team-a"}, "team-b", "team-b"},
+		{"create_in with empty projects", nil, "team-b", "team-b"},
+		{"both empty", nil, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := Instance{Projects: tc.projects, CreateIn: tc.createIn}
+			assert.Equal(t, tc.want, inst.FilingTarget())
+		})
+	}
+}
+
 func (stubProvider) UnlinkIssues(context.Context, string, string) error {
 	return nil
 }

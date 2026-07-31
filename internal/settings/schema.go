@@ -83,7 +83,8 @@ func trackerFields(credentials []Field, extra ...Field) []Field {
 		Field{Key: "description", Label: "Description", Type: TypeString, Description: "What this tracker is used for"},
 		Field{Key: "role", Label: "Role", Type: TypeEnum, Enum: []string{"pm", "engineering"}, Description: "Topology role: pm or engineering — distinct trackers per role keep separate engineering tickets; a single tracker carries the whole ticket lifecycle"},
 		Field{Key: "safe", Label: "Safe mode", Type: TypeBool, Description: "Block destructive operations (deletes)"},
-		Field{Key: "projects", Label: "Projects", Type: TypeStringList, Description: "Project keys to index"},
+		Field{Key: "projects", Label: "Projects", Type: TypeStringList, Description: "Project keys the board indexes and shows (empty = show all work)"},
+		Field{Key: "create_in", Label: "File new tickets in", Type: TypeString, Description: "Where new tickets are filed (defaults to the first indexed project) — set this to file into one place while the board shows all work"},
 	)
 	return fields
 }

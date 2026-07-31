@@ -15,6 +15,7 @@ type Config struct {
 	Role        string   `mapstructure:"role"`
 	Safe        bool     `mapstructure:"safe"`
 	Projects    []string `mapstructure:"projects"`
+	CreateIn    string   `mapstructure:"create_in"`
 }
 
 // LoadConfigs reads a .humanconfig YAML file from dir and returns the
@@ -75,6 +76,7 @@ func buildInstance(cfg Config) (tracker.Instance, bool) {
 		Role:        cfg.Role,
 		Safe:        cfg.Safe,
 		Projects:    cfg.Projects,
+		CreateIn:    cfg.CreateIn,
 		Provider:    New(cfg.URL, cfg.Token),
 	}
 	// A roleless entry keeps GitHub's historical dual identity so existing

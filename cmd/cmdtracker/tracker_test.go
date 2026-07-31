@@ -524,6 +524,22 @@ func TestRunTrackerTopology_PMProject(t *testing.T) {
 	assert.Contains(t, buf.String(), `"project": "team-a"`)
 }
 
+// SC-1959: the create target the topology emits must come from a dedicated
+// filing field, independent of the board-scope Projects list. A board configured
+// to show ALL work (Projects empty) can still file into one place via create_in.
+func TestRunTrackerTopology_FilingTargetIndependentOfBoardScope(t *testing.T) {
+	instances := []tracker.Instance{{
+		Name:     "board",
+		Kind:     "shortcut",
+		Projects: nil,      // board shows all work
+		CreateIn: "team-a", // new tickets still file into team-a
+	}}
+	var buf bytes.Buffer
+	err := RunTrackerTopology(&buf, ".", false, loaderOK(instances))
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), `"project": "team-a"`)
+}
+
 // 1087: with no configured project the field is omitted (omitempty), keeping the
 // topology contract backward compatible.
 func TestRunTrackerTopology_NoProjectOmitted(t *testing.T) {

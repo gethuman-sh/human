@@ -3218,11 +3218,16 @@ func resolvePMCreator(dir string, lookup config.EnvLookup, resolver *vault.Resol
 		if !ok {
 			continue
 		}
-		project := ""
-		if len(inst.Projects) > 0 {
-			project = inst.Projects[0]
+		target := inst.FilingTarget()
+		if target == "" {
+			// A PM tracker with neither projects nor create_in would file
+			// group-less and land the ticket off every board (SC-1959). Fail
+			// loudly instead of creating an invisible ticket.
+			return nil, "", errors.WithDetails(
+				"PM tracker has no filing target — set create_in (or projects) in .humanconfig so new tickets land on the board",
+				"tracker", inst.Name, "dir", dir)
 		}
-		return c, project, nil
+		return c, target, nil
 	}
 	return nil, "", errors.WithDetails("no PM-role tracker configured", "dir", dir)
 }

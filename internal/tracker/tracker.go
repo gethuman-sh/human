@@ -521,8 +521,14 @@ type Instance struct {
 	Description string   // optional human-readable description of what this tracker is for
 	Role        string   // "pm", "engineering", or empty (inferred from kind)
 	Safe        bool     // when true, destructive operations (deletes) are blocked
-	Projects    []string // projects to index (e.g. ["KAN", "INFRA"])
-	Provider    Provider
+	Projects    []string // projects to index (board scope; empty = show all)
+	// CreateIn is where NEW tickets are filed, independent of Projects (the
+	// board scope). Empty means "default to Projects[0]" so setups that predate
+	// the split keep filing exactly where they did. Splitting the two lets a
+	// board show all work (Projects empty) while still filing into one place
+	// (CreateIn set) — SC-1959.
+	CreateIn string
+	Provider Provider
 	// Forge is the optional code-host capability of this backend. It is set
 	// only for backends that also host pull requests (e.g. GitHub); pure issue
 	// trackers leave it nil. Kept separate from Provider so the tracker and
@@ -548,6 +554,21 @@ const RoleForge = "forge"
 // forge-only entry also carries a nil Provider, so the same guard keeps tracker
 // calls from dereferencing it.
 func (inst Instance) IsTracker() bool { return inst.Role != RoleForge }
+
+// FilingTarget returns where new tickets should be filed for this instance.
+// An explicit CreateIn always wins; otherwise it falls back to the first
+// indexed project so existing single-knob configs are unchanged. Empty means
+// no filing target is configured — callers on the write path must reject this
+// rather than file group-less and land the ticket off every board (SC-1959).
+func (inst Instance) FilingTarget() string {
+	if inst.CreateIn != "" {
+		return inst.CreateIn
+	}
+	if len(inst.Projects) > 0 {
+		return inst.Projects[0]
+	}
+	return ""
+}
 
 // TrackerInstances returns only the entries that expose a tracker capability,
 // dropping forge-only entries. Tracker resolution and counting run on this
