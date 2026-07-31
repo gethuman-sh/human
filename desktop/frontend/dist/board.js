@@ -1818,9 +1818,16 @@ async function pollDoctor() {
     }
     else {
         const lines = failing.map((c) => `${c.name}: ${c.detail || "failing"}`);
+        // Three states, not two. A held check stops work from starting without the
+        // substrate being broken — saying "nothing is blocked" there would be
+        // false, and it is the false half that leaves someone hunting a ticket
+        // failure whose real cause was an approval nobody answered.
+        const holding = !blocked && failing.some((c) => c.holding);
         const header = blocked
             ? "New work is blocked:"
-            : "Advisory — work can start, nothing is blocked:";
+            : holding
+                ? "New work is waiting — this needs you:"
+                : "Advisory — work can start, nothing is blocked:";
         led.title = [header, ...lines].join("\n");
     }
 }

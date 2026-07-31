@@ -272,6 +272,10 @@ interface DoctorCheck {
   name: string;
   ok: boolean;
   gating?: boolean;
+  // Set when this failure holds new work back without being a substrate
+  // failure (an unreachable tracker): the rail must say work is waiting rather
+  // than that nothing is blocked.
+  holding?: boolean;
   // "ok" | "blocking" | "degraded" | "transient" — a failing check's real
   // consequence (SC-1991). Absent on older daemons; treat as unclassified.
   severity?: string;
@@ -2243,9 +2247,16 @@ async function pollDoctor(): Promise<void> {
     led.title = "All systems go";
   } else {
     const lines = failing.map((c) => `${c.name}: ${c.detail || "failing"}`);
+    // Three states, not two. A held check stops work from starting without the
+    // substrate being broken — saying "nothing is blocked" there would be
+    // false, and it is the false half that leaves someone hunting a ticket
+    // failure whose real cause was an approval nobody answered.
+    const holding = !blocked && failing.some((c) => c.holding);
     const header = blocked
       ? "New work is blocked:"
-      : "Advisory — work can start, nothing is blocked:";
+      : holding
+        ? "New work is waiting — this needs you:"
+        : "Advisory — work can start, nothing is blocked:";
     led.title = [header, ...lines].join("\n");
   }
 }

@@ -45,6 +45,14 @@ type DoctorCheckDef struct {
 	ID      string
 	Name    string
 	Timeout time.Duration // zero means defaultCheckTimeout
+	// Holding marks a check whose failure makes new work WAIT without declaring
+	// the substrate broken. A tracker that cannot be reached right now is the
+	// case it exists for: launching into it spends an agent run on a credential
+	// that was unavailable for thirty seconds, but calling that a system failure
+	// alarms on a blip (SC-1991 vs SC-2173). Work waits, quietly, and the report
+	// says so rather than telling the user nothing is blocked.
+	Holding bool
+
 	// Gating marks a check whose failure genuinely prevents new work from
 	// starting. Only gating failures may be presented as a hard stop; a
 	// non-gating failure is advisory. Kept in lockstep with the launch gate's
@@ -66,6 +74,10 @@ type DoctorCheck struct {
 	// Gating echoes the def's Gating flag so UIs can render a failing check with
 	// its real weight without re-deriving the launch-critical set.
 	Gating bool `json:"gating,omitempty"`
+	// Holding echoes the def's Holding flag: this failure holds new work back
+	// without being a substrate failure, so a UI can say "waiting" rather than
+	// either "blocked" or the untrue "nothing is blocked".
+	Holding bool `json:"holding,omitempty"`
 	// Severity is the failure's classification (see the Severity* constants). A
 	// passing check is SeverityOK.
 	Severity string `json:"severity,omitempty"`
@@ -163,7 +175,7 @@ func (d *DoctorRunner) run(ctx context.Context) DoctorData {
 		}
 		data.Checks = append(data.Checks, DoctorCheck{
 			ID: def.ID, Name: def.Name, OK: ok,
-			Gating: def.Gating, Severity: severity, Detail: detail,
+			Gating: def.Gating, Holding: def.Holding, Severity: severity, Detail: detail,
 		})
 	}
 	data.Summary = summarizeDoctor(data.Checks)
