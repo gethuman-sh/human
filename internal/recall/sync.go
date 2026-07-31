@@ -10,6 +10,11 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
+// indexFetchCap bounds one listing. The index is after the entire record, so
+// this sits far above any realistic backlog — a cap sized like a page would
+// silently make "all past tickets" mean "the most recent page".
+const indexFetchCap = 10000
+
 // SyncResult summarises one sync run.
 type SyncResult struct {
 	Indexed int
@@ -59,29 +64,95 @@ func syncInstance(ctx context.Context, store Store, inst *tracker.Instance, full
 		projects = []string{""}
 	}
 
+	// Truncation is per instance, not per project: one short listing makes the
+	// whole instance's absence set unreliable.
+	truncated := false
 	for _, project := range projects {
-		syncProject(ctx, store, inst, project, fullSync, incremental, lastIndexed, logger, result, seen)
+		if syncProject(ctx, store, inst, project, fullSync, incremental, lastIndexed, logger, result, seen) {
+			truncated = true
+		}
 	}
 
 	// Only prune on full sync — incremental sync cannot detect deletions.
 	if !incremental {
-		existingKeys, err := store.AllKeys(ctx, inst.Name)
-		if err != nil {
+		if err := prune(ctx, store, inst, truncated, logger, result, seen); err != nil {
 			return err
-		}
-		for _, key := range existingKeys {
-			if !seen[key] {
-				if err := store.DeleteEntry(ctx, key, inst.Name); err != nil {
-					_, _ = fmt.Fprintf(logger, "  Error pruning %s: %v\n", key, err)
-					result.Errors++
-					continue
-				}
-				result.Pruned++
-			}
 		}
 	}
 
 	return nil
+}
+
+// PruneBlastRadius is the share of an instance's indexed entries a single run
+// may delete before the prune is refused.
+var PruneBlastRadius = 0.2
+
+// pruneFloor is the number of deletions always permitted regardless of share,
+// so an ordinary small cleanup on a small index is not blocked by arithmetic.
+const pruneFloor = 5
+
+// prune removes entries whose tickets are gone upstream — and refuses when it
+// cannot tell "gone" from "not fetched".
+//
+// This is the one operation here that destroys data. A listing that came back
+// short because the backend capped it looks exactly like a backlog that was
+// emptied, and pruning against it deletes the history it merely failed to
+// fetch. Two independent guards, because one of them can be lied to:
+//
+//   - Truncation, when the backend reports it. Not every backend can: Shortcut
+//     does not implement PagedLister, so it always reports "complete" whether or
+//     not the server capped the response. A guard that trusts this alone is no
+//     guard at all on the tracker that matters most.
+//   - Blast radius, which rests on a fact about OUR data rather than a claim
+//     from the provider. A run that would delete a large share of what we hold
+//     is refused whatever the backend said.
+//
+// Refusing is cheap — the entries stay, slightly stale, and the next complete
+// sync removes them. Deleting wrongly is not recoverable without a full
+// re-index, and silently (SC-2132).
+func prune(ctx context.Context, store Store, inst *tracker.Instance, truncated bool, logger io.Writer, result *SyncResult, seen map[string]bool) error {
+	existingKeys, err := store.AllKeys(ctx, inst.Name)
+	if err != nil {
+		return err
+	}
+	var doomed []string
+	for _, key := range existingKeys {
+		if !seen[key] {
+			doomed = append(doomed, key)
+		}
+	}
+	if len(doomed) == 0 {
+		return nil
+	}
+	if truncated {
+		_, _ = fmt.Fprintf(logger, "  Skipping prune for %s: the listing was truncated, so %d absent entries cannot be told from unfetched ones\n",
+			inst.Name, len(doomed))
+		return nil
+	}
+	if refusePrune(len(doomed), len(existingKeys)) {
+		_, _ = fmt.Fprintf(logger, "  Skipping prune for %s: it would delete %d of %d entries, which looks like a short listing rather than deleted work\n",
+			inst.Name, len(doomed), len(existingKeys))
+		return nil
+	}
+	for _, key := range doomed {
+		if err := store.DeleteEntry(ctx, key, inst.Name); err != nil {
+			_, _ = fmt.Fprintf(logger, "  Error pruning %s: %v\n", key, err)
+			result.Errors++
+			continue
+		}
+		result.Pruned++
+	}
+	return nil
+}
+
+// refusePrune reports whether deleting doomed of existing entries is too large a
+// share to be believable. Small absolute deletions are always allowed, so a
+// genuine tidy-up on a small index is never blocked.
+func refusePrune(doomed, existing int) bool {
+	if doomed <= pruneFloor {
+		return false
+	}
+	return float64(doomed) > PruneBlastRadius*float64(existing)
 }
 
 // detailFor returns the issue to index, re-fetching it only when the listing
@@ -125,22 +196,30 @@ func planBody(ctx context.Context, p tracker.Provider, key string) string {
 }
 
 // syncProject fetches and indexes issues for a single project (or all projects when project is "").
-func syncProject(ctx context.Context, store Store, inst *tracker.Instance, project string, fullSync, incremental bool, lastIndexed time.Time, logger io.Writer, result *SyncResult, seen map[string]bool) {
+// syncProject reports whether the listing was truncated, which the caller needs
+// before it may delete anything.
+func syncProject(ctx context.Context, store Store, inst *tracker.Instance, project string, fullSync, incremental bool, lastIndexed time.Time, logger io.Writer, result *SyncResult, seen map[string]bool) bool {
 	opts := tracker.ListOptions{
-		Project:    project,
-		MaxResults: 100,
+		Project: project,
+		// The index wants the whole record, so the cap is set far above any real
+		// backlog rather than at a page size. A backend that still cuts the list
+		// short reports it through Truncated, which gates the prune.
+		MaxResults: indexFetchCap,
 		IncludeAll: fullSync,
 	}
 	if incremental {
 		opts.UpdatedSince = lastIndexed
 	}
 
-	issues, err := inst.Provider.ListIssues(ctx, opts)
+	// ListIssuesPage rather than ListIssues: the plain call discards the
+	// truncation signal, which is exactly what the prune needs to see.
+	page, err := tracker.ListIssuesPage(ctx, inst.Provider, opts)
 	if err != nil {
 		_, _ = fmt.Fprintf(logger, "  Error listing %s/%s: %v\n", inst.Name, project, err)
 		result.Errors++
-		return
+		return false
 	}
+	issues := page.Issues
 
 	label := project
 	if label == "" {
@@ -204,4 +283,5 @@ func syncProject(ctx context.Context, store Store, inst *tracker.Instance, proje
 		}
 		result.Indexed++
 	}
+	return page.Truncated
 }
