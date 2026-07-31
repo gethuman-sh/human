@@ -110,17 +110,17 @@ func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(jitteredInterval(interval, BoardReconcileJitter)):
+		case <-time.After(JitteredInterval(interval, BoardReconcileJitter)):
 			reconcileOnce(ctx, listCards, gate, commitsPresent, mergedProbe, postDeployed, liveAgents, postFailed, closedProbe, chainReview, driveLoop, retry, progress, stopAgent, daemonID, logger)
 		}
 	}
 }
 
-// jitteredInterval returns d randomly perturbed by up to ±d*fraction, floored
+// JitteredInterval returns d randomly perturbed by up to ±d*fraction, floored
 // at zero, so N independently started daemons spread their reconcile wake-ups
 // instead of firing on the same wall-clock tick. A non-positive fraction
 // returns d unchanged.
-func jitteredInterval(d time.Duration, fraction float64) time.Duration {
+func JitteredInterval(d time.Duration, fraction float64) time.Duration {
 	if fraction <= 0 {
 		return d
 	}
