@@ -64,6 +64,8 @@ import {
   safetyReconcileError,
 } from "./board-queue.js";
 import type { DeploySide } from "./board-queue.js";
+import { linksWithin, arrowPath } from "./board-arrows.js";
+import type { Box } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
@@ -2009,6 +2011,85 @@ function render(): void {
   // it — it only needs its card data refreshed from the new board state.
   refreshTicketDetail();
   updateHideToggle();
+  // Arrows are measured from laid-out cards, so they wait for the frame the
+  // browser draws this rebuild in — reading offsets now would measure the DOM
+  // as it was before any of the above landed.
+  requestAnimationFrame(drawBlockerArrows);
+}
+
+// drawBlockerArrows connects each card to the work it waits for, wherever both
+// ends happen to share a column.
+//
+// Every column is swept on every render rather than tracking which cards moved:
+// a card changes column by being rebuilt somewhere else, so there is no move to
+// observe, and a stale arrow pointing at a card that left would be worse than
+// no arrow at all.
+function drawBlockerArrows(): void {
+  const blockers = new Map<string, string[]>();
+  for (const card of current.cards) {
+    if (card.blockers?.length) blockers.set(card.key, card.blockers);
+  }
+  document.querySelectorAll<HTMLElement>(".column-body").forEach((body, i) => {
+    body.querySelector(".blocker-arrows")?.remove();
+    if (blockers.size === 0) return;
+    const cards = new Map<string, HTMLElement>();
+    body.querySelectorAll<HTMLElement>(".card[data-key]").forEach((el) => {
+      if (el.dataset.key) cards.set(el.dataset.key, el);
+    });
+    const links = linksWithin(blockers, new Set(cards.keys()));
+    if (links.length === 0) return;
+    const overlay = arrowOverlay(body, i);
+    for (const link of links) {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", arrowPath(boxOf(cards.get(link.from)!), boxOf(cards.get(link.to)!)));
+      path.setAttribute("class", "blocker-arrow");
+      path.setAttribute("marker-end", `url(#${overlay.dataset.head})`);
+      overlay.appendChild(path);
+    }
+    body.appendChild(overlay);
+  });
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// boxOf measures a card in its column's own content coordinates. The column is
+// positioned, so offsetLeft/offsetTop are already relative to it and already
+// account for how far it is scrolled — which is what makes the overlay scroll
+// with the cards instead of sliding across them.
+function boxOf(el: HTMLElement): Box {
+  return { left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight };
+}
+
+// arrowOverlay builds the SVG layer for one column, sized to the column's whole
+// scrollable content so an arrow to a card below the fold is not clipped away.
+// It never takes pointer events: dragging a card is how the board works, and a
+// layer over every card would swallow it.
+function arrowOverlay(body: HTMLElement, index: number): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "blocker-arrows");
+  svg.setAttribute("width", String(body.scrollWidth));
+  svg.setAttribute("height", String(body.scrollHeight));
+  // Marker ids are document-global, so each column defines its own — two
+  // columns sharing one id would leave every arrow pointing at whichever
+  // definition happened to render last.
+  const headID = `blocker-arrowhead-${index}`;
+  svg.dataset.head = headID;
+  const defs = document.createElementNS(SVG_NS, "defs");
+  const marker = document.createElementNS(SVG_NS, "marker");
+  marker.setAttribute("id", headID);
+  marker.setAttribute("viewBox", "0 0 8 8");
+  marker.setAttribute("refX", "7");
+  marker.setAttribute("refY", "4");
+  marker.setAttribute("markerWidth", "6");
+  marker.setAttribute("markerHeight", "6");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const head = document.createElementNS(SVG_NS, "path");
+  head.setAttribute("d", "M 0 1 L 7 4 L 0 7 z");
+  head.setAttribute("class", "blocker-arrowhead");
+  marker.appendChild(head);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+  return svg;
 }
 
 function showError(msg: string): void {
@@ -3518,6 +3599,11 @@ function init(): void {
   });
   document.getElementById("ideation-draft-submit")?.addEventListener("click", () => void approveIdeation());
 }
+
+// The bug grid reflows on width (auto-fill columns), so a resize moves cards
+// out from under arrows drawn for the old layout. Redrawing on the next frame
+// re-measures rather than trying to transform what was already drawn.
+window.addEventListener("resize", () => requestAnimationFrame(drawBlockerArrows));
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
