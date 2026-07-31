@@ -178,7 +178,11 @@ func RunSearch(ctx context.Context, out io.Writer, query string, limit int, sour
 	}
 
 	if len(entries) == 0 {
-		_, _ = fmt.Fprintln(out, "No results found. Run 'human index' to build or update the recall.")
+		// A genuine miss against a healthy index. The index reports its own
+		// unusable states as errors above, so "no results" here means the
+		// search really found nothing — suggesting a re-index would send the
+		// reader after the wrong problem (SC-2132).
+		_, _ = fmt.Fprintln(out, "No results found.")
 		return nil
 	}
 

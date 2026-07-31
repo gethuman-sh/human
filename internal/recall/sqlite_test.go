@@ -404,6 +404,11 @@ func TestDeleteEntry_verifiesFTSClean(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
+	// A second entry keeps the index non-empty, so a search for the deleted one
+	// exercises "gone from FTS" rather than "index refuses to answer" — an empty
+	// index cannot tell a deleted ticket from one never indexed.
+	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "KAN-2", Source: "work", Kind: "jira", Title: "survivor"}, "kept"))
+
 	// Insert and then delete.
 	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "KAN-1", Source: "work", Kind: "jira", Title: "unique searchable term xyzzy"}, "xyzzy content"))
 	require.NoError(t, s.DeleteEntry(ctx, "KAN-1", "work"))
@@ -417,14 +422,13 @@ func TestDeleteEntry_verifiesFTSClean(t *testing.T) {
 		t.Errorf("expected 0 results after delete, got %d", len(results))
 	}
 
-	// Verify AllKeys is empty.
+	// Verify AllKeys no longer lists the deleted key.
 	keys, err := s.AllKeys(ctx, "work")
 	if err != nil {
 		t.Fatalf("AllKeys: %v", err)
 	}
-	if len(keys) != 0 {
-		t.Errorf("expected 0 keys after delete, got %d", len(keys))
-	}
+	assert.NotContains(t, keys, "KAN-1", "the deleted key must be gone")
+	assert.Contains(t, keys, "KAN-2", "the survivor must remain")
 }
 
 func TestUpsertEntry_preservesAssigneeAndURL(t *testing.T) {
@@ -543,18 +547,18 @@ func TestSanitizeFTSQuery(t *testing.T) {
 		{"empty", "", ""},
 		{"only whitespace", "   ", ""},
 		{"single word", "hello", `"hello"`},
-		{"two words", "hello world", `"hello" "world"`},
+		{"two words", "hello world", `"hello" OR "world"`},
 		{"embedded quote", `he"llo`, `"he""llo"`},
 		{"pre-quoted word not double wrapped", `"foo"`, `"foo"`},
-		{"fts5 OR operator", "foo OR bar", `"foo" "OR" "bar"`},
-		{"fts5 AND operator", "foo AND bar", `"foo" "AND" "bar"`},
-		{"fts5 NOT operator", "foo NOT bar", `"foo" "NOT" "bar"`},
+		{"fts5 OR operator", "foo OR bar", `"foo" OR "OR" OR "bar"`},
+		{"fts5 AND operator", "foo AND bar", `"foo" OR "AND" OR "bar"`},
+		{"fts5 NOT operator", "foo NOT bar", `"foo" OR "NOT" OR "bar"`},
 		{"fts5 wildcard", "foo*", `"foo*"`},
 		{"fts5 paren", "(foo)", `"(foo)"`},
 		{"fts5 colon", "col:value", `"col:value"`},
 		{"fts5 caret", "foo^2", `"foo^2"`},
-		{"unicode preserved", "héllo wörld", `"héllo" "wörld"`},
-		{"newlines treated as whitespace", "foo\nbar", `"foo" "bar"`},
+		{"unicode preserved", "héllo wörld", `"héllo" OR "wörld"`},
+		{"newlines treated as whitespace", "foo\nbar", `"foo" OR "bar"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -564,10 +568,14 @@ func TestSanitizeFTSQuery(t *testing.T) {
 	}
 }
 
-// FuzzSanitizeFTSQuery verifies sanitizeFTSQuery never panics and every
-// non-empty output consists of whitespace-separated tokens that each begin
-// and end with a double-quote. That invariant is what keeps FTS5 from
-// parsing any of the input as an operator.
+// FuzzSanitizeFTSQuery verifies sanitizeFTSQuery never panics and that every
+// token derived from USER INPUT is wrapped in double-quotes. That is what keeps
+// FTS5 from parsing any of the input as an operator.
+//
+// The output now also contains bare OR separators the function itself inserts
+// (terms are OR-ed so a natural-language question can match on any word). Those
+// are ours, not the user's, and are the only unquoted tokens permitted — the
+// safety property is unchanged, only its shape.
 func FuzzSanitizeFTSQuery(f *testing.F) {
 	seeds := []string{
 		"",
@@ -589,10 +597,22 @@ func FuzzSanitizeFTSQuery(f *testing.F) {
 		if out == "" {
 			return
 		}
+		prevWasTerm := false
 		for tok := range strings.SplitSeq(out, " ") {
+			if tok == "OR" {
+				if !prevWasTerm {
+					t.Fatalf("separator OR is not between terms (out=%q, input=%q)", out, input)
+				}
+				prevWasTerm = false
+				continue
+			}
 			if !strings.HasPrefix(tok, `"`) || !strings.HasSuffix(tok, `"`) {
 				t.Fatalf("token %q is not wrapped in quotes (input=%q)", tok, input)
 			}
+			prevWasTerm = true
+		}
+		if !prevWasTerm {
+			t.Fatalf("output must not end on a separator (out=%q, input=%q)", out, input)
 		}
 	})
 }
