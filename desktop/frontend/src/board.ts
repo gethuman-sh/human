@@ -108,6 +108,10 @@ interface Card {
   // Ticket the user parked off the board (right-click → Hide). Local view
   // preference; filtered out unless revealed via the header's Unhide toggle.
   hidden?: boolean;
+  // Tickets this one waits for. A blocker and the card it holds usually sit in
+  // different columns, so this renders as a badge naming the key rather than a
+  // line drawn between two cards.
+  blockers?: string[];
   // Set when the daemon could not read this ticket's markers this scan (a
   // comment-fetch error). Rendered locked: non-draggable, no launch actions,
   // with an "unreadable" badge — never presented as idle Backlog work (1700).
@@ -519,6 +523,15 @@ function renderCard(card: Card): HTMLElement {
   if (age) {
     const planned = card.stageEnteredAt ? new Date(card.stageEnteredAt).toLocaleDateString() : "";
     meta.push(`<span class="badge ${age.cls}" title="${escapeAttr("planned " + planned)}">${escapeHtml(age.text)}</span>`);
+  }
+  // A blocked card would otherwise sit in Backlog looking like work nobody
+  // picked up. Naming what it waits for is the whole reason the gate can refuse
+  // quietly: the card itself carries the explanation.
+  if (card.blockers?.length) {
+    const keys = card.blockers.join(", ");
+    meta.push(
+      `<span class="badge blocked" title="${escapeAttr(`Waiting for ${keys} to finish. Remove the link to start this now.`)}">waits for ${escapeHtml(keys)}</span>`,
+    );
   }
   if (card.engineeringKey) meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
   if (card.prURL) meta.push(`<a href="${escapeAttr(card.prURL)}" target="_blank">PR</a>`);

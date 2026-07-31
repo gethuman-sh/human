@@ -66,6 +66,20 @@ func TestDetectMutating(t *testing.T) {
 			wantOp: MutatingOp{Operation: "start", TrackerKind: "jira", Key: "KAN-5"},
 		},
 		{
+			// A link is what the launch gate reads, so writing one is a change
+			// to how work is sequenced — it belongs in the trail.
+			name:   "link",
+			args:   []string{"shortcut", "issue", "link", "SC-1", "SC-2", "--blocks"},
+			wantOK: true,
+			wantOp: MutatingOp{Operation: "link", TrackerKind: "shortcut", Key: "SC-1"},
+		},
+		{
+			name:   "unlink",
+			args:   []string{"shortcut", "issue", "unlink", "SC-1", "SC-2"},
+			wantOK: true,
+			wantOp: MutatingOp{Operation: "unlink", TrackerKind: "shortcut", Key: "SC-1"},
+		},
+		{
 			name:   "trackerName",
 			args:   []string{"jira", "--tracker", "work", "issue", "delete", "KAN-6"},
 			wantOK: true,

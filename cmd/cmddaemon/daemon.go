@@ -2506,6 +2506,55 @@ func closedTicketProbeFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 	}
 }
 
+// blockedByProbeFunc builds the stage gate's dependency probe: it reads the
+// links the tracker already records on pmKey and returns the blockers that have
+// not finished.
+//
+// Resolving each blocker's real status here is what lets the gate stay simple —
+// it never has to decide what "open" means, and a blocker that finished last
+// week is simply absent. The extra fetches run once per launch attempt, not per
+// render, and only for a ticket that actually carries links.
+func blockedByProbeFunc(dir string, lookup config.EnvLookup, resolver *vault.Resolver, logger zerolog.Logger) func(context.Context, string) ([]string, error) {
+	return func(ctx context.Context, pmKey string) ([]string, error) {
+		getter, err := resolvePMGetter(dir, lookup, resolver)
+		if err != nil {
+			return nil, err
+		}
+		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		issue, err := getter.GetIssue(fetchCtx, pmKey)
+		if err != nil {
+			return nil, errors.WrapWithDetails(err, "reading a ticket's dependencies", "pm", pmKey)
+		}
+		return openBlockers(fetchCtx, getter, issue, logger), nil
+	}
+}
+
+// openBlockers keeps the blockers of issue that have not finished.
+//
+// A blocker that cannot be read is kept. Failing to read it is not evidence
+// that it finished, and the link is deliberate data: holding the work is the
+// direction that cannot cause the collision the dependency was written to
+// prevent. The refusal names the blocker, so this is visible rather than a
+// silent stall.
+func openBlockers(ctx context.Context, getter tracker.Getter, issue *tracker.Issue, logger zerolog.Logger) []string {
+	open := make([]string, 0, len(issue.Links))
+	for _, key := range issue.BlockedBy() {
+		blocker, err := getter.GetIssue(ctx, key)
+		if err != nil {
+			logger.Warn().Err(err).Str("pm", issue.Key).Str("blocker", key).
+				Msg("board gate: cannot read a blocker, treating it as unfinished")
+			open = append(open, key)
+			continue
+		}
+		if blocker.StatusType == tracker.CategoryDone || blocker.StatusType == tracker.CategoryClosed {
+			continue
+		}
+		open = append(open, key)
+	}
+	return open
+}
+
 // resolvePMTransitioner resolves the PM-role tracker.Transitioner for a
 // workspace. Role-based selection (InferRole()=="pm"), never key prefix —
 // mirrors resolvePMCommenter. tracker.Provider embeds Transitioner, so the PM
@@ -2641,6 +2690,7 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 		DaemonID:     daemonID,
 		Logger:       logger,
 		LaunchGate:   launchGate,
+		BlockedBy:    blockedByProbeFunc(entry.Dir, lookup, resolver, logger),
 	}, nil
 }
 

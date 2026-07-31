@@ -186,3 +186,56 @@ func TestCompose_CarriesTicketAndRunFacts(t *testing.T) {
 	assert.Equal(t, "why", c.OptionsContext)
 	assert.True(t, view.DockerAvailable, "docker availability is the launching host's, passed in")
 }
+
+// blockedIssue builds an issue waiting for the given keys.
+func blockedIssue(key, title string, blockers ...string) tracker.Issue {
+	issue := tracker.Issue{Key: key, Title: title}
+	for _, b := range blockers {
+		issue.Links = append(issue.Links, tracker.IssueLink{Key: b, Kind: tracker.LinkBlocks, Inbound: true})
+	}
+	return issue
+}
+
+// A card that will not start has to say why on its face, or it reads as idle
+// work nobody picked up — the reading the board must never give.
+func TestCompose_CardNamesTheWorkItWaitsFor(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{
+			blockedIssue("SC-2", "waits", "SC-1"),
+			{Key: "SC-1", Title: "goes first"},
+		},
+		map[string]daemon.BoardCard{},
+	)}, true)
+
+	assert.Equal(t, []string{"SC-1"}, cardByKey(t, view, "SC-2").Blockers)
+	assert.Empty(t, cardByKey(t, view, "SC-1").Blockers, "the blocker itself waits for nothing")
+}
+
+// A blocker that finished has left the board, and its absence is what tells us
+// so — no second fetch, no stale badge on work that is free to start.
+func TestCompose_FinishedBlockerLeavesNoBadge(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{
+			blockedIssue("SC-2", "waits", "SC-1"),
+			{Key: "SC-1", Title: "shipped", StatusType: tracker.CategoryDone},
+		},
+		map[string]daemon.BoardCard{},
+	)}, true)
+
+	assert.Empty(t, cardByKey(t, view, "SC-2").Blockers)
+}
+
+// An association is not an ordering, and blocking something else is not waiting
+// for it.
+func TestCompose_OnlyWaitingRelationsBadge(t *testing.T) {
+	issue := tracker.Issue{Key: "SC-2", Title: "two", Links: []tracker.IssueLink{
+		{Key: "SC-1", Kind: tracker.LinkBlocks, Inbound: false},
+		{Key: "SC-1", Kind: tracker.LinkRelated, Inbound: true},
+	}}
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{issue, {Key: "SC-1", Title: "one"}},
+		map[string]daemon.BoardCard{},
+	)}, true)
+
+	assert.Empty(t, cardByKey(t, view, "SC-2").Blockers)
+}

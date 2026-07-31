@@ -39,12 +39,14 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 	// is preserved because pruning paused). See CanPrune / SC-1693.
 	view.Truncation = TruncationNotice(results)
 
+	blockedBy := map[string][]string{}
 	for _, issue := range pm.Issues {
 		card := pm.BoardCards[issue.Key]
 		stage, include := composedStage(issue, card)
 		if !include {
 			continue
 		}
+		blockedBy[issue.Key] = issue.BlockedBy()
 		view.Cards = append(view.Cards, daemon.BoardViewCard{
 			Key:            issue.Key,
 			Title:          issue.Title,
@@ -70,7 +72,30 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			OptionsContext: card.OptionsContext,
 		})
 	}
+	markBlocked(view.Cards, blockedBy)
 	return view
+}
+
+// markBlocked badges each card with the blockers that are still on the board.
+//
+// Presence on the board IS the test for "still open" here: a finished blocker
+// left the board when it was closed, so it drops out without a second fetch.
+// That makes the badge approximate — a blocker the fetch never returned, say on
+// another tracker, reads as finished — and approximate is the right trade for a
+// label. Nothing acts on this; the launch gate resolves real status before it
+// holds any work back.
+func markBlocked(cards []daemon.BoardViewCard, blockedBy map[string][]string) {
+	onBoard := make(map[string]bool, len(cards))
+	for _, c := range cards {
+		onBoard[c.Key] = true
+	}
+	for i, c := range cards {
+		for _, key := range blockedBy[c.Key] {
+			if onBoard[key] {
+				cards[i].Blockers = append(cards[i].Blockers, key)
+			}
+		}
+	}
 }
 
 // composedStage resolves the column a ticket sits in, and whether it belongs on

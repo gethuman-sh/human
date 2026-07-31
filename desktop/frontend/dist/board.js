@@ -174,6 +174,13 @@ function renderCard(card) {
         const planned = card.stageEnteredAt ? new Date(card.stageEnteredAt).toLocaleDateString() : "";
         meta.push(`<span class="badge ${age.cls}" title="${escapeAttr("planned " + planned)}">${escapeHtml(age.text)}</span>`);
     }
+    // A blocked card would otherwise sit in Backlog looking like work nobody
+    // picked up. Naming what it waits for is the whole reason the gate can refuse
+    // quietly: the card itself carries the explanation.
+    if (card.blockers?.length) {
+        const keys = card.blockers.join(", ");
+        meta.push(`<span class="badge blocked" title="${escapeAttr(`Waiting for ${keys} to finish. Remove the link to start this now.`)}">waits for ${escapeHtml(keys)}</span>`);
+    }
     if (card.engineeringKey)
         meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
     if (card.prURL)

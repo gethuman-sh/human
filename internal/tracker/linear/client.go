@@ -360,7 +360,15 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 // AddComment implements tracker.Commenter.
 // LinkIssues implements tracker.Linker via Linear's issueRelationCreate
 // mutation with the symmetric "related" relation type.
-func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string, kind tracker.LinkKind) error {
+	// Only the symmetric relation is implemented here. Asked for a directional
+	// one, refuse rather than record a weaker link: a "blocks" stored as
+	// "related" would gate nothing while appearing to, and the caller could not
+	// tell the difference.
+	if kind != tracker.LinkRelated {
+		return errors.WithDetails("Linear links are symmetric here; directional links are not implemented for this backend",
+			"kind", string(kind), "key", key, "otherKey", otherKey)
+	}
 	issueID, err := c.resolveIssueID(ctx, key)
 	if err != nil {
 		return err
@@ -939,4 +947,13 @@ func projectFromIdentifier(identifier string) string {
 		return ""
 	}
 	return strings.ToUpper(identifier[:idx])
+}
+
+// UnlinkIssues is not implemented for Linear. Reporting success without
+// removing anything would be worse than refusing: unlinking is how work held
+// behind a blocker is released, so a silent no-op would leave the caller
+// believing a dependency was gone when it was not.
+func (c *Client) UnlinkIssues(_ context.Context, key string, otherKey string) error {
+	return errors.WithDetails("removing issue links is not implemented for Linear",
+		"key", key, "otherKey", otherKey)
 }

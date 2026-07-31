@@ -55,7 +55,7 @@ func (m *mockProvider) AddComment(ctx context.Context, issueKey string, body str
 	return m.addCommentFn(ctx, issueKey, body)
 }
 
-func (m *mockProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (m *mockProvider) LinkIssues(ctx context.Context, key string, otherKey string, _ tracker.LinkKind) error {
 	if m.linkIssuesFn == nil {
 		return nil
 	}
@@ -417,11 +417,15 @@ func TestAuditProvider_LinkIssues(t *testing.T) {
 	}
 	ap, logPath := newAudit(t, inner)
 
-	err := ap.LinkIssues(context.Background(), "KAN-10", "KAN-11")
+	err := ap.LinkIssues(context.Background(), "KAN-10", "KAN-11", tracker.LinkRelated)
 	require.NoError(t, err)
 
 	entries := readEntries(t, logPath)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "LinkIssues", entries[0].Operation)
 	assert.Equal(t, "KAN-10", entries[0].Key)
+}
+
+func (m *mockProvider) UnlinkIssues(context.Context, string, string) error {
+	return nil
 }

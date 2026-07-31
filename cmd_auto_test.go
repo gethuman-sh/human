@@ -498,3 +498,35 @@ func TestAutoLink_crossTrackerRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "same tracker")
 }
+
+// --- BuildAutoUnlinkCmd tests ---
+
+// The release valve has to work the same way the link did: from the key alone,
+// without naming the tracker.
+func TestAutoUnlink_singleKind(t *testing.T) {
+	setAutoLoader(t, newMockInstances("jira"))
+
+	cmd := newRootCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"unlink", "KAN-1", "KAN-2"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "Unlinked KAN-1 from KAN-2")
+}
+
+func TestAutoUnlink_crossTrackerRejected(t *testing.T) {
+	setAutoLoader(t, newMockInstances("jira"))
+
+	cmd := newRootCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"unlink", "KAN-1", "octocat/repo#42"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "one tracker")
+}

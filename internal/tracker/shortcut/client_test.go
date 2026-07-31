@@ -1549,7 +1549,7 @@ func TestLinkIssues_happy(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "token")
-	err := client.LinkIssues(context.Background(), "42", "57")
+	err := client.LinkIssues(context.Background(), "42", "57", tracker.LinkRelated)
 	require.NoError(t, err)
 
 	// The exact verb string is the API contract — Shortcut rejects variants.
@@ -1560,9 +1560,9 @@ func TestLinkIssues_happy(t *testing.T) {
 
 func TestLinkIssues_badKey(t *testing.T) {
 	client := New("http://unused", "token")
-	err := client.LinkIssues(context.Background(), "not-numeric", "57")
+	err := client.LinkIssues(context.Background(), "not-numeric", "57", tracker.LinkRelated)
 	require.Error(t, err)
-	err = client.LinkIssues(context.Background(), "42", "not-numeric")
+	err = client.LinkIssues(context.Background(), "42", "not-numeric", tracker.LinkRelated)
 	require.Error(t, err)
 }
 
@@ -1573,6 +1573,6 @@ func TestLinkIssues_httpError(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "token")
-	err := client.LinkIssues(context.Background(), "42", "57")
+	err := client.LinkIssues(context.Background(), "42", "57", tracker.LinkRelated)
 	require.Error(t, err)
 }

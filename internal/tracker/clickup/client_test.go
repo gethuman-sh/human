@@ -1384,7 +1384,7 @@ func TestLinkIssues_happy(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "token", "team-9")
-	err := client.LinkIssues(context.Background(), "abc123", "def456")
+	err := client.LinkIssues(context.Background(), "abc123", "def456", tracker.LinkRelated)
 	require.NoError(t, err)
 }
 
@@ -1400,13 +1400,13 @@ func TestLinkIssues_customIDPair(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "token", "team-9")
-	err := client.LinkIssues(context.Background(), "PROJ-1", "PROJ-2")
+	err := client.LinkIssues(context.Background(), "PROJ-1", "PROJ-2", tracker.LinkRelated)
 	require.NoError(t, err)
 }
 
 func TestLinkIssues_mixedIDFormsRejected(t *testing.T) {
 	client := New("http://unused", "token", "team-9")
-	err := client.LinkIssues(context.Background(), "PROJ-1", "def456")
+	err := client.LinkIssues(context.Background(), "PROJ-1", "def456", tracker.LinkRelated)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "custom task ID")
 }

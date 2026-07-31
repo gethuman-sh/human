@@ -178,6 +178,11 @@ type BoardViewCard struct {
 	// Assignee is the ticket owner shown in the detail panel. Display-only:
 	// the board never assigns; empty renders as "Unassigned" in the frontend.
 	Assignee string `json:"assignee,omitempty"`
+	// Blockers names the tickets this card is waiting for, so a card that will
+	// not start says why on its face rather than looking idle. A blocker and
+	// the card it holds usually sit in different columns, which is why this is
+	// a badge naming the key and not a line drawn between two cards.
+	Blockers []string `json:"blockers,omitempty"`
 	// Tracker/TrackerKind are the instance name and provider kind the issue
 	// was listed from. The detail panel passes them back to GetIssueDetail so
 	// the daemon resolves the exact instance — bare numeric keys are ambiguous

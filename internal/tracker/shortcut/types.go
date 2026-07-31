@@ -16,6 +16,19 @@ type scStory struct {
 	ParentStoryID   *int64    `json:"parent_story_id"` // set when this story is a subtask
 	UpdatedAt       string    `json:"updated_at"`
 	Labels          []scLabel `json:"labels"`
+	// StoryLinks are this story's relationships. Shortcut sends subject/object
+	// identifiers rather than a direction, so which end this story sits on is
+	// resolved against its own ID when converting (see toTrackerIssue).
+	StoryLinks []scStoryLink `json:"story_links"`
+}
+
+// scStoryLink is one Shortcut story relationship. The verb reads
+// subject-verb-object: with verb "blocks", SubjectID blocks ObjectID.
+type scStoryLink struct {
+	ID        int64  `json:"id"`
+	Verb      string `json:"verb"`
+	SubjectID int64  `json:"subject_id"`
+	ObjectID  int64  `json:"object_id"`
 }
 
 // scLabel is a label attached to a story. The same {"name": ...} shape doubles

@@ -877,7 +877,7 @@ func TestLinkIssues_happy(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "user@example.com", "token")
-	err := client.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	err := client.LinkIssues(context.Background(), "KAN-1", "KAN-2", tracker.LinkRelated)
 	require.NoError(t, err)
 
 	assert.Equal(t, map[string]any{"name": "Relates"}, gotBody["type"])
@@ -892,7 +892,7 @@ func TestLinkIssues_httpError(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "user@example.com", "token")
-	err := client.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	err := client.LinkIssues(context.Background(), "KAN-1", "KAN-2", tracker.LinkRelated)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "linking issues")
 }

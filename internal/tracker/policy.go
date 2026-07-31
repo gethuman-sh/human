@@ -190,11 +190,18 @@ func (pp *PolicyProvider) AddComment(ctx context.Context, issueKey string, body 
 	return pp.inner.AddComment(ctx, issueKey, body)
 }
 
-func (pp *PolicyProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (pp *PolicyProvider) LinkIssues(ctx context.Context, key string, otherKey string, kind LinkKind) error {
 	if err := pp.checkPolicy("link", ""); err != nil {
 		return err
 	}
-	return pp.inner.LinkIssues(ctx, key, otherKey)
+	return pp.inner.LinkIssues(ctx, key, otherKey, kind)
+}
+
+func (pp *PolicyProvider) UnlinkIssues(ctx context.Context, key string, otherKey string) error {
+	if err := pp.checkPolicy("unlink", ""); err != nil {
+		return err
+	}
+	return pp.inner.UnlinkIssues(ctx, key, otherKey)
 }
 
 func (pp *PolicyProvider) TransitionIssue(ctx context.Context, key string, targetStatus string) error {

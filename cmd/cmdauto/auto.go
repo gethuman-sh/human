@@ -123,9 +123,10 @@ func BuildAutoStatusCmd(deps cmdutil.Deps) *cobra.Command {
 // so the second key must be shaped for the same tracker kind — a cross-tracker
 // pair is rejected up front rather than sent to an API that cannot express it.
 func BuildAutoLinkCmd(deps cmdutil.Deps) *cobra.Command {
-	return &cobra.Command{
+	var blocks bool
+	cmd := &cobra.Command{
 		Use:   "link KEY OTHER_KEY",
-		Short: `Link two related issues ("relates to", auto-detect tracker)`,
+		Short: `Link two issues ("relates to", or --blocks for a dependency; auto-detect tracker)`,
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := cmdutil.ResolveAutoProvider(cmd.Context(), cmd, args[0], true, deps)
@@ -140,7 +141,43 @@ func BuildAutoLinkCmd(deps cmdutil.Deps) *cobra.Command {
 					"key", args[0], "otherKey", args[1], "tracker", result.Kind)
 			}
 
-			if err := cmdprovider.RunLinkIssues(cmd.Context(), result.Provider, cmd.OutOrStdout(), result.Key, args[1]); err != nil {
+			if err := cmdprovider.RunLinkIssues(cmd.Context(), result.Provider, cmd.OutOrStdout(), result.Key, args[1], blocks); err != nil {
+				return err
+			}
+
+			project := tracker.ExtractProject(result.Key)
+			PrintAutoHints(cmd.ErrOrStderr(), result.Kind, result.Key, project, "link")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&blocks, "blocks", false,
+		"Record a directional dependency: the first issue must finish before the second can start")
+	return cmd
+}
+
+// BuildAutoUnlinkCmd creates the top-level "unlink" command. Removing the link
+// is how work held behind a blocker is released, so it has to be as reachable
+// as the link that held it — someone looking at a stalled card should not have
+// to name the tracker to free it.
+func BuildAutoUnlinkCmd(deps cmdutil.Deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "unlink KEY OTHER_KEY",
+		Short: "Remove the relationship between two issues (auto-detect tracker)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := cmdutil.ResolveAutoProvider(cmd.Context(), cmd, args[0], true, deps)
+			if err != nil {
+				return err
+			}
+			defer result.Cleanup()
+
+			if !slices.Contains(tracker.DetectCandidateKinds(args[1]), result.Kind) {
+				return errors.WithDetails(
+					"keys resolve to different trackers; a link only ever existed within one tracker",
+					"key", args[0], "otherKey", args[1], "tracker", result.Kind)
+			}
+
+			if err := cmdprovider.RunUnlinkIssues(cmd.Context(), result.Provider, cmd.OutOrStdout(), result.Key, args[1]); err != nil {
 				return err
 			}
 

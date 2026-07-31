@@ -465,7 +465,15 @@ const relatedRel = "System.LinkTypes.Related"
 // LinkIssues implements tracker.Linker by patching a Related relation onto
 // the first work item — the same /relations/- json-patch the create-time
 // hierarchy link uses.
-func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string, kind tracker.LinkKind) error {
+	// Only the symmetric relation is implemented here. Asked for a directional
+	// one, refuse rather than record a weaker link: a "blocks" stored as
+	// "related" would gate nothing while appearing to, and the caller could not
+	// tell the difference.
+	if kind != tracker.LinkRelated {
+		return errors.WithDetails("Azure DevOps links are symmetric here; directional links are not implemented for this backend",
+			"kind", string(kind), "key", key, "otherKey", otherKey)
+	}
 	project, id, err := parseIssueKey(key)
 	if err != nil {
 		return err
@@ -664,4 +672,13 @@ func (c *Client) apisPath(project, resource string) string {
 		return fmt.Sprintf("/%s/%s/_apis/%s", url.PathEscape(c.org), url.PathEscape(project), resource)
 	}
 	return fmt.Sprintf("/%s/_apis/%s", url.PathEscape(c.org), resource)
+}
+
+// UnlinkIssues is not implemented for Azure DevOps. Reporting success without
+// removing anything would be worse than refusing: unlinking is how work held
+// behind a blocker is released, so a silent no-op would leave the caller
+// believing a dependency was gone when it was not.
+func (c *Client) UnlinkIssues(_ context.Context, key string, otherKey string) error {
+	return errors.WithDetails("removing issue links is not implemented for Azure DevOps",
+		"key", key, "otherKey", otherKey)
 }

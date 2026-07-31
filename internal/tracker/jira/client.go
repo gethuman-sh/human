@@ -240,7 +240,15 @@ func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (
 // LinkIssues implements tracker.Linker via Jira's issue-link API. "Relates"
 // is Jira's stock symmetric link type; instances that renamed it surface the
 // API's own error so the user sees the tracker's vocabulary, not ours.
-func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string, kind tracker.LinkKind) error {
+	// Only the symmetric relation is implemented here. Asked for a directional
+	// one, refuse rather than record a weaker link: a "blocks" stored as
+	// "related" would gate nothing while appearing to, and the caller could not
+	// tell the difference.
+	if kind != tracker.LinkRelated {
+		return errors.WithDetails("Jira links are symmetric here; directional links are not implemented for this backend",
+			"kind", string(kind), "key", key, "otherKey", otherKey)
+	}
 	payload := map[string]any{
 		"type":         map[string]string{"name": "Relates"},
 		"inwardIssue":  map[string]string{"key": key},
@@ -500,4 +508,13 @@ func projectFromKey(key string) string {
 		return key[:idx]
 	}
 	return ""
+}
+
+// UnlinkIssues is not implemented for Jira. Reporting success without
+// removing anything would be worse than refusing: unlinking is how work held
+// behind a blocker is released, so a silent no-op would leave the caller
+// believing a dependency was gone when it was not.
+func (c *Client) UnlinkIssues(_ context.Context, key string, otherKey string) error {
+	return errors.WithDetails("removing issue links is not implemented for Jira",
+		"key", key, "otherKey", otherKey)
 }

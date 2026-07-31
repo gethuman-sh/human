@@ -851,6 +851,14 @@ body {
   color: var(--turn-machine);
 }
 
+/* Work parked behind another ticket: nothing is running and nothing is wrong,
+   so it belongs in neither the machine nor the failure register — muted, but
+   weighted enough to answer "why is this card not moving?" at a glance. */
+.badge.blocked {
+  color: var(--muted);
+  font-weight: 600;
+}
+
 /* An open decision block (ticket 534): the pipeline is deliberately waiting on
    the human — amber, because the ball is in play and in the user's court
    (SC-1830 needs-a-person register). */

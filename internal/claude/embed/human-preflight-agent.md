@@ -19,6 +19,13 @@ human get <PM_KEY>
 human <TRACKER> issue comment list <PM_KEY>
 human plan show <PM_KEY>          # the plan, when one is attached
 
+# Other open work heading for the same code
+human search --file <path> --json --limit 10   # tickets whose plans name this exact file
+human search "<terms from the title>" --json --limit 10
+
+# Ordering, once a human has chosen it (BLOCKER first — it must finish first)
+human link <BLOCKER_KEY> <PM_KEY> --blocks
+
 # What this run may do
 human capabilities --json
 
@@ -61,11 +68,37 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
    A decision recorded here is **final**. Never re-surface it as a new fork.
 
+   One kind of answer does more than fill state. A fork settled as *"<KEY> goes first"* is a sequencing
+   decision, so put it where the pipeline can act on it and then stop — this work must not start while
+   that ticket is open:
+
+   ```bash
+   human link <BLOCKER_KEY> <PM_KEY> --blocks
+   ```
+
+   Then end the run `needs-human-work`, naming the ticket being waited for. The link is what holds the
+   work; stopping is what keeps this run from doing the thing the human just said to do second. The card
+   shows what it waits for, and the ticket is picked up again once the blocker is done.
+
 5. **Read everything that could answer a question before you ask it** — the ticket description and comments, the attached plan, `.humanconfig`, `CLAUDE.md`, and the actual code. Most apparent ambiguity is answered by the codebase.
 
-6. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
+6. **Check whether other open work is heading for the same code.** Two runs editing one file collide, and
+   the loser's work is redone by hand — the most expensive failure this stage can prevent. Take the files
+   from the plan (or from what the ticket plainly changes) and ask who else is aiming at them:
 
-7. **Emit exactly one verdict** (below).
+   ```bash
+   human search --file internal/daemon/board_transition.go --json --limit 10
+   ```
+
+   A hit only counts when the other ticket is **still open** and its work would land in the same place —
+   a shipped ticket and a merely adjacent one order nothing. When it does count, that is a fork for the
+   human: which goes first is a judgement about intent, and an agent silently reordering someone's
+   backlog is worse than one that asks. Surface it as the verdict below. **Propose, never create** — the
+   link is written only after a human has chosen it (step 4).
+
+7. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
+
+8. **Emit exactly one verdict** (below).
 
 ## What may be asked
 
@@ -76,6 +109,10 @@ A question is admissible **only** if all three hold:
 - **(c)** Guessing wrong would waste the run, rather than being cheap to revise afterwards.
 
 Ask about **scope forks and product intent**. Never about implementation choices you can make yourself.
+
+Ordering is admissible on the same terms: two open tickets aimed at the same code are a fork about which
+one the product wants first, and the options read as *"SC-1234 goes first"* / *"this goes first"* /
+*"they do not overlap — run both"*.
 
 If you cannot name what you searched, you have not earned the question. Go read more.
 

@@ -45,7 +45,9 @@ func (s *stubProvider) AddComment(_ context.Context, key, body string) (*tracker
 	}
 	return &tracker.Comment{Body: body}, nil
 }
-func (s *stubProvider) LinkIssues(context.Context, string, string) error      { return nil }
+func (s *stubProvider) LinkIssues(context.Context, string, string, tracker.LinkKind) error {
+	return nil
+}
 func (s *stubProvider) DeleteIssue(context.Context, string) error             { return nil }
 func (s *stubProvider) TransitionIssue(context.Context, string, string) error { return nil }
 func (s *stubProvider) AssignIssue(context.Context, string, string) error     { return nil }
@@ -192,4 +194,8 @@ func TestBuildMarkerCmd_Subcommands(t *testing.T) {
 		names = append(names, strings.Fields(sub.Use)[0])
 	}
 	assert.ElementsMatch(t, []string{"post", "show", "list"}, names)
+}
+
+func (s *stubProvider) UnlinkIssues(context.Context, string, string) error {
+	return nil
 }

@@ -188,7 +188,15 @@ func (c *Client) ListComments(ctx context.Context, issueKey string) ([]tracker.C
 // path, so a custom-ID pair resolves in one call; a mixed pair (one custom,
 // one canonical) is rejected early because the flag would misread the
 // canonical id as a custom one.
-func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string, kind tracker.LinkKind) error {
+	// Only the symmetric relation is implemented here. Asked for a directional
+	// one, refuse rather than record a weaker link: a "blocks" stored as
+	// "related" would gate nothing while appearing to, and the caller could not
+	// tell the difference.
+	if kind != tracker.LinkRelated {
+		return errors.WithDetails("ClickUp links are symmetric here; directional links are not implemented for this backend",
+			"kind", string(kind), "key", key, "otherKey", otherKey)
+	}
 	if looksLikeCustomID(key) != looksLikeCustomID(otherKey) {
 		return errors.WithDetails("cannot link a custom task ID to a canonical task ID; use the same ID form for both",
 			"key", key, "otherKey", otherKey)
@@ -806,4 +814,13 @@ func (c *Client) SetMarkdownDescription(ctx context.Context, key string, markdow
 	}
 	_ = resp.Body.Close()
 	return nil
+}
+
+// UnlinkIssues is not implemented for ClickUp. Reporting success without
+// removing anything would be worse than refusing: unlinking is how work held
+// behind a blocker is released, so a silent no-op would leave the caller
+// believing a dependency was gone when it was not.
+func (c *Client) UnlinkIssues(_ context.Context, key string, otherKey string) error {
+	return errors.WithDetails("removing issue links is not implemented for ClickUp",
+		"key", key, "otherKey", otherKey)
 }

@@ -905,14 +905,14 @@ func TestLinkIssues_happy(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "token")
-	err := client.LinkIssues(context.Background(), "group/proj#5", "group/other#7")
+	err := client.LinkIssues(context.Background(), "group/proj#5", "group/other#7", tracker.LinkRelated)
 	require.NoError(t, err)
 }
 
 func TestLinkIssues_badKeys(t *testing.T) {
 	client := New("http://unused", "token")
-	require.Error(t, client.LinkIssues(context.Background(), "no-hash", "group/other#7"))
-	require.Error(t, client.LinkIssues(context.Background(), "group/proj#5", "no-hash"))
+	require.Error(t, client.LinkIssues(context.Background(), "no-hash", "group/other#7", tracker.LinkRelated))
+	require.Error(t, client.LinkIssues(context.Background(), "group/proj#5", "no-hash", tracker.LinkRelated))
 }
 
 func TestLinkIssues_httpError(t *testing.T) {
@@ -922,7 +922,7 @@ func TestLinkIssues_httpError(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "token")
-	err := client.LinkIssues(context.Background(), "group/proj#5", "group/other#7")
+	err := client.LinkIssues(context.Background(), "group/proj#5", "group/other#7", tracker.LinkRelated)
 	require.Error(t, err)
 }
 
