@@ -593,7 +593,18 @@ type Commenter interface {
 // cross-reference comment on the first issue, which is that ecosystem's
 // convention for relating issues.
 type Linker interface {
-	LinkIssues(ctx context.Context, key string, otherKey string) error
+	// LinkIssues relates key to otherKey. For LinkBlocks the direction is
+	// subject-verb-object: key blocks otherKey.
+	//
+	// A backend that cannot express the requested kind must return an error
+	// naming that limitation rather than writing a weaker relation. A "blocks"
+	// link silently stored as "related" would gate nothing while appearing to,
+	// which is the failure a caller cannot detect.
+	LinkIssues(ctx context.Context, key string, otherKey string, kind LinkKind) error
+	// UnlinkIssues removes the relationship between two issues. Removing a
+	// dependency is how work held behind a mistaken or abandoned blocker is
+	// released, so it is a mutation in its own right.
+	UnlinkIssues(ctx context.Context, key string, otherKey string) error
 }
 
 // Deleter deletes (or closes) an issue by key.

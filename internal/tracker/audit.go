@@ -126,10 +126,17 @@ func (a *AuditProvider) AddComment(ctx context.Context, issueKey string, body st
 	return comment, err
 }
 
-func (a *AuditProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (a *AuditProvider) LinkIssues(ctx context.Context, key string, otherKey string, kind LinkKind) error {
 	start := time.Now()
-	err := a.inner.LinkIssues(ctx, key, otherKey)
+	err := a.inner.LinkIssues(ctx, key, otherKey, kind)
 	a.log("LinkIssues", key, time.Since(start), err)
+	return err
+}
+
+func (a *AuditProvider) UnlinkIssues(ctx context.Context, key string, otherKey string) error {
+	start := time.Now()
+	err := a.inner.UnlinkIssues(ctx, key, otherKey)
+	a.log("UnlinkIssues", key, time.Since(start), err)
 	return err
 }
 

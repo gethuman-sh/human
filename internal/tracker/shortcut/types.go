@@ -25,6 +25,7 @@ type scStory struct {
 // scStoryLink is one Shortcut story relationship. The verb reads
 // subject-verb-object: with verb "blocks", SubjectID blocks ObjectID.
 type scStoryLink struct {
+	ID        int64  `json:"id"`
 	Verb      string `json:"verb"`
 	SubjectID int64  `json:"subject_id"`
 	ObjectID  int64  `json:"object_id"`

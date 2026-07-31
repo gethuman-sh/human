@@ -171,9 +171,20 @@ func (d *DestructiveProvider) AddComment(ctx context.Context, issueKey string, b
 	return d.inner.AddComment(ctx, issueKey, body)
 }
 
-func (d *DestructiveProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (d *DestructiveProvider) LinkIssues(ctx context.Context, key string, otherKey string, kind LinkKind) error {
 	// Additive like AddComment: linking never needs a destructive confirm.
-	return d.inner.LinkIssues(ctx, key, otherKey)
+	return d.inner.LinkIssues(ctx, key, otherKey, kind)
+}
+
+// UnlinkIssues is NOT additive, so unlike LinkIssues it is recorded. Removing a
+// blocking link releases work someone deliberately sequenced behind something
+// else; that is a decision being undone, and it belongs in the destructive log
+// beside deletes and transitions.
+func (d *DestructiveProvider) UnlinkIssues(ctx context.Context, key string, otherKey string) error {
+	err := d.inner.UnlinkIssues(ctx, key, otherKey)
+	entry := d.buildEntry("UnlinkIssues", key, otherKey, err)
+	d.logEntry(ctx, entry)
+	return err
 }
 
 func (d *DestructiveProvider) AssignIssue(ctx context.Context, key string, userID string) error {

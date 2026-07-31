@@ -46,9 +46,17 @@ func (s *SafeProvider) AddComment(ctx context.Context, issueKey string, body str
 	return s.inner.AddComment(ctx, issueKey, body)
 }
 
-func (s *SafeProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (s *SafeProvider) LinkIssues(ctx context.Context, key string, otherKey string, kind LinkKind) error {
 	// Additive like AddComment — safe mode blocks only destructive operations.
-	return s.inner.LinkIssues(ctx, key, otherKey)
+	return s.inner.LinkIssues(ctx, key, otherKey, kind)
+}
+
+// UnlinkIssues removes a dependency, which can release work someone sequenced
+// deliberately — safe mode blocks it.
+func (s *SafeProvider) UnlinkIssues(_ context.Context, _ string, _ string) error {
+	return errors.WithDetails("operation blocked by safe mode: %s on %s",
+		"operation", "UnlinkIssues",
+		"instance", s.instanceName)
 }
 
 func (s *SafeProvider) TransitionIssue(_ context.Context, _ string, _ string) error {

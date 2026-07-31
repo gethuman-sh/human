@@ -39,7 +39,9 @@ func (s *stubProvider) ListComments(context.Context, string) ([]tracker.Comment,
 func (s *stubProvider) AddComment(context.Context, string, string) (*tracker.Comment, error) {
 	return nil, nil
 }
-func (s *stubProvider) LinkIssues(context.Context, string, string) error      { return nil }
+func (s *stubProvider) LinkIssues(context.Context, string, string, tracker.LinkKind) error {
+	return nil
+}
 func (s *stubProvider) DeleteIssue(context.Context, string) error             { return nil }
 func (s *stubProvider) TransitionIssue(context.Context, string, string) error { return nil }
 func (s *stubProvider) AssignIssue(context.Context, string, string) error     { return nil }
@@ -124,4 +126,8 @@ func TestFetchTrackerIssuesLiteFunc_EmptyRegistry(t *testing.T) {
 	results, err := fetchTrackerIssuesLiteFunc(reg, vault.NewResolver())()
 	require.NoError(t, err)
 	assert.Empty(t, results)
+}
+
+func (s *stubProvider) UnlinkIssues(context.Context, string, string) error {
+	return nil
 }

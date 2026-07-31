@@ -139,7 +139,7 @@ func TestSafeProvider_LinkIssuesForwarded(t *testing.T) {
 	}
 	sp := tracker.NewSafeProvider(inner, "test-instance")
 
-	err := sp.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	err := sp.LinkIssues(context.Background(), "KAN-1", "KAN-2", tracker.LinkRelated)
 	require.NoError(t, err)
 	assert.Equal(t, "KAN-1", gotKey)
 	assert.Equal(t, "KAN-2", gotOther)

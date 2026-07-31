@@ -561,6 +561,23 @@ func TestDetectDestructive_YesDoesNotSkip(t *testing.T) {
 	assert.Equal(t, "KAN-1", op.Key)
 }
 
+// Unlinking releases work that was deliberately held behind a blocker, so it
+// is gated like a transition rather than waved through as an edit to metadata.
+func TestDetectDestructive_Unlink(t *testing.T) {
+	op, ok := detectDestructive([]string{"shortcut", "issue", "unlink", "SC-1", "SC-2"})
+	assert.True(t, ok)
+	assert.Equal(t, "UnlinkIssues", op.Operation)
+	assert.Equal(t, "shortcut", op.Tracker)
+	assert.Equal(t, "SC-1", op.Key)
+}
+
+// Creating a link only adds a constraint someone can see and remove; it needs
+// no confirmation prompt.
+func TestDetectDestructive_LinkIsNotGated(t *testing.T) {
+	_, ok := detectDestructive([]string{"shortcut", "issue", "link", "SC-1", "SC-2", "--blocks"})
+	assert.False(t, ok)
+}
+
 func TestDetectDestructive_NonDestructive(t *testing.T) {
 	_, ok := detectDestructive([]string{"jira", "issue", "list", "--project", "KAN"})
 	assert.False(t, ok)

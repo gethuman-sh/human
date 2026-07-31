@@ -36,7 +36,7 @@ func (m *mockProvider) AddComment(_ context.Context, _ string, _ string) (*track
 	return nil, nil
 }
 
-func (m *mockProvider) LinkIssues(_ context.Context, _ string, _ string) error {
+func (m *mockProvider) LinkIssues(_ context.Context, _ string, _ string, _ tracker.LinkKind) error {
 	return nil
 }
 
@@ -550,4 +550,8 @@ func TestSync_preferFullIssueURL(t *testing.T) {
 	if urls["KAN-2"] != "https://jira.example.com" {
 		t.Errorf("KAN-2 URL should fall back to instance URL, got %q", urls["KAN-2"])
 	}
+}
+
+func (m *mockProvider) UnlinkIssues(context.Context, string, string) error {
+	return nil
 }

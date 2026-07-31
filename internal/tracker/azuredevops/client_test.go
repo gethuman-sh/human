@@ -1008,7 +1008,7 @@ func TestLinkIssues_happy(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "myorg", "token")
-	err := client.LinkIssues(context.Background(), "Proj/12", "Proj/34")
+	err := client.LinkIssues(context.Background(), "Proj/12", "Proj/34", tracker.LinkRelated)
 	require.NoError(t, err)
 
 	require.Len(t, ops, 1)
@@ -1023,6 +1023,6 @@ func TestLinkIssues_happy(t *testing.T) {
 
 func TestLinkIssues_badKey(t *testing.T) {
 	client := New("http://unused", "myorg", "token")
-	require.Error(t, client.LinkIssues(context.Background(), "12", "Proj/34"))
-	require.Error(t, client.LinkIssues(context.Background(), "Proj/12", "34"))
+	require.Error(t, client.LinkIssues(context.Background(), "12", "Proj/34", tracker.LinkRelated))
+	require.Error(t, client.LinkIssues(context.Background(), "Proj/12", "34", tracker.LinkRelated))
 }

@@ -213,7 +213,7 @@ func (m *mockProvider) AddComment(ctx context.Context, issueKey string, body str
 	return m.addCommentFn(ctx, issueKey, body)
 }
 
-func (m *mockProvider) LinkIssues(ctx context.Context, key string, otherKey string) error {
+func (m *mockProvider) LinkIssues(ctx context.Context, key string, otherKey string, _ tracker.LinkKind) error {
 	if m.linkIssuesFn == nil {
 		return nil
 	}
@@ -1344,4 +1344,8 @@ func TestBuildInstallCmd_unsupportedAgent(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported agent")
+}
+
+func (m *mockProvider) UnlinkIssues(context.Context, string, string) error {
+	return nil
 }

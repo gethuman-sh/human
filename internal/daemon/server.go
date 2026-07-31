@@ -1359,25 +1359,29 @@ func detectDestructive(args []string) (destructiveOp, bool) {
 		return destructiveOp{}, false
 	}
 
-	verb := cleaned[issueIdx+1]
-	key := cleaned[issueIdx+2]
-
-	switch verb {
-	case "delete":
-		return destructiveOp{Operation: "DeleteIssue", Tracker: trackerKind, Key: key}, true
-	case "edit":
-		return destructiveOp{Operation: "EditIssue", Tracker: trackerKind, Key: key}, true
-	case "status":
-		// "issue status KEY STATUS" mutates state via TransitionIssue, which the
-		// tracker layer already classifies as destructive — gate it too. (Note:
-		// the read-only "statuses" listing verb is intentionally not matched.)
-		return destructiveOp{Operation: "TransitionIssue", Tracker: trackerKind, Key: key}, true
-	case "start":
-		// "issue start KEY" transitions to In Progress and assigns the user.
-		return destructiveOp{Operation: "StartIssue", Tracker: trackerKind, Key: key}, true
-	default:
+	op, ok := gatedOperations[cleaned[issueIdx+1]]
+	if !ok {
 		return destructiveOp{}, false
 	}
+	return destructiveOp{Operation: op, Tracker: trackerKind, Key: cleaned[issueIdx+2]}, true
+}
+
+// gatedOperations maps an "issue" verb to the tracker operation that must be
+// confirmed before it runs. A verb absent here executes unprompted, so the
+// omissions matter as much as the entries: "statuses" and "link" are left out
+// because listing states changes nothing and adding a link only adds a
+// constraint that stays visible and removable.
+var gatedOperations = map[string]string{
+	"delete": "DeleteIssue",
+	"edit":   "EditIssue",
+	// "issue status KEY STATUS" mutates state via TransitionIssue, which the
+	// tracker layer already classifies as destructive — gate it too.
+	"status": "TransitionIssue",
+	// "issue start KEY" transitions to In Progress and assigns the user.
+	"start": "StartIssue",
+	// Removing a link undoes a sequencing decision and releases work that was
+	// deliberately held behind a blocker — the same weight as a transition.
+	"unlink": "UnlinkIssues",
 }
 
 // handleDestructiveConfirm gates a destructive operation on a permission

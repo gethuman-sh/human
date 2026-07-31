@@ -36,7 +36,9 @@ func (s *stubProvider) AddComment(_ context.Context, _, body string) (*tracker.C
 	s.added = append(s.added, body)
 	return &tracker.Comment{Body: body}, s.addErr
 }
-func (s *stubProvider) LinkIssues(context.Context, string, string) error      { return nil }
+func (s *stubProvider) LinkIssues(context.Context, string, string, tracker.LinkKind) error {
+	return nil
+}
 func (s *stubProvider) DeleteIssue(context.Context, string) error             { return nil }
 func (s *stubProvider) TransitionIssue(context.Context, string, string) error { return nil }
 func (s *stubProvider) AssignIssue(context.Context, string, string) error     { return nil }
@@ -248,4 +250,8 @@ func TestRunHandoffPost_derivesCommitsFromBranchNotHead(t *testing.T) {
 	err := RunHandoffPost(context.Background(), p, &buf, ".", "SC-1", PostOptions{Branch: "feat/sc-1", Verify: true})
 	require.NoError(t, err)
 	assert.Equal(t, "feat/sc-1", gotRev)
+}
+
+func (s *stubProvider) UnlinkIssues(context.Context, string, string) error {
+	return nil
 }

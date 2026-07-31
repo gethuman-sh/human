@@ -9,7 +9,7 @@ import (
 // MutatingOp is the skeleton of a detected mutating tracker command, decomposed
 // into the parts the audit event needs.
 type MutatingOp struct {
-	Operation   string // "create","edit","delete","comment","status","start"
+	Operation   string // "create","edit","delete","comment","status","start","link","unlink"
 	TrackerKind string
 	TrackerName string // from --tracker
 	Key         string // issue key, empty for create
@@ -110,9 +110,11 @@ func classifyVerb(cleaned []string, issueIdx int) (MutatingOp, bool) {
 	switch verb {
 	case "create":
 		return MutatingOp{Operation: "create"}, true
-	case "edit", "delete", "status", "start":
+	case "edit", "delete", "status", "start", "link", "unlink":
 		// Each requires a key as the next positional. "status" is exact, so the
-		// read-only "statuses" listing verb never reaches here.
+		// read-only "statuses" listing verb never reaches here. link/unlink
+		// write a relationship the launch gate reads, so an agent changing one
+		// must leave the same trail as an agent changing a status.
 		if key := keyAt(1); key != "" {
 			return MutatingOp{Operation: verb, Key: key}, true
 		}

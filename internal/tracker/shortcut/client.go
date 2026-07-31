@@ -541,10 +541,14 @@ func (c *Client) DeleteIssue(ctx context.Context, key string) error {
 }
 
 // AddComment implements tracker.Commenter.
-// LinkIssues implements tracker.Linker via Shortcut's story-link API. The
-// "relates to" verb is Shortcut's symmetric story relation; subject/object
-// order therefore carries no meaning beyond display.
-func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) error {
+// LinkIssues implements tracker.Linker via Shortcut's story-link API. Shortcut
+// states relations as subject-verb-object, so key is the subject: with
+// LinkBlocks, key blocks otherKey.
+func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string, kind tracker.LinkKind) error {
+	verb, ok := verbFor(kind)
+	if !ok {
+		return errors.WithDetails("shortcut cannot express this link kind", "kind", string(kind))
+	}
 	subjectID, err := parseStoryID(key)
 	if err != nil {
 		return err
@@ -555,7 +559,7 @@ func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) er
 	}
 
 	payload, err := json.Marshal(map[string]any{
-		"verb":       "relates to",
+		"verb":       verb,
 		"subject_id": subjectID,
 		"object_id":  objectID,
 	})
@@ -566,6 +570,56 @@ func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string) er
 	resp, err := c.doRequest(ctx, http.MethodPost, "/api/v3/story-links", "", bytes.NewReader(payload), "application/json")
 	if err != nil {
 		return errors.WrapWithDetails(err, "linking issues", "key", key, "otherKey", otherKey)
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+// verbFor maps our vocabulary onto Shortcut's. The inverse of linkKindFor, kept
+// beside it so the two cannot drift.
+func verbFor(kind tracker.LinkKind) (string, bool) {
+	switch kind {
+	case tracker.LinkBlocks:
+		return "blocks", true
+	case tracker.LinkRelated:
+		return "relates to", true
+	default:
+		return "", false
+	}
+}
+
+// UnlinkIssues removes the relationship between two stories, in whichever
+// direction it was recorded — the caller asking to release a dependency should
+// not have to know which end it was written from.
+func (c *Client) UnlinkIssues(ctx context.Context, key string, otherKey string) error {
+	id, err := parseStoryID(key)
+	if err != nil {
+		return err
+	}
+	otherID, err := parseStoryID(otherKey)
+	if err != nil {
+		return err
+	}
+	story, err := c.fetchStory(ctx, id)
+	if err != nil {
+		return err
+	}
+	for _, l := range story.StoryLinks {
+		if (l.SubjectID == id && l.ObjectID == otherID) || (l.SubjectID == otherID && l.ObjectID == id) {
+			if dErr := c.deleteStoryLink(ctx, l.ID); dErr != nil {
+				return dErr
+			}
+		}
+	}
+	return nil
+}
+
+// deleteStoryLink removes one story-link record by id.
+func (c *Client) deleteStoryLink(ctx context.Context, linkID int64) error {
+	path := fmt.Sprintf("/api/v3/story-links/%d", linkID)
+	resp, err := c.doRequest(ctx, http.MethodDelete, path, "", nil, "")
+	if err != nil {
+		return errors.WrapWithDetails(err, "removing story link", "linkID", linkID)
 	}
 	_ = resp.Body.Close()
 	return nil

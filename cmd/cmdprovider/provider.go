@@ -37,6 +37,7 @@ func BuildProviderCommands(kind string, deps cmdutil.Deps) []*cobra.Command {
 	issueCmd.AddCommand(buildIssueDeleteCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueCommentCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueLinkCmd(kind, deps))
+	issueCmd.AddCommand(buildIssueUnlinkCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueStartCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueStatusesCmd(kind, deps))
 	issueCmd.AddCommand(buildIssueStatusSetCmd(kind, deps))
@@ -252,9 +253,10 @@ func buildIssueCommentCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 }
 
 func buildIssueLinkCmd(kind string, deps cmdutil.Deps) *cobra.Command {
-	return &cobra.Command{
+	var blocks bool
+	cmd := &cobra.Command{
 		Use:   "link KEY OTHER_KEY",
-		Short: `Link two related issues ("relates to"; on GitHub, a cross-reference comment)`,
+		Short: `Link two issues ("relates to" by default, or --blocks for a dependency)`,
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, cleanup, err := cmdutil.ResolveProvider(cmd, kind, deps)
@@ -262,7 +264,27 @@ func buildIssueLinkCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			return RunLinkIssues(cmd.Context(), p, cmd.OutOrStdout(), args[0], args[1])
+			return RunLinkIssues(cmd.Context(), p, cmd.OutOrStdout(), args[0], args[1], blocks)
+		},
+	}
+	cmd.Flags().BoolVar(&blocks, "blocks", false,
+		"Record a directional dependency: the first issue must finish before the second can start")
+	return cmd
+}
+
+// buildIssueUnlinkCmd removes a relationship between two issues.
+func buildIssueUnlinkCmd(kind string, deps cmdutil.Deps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "unlink KEY OTHER_KEY",
+		Short: "Remove the relationship between two issues",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, cleanup, err := cmdutil.ResolveProvider(cmd, kind, deps)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+			return RunUnlinkIssues(cmd.Context(), p, cmd.OutOrStdout(), args[0], args[1])
 		},
 	}
 }
@@ -495,11 +517,31 @@ func RunAddComment(ctx context.Context, p tracker.Provider, out io.Writer, key, 
 }
 
 // RunLinkIssues relates two issues in the same tracker and confirms on out.
-func RunLinkIssues(ctx context.Context, p tracker.Provider, out io.Writer, key, otherKey string) error {
-	if err := p.LinkIssues(ctx, key, otherKey); err != nil {
+// With blocks set the relation is directional: key must finish before otherKey
+// can start.
+func RunLinkIssues(ctx context.Context, p tracker.Provider, out io.Writer, key, otherKey string, blocks bool) error {
+	kind := tracker.LinkRelated
+	if blocks {
+		kind = tracker.LinkBlocks
+	}
+	if err := p.LinkIssues(ctx, key, otherKey, kind); err != nil {
 		return err
 	}
+	if blocks {
+		_, _ = fmt.Fprintf(out, "Linked %s to %s (blocks: %s must finish first)\n", key, otherKey, key)
+		return nil
+	}
 	_, _ = fmt.Fprintf(out, "Linked %s to %s (relates to)\n", key, otherKey)
+	return nil
+}
+
+// RunUnlinkIssues removes the relationship between two issues. This is how work
+// held behind a mistaken or abandoned blocker is released.
+func RunUnlinkIssues(ctx context.Context, p tracker.Provider, out io.Writer, key, otherKey string) error {
+	if err := p.UnlinkIssues(ctx, key, otherKey); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Unlinked %s from %s\n", key, otherKey)
 	return nil
 }
 

@@ -1240,7 +1240,7 @@ func TestLinkIssues_postsCrossReferenceComment(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "ghp_test")
-	err := client.LinkIssues(context.Background(), "octocat/hello-world#7", "octocat/other-repo#42")
+	err := client.LinkIssues(context.Background(), "octocat/hello-world#7", "octocat/other-repo#42", tracker.LinkRelated)
 	require.NoError(t, err)
 
 	// The full owner/repo#N form keeps the mention working across repos.
@@ -1249,7 +1249,7 @@ func TestLinkIssues_postsCrossReferenceComment(t *testing.T) {
 
 func TestLinkIssues_badOtherKey(t *testing.T) {
 	client := New("http://unused", "ghp_test")
-	err := client.LinkIssues(context.Background(), "octocat/hello-world#7", "not-a-key")
+	err := client.LinkIssues(context.Background(), "octocat/hello-world#7", "not-a-key", tracker.LinkRelated)
 	require.Error(t, err)
 }
 

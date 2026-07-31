@@ -2052,7 +2052,7 @@ func TestLinkIssues_happy(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "token")
-	err := client.LinkIssues(context.Background(), "ENG-1", "ENG-2")
+	err := client.LinkIssues(context.Background(), "ENG-1", "ENG-2", tracker.LinkRelated)
 	require.NoError(t, err)
 }
 
@@ -2071,7 +2071,7 @@ func TestLinkIssues_rejected(t *testing.T) {
 	defer srv.Close()
 
 	client := New(srv.URL, "token")
-	err := client.LinkIssues(context.Background(), "ENG-1", "ENG-2")
+	err := client.LinkIssues(context.Background(), "ENG-1", "ENG-2", tracker.LinkRelated)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "rejected")
 }

@@ -36,8 +36,10 @@ func (s *semanticStub) ListComments(context.Context, string) ([]tracker.Comment,
 func (s *semanticStub) AddComment(context.Context, string, string) (*tracker.Comment, error) {
 	return nil, nil
 }
-func (s *semanticStub) LinkIssues(context.Context, string, string) error { return nil }
-func (s *semanticStub) DeleteIssue(context.Context, string) error        { return nil }
+func (s *semanticStub) LinkIssues(context.Context, string, string, tracker.LinkKind) error {
+	return nil
+}
+func (s *semanticStub) DeleteIssue(context.Context, string) error { return nil }
 func (s *semanticStub) TransitionIssue(_ context.Context, _, status string) error {
 	s.transitions = append(s.transitions, status)
 	return s.transErr
@@ -146,4 +148,8 @@ func TestRunIdeaPromote_editError(t *testing.T) {
 	var buf bytes.Buffer
 	err := RunIdeaPromote(context.Background(), p, &buf, "SC-1")
 	require.Error(t, err)
+}
+
+func (s *semanticStub) UnlinkIssues(context.Context, string, string) error {
+	return nil
 }

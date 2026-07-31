@@ -294,7 +294,7 @@ func TestDestructiveProvider_LinkIssuesPassthrough(t *testing.T) {
 	}
 	dp, logPath := newDestructive(t, inner, nil)
 
-	err := dp.LinkIssues(context.Background(), "KAN-5", "KAN-6")
+	err := dp.LinkIssues(context.Background(), "KAN-5", "KAN-6", tracker.LinkRelated)
 	require.NoError(t, err)
 
 	entries := readDestructiveEntries(t, logPath)

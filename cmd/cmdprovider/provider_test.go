@@ -73,7 +73,7 @@ func (m *mockProvider) AddComment(ctx context.Context, key, body string) (*track
 	return m.addCommentFn(ctx, key, body)
 }
 
-func (m *mockProvider) LinkIssues(ctx context.Context, key, otherKey string) error {
+func (m *mockProvider) LinkIssues(ctx context.Context, key, otherKey string, _ tracker.LinkKind) error {
 	if m.linkIssuesFn == nil {
 		return nil
 	}
@@ -1220,7 +1220,7 @@ func TestRunLinkIssues_Success(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := RunLinkIssues(context.Background(), p, &buf, "KAN-1", "KAN-2")
+	err := RunLinkIssues(context.Background(), p, &buf, "KAN-1", "KAN-2", false)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Linked KAN-1 to KAN-2")
 }
@@ -1233,7 +1233,11 @@ func TestRunLinkIssues_Error(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := RunLinkIssues(context.Background(), p, &buf, "KAN-1", "KAN-2")
+	err := RunLinkIssues(context.Background(), p, &buf, "KAN-1", "KAN-2", false)
 	require.Error(t, err)
 	assert.Empty(t, buf.String())
+}
+
+func (m *mockProvider) UnlinkIssues(context.Context, string, string) error {
+	return nil
 }

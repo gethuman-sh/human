@@ -276,11 +276,11 @@ func TestPolicyProvider_LinkIssues(t *testing.T) {
 
 	blocked := tracker.NewPolicyProvider(inner, "test",
 		tracker.NewPolicy(tracker.PolicyConfig{Block: []string{"link"}}), nil)
-	err := blocked.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	err := blocked.LinkIssues(context.Background(), "KAN-1", "KAN-2", tracker.LinkRelated)
 	assert.Error(t, err)
 
 	allowed := tracker.NewPolicyProvider(inner, "test",
 		tracker.NewPolicy(tracker.PolicyConfig{}), nil)
-	err = allowed.LinkIssues(context.Background(), "KAN-1", "KAN-2")
+	err = allowed.LinkIssues(context.Background(), "KAN-1", "KAN-2", tracker.LinkRelated)
 	assert.NoError(t, err)
 }
