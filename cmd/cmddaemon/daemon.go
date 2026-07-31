@@ -1759,6 +1759,12 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 		}
 		loadFailures = append(loadFailures, failures...)
 		for _, inst := range instances {
+			// A forge-only entry owns no projects and no issues; querying it with
+			// an empty project on every refresh does work whose result is
+			// meaningless, so it is never listed ([SC-1671]).
+			if !inst.IsTracker() {
+				continue
+			}
 			projects := inst.Projects
 			if len(projects) == 0 {
 				projects = []string{""}

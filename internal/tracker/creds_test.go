@@ -291,3 +291,33 @@ func TestFormatMissingCreds(t *testing.T) {
 	assert.Contains(t, msg, "JIRA_USER")
 	assert.Contains(t, msg, "https://example.com/tokens")
 }
+
+// TestDiagnoseTrackers_skipsForgeOnly locks the SC-1671 rule that a role: forge
+// githubs entry is not a tracker: it must not appear in the diagnosis that backs
+// `human tracker list` and tracker counting.
+func TestDiagnoseTrackers_skipsForgeOnly(t *testing.T) {
+	unmarshal := func(_, section string, target any) error {
+		if section == "githubs" {
+			entries := target.(*[]diagnoseEntry)
+			*entries = []diagnoseEntry{
+				{Name: "prs", Token: "ghp_forge", Role: "forge"},
+				{Name: "issues", Token: "ghp_tracker"},
+			}
+		}
+		return nil
+	}
+	getenv := func(_ string) string { return "" }
+
+	statuses := DiagnoseTrackers(".", unmarshal, getenv)
+
+	for _, s := range statuses {
+		assert.NotEqual(t, "prs", s.Name, "forge-only entry must be excluded from tracker diagnosis")
+	}
+	var tracker *TrackerStatus
+	for i := range statuses {
+		if statuses[i].Name == "issues" {
+			tracker = &statuses[i]
+		}
+	}
+	require.NotNil(t, tracker, "the tracker-role github entry must still be diagnosed")
+}

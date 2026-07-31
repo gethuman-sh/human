@@ -104,6 +104,21 @@ func TestResolveTopology_firstRoleWins(t *testing.T) {
 	assert.Equal(t, "eng1", top.Engineering.Name)
 }
 
+// TestResolveTopology_ignoresForgeOnly is the SC-1671 regression: a forge-only
+// entry (role: forge) must never count as a second PM candidate, or a lone
+// real tracker beside it makes PM resolution ambiguous and stays nil.
+func TestResolveTopology_ignoresForgeOnly(t *testing.T) {
+	instances := []Instance{
+		{Name: "work", Kind: "linear", Provider: stubProvider{}},
+		forgeOnly("prs"),
+	}
+	top := ResolveTopology(instances)
+	assert.Equal(t, "single", top.Mode)
+	require.NotNil(t, top.PM)
+	assert.Equal(t, "work", top.PM.Name)
+	assert.Nil(t, top.Engineering)
+}
+
 func TestResolveTopology_empty(t *testing.T) {
 	top := ResolveTopology(nil)
 	assert.Equal(t, "single", top.Mode)

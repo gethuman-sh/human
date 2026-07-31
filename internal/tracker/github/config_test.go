@@ -168,3 +168,99 @@ func TestLoadInstances_incompleteConfigSkipped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, instances)
 }
+
+// TestLoadInstances_roleSplitsTrackerAndForge locks the SC-1671 rule that a
+// githubs: entry's role decides which capabilities it contributes: no role means
+// both (backwards compatibility), role: forge means forge-only (nil Provider),
+// and any other role means tracker-only (no Forge).
+func TestLoadInstances_roleSplitsTrackerAndForge(t *testing.T) {
+	tests := []struct {
+		name        string
+		role        string
+		wantTracker bool
+		wantForge   bool
+	}{
+		{name: "no role is both", role: "", wantTracker: true, wantForge: true},
+		{name: "forge role is forge only", role: "forge", wantTracker: false, wantForge: true},
+		{name: "pm role is tracker only", role: "pm", wantTracker: true, wantForge: false},
+		{name: "tracker role is tracker only", role: "tracker", wantTracker: true, wantForge: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			yaml := "githubs:\n  - name: gh\n    url: https://api.github.com\n    token: ghp_abc\n"
+			if tt.role != "" {
+				yaml += "    role: " + tt.role + "\n"
+			}
+			writeConfig(t, dir, yaml)
+
+			unsetEnv(t, "GITHUB_URL")
+			unsetEnv(t, "GITHUB_TOKEN")
+			unsetEnv(t, "GITHUB_GH_URL")
+			unsetEnv(t, "GITHUB_GH_TOKEN")
+
+			instances, err := LoadInstances(dir)
+			require.NoError(t, err)
+			require.Len(t, instances, 1)
+			inst := instances[0]
+
+			if tt.wantTracker {
+				assert.NotNil(t, inst.Provider, "expected a tracker Provider")
+				assert.True(t, inst.IsTracker())
+			} else {
+				assert.Nil(t, inst.Provider, "forge-only entry must carry no tracker Provider")
+				assert.False(t, inst.IsTracker())
+			}
+			if tt.wantForge {
+				assert.NotNil(t, inst.Forge, "expected a Forge client")
+			} else {
+				assert.Nil(t, inst.Forge, "tracker-only entry must carry no Forge")
+			}
+		})
+	}
+}
+
+// TestLoadForgeInstances covers the forges: section: each entry builds a
+// forge-only instance (nil Provider, Forge set, role forge) that owns no
+// projects, and a token-less entry is skipped (SC-1671).
+func TestLoadForgeInstances(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "forges:\n  - name: prs\n    url: https://api.github.com\n    token: ghp_forge\n  - name: broken\n")
+
+	unsetEnv(t, "FORGE_URL")
+	unsetEnv(t, "FORGE_TOKEN")
+	unsetEnv(t, "FORGE_PRS_URL")
+	unsetEnv(t, "FORGE_PRS_TOKEN")
+	unsetEnv(t, "FORGE_BROKEN_URL")
+	unsetEnv(t, "FORGE_BROKEN_TOKEN")
+
+	instances, err := LoadForgeInstances(dir)
+	require.NoError(t, err)
+	require.Len(t, instances, 1, "the token-less forge entry must be skipped")
+
+	inst := instances[0]
+	assert.Equal(t, "prs", inst.Name)
+	assert.Equal(t, "github", inst.Kind)
+	assert.Equal(t, "forge", inst.Role)
+	assert.Nil(t, inst.Provider, "a forge entry contributes no tracker Provider")
+	assert.False(t, inst.IsTracker())
+	assert.NotNil(t, inst.Forge)
+	assert.Empty(t, inst.Projects)
+}
+
+// TestLoadForgeInstances_defaultURL confirms a forge entry inherits the GitHub
+// default API URL when none is set.
+func TestLoadForgeInstances_defaultURL(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "forges:\n  - name: prs\n    token: ghp_forge\n")
+
+	unsetEnv(t, "FORGE_URL")
+	unsetEnv(t, "FORGE_TOKEN")
+	unsetEnv(t, "FORGE_PRS_URL")
+	unsetEnv(t, "FORGE_PRS_TOKEN")
+
+	instances, err := LoadForgeInstances(dir)
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	assert.Equal(t, "https://api.github.com", instances[0].URL)
+}
