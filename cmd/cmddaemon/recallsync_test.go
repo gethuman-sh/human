@@ -38,3 +38,18 @@ func TestTicketSources_KeepsADeclaredTracker(t *testing.T) {
 func TestTicketSources_EmptyInputIsEmpty(t *testing.T) {
 	assert.Empty(t, ticketSources(nil))
 }
+
+// The schedule alternates: deltas keep the record current cheaply, and every
+// Nth pass runs full to bring in closed history and remove what is genuinely
+// gone. Startup is never full — the daemon re-execs on every rebuild, so a full
+// pass there would mean a complete re-fetch every few minutes.
+func TestRecallFullSyncEvery_SchedulesFullPassesPeriodically(t *testing.T) {
+	full := make([]int, 0, 3)
+	for pass := 1; pass <= 12; pass++ {
+		if RecallFullSyncEvery > 0 && pass%RecallFullSyncEvery == 0 {
+			full = append(full, pass)
+		}
+	}
+
+	assert.Equal(t, []int{6, 12}, full, "one full pass per RecallFullSyncEvery deltas")
+}

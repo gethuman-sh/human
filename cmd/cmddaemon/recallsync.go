@@ -23,6 +23,15 @@ var RecallSyncInterval = 10 * time.Minute
 // wall-clock tick, so N machines do not hit the tracker's API together.
 var RecallSyncJitter = 0.2
 
+// RecallFullSyncEvery is how many delta passes go by before one runs as a full
+// sync instead. The full pass is what brings in closed history and removes
+// tickets that are genuinely gone; the deltas in between keep the record
+// current cheaply.
+//
+// Counted in passes rather than run on a second timer so two syncs can never
+// overlap — they share one index and one tracker's rate budget.
+var RecallFullSyncEvery = 6
+
 // RunRecallSync keeps the searchable ticket record current without anyone
 // running a command.
 //
@@ -32,12 +41,14 @@ var RecallSyncJitter = 0.2
 // found" every time — which is how the same problem came to be solved twice
 // (SC-2132).
 //
-// DELTA ONLY, never a full sync. That is what makes it safe to run unattended:
-// recall.Sync prunes any key it did not see this pass, and until the prune is
-// guarded against a truncated listing, an unattended full sync could delete
-// history it merely failed to fetch. A delta pass skips the prune entirely once
-// a source has any entries, and it still carries the goal — a ticket closing is
-// an update, so closed tickets flow in as they close.
+// Mostly delta, with an occasional full pass. A delta keeps the record current
+// cheaply and never deletes anything; the full pass is what brings in closed
+// history and removes tickets that are genuinely gone.
+//
+// The full pass is only safe unattended because the prune refuses to act on a
+// listing it cannot trust — a short response looks exactly like an emptied
+// backlog, and Shortcut cannot report that it was capped. Without that guard
+// this schedule would delete history it merely failed to fetch, once an hour.
 //
 // It runs one pass immediately (a restart should not blind the record for a
 // full interval) and then on a jittered ticker, mirroring RunBoardReconcile.
@@ -47,13 +58,17 @@ func RunRecallSync(ctx context.Context, reg *daemon.ProjectRegistry, resolver *v
 	}
 	logger.Info().Msg("recall sync started")
 
-	recallSyncOnce(ctx, reg, resolver, dbPath, logger)
-	for {
+	// Startup is always a delta. The daemon re-execs on every rebuild, so a full
+	// pass here would mean a complete re-fetch every few minutes during an
+	// active session.
+	recallSyncOnce(ctx, reg, resolver, dbPath, false, logger)
+	for pass := 1; ; pass++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(daemon.JitteredInterval(interval, RecallSyncJitter)):
-			recallSyncOnce(ctx, reg, resolver, dbPath, logger)
+			full := RecallFullSyncEvery > 0 && pass%RecallFullSyncEvery == 0
+			recallSyncOnce(ctx, reg, resolver, dbPath, full, logger)
 		}
 	}
 }
@@ -69,6 +84,12 @@ func RunRecallSync(ctx context.Context, reg *daemon.ProjectRegistry, resolver *v
 // A tracker earns a role by carrying this project's pipeline work, so role is
 // the signal for "these are our tickets". A team whose tracker IS GitHub sets
 // role: pm and is indexed exactly as before.
+//
+// This compensates for a root cause tracked separately: a githubs: entry always
+// registers as BOTH tracker and forge, so there is no way to say "I use GitHub
+// only for pull requests" (SC-1671). Until that is fixed the forge-only entry
+// looks like a tracker to everything, and this filter keeps it out of the one
+// path that would hammer it every ten minutes.
 //
 // The manual `human index` is deliberately left alone: someone running it by
 // hand has said what they want indexed, and may well want a roleless tracker in
@@ -87,7 +108,7 @@ func ticketSources(instances []tracker.Instance) []tracker.Instance {
 // recallSyncOnce refreshes the record for every registered project. A failure
 // for one project or one tracker never stops the others: a stale record is
 // recoverable, a loop that died is not.
-func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *vault.Resolver, dbPath string, logger zerolog.Logger) {
+func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *vault.Resolver, dbPath string, full bool, logger zerolog.Logger) {
 	store, err := recall.NewSQLiteStore(dbPath)
 	if err != nil {
 		logger.Warn().Err(err).Msg("recall sync: cannot open the index")
@@ -111,7 +132,7 @@ func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *
 		// errors with no way to learn what failed is the shape of problem this
 		// work exists to remove, and discarding the detail put it right back.
 		var detail strings.Builder
-		res, sErr := recall.Sync(ctx, store, instances, false, &detail)
+		res, sErr := recall.Sync(ctx, store, instances, full, &detail)
 		if sErr != nil {
 			logger.Warn().Err(sErr).Str("dir", entry.Dir).Str("detail", detail.String()).
 				Msg("recall sync: failed")
@@ -124,6 +145,6 @@ func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *
 			event = logger.Warn().Str("detail", strings.TrimSpace(detail.String()))
 		}
 		event.Int("indexed", res.Indexed).Int("errors", res.Errors).Int("pruned", res.Pruned).
-			Str("dir", entry.Dir).Msg("recall sync: refreshed the ticket record")
+			Bool("full", full).Str("dir", entry.Dir).Msg("recall sync: refreshed the ticket record")
 	}
 }
