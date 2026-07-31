@@ -8,7 +8,7 @@ You are picking up a code review handoff. The engineer (human or AI) who finishe
 
 ```
 [human:ready-for-review]
-engineering: HUM-89, HUM-90
+engineering: <ENG_KEY_1>, <ENG_KEY_2>
 branch: main
 commits: 2037e40, 64bb370
 ```
@@ -19,7 +19,7 @@ Your job: read that handoff, run the `human-reviewer` agent against each review 
 
 ## Steps
 
-1. **Resolve the PM ticket.** `$ARGUMENTS` is the PM ticket key (e.g. `SC-79`). `human get <PM_KEY>` must succeed — the CLI auto-detects the owning tracker from the key shape; there is no tracker to pick by hand.
+1. **Resolve the PM ticket.** `$ARGUMENTS` is the PM ticket key (e.g. `<PM_KEY>`). `human get <PM_KEY>` must succeed — the CLI auto-detects the owning tracker from the key shape; there is no tracker to pick by hand.
 
 2. **Read the handoff.** Run `human handoff show <PM_KEY>` — it returns the newest `[human:ready-for-review]` handoff parsed as JSON:
    - `engineering` — the engineering ticket keys. May be absent (single-tracker topology): the review keys are then just `<PM_KEY>` itself.

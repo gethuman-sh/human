@@ -110,7 +110,7 @@ If no hygiene issues are found, append nothing and state in your final reply wha
 
 - Naming consistency matters more **within a package** than across the whole codebase. Different packages can have different conventions if they're internally consistent.
 - Only flag convention violations that are **actually violated**, not hypothetical ones. Read the code before reporting.
-- TODOs with ticket references (e.g., `TODO(HUM-42)`) are not stale -- they have an owner and a plan.
+- TODOs with ticket references (e.g., `TODO(<TICKET_KEY>)`) are not stale -- they have an owner and a plan.
 - Test health issues are high-impact because bad tests are worse than no tests: they give false confidence.
 - Convention violations should reference the specific rule being violated (e.g., "CLAUDE.md requires WithDetails for errors").
 

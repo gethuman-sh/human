@@ -12,7 +12,7 @@ All files for one invocation go into their own subdirectory `mockups/<feature-sl
 
 ## Ticket-linked invocation
 
-If the argument begins with an issue key followed by a colon (e.g. `SC-123: dark mode toggle`), the mockups belong to that ticket: use the lowercased key as the feature slug (`mockups/sc-123/`), use the text after the colon as the feature name, and add a top-level `"ticket": "SC-123"` field to `index.json`. An optional `Ticket context:` block after the first line is background for choosing options — never render it in the mockups. Without a leading key, behave exactly as described below.
+If the argument begins with an issue key followed by a colon (e.g. `<TICKET_KEY>: dark mode toggle`), the mockups belong to that ticket: use the lowercased key as the feature slug (`mockups/<ticket-key>/`), use the text after the colon as the feature name, and add a top-level `"ticket": "<TICKET_KEY>"` field to `index.json`. An optional `Ticket context:` block after the first line is background for choosing options — never render it in the mockups. Without a leading key, behave exactly as described below.
 
 ## Variation invocation
 

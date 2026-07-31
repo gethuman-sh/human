@@ -49,7 +49,7 @@ human commits prefix <PM_KEY> [<ENG_KEY>]
 - [ ] No unrelated changes (scope check)
 - [ ] Edge cases from the ticket handled
 - [ ] Plan tasks completed (if plan exists)
-- [ ] Every commit message references the ticket trail: `human commits for <key>` lists the commits attributed to a key, and `human commits prefix <PM_KEY> [<ENG_KEY>]` prints the required subject prefix (e.g. `[SC-79] [HUM-59]` in split topology, preserving the PM → engineering → commit trail; `[SC-79]` in single-tracker topology)
+- [ ] Every commit message references the ticket trail: `human commits for <key>` lists the commits attributed to a key, and `human commits prefix <PM_KEY> [<ENG_KEY>]` prints the required subject prefix (e.g. `[<PM_KEY>] [<ENG_KEY>]` in split topology, preserving the PM → engineering → commit trail; `[<PM_KEY>]` in single-tracker topology)
 
 ## Principles
 

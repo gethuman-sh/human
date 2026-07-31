@@ -50,8 +50,8 @@ does the product framing.
    Record the resolved boundary (the tag or date) explicitly so synthesis can reuse it.
 
 5. **Collect recent git history** — Run `git log --oneline -50` to show recent development
-   direction, and note commit-message ticket-reference conventions you observe (e.g. `[SC-148]`,
-   `[HUM-153]`, `Issue #42`).
+   direction, and note commit-message ticket-reference conventions you observe (e.g. `[<PROJECT_KEY>]`,
+   `Issue #42`).
 
 6. **Write the inventory** to `.human/features/.features-inventory.md`:
 

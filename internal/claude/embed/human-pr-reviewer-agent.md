@@ -23,7 +23,7 @@ The PR, the work key, and the branch are your fixed binding for the whole run. R
 
 ## Review the LOCAL branch, not the pushed head
 
-The fixer commits its fix on the **local** branch and has no push credentials in board context — the daemon ships the branch only at merge. So the pushed origin head is stale by design: reviewing `gh pr diff` (which reads origin) would re-read the pre-fix code and the loop could never converge (SC-1760). Review the **local branch ref** instead — the fixer's commit is already in your shared object store.
+The fixer commits its fix on the **local** branch and has no push credentials in board context — the daemon ships the branch only at merge. So the pushed origin head is stale by design: reviewing `gh pr diff` (which reads origin) would re-read the pre-fix code and the loop could never converge. Review the **local branch ref** instead — the fixer's commit is already in your shared object store.
 
 You run in a fresh worktree checked out at the default branch, which is the PR's base. Do **not** `git checkout <branch>` — that branch may be checked out in the fixer's worktree and a second checkout is refused; read the ref directly.
 

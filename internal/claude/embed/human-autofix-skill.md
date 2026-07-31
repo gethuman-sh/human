@@ -10,9 +10,9 @@ Point this skill at a bug ticket and it runs the full bug-fix pipeline autonomou
 
 The run does **not** end at the review handoff: exactly like the kanban flow — where a clean build chains straight into its review and Deploy ships it — the skill chains the fix into a review by the **human-reviewer** agent and, when the verdict is a pass, drives the same deploy pipeline the board's Deploy stage runs (push → PR → CI gate → merge → close). A failing review or a red CI gate stops the run honestly with the handoff left standing for a human.
 
-**Board-context exception**: when `<BOARD_CONTEXT>` is true (launched with `--board`; `HUMAN_AGENT_NAME` starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The container holds no push/PR credentials and the Bugs pane's Deploy button owns shipping, so **end after the review (Step 7.3) and skip Step 8 (deploy) entirely**. The review itself now runs **inline, in this warm container** (Steps 7.2–7.3) — same workspace and caches the fix was built in — so a bug pays **one** container startup, not two (SC-782). Do NOT push, open, or merge a PR in board context.
+**Board-context exception**: when `<BOARD_CONTEXT>` is true (launched with `--board`; `HUMAN_AGENT_NAME` starting with `board-` is a fallback signal), this skill runs *as a board stage agent*. The container holds no push/PR credentials and the Bugs pane's Deploy button owns shipping, so **end after the review (Step 7.3) and skip Step 8 (deploy) entirely**. The review itself now runs **inline, in this warm container** (Steps 7.2–7.3) — same workspace and caches the fix was built in — so a bug pays **one** container startup, not two, instead of a second container spun up later just to run the review. Do NOT push, open, or merge a PR in board context.
 
-This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — reach a verdict and act on it (SC-86: "no further input"). Every run ends in exactly one verdict: **confirmed**, **not-a-bug**, or **undetermined**.
+This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — reach a verdict and act on it; the pipeline is required to run end to end with no further input. Every run ends in exactly one verdict: **confirmed**, **not-a-bug**, or **undetermined**.
 
 Follow these steps in order.
 
@@ -210,7 +210,7 @@ Otherwise (standalone, `<BOARD_CONTEXT>` false) dispatch the existing push promp
 Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch and push it. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.")
 ```
 
-It creates branch `autofix/<work-key>` (the key lowercased), writes a regression test that **fails** because of the bug, implements the root-cause fix, confirms the suite is green, commits with subjects starting with the `human commits prefix <BUG_KEY> [<ENG_KEY>]` prefix (e.g. `[SC-79] [HUM-59]` in split topology, `[SC-79]` otherwise), and returns the branch name. In a standalone run it pushes the branch; in board context it leaves the branch local (the bind-mounted host repo) and returns its name without pushing. If it reports it could not reach a green build/test, STOP and report — do not open a PR.
+It creates branch `autofix/<work-key>` (the key lowercased), writes a regression test that **fails** because of the bug, implements the root-cause fix, confirms the suite is green, commits with subjects starting with the `human commits prefix <BUG_KEY> [<ENG_KEY>]` prefix (e.g. `[<PM_KEY>] [<ENG_KEY>]` in split topology, `[<PM_KEY>]` otherwise), and returns the branch name. In a standalone run it pushes the branch; in board context it leaves the branch local (the bind-mounted host repo) and returns its name without pushing. If it reports it could not reach a green build/test, STOP and report — do not open a PR.
 
 ## Step 6 — Phase 4: Verify (done gate)
 
@@ -239,7 +239,7 @@ human marker post <BUG_KEY> implementation-failed --body-file - <<'EOF'
 EOF
 ```
 
-The first body line becomes the badge headline. This is mandatory in board context — the bug-fix analog of the no-dead-end-states work (SC-355/591). Then STOP and report honestly without posting the handoff.
+The first body line becomes the badge headline. This is mandatory in board context — every run must leave a visible, honest outcome behind rather than a card left silently "running". Then STOP and report honestly without posting the handoff.
 
 ## Step 7 — Phase 5: Hand off and review
 
@@ -254,7 +254,7 @@ human handoff post <BUG_KEY> --engineering <ENG_KEY> --branch autofix/<work-key>
 human handoff post <BUG_KEY> --branch autofix/<work-key>                           # single-tracker: omit --engineering
 ```
 
-The explicit `--branch` pins the fix branch even when the orchestrating checkout sits elsewhere. The command derives the rest — `commits:` from the commits referencing `<WORK_KEY>`, `daemon:` from the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1; the line is omitted when the var is unset) — then verifies every SHA is reachable on the branch (fetching origin first) and refuses to post otherwise, so a handoff can never name commits that live nowhere. The posted comment looks like:
+The explicit `--branch` pins the fix branch even when the orchestrating checkout sits elsewhere. The command derives the rest — `commits:` from the commits referencing `<WORK_KEY>`, `daemon:` from the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (the line is omitted when the var is unset) — then verifies every SHA is reachable on the branch (fetching origin first) and refuses to post otherwise, so a handoff can never name commits that live nowhere. The posted comment looks like:
 
 ```
 [human:ready-for-review]
@@ -270,7 +270,7 @@ When `<BOARD_CONTEXT>` is true the branch is intentionally local (the bind-mount
 
 ### 7.2 Review by the reviewer agent
 
-Chain straight into the review, like the kanban flow chains a clean build. This runs **inline in this same warm container in board context too** (SC-782) — it is no longer skipped when `<BOARD_CONTEXT>` is true; only Step 8 (deploy) is. Post the started marker, then dispatch the reviewer:
+Chain straight into the review, like the kanban flow chains a clean build. This runs **inline in this same warm container in board context too** — it is no longer skipped when `<BOARD_CONTEXT>` is true; only Step 8 (deploy) is. Post the started marker, then dispatch the reviewer:
 
 ```bash
 human marker post <BUG_KEY> review-started
