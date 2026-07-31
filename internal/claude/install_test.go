@@ -165,6 +165,26 @@ func TestExecutorSeparatesAnUnreadablePlanFromAMissingOne(t *testing.T) {
 		"an unreachable tracker must end the run retryable, not as a missing plan")
 }
 
+// A run that ends must leave a readable account on the ticket. The fix pipeline
+// learned this and posts a fix-summary at every terminal point; the feature
+// pipeline's implementation stage summarized only in its final message, which in
+// board context is read by nobody — so a shipped feature left the card carrying
+// branch and commit lines and no prose at all.
+func TestEveryFinishingPipelinePostsARunSummary(t *testing.T) {
+	for _, name := range []string{
+		"human-autofix-skill.md",
+		"human-security-fix-skill.md",
+		"human-executor-agent.md",
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join("embed", name))
+			require.NoError(t, err)
+			assert.Contains(t, string(body), "fix-summary",
+				"%s must leave a plain-language account of the run on the ticket", name)
+		})
+	}
+}
+
 // TestDoneGatePromptsClassifyRedSuites locks the SC-1135 guarantee that the
 // done-gate prompts no longer treat any red suite as an automatic NOT DONE.
 // A correct fix was failed because an unrelated, pre-existing real-git test
