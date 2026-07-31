@@ -61,7 +61,7 @@ func (g *GhCLI) Resolve(ref string) (string, error) {
 	if g.runner != nil {
 		out, err = g.runner(ctx, g.Binary, args...)
 	} else {
-		out, err = exec.CommandContext(ctx, g.Binary, args...).Output() // #nosec G204 -- binary is a static default, args match a whitelisted grammar
+		out, err = readSecretOutput(ctx, g.Binary, args...)
 	}
 	if err != nil {
 		// .Output() stashes the command's stderr on *exec.ExitError; surfacing

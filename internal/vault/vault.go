@@ -140,7 +140,13 @@ func (r *Resolver) resolveOnce(ref string) (string, error) {
 	r.inflight[ref] = call
 	r.mu.Unlock()
 
-	call.val, call.err = r.fromProviders(ref)
+	// Secret mode bounds how long the working copies made while reading the
+	// secret stay legible in this process — the bytes from the store, the
+	// trimming, the parsing. Without it they are ordinary garbage, readable
+	// until something happens to overwrite them (SC-2183).
+	eraseTemporaries(func() {
+		call.val, call.err = r.fromProviders(ref)
+	})
 
 	r.mu.Lock()
 	delete(r.inflight, ref)

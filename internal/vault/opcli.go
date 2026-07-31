@@ -77,7 +77,7 @@ func (o *OpCLI) Resolve(ref string) (string, error) {
 	if o.runner != nil {
 		out, err = o.runner(ctx, o.Binary, "read", sdkRef)
 	} else {
-		out, err = exec.CommandContext(ctx, o.Binary, "read", sdkRef).Output() // #nosec G204 -- binary is a static default, ref is from config
+		out, err = readSecretOutput(ctx, o.Binary, "read", sdkRef)
 	}
 	if err != nil {
 		return "", opFailure(o.Binary, ref, err, ctx.Err())
