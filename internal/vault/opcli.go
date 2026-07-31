@@ -23,6 +23,15 @@ var opRefPattern = regexp.MustCompile(`^op://[A-Za-z0-9 _./\-]+$`)
 // CLI does not stall every caller waiting on a secret.
 const opTimeout = 30 * time.Second
 
+// The reference prefixes: 1pw:// is what a user writes in .humanconfig, op://
+// is what 1Password's own tooling expects. They lived beside the in-process SDK
+// until it was removed (SC-2183) and moved here, to the one provider that reads
+// a 1Password secret.
+const (
+	secretRefPrefix = "1pw://"
+	sdkRefPrefix    = "op://"
+)
+
 // OpCLI resolves 1pw:// secret references by shelling out to the 1Password CLI.
 // It is the fallback behind the in-process SDK on every platform: released
 // binaries are built without CGO, so the SDK is unavailable and the CLI is

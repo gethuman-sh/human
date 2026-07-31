@@ -68,10 +68,13 @@ func NewResolverFromConfig(cfg *Config) *Resolver {
 	var r *Resolver
 	switch cfg.Provider {
 	case "1password", "1pw":
-		// SDK first (works in CGO dev builds), op CLI behind it as the
-		// fallback that works in released CGO-disabled builds on every
-		// platform, then gh:// for GitHub CLI references.
-		r = NewResolver(NewOnePassword(cfg.Account), NewOpCLI(), NewGhCLI())
+		// One way to read a 1Password secret, the same on every build: the op
+		// CLI. The in-process SDK used to sit in front of it in CGO builds,
+		// reaching the same desktop app by a second route — so it was a second
+		// implementation of the working path rather than a capability, and it
+		// was tried first on every miss while the CLI did the actual resolving
+		// (SC-2183). gh:// follows for GitHub CLI references.
+		r = NewResolver(NewOpCLI(), NewGhCLI())
 	case "github", "gh":
 		r = NewResolver(NewGhCLI())
 	default:

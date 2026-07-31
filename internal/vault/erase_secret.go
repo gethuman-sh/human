@@ -1,20 +1,16 @@
 //go:build goexperiment.runtimesecret
 
-// DO NOT ENABLE THIS EXPERIMENT WITHOUT READING THIS.
+// Enabling this used to segfault the process, and the reason is worth keeping:
+// the erasure fought the WebAssembly runtime (extism/wazero) inside the
+// 1Password SDK, which ran JIT-compiled code on stacks the erasure then walked.
+// No traceback — the fault was below the runtime's ability to report it. Every
+// pure-Go reproducer survived; flipping CGO alone flipped the result.
 //
-// Building with GOEXPERIMENT=runtimesecret segfaults the process on the real
-// credential-resolution path (2026-07-31, go1.26.5): `go test .` dies with
-// "signal: segmentation fault (core dumped)" and no traceback at all, which
-// means the fault is below the runtime's ability to report it. Removing
-// secret.Do makes it pass; the experiment alone, and memguard alone, are both
-// fine — it is the combination with this path. Two minimal reproducers (exec
-// inside Do, values escaping Do under GC) did NOT reproduce it, so the trigger
-// is still unidentified.
-//
-// The package is "not subject to the Go 1 compatibility promise" and this is
-// what that means in practice. The file is kept because the erasure is worth
-// having once the feature stabilises, and because deleting it would lose the
-// finding — but no build enables the tag, so this code is not compiled.
+// The SDK is gone (SC-2183) and with it the only wasm in this binary, so the
+// erasure is enabled again in every build. Before adding a dependency that
+// embeds a wasm runtime, check `go version -m` and re-run the suite with
+// GOEXPERIMENT=runtimesecret — this package is not covered by the Go 1
+// compatibility promise, and that is what it means in practice.
 
 package vault
 

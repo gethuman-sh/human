@@ -18,6 +18,13 @@ concurrency:
 permissions:
   contents: read
 
+# Released binaries are built with runtime/secret enabled (.goreleaser.yaml), so
+# CI must compile and test the same code path — otherwise the file that ships is
+# the one nothing ever checked. The build job additionally proves the stub still
+# compiles without it.
+env:
+  GOEXPERIMENT: runtimesecret
+
 jobs:
   lint:
     runs-on: ubuntu-24.04
@@ -71,3 +78,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go build -o bin/human .
+      # A build without the experiment must stay green: it is what anyone gets
+      # from a plain `go build`, and it selects the stub instead.
+      - run: go build ./...
+        env:
+          GOEXPERIMENT: ""

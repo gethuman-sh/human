@@ -94,7 +94,9 @@ jiras:
     key: 1pw://Development/Jira API Key/token
 ```
 
-Secrets are resolved through the 1Password CLI (`op`) on every platform — released binaries are built without CGO, so the in-process SDK is unavailable and the CLI is the working path. Install `op` and sign in (`op signin`); on WSL the Windows `op.exe` is used across the boundary. In CGO-enabled developer builds the in-process SDK (desktop app integration, biometric/master-password auth) is tried first and the CLI is the automatic fallback.
+Secrets are resolved through the 1Password CLI (`op`) on every platform and every build. Install `op` and sign in (`op signin`); on WSL the Windows `op.exe` is used across the boundary. An in-process SDK used to sit in front of the CLI in CGO builds; it reached the same desktop app by a second route, so it was a second implementation of the working path rather than a capability of its own, and it is gone (SC-2183).
+
+A resolved secret is served from the daemon's memory for `cache_ttl` (default 15 minutes) — 1Password prompts for approval per read, so consulting `op` on every call means one dialog per command the pipeline runs. Set a non-positive `cache_ttl` to consult `op` every time.
 
 GitHub tokens can instead come straight from the GitHub CLI's keyring with a `gh://` reference — no PAT to copy anywhere:
 
