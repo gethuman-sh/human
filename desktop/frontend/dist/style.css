@@ -854,6 +854,23 @@ body {
   color: var(--turn-machine);
 }
 
+/* Room for an arrow, taken from the card rather than from the layout: a margin
+   inside the grid cell leaves every track boundary where it was, so the row
+   stays a row. Only the edge an arrow actually attaches to gives up space, and
+   a card in the middle of a chain gives up both. */
+.card.arrow-gap-left {
+  margin-left: 12px;
+}
+.card.arrow-gap-right {
+  margin-right: 12px;
+}
+.card.arrow-gap-top {
+  margin-top: 12px;
+}
+.card.arrow-gap-bottom {
+  margin-bottom: 12px;
+}
+
 /* The dependency arrow layer: one SVG per column, sized to the column's whole
    scrollable content. It sits over the cards, so it must never take a pointer
    event — dragging a card is how the board works. */

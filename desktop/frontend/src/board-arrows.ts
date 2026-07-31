@@ -47,7 +47,15 @@ export function linksWithin(blockers: Map<string, string[]>, present: Set<string
 }
 
 // Side names which edge of a card an arrow leaves from or arrives at.
-type Side = "left" | "right" | "top" | "bottom";
+export type Side = "left" | "right" | "top" | "bottom";
+
+// Drawn is a dependency that survived the corridor test, with the edges it
+// connects settled. The sides are decided once, before any card is narrowed, so
+// the gap opened for an arrow is always the gap it actually uses.
+export interface Drawn extends Link {
+  exit: Side;
+  enter: Side;
+}
 
 // sides picks the pair of edges to connect: the ones that face each other.
 //
@@ -95,8 +103,8 @@ const GAP = 4;
 // artifact. The control points push out along the exit and entry axes, so the
 // curve leaves and arrives perpendicular to the cards and the direction is
 // legible even when the two are only a few pixels apart.
-export function arrowPath(from: Box, to: Box): string {
-  const { exit, enter } = sides(from, to);
+export function arrowPath(from: Box, to: Box, edges: { exit: Side; enter: Side } = sides(from, to)): string {
+  const { exit, enter } = edges;
   const start = anchor(from, exit);
   const raw = anchor(to, enter);
   const end = shortenBy(raw, enter, GAP);
@@ -135,4 +143,75 @@ function distance(a: { x: number; y: number }, b: { x: number; y: number }): num
 // keep a re-render from emitting a different string for an identical layout.
 function r(n: number): number {
   return Math.round(n);
+}
+
+// plan settles which dependencies are actually drawable, and how.
+//
+// A pair whose corridor is blocked is dropped rather than drawn across whatever
+// sits between them: a line over a third card's face states a relationship
+// between the wrong two tickets. Those keep the badge, exactly like a pair split
+// across two columns — the rule is the same one, that an arrow is drawn only
+// where it reads.
+export function plan(links: Link[], boxes: Map<string, Box>): Drawn[] {
+  const drawn: Drawn[] = [];
+  for (const link of links) {
+    const from = boxes.get(link.from);
+    const to = boxes.get(link.to);
+    if (!from || !to) continue;
+    const others = [...boxes.entries()]
+      .filter(([key]) => key !== link.from && key !== link.to)
+      .map(([, box]) => box);
+    if (!corridorClear(from, to, others)) continue;
+    drawn.push({ ...link, ...sides(from, to) });
+  }
+  return drawn;
+}
+
+// corridorClear reports whether the space an arrow would cross holds no other
+// card. The corridor is the box spanning the two facing edges — for neighbours
+// that is the gap between them, and for a pair with a card in between it is a
+// box that card sits inside.
+export function corridorClear(from: Box, to: Box, others: Box[]): boolean {
+  const { exit, enter } = sides(from, to);
+  const a = anchor(from, exit);
+  const b = anchor(to, enter);
+  const corridor: Box = {
+    left: Math.min(a.x, b.x),
+    top: Math.min(a.y, b.y),
+    width: Math.abs(b.x - a.x),
+    height: Math.abs(b.y - a.y),
+  };
+  return !others.some((o) => overlaps(corridor, o));
+}
+
+// overlaps is a strict rectangle intersection: two boxes that merely touch
+// edges do not overlap, so a neighbour flush against the corridor's boundary
+// does not count as standing in it.
+function overlaps(a: Box, b: Box): boolean {
+  return (
+    a.left < b.left + b.width &&
+    b.left < a.left + a.width &&
+    a.top < b.top + b.height &&
+    b.top < a.top + a.height
+  );
+}
+
+// gapsBySide reports, per card, which of its edges an arrow attaches to — the
+// sides that must be narrowed to make room.
+//
+// A card in the middle of a chain is waited on from one side and waits on the
+// other, so it narrows on both; that is not a case in the code, it is what
+// collecting sides per card rather than per arrow produces.
+export function gapsBySide(drawn: Drawn[]): Map<string, Side[]> {
+  const gaps = new Map<string, Set<Side>>();
+  const add = (key: string, side: Side) => {
+    const sides = gaps.get(key) ?? new Set<Side>();
+    sides.add(side);
+    gaps.set(key, sides);
+  };
+  for (const d of drawn) {
+    add(d.from, d.exit);
+    add(d.to, d.enter);
+  }
+  return new Map([...gaps].map(([key, sides]) => [key, [...sides].sort()]));
 }

@@ -16,7 +16,7 @@ import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteO
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
 import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, } from "./board-queue.js";
-import { linksWithin, arrowPath } from "./board-arrows.js";
+import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
@@ -1603,34 +1603,80 @@ function render() {
 // a card changes column by being rebuilt somewhere else, so there is no move to
 // observe, and a stale arrow pointing at a card that left would be worse than
 // no arrow at all.
+//
+// Three passes, all inside one frame so the user sees a single painted result:
+// decide what is drawable from the untouched layout, narrow the cards those
+// arrows attach to, then measure the settled layout and draw. The order is
+// forced — which edge an arrow uses is read from the cards' positions, and
+// narrowing moves them. Deciding first is safe because narrowing only ever
+// opens space, so a corridor that was clear stays clear.
 function drawBlockerArrows() {
     const blockers = new Map();
     for (const card of current.cards) {
         if (card.blockers?.length)
             blockers.set(card.key, card.blockers);
     }
-    document.querySelectorAll(".column-body").forEach((body, i) => {
-        body.querySelector(".blocker-arrows")?.remove();
-        if (blockers.size === 0)
-            return;
-        const cards = new Map();
-        body.querySelectorAll(".card[data-key]").forEach((el) => {
-            if (el.dataset.key)
-                cards.set(el.dataset.key, el);
-        });
-        const links = linksWithin(blockers, new Set(cards.keys()));
-        if (links.length === 0)
-            return;
-        const overlay = arrowOverlay(body, i);
-        for (const link of links) {
-            const path = document.createElementNS(SVG_NS, "path");
-            path.setAttribute("d", arrowPath(boxOf(cards.get(link.from)), boxOf(cards.get(link.to))));
-            path.setAttribute("class", "blocker-arrow");
-            path.setAttribute("marker-end", `url(#${overlay.dataset.head})`);
-            overlay.appendChild(path);
-        }
-        body.appendChild(overlay);
+    // Cleared unconditionally: a resize redraws without rebuilding the DOM, so
+    // last layout's gaps would otherwise linger beside arrows that have moved.
+    document.querySelectorAll(".card").forEach(clearArrowGaps);
+    const bodies = [...document.querySelectorAll(".column-body")];
+    bodies.forEach((body) => body.querySelector(".blocker-arrows")?.remove());
+    if (blockers.size === 0)
+        return;
+    const work = bodies.map((body) => {
+        const cards = cardsIn(body);
+        const boxes = new Map([...cards].map(([key, el]) => [key, boxOf(el)]));
+        return { body, cards, drawn: plan(linksWithin(blockers, new Set(cards.keys())), boxes) };
     });
+    for (const { cards, drawn } of work) {
+        for (const [key, sides] of gapsBySide(drawn)) {
+            const el = cards.get(key);
+            if (el)
+                for (const side of sides)
+                    el.classList.add(`arrow-gap-${side}`);
+        }
+    }
+    for (const { body, cards, drawn } of work) {
+        if (drawn.length === 0)
+            continue;
+        // Re-measured AFTER the gaps land: these are the positions the arrows are
+        // drawn between, and they are not the ones the plan was made from.
+        const boxes = new Map([...cards].map(([key, el]) => [key, boxOf(el)]));
+        body.appendChild(arrowLayer(body, bodies.indexOf(body), drawn, boxes));
+    }
+}
+const ARROW_GAP_SIDES = ["left", "right", "top", "bottom"];
+function clearArrowGaps(el) {
+    for (const side of ARROW_GAP_SIDES)
+        el.classList.remove(`arrow-gap-${side}`);
+}
+// cardsIn indexes one column's cards by ticket key.
+function cardsIn(body) {
+    const cards = new Map();
+    body.querySelectorAll(".card[data-key]").forEach((el) => {
+        if (el.dataset.key)
+            cards.set(el.dataset.key, el);
+    });
+    return cards;
+}
+// arrowLayer builds one column's finished SVG, paths and all.
+function arrowLayer(body, index, drawn, boxes) {
+    const overlay = arrowOverlay(body, index);
+    for (const d of drawn) {
+        const from = boxes.get(d.from);
+        const to = boxes.get(d.to);
+        if (!from || !to)
+            continue;
+        const path = document.createElementNS(SVG_NS, "path");
+        // The sides come from the plan, not from a fresh reading of the narrowed
+        // boxes: the gap was opened on those edges, and an arrow that picked
+        // different ones would leave through a side with no room for it.
+        path.setAttribute("d", arrowPath(from, to, { exit: d.exit, enter: d.enter }));
+        path.setAttribute("class", "blocker-arrow");
+        path.setAttribute("marker-end", `url(#${overlay.dataset.head})`);
+        overlay.appendChild(path);
+    }
+    return overlay;
 }
 const SVG_NS = "http://www.w3.org/2000/svg";
 // boxOf measures a card in its column's own content coordinates. The column is

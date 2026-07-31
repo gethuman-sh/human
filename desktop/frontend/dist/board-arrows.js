@@ -73,8 +73,8 @@ const GAP = 4;
 // artifact. The control points push out along the exit and entry axes, so the
 // curve leaves and arrives perpendicular to the cards and the direction is
 // legible even when the two are only a few pixels apart.
-export function arrowPath(from, to) {
-    const { exit, enter } = sides(from, to);
+export function arrowPath(from, to, edges = sides(from, to)) {
+    const { exit, enter } = edges;
     const start = anchor(from, exit);
     const raw = anchor(to, enter);
     const end = shortenBy(raw, enter, GAP);
@@ -109,4 +109,71 @@ function distance(a, b) {
 // keep a re-render from emitting a different string for an identical layout.
 function r(n) {
     return Math.round(n);
+}
+// plan settles which dependencies are actually drawable, and how.
+//
+// A pair whose corridor is blocked is dropped rather than drawn across whatever
+// sits between them: a line over a third card's face states a relationship
+// between the wrong two tickets. Those keep the badge, exactly like a pair split
+// across two columns — the rule is the same one, that an arrow is drawn only
+// where it reads.
+export function plan(links, boxes) {
+    const drawn = [];
+    for (const link of links) {
+        const from = boxes.get(link.from);
+        const to = boxes.get(link.to);
+        if (!from || !to)
+            continue;
+        const others = [...boxes.entries()]
+            .filter(([key]) => key !== link.from && key !== link.to)
+            .map(([, box]) => box);
+        if (!corridorClear(from, to, others))
+            continue;
+        drawn.push({ ...link, ...sides(from, to) });
+    }
+    return drawn;
+}
+// corridorClear reports whether the space an arrow would cross holds no other
+// card. The corridor is the box spanning the two facing edges — for neighbours
+// that is the gap between them, and for a pair with a card in between it is a
+// box that card sits inside.
+export function corridorClear(from, to, others) {
+    const { exit, enter } = sides(from, to);
+    const a = anchor(from, exit);
+    const b = anchor(to, enter);
+    const corridor = {
+        left: Math.min(a.x, b.x),
+        top: Math.min(a.y, b.y),
+        width: Math.abs(b.x - a.x),
+        height: Math.abs(b.y - a.y),
+    };
+    return !others.some((o) => overlaps(corridor, o));
+}
+// overlaps is a strict rectangle intersection: two boxes that merely touch
+// edges do not overlap, so a neighbour flush against the corridor's boundary
+// does not count as standing in it.
+function overlaps(a, b) {
+    return (a.left < b.left + b.width &&
+        b.left < a.left + a.width &&
+        a.top < b.top + b.height &&
+        b.top < a.top + a.height);
+}
+// gapsBySide reports, per card, which of its edges an arrow attaches to — the
+// sides that must be narrowed to make room.
+//
+// A card in the middle of a chain is waited on from one side and waits on the
+// other, so it narrows on both; that is not a case in the code, it is what
+// collecting sides per card rather than per arrow produces.
+export function gapsBySide(drawn) {
+    const gaps = new Map();
+    const add = (key, side) => {
+        const sides = gaps.get(key) ?? new Set();
+        sides.add(side);
+        gaps.set(key, sides);
+    };
+    for (const d of drawn) {
+        add(d.from, d.exit);
+        add(d.to, d.enter);
+    }
+    return new Map([...gaps].map(([key, sides]) => [key, [...sides].sort()]));
 }
