@@ -79,10 +79,12 @@ type resolveCall struct {
 	err  error
 }
 
-// cachedSecret is a resolved plaintext value with the instant it stops being a
-// valid lapse fallback.
+// cachedSecret is a resolved secret with the instant it stops being valid.
+// The value is sealed rather than held as a string: it is the only plaintext
+// that outlives a single call, so it is the copy a core file or a swap page
+// would capture (SC-2183).
 type cachedSecret struct {
-	value     string
+	value     sealed
 	expiresAt time.Time
 }
 
@@ -200,7 +202,7 @@ func (r *Resolver) remember(ref, val string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sweepExpiredLocked()
-	r.cache[ref] = cachedSecret{value: val, expiresAt: r.now().Add(r.ttl)}
+	r.cache[ref] = cachedSecret{value: seal(val), expiresAt: r.now().Add(r.ttl)}
 }
 
 // sweepExpiredLocked deletes every cache entry whose TTL has passed. Callers
@@ -227,7 +229,15 @@ func (r *Resolver) cached(ref string) (string, bool) {
 		delete(r.cache, ref)
 		return "", false
 	}
-	return entry.value, true
+	val, ok := entry.value.open()
+	if !ok {
+		// Unreadable is treated as absent: the caller goes to the provider,
+		// which is right, instead of receiving an empty secret that would fail
+		// somewhere less obvious.
+		delete(r.cache, ref)
+		return "", false
+	}
+	return val, true
 }
 
 // IsSecretRef reports whether s looks like a vault secret reference.

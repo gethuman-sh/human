@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/1password/onepassword-sdk-go v0.4.0
 	github.com/Masterminds/semver/v3 v3.5.0
+	github.com/awnumar/memguard v0.23.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/huh v1.0.0
@@ -114,6 +115,7 @@ require (
 	github.com/atc0005/go-teams-notify/v2 v2.14.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/avast/retry-go/v4 v4.7.0 // indirect
+	github.com/awnumar/memcall v0.4.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.32.5 // indirect
