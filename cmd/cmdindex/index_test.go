@@ -152,6 +152,40 @@ func TestRunIndex_syncsAllInstances(t *testing.T) {
 	}
 }
 
+// TestRunIndex_skipsForgeOnlyInstance is the SC-1671 regression: LoadAllInstances
+// returns forge-only entries (role: forge, or a forges: entry) alongside real
+// trackers, and those entries carry a nil Provider. `human index` must not
+// panic dereferencing it.
+func TestRunIndex_skipsForgeOnlyInstance(t *testing.T) {
+	deps, _ := testDeps(t)
+
+	provider := &mockProvider{
+		listFn: func(_ context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
+			return []tracker.Issue{{Key: opts.Project + "-1"}}, nil
+		},
+		getFn: func(_ context.Context, key string) (*tracker.Issue, error) {
+			return &tracker.Issue{Key: key, Title: "Test"}, nil
+		},
+	}
+
+	deps.LoadInstances = func(_ string) ([]tracker.Instance, error) {
+		return []tracker.Instance{
+			{Name: "work", Kind: "jira", Projects: []string{"KAN"}, Provider: provider},
+			{Name: "prs", Kind: "github", Role: tracker.RoleForge}, // forge-only, nil Provider
+		}, nil
+	}
+
+	var buf bytes.Buffer
+	require.NotPanics(t, func() {
+		err := RunIndex(context.Background(), &buf, "", false, deps)
+		require.NoError(t, err)
+	})
+
+	if !strings.Contains(buf.String(), "1 indexed") {
+		t.Errorf("expected '1 indexed', got:\n%s", buf.String())
+	}
+}
+
 func TestRunIndex_filtersSource(t *testing.T) {
 	deps, _ := testDeps(t)
 

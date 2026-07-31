@@ -555,3 +555,37 @@ func TestSync_preferFullIssueURL(t *testing.T) {
 func (m *mockProvider) UnlinkIssues(context.Context, string, string) error {
 	return nil
 }
+
+// TestSync_skipsForgeOnlyInstance is the SC-1671 regression: a forge-only
+// entry (role: forge, or any forges: entry) carries a nil Provider — it
+// exists only to open pull requests. Sync must filter it out rather than
+// dereference inst.Provider.ListIssues and panic, since `human index` passes
+// the full LoadAllInstances list (trackers and forge-only entries alike).
+func TestSync_skipsForgeOnlyInstance(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	var buf bytes.Buffer
+
+	provider := &mockProvider{
+		listFn: func(_ context.Context, _ tracker.ListOptions) ([]tracker.Issue, error) {
+			return []tracker.Issue{{Key: "KAN-1"}}, nil
+		},
+		getFn: func(_ context.Context, key string) (*tracker.Issue, error) {
+			return &tracker.Issue{Key: key, Title: "OK"}, nil
+		},
+	}
+
+	instances := []tracker.Instance{
+		{Name: "work", Kind: "jira", Projects: []string{"KAN"}, Provider: provider},
+		{Name: "prs", Kind: "github", Role: tracker.RoleForge}, // forge-only, nil Provider
+	}
+
+	result, err := Sync(ctx, s, instances, false, &buf)
+	require.NoError(t, err)
+	if result.Indexed != 1 {
+		t.Errorf("expected 1 indexed (forge-only entry skipped), got %d", result.Indexed)
+	}
+	if result.Errors != 0 {
+		t.Errorf("expected 0 errors, got %d", result.Errors)
+	}
+}

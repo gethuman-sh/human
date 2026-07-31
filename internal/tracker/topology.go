@@ -19,25 +19,32 @@ type Topology struct {
 // exactly one non-engineering tracker exists — with several candidates PM stays
 // nil rather than guessing.
 func ResolveTopology(instances []Instance) Topology {
+	// A forge-only entry (role: forge, or any forges: entry) carries no issue
+	// tracker capability at all, so it must never count toward PM candidates
+	// or role resolution — otherwise a lone forge entry alongside one real
+	// tracker makes the PM fallback see two candidates and resolve to nil
+	// ([SC-1671]).
+	trackerInstances := TrackerInstances(instances)
+
 	t := Topology{Mode: "single"}
-	for i := range instances {
-		switch instances[i].InferRole() {
+	for i := range trackerInstances {
+		switch trackerInstances[i].InferRole() {
 		case "engineering":
 			if t.Engineering == nil {
-				t.Engineering = &instances[i]
+				t.Engineering = &trackerInstances[i]
 				t.Mode = "split"
 			}
 		case "pm":
 			if t.PM == nil {
-				t.PM = &instances[i]
+				t.PM = &trackerInstances[i]
 			}
 		}
 	}
 	if t.PM == nil {
 		var candidates []*Instance
-		for i := range instances {
-			if instances[i].InferRole() != "engineering" {
-				candidates = append(candidates, &instances[i])
+		for i := range trackerInstances {
+			if trackerInstances[i].InferRole() != "engineering" {
+				candidates = append(candidates, &trackerInstances[i])
 			}
 		}
 		if len(candidates) == 1 {

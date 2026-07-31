@@ -84,6 +84,10 @@ func RunTrackerList(out io.Writer, dir string, table bool, loader func(string) (
 	if err != nil {
 		return err
 	}
+	// A forge-only entry (role: forge, or a forges: entry) opens pull
+	// requests but is not a tracker — it must stay out of this view exactly
+	// as it stays out of tracker resolution and counting ([SC-1671]).
+	instances = tracker.TrackerInstances(instances)
 
 	entries := make([]TrackerEntry, len(instances))
 	for i, inst := range instances {

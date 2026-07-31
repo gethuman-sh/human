@@ -119,6 +119,26 @@ func TestRunTrackerList_TableEmpty(t *testing.T) {
 	assert.Contains(t, buf.String(), "No trackers configured in .humanconfig")
 }
 
+// TestRunTrackerList_ExcludesForgeOnly is the SC-1671 regression: a
+// forge-only entry (role: forge, or a forges: entry) opens pull requests but
+// is not a tracker, so `human tracker list` must not surface it — matching
+// the same guarantee already enforced for resolution, counting, and
+// DiagnoseTrackers.
+func TestRunTrackerList_ExcludesForgeOnly(t *testing.T) {
+	instances := []tracker.Instance{
+		{Name: "work", Kind: "jira", URL: "https://jira.example.com", User: "alice", Description: "Work JIRA"},
+		{Name: "prs", Kind: "github", Role: tracker.RoleForge, Description: "PR forge"},
+	}
+	var buf bytes.Buffer
+
+	err := RunTrackerList(&buf, ".", false, loaderOK(instances))
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, `"name": "work"`)
+	assert.NotContains(t, out, `"name": "prs"`)
+}
+
 // --- PrintTrackerJSON tests ---
 
 func TestPrintTrackerJSON_Entries(t *testing.T) {
