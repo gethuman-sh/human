@@ -34,18 +34,30 @@ type SecretProvider interface {
 // command contexts via WithResolver so all requests share one provider
 // instance (avoiding repeated op.exe subprocesses on WSL2).
 //
-// Providers are always tried first, so a rotated secret is picked up
-// immediately while the store is reachable. A successful resolution is
-// remembered for a bounded TTL, and only surfaces as a fallback when every
-// claiming provider later fails — a credential lapse. This keeps a momentary
-// loss of access from invalidating a secret that already resolved in the same
-// run (SC-2039): the deploy step that reads a credential it read at push time
-// survives the lapse instead of failing on an unrelated stale read. The cache
-// lives only in daemon memory, never on disk. Every entry is TTL-bounded:
-// remember sweeps expired entries on each successful resolve (so a ref that
-// is never re-requested does not linger past its TTL just because nobody
-// asked for it again), and cached additionally drops its own entry on a
-// stale read.
+// A resolved secret is served from memory for a bounded TTL, and the provider
+// is consulted only on a miss. That is what keeps a human out of the machine's
+// loop: an interactive store (the 1Password desktop app) raises an approval
+// dialog per read, so reaching the provider on every request means approving
+// one prompt per command the pipeline runs — faster than anyone can clear
+// them, and a missed one fails an unrelated piece of work half a minute later
+// (SC-2173).
+//
+// The cost is the honest one for any cache: a rotated secret is picked up when
+// the entry ages out rather than instantly. The window is configurable, and a
+// non-positive `cache_ttl` disables caching entirely for anyone who wants the
+// provider consulted every time.
+//
+// Concurrent resolutions of the same reference are collapsed into one provider
+// call, so several pieces of work starting together raise one approval between
+// them instead of one each.
+//
+// A still-fresh entry is also served when every claiming provider fails — a
+// credential lapse. This keeps a momentary loss of access from invalidating a
+// secret that already resolved in the same run (SC-2039). The cache lives only
+// in daemon memory, never on disk. Every entry is TTL-bounded: remember sweeps
+// expired entries on each successful resolve (so a ref that is never
+// re-requested does not linger past its TTL just because nobody asked for it
+// again), and cached additionally drops its own entry on a stale read.
 type Resolver struct {
 	providers []SecretProvider
 
@@ -53,6 +65,18 @@ type Resolver struct {
 	now   func() time.Time
 	mu    sync.Mutex
 	cache map[string]cachedSecret
+	// inflight holds the resolution currently running for a reference, so
+	// callers that arrive while it runs wait for its result instead of raising
+	// a second approval prompt for the same secret.
+	inflight map[string]*resolveCall
+}
+
+// resolveCall is one in-progress resolution, shared by everyone who asked for
+// the same reference while it was running.
+type resolveCall struct {
+	done chan struct{}
+	val  string
+	err  error
 }
 
 // cachedSecret is a resolved plaintext value with the instant it stops being a
@@ -74,16 +98,59 @@ func NewResolver(providers ...SecretProvider) *Resolver {
 		ttl:       DefaultCacheTTL,
 		now:       time.Now,
 		cache:     make(map[string]cachedSecret),
+		inflight:  make(map[string]*resolveCall),
 	}
 }
 
 // Resolve looks up a secret reference. If the value is not a vault reference
 // (no provider claims it), the original value is returned unchanged.
+//
+// A still-fresh cached value is served without touching the provider. With an
+// interactive store that is the difference between one approval prompt and one
+// per command the pipeline runs.
 func (r *Resolver) Resolve(ref string) (string, error) {
 	if !IsSecretRef(ref) {
 		return ref, nil
 	}
+	if val, ok := r.cached(ref); ok {
+		return val, nil
+	}
+	return r.resolveOnce(ref)
+}
 
+// resolveOnce consults the providers, with concurrent callers asking for the
+// same reference sharing one call.
+//
+// Without this, ten pieces of work starting together raise ten prompts for one
+// secret — and a person cannot clear ten dialogs before the first times out, so
+// a burst of activity is precisely when resolution is most likely to fail.
+func (r *Resolver) resolveOnce(ref string) (string, error) {
+	r.mu.Lock()
+	if r.inflight == nil {
+		r.inflight = make(map[string]*resolveCall)
+	}
+	if call, running := r.inflight[ref]; running {
+		r.mu.Unlock()
+		<-call.done
+		return call.val, call.err
+	}
+	call := &resolveCall{done: make(chan struct{})}
+	r.inflight[ref] = call
+	r.mu.Unlock()
+
+	call.val, call.err = r.fromProviders(ref)
+
+	r.mu.Lock()
+	delete(r.inflight, ref)
+	r.mu.Unlock()
+	close(call.done)
+	return call.val, call.err
+}
+
+// fromProviders tries each claiming provider in order and remembers what one of
+// them returns. Providers are tried in order; the first claimant that succeeds
+// wins.
+func (r *Resolver) fromProviders(ref string) (string, error) {
 	var lastErr error
 	claimed := false
 	for _, p := range r.providers {
@@ -105,7 +172,9 @@ func (r *Resolver) Resolve(ref string) (string, error) {
 		// Every claimant failed — a credential lapse. Serve a still-fresh
 		// cached value so work whose secret already resolved this run is not
 		// failed by an unrelated stale read; only when nothing is cached does
-		// the lapse surface as the error it is.
+		// the lapse surface as the error it is. Reached when an entry landed
+		// while this call was running, or expired between the read above and
+		// the failure here.
 		if val, ok := r.cached(ref); ok {
 			return val, nil
 		}

@@ -564,7 +564,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// cannot serve a review must leave the ready-for-review handoff unclaimed for
 	// one that can, not claim and fail it (SC-912). Doctor.Blockers is nil-safe.
 	reviewLaunchGate := func(ctx context.Context) []daemon.DoctorCheck {
-		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchCriticalChecks)
+		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchRefusalChecks())
 	}
 	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 	// A finished build chains straight into its review — the board's

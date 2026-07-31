@@ -1527,6 +1527,24 @@ const doctorCacheAge = 2 * time.Minute
 // from the same source of truth as the synchronous launch-refusal path.
 var LaunchCriticalChecks = []string{"docker", "agent-skills", "claude-auth"}
 
+// LaunchHeldChecks additionally refuse a launch WITHOUT marking the check as
+// gating in the report.
+//
+// The two lists differ because the two questions do. A tracker that cannot be
+// reached right now is a blip that must not raise a system alarm (SC-1991) —
+// but an agent launched into it cannot read its plan, cannot post its handoff,
+// and dies blaming the ticket for a credential that was unavailable for thirty
+// seconds (SC-2173). So the work waits, quietly, exactly as it waits for a
+// daemon that cannot serve it, and nothing is spent.
+var LaunchHeldChecks = []string{"trackers"}
+
+// LaunchRefusalChecks is every check that stops a launch — the single source
+// the gate builds its blocker set from, so a check can never be added to one
+// list and forgotten in the other.
+func LaunchRefusalChecks() []string {
+	return append(append([]string{}, LaunchCriticalChecks...), LaunchHeldChecks...)
+}
+
 // handleDoctor returns the substrate health checks as JSON. "refresh" as an
 // argument forces a live run instead of the poller cache.
 func (s *Server) handleDoctor(conn net.Conn, args []string) {

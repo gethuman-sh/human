@@ -65,8 +65,16 @@ func buildDoctorChecks(reg *daemon.ProjectRegistry, resolver *vault.Resolver, pe
 	for _, id := range daemon.LaunchCriticalChecks {
 		gating[id] = true
 	}
+	// Holding is the quieter sibling: these hold work back without declaring the
+	// substrate broken, so the board can say "waiting on you" instead of the
+	// untrue "nothing is blocked" (SC-2173).
+	holding := make(map[string]bool, len(daemon.LaunchHeldChecks))
+	for _, id := range daemon.LaunchHeldChecks {
+		holding[id] = true
+	}
 	for i := range checks {
 		checks[i].Gating = gating[checks[i].ID]
+		checks[i].Holding = holding[checks[i].ID]
 	}
 	return checks
 }

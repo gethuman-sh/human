@@ -2,6 +2,8 @@ package vault
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -228,15 +230,42 @@ func TestResolver_Resolve_cachingDisabledByZeroTTL(t *testing.T) {
 	require.Error(t, err)
 }
 
-// A successful resolution refreshes the cache: a value read again while the
-// store is up wins over an older cached one, and rotations are picked up.
-func TestResolver_Resolve_successRefreshesCache(t *testing.T) {
+// The contract that keeps a human out of the machine's loop: within the TTL the
+// stored value is served and the provider is never consulted. With an
+// interactive store, every provider call is an approval dialog, so "ask again
+// each time" means one prompt per command the pipeline runs (SC-2173).
+func TestResolver_Resolve_servesTheCachedValueWithoutAskingAgain(t *testing.T) {
+	calls := 0
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			calls++
+			return "token", nil
+		},
+	}
+	r := NewResolver(provider)
+
+	for range 5 {
+		val, err := r.Resolve("1pw://vault/item/field")
+		require.NoError(t, err)
+		assert.Equal(t, "token", val)
+	}
+
+	assert.Equal(t, 1, calls, "five reads of one secret must raise one approval, not five")
+}
+
+// The trade-off, stated as a test rather than left implicit: a rotated secret
+// is picked up when the entry ages out, not instantly.
+func TestResolver_Resolve_rotationIsPickedUpWhenTheEntryAgesOut(t *testing.T) {
+	now := time.Now()
 	current := "first"
 	provider := &fakeProvider{
 		canResolve: func(string) bool { return true },
 		resolve:    func(string) (string, error) { return current, nil },
 	}
 	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
 
 	val, err := r.Resolve("1pw://vault/item/field")
 	require.NoError(t, err)
@@ -245,7 +274,93 @@ func TestResolver_Resolve_successRefreshesCache(t *testing.T) {
 	current = "rotated"
 	val, err = r.Resolve("1pw://vault/item/field")
 	require.NoError(t, err)
-	assert.Equal(t, "rotated", val)
+	assert.Equal(t, "first", val, "within the window the stored value stands")
+
+	now = now.Add(time.Minute + time.Second)
+	val, err = r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "rotated", val, "once it ages out the store is asked again")
+}
+
+// Disabling the cache restores asking every time, for anyone who wants that.
+func TestResolver_Resolve_disabledCacheAsksEveryTime(t *testing.T) {
+	calls := 0
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			calls++
+			return "token", nil
+		},
+	}
+	r := NewResolver(provider)
+	r.ttl = 0
+
+	for range 3 {
+		_, err := r.Resolve("1pw://vault/item/field")
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 3, calls)
+}
+
+// Several pieces of work starting at once must raise ONE approval between them.
+// A person cannot clear ten dialogs before the first times out, so a burst is
+// exactly when asking separately fails.
+func TestResolver_Resolve_concurrentCallersShareOneApproval(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			calls.Add(1)
+			<-release // hold the "dialog" open while the others pile in
+			return "token", nil
+		},
+	}
+	r := NewResolver(provider)
+
+	var wg sync.WaitGroup
+	got := make([]string, 10)
+	for i := range got {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			val, err := r.Resolve("1pw://vault/item/field")
+			assert.NoError(t, err)
+			got[i] = val
+		}()
+	}
+	// Let the waiters reach the in-flight call before the first one returns.
+	assert.Eventually(t, func() bool { return calls.Load() == 1 }, time.Second, time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), calls.Load(), "ten concurrent readers, one approval")
+	for _, v := range got {
+		assert.Equal(t, "token", v, "every caller gets the resolved value")
+	}
+}
+
+// Distinct references are not collapsed — the single-flight is per secret.
+func TestResolver_Resolve_differentRefsAreNotShared(t *testing.T) {
+	calls := 0
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(ref string) (string, error) {
+			calls++
+			return ref, nil
+		},
+	}
+	r := NewResolver(provider)
+
+	a, err := r.Resolve("1pw://vault/item/one")
+	require.NoError(t, err)
+	b, err := r.Resolve("1pw://vault/item/two")
+	require.NoError(t, err)
+
+	assert.Equal(t, "1pw://vault/item/one", a)
+	assert.Equal(t, "1pw://vault/item/two", b)
+	assert.Equal(t, 2, calls)
 }
 
 func TestResolveField_nilResolver(t *testing.T) {
