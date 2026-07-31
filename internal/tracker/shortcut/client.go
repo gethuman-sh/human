@@ -79,10 +79,8 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 	} else {
 		// Use search for all stories regardless of team assignment.
 		// listAllGroupStories only returns stories with a group_id set, so
-		// stories with no team are silently dropped. searchAllStories with
-		// {"archived":false} returns everything and avoids the empty-body
-		// problem seen on some Shortcut workspaces.
-		stories, err = c.searchAllStories(ctx, opts.UpdatedSince)
+		// stories with no team are silently dropped.
+		stories, err = c.searchAllStories(ctx, opts.UpdatedSince, opts.IncludeAll)
 	}
 	if err != nil {
 		return nil, err
@@ -105,7 +103,7 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 		if cErr != nil {
 			return nil, cErr
 		}
-		if !opts.IncludeAll && c.isDoneOrArchived(story) {
+		if !c.belongsInResult(story, opts.IncludeAll) {
 			continue
 		}
 		issues = append(issues, issue)
@@ -149,12 +147,31 @@ func (c *Client) searchStories(ctx context.Context, groupID string, since time.T
 	return stories, nil
 }
 
-// searchAllStories searches across all groups, optionally filtering by updated time.
-// Archived is always set to false so the request body is never empty — sending {}
-// returns no results on some Shortcut workspaces, while {"archived":false} returns
-// all non-archived stories regardless of team assignment.
-func (c *Client) searchAllStories(ctx context.Context, since time.Time) ([]scStory, error) {
-	archived := false
+// searchAllStories searches across all groups, optionally filtering by updated
+// time.
+//
+// The archived filter has to be sent explicitly rather than omitted: an empty
+// request body returns no results on some Shortcut workspaces, so {} is not a
+// way to ask for "both". Asking for the record therefore issues TWO searches —
+// archived and not — and merges them. Without that, an archived story could
+// never be returned at all, and "was this already fixed?" would silently miss
+// every ticket somebody tidied away (SC-2132).
+func (c *Client) searchAllStories(ctx context.Context, since time.Time, includeArchived bool) ([]scStory, error) {
+	stories, err := c.searchArchived(ctx, since, false)
+	if err != nil || !includeArchived {
+		return stories, err
+	}
+	archived, err := c.searchArchived(ctx, since, true)
+	if err != nil {
+		// The unarchived half is a usable answer; losing it because the archived
+		// half failed would be worse than an incomplete one.
+		return stories, nil
+	}
+	return append(stories, archived...), nil
+}
+
+// searchArchived runs one archived/not-archived half of the search.
+func (c *Client) searchArchived(ctx context.Context, since time.Time, archived bool) ([]scStory, error) {
 	body := scSearchRequest{Archived: &archived}
 	if !since.IsZero() {
 		body.UpdatedAtStart = since.Format(time.RFC3339)
@@ -836,13 +853,35 @@ func (c *Client) defaultWorkflowStateID(ctx context.Context) (int64, error) {
 // isDoneOrArchived returns true if the story is archived or in a "done" workflow state.
 // Must be called after workflow states have been loaded.
 func (c *Client) isDoneOrArchived(story scStory) bool {
-	if story.Archived {
-		return true
-	}
+	return story.Archived || c.isDone(story)
+}
+
+// isDone reports whether the story reached a done workflow state. Independent of
+// Archived: the two are separate fields, so a story can be archived without ever
+// having been finished.
+func (c *Client) isDone(story scStory) bool {
 	c.statesMu.Lock()
 	stateType := c.stateTypes[story.WorkflowStateID]
 	c.statesMu.Unlock()
 	return stateType == tracker.CategoryDone
+}
+
+// belongsInResult reports whether a story survives the caller's filter.
+//
+// Without IncludeAll the caller wants live work: neither finished nor put away.
+//
+// With IncludeAll the caller wants the record — everything that happened —
+// EXCEPT work that was archived without ever being done. Archiving and
+// finishing are orthogonal in Shortcut, and an archived-but-unfinished story is
+// work somebody abandoned: surfacing it in a search reads as if the work exists
+// or is planned, which is more misleading than not finding it at all (SC-2132).
+// Archived-and-done stories are ordinary housekeeping and stay, because "was
+// this already fixed?" is exactly what the record is asked.
+func (c *Client) belongsInResult(story scStory, includeAll bool) bool {
+	if !includeAll {
+		return !c.isDoneOrArchived(story)
+	}
+	return !story.Archived || c.isDone(story)
 }
 
 // isValidStoryType returns true if t is a Shortcut-accepted story type.
