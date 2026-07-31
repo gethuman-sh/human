@@ -341,6 +341,9 @@ body {
 
 .column-body {
   padding: 10px;
+  /* Anchors the dependency-arrow overlay, and makes every card's
+     offsetLeft/offsetTop read in this column's own content coordinates. */
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -849,6 +852,30 @@ body {
    asked of the user and nothing has failed (SC-1830). */
 .badge.degraded {
   color: var(--turn-machine);
+}
+
+/* The dependency arrow layer: one SVG per column, sized to the column's whole
+   scrollable content. It sits over the cards, so it must never take a pointer
+   event — dragging a card is how the board works. */
+.blocker-arrows {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* Same muted register as the "waits for" badge: the arrow states an ordering,
+   it does not raise an alarm. */
+.blocker-arrow {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  opacity: 0.85;
+}
+
+.blocker-arrowhead {
+  fill: var(--muted);
+  opacity: 0.85;
 }
 
 /* Work parked behind another ticket: nothing is running and nothing is wrong,
