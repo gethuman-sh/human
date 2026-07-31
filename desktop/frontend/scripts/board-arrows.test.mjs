@@ -95,3 +95,73 @@ test("touching cards still produce a curve, not a dot", () => {
   assert.match(d, /^M \d+ \d+ C /);
   assert.notEqual(d.split("C")[1].trim(), "");
 });
+
+import { plan, corridorClear, gapsBySide } from "../build/board-arrows.js";
+
+// A row of three: SC-1 and SC-3 are linked, SC-2 sits between them. A straight
+// line would cross SC-2's face and state a relationship between the wrong two
+// tickets, so that pair keeps the badge — the same rule as a pair split across
+// two columns.
+test("a card in the way means no arrow, not an arrow through it", () => {
+  const boxes = new Map([
+    ["SC-1", box(0, 0)],
+    ["SC-2", box(140, 0)],
+    ["SC-3", box(280, 0)],
+  ]);
+
+  assert.deepEqual(plan([{ from: "SC-1", to: "SC-3" }], boxes), []);
+  assert.equal(plan([{ from: "SC-1", to: "SC-2" }], boxes).length, 1, "neighbours still draw");
+});
+
+// The corridor between neighbours is just the gap, and a card flush against it
+// is beside the arrow, not in its way.
+test("touching the corridor is not standing in it", () => {
+  assert.equal(corridorClear(box(0, 0), box(140, 0), [box(140, 0)]), true);
+});
+
+// A wrapped grid row: the blocker ends one row, the card it holds starts the
+// next. The corridor is the space between the rows, which no card occupies.
+test("a wrapped row still draws", () => {
+  const boxes = new Map([
+    ["SC-1", box(500, 0)],
+    ["SC-2", box(0, 100)],
+    ["SC-9", box(140, 0)],
+  ]);
+
+  const drawn = plan([{ from: "SC-1", to: "SC-2" }], boxes);
+  assert.deepEqual(drawn, [{ from: "SC-1", to: "SC-2", exit: "bottom", enter: "top" }]);
+});
+
+// The sides are settled before any card is narrowed, so the gap that gets
+// opened is always the one the arrow uses.
+test("the plan records which edges the arrow will use", () => {
+  const drawn = plan([{ from: "SC-1", to: "SC-2" }], new Map([["SC-1", box(0, 0)], ["SC-2", box(140, 0)]]));
+
+  assert.deepEqual(drawn, [{ from: "SC-1", to: "SC-2", exit: "right", enter: "left" }]);
+});
+
+// Only the edge an arrow attaches to gives up space.
+test("each card narrows only on the side an arrow uses", () => {
+  const drawn = plan([{ from: "SC-1", to: "SC-2" }], new Map([["SC-1", box(0, 0)], ["SC-2", box(140, 0)]]));
+
+  assert.deepEqual([...gapsBySide(drawn)], [
+    ["SC-1", ["right"]],
+    ["SC-2", ["left"]],
+  ]);
+});
+
+// A card in the middle of a chain is waited on from one side and waits on the
+// other, so it narrows on both — which is what collecting sides per card rather
+// than per arrow produces, with no case for it in the code.
+test("a card mid-chain narrows on both sides", () => {
+  const boxes = new Map([["SC-1", box(0, 0)], ["SC-2", box(140, 0)], ["SC-3", box(280, 0)]]);
+  const drawn = plan(
+    [
+      { from: "SC-1", to: "SC-2" },
+      { from: "SC-2", to: "SC-3" },
+    ],
+    boxes,
+  );
+
+  assert.deepEqual(gapsBySide(drawn).get("SC-2"), ["left", "right"]);
+});
