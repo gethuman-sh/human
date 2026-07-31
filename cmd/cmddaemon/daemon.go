@@ -445,6 +445,42 @@ func removeStatsFilesUnlessHandedOver(handedOver *atomic.Bool, statsPath, connec
 	daemon.RemoveConnected(connectedPath)
 }
 
+// startProxyServer builds the HTTPS proxy on the pre-owned listener, prints its
+// one-line status, and serves it in the background. It returns the server so the
+// stats writer can report on it.
+func startProxyServer(ctx context.Context, proxyAddr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, ln net.Listener, out io.Writer) (*proxy.Server, error) {
+	proxySrv, proxyStatus, err := buildProxyServer(proxyAddr, interactive, logger, emitter)
+	if err != nil {
+		return nil, err
+	}
+	proxySrv.Listener = ln
+	if proxyStatus != "" {
+		_, _ = fmt.Fprintln(out, proxyStatus)
+	}
+	go func() {
+		if err := proxySrv.ListenAndServe(ctx); err != nil {
+			logger.Error().Err(err).Msg("https proxy failed")
+		}
+	}()
+	return proxySrv, nil
+}
+
+// claimDaemonIdentity is called only once the listeners are accepting: it
+// signals a handover parent to step down and records this process as the live
+// daemon (pidfile + daemon.json). Deferring it out of runDaemonForeground keeps
+// the identity claim off the readiness path — a locked vault can never freeze
+// the process before it is recorded as serving (SC-2138).
+func claimDaemonIdentity(ds *daemonState, logger zerolog.Logger) error {
+	signalHandoverReady(logger)
+	if err := WritePidFile(os.Getpid()); err != nil {
+		return errors.WrapWithDetails(err, "failed to write PID file")
+	}
+	if err := daemon.WriteInfo(ds.info); err != nil {
+		return errors.WrapWithDetails(err, "failed to write daemon info")
+	}
+	return nil
+}
+
 func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
 	// Bind the daemon, chrome bridge, and HTTPS proxy on the interface
 	// containers can reach without exposing them to the LAN (never 0.0.0.0): the
@@ -497,20 +533,10 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	chromeSvcs := startChromeServices(ctx, chromeAddr, ds.srv.Token, listeners.chrome, logger)
 
-	proxySrv, proxyStatus, proxyErr := buildProxyServer(proxyAddr, interactive, logger, ds.networkStore)
-	if proxyErr != nil {
-		return proxyErr
+	proxySrv, err := startProxyServer(ctx, proxyAddr, interactive, logger, ds.networkStore, listeners.proxy, out)
+	if err != nil {
+		return err
 	}
-	proxySrv.Listener = listeners.proxy
-	if proxyStatus != "" {
-		_, _ = fmt.Fprintln(out, proxyStatus)
-	}
-
-	go func() {
-		if err := proxySrv.ListenAndServe(ctx); err != nil {
-			logger.Error().Err(err).Msg("https proxy failed")
-		}
-	}()
 
 	// The listeners are accepting, so this process is serving. Only now does it
 	// claim the on-disk identity and (if it is a handover child) tell the parent
@@ -518,12 +544,8 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// locked vault can never freeze the child before it is recorded as the live
 	// daemon — and a stalled child never leaves the pidfile/daemon.json naming a
 	// process that is not answering (SC-2138).
-	signalHandoverReady(logger)
-	if err := WritePidFile(os.Getpid()); err != nil {
-		return errors.WrapWithDetails(err, "failed to write PID file")
-	}
-	if err := daemon.WriteInfo(ds.info); err != nil {
-		return errors.WrapWithDetails(err, "failed to write daemon info")
+	if err := claimDaemonIdentity(ds, logger); err != nil {
+		return err
 	}
 
 	statsPath := proxy.StatsPath()

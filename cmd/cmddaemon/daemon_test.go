@@ -161,10 +161,10 @@ func TestDaemonCmd_StopRegistered(t *testing.T) {
 
 func TestStaleBuildNotice(t *testing.T) {
 	tests := []struct {
-		name          string
-		running       string
-		onDisk        string
-		wantContains  string // empty means the notice must be empty
+		name         string
+		running      string
+		onDisk       string
+		wantContains string // empty means the notice must be empty
 	}{
 		{"same build is quiet", "abc123", "abc123", ""},
 		{"running build unknown is quiet", "", "abc123", ""},
