@@ -121,7 +121,11 @@ func ResolveForge(cmd *cobra.Command, kind string, deps Deps) (forge.Forge, erro
 
 	trackerName, _ := cmd.Root().PersistentFlags().GetString("tracker")
 
-	instance, err := tracker.ResolveByKind(kind, instances, trackerName)
+	// Resolve on the forge capability, not the tracker Provider: a forge-only
+	// entry (role: forge or a forges: section) carries a nil Provider and would
+	// be invisible to ResolveByKind, yet it is exactly the entry that can open a
+	// pull request ([SC-1671]).
+	instance, err := tracker.ResolveForgeByKind(kind, instances, trackerName)
 	if err != nil {
 		return nil, err
 	}

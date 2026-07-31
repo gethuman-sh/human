@@ -40,24 +40,49 @@ var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	GetName: func(c Config) string { return c.Name },
 	SetURL:  func(c *Config, v string) { c.URL = v },
 	GetURL:  func(c Config) string { return c.URL },
-	Build: func(cfg Config) (tracker.Instance, bool) {
-		if cfg.Token == "" {
-			return tracker.Instance{}, false
-		}
+	Build:   buildInstance,
+}
+
+// buildInstance turns one githubs: entry into a tracker.Instance, splitting the
+// tracker and forge capabilities by the entry's role ([SC-1671]):
+//
+//   - role: forge          → forge-only: a code-host client with a nil Provider,
+//     invisible to tracker resolution, counting and issue listing.
+//   - no role              → BOTH tracker and forge, preserving the single-entry
+//     configs that predate the split (backwards compatibility).
+//   - any other role       → tracker-only (pm, engineering, tracker): no forge.
+//     Declare a separate forges: entry to run GitHub as both deliberately.
+func buildInstance(cfg Config) (tracker.Instance, bool) {
+	if cfg.Token == "" {
+		return tracker.Instance{}, false
+	}
+	if cfg.Role == tracker.RoleForge {
 		return tracker.Instance{
 			Name:        cfg.Name,
 			Kind:        "github",
 			URL:         cfg.URL,
 			Description: cfg.Description,
-			Role:        cfg.Role,
+			Role:        tracker.RoleForge,
 			Safe:        cfg.Safe,
-			Projects:    cfg.Projects,
-			Provider:    New(cfg.URL, cfg.Token),
-			// GitHub is also a code forge — expose PR creation alongside the
-			// issue-tracker provider via a separate forge client.
-			Forge: forgegithub.New(cfg.URL, cfg.Token),
+			Forge:       forgegithub.New(cfg.URL, cfg.Token),
 		}, true
-	},
+	}
+	inst := tracker.Instance{
+		Name:        cfg.Name,
+		Kind:        "github",
+		URL:         cfg.URL,
+		Description: cfg.Description,
+		Role:        cfg.Role,
+		Safe:        cfg.Safe,
+		Projects:    cfg.Projects,
+		Provider:    New(cfg.URL, cfg.Token),
+	}
+	// A roleless entry keeps GitHub's historical dual identity so existing
+	// single-entry configs open pull requests exactly as before.
+	if cfg.Role == "" {
+		inst.Forge = forgegithub.New(cfg.URL, cfg.Token)
+	}
+	return inst, true
 }
 
 // LoadInstances reads config, applies env overrides, creates clients,

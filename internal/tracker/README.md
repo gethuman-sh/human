@@ -17,4 +17,5 @@
 - Edit an issue's title and description
 - Auto-detects the right tracker from a key
 - Resolves tracker roles and topology (`human tracker topology`): which tracker is PM, which is engineering, single vs split
+- Splits GitHub's tracker and forge roles: a `githubs:` entry is BOTH an issue tracker and a pull-request forge by default (backwards compatible), but `role: forge` (or a top-level `forges:` section) makes it forge-only — it opens pull requests yet contributes no tracker instance, so it never counts as a second tracker, never breaks keyless resolution, and is never queried for issues. Any other explicit role (`pm`, `engineering`, `tracker`) makes the entry tracker-only; declare a separate forge entry to run GitHub as both deliberately
 - Guards deletes and edits with safe-mode policies

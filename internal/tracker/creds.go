@@ -166,6 +166,12 @@ func DiagnoseTrackers(dir string, unmarshal func(dir, section string, target any
 		}
 
 		for _, entry := range entries {
+			// A forge-only entry (role: forge) is not a tracker: it must stay out
+			// of the tracker count and the `human tracker list` view exactly as it
+			// stays out of resolution and listing ([SC-1671]).
+			if entry.Role == RoleForge {
+				continue
+			}
 			missing, vaultRef := diagnoseMissing(spec, entry, getenv)
 			result = append(result, TrackerStatus{
 				Name:     entry.Name,
