@@ -33,7 +33,7 @@ func TestHandleBoardAgentExit_RetryableFailureRelaunchesTheStage(t *testing.T) {
 	var relaunched, resets []BoardStage
 	policy := retryPolicyFor(ExitRetryable, true, &relaunched, &resets)
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor,
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", "", commenterFor,
 		nil, nil, nil, alwaysReachable, nil, nil, nil, policy, "d1", zerolog.Nop())
 
 	require.Equal(t, []BoardStage{BoardPlanning}, relaunched)
@@ -58,7 +58,7 @@ func TestHandleBoardAgentExit_TerminalFailureIsNotRelaunched(t *testing.T) {
 	var relaunched, resets []BoardStage
 	policy := retryPolicyFor(ExitNeedsHumanWork, true, &relaunched, &resets)
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor,
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", "", commenterFor,
 		nil, nil, nil, alwaysReachable, nil, nil, nil, policy, "d1", zerolog.Nop())
 
 	require.Empty(t, relaunched)
@@ -74,7 +74,7 @@ func TestHandleBoardAgentExit_CleanFinishResetsTheRetryBudget(t *testing.T) {
 	var relaunched, resets []BoardStage
 	policy := retryPolicyFor(ExitDone, true, &relaunched, &resets)
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor,
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", "", commenterFor,
 		nil, nil, nil, alwaysReachable, nil, nil, nil, policy, "d1", zerolog.Nop())
 
 	require.Equal(t, []BoardStage{BoardPlanning}, resets)

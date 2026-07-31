@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -87,7 +88,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, commenterFor, chainReview, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, evt.EventName, commenterFor, chainReview, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger)
 			}
 		}
 	}
@@ -97,7 +98,14 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // latest marker is already its done-marker (a clean finish). A cleanly
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
-func handleBoardAgentExit(ctx context.Context, agentName, errorType string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
+//
+// eventName is the hook event's own name ("Stop", "SessionEnd", or the zombie
+// sweep's synthesized "StopFailure") — the only signal that discriminates a
+// clean exit-0 from a genuine death, since both carry an empty ErrorType. It
+// is used to derive cleanExit, which in turn guards against misreading a
+// clean finish that merely raced its own review-complete propagation as a
+// mid-review crash (SC-2133).
+func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
@@ -117,6 +125,12 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot resolve PM commenter")
 		return
 	}
+	// A reap synthesizes "StopFailure" for a genuinely dead run; a clean exit-0
+	// fires "Stop" or "SessionEnd" — both carry an empty ErrorType, so eventName
+	// is the only thing that tells them apart. cleanExit gates the mid-review
+	// death check below: a clean exit-0 that merely raced its own
+	// review-complete propagation is never a death (SC-2133).
+	cleanExit := eventName != "StopFailure"
 	// A clean stage finish leaves the stage's done-marker as the latest marker;
 	// only treat the exit as a failure when that did NOT happen. Re-read with
 	// bounded backoff first: a reap-synthesized exit can be handled before the
@@ -140,7 +154,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 			onHandoff(agentName)
 		}
 		if stage == BoardImplementation {
-			chainReviewAfterCleanBuild(ctx, pmKey, agentName, errorType, comments, commenter, chainReview, reachable, commitsPresent, diagnose, daemonID, logger)
+			chainReviewAfterCleanBuild(ctx, pmKey, agentName, errorType, cleanExit, comments, commenter, chainReview, reachable, commitsPresent, diagnose, daemonID, logger)
 		}
 		return
 	}
@@ -183,21 +197,29 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType string, comm
 // implementation container now runs the review in-place (warm workspace, one
 // container startup). If it already posted a verification-stage marker, the
 // review is accounted for and a second cold review container must NOT launch;
-// only a mid-review death (marker still running) surfaces a retryable review
-// failure, its body composed from diagnose exactly like the generic crash path
-// so the tracker carries the real reason instead of a hardcoded sentence
-// (SC-1688). Otherwise it flows into chainReviewAfterBuild's branch/commit-gated
-// chain. A nil chainReview disables chaining entirely.
-func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, daemonID string, logger zerolog.Logger) {
+// only a mid-review death (marker still running AND the exit itself was not
+// clean) surfaces a retryable review failure, its body composed from diagnose
+// exactly like the generic crash path so the tracker carries the real reason
+// instead of a hardcoded sentence (SC-1688). A clean exit-0 (cleanExit) whose
+// verification marker still reads "running" means the review-complete simply
+// has not propagated to this read yet — never that the review died (SC-2133);
+// listStageSettled's extended settle-wait already gives that propagation a
+// bounded chance to land before this is reached, so a residual "running" read
+// past that budget is treated as still-in-flight, not a crash. Otherwise it
+// flows into chainReviewAfterBuild's branch/commit-gated chain. A nil
+// chainReview disables chaining entirely.
+func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType string, cleanExit bool, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, daemonID string, logger zerolog.Logger) {
 	if chainReview == nil {
 		return
 	}
 	if vOK, vState := latestStageState(comments, BoardVerification); vOK {
 		// review-complete (pass OR fail verdict) is a recorded outcome the board
 		// acts on; a review-failed marker is already retryable. Either way, do not
-		// chain a second review. Only a mid-review death needs a retryable marker.
-		if vState == BoardRunning {
-			body := ReviewFailedHeader + "\n" + failureMarkerBody(diagnose, agentName, errorType)
+		// chain a second review. Only a mid-review death — the marker still reads
+		// "running" AND the exit itself was not clean — needs a retryable marker.
+		if vState == BoardRunning && !cleanExit {
+			body := ReviewFailedHeader + "\n" + failureMarkerBody(diagnose, agentName, errorType) +
+				"\n\n" + handoffSearchNote(BoardVerification, ReviewCompleteHeader)
 			if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 				logger.Warn().Err(err).Str("pm", pmKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
 			}
@@ -205,6 +227,14 @@ func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType
 		return
 	}
 	chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
+}
+
+// handoffSearchNote composes the "what was searched for" line the review-failed
+// marker carries: a recorded failure must be diagnosable from the ticket alone,
+// without reading agent logs, when the handoff it claims is missing really is
+// absent (SC-2133 AC #3).
+func handoffSearchNote(stage BoardStage, header string) string {
+	return fmt.Sprintf("searched for: a %q marker on the %s stage — none found", header, stage)
 }
 
 // drivePRLoopExit routes a PR review/fix loop agent's exit to the loop driver
@@ -353,11 +383,31 @@ func listStageSettled(ctx context.Context, commenter tracker.Commenter, pmKey st
 // stageSettled reports whether the stage's latest marker is one of the three
 // clean, non-failure endings handleBoardAgentExit treats as settled: the
 // stage's own done-marker, a terminal BoardResolved marker, or an open
-// same-stage [human:options] pause. Kept as the exact negation of the failure
-// branch so the re-read loop and the post decision can never drift apart.
+// same-stage [human:options] pause. It is no longer the exact negation of the
+// failure branch: for the implementation stage it ALSO keeps re-reading while
+// the merged verification stage looks in-flight (SC-782's autofix container
+// runs the review in-place and can post its [human:review-complete] handoff a
+// moment after the implementation's own done-marker). Giving that second,
+// later handoff the same settle-wait chance the first one gets closes the
+// SC-2133 race where a clean exit's read lands between the two handoffs and
+// misreads the still-propagating review as a mid-review death.
 func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
 	_, state := latestStageState(comments, stage)
-	return state == BoardDone || state == BoardResolved || stagePausedOnOptions(comments, stage)
+	if state != BoardDone && state != BoardResolved && !stagePausedOnOptions(comments, stage) {
+		return false
+	}
+	if stage == BoardImplementation && verificationInFlight(comments) {
+		return false
+	}
+	return true
+}
+
+// verificationInFlight reports whether the verification stage's latest marker
+// is [human:review-started] with no later review-complete/review-failed —
+// the merged-container review is running but has not yet recorded an outcome.
+func verificationInFlight(comments []tracker.Comment) bool {
+	ok, state := latestStageState(comments, BoardVerification)
+	return ok && state == BoardRunning
 }
 
 // failureMarkerBody composes the failed marker's body: a one-line headline
