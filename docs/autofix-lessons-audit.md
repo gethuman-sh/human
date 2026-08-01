@@ -34,8 +34,13 @@ per-agent and nothing forces the sibling agents to be updated with it.
 Not yet applied to the feature pipeline. Each is verified missing on `main`, not
 inferred.
 
-- [ ] **The PR-loop reviewer can block a better implementation for "diverging
-  from the plan."** `human-pr-reviewer-agent.md` step 2 reads the plan "for
+- [x] **The PR-loop reviewer can block a better implementation for "diverging
+  from the plan."** *Filed as SC-2327 and shipped: both review gates now carry
+  the identical plan-covering rule, locked by one drift-guard test over the pair
+  — the shape of the defect was one gate having a rule its sibling lacked, so a
+  per-file test would not have caught it.* The original finding follows.
+
+  `human-pr-reviewer-agent.md` step 2 read the plan "for
   intent" and step 6 blocks with `changes-requested` when the diff "diverges
   from the ticket" — with nothing saying that the outcome is the criterion and
   the plan's mechanism is not. This is the SC-1881 defect, and it is worse here
@@ -47,7 +52,7 @@ inferred.
   outcome-over-mechanism paragraph the standalone reviewer now has.*
 
 - [ ] **The PR fixer and deploy fixer still hardcode this repo's Makefile
-  gate.** SC-1793 rewrote `human-bug-fixer` and `human-bug-verify` to *detect*
+  gate.** *Filed as SC-2328 — still open.* SC-1793 rewrote `human-bug-fixer` and `human-bug-verify` to *detect*
   the project's gate — probe a `Makefile`, then per-ecosystem runners, skip what
   is absent — because a project without a Makefile got instructions it could not
   follow. `human-pr-fixer-agent.md` step 4 and `human-deploy-fixer-agent.md`
@@ -56,7 +61,12 @@ inferred.
   review/fix loop for any Deploy transition, feature or bug. *Fix: apply the
   SC-1793 detect-first rewrite to both.*
 
-- [ ] **Agent state is one global store with no project dimension.** SC-1654
+- [x] **Agent state is one global store with no project dimension.** *Filed as
+  SC-2326 and shipped: state and the recall index are both keyed by project now,
+  resolved daemon-side so no prompt names it, and pre-existing rows migrate in
+  place as the default project.* The original finding follows.
+
+   SC-1654
   made the board cache, the view preferences and the idea-space per-project, and
   closed with an explicit unverified note: *"`codenav.db`, `index.db` (recall),
   `ideation.db` and `state.db` … may already be keyed by repo path internally —
@@ -70,7 +80,9 @@ inferred.
   global too, though a search index degrades rather than corrupting. *Fix: add a
   project dimension to the scope, the way the three sibling stores got one.*
 
-- [ ] **Verify whether the planner and reviewer need a stage lease.** The
+- [ ] **Verify whether the planner and reviewer need a stage lease.** *Filed as
+  SC-2329 — still open, and waits on SC-2328 because both rewrite the same two
+  fixer prompts.* The
   `stage-lease` fragment is included by `human-bug-fixer`, `human-bug-triage`,
   `human-executor` and `human-security-triage`, but not by `human-planner`,
   `human-reviewer`, `human-pr-*` or `human-deploy-fixer` — all of them
