@@ -97,13 +97,15 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
    human search "<an error string or symptom involved>" --json --limit 20
    ```
 
-   A hit is not automatically a duplicate — a closed ticket may be the *reason* this one exists. Read what you find. A hit only orders this work when the other ticket is **still open** and its work would land in the same place; a shipped ticket and a merely adjacent one order nothing.
+   A hit is not automatically a duplicate — a closed ticket may be the *reason* this one exists. Read what you find. For each open hit, read its **Status** from the search JSON (and check its comments for a `[human:claim]` or `[human:implementation-started]` marker). A hit only orders this work when the other ticket is **actively in progress** — a status denoting work in flight (in progress, in development, in review) or a claim/implementation-started marker — **and** its work would land in the same place; a shipped ticket and a merely adjacent one order nothing. A ticket that is open but **not started** — planned, or sitting in the backlog — is real information but not a collision: **record it, do not escalate.** An empty or unrecognized status with no claim marker resolves to *not* in flight — record it, the safe default.
 
    **If a search fails, you have not searched.** The record reports when it cannot be trusted — empty, or too stale to rely on — as an error rather than as an empty result. Treating that as "nothing found" is the failure this step exists to prevent: say the check could not be made, and do not record that there are no siblings.
 
    Name what you searched and what you found in the `assumptions` of your verdict below, so the run's record shows the check was made rather than merely claimed.
 
-   If an open ticket is clearly the same problem, or is already changing the same code, that is a **fork for a human** — the two may need merging, this run may need to stop, or one may simply go first. Which goes first is a judgement about intent, and an agent silently reordering someone's backlog is worse than one that asks. Use the verdict below, and **propose, never create** — the link is written only after a human has chosen it (step 4). Do not silently proceed and let the collision surface at merge time.
+   If an **in-progress** ticket is clearly the same problem, or is already changing the same code, that is a **fork for a human** — the two may need merging, this run may need to stop, or one may simply go first. Which goes first is a judgement about intent, and an agent silently reordering someone's backlog is worse than one that asks. Use the verdict below, and **propose, never create** — the link is written only after a human has chosen it (step 4). Do not silently proceed and let the collision surface at merge time. This is the case the check exists for: **two live runs** implementing the same problem, or the same one-line fix, at the same time — always in flight, so always still caught.
+
+   Overlap with a ticket that has **not started** is never a fork. Record the overlapping ticket's key, status, and shared file(s) in the `assumptions` of the `PREFLIGHT OK` verdict below, so the plan is built to accommodate the coming work instead of the run halting to ask about it.
 
 7. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
 
@@ -119,9 +121,10 @@ A question is admissible **only** if all three hold:
 
 Ask about **scope forks and product intent**. Never about implementation choices you can make yourself.
 
-Ordering is admissible on the same terms: two open tickets aimed at the same code are a fork about which
-one the product wants first, and the options read as *"<TICKET_KEY> goes first"* / *"this goes first"* /
-*"they do not overlap — run both"*.
+Ordering is admissible on the same terms, but only when the other ticket is **actively in progress**: two
+live runs aimed at the same code are a fork about which one the product wants first, and the options read
+as *"<TICKET_KEY> goes first"* / *"this goes first"* / *"they do not overlap — run both"*. An open ticket
+that has **not started** is never an ordering fork — record it in the verdict below, do not ask about it.
 
 If you cannot name what you searched, you have not earned the question. Go read more.
 
@@ -133,7 +136,7 @@ If you cannot name what you searched, you have not earned the question. Go read 
 human state set <PM_KEY> stage.preflight --json --body-file - <<'EOF'
 {"exit":"done",
  "ready":"yes",
- "assumptions":"<the judgment calls you made and why — for the run summary; include what you searched for existing work and what came back, or that the record could not be searched>",
+ "assumptions":"<the judgment calls you made and why — for the run summary; include what you searched for existing work and what came back, or that the record could not be searched; include any overlap with not-yet-started work you recorded rather than escalated (ticket key, status, shared files)>",
  "summary":"<one line>"}
 EOF
 ```
