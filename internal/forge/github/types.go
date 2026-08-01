@@ -46,11 +46,18 @@ type graphQLResponse struct {
 	} `json:"errors,omitempty"`
 }
 
+// checkRun is one GitHub check-run result. Name and StartedAt let combineChecks
+// group re-runs by check and pick the newest attempt, so a superseded (cancelled)
+// attempt does not overrule the run that replaced it (SC-2602).
+type checkRun struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	StartedAt  string `json:"started_at"`
+}
+
 type checkRunsResponse struct {
-	CheckRuns []struct {
-		Status     string `json:"status"`
-		Conclusion string `json:"conclusion"`
-	} `json:"check_runs"`
+	CheckRuns []checkRun `json:"check_runs"`
 }
 
 type combinedStatusResponse struct {
