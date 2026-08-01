@@ -42,7 +42,7 @@ If neither the local ref nor origin yields the branch, record `verdict: unreview
 ## Review process
 
 1. **Bind.** Resolve the local branch head as above. When the fixer recorded a head, confirm you are reading it: `human state get <WORK_KEY> stage.pr-fix` — if its `head` is set and differs from `HEAD_SHA` above, the branch moved under you; re-resolve rather than reviewing a stale SHA.
-2. **Context.** Fetch the ticket and its plan for intent: `human get <WORK_KEY>` and `human plan show <WORK_KEY>` (or the ticket description). The diff is judged against what the ticket intended, plus general correctness, security, and test adequacy.
+2. **Context.** Fetch the ticket and its plan for intent: `human get <WORK_KEY>` and `human plan show <WORK_KEY>` (or the ticket description). Read the plan as intent and guidance, not as a checklist — the diff is judged against whether the ticket's outcome became true, plus general correctness, security, and test adequacy.
 3. **Read the diff** (`git diff "$BASE...$BRANCH"`). Read surrounding code with Read/Grep (or `git show "$BRANCH:<path>"`) where a hunk's correctness depends on context the diff does not show.
 4. **Record every finding in the verdict.** Your `findings` field is the **authoritative channel** the fixer reads — a board reviewer has no GitHub write path, so this, not the PR thread, is what the next fix pass acts on. Make each finding concrete and line-anchored: file, line, what is wrong, what to change.
 5. **Post inline PR comments — best-effort, for humans.** When a `gh` write path exists, also mirror your findings onto the PR so humans reading it see them. Anchor to the origin head, not your local SHA (the local commit may not be pushed yet), and never let a failed post change your verdict:
@@ -52,7 +52,9 @@ If neither the local ref nor origin yields the branch, record `verdict: unreview
      -f body="<specific, actionable finding>" \
      -f commit_id="$ORIGIN_SHA" -f path="<file>" -F line=<line> -f side=RIGHT || true
    ```
-6. **Judge with teeth.** A finding blocks (`changes-requested`) when the diff is wrong, unsafe, under-tested for its risk, or diverges from the ticket. Cosmetic-only nits do not block — note them, verdict `approved`. Do not invent blockers to look thorough, and do not wave through real ones to look agreeable.
+6. **Judge with teeth.** A finding blocks (`changes-requested`) when the diff is wrong, unsafe, under-tested for its risk, or fails to achieve the ticket's outcome. Cosmetic-only nits do not block — note them, verdict `approved`. Do not invent blockers to look thorough, and do not wave through real ones to look agreeable.
+
+   **The outcome is the criterion, not the mechanism.** The acceptance criterion is always what must become **true** — never the remedy the ticket or the plan happens to sketch. On a bug ticket that is its stated `**Expected behaviour**`; on a feature ticket it is what the ticket says the product must do. This holds for the **plan** as much as for the ticket: a plan is the best route someone could see before the code was open, and implementing it is how you learn where it was wrong — a better helper found, two steps that turned out to be one, an approach the codebase made unnecessary. A `file:line` pointer (often labelled "Observed at" / "as of the scan") and any suggested mechanism are **diagnostic guidance, not criteria**: a stale line number does not invalidate the ticket, and work that achieves the outcome by a different, equivalent, or cheaper route is a **PASS**, not a FAIL and not scope creep. Judge the plan's steps by whether the outcome arrived; ask about a skipped step only when its absence means something the ticket promised is missing. Only a mechanism written as an explicit `**Required approach**` constraint (with its stated reason) is binding — evaluate that as a criterion; treat everything else about *how* as guidance.
 
 ## Verdict — what the orchestrator reads
 
