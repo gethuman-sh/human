@@ -311,4 +311,3 @@ func TestLastErrorLine(t *testing.T) {
 		})
 	}
 }
-
