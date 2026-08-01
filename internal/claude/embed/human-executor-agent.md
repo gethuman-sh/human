@@ -36,6 +36,8 @@ human <TRACKER> issue comment list <TICKET_KEY>
    - Otherwise `human plan show <key>`: prints the ticket's `[human:plan]` comment if present — that is the plan.
    - Otherwise fall back to `.human/bugs/<key>.md` (a bug analysis with a fix plan).
    - If no source provides a plan, stop and report that a plan must be created first with `/human-plan` or `/human-bug-plan`.
+
+   **"I could not read the plan" is not "there is no plan."** The two failures look alike from here and mean opposite things: one asks for a plan to be written, the other asks for the tracker to come back. `human plan show` says which — a missing plan reports `no [human:plan] comment on ticket`, while an unreachable tracker reports a credential or transport error naming the store. Only the first is an absence. On the second, end the run `retryable` naming the store that failed, and change nothing: re-planning a ticket that already has a plan discards a human's work over a timeout, and it is the same mistake as an empty search index answering "nothing found".
 2. **Parse ticket keys** from the plan header:
    - `**PM ticket**: <PM_KEY>` — the original PM ticket
    - `**Engineering ticket**: <ENG_KEY>` — present only in split topology
@@ -90,7 +92,32 @@ human <TRACKER> issue comment list <TICKET_KEY>
       ```
 
    Never end a session with uncommitted work and a question. If `human-done` (step 5) failed, you still owe one of these three: commit the in-progress work and hand off with the failures listed in `--notes`, OR post an options block if the failure is a real fork, OR `nothing-to-do` if the work was already shipped — but do not exit with a dead-card question.
-8. **Summarize** what was done: files created, files modified, done verdict, link/key of the PM comment that was posted (or note that it was skipped because done failed).
+8. **Leave the account on the ticket, then summarize.** Post a plain-language run summary as a `fix-summary` marker on the PM ticket at **every** terminal point in step 7 — handoff, options block, or nothing-to-ship. The board renders it on the card's detail pane, and it is the only place a person catching up later can read what happened without reconstructing it from markers, commits and agent logs. In board context your final message is read by nobody, so a summary that lives only there is a summary that was never written.
+
+   ```bash
+   human marker post <PM_KEY> fix-summary --body-file - <<'SUMMARY_EOF'
+   ## What happened
+   <2–4 sentences, plain language: what the ticket asked for and what now exists. Written for whoever asked for it, not for an engineer.>
+
+   ## Changes
+   - Branch: <branch> — <left local for Deploy | pushed>
+   - Commits: <short sha — one-line subject, per commit>
+   - <the areas of the product touched, one line>
+
+   ## Proof
+   - Checks: <suite/lint result>
+   - Done verdict: <pass, or what it flagged>
+   - Review: <pending — the daemon chains it, in board context>
+
+   ## Along the way
+   <the story of the run when it was not straight: a plan step that turned out wrong, a decision taken and why, work deferred, infrastructure trouble. If it went straight through, say exactly that.>
+
+   ## Where it ended
+   <handoff posted, the Deploy button ships it | stopped on a decision: what the fork is | nothing to ship: what already satisfied the ticket>
+   SUMMARY_EOF
+   ```
+
+   Fill every section from what actually happened in THIS run — never leave template placeholders in the posted comment. If posting the summary fails, carry on: the handoff is what the pipeline needs, the summary is what the human needs. Then summarize in your final message: files created, files modified, done verdict, and the marker/handoff you posted.
 
 ## Retry budget and flakes
 

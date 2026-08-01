@@ -6,9 +6,14 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
-// FixSummaryHeader marks the plain-language run summary the autofix pipeline
-// posts on a bug ticket. It is content, not a stage signal (like
-// PlanCommentHeader), so it is deliberately NOT in orderedMarkerSpecs.
+// FixSummaryHeader marks the plain-language run summary a run posts when it
+// ends — the account a person catching up reads instead of reconstructing the
+// run from markers, commits and agent logs. Named for the fix pipeline that
+// needed it first; the feature pipeline's implementation stage posts the same
+// marker, and extraction has never been scoped to bug tickets.
+//
+// It is content, not a stage signal (like PlanCommentHeader), so it is
+// deliberately NOT in orderedMarkerSpecs.
 const FixSummaryHeader = "[human:fix-summary]"
 
 // IssueDetailExtras are the comment-sourced fields the board detail panel shows

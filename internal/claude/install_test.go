@@ -146,6 +146,45 @@ func TestReviewPathPromptsDocumentUnreviewableEscape(t *testing.T) {
 	})
 }
 
+// A stage that could not reach the tracker must not report what it failed to
+// read as an absence. The executor's plan lookup ends in "no plan exists", which
+// invites re-planning a ticket a human already planned — over a credential store
+// that was briefly unavailable. `human plan show` reports the two differently,
+// so the prompt must say which is which, and that the unreachable case ends the
+// run retryable with nothing changed.
+func TestExecutorSeparatesAnUnreadablePlanFromAMissingOne(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("embed", "human-executor-agent.md"))
+	require.NoError(t, err)
+	content := string(body)
+
+	assert.Contains(t, content, "not \"there is no plan.\"",
+		"the executor must be told the two failures are different")
+	assert.Contains(t, content, "no [human:plan] comment on ticket",
+		"the executor must be given the signal that distinguishes them")
+	assert.Contains(t, content, "retryable",
+		"an unreachable tracker must end the run retryable, not as a missing plan")
+}
+
+// A run that ends must leave a readable account on the ticket. The fix pipeline
+// learned this and posts a fix-summary at every terminal point; the feature
+// pipeline's implementation stage summarized only in its final message, which in
+// board context is read by nobody — so a shipped feature left the card carrying
+// branch and commit lines and no prose at all.
+func TestEveryFinishingPipelinePostsARunSummary(t *testing.T) {
+	for _, name := range []string{
+		"human-autofix-skill.md",
+		"human-security-fix-skill.md",
+		"human-executor-agent.md",
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join("embed", name))
+			require.NoError(t, err)
+			assert.Contains(t, string(body), "fix-summary",
+				"%s must leave a plain-language account of the run on the ticket", name)
+		})
+	}
+}
+
 // TestDoneGatePromptsClassifyRedSuites locks the SC-1135 guarantee that the
 // done-gate prompts no longer treat any red suite as an automatic NOT DONE.
 // A correct fix was failed because an unrelated, pre-existing real-git test
