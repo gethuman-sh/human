@@ -721,6 +721,35 @@ func TestApplyTransitionDeployWaitsForPendingChecks(t *testing.T) {
 	assert.Equal(t, 1, p.merged)
 }
 
+// TestApplyTransitionDeployCancelledCheckDoesNotFailGate is the daemon-layer
+// companion to SC-2602: combineChecks now maps a cancelled (superseded) build
+// to forge.ChecksPending instead of ChecksFailing, so from waitForChecks's
+// perspective a cancelled build looks exactly like this Pending → Passing
+// sequence. With a launcher wired (unlike TestApplyTransitionDeployChecksFail,
+// which nils it out for the CLI-only path), this asserts the gate keeps
+// polling and merges cleanly — no DeployFailedHeader, no fixer dispatch —
+// rather than dead-ending on a build that was only called off, not failed.
+func TestApplyTransitionDeployCancelledCheckDoesNotFailGate(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/12", Number: 12},
+		checks: []forge.ChecksState{forge.ChecksPending, forge.ChecksPassing}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.merged)
+	for _, b := range c.added {
+		assert.False(t, strings.HasPrefix(b, DeployFailedHeader),
+			"a cancelled check-run must not be misread as a CI failure: %q", b)
+	}
+	assert.Zero(t, l.calls, "a superseded build must never dispatch the deploy-fixer")
+}
+
 func TestApplyTransitionDeployChecksFail(t *testing.T) {
 	syncDeploy(t)
 	c := &fakeCommenter{comments: []tracker.Comment{
