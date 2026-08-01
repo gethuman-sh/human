@@ -990,7 +990,7 @@ func assertTicketReviewVerdictIsCleanStop(t *testing.T, verdict string) {
 	var reclaimed string
 	onHandoff := func(agentName string) { reclaimed = agentName }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "crashed", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "crashed", "", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
 
 	c.mu.Lock()
 	assert.Empty(t, c.added, "a deliberate %s stop must post no failed marker", verdict)
@@ -1027,7 +1027,7 @@ func TestRunBoardFailureWatch_TicketReviewReadyThenCrashStillFails(t *testing.T)
 	}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "crashed", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "crashed", "", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
