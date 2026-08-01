@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -171,7 +172,12 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 	//   2. An open [human:options] block for the stage's OWN stage — a deliberate
 	//      up-front human decision (see stagePausedOnOptions). Posting a *-failed
 	//      here would red the card and loop re-planning forever (SC-751).
-	if state == BoardResolved || stagePausedOnOptions(comments, stage) {
+	//   3. A recorded DELIBERATE stop verdict from any gate (deliberateStopRecorded):
+	//      a gate that concluded the ticket must not be worked. Stage-agnostic on
+	//      purpose — the ticket-review gate runs under PLANNING but files its
+	//      verdict under BACKLOG, so scoping this to the running stage is exactly
+	//      what let this defect class recur (SC-2302).
+	if state == BoardResolved || stagePausedOnOptions(comments, stage) || deliberateStopRecorded(comments) {
 		retry.reset(pmKey, stage)
 		if onHandoff != nil {
 			onHandoff(agentName)
@@ -388,20 +394,53 @@ func listStageSettled(ctx context.Context, commenter tracker.Commenter, pmKey st
 	return comments, nil
 }
 
-// stageSettled reports whether the stage's latest marker is one of the three
-// clean, non-failure endings handleBoardAgentExit treats as settled: the
-// stage's own done-marker, a terminal BoardResolved marker, or an open
-// same-stage [human:options] pause. It is no longer the exact negation of the
-// failure branch: for the implementation stage it ALSO keeps re-reading while
-// the merged verification stage looks in-flight (SC-782's autofix container
-// runs the review in-place and can post its [human:review-complete] handoff a
-// moment after the implementation's own done-marker). Giving that second,
-// later handoff the same settle-wait chance the first one gets closes the
-// SC-2133 race where a clean exit's read lands between the two handoffs and
-// misreads the still-propagating review as a mid-review death.
+// terminalStopVerdicts registers, per marker type, the head tokens that record a
+// DELIBERATE, recorded decision to STOP the work — a gate concluding the ticket
+// must not proceed. Recognized regardless of which stage classification the
+// marker carries, because a gate may run under one stage yet file its verdict
+// under another (the ticket-review gate runs under PLANNING but files
+// [human:ticket-review] under BACKLOG, SC-1856). Scoping the clean-stop check to
+// the running stage is exactly what let this defect class recur. New gates
+// register one entry here and can never be mistaken for a crash by default.
+//
+// bug-verdict is deliberately absent: `confirmed` means proceed, and
+// `not-a-bug`/`undetermined` are already terminated by the same-stage
+// [human:no-fix-needed] marker. ready/reframed are absent for the same reason —
+// they continue into planning.
+var terminalStopVerdicts = map[string]map[string]bool{
+	"ticket-review": {"superseded": true, "escalated": true, "rejected": true},
+}
+
+// deliberateStopRecorded reports whether the thread's latest verdict of any
+// registered gate records a deliberate stop. Stage-agnostic on purpose: it reads
+// the verdict marker directly rather than through the stage-scoped
+// latestStageState, so a gate that files its verdict under a stage other than
+// the one it ran under is still recognized as a clean ending.
+func deliberateStopRecorded(comments []tracker.Comment) bool {
+	for markerType, stopHeads := range terminalStopVerdicts {
+		if m, ok := marker.Latest(comments, markerType); ok && stopHeads[m.Head] {
+			return true
+		}
+	}
+	return false
+}
+
+// stageSettled reports whether the stage's latest marker is one of the clean,
+// non-failure endings handleBoardAgentExit treats as settled: the stage's own
+// done-marker, a terminal BoardResolved marker, an open same-stage
+// [human:options] pause, or a recorded deliberate stop verdict from any gate
+// (deliberateStopRecorded, stage-agnostic). It is no longer the exact negation
+// of the failure branch: for the implementation stage it ALSO keeps re-reading
+// while the merged verification stage looks in-flight (SC-782's autofix
+// container runs the review in-place and can post its
+// [human:review-complete] handoff a moment after the implementation's own
+// done-marker). Giving that second, later handoff the same settle-wait chance
+// the first one gets closes the SC-2133 race where a clean exit's read lands
+// between the two handoffs and misreads the still-propagating review as a
+// mid-review death.
 func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
 	_, state := latestStageState(comments, stage)
-	if state != BoardDone && state != BoardResolved && !stagePausedOnOptions(comments, stage) {
+	if state != BoardDone && state != BoardResolved && !stagePausedOnOptions(comments, stage) && !deliberateStopRecorded(comments) {
 		return false
 	}
 	if stage == BoardImplementation && verificationInFlight(comments) {
