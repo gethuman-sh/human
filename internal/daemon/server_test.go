@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/stats"
@@ -1641,9 +1642,9 @@ func TestServer_HandleToolStats_WithData(t *testing.T) {
 	// Insert some events.
 	ctx := context.Background()
 	now := time.Now().UTC()
-	require.NoError(t, store.InsertEvent(ctx, "sess-1", "tool_start", "Bash", "/tmp", "", now.Add(-1*time.Hour)))
-	require.NoError(t, store.InsertEvent(ctx, "sess-1", "tool_end", "Bash", "/tmp", "", now.Add(-59*time.Minute)))
-	require.NoError(t, store.InsertEvent(ctx, "sess-1", "tool_start", "Read", "/tmp", "", now.Add(-30*time.Minute)))
+	require.NoError(t, store.InsertEvent(ctx, hookevents.Event{SessionID: "sess-1", EventName: "tool_start", ToolName: "Bash", Cwd: "/tmp", Timestamp: now.Add(-1 * time.Hour)}))
+	require.NoError(t, store.InsertEvent(ctx, hookevents.Event{SessionID: "sess-1", EventName: "tool_end", ToolName: "Bash", Cwd: "/tmp", Timestamp: now.Add(-59 * time.Minute)}))
+	require.NoError(t, store.InsertEvent(ctx, hookevents.Event{SessionID: "sess-1", EventName: "tool_start", ToolName: "Read", Cwd: "/tmp", Timestamp: now.Add(-30 * time.Minute)}))
 
 	addr, _ := startTestServerCustom(t, token, func(s *Server) {
 		s.StatsStore = store

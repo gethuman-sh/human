@@ -194,6 +194,38 @@ func TestParseHookEventArgs(t *testing.T) {
 	assert.False(t, evt.Timestamp.IsZero())
 }
 
+// A tool_input carrying a command and a token must persist the command bounded
+// and the token redacted — nothing sensitive, but the activity is captured.
+func TestParseHookEventArgs_CapturesAndRedactsToolInput(t *testing.T) {
+	t.Setenv("SOME_API_TOKEN", "ghp_abcdefghijklmnopqrstuvwx12")
+	args := []string{"PreToolUse", "s1", "/proj", "", "Bash", "", "agent-1",
+		`{"command":"gh auth --token ghp_abcdefghijklmnopqrstuvwx12"}`, "", ""}
+	evt := ParseHookEventArgs(args)
+	assert.Contains(t, evt.ToolInput, "gh auth --token")
+	assert.Contains(t, evt.ToolInput, "[redacted]")
+	assert.NotContains(t, evt.ToolInput, "ghp_abcdefghijklmnopqrstuvwx12")
+}
+
+func TestParseHookEventArgs_SubagentTypeAndModel(t *testing.T) {
+	evt := ParseHookEventArgs([]string{"SubagentStart", "s1", "/proj", "", "", "", "a1", "", "reviewer", "opus-4"})
+	assert.Equal(t, "reviewer", evt.SubagentType)
+	assert.Equal(t, "opus-4", evt.Model)
+}
+
+// DurationMsSincePre pairs a Post event back to the most recent matching Pre so
+// per-step cost is a stored fact, not a later timestamp join (SC-2461).
+func TestHookStore_DurationPairing(t *testing.T) {
+	store := NewHookEventStore()
+	t0 := time.Now().UTC()
+	store.Append(hookevents.Event{EventName: "PreToolUse", SessionID: "s1", ToolName: "Bash", Timestamp: t0})
+
+	got := store.DurationMsSincePre("s1", "Bash", t0.Add(1500*time.Millisecond))
+	assert.Equal(t, int64(1500), got)
+
+	// No buffered Pre for a different tool yields 0, not a spurious pairing.
+	assert.Equal(t, int64(0), store.DurationMsSincePre("s1", "Read", t0.Add(time.Second)))
+}
+
 func TestParseHookEventArgs_WithNotificationType(t *testing.T) {
 	evt := ParseHookEventArgs([]string{"Notification", "s1", "/proj", "idle_prompt"})
 	assert.Equal(t, "Notification", evt.EventName)

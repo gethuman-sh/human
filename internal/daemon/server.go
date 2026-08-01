@@ -518,6 +518,12 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 func (s *Server) handleHookEvent(conn net.Conn, args []string) {
 	if s.HookEvents != nil {
 		evt := ParseHookEventArgs(args)
+		// Derive per-step duration before Append so both the JSONL sink and the
+		// stats writer see the same populated event; the matching PreToolUse is
+		// already buffered because Pre precedes Post (SC-2461).
+		if evt.EventName == "PostToolUse" || evt.EventName == "PostToolUseFailure" {
+			evt.DurationMs = s.HookEvents.DurationMsSincePre(evt.SessionID, evt.ToolName, evt.Timestamp)
+		}
 		s.HookEvents.Append(evt)
 		if s.StatsWriter != nil {
 			s.StatsWriter.Send(evt)

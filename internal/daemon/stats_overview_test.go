@@ -16,6 +16,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/stats"
 )
 
@@ -94,9 +95,9 @@ func TestBuildStatsOverview_range(t *testing.T) {
 	t.Cleanup(func() { _ = statsStore.Close() })
 	ctx := context.Background()
 	// Two ok tool calls and one error, all within 24h.
-	require.NoError(t, statsStore.InsertEvent(ctx, "s1", "PostToolUse", "Bash", "/p", "", now.Add(-time.Hour)))
-	require.NoError(t, statsStore.InsertEvent(ctx, "s1", "PostToolUse", "Read", "/p", "", now.Add(-2*time.Hour)))
-	require.NoError(t, statsStore.InsertEvent(ctx, "s1", "PostToolUseFailure", "Bash", "/p", "timeout", now.Add(-3*time.Hour)))
+	require.NoError(t, statsStore.InsertEvent(ctx, hookevents.Event{SessionID: "s1", EventName: "PostToolUse", ToolName: "Bash", Cwd: "/p", Timestamp: now.Add(-time.Hour)}))
+	require.NoError(t, statsStore.InsertEvent(ctx, hookevents.Event{SessionID: "s1", EventName: "PostToolUse", ToolName: "Read", Cwd: "/p", Timestamp: now.Add(-2 * time.Hour)}))
+	require.NoError(t, statsStore.InsertEvent(ctx, hookevents.Event{SessionID: "s1", EventName: "PostToolUseFailure", ToolName: "Bash", Cwd: "/p", ErrorType: "timeout", Timestamp: now.Add(-3 * time.Hour)}))
 
 	auditStore, err := audit.NewStore(":memory:")
 	require.NoError(t, err)

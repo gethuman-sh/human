@@ -467,12 +467,15 @@ func buildInstallCmd() *cobra.Command {
 
 // hookInput is the JSON structure Claude Code sends to hook scripts via stdin.
 type hookInput struct {
-	EventName        string `json:"hook_event_name"`
-	SessionID        string `json:"session_id"`
-	Cwd              string `json:"cwd"`
-	NotificationType string `json:"notification_type"`
-	ToolName         string `json:"tool_name"`
-	ErrorType        string `json:"error"`
+	EventName        string          `json:"hook_event_name"`
+	SessionID        string          `json:"session_id"`
+	Cwd              string          `json:"cwd"`
+	NotificationType string          `json:"notification_type"`
+	ToolName         string          `json:"tool_name"`
+	ErrorType        string          `json:"error"`
+	ToolInput        json.RawMessage `json:"tool_input"`
+	SubagentType     string          `json:"subagent_type"`
+	Model            string          `json:"model"`
 }
 
 // hookDeliverer forwards resolved hook-event args to the daemon. Injected so
@@ -530,11 +533,27 @@ func runHook(stdin io.Reader, stderr io.Writer, deliver hookDeliverer) error {
 	}
 
 	agentName := os.Getenv("HUMAN_AGENT_NAME")
-	args := []string{"hook-event", eventName, input.SessionID, input.Cwd, input.NotificationType, input.ToolName, input.ErrorType, agentName}
+	toolInput := compactJSON(input.ToolInput) // "" when absent
+	args := []string{"hook-event", eventName, input.SessionID, input.Cwd,
+		input.NotificationType, input.ToolName, input.ErrorType, agentName,
+		toolInput, input.SubagentType, input.Model}
 	if err := deliver(args); err != nil {
 		_, _ = fmt.Fprintf(stderr, "human hook: failed to deliver %q event to daemon: %v\n", eventName, err) // #nosec G705 -- CLI terminal output, not web
 	}
 	return nil
+}
+
+// compactJSON returns tool input as single-line JSON, or "" when empty/invalid.
+// The daemon bounds and redacts it before persisting; here we only normalize.
+func compactJSON(raw json.RawMessage) string {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return "" // malformed input is dropped rather than forwarded raw
+	}
+	return buf.String()
 }
 
 // resolveEventName recovers the hook event name across Claude Code schema

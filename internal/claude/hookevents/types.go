@@ -16,6 +16,14 @@ type Event struct {
 	ToolName         string    `json:"tool_name,omitempty"`
 	ErrorType        string    `json:"error_type,omitempty"`
 	AgentName        string    `json:"agent_name,omitempty"`
+	// ToolInput is the bounded, redacted JSON of the tool's input — what the
+	// tool read or ran, not merely that it ran (SC-2461).
+	ToolInput string `json:"tool_input,omitempty"`
+	// SubagentType and Model identify which tier ran a stage (SubagentStart).
+	SubagentType string `json:"subagent_type,omitempty"`
+	Model        string `json:"model,omitempty"`
+	// DurationMs is the tool's wall time, derived by pairing Post→Pre daemon-side.
+	DurationMs int64 `json:"duration_ms,omitempty"`
 }
 
 // SessionSnapshot holds the derived working/idle state for one session.

@@ -60,12 +60,32 @@ func TestRunHook_CanonicalKey_ForwardsSuccessfully(t *testing.T) {
 	err := runHook(strings.NewReader(payload), &stderr, deliver)
 
 	require.NoError(t, err)
-	require.Len(t, captured, 8)
+	require.Len(t, captured, 11)
 	assert.Equal(t, "PostToolUse", captured[1])
 	assert.Equal(t, "s2", captured[2])
 	assert.Equal(t, "/w", captured[3])
 	assert.Equal(t, "Bash", captured[5])
 	assert.Empty(t, stderr.String(), "a successful delivery must stay quiet")
+}
+
+// A PreToolUse payload carrying a Bash command must forward the command, not
+// merely the tool name. Regression for SC-2461: the record must answer what a
+// tool ran, not only that it ran.
+func TestRunHook_CapturesToolInputCommand(t *testing.T) {
+	payload := `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w",` +
+		`"tool_name":"Bash","tool_input":{"command":"go test ./internal/recall/... -run TestOverlap"}}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	var stderr bytes.Buffer
+	err := runHook(strings.NewReader(payload), &stderr, deliver)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, captured)
+	joined := strings.Join(captured, "\x00")
+	assert.Contains(t, joined, "go test ./internal/recall/... -run TestOverlap",
+		"the forwarded record must carry the tool's command, not just its name")
 }
 
 // An empty stdin invocation is a genuine no-op — no warning noise.

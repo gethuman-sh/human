@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	_ "modernc.org/sqlite"
 )
 
@@ -63,7 +65,11 @@ func (s *StatsStore) ensureSchema() error {
 			tool_name  TEXT NOT NULL DEFAULT '',
 			cwd        TEXT NOT NULL DEFAULT '',
 			error_type TEXT,
-			timestamp  DATETIME NOT NULL
+			timestamp  DATETIME NOT NULL,
+			tool_input    TEXT NOT NULL DEFAULT '',
+			subagent_type TEXT NOT NULL DEFAULT '',
+			model         TEXT NOT NULL DEFAULT '',
+			duration_ms   INTEGER NOT NULL DEFAULT 0
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_tool_events_timestamp
@@ -76,19 +82,46 @@ func (s *StatsStore) ensureSchema() error {
 	if err != nil {
 		return errors.WrapWithDetails(err, "create stats schema")
 	}
+	return s.ensureColumns()
+}
+
+// ensureColumns additively migrates a pre-existing tool_events table to carry
+// the activity columns (SC-2461). ADD COLUMN on an already-migrated DB reports
+// a duplicate-column error, which is the expected no-op on the second open.
+func (s *StatsStore) ensureColumns() error {
+	cols := []string{
+		"ALTER TABLE tool_events ADD COLUMN tool_input TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE tool_events ADD COLUMN subagent_type TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE tool_events ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE tool_events ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0",
+	}
+	for _, stmt := range cols {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return errors.WrapWithDetails(err, "add stats column", "stmt", stmt)
+		}
+	}
 	return nil
 }
 
-// InsertEvent persists a single tool call event.
-func (s *StatsStore) InsertEvent(ctx context.Context, sessionID, eventName, toolName, cwd, errorType string, ts time.Time) error {
+// InsertEvent persists a single tool call event, including the redacted tool
+// input, subagent type/model, and derived duration (SC-2461).
+func (s *StatsStore) InsertEvent(ctx context.Context, evt hookevents.Event) error {
+	ts := evt.Timestamp
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
 	var errPtr *string
-	if errorType != "" {
-		errPtr = &errorType
+	if evt.ErrorType != "" {
+		errPtr = &evt.ErrorType
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tool_events (session_id, event_name, tool_name, cwd, error_type, timestamp)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, sessionID, eventName, toolName, cwd, errPtr, ts.UTC().Format("2006-01-02 15:04:05"))
+		INSERT INTO tool_events
+			(session_id, event_name, tool_name, cwd, error_type, timestamp,
+			 tool_input, subagent_type, model, duration_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, evt.SessionID, evt.EventName, evt.ToolName, evt.Cwd, errPtr,
+		ts.UTC().Format("2006-01-02 15:04:05"),
+		evt.ToolInput, evt.SubagentType, evt.Model, evt.DurationMs)
 	if err != nil {
 		return errors.WrapWithDetails(err, "insert tool event")
 	}
