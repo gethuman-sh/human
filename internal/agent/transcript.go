@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/devcontainer"
@@ -21,14 +22,55 @@ func containerTranscriptPath(remoteUser string) string {
 	return "/home/" + remoteUser + "/.claude/projects"
 }
 
-// CopyTranscript streams ~/.claude/projects from the container as a tar archive
-// and extracts it into destDir. It is best-effort: a missing path or copy error
-// is returned wrapped, but callers treat copy-out as non-fatal — the container
+// CopyTranscript preserves the Claude session transcript for one run out of the
+// container into destDir. One container hosts many runs, each in its own private
+// worktree, and Claude stores every run's sessions in a per-cwd subdir of
+// ~/.claude/projects. When the run's worktree is known, the copy-out is scoped to
+// just that subdir, so a preserved run carries its own sessions and no others
+// (SC-2463). If the worktree is empty or its subdir cannot be copied — an
+// unrecognised cwd encoding, or a run whose sessions never materialised — the
+// whole projects root is copied instead: losing the evidence is worse than
+// keeping too much of it. Best-effort by contract; callers treat any error as a
+// skip and proceed with container removal.
+func CopyTranscript(ctx context.Context, docker devcontainer.DockerClient, containerID, remoteUser, worktree, destDir string) error {
+	root := containerTranscriptPath(remoteUser)
+	if worktree != "" {
+		scoped := root + "/" + claudeProjectDirName(worktree)
+		if err := copyTranscriptTree(ctx, docker, containerID, scoped, destDir); err == nil {
+			return nil
+		}
+		// Scoped copy failed (subdir absent, or the cwd encoding did not match this
+		// Claude build): fall back to the whole root — preserve more, not less.
+	}
+	return copyTranscriptTree(ctx, docker, containerID, root, destDir)
+}
+
+// claudeProjectDirName reproduces Claude Code's cwd→project-dir encoding: every
+// character that is not an ASCII letter or digit becomes '-'. Claude names each
+// ~/.claude/projects/<encoded-cwd> subdir this way, so a run's private worktree
+// path (its cwd) maps to exactly the subdir holding that run's sessions. Verified
+// against a live index: "/workspaces/cli" -> "-workspaces-cli".
+func claudeProjectDirName(cwd string) string {
+	var b strings.Builder
+	b.Grow(len(cwd))
+	for _, r := range cwd {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+// copyTranscriptTree streams srcPath from the container as a tar archive and
+// extracts it into destDir. It is best-effort: a missing path or copy error is
+// returned wrapped, but callers treat copy-out as non-fatal — the container
 // removal must still proceed. Extraction is hardened against path traversal:
 // non-local entry names are skipped and every filesystem operation goes through
 // an os.Root bound to destDir, so containment is kernel-enforced.
-func CopyTranscript(ctx context.Context, docker devcontainer.DockerClient, containerID, remoteUser, destDir string) error {
-	srcPath := containerTranscriptPath(remoteUser)
+func copyTranscriptTree(ctx context.Context, docker devcontainer.DockerClient, containerID, srcPath, destDir string) error {
 	rc, err := docker.CopyFromContainer(ctx, containerID, srcPath)
 	if err != nil {
 		return errors.WrapWithDetails(err, "copying transcript from container", "container", containerID, "src", srcPath)

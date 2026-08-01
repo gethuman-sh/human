@@ -237,7 +237,7 @@ func PreserveExecutionArtifacts(ctx context.Context, docker devcontainer.DockerC
 	if exe == nil {
 		return
 	}
-	_ = CopyTranscript(ctx, docker, meta.ContainerID, meta.RemoteUser, exe.TranscriptDir())
+	_ = CopyTranscript(ctx, docker, meta.ContainerID, meta.RemoteUser, exe.Launch.Worktree, exe.TranscriptDir())
 	_ = exe.RecordOutcome(OutcomeRecord{
 		Reason: reason, EndedAt: time.Now(),
 		DurationMs: time.Since(meta.CreatedAt).Milliseconds(),

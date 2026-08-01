@@ -13,8 +13,75 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 )
+
+// scopedProjectsMock models `docker cp container:<srcPath> -` faithfully: it holds
+// a container-absolute path→contents tree and, on CopyFromContainer(srcPath),
+// returns a tar of exactly the entries under srcPath, re-rooted at basename(srcPath)
+// (the parent dir is stripped) — the same re-rooting the real engine performs. A
+// srcPath matching nothing errors, mimicking a missing path in the container.
+type scopedProjectsMock struct {
+	mockDockerClient
+	tree map[string]string // container-absolute path -> file contents
+}
+
+func (m *scopedProjectsMock) CopyFromContainer(_ context.Context, _, srcPath string) (io.ReadCloser, error) {
+	parent := filepath.Dir(srcPath)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	matched := 0
+	for path, contents := range m.tree {
+		if path != srcPath && !strings.HasPrefix(path, srcPath+"/") {
+			continue
+		}
+		rel := strings.TrimPrefix(path, parent+"/")
+		_ = tw.WriteHeader(&tar.Header{Name: rel, Mode: 0o600, Size: int64(len(contents)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write([]byte(contents))
+		matched++
+	}
+	_ = tw.Close()
+	if matched == 0 {
+		return nil, errors.WithDetails("no such path in container", "src", srcPath)
+	}
+	return io.NopCloser(&buf), nil
+}
+
+// TestPreserveExecutionArtifacts_ScopesTranscriptToRun is the SC-2463 regression
+// guard: one container hosts two runs whose Claude sessions live under distinct
+// ~/.claude/projects subdirs (each named by sanitising the run's worktree cwd).
+// Preserving run A must capture only run A's sessions. On the pre-fix code the
+// copy-out pulls the whole projects root, so run B's session lands too and this
+// fails.
+func TestPreserveExecutionArtifacts_ScopesTranscriptToRun(t *testing.T) {
+	withLogRoot(t)
+
+	// Worktree "/w/run-a" sanitises to "-w-run-a" — exactly how Claude names the
+	// projects subdir for a run whose cwd is that worktree.
+	exe, err := NewExecution(LaunchRecord{ID: "eA", Agent: "aA", StartedAt: time.Now(), Worktree: "/w/run-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := Meta{
+		Name: "aA", ContainerID: "cid", RemoteUser: "vscode",
+		CreatedAt: time.Now(), ExecutionID: exe.Launch.ID,
+	}
+	docker := &scopedProjectsMock{tree: map[string]string{
+		"/home/vscode/.claude/projects/-w-run-a/a.jsonl": "RUN-A-DATA",
+		"/home/vscode/.claude/projects/-w-run-b/b.jsonl": "RUN-B-DATA",
+	}}
+
+	PreserveExecutionArtifacts(context.Background(), docker, meta, "reaped")
+
+	got := readTree(t, exe.TranscriptDir())
+	if !strings.Contains(got, "RUN-A-DATA") {
+		t.Fatalf("run A's own session missing from preserved transcript, got %q", got)
+	}
+	if strings.Contains(got, "RUN-B-DATA") {
+		t.Fatalf("another run's session leaked into the preserved transcript, got %q", got)
+	}
+}
 
 // stdoutFrame wraps payload in a Docker stdcopy multiplexed stdout frame:
 // an 8-byte header (stream=1, then a big-endian uint32 length) followed by the
