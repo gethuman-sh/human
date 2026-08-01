@@ -248,6 +248,22 @@ var WorktreeRemove = func(ctx context.Context, repoDir, worktreePath string) err
 	return nil
 }
 
+// WorktreeDetach detaches HEAD in the worktree at worktreePath to its current
+// commit (running `git -C <worktreePath> checkout --detach`). A kept forensic
+// worktree otherwise keeps OWNING refs/heads/<branch>, which freezes the shared
+// repo's local branch so a fetch cannot fast-forward it and a later deploy
+// republishes the frozen tip over newer work (SC-2322). Detaching to the SAME
+// commit changes only the ref pointer, never the working tree, so every tracked,
+// staged, modified, and untracked forensic file stays bit-for-bit as-is (SC-731);
+// only the branch ownership is released. `checkout --detach` (not `switch`) for
+// compatibility with older git. Package var for test stubs.
+var WorktreeDetach = func(ctx context.Context, worktreePath string) error {
+	if _, err := runner(ctx, "git", "-C", worktreePath, "checkout", "--detach"); err != nil {
+		return errors.WrapWithDetails(err, "detaching git worktree", "worktree", worktreePath)
+	}
+	return nil
+}
+
 // Commit is one commit that references a ticket key, as returned by CommitsFor.
 type Commit struct {
 	SHA      string `json:"sha"`
@@ -294,6 +310,28 @@ var CommitsForRev = func(ctx context.Context, dir, key, rev string) ([]Commit, e
 			continue
 		}
 		if strings.HasPrefix(parts[2], "Merge pull request") {
+			continue
+		}
+		commits = append(commits, Commit{SHA: parts[0], ShortSHA: parts[1], Subject: parts[2]})
+	}
+	return commits, nil
+}
+
+// CommitsBetween lists the commits in the range base..to (in to but not in
+// base) at dir, newest first — the newer commits a behind publish would
+// overwrite, named so the guard's error can point the reader at what to recover
+// (SC-2322). Mirrors CommitsForRev's parse of the %H/%h/%s record. Package var
+// so callers can stub git access in tests.
+var CommitsBetween = func(ctx context.Context, dir, base, to string) ([]Commit, error) {
+	out, err := runner(ctx, "git", "-C", dir, "log",
+		"--format=%H%x1f%h%x1f%s", base+".."+to)
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "listing commits in range", "dir", dir, "base", base, "to", to)
+	}
+	var commits []Commit
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\x1f", 3)
+		if len(parts) != 3 {
 			continue
 		}
 		commits = append(commits, Commit{SHA: parts[0], ShortSHA: parts[1], Subject: parts[2]})
