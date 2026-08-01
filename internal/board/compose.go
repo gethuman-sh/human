@@ -109,6 +109,11 @@ func markBlocked(cards []daemon.BoardViewCard, blockedBy map[string][]string) {
 //     ticket is hidden, an idea sits in Ideas by its label alone, everything
 //     else lands in Backlog. Mirrors daemon.DeriveBoardCard so the quick pass
 //     and the full pass agree.
+//
+// An OUTAGE card (State == "outage", SC-2307) needs no special case here: unlike
+// a DEGRADED card it has a genuine derived stage, so it flows through the normal
+// path and its state is forwarded verbatim (State: string(card.State) below) for
+// the frontend to render as "machine down".
 func composedStage(issue tracker.Issue, card daemon.BoardCard) (daemon.BoardStage, bool) {
 	if card.Degraded {
 		stage := card.Stage

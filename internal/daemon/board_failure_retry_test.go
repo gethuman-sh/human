@@ -49,6 +49,64 @@ func TestHandleBoardAgentExit_RetryableFailureRelaunchesTheStage(t *testing.T) {
 	require.True(t, sawFailedMarker, "the failed marker must be posted before the relaunch")
 }
 
+// A stage that reported the substrate was down posts a distinct *-outage marker
+// (not a red *-failed one) and does NOT relaunch on the live path — the durable
+// reconcile pass owns the backoff relaunch (SC-2307).
+func TestHandleBoardAgentExit_OutagePostsOutageMarkerAndDoesNotRelaunch(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	c := &syncCommenter{}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var relaunched, resets []BoardStage
+	policy := retryPolicyFor(ExitOutage, true, &relaunched, &resets)
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor,
+		nil, nil, nil, alwaysReachable, nil, nil, nil, policy, "d1", zerolog.Nop())
+
+	require.Empty(t, relaunched, "the live path must not relaunch an outage — the reconcile backoff does")
+
+	var sawOutage, sawFailed bool
+	for _, body := range c.added {
+		if _, state, ok := ClassifyMarker(body); ok {
+			switch state {
+			case BoardOutage:
+				sawOutage = true
+			case BoardFailed:
+				sawFailed = true
+			}
+		}
+	}
+	require.True(t, sawOutage, "an outage exit must post its *-outage marker")
+	require.False(t, sawFailed, "an outage must never red the card with a *-failed marker")
+}
+
+// The crash path is unchanged by the outage split: a retryable exit still reds
+// the card with a *-failed marker and takes the bounded relaunch (SC-2307).
+func TestHandleBoardAgentExit_CrashStillFailsBounded(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	c := &syncCommenter{}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var relaunched, resets []BoardStage
+	policy := retryPolicyFor(ExitRetryable, true, &relaunched, &resets)
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor,
+		nil, nil, nil, alwaysReachable, nil, nil, nil, policy, "d1", zerolog.Nop())
+
+	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
+	var sawFailed, sawOutage bool
+	for _, body := range c.added {
+		if _, state, ok := ClassifyMarker(body); ok {
+			switch state {
+			case BoardFailed:
+				sawFailed = true
+			case BoardOutage:
+				sawOutage = true
+			}
+		}
+	}
+	require.True(t, sawFailed, "a retryable crash still posts a *-failed marker")
+	require.False(t, sawOutage, "a crash must not be mistaken for an outage")
+}
+
 // A stage that concluded it needs a human must not be relaunched — that is the
 // difference between recovering from a flake and looping on a real blocker.
 func TestHandleBoardAgentExit_TerminalFailureIsNotRelaunched(t *testing.T) {

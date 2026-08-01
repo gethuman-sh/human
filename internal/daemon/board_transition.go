@@ -1229,9 +1229,11 @@ func reviewPrompt(key string, card BoardCard) string {
 // is protected by the idempotency guard, and a DONE verification with a failing
 // verdict takes the rework path instead (SC-695).
 func isReviewRetry(to BoardStage, card BoardCard) bool {
+	// An outage card is relaunched in place exactly like a failed one (SC-2307),
+	// so the reconcile backoff can re-drive it.
 	return to == BoardVerification &&
 		card.Stage == BoardVerification &&
-		card.State == BoardFailed
+		(card.State == BoardFailed || card.State == BoardOutage)
 }
 
 // isDuplicateDrop reports a drop onto a stage the card is already working, so a
@@ -1281,18 +1283,22 @@ func isReworkTransition(to BoardStage, card BoardCard) bool {
 // rule. A running planning card is protected by ApplyTransition's idempotency
 // guard either way.
 func isPlanningRetry(to BoardStage, card BoardCard) bool {
+	// An outage card is relaunched in place exactly like a failed one (SC-2307),
+	// so the reconcile backoff can re-drive it.
 	return to == BoardPlanning &&
 		card.Stage == BoardPlanning &&
-		(card.State == BoardFailed || card.State == BoardDone)
+		(card.State == BoardFailed || card.State == BoardDone || card.State == BoardOutage)
 }
 
 // isBuildRetry mirrors isPlanningRetry for the implementation stage: failed
 // builds only — running builds are protected by the idempotency guard, and a
 // verification-stage card takes the rework path instead (SC-591).
 func isBuildRetry(to BoardStage, card BoardCard) bool {
+	// An outage card is relaunched in place exactly like a failed one (SC-2307),
+	// so the reconcile backoff can re-drive it.
 	return to == BoardImplementation &&
 		card.Stage == BoardImplementation &&
-		card.State == BoardFailed
+		(card.State == BoardFailed || card.State == BoardOutage)
 }
 
 // isDeployRetry reports the deploy-stage twin of isBuildRetry: relaunching the
@@ -1301,9 +1307,11 @@ func isBuildRetry(to BoardStage, card BoardCard) bool {
 // and re-deploys the already-reviewed branch rather than re-implementing it, so
 // a conflicted deploy is never a dead end (735).
 func isDeployRetry(to BoardStage, card BoardCard) bool {
+	// An outage card is relaunched in place exactly like a failed one (SC-2307),
+	// so the reconcile backoff can re-drive it.
 	return to == BoardDoneStage &&
 		card.Stage == BoardDoneStage &&
-		card.State == BoardFailed
+		(card.State == BoardFailed || card.State == BoardOutage)
 }
 
 // doneBody builds the PR description with the PM→engineering→branch trail.
@@ -1330,6 +1338,23 @@ func failedHeaderFor(stage BoardStage) string {
 		return ReviewFailedHeader
 	case BoardDoneStage:
 		return DeployFailedHeader
+	default:
+		return ""
+	}
+}
+
+// outageHeaderFor returns the *-outage marker header for a stage, mirroring
+// failedHeaderFor. Empty for a stage that has no relaunch path (SC-2307).
+func outageHeaderFor(stage BoardStage) string {
+	switch stage {
+	case BoardPlanning:
+		return PlanningOutageHeader
+	case BoardImplementation:
+		return ImplementationOutageHeader
+	case BoardVerification:
+		return ReviewOutageHeader
+	case BoardDoneStage:
+		return DeployOutageHeader
 	default:
 		return ""
 	}

@@ -21,6 +21,20 @@ func TestExpandIncludes_SubstitutesAKnownFragment(t *testing.T) {
 	require.Contains(t, string(out), "rest", "surrounding content survives")
 }
 
+// The exit contract must give agents the vocabulary to record a substrate
+// outage as its own exit class, distinct from a retryable flake (SC-2307).
+func TestExpandIncludes_ExitContractHasOutageRow(t *testing.T) {
+	in := []byte("<!-- human:include exit-contract -->\n")
+
+	out, err := expandIncludes(in)
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s, "`outage`", "the outage exit class must be documented")
+	require.Contains(t, s, "five ways", "the contract now enumerates five endings, not four")
+	require.NotContains(t, s, "a network blip",
+		"retryable must no longer claim substrate/network failures — those are now an outage")
+}
+
 func TestExpandIncludes_LeavesContentWithoutDirectivesAlone(t *testing.T) {
 	in := []byte("# Agent\n\nplain prompt\n")
 

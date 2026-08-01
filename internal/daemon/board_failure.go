@@ -184,6 +184,19 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 		}
 		return
 	}
+	// A stage that reported the substrate was down (ExitOutage) is not a failure:
+	// post a distinct *-outage marker so the card reads "machine down", not red,
+	// and do NOT relaunch here — the durable reconcile pass relaunches it each
+	// interval (the backoff) with the retry budget untouched (SC-2307). The body
+	// carries the same diagnosed reason line a *-failed marker would, so the badge
+	// still reads the cause via failureReason.
+	if header := outageHeaderFor(stage); header != "" && retry.recordedOutage(pmKey, stage) {
+		body := header + "\n" + failureMarkerBody(diagnose, agentName, errorType)
+		if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+			logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post outage marker")
+		}
+		return
+	}
 	body := failedHeaderFor(stage) + "\n" + failureMarkerBody(diagnose, agentName, errorType)
 	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
@@ -438,6 +451,14 @@ func deliberateStopRecorded(comments []tracker.Comment) bool {
 // the first one gets closes the SC-2133 race where a clean exit's read lands
 // between the two handoffs and misreads the still-propagating review as a
 // mid-review death.
+//
+// A *-outage marker is deliberately NOT a settled state here: it is a transient
+// the durable reconcile pass owns (it relaunches the stage each interval until
+// the substrate returns, SC-2307), never a clean ending. An outage exit posts no
+// marker of its own before this runs — handleBoardAgentExit posts the *-outage
+// marker after routing on recordedOutage — so this only ever sees the stage's
+// still-running *-started marker and returns unsettled after the bounded
+// re-check budget, exactly as it would for any incomplete stage.
 func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
 	_, state := latestStageState(comments, stage)
 	if state != BoardDone && state != BoardResolved && !stagePausedOnOptions(comments, stage) && !deliberateStopRecorded(comments) {

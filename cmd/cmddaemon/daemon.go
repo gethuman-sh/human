@@ -2019,6 +2019,12 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult, l
 						if prev, ok := lastKnown(key); ok {
 							card = prev
 							card.Degraded = true
+							// A read failure is not evidence the plan vanished: keep the
+							// last-known HasPlan so an unreachable tracker never reads as
+							// "no plan exists" and invites re-planning a ticket a human
+							// already planned (SC-2307 AC3). When there is no lastKnown,
+							// HasPlan stays genuinely unknown and Degraded=true renders the
+							// card non-launchable — the honest, invitation-suppressing state.
 						}
 					}
 					mu.Lock()

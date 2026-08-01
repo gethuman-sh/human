@@ -855,6 +855,30 @@ func TestIsDeployRetry(t *testing.T) {
 	assert.False(t, isDeployRetry(BoardVerification, BoardCard{Stage: BoardDoneStage, State: BoardFailed}))
 }
 
+// An outage card is relaunched in place exactly like a failed one, so the
+// reconcile backoff can re-drive it (SC-2307). Every relaunchable stage's
+// predicate must accept BoardOutage alongside BoardFailed.
+func TestRetryPredicates_AcceptOutage(t *testing.T) {
+	assert.True(t, isBuildRetry(BoardImplementation, BoardCard{Stage: BoardImplementation, State: BoardOutage}))
+	assert.True(t, isReviewRetry(BoardVerification, BoardCard{Stage: BoardVerification, State: BoardOutage}))
+	assert.True(t, isDeployRetry(BoardDoneStage, BoardCard{Stage: BoardDoneStage, State: BoardOutage}))
+	assert.True(t, isPlanningRetry(BoardPlanning, BoardCard{Stage: BoardPlanning, State: BoardOutage}))
+
+	// isReworkTransition is the backward rework move keyed on BoardDone — an
+	// outage must NOT trigger it (SC-2307 D4).
+	assert.False(t, isReworkTransition(BoardImplementation, BoardCard{Stage: BoardVerification, State: BoardOutage}))
+}
+
+// outageHeaderFor mirrors failedHeaderFor: one header per relaunchable stage,
+// empty for a stage with no relaunch path.
+func TestOutageHeaderFor(t *testing.T) {
+	assert.Equal(t, PlanningOutageHeader, outageHeaderFor(BoardPlanning))
+	assert.Equal(t, ImplementationOutageHeader, outageHeaderFor(BoardImplementation))
+	assert.Equal(t, ReviewOutageHeader, outageHeaderFor(BoardVerification))
+	assert.Equal(t, DeployOutageHeader, outageHeaderFor(BoardDoneStage))
+	assert.Empty(t, outageHeaderFor(BoardBacklog))
+}
+
 // TestApplyTransitionDeployRetryRebasesAndRedeploys drives the whole retry path:
 // a card sitting on a failed deploy, re-dropped on Deploy, must re-run the
 // deploy pipeline (rebase + merge) rather than being rejected by the

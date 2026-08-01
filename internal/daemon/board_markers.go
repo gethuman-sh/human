@@ -53,6 +53,13 @@ const (
 	// (latest-wins). [human:option-chosen] is not a classified marker, so this
 	// state is synthesized in DeriveBoardCard, not mapped from a marker.
 	BoardQueued BoardState = "queued"
+	// BoardOutage is a NON-failing transient: a stage exited reporting the
+	// substrate it needs was unreachable (a credential store timeout, a tracker
+	// it could not reach — ExitOutage). Nothing about the work is wrong. It never
+	// reds the card and is NOT charged against DefaultStageRetries; the durable
+	// reconcile pass relaunches it each interval (the backoff) until the
+	// substrate returns and a *-started marker supersedes it (SC-2307).
+	BoardOutage BoardState = "outage"
 )
 
 // Board marker headers. These mirror the existing review-handoff headers in
@@ -121,6 +128,18 @@ const (
 	// human-deploy-fixer instead of redding, so this reads as the done stage running.
 	// Each occurrence is one deploy-fix round — the budget counts them (deployFixRounds).
 	DeployFixStartedHeader = "[human:deploy-fix-started]"
+
+	// Outage markers are the NON-failing transient twin of the *-failed headers,
+	// one per relaunchable stage. A stage that reported the substrate it needs was
+	// unreachable (ExitOutage) posts its stage's *-outage marker instead of a
+	// *-failed one, so the card reads "machine down" rather than red and the
+	// durable reconcile pass relaunches it each interval without charging the
+	// retry budget (SC-2307). `-outage` never prefixes another header, so
+	// ClassifyMarker's prefix match stays unambiguous.
+	PlanningOutageHeader       = "[human:planning-outage]"
+	ImplementationOutageHeader = "[human:implementation-outage]"
+	ReviewOutageHeader         = "[human:review-outage]"
+	DeployOutageHeader         = "[human:deploy-outage]"
 )
 
 // PlanCommentHeader marks a comment whose body IS the engineering plan for
@@ -173,6 +192,10 @@ var orderedMarkerSpecs = []markerSpec{
 	{PRFixStartedHeader, BoardDoneStage, BoardRunning},
 	{PRReviewFailedHeader, BoardDoneStage, BoardFailed},
 	{DeployFixStartedHeader, BoardDoneStage, BoardRunning},
+	{PlanningOutageHeader, BoardPlanning, BoardOutage},
+	{ImplementationOutageHeader, BoardImplementation, BoardOutage},
+	{ReviewOutageHeader, BoardVerification, BoardOutage},
+	{DeployOutageHeader, BoardDoneStage, BoardOutage},
 }
 
 // stageRank orders the pipeline stages so derivation can pick the furthest

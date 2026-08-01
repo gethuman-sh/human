@@ -116,6 +116,28 @@ func TestScanReadyForReview_FetchError_PrefersLastKnownStage(t *testing.T) {
 	assert.Equal(t, daemon.BoardRunning, cards["SC-1"].State)
 }
 
+// SC-2307 AC3: a tracker-read failure must never fabricate "no plan exists". The
+// degraded card carries the last-known HasPlan forward so an unreachable tracker
+// never invites re-planning a ticket a human already planned.
+func TestScanReadyForReview_FetchError_PreservesHasPlan(t *testing.T) {
+	logger := zerolog.Nop()
+	prov := &stubProvider{err: errors.New("tracker unreachable")}
+	jobs := []fetchJob{{inst: tracker.Instance{Name: "work", Kind: "shortcut", Provider: prov}}}
+	results := []daemon.TrackerIssuesResult{{
+		TrackerRole: "pm",
+		Issues:      []tracker.Issue{{Key: "SC-1", StatusType: tracker.CategoryStarted}},
+	}}
+	prev := func(key string) (daemon.BoardCard, bool) {
+		return daemon.BoardCard{Stage: daemon.BoardImplementation, State: daemon.BoardRunning, HasPlan: true}, true
+	}
+
+	_, _, cards := scanReadyForReview(jobs, results, logger, prev)
+
+	assert.True(t, cards["SC-1"].Degraded, "an unreadable tracker yields a degraded, non-launchable card")
+	assert.True(t, cards["SC-1"].HasPlan,
+		"a read failure must never read as 'no plan exists' — the last-known plan presence is preserved")
+}
+
 // The lite fetcher must return without error (and without running the comment
 // scan) even when there is nothing to fetch, so the board's fast path degrades
 // to an empty board rather than a failure.
