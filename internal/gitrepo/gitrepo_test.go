@@ -420,6 +420,57 @@ func TestWorktreeRemove_error(t *testing.T) {
 	}
 }
 
+func TestWorktreeDetach_success(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := WorktreeDetach(context.Background(), "/wt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt", "checkout", "--detach"})
+}
+
+func TestWorktreeDetach_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("not a git repository")
+	})
+	if err := WorktreeDetach(context.Background(), "/wt"); err == nil {
+		t.Fatal("expected error when detach fails")
+	}
+}
+
+func TestCommitsBetween_parsesLog(t *testing.T) {
+	out := "aaa1\x1fa1\x1fadvance\n" + "bbb2\x1fb2\x1ffix\n"
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return []byte(out), nil
+	})
+	commits, err := CommitsBetween(context.Background(), "/repo", "base", "to")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("commits = %d, want 2", len(commits))
+	}
+	if commits[0].SHA != "aaa1" || commits[0].ShortSHA != "a1" || commits[0].Subject != "advance" {
+		t.Errorf("first (newest) commit = %+v", commits[0])
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "log",
+		"--format=%H%x1f%h%x1f%s", "base..to"})
+}
+
+func TestCommitsBetween_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("unknown revision")
+	})
+	if _, err := CommitsBetween(context.Background(), "/repo", "base", "to"); err == nil {
+		t.Fatal("expected error when git log fails")
+	}
+}
+
 func TestRebaseHead_argv(t *testing.T) {
 	var gotArgs []string
 	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
