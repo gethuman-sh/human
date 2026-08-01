@@ -97,6 +97,47 @@ func TruncationNotice(results []daemon.TrackerIssuesResult) string {
 	return fmt.Sprintf("Showing the first %d tickets — more open tickets exist beyond the fetch cap and are not displayed. Saved order and hidden flags are preserved (pruning is paused) until the full list can be fetched.", len(pm.Issues))
 }
 
+// PrefsKeep is every PM ticket the fetch actually returned.
+//
+// It is derived from the SAME results CanPrune judges, and that is the whole
+// point. The keep set used to come from the composed board — a second, separate
+// request — so a healthy fetch could authorise a prune against a board that had
+// answered with nothing, and every hidden flag and hand-sorted column went at
+// once (SC-2400). A guard is only a guard if it is inspecting the thing it
+// guards.
+//
+// Broader than the board on purpose: a done ticket is still in the listing
+// though it has left the board, so its preference survives until the ticket
+// itself does. Keeping a stale line costs a line; dropping a live one costs
+// somebody's deliberate act.
+func PrefsKeep(results []daemon.TrackerIssuesResult) map[string]struct{} {
+	pm, ok := FirstPMResult(results)
+	if !ok {
+		return map[string]struct{}{}
+	}
+	keys := make(map[string]struct{}, len(pm.Issues))
+	for _, issue := range pm.Issues {
+		keys[issue.Key] = struct{}{}
+	}
+	return keys
+}
+
+// IdeaKeep is every PM ticket the fetch returned that is an idea — the same
+// source as PrefsKeep, for the same reason.
+func IdeaKeep(results []daemon.TrackerIssuesResult) map[string]struct{} {
+	pm, ok := FirstPMResult(results)
+	if !ok {
+		return map[string]struct{}{}
+	}
+	keys := make(map[string]struct{})
+	for _, issue := range pm.Issues {
+		if issue.IsIdea() {
+			keys[issue.Key] = struct{}{}
+		}
+	}
+	return keys
+}
+
 // PrunePrefs drops stale entries from each target store for project, but ONLY
 // when the fetch is trustworthy (CanPrune). A prune failure is ignored: a
 // stale entry is harmless — the board renders from current cards regardless —
@@ -107,6 +148,15 @@ func PrunePrefs(results []daemon.TrackerIssuesResult, project string, targets ..
 		return
 	}
 	for _, t := range targets {
+		// Never prune to nothing. An empty keep set says "no ticket exists",
+		// which a refresh is not entitled to conclude — and acting on it removes
+		// every preference at once rather than the stale ones it was asked for
+		// (SC-2400). A board that genuinely holds no tickets keeps its stored
+		// preferences until one does; that costs a few lines in a file, which is
+		// the cheaper of the two mistakes by a wide margin.
+		if len(t.Keep) == 0 {
+			continue
+		}
 		_ = t.Store.PruneExcept(project, t.Keep)
 	}
 }
