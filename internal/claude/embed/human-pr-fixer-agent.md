@@ -37,10 +37,8 @@ You have no push credentials in board context, and you do not need them. The rev
 1. **Check out the branch.** Board runs start detached at the default branch — the PR code is on the branch, not HEAD: `git checkout <branch>`.
 2. **Collect the findings.** Read `stage.pr-review` findings and any human PR comments. Treat a human comment with the same weight as the machine reviewer's — a human dropping a comment on the PR is exactly the out-of-band review this loop must answer.
 3. **Address each finding** with the smallest correct change. If a finding asks for a behavior change, add or update a test that pins it. If you disagree with a finding, do not silently ignore it — record why in your report's `addressed`/`deferred`, and leave the code as is; the next review decides.
-4. **Go green on the fast tier** — iterate on the project's **fast feedback gate** (its tests plus its lean lint), not the full quality suite. First **detect** what the project actually provides, the way `human-done` does, then run the fast tier it offers:
-   - Detect the test runner and lint tool: probe for a `Makefile` with `test`/`lint` targets, then common per-ecosystem tools — `make test` + `make lint`, `npm test` + `npm run lint`, `go test ./...` + `go vet ./...`/`golangci-lint run`, `pytest` + `ruff`/`flake8`, `cargo test` + `cargo clippy`, etc. Run only what the project has; skip a tool that is not present.
-   - Run the **lean lint**, not the heavy bundled gate. Where the project separates the two (e.g. this repo's `make lint` is the documented lean hot-loop gate, distinct from `make check`), run the lean lint here and leave the heavy gate to the deploy CI, which owns the single full-suite run — do **not** run `make check`/the full suite here. Where the project offers no such split, run its tests and whatever lightweight lint exists.
-   - If no test runner is found at all, note it (as `human-done` does) rather than reporting a failure to run something that does not exist.
+4. **Go green on the fast tier** — for the packages this change touches, not the full quality gate; the deploy CI gate runs the full suite.
+<!-- human:include build-gate -->
 5. **Commit** on the branch, referencing the key (`human commits prefix <WORK_KEY>` for the subject prefix). This local commit is what the reviewer re-reads. You **must** produce a new commit when you changed anything — a report of `done` with no new commit trips the loop's convergence guard and reds the card. If you genuinely could address nothing, that is `needs-input`, not `done`.
 
 ## Convergence

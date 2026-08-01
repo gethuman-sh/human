@@ -37,10 +37,9 @@ Use `human tracker list` first when multiple trackers are configured.
    ```
 3. **Write the regression test first** — add a test that captures the bug. Run it and **confirm it FAILS** for the documented reason (capture the red output). If it passes, your test does not reproduce the bug — fix the test before touching product code.
 4. **Fix the root cause** — implement the change from the plan. Do not paper over the symptom. Read each file before editing it.
-5. **Go green (fast tier)** — the new test now passes; iterate with the project's **fast feedback gate**, not the full quality suite. First **detect** what the project actually provides (the way `human-done` detects its test runner), then run the fast tier it offers:
-   - Detect the test runner and lint tool: probe for a `Makefile` with `test`/`lint` targets, then common per-ecosystem tools — `make test` + `make lint`, `npm test` + `npm run lint`, `go test ./...` + `go vet ./...`/`golangci-lint run`, `pytest` + `ruff`/`flake8`, `cargo test` + `cargo clippy`, etc. Run only what the project has; skip a tool that is not present.
-   - The intent is **tests plus the lean lint**, not the full quality gate. Where the project separates a lean lint from a heavier bundled gate (e.g. this repo's `make lint` is the documented lean hot-loop gate, distinct from `make check` whose fresh-test + sec + secrets passes are the verify step's one authoritative job), run the lean lint and do **not** run the heavy gate here — running the full suite now is exactly the redundant pass this pipeline removes; the verify gate owns the single full-suite run. Where the project offers no such split, run its tests and whatever lightweight lint exists.
-   - If no test runner is found at all, note it (as `human-done` does) and rely on the regression test you ran directly in step 3.
+5. **Go green (fast tier)** — the new test now passes; iterate with the project's fast feedback gate, not the full quality suite.
+<!-- human:include build-gate -->
+   Where no test runner is found at all, rely on the regression test you ran directly in step 3.
    - Confirm the new test passes and no existing tests regress. If a check fails, do **not** stop on the first failure — apply the retry budget below. Only when the budget is spent do you stop and report what failed; never push a broken branch.
 6. **Commit** — one or more commits, each starting with the canonical prefix from `human commits prefix <BUG_KEY> [<ENG_KEY>]` (both keys in split topology, the single bug key otherwise), e.g. `[<PM_KEY>] [<ENG_KEY>] Fix <summary>`.
 7. **Push (conditional)** —
