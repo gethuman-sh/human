@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func TestCopyTranscript_UnblocksOnContextCancel(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- CopyTranscript(ctx, docker, "cid", "vscode", dest) }()
+	go func() { done <- CopyTranscript(ctx, docker, "cid", "vscode", "", dest) }()
 
 	select {
 	case err := <-done:
@@ -96,6 +97,51 @@ func TestCopyTranscript_UnblocksOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("CopyTranscript did not unblock on context cancel within 2s")
+	}
+}
+
+func TestClaudeProjectDirName(t *testing.T) {
+	cases := []struct{ cwd, want string }{
+		{"/workspaces/cli", "-workspaces-cli"},
+		{"/home/vscode/.human/wt/run_1", "-home-vscode--human-wt-run-1"},
+	}
+	for _, c := range cases {
+		if got := claudeProjectDirName(c.cwd); got != c.want {
+			t.Fatalf("claudeProjectDirName(%q) = %q, want %q", c.cwd, got, c.want)
+		}
+	}
+}
+
+// TestCopyTranscript_Fallback_EmptyWorktree pins that an empty worktree takes the
+// whole-root path unchanged: the copy still extracts.
+func TestCopyTranscript_Fallback_EmptyWorktree(t *testing.T) {
+	dest := t.TempDir()
+	docker := &copyMock{archive: func() io.ReadCloser {
+		return tarArchive(map[string]string{"projects/p/s.jsonl": "ROOT-DATA"})
+	}}
+	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", "", dest); err != nil {
+		t.Fatalf("CopyTranscript: %v", err)
+	}
+	if got := readTree(t, dest); !strings.Contains(got, "ROOT-DATA") {
+		t.Fatalf("expected root copy to land, got %q", got)
+	}
+}
+
+// TestCopyTranscript_Fallback_ScopedMissing is the SC-2463 fallback guard: when a
+// run's worktree sanitises to a subdir the container does not hold, the scoped
+// copy errors and we fall back to the whole projects root — preserve more, not
+// less.
+func TestCopyTranscript_Fallback_ScopedMissing(t *testing.T) {
+	dest := t.TempDir()
+	docker := &scopedProjectsMock{tree: map[string]string{
+		"/home/vscode/.claude/projects/-w-run-b/b.jsonl": "RUN-B-DATA",
+	}}
+	// worktree "/w/run-a" -> subdir "-w-run-a", which is absent from the tree.
+	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", "/w/run-a", dest); err != nil {
+		t.Fatalf("CopyTranscript: %v", err)
+	}
+	if got := readTree(t, dest); !strings.Contains(got, "RUN-B-DATA") {
+		t.Fatalf("expected fallback to root to preserve available sessions, got %q", got)
 	}
 }
 
@@ -116,7 +162,7 @@ func TestCopyTranscript_ExtractsTar(t *testing.T) {
 	docker := &copyMock{archive: func() io.ReadCloser {
 		return tarArchive(map[string]string{"projects/p/s.jsonl": "SESSION-DATA"})
 	}}
-	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", dest); err != nil {
+	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", "", dest); err != nil {
 		t.Fatalf("CopyTranscript: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dest, "projects", "p", "s.jsonl"))
@@ -133,7 +179,7 @@ func TestCopyTranscript_RejectsTraversal(t *testing.T) {
 	docker := &copyMock{archive: func() io.ReadCloser {
 		return tarArchive(map[string]string{"../escape.txt": "EVIL"})
 	}}
-	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", dest); err != nil {
+	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", "", dest); err != nil {
 		t.Fatalf("CopyTranscript should skip traversal, not error: %v", err)
 	}
 	// The escaping entry must not be written outside dest.
@@ -150,7 +196,7 @@ func TestCopyTranscript_SkipsAbsoluteEntry(t *testing.T) {
 	docker := &copyMock{archive: func() io.ReadCloser {
 		return tarArchive(map[string]string{"/abs.txt": "DATA"})
 	}}
-	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", dest); err != nil {
+	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", "", dest); err != nil {
 		t.Fatalf("CopyTranscript should skip absolute entries, not error: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "abs.txt")); err == nil {
@@ -163,7 +209,7 @@ func TestCopyTranscript_TopLevelFile(t *testing.T) {
 	docker := &copyMock{archive: func() io.ReadCloser {
 		return tarArchive(map[string]string{"file.jsonl": "TOP"})
 	}}
-	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", dest); err != nil {
+	if err := CopyTranscript(context.Background(), docker, "cid", "vscode", "", dest); err != nil {
 		t.Fatalf("CopyTranscript: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dest, "file.jsonl"))
