@@ -426,6 +426,24 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 // before this launch (SC-2462): a non-empty cause over StageWaitThreshold gets an
 // attributed [human:stage-wait] record; an empty cause (a human-initiated drop)
 // is deliberation, never recorded.
+// launchAgent is the single AgentLauncher boundary every board launch path
+// routes through. A benign single-flight refusal (ErrAgentAlreadyRunning) means
+// "one is already working on it", not "this failed", so it is swallowed to a
+// no-op here and the caller posts no failed marker — leaving the card running.
+// Every other error is returned unchanged so a launch that genuinely could not
+// happen (no container, no credentials) still fails loudly. Centralizing the
+// no-op contract here means a new launch path inherits it without rediscovering
+// the rule (SC-2603; the per-call-site guard it replaces was SC-1419).
+func (d BoardTransitionDeps) launchAgent(ctx context.Context, name, prompt string) error {
+	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
+		if stderrors.Is(err, ErrAgentAlreadyRunning) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string, cause WaitCause) error {
 	// Launch gate: a daemon whose host fails a launch-critical doctor check
 	// (docker, agent-skills, claude-auth) cannot serve this stage. Refuse before
@@ -471,14 +489,7 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 		return errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
 	}
 	name := agentNameFor(pmKey, stage)
-	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
-		// A single-flight refusal (the stage's agent is already running) is the
-		// launch-path analogue of ApplyTransition's idempotency guard: a retry
-		// raced the agent cleanup, only one agent ever ran, so leave the card
-		// running and post no failed marker (SC-1419).
-		if stderrors.Is(err, ErrAgentAlreadyRunning) {
-			return nil
-		}
+	if err := d.launchAgent(ctx, name, prompt); err != nil {
 		failBody := failedHeaderFor(stage) + "\n" + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(failBody, d.DaemonID))
 		return errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
@@ -595,7 +606,7 @@ func deployFixRounds(comments []tracker.Comment) int {
 // failure escalates the card — leaving it spinning would strand the loop.
 func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string, stage BoardStage, prompt string) error {
 	name := agentNameFor(pmKey, stage)
-	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
+	if err := d.launchAgent(ctx, name, prompt); err != nil {
 		body := PRReviewFailedHeader + "\ncould not launch the PR " + string(stage) + " agent — " + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID))
 		return errors.WrapWithDetails(err, "launching PR loop agent", "pm", pmKey, "stage", string(stage))
@@ -1194,7 +1205,7 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 // reds the card — leaving it spinning would strand the deploy.
 func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) error {
 	name := agentNameFor(pmKey, deployFixAgentStage)
-	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
+	if err := d.launchAgent(ctx, name, prompt); err != nil {
 		body := DeployFailedHeader + "\ncould not launch the deploy fixer — " + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID))
 		return errors.WrapWithDetails(err, "launching deploy fixer", "pm", pmKey)
