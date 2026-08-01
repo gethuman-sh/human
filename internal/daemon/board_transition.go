@@ -111,6 +111,11 @@ type BoardTransitionRequest struct {
 	PMTitle string     `json:"pm_title"`
 	From    BoardStage `json:"from"`
 	To      BoardStage `json:"to"`
+	// Cause names what filled the gap before this launch so an over-threshold
+	// inter-stage wait can be recorded and attributed (SC-2462). Empty = a
+	// human-initiated drop, whose interval is deliberation, not a pipeline wait,
+	// and is never recorded.
+	Cause WaitCause `json:"cause,omitempty"`
 }
 
 // BoardTransitionDeps wires the transition engine's collaborators.
@@ -276,7 +281,8 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	case isReworkTransition(req.To, card):
 		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 			executePrompt(dispatchKey(req.PMKey, card),
-				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first"))
+				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first"),
+			WaitCauseChain)
 
 	// Planning retry: a failed planning run is relaunched in place. The retry
 	// gesture targets planning while the card already derives to planning, so
@@ -285,7 +291,7 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// guard already returned for it.
 	case isPlanningRetry(req.To, card):
 		return true, d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			planPrompt(req.PMKey))
+			planPrompt(req.PMKey), WaitCauseRetry)
 
 	// Build retry: the same sanctioned in-place relaunch for a failed
 	// implementation run — without it a failed build is a dead end, since the
@@ -294,7 +300,7 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// executor picks it up.
 	case isBuildRetry(req.To, card):
 		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			executePrompt(dispatchKey(req.PMKey, card), ""))
+			executePrompt(dispatchKey(req.PMKey, card), ""), WaitCauseRetry)
 
 	// Review retry: a stage-failed review is otherwise a dead end. The rework
 	// re-drop keys on a DONE verification with a failing verdict, and a
@@ -304,7 +310,7 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// the same handoff (SC-695). A RUNNING review is caught by the idempotency guard.
 	case isReviewRetry(req.To, card):
 		return true, d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			reviewPrompt(dispatchKey(req.PMKey, card), card))
+			reviewPrompt(dispatchKey(req.PMKey, card), card), WaitCauseRetry)
 
 	// Deploy retry: a card sitting on a failed deploy, re-dropped on Deploy, must
 	// re-run the deploy pipeline — the freshness stage rebases the already-reviewed
@@ -324,13 +330,13 @@ func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTr
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			planPrompt(req.PMKey))
+			planPrompt(req.PMKey), req.Cause)
 	case BoardImplementation:
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			executePrompt(dispatchKey(req.PMKey, card), ""))
+			executePrompt(dispatchKey(req.PMKey, card), ""), req.Cause)
 	case BoardVerification:
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			reviewPrompt(dispatchKey(req.PMKey, card), card))
+			reviewPrompt(dispatchKey(req.PMKey, card), card), req.Cause)
 	case BoardDoneStage:
 		return d.runDoneStage(ctx, req, card)
 	default:
@@ -380,7 +386,7 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 	// push and fail — the fix completed and passed review but the card ended red
 	// (SC-252).
 	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-		"/human-autofix "+req.PMKey+" --board")
+		"/human-autofix "+req.PMKey+" --board", WaitCause(""))
 }
 
 // SecurityFixRequest is the wire request for launching the security-fix pipeline
@@ -411,13 +417,16 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 		return nil
 	}
 	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-		"/human-security-fix "+req.PMKey+" --board")
+		"/human-security-fix "+req.PMKey+" --board", WaitCause(""))
 }
 
 // startAgentStage posts the stage's started marker, then launches the agent. On
 // launch failure it posts the stage's *-failed marker so the board reflects the
-// error rather than leaving a stuck spinner.
-func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string) error {
+// error rather than leaving a stuck spinner. cause names what filled the gap
+// before this launch (SC-2462): a non-empty cause over StageWaitThreshold gets an
+// attributed [human:stage-wait] record; an empty cause (a human-initiated drop)
+// is deliberation, never recorded.
+func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string, cause WaitCause) error {
 	// Launch gate: a daemon whose host fails a launch-critical doctor check
 	// (docker, agent-skills, claude-auth) cannot serve this stage. Refuse before
 	// the claim so NO [human:claim] is posted — the work is left unclaimed for a
@@ -450,6 +459,13 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	}
 	if !won {
 		return nil
+	}
+	// Record the inter-stage wait before the started marker lands: this is the
+	// last instant the previous stage's done marker is the newest done-state
+	// marker, i.e. the eligibility anchor. Best-effort and threshold-gated, so a
+	// promptly-chained stage posts nothing (SC-2462).
+	if waitComments, err := d.Commenter.ListComments(ctx, pmKey); err == nil {
+		recordStageWait(ctx, d.Commenter, pmKey, stage, waitComments, cause, d.DaemonID, d.Logger)
 	}
 	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(startedHeader, d.DaemonID)); err != nil {
 		return errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))

@@ -305,8 +305,13 @@ func TestApplyTransitionRetriesFailedBuild(t *testing.T) {
 	assert.Contains(t, l.prompt, "/human-execute SC-1")
 	assert.Contains(t, l.prompt, "BOARD CONTEXT", "headless dispatch must carry the no-push, no-questions rules")
 	assert.Equal(t, "board-SC-1-implementation", l.name)
-	require.Len(t, c.added, 1)
-	assert.Equal(t, ImplementationStartedHeader, c.added[0])
+	// The prior stage (plan-ready) finished at Unix(1,0), decades before this
+	// retry — the retry's cause (WaitCauseRetry) is over StageWaitThreshold, so
+	// it is attributed with a [human:stage-wait] record ahead of the started
+	// marker (SC-2462).
+	require.Len(t, c.added, 2)
+	assert.True(t, strings.HasPrefix(c.added[0], StageWaitHeader))
+	assert.Equal(t, ImplementationStartedHeader, c.added[1])
 }
 
 func TestApplyTransitionRunningBuildNotRelaunched(t *testing.T) {
@@ -405,8 +410,13 @@ func TestApplyTransitionReviewRetry(t *testing.T) {
 	assert.Equal(t, 1, l.calls)
 	assert.Equal(t, "/human-review HUM-9 --branch=feat/x --commits=abc123", l.prompt)
 	assert.Equal(t, "board-SC-1-verification", l.name)
-	require.Len(t, c.added, 1)
-	assert.Equal(t, ReviewStartedHeader, c.added[0])
+	// The prior stage (ready-for-review) finished decades before this retry — the
+	// retry's cause (WaitCauseRetry) is over StageWaitThreshold, so it is
+	// attributed with a [human:stage-wait] record ahead of the started marker
+	// (SC-2462).
+	require.Len(t, c.added, 2)
+	assert.True(t, strings.HasPrefix(c.added[0], StageWaitHeader))
+	assert.Equal(t, ReviewStartedHeader, c.added[1])
 }
 
 func TestApplyTransitionRunningReviewNotRelaunched(t *testing.T) {
@@ -1600,8 +1610,13 @@ func TestApplyTransitionReplansDonePlanning(t *testing.T) {
 	assert.Equal(t, 1, l.calls)
 	assert.Contains(t, l.prompt, "/human-ticket-review SC-1")
 	assert.Contains(t, l.prompt, "/human-plan SC-1")
-	require.Len(t, c.added, 1)
-	assert.Equal(t, PlanningStartedHeader, c.added[0])
+	// The prior stage (plan-ready) finished decades before this replan — the
+	// retry's cause (WaitCauseRetry) is over StageWaitThreshold, so it is
+	// attributed with a [human:stage-wait] record ahead of the started marker
+	// (SC-2462).
+	require.Len(t, c.added, 2)
+	assert.True(t, strings.HasPrefix(c.added[0], StageWaitHeader))
+	assert.Equal(t, PlanningStartedHeader, c.added[1])
 }
 
 func TestApplyTransitionReplanRejectedBeyondPlanning(t *testing.T) {

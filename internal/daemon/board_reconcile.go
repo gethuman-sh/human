@@ -438,6 +438,12 @@ func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgen
 		if silenced {
 			body = header + "\n" + silenceReapReason(idleReason)
 		}
+		// If this stage was preceded by a recorded inter-stage wait, name that
+		// cause in the red so a stall that followed a long wait is attributable
+		// rather than judged from silence (SC-2462).
+		if cause := latestStageWaitCause(card.Comments); cause != "" {
+			body += "\nafter wait cause: " + cause
+		}
 		if err := postFailed(ctx, card.Key, body); err != nil {
 			logger.Warn().Err(err).Str("pm", card.Key).
 				Msg("board reconcile: cannot red stuck-running card")

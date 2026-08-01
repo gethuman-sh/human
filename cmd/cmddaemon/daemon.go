@@ -630,14 +630,22 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by
 	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
-	// path (RunBoardReconcile) so both launch the identical review.
-	chainReview := func(pmKey string) error {
-		return boardTransition(daemon.BoardTransitionRequest{
-			PMKey: pmKey,
-			From:  daemon.BoardImplementation,
-			To:    daemon.BoardVerification,
-		})
+	// path (RunBoardReconcile), each supplying the cause that names WHY it fired
+	// (SC-2462): the live path is a prompt chain, the durable path is the poll
+	// boundary that recovers a restart-orphaned handoff — the exact 31-minute
+	// hole SC-2462 could not previously name.
+	chainReviewWith := func(cause daemon.WaitCause) func(pmKey string) error {
+		return func(pmKey string) error {
+			return boardTransition(daemon.BoardTransitionRequest{
+				PMKey: pmKey,
+				From:  daemon.BoardImplementation,
+				To:    daemon.BoardVerification,
+				Cause: cause,
+			})
+		}
 	}
+	liveChainReview := chainReviewWith(daemon.WaitCauseChain)
+	durableChainReview := chainReviewWith(daemon.WaitCausePollBoundary)
 	// The diagnoser reads the dead run's persisted artifacts so the failed
 	// marker says what actually broke instead of the generic stage line.
 	diagnoseFailure := func(agentName, hookErrorType string) daemon.FailureDiagnosis {
@@ -645,7 +653,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		return daemon.FailureDiagnosis{Headline: d.Headline, Detail: d.Detail}
 	}
 	// The pre-merge PR review→fix loop is driven off the reviewer/fixer Stop
-	// events, exactly like chainReview: on each loop-agent exit read the outcome
+	// events, exactly like chainReviewWith: on each loop-agent exit read the outcome
 	// it recorded (the reviewer's verdict, the fixer's exit) from the state store
 	// and hand it to the loop executor, which decides the next step.
 	advancePRLoop := advancePRLoopFunc(ctx, ds, diagnoseFailure, reviewLaunchGate, logger)
@@ -696,7 +704,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		chainReview, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
+		liveChainReview, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
@@ -738,7 +746,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		// The durable re-drive has no exiting agent to attribute — the run it is
 		// recovering from is long gone — so it drives the loop with no run identity
 		// and any escalation falls back to its generic line.
-		chainReview, func(pmKey string) error { return advancePRLoop(pmKey, "", "") },
+		durableChainReview, func(pmKey string) error { return advancePRLoop(pmKey, "", "") },
 		stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
 
 	// Surface tickets created or edited outside the board (tracker web UI, CLI,

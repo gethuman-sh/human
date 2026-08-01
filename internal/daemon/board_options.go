@@ -251,7 +251,10 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 	prompt := stagePrompt(stage, req.PMKey, card) +
 		" — a decision was made on this ticket: pursue the direction in the latest " +
 		OptionChosenHeader + " comment (" + chosen.Label + ")"
-	return d.startAgentStage(ctx, req.PMKey, stage, startedHeaderFor(stage), prompt)
+	// A decision click is human-initiated, like the Fix/Retry entry points: the
+	// interval since the decision became available is the human's think-time,
+	// not a pipeline wait, so it is suppressed (empty cause, SC-2462).
+	return d.startAgentStage(ctx, req.PMKey, stage, startedHeaderFor(stage), prompt, WaitCause(""))
 }
 
 func findOption(opts []BoardOption, id string) (BoardOption, bool) {
