@@ -403,8 +403,20 @@ func (m *Manager) stopLocked(ctx context.Context, name string) error {
 	// execution log for forensics/resume, swept later by PruneExecutions. A
 	// no-handoff exit 0 is precisely the data-loss case where uncommitted work
 	// exists to lose, so it must default to keep (SC-731).
-	if meta.Worktree != "" && meta.ProjectDir != "" && meta.Handoff {
-		_ = gitrepo.WorktreeRemove(ctx, meta.ProjectDir, meta.Worktree)
+	//
+	// But keeping the FILES must not keep the BRANCH: a kept worktree still owns
+	// refs/heads/<branch>, which freezes the shared repo's local branch so a
+	// fetch cannot fast-forward it, and a later deploy republishes that frozen
+	// tip over newer origin work (SC-2322). Detaching HEAD to the same commit
+	// releases only the branch ownership; the forensic files and the 90-day
+	// retention are untouched. Both operations are best-effort — a failure here
+	// must never block the stop from recording StatusStopped.
+	if meta.Worktree != "" && meta.ProjectDir != "" {
+		if meta.Handoff {
+			_ = gitrepo.WorktreeRemove(ctx, meta.ProjectDir, meta.Worktree)
+		} else {
+			_ = gitrepo.WorktreeDetach(ctx, meta.Worktree)
+		}
 	}
 
 	meta.Status = StatusStopped
