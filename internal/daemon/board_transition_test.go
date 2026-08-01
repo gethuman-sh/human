@@ -993,6 +993,42 @@ func TestStartAgentStageAlreadyRunningIsNoOp(t *testing.T) {
 	}
 }
 
+func TestDispatchDeployFixerAlreadyRunningIsNoOp(t *testing.T) {
+	// The deploy gate racing its own repair hits the single-flight guard, which
+	// refuses the second launch with ErrAgentAlreadyRunning. That benign refusal
+	// must leave the card spinning on the deploy-fix-started marker: no
+	// [human:deploy-failed] marker, nil return (SC-2603, mirrors SC-1419).
+	c := &fakeCommenter{}
+	l := &fakeLauncher{err: ErrAgentAlreadyRunning}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.dispatchDeployFixer(context.Background(), "SC-1",
+		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed")
+	require.NoError(t, err)
+	require.Equal(t, 1, l.calls, "the launch must have been attempted")
+	// exactly the running deploy-fix-started marker, and no deploy-failed marker.
+	require.Len(t, c.added, 1)
+	assert.True(t, strings.HasPrefix(c.added[0], DeployFixStartedHeader))
+	for _, body := range c.added {
+		assert.NotContains(t, body, DeployFailedHeader)
+	}
+}
+
+func TestLaunchPRLoopAgentAlreadyRunningIsNoOp(t *testing.T) {
+	// The PR review→fix loop racing its own agent hits the same single-flight
+	// guard. The benign refusal must leave the loop's card running: no
+	// [human:pr-review-failed] marker, nil return (SC-2603).
+	c := &fakeCommenter{}
+	l := &fakeLauncher{err: ErrAgentAlreadyRunning}
+	deps := newDeps(c, l, &fakeDeployer{})
+	err := deps.launchPRLoopAgent(context.Background(), "SC-1", prReviewAgentStage, "/human-pr-review SC-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, l.calls, "the launch must have been attempted")
+	assert.Empty(t, c.added, "a benign single-flight refusal posts no marker")
+	for _, body := range c.added {
+		assert.NotContains(t, body, PRReviewFailedHeader)
+	}
+}
+
 func TestAgentNameRoundTrip(t *testing.T) {
 	name := agentNameFor("SC-105", BoardImplementation)
 	assert.Equal(t, "board-SC-105-implementation", name)
