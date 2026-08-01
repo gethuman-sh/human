@@ -638,6 +638,48 @@ func TestDetectDestructive_StatusesListNotDestructive(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// --- state project routing tests ---
+
+func TestStateScopeArg_FindsScopeAheadOfOrBehindFlags(t *testing.T) {
+	assert.Equal(t, "KAN-1", stateScopeArg([]string{"state", "set", "--agent", "x", "KAN-1", "n"}))
+	assert.Equal(t, "KAN-1", stateScopeArg([]string{"state", "set", "KAN-1", "n", "--agent", "x"}))
+	assert.Equal(t, "KAN-1", stateScopeArg([]string{"state", "get", "KAN-1", "n"}))
+	assert.Equal(t, "", stateScopeArg([]string{"state", "prune"}), "prune carries no scope")
+	assert.Equal(t, "", stateScopeArg([]string{"jira", "issue", "get", "KAN-1"}), "not a state command")
+	assert.Equal(t, "", stateScopeArg([]string{"state"}), "no subcommand")
+}
+
+func TestResolveStateProject_RoutesByRecordedOrigin(t *testing.T) {
+	reg := twoProjectRegistry(t)
+	a := reg.Entries()[0]
+	reg.SetOrigins([]KeyOrigin{{Key: "KAN-1", Dir: a.Dir}})
+
+	srv := &Server{Projects: reg}
+	got := srv.resolveStateProject([]string{"state", "get", "KAN-1", "stage.fix"})
+	assert.Equal(t, a.Name, got)
+}
+
+func TestResolveStateProject_UnknownKeyResolvesToDefault(t *testing.T) {
+	reg := twoProjectRegistry(t)
+	srv := &Server{Projects: reg}
+	got := srv.resolveStateProject([]string{"state", "get", "NOPE-1", "stage.fix"})
+	assert.Equal(t, "", got)
+}
+
+func TestResolveStateProject_SingleProjectResolvesToDefault(t *testing.T) {
+	reg := oneProjectRegistry(t)
+	reg.SetOrigins([]KeyOrigin{{Key: "KAN-1", Dir: reg.Entries()[0].Dir}})
+	srv := &Server{Projects: reg}
+	got := srv.resolveStateProject([]string{"state", "get", "KAN-1", "stage.fix"})
+	assert.Equal(t, "", got, "single-project state stays in the default namespace")
+}
+
+func TestResolveStateProject_NoProjectsRegistered(t *testing.T) {
+	srv := &Server{}
+	got := srv.resolveStateProject([]string{"state", "get", "KAN-1", "stage.fix"})
+	assert.Equal(t, "", got)
+}
+
 // --- Server destructive confirmation tests ---
 
 func startTestServerWithConfirm(t *testing.T, token string) (addr string, cancel context.CancelFunc, store *PendingConfirmStore) {
