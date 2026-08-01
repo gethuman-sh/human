@@ -45,7 +45,7 @@ func RunRemote(addr, token string, args []string, version string) (int, error) {
 		return code, err
 	}
 	_, _ = fmt.Fprintf(os.Stderr,
-		"Permission required: %s (id %s)\nApprove or deny it in the human desktop app or TUI — there is no time limit. Once approved, re-run this exact command to execute it (it will not ask again). Check the decision anytime with: human confirm-status %s\n",
+		"Permission required: %s (id %s)\nApprove or deny it in the human desktop app — there is no time limit. Once approved, re-run this exact command to execute it (it will not ask again). Check the decision anytime with: human confirm-status %s\n",
 		resp.ConfirmPrompt, resp.ConfirmID, resp.ConfirmID)
 	return 1, nil
 }

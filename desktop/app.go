@@ -37,11 +37,11 @@ import (
 // the daemon client (daemon.GetTrackerIssues / daemon.BoardTransition /
 // daemon.Subscribe) — never directly to a tracker or forge — so all credential
 // handling, role resolution and the destructive-confirm bypass stay in the
-// daemon, exactly as the TUI does it.
+// daemon.
 //
 // The one exception is Instances() (instances.go), which discovers running
 // Claude Code processes in-process via the monitor package. That path needs no
-// credentials and the TUI runs the same monitor alongside its daemon calls, so
+// credentials and the monitor runs alongside the daemon calls, so
 // it is consistent with the credential-only rationale above — and it cannot be
 // a daemon route regardless, since monitor imports daemon (an import cycle).
 type App struct {
@@ -288,7 +288,7 @@ func formatStageTime(t time.Time) string {
 // field. Combines IsReachable() (authoritative TCP dial, works across process
 // namespaces e.g. host <-> devcontainer) with ReadAlivePid() (same-host
 // PID-file liveness) so a daemon that is alive but momentarily not yet
-// listening still reads as reachable, matching the TUI's dual-source check.
+// listening still reads as reachable — a dual-source check.
 func (a *App) DaemonStatus() bool {
 	info, err := daemon.ReadInfo()
 	if err == nil && info.IsReachable() {

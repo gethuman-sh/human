@@ -30,8 +30,8 @@ type Server struct {
 	Policy      Decider
 	Interceptor Interceptor // optional: MITM interceptor for specific domains
 	Logger      zerolog.Logger
-	// Emitter records ambient network decisions for the TUI activity
-	// panel. Optional — nil means no events are recorded so tests and
+	// Emitter records ambient network decisions for the activity panel.
+	// Optional — nil means no events are recorded so tests and
 	// standalone use pay nothing for the feature.
 	Emitter NetworkEventEmitter
 	// Dialer connects to upstream servers. Injected for testing.

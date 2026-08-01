@@ -45,7 +45,6 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdstate"
 	"github.com/gethuman-sh/human/cmd/cmdtelegram"
 	"github.com/gethuman-sh/human/cmd/cmdtracker"
-	"github.com/gethuman-sh/human/cmd/cmdtui"
 	"github.com/gethuman-sh/human/cmd/cmdusage"
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
@@ -158,7 +157,7 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	pf.String("tracker", "", "Named tracker instance from .humanconfig")
 	pf.Bool("safe", os.Getenv("HUMAN_SAFE") == "1", "Block destructive operations (deletes)")
 	// --yes skips the interactive confirmation for a destructive operation. The
-	// daemon injects it after a TUI approval when re-executing the command, so it
+	// daemon injects it after an operator approval when re-executing the command, so it
 	// must be accepted by every (current and future) destructive subcommand —
 	// hence a single persistent flag here rather than per-command registration.
 	pf.Bool("yes", false, "Skip interactive confirmation for destructive operations")
@@ -372,10 +371,6 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	searchCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(searchCmd)
 
-	tuiCmd := cmdtui.BuildTuiCmd()
-	tuiCmd.GroupID = "utility"
-	rootCmd.AddCommand(tuiCmd)
-
 	agentCmd := cmdagent.BuildAgentCmd()
 	agentCmd.GroupID = "utility"
 	rootCmd.AddCommand(agentCmd)
@@ -580,7 +575,6 @@ var localSubcommands = map[string]bool{
 	"usage":         true,
 	"index":         true,
 	"agent-context": true,
-	"tui":           true,
 	"doctor":        true,
 	"ping":          true,
 	"proxy":         true,

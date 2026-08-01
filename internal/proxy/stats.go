@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-// Stats holds proxy runtime metrics written by the daemon and read by the TUI.
+// Stats holds proxy runtime metrics written by the daemon and read by its clients.
 type Stats struct {
 	ActiveConns int64 `json:"active_conns"`
 }
