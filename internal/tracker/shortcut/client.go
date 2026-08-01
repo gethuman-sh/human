@@ -58,40 +58,52 @@ func (c *Client) SetHTTPDoer(doer apiclient.HTTPDoer) {
 // for full sync, or POST /api/v3/stories/search for incremental sync.
 // When opts.Project is empty, searches across all groups.
 func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
+	page, err := c.ListIssuesPage(ctx, opts)
+	return page.Issues, err
+}
+
+// ListIssuesPage implements tracker.PagedLister.
+//
+// Truncated is reported only when it is OBSERVED: a cursor still pending when
+// collection stopped. Shortcut's older endpoints answer with a bare array and
+// no cursor, and that silence is not proof of completeness — the server may
+// have capped the response without saying so. Claiming "complete" there would
+// be worse than admitting the limit, because the index's prune deletes whatever
+// a listing omitted; the honest signal is what lets that guard work (SC-2132).
+func (c *Client) ListIssuesPage(ctx context.Context, opts tracker.ListOptions) (tracker.IssuePage, error) {
 	project := opts.Project
 
 	var stories []scStory
+	var truncated bool
 	var err error
 
 	if project != "" {
 		groupID, gErr := c.resolveGroupID(ctx, project)
 		if gErr != nil {
-			return nil, gErr
+			return tracker.IssuePage{}, gErr
 		}
 		if groupID == "" {
-			return nil, errors.WithDetails("group not found in Shortcut", "project", project)
+			return tracker.IssuePage{}, errors.WithDetails("group not found in Shortcut", "project", project)
 		}
 		if !opts.UpdatedSince.IsZero() {
-			stories, err = c.searchStories(ctx, groupID, opts.UpdatedSince)
+			stories, truncated, err = c.searchStories(ctx, groupID, opts.UpdatedSince)
 		} else {
-			stories, err = c.listGroupStories(ctx, groupID)
+			stories, truncated, err = c.listGroupStories(ctx, groupID)
 		}
 	} else {
 		// Use search for all stories regardless of team assignment.
 		// listAllGroupStories only returns stories with a group_id set, so
-		// stories with no team are silently dropped. searchAllStories with
-		// {"archived":false} returns everything and avoids the empty-body
-		// problem seen on some Shortcut workspaces.
-		stories, err = c.searchAllStories(ctx, opts.UpdatedSince)
+		// stories with no team are silently dropped.
+		stories, truncated, err = c.searchAllStories(ctx, opts.UpdatedSince, opts.IncludeAll)
 	}
 	if err != nil {
-		return nil, err
+		return tracker.IssuePage{}, err
 	}
 
 	// Pre-load group name map for resolving story group IDs.
 	if project == "" {
 		if _, gErr := c.resolveGroupID(ctx, ""); gErr != nil {
-			return nil, gErr
+			return tracker.IssuePage{}, gErr
 		}
 	}
 
@@ -103,76 +115,142 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 		}
 		issue, cErr := c.toTrackerIssue(ctx, story, p)
 		if cErr != nil {
-			return nil, cErr
+			return tracker.IssuePage{}, cErr
 		}
-		if !opts.IncludeAll && c.isDoneOrArchived(story) {
+		if !c.belongsInResult(story, opts.IncludeAll) {
 			continue
 		}
 		issues = append(issues, issue)
 	}
-	return issues, nil
+	return tracker.IssuePage{Issues: issues, Truncated: truncated}, nil
 }
 
 // listGroupStories fetches all stories for a group via the group endpoint.
-func (c *Client) listGroupStories(ctx context.Context, groupID string) ([]scStory, error) {
+func (c *Client) listGroupStories(ctx context.Context, groupID string) ([]scStory, bool, error) {
 	path := fmt.Sprintf("/api/v3/groups/%s/stories", url.PathEscape(groupID))
 	resp, err := c.doRequest(ctx, http.MethodGet, path, "", nil, "")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var stories []scStory
-	if err := apiclient.DecodeJSON(resp, &stories, "groupID", groupID); err != nil {
-		return nil, err
+	page, err := c.decodeStories(resp)
+	if err != nil {
+		return nil, false, err
 	}
-	return stories, nil
+	return c.followPages(ctx, page)
 }
 
 // searchStories uses POST /api/v3/stories/search with updated_at_start filter.
-func (c *Client) searchStories(ctx context.Context, groupID string, since time.Time) ([]scStory, error) {
+func (c *Client) searchStories(ctx context.Context, groupID string, since time.Time) ([]scStory, bool, error) {
 	body := scSearchRequest{
 		GroupIDs:       []string{groupID},
 		UpdatedAtStart: since.Format(time.RFC3339),
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, errors.WrapWithDetails(err, "marshalling search request")
+		return nil, false, errors.WrapWithDetails(err, "marshalling search request")
 	}
 
 	resp, err := c.doRequest(ctx, http.MethodPost, "/api/v3/stories/search", "", bytes.NewReader(payload), "application/json")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var stories []scStory
-	if err := apiclient.DecodeJSON(resp, &stories); err != nil {
-		return nil, err
+	page, err := c.decodeStories(resp)
+	if err != nil {
+		return nil, false, err
 	}
-	return stories, nil
+	return c.followPages(ctx, page)
 }
 
-// searchAllStories searches across all groups, optionally filtering by updated time.
-// Archived is always set to false so the request body is never empty — sending {}
-// returns no results on some Shortcut workspaces, while {"archived":false} returns
-// all non-archived stories regardless of team assignment.
-func (c *Client) searchAllStories(ctx context.Context, since time.Time) ([]scStory, error) {
-	archived := false
+// searchAllStories searches across all groups, optionally filtering by updated
+// time.
+//
+// The archived filter has to be sent explicitly rather than omitted: an empty
+// request body returns no results on some Shortcut workspaces, so {} is not a
+// way to ask for "both". Asking for the record therefore issues TWO searches —
+// archived and not — and merges them. Without that, an archived story could
+// never be returned at all, and "was this already fixed?" would silently miss
+// every ticket somebody tidied away (SC-2132).
+func (c *Client) searchAllStories(ctx context.Context, since time.Time, includeArchived bool) ([]scStory, bool, error) {
+	stories, truncated, err := c.searchArchived(ctx, since, false)
+	if err != nil || !includeArchived {
+		return stories, truncated, err
+	}
+	archived, archTruncated, err := c.searchArchived(ctx, since, true)
+	if err != nil {
+		// The unarchived half is a usable answer; losing it because the archived
+		// half failed would be worse than an incomplete one — but the result is
+		// then incomplete, and must say so.
+		return stories, true, nil
+	}
+	return append(stories, archived...), truncated || archTruncated, nil
+}
+
+// searchArchived runs one archived/not-archived half of the search, following
+// the cursor to the end when the response carries one.
+func (c *Client) searchArchived(ctx context.Context, since time.Time, archived bool) ([]scStory, bool, error) {
 	body := scSearchRequest{Archived: &archived}
 	if !since.IsZero() {
 		body.UpdatedAtStart = since.Format(time.RFC3339)
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, errors.WrapWithDetails(err, "marshalling search request")
+		return nil, false, errors.WrapWithDetails(err, "marshalling search request")
 	}
 
 	resp, err := c.doRequest(ctx, http.MethodPost, "/api/v3/stories/search", "", bytes.NewReader(payload), "application/json")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var stories []scStory
-	if err := apiclient.DecodeJSON(resp, &stories); err != nil {
-		return nil, err
+	page, err := c.decodeStories(resp)
+	if err != nil {
+		return nil, false, err
 	}
-	return stories, nil
+	return c.followPages(ctx, page)
+}
+
+// followPages walks a cursor to the end, returning everything collected and
+// whether stories remain beyond what was fetched.
+//
+// A bare-array response has no cursor, which is NOT evidence that it was
+// complete — the server may simply have capped it without saying so. That case
+// reports notComplete=false because there is nothing to report from, and the
+// index's prune guard is what protects against acting on a short answer. This
+// function only claims truncation it can actually observe.
+func (c *Client) followPages(ctx context.Context, first scStoryPage) (stories []scStory, notComplete bool, err error) {
+	stories = append(stories, first.Stories...)
+	next := first.Next
+	for pages := 0; next != ""; pages++ {
+		if pages >= maxSearchPages {
+			return stories, true, nil
+		}
+		path, rawQuery, ok := nextPathAndQuery(next)
+		if !ok {
+			return stories, true, nil
+		}
+		resp, rErr := c.doRequest(ctx, http.MethodGet, path, rawQuery, nil, "")
+		if rErr != nil {
+			// Partial data plus an honest "there is more" beats losing the pages
+			// already fetched.
+			return stories, true, nil
+		}
+		page, dErr := c.decodeStories(resp)
+		if dErr != nil {
+			return stories, true, nil
+		}
+		stories = append(stories, page.Stories...)
+		next = page.Next
+	}
+	return stories, false, nil
+}
+
+// decodeStories reads a story response in whichever shape it arrives.
+func (c *Client) decodeStories(resp *http.Response) (scStoryPage, error) {
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, apiclient.MaxResponseBodyBytes+1))
+	if err != nil {
+		return scStoryPage{}, errors.WrapWithDetails(err, "reading story response")
+	}
+	return decodeStoryPage(raw)
 }
 
 // groupNameByID returns the group name for a UUID, or "" if not found.
@@ -836,13 +914,35 @@ func (c *Client) defaultWorkflowStateID(ctx context.Context) (int64, error) {
 // isDoneOrArchived returns true if the story is archived or in a "done" workflow state.
 // Must be called after workflow states have been loaded.
 func (c *Client) isDoneOrArchived(story scStory) bool {
-	if story.Archived {
-		return true
-	}
+	return story.Archived || c.isDone(story)
+}
+
+// isDone reports whether the story reached a done workflow state. Independent of
+// Archived: the two are separate fields, so a story can be archived without ever
+// having been finished.
+func (c *Client) isDone(story scStory) bool {
 	c.statesMu.Lock()
 	stateType := c.stateTypes[story.WorkflowStateID]
 	c.statesMu.Unlock()
 	return stateType == tracker.CategoryDone
+}
+
+// belongsInResult reports whether a story survives the caller's filter.
+//
+// Without IncludeAll the caller wants live work: neither finished nor put away.
+//
+// With IncludeAll the caller wants the record — everything that happened —
+// EXCEPT work that was archived without ever being done. Archiving and
+// finishing are orthogonal in Shortcut, and an archived-but-unfinished story is
+// work somebody abandoned: surfacing it in a search reads as if the work exists
+// or is planned, which is more misleading than not finding it at all (SC-2132).
+// Archived-and-done stories are ordinary housekeeping and stay, because "was
+// this already fixed?" is exactly what the record is asked.
+func (c *Client) belongsInResult(story scStory, includeAll bool) bool {
+	if !includeAll {
+		return !c.isDoneOrArchived(story)
+	}
+	return !story.Archived || c.isDone(story)
 }
 
 // isValidStoryType returns true if t is a Shortcut-accepted story type.

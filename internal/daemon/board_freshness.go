@@ -52,7 +52,7 @@ func RunBoardFreshnessPoll(ctx context.Context, list IssueLister, poke func(), h
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(jitteredInterval(interval, BoardFreshnessJitter)):
+		case <-time.After(JitteredInterval(interval, BoardFreshnessJitter)):
 		}
 		if st.step(hasWatchers(), fingerprint, logger) {
 			poke()

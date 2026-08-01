@@ -739,6 +739,11 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		boardHasWatchers(ds.srv.HookEvents),
 		daemon.BoardFreshnessInterval, logger)
 
+	// Keep the searchable ticket record current, so an agent's "is this already
+	// being handled?" check has something to find. It was fed only by a hand-run
+	// command and held nothing for months (SC-2132).
+	go RunRecallSync(ctx, ds.srv.Projects, ds.vaultResolver, recall.DefaultDBPath(), RecallSyncInterval, logger)
+
 	// Watch the binary so a rebuild re-execs into the new build, handing over the
 	// live sockets (no client sees a refused connection) and draining in-flight
 	// connections before the old process exits. A no-op on Windows.
@@ -1711,7 +1716,6 @@ func boardViewFunc(fetch func() ([]daemon.TrackerIssuesResult, error), doctor *d
 		defer cancel()
 		dockerOK := len(doctor.Blockers(ctx, []string{"docker"})) == 0
 		view := board.Compose(results, dockerOK)
-		indexBoardView(ctx, view, recall.DefaultDBPath(), logger)
 		rememberBoardView(cache, project, view, logger)
 		return view, nil
 	}
@@ -1766,47 +1770,6 @@ func rememberBoardView(cache *boardcache.Store, project string, view daemon.Boar
 	}
 	if err := cache.Save(project, raw); err != nil {
 		logger.Debug().Err(err).Msg("board view: cannot persist the last good board")
-	}
-}
-
-// indexBoardView keeps the searchable ticket record current from a fetch that
-// has already happened.
-//
-// The index is what every agent consults to find out whether a problem is
-// already being worked on, and it was fed only by a hand-run command — so it sat
-// empty for months while the board beside it stayed minutes-fresh. Two copies of
-// one fetch, one of them nobody owned. Writing here costs no extra tracker calls
-// and makes the record as current as the board.
-//
-// Deliberately partial: this covers the open PM tickets the board shows, not
-// closed ones, and it carries no comment text — TrackerIssuesResult does not
-// include comments, they are consumed deriving stages and discarded. Closed
-// tickets and plan bodies still need their own path.
-//
-// Best-effort throughout: an index write must never fail a board fetch.
-func indexBoardView(ctx context.Context, view daemon.BoardView, dbPath string, logger zerolog.Logger) {
-	if len(view.Cards) == 0 {
-		return
-	}
-	store, err := recall.NewSQLiteStore(dbPath)
-	if err != nil {
-		logger.Debug().Err(err).Msg("board index: cannot open the recall store")
-		return
-	}
-	defer func() { _ = store.Close() }()
-	for _, c := range view.Cards {
-		entry := recall.Entry{
-			Key:      c.Key,
-			Source:   c.Tracker,
-			Kind:     c.TrackerKind,
-			Title:    c.Title,
-			Status:   c.Stage,
-			Assignee: c.Assignee,
-			URL:      c.URL,
-		}
-		if err := store.UpsertEntry(ctx, entry, c.Description); err != nil {
-			logger.Debug().Err(err).Str("key", c.Key).Msg("board index: cannot upsert entry")
-		}
 	}
 }
 

@@ -29,6 +29,10 @@ human link <BLOCKER_KEY> <PM_KEY> --blocks
 # What this run may do
 human capabilities --json
 
+# Whether this work already exists. Reports an unusable record as an ERROR,
+# never as an empty result — a failed search is not "no siblings".
+human search "<terms>" --json --limit 20
+
 # Working state, shared with every later stage
 human state set <PM_KEY> <name> --json --body-file -
 human state get <PM_KEY> <name> --field <field> --default '(unset)'
@@ -82,19 +86,24 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
 5. **Read everything that could answer a question before you ask it** — the ticket description and comments, the attached plan, `.humanconfig`, `CLAUDE.md`, and the actual code. Most apparent ambiguity is answered by the codebase.
 
-6. **Check whether other open work is heading for the same code.** Two runs editing one file collide, and
-   the loser's work is redone by hand — the most expensive failure this stage can prevent. Take the files
-   from the plan (or from what the ticket plainly changes) and ask who else is aiming at them:
+6. **Find out whether this work already exists, and whether other open work is heading for the same code.** The most expensive failure is not a wrong answer, it is doing work someone already did. Two tickets describing one problem have been implemented twice and collided in the same function; the same one-line fix has been written on two machines in parallel.
+
+   Search the ticket record **several ways**, because this is a keyword index and not a semantic one — one query is not enough, and two tickets about the same problem routinely share no words at all:
 
    ```bash
-   human search --file internal/daemon/board_transition.go --json --limit 10
+   human search "<the subject, not the ticket's wording>" --json --limit 20
+   human search "<the subsystem or component>" --json --limit 20
+   human search --file "<a path the work will touch>" --json   # exact: who else is changing this file
+   human search "<an error string or symptom involved>" --json --limit 20
    ```
 
-   A hit only counts when the other ticket is **still open** and its work would land in the same place —
-   a shipped ticket and a merely adjacent one order nothing. When it does count, that is a fork for the
-   human: which goes first is a judgement about intent, and an agent silently reordering someone's
-   backlog is worse than one that asks. Surface it as the verdict below. **Propose, never create** — the
-   link is written only after a human has chosen it (step 4).
+   A hit is not automatically a duplicate — a closed ticket may be the *reason* this one exists. Read what you find. A hit only orders this work when the other ticket is **still open** and its work would land in the same place; a shipped ticket and a merely adjacent one order nothing.
+
+   **If a search fails, you have not searched.** The record reports when it cannot be trusted — empty, or too stale to rely on — as an error rather than as an empty result. Treating that as "nothing found" is the failure this step exists to prevent: say the check could not be made, and do not record that there are no siblings.
+
+   Name what you searched and what you found in the `assumptions` of your verdict below, so the run's record shows the check was made rather than merely claimed.
+
+   If an open ticket is clearly the same problem, or is already changing the same code, that is a **fork for a human** — the two may need merging, this run may need to stop, or one may simply go first. Which goes first is a judgement about intent, and an agent silently reordering someone's backlog is worse than one that asks. Use the verdict below, and **propose, never create** — the link is written only after a human has chosen it (step 4). Do not silently proceed and let the collision surface at merge time.
 
 7. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
 
@@ -104,7 +113,7 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
 A question is admissible **only** if all three hold:
 
-- **(a)** You searched the ticket, its comments, the plan, the config, and the code, and you can name what you searched.
+- **(a)** You searched the ticket, its comments, the plan, the config, the code, **and the ticket record for work that already exists**, and you can name what you searched.
 - **(b)** Two readings lead to *materially different work* — not different style, different work.
 - **(c)** Guessing wrong would waste the run, rather than being cheap to revise afterwards.
 
@@ -124,7 +133,7 @@ If you cannot name what you searched, you have not earned the question. Go read 
 human state set <PM_KEY> stage.preflight --json --body-file - <<'EOF'
 {"exit":"done",
  "ready":"yes",
- "assumptions":"<the judgment calls you made and why — for the run summary>",
+ "assumptions":"<the judgment calls you made and why — for the run summary; include what you searched for existing work and what came back, or that the record could not be searched>",
  "summary":"<one line>"}
 EOF
 ```
