@@ -646,14 +646,14 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// own machine — a board-context fix leaves its branch local on the machine
 	// that produced it, so a daemon elsewhere leaves the handoff for one that can
 	// reach it (SC-652). The board operates on the single registered project.
-	branchReachable := func(branch string) bool {
+	branchReachable := func(branch string) daemon.ProbeResult {
 		return boardBranchReachable(ctx, ds.srv.Projects, branch)
 	}
 	// A handoff must name commits the branch actually contains — a retry that never
 	// pushed its work named SHAs no machine could see (735). This gate verifies
 	// every named commit is reachable from the branch on this machine (local ref or
 	// origin/<branch>); any absent commit fails the check.
-	commitsPresent := func(branch string, commits []string) bool {
+	commitsPresent := func(branch string, commits []string) daemon.ProbeResult {
 		return boardCommitsPresent(ctx, ds.srv.Projects, branch, commits)
 	}
 	// A cleanly finished stage is the only thing that authorizes reclaiming the
@@ -2182,34 +2182,55 @@ func boardParticipation(projects *daemon.ProjectRegistry) daemon.ProjectParticip
 
 // boardBranchReachable reports whether a handoff branch resolves on this machine
 // (local ref or origin) — a board-context fix leaves its branch local on the
-// machine that produced it (SC-652). A 15s timeout bounds the git probe.
-func boardBranchReachable(ctx context.Context, projects *daemon.ProjectRegistry, branch string) bool {
+// machine that produced it (SC-652). A 15s timeout bounds the git probe. The
+// tri-state result distinguishes a branch this machine confirmed absent from a
+// probe that could not run at all (unresolvable project dir, git error,
+// timeout) — the latter must never be read as evidence the branch is missing
+// (SC-2403).
+func boardBranchReachable(ctx context.Context, projects *daemon.ProjectRegistry, branch string) daemon.ProbeResult {
 	dir, ok := boardProjectDir(projects)
 	if !ok {
-		return false
+		return daemon.ProbeResult{Status: daemon.ProbeUnreadable,
+			Detail: "the board's project directory could not be resolved (no single registered project) — run the check on the machine that owns the project"}
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	return gitrepo.BranchReachable(probeCtx, dir, branch)
+	switch gitrepo.BranchReachability(probeCtx, dir, branch) {
+	case gitrepo.ReachabilityPresent:
+		return daemon.ProbeResult{Status: daemon.ProbePresent}
+	case gitrepo.ReachabilityAbsent:
+		return daemon.ProbeResult{Status: daemon.ProbeAbsent}
+	default:
+		return daemon.ProbeResult{Status: daemon.ProbeUnreadable,
+			Detail: "the branch-reachability git probe against " + dir + " errored or timed out — retry when the repository is reachable"}
+	}
 }
 
 // boardCommitsPresent reports whether every named commit is reachable from
 // branch on this machine — the gate that keeps a handoff from naming SHAs no
-// machine could see (735). Any absent commit fails the check. A 15s timeout
-// bounds the git probes.
-func boardCommitsPresent(ctx context.Context, projects *daemon.ProjectRegistry, branch string, commits []string) bool {
+// machine could see (735). A definite absence or an unreadable probe (dir
+// unresolved, git error, timeout) short-circuits the loop; only a probe that
+// confirmed every commit reads as Present, and only a probe that could not
+// complete reads as Unreadable rather than as a phantom-commit absence
+// (SC-2403).
+func boardCommitsPresent(ctx context.Context, projects *daemon.ProjectRegistry, branch string, commits []string) daemon.ProbeResult {
 	dir, ok := boardProjectDir(projects)
 	if !ok {
-		return false
+		return daemon.ProbeResult{Status: daemon.ProbeUnreadable,
+			Detail: "the board's project directory could not be resolved (no single registered project) — run the check on the machine that owns the project"}
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	for _, sha := range commits {
-		if !gitrepo.CommitReachable(probeCtx, dir, branch, sha) {
-			return false
+		switch gitrepo.CommitReachability(probeCtx, dir, branch, sha) {
+		case gitrepo.ReachabilityAbsent:
+			return daemon.ProbeResult{Status: daemon.ProbeAbsent}
+		case gitrepo.ReachabilityUnknown:
+			return daemon.ProbeResult{Status: daemon.ProbeUnreadable,
+				Detail: "the commit-presence git probe against " + dir + " errored or timed out for " + sha + " — retry when the repository is reachable"}
 		}
 	}
-	return true
+	return daemon.ProbeResult{Status: daemon.ProbePresent}
 }
 
 // forgeDeployer implements daemon.Deployer: push + PR, the CI gate, the merge

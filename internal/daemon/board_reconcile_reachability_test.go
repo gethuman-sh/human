@@ -25,7 +25,7 @@ func peerCard(now time.Time) []ReconcileCard {
 	}}
 }
 
-func neverReachable(string) bool { return false }
+func neverReachable(string) ProbeResult { return ProbeResult{Status: ProbeAbsent} }
 
 // The defect: a daemon judged a peer's live run dead from a machine-local
 // container probe, reddened the card and retried the stage HERE — against work

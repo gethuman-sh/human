@@ -150,6 +150,57 @@ var PushWithLease = func(ctx context.Context, dir, branch, expectedRemoteSHA str
 	return nil
 }
 
+// Reachability is the tri-state outcome of a git reachability probe. A boolean
+// cannot say "I could not determine this", so a probe that errored or timed out
+// was indistinguishable from a genuine negative — the defect SC-2403 fixes.
+// Unknown is the zero value so an unset/failed probe never reads as a clean
+// negative a caller might act on.
+type Reachability int
+
+const (
+	ReachabilityUnknown Reachability = iota // probe could not run to completion (git error, timeout, killed)
+	ReachabilityPresent                     // the fact was read as true
+	ReachabilityAbsent                      // the fact was read as a clean false (git ran, answered "no")
+)
+
+// cleanAbsence reports whether err is git answering a definite "no" — a
+// completed process that exited 1 (merge-base --is-ancestor: not an ancestor;
+// rev-parse --verify: no such ref). Any other error (exit >1, a killed process,
+// a context timeout, a spawn failure) is NOT a clean absence and must read as
+// Unknown. .Output() returns the *exec.ExitError unwrapped, so a type assertion
+// is sufficient (matches internal/vault/readsecret.go).
+func cleanAbsence(err error) bool {
+	ee, ok := err.(*exec.ExitError)
+	return ok && ee.ExitCode() == 1
+}
+
+// CommitReachability is CommitReachable's tri-state form: Present when git
+// confirms sha is an ancestor of branch, Absent only when git ran to
+// completion and cleanly answered "not an ancestor" (exit 1), and Unknown for
+// anything else (a git error, a timeout, a killed process) — none of which may
+// be read as evidence the commit is missing. Package var so callers can stub
+// git access in tests.
+var CommitReachability = func(ctx context.Context, dir, branch, sha string) Reachability {
+	// An empty ref/sha is a caller-supplied definite non-match, not an
+	// unreadable probe; keep it a clean absence and never shell out.
+	if branch == "" || sha == "" {
+		return ReachabilityAbsent
+	}
+	ref := branch
+	if !BranchExistsLocal(ctx, dir, branch) {
+		ref = "origin/" + branch
+	}
+	_, err := runner(ctx, "git", "-C", dir, "merge-base", "--is-ancestor", sha, ref)
+	switch {
+	case err == nil:
+		return ReachabilityPresent
+	case cleanAbsence(err):
+		return ReachabilityAbsent
+	default:
+		return ReachabilityUnknown
+	}
+}
+
 // CommitReachable reports whether sha is reachable from branch in the repository
 // at dir. It resolves branch as a local ref when present (a board-context fix
 // leaves its branch local on the machine that produced it), else as
@@ -157,15 +208,7 @@ var PushWithLease = func(ctx context.Context, dir, branch, expectedRemoteSHA str
 // An empty branch or sha short-circuits to false. Package var so callers can
 // stub git access in tests.
 var CommitReachable = func(ctx context.Context, dir, branch, sha string) bool {
-	if branch == "" || sha == "" {
-		return false
-	}
-	ref := branch
-	if !BranchExistsLocal(ctx, dir, branch) {
-		ref = "origin/" + branch
-	}
-	_, err := runner(ctx, "git", "-C", dir, "merge-base", "--is-ancestor", sha, ref)
-	return err == nil
+	return CommitReachability(ctx, dir, branch, sha) == ReachabilityPresent
 }
 
 // DefaultBranch returns the repository's default branch by resolving
@@ -218,13 +261,63 @@ var BranchExistsRemote = func(ctx context.Context, dir, branch string) bool {
 	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
+func branchLocalReachability(ctx context.Context, dir, branch string) Reachability {
+	if branch == "" {
+		return ReachabilityAbsent
+	}
+	_, err := runner(ctx, "git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	switch {
+	case err == nil:
+		return ReachabilityPresent
+	case cleanAbsence(err):
+		return ReachabilityAbsent
+	default:
+		return ReachabilityUnknown
+	}
+}
+
+func branchRemoteReachability(ctx context.Context, dir, branch string) Reachability {
+	if branch == "" {
+		return ReachabilityAbsent
+	}
+	out, err := runner(ctx, "git", "-C", dir, "ls-remote", "--heads", "origin", branch)
+	switch {
+	case err != nil:
+		return ReachabilityUnknown // ls-remote gives no exit-1 "clean absence"; any error is unreadable
+	case strings.TrimSpace(string(out)) == "":
+		return ReachabilityAbsent
+	default:
+		return ReachabilityPresent
+	}
+}
+
+// BranchReachability is BranchReachable's tri-state form: Present if the branch
+// resolves locally or on origin; Unknown if neither confirmed it but a probe
+// could not complete (so absence cannot be claimed); Absent only when both
+// probes ran and cleanly reported no such ref. The local probe short-circuits a
+// remote round-trip on a hit, matching BranchReachable's original behaviour.
+var BranchReachability = func(ctx context.Context, dir, branch string) Reachability {
+	local := branchLocalReachability(ctx, dir, branch)
+	if local == ReachabilityPresent {
+		return ReachabilityPresent
+	}
+	remote := branchRemoteReachability(ctx, dir, branch)
+	if remote == ReachabilityPresent {
+		return ReachabilityPresent
+	}
+	if local == ReachabilityUnknown || remote == ReachabilityUnknown {
+		return ReachabilityUnknown
+	}
+	return ReachabilityAbsent
+}
+
 // BranchReachable reports whether branch resolves on THIS machine for the
 // repository at dir — as a local ref or on origin. The local check comes first so
 // a branch left local (a board-context fix on the machine that produced it) is
 // reachable without a network round-trip; once the branch is pushed, the remote
 // check also passes. Package var so callers can stub git access in tests.
 var BranchReachable = func(ctx context.Context, dir, branch string) bool {
-	return BranchExistsLocal(ctx, dir, branch) || BranchExistsRemote(ctx, dir, branch)
+	return BranchReachability(ctx, dir, branch) == ReachabilityPresent
 }
 
 // WorktreeAdd creates a detached private worktree at worktreePath rooted at base

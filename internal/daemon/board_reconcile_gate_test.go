@@ -30,7 +30,12 @@ func TestWorkGate_ForReviewAdmitsOnlyReachableParticipatingCards(t *testing.T) {
 		handoffCard("SC-elsewhere", "local-only/y"),
 	}
 	// reachable resolves only the first branch; participation is open.
-	reachable := func(b string) bool { return b == "reachable/x" }
+	reachable := func(b string) ProbeResult {
+		if b == "reachable/x" {
+			return ProbeResult{Status: ProbePresent}
+		}
+		return ProbeResult{Status: ProbeAbsent}
+	}
 	gate := WorkGate{reachable: reachable}
 
 	admitted := gate.forReview(cards)

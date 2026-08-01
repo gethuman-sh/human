@@ -158,6 +158,17 @@ const PlanCommentHeader = "[human:plan]"
 // flag. Best-effort close means recorded-and-surfaced, never red, never silent.
 const CloseFailedHeader = "[human:close-failed]"
 
+// HandoffCheckUnreadableHeader flags that a board handoff's branch- or
+// commit-presence check could not be PERFORMED on this machine (an unresolvable
+// project dir, a git error, or a probe that ran past its timeout) — as opposed
+// to a check that ran and found the commits genuinely absent. Like
+// CloseFailedHeader it is a surfaced operator signal, NOT a stage transition: it
+// is deliberately kept OUT of orderedMarkerSpecs so ClassifyMarker never
+// classifies it and the card keeps its current (implementation-done) state,
+// leaving the durable reconcile pass to retry the check rather than reddening
+// good work on an answer that was never given (SC-2403).
+const HandoffCheckUnreadableHeader = "[human:handoff-check-unreadable]"
+
 // markerSpec maps a marker header to the (stage, state) it represents.
 type markerSpec struct {
 	Header string

@@ -15,7 +15,7 @@ import (
 // alwaysReachable is the test predicate for reconcile passes that are not
 // exercising the reachability gate: every handoff branch resolves on this
 // machine, matching the fixer-and-reviewer-share-a-machine invariant.
-func alwaysReachable(string) bool { return true }
+func alwaysReachable(string) ProbeResult { return ProbeResult{Status: ProbePresent} }
 
 // reviewSet and takeoverSet build the DrivableCards a work-driving pass is handed
 // in production, applying the same WorkGate reconcileOnce applies. A test that
@@ -113,7 +113,7 @@ func TestReconcileOrphanedHandoffs_SkipsUnreachableBranch(t *testing.T) {
 		Key:      "SC-1",
 		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: autofix/sc-1", time.Unix(1, 0))},
 	}}
-	unreachable := func(string) bool { return false }
+	unreachable := func(string) ProbeResult { return ProbeResult{Status: ProbeAbsent} }
 	called := false
 	n := reconcileOrphanedHandoffs(reviewSet(cards, unreachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
 
@@ -129,7 +129,7 @@ func TestReconcileOrphanedHandoffs_PassesHandoffBranchToProbe(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: autofix/sc-1", time.Unix(1, 0))},
 	}}
 	var probed string
-	reachable := func(branch string) bool { probed = branch; return true }
+	reachable := func(branch string) ProbeResult { probed = branch; return ProbeResult{Status: ProbePresent} }
 	n := reconcileOrphanedHandoffs(reviewSet(cards, reachable), nil, func(string) error { return nil }, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
@@ -146,9 +146,9 @@ func TestReconcileOrphanedHandoffs_SkipsPhantomCommits(t *testing.T) {
 	}}
 	var probedBranch string
 	var probedCommits []string
-	commitsPresent := func(branch string, commits []string) bool {
+	commitsPresent := func(branch string, commits []string) ProbeResult {
 		probedBranch, probedCommits = branch, commits
-		return false
+		return ProbeResult{Status: ProbeAbsent}
 	}
 	called := false
 	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
@@ -166,12 +166,32 @@ func TestReconcileOrphanedHandoffs_ChainsWhenCommitsPresent(t *testing.T) {
 		Key:      "SC-1",
 		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0))},
 	}}
-	commitsPresent := func(string, []string) bool { return true }
+	commitsPresent := func(string, []string) ProbeResult { return ProbeResult{Status: ProbePresent} }
 	called := false
 	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.True(t, called)
+}
+
+// An unreadable commit-presence check (this machine cannot reach the repo, or
+// the probe errored/timed out) must be skipped-and-left exactly like a genuine
+// absence — the durable reconcile pass never treats "could not determine" as
+// evidence, and posts no comment of its own (the live chain owns diagnostics;
+// SC-2403).
+func TestReconcileOrphanedHandoffs_LeavesUnreadableCommits(t *testing.T) {
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0))},
+	}}
+	commitsPresent := func(string, []string) ProbeResult {
+		return ProbeResult{Status: ProbeUnreadable, Detail: "probe timed out"}
+	}
+	called := false
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
+
+	assert.Equal(t, 0, n)
+	assert.False(t, called, "an unreadable commit check must not chain a review")
 }
 
 // This is the bug: with a fresh watcher (empty HookEventStore, no live exit

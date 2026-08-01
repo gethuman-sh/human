@@ -361,21 +361,38 @@ func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker
 	// elsewhere must leave the handoff for one that can reach it rather than start
 	// a review that can never check out the code (SC-652).
 	branch := latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
-	if reachable != nil && !reachable(branch) {
-		logger.Debug().Str("pm", pmKey).Str("branch", branch).
-			Msg("board chain: handoff branch unreachable on this machine, leaving for a daemon that can reach it")
-		return
+	if reachable != nil {
+		switch r := reachable(branch); r.Status {
+		case ProbeAbsent:
+			// The branch is genuinely not on this machine — a board-context fix
+			// leaves its branch local on the machine that produced it. Leave the
+			// handoff for a daemon that can reach it (SC-652).
+			logger.Debug().Str("pm", pmKey).Str("branch", branch).
+				Msg("board chain: handoff branch not on this machine, leaving for a daemon that can reach it")
+			return
+		case ProbeUnreadable:
+			// The reachability probe could not run (unresolvable dir, git error,
+			// timeout). Do NOT strand the work silently: surface why and leave it to
+			// be retried (SC-2403 sibling).
+			postHandoffCheckUnreadable(ctx, pmKey, branch, r.Detail, commenter, daemonID, logger)
+			return
+		}
 	}
-	// Fail loudly on a phantom-commit handoff: a handoff naming commits absent from
-	// the branch would bind a review/deploy against SHAs the branch never contained
-	// (a retry that never pushed its work, 735). On the live chain a red card is the
-	// loud failure the ticket asks for — re-run the fix rather than review nothing.
-	if handoffNamesPhantomCommits(comments, branch, commitsPresent) {
+	switch p := commitPresenceForHandoff(comments, branch, commitsPresent); p.Status {
+	case ProbeAbsent:
+		// A definite phantom-commit handoff (a retry that never pushed its work) —
+		// the loud failure the ticket wants: red the card, do not review nothing.
 		body := ImplementationFailedHeader +
 			"\nhandoff names commits absent from branch " + branch + " on this machine — re-run the fix"
 		if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 			logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post phantom-commit failure")
 		}
+		return
+	case ProbeUnreadable:
+		// The commit-presence check could not be performed. Never red good work on
+		// a check that did not complete — surface which probe and why, and leave it
+		// for reconcile to retry (SC-2403).
+		postHandoffCheckUnreadable(ctx, pmKey, branch, p.Detail, commenter, daemonID, logger)
 		return
 	}
 	if err := chainReview(pmKey); err != nil {
@@ -383,15 +400,32 @@ func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker
 	}
 }
 
-// handoffNamesPhantomCommits reports whether the latest handoff names at least
-// one commit that is not present on branch on this machine. A nil gate or a
-// handoff with no commits line is never phantom.
-func handoffNamesPhantomCommits(comments []tracker.Comment, branch string, commitsPresent CommitsPresent) bool {
+// postHandoffCheckUnreadable surfaces WHICH board check could not be performed
+// and why, without reddening the card. The card keeps its ready-for-review
+// state, so the durable reconcile pass retries the check — an unreadable probe
+// is left/retried, never treated as evidence of missing work (SC-2403).
+func postHandoffCheckUnreadable(ctx context.Context, pmKey, branch, detail string, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) {
+	body := HandoffCheckUnreadableHeader +
+		"\ncould not verify the handoff for branch " + branch + " on this machine — " + detail +
+		"\nleaving the card for a daemon that can complete the check; it will be retried."
+	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post handoff-check-unreadable diagnostic")
+	}
+}
+
+// commitPresenceForHandoff reports the tri-state presence of the latest
+// handoff's named commits on branch. A nil gate or a handoff naming no commits
+// is ProbePresent (nothing to refute) — preserving the "no gate ⇒ proceed"
+// default.
+func commitPresenceForHandoff(comments []tracker.Comment, branch string, commitsPresent CommitsPresent) ProbeResult {
 	if commitsPresent == nil {
-		return false
+		return ProbeResult{Status: ProbePresent}
 	}
 	commits := ParseCommitsFromHandoff(latestHandoffBody(comments))
-	return len(commits) > 0 && !commitsPresent(branch, commits)
+	if len(commits) == 0 {
+		return ProbeResult{Status: ProbePresent}
+	}
+	return commitsPresent(branch, commits)
 }
 
 // listStageSettled fetches the PM ticket's comment thread and, while the given

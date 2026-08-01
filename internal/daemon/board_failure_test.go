@@ -331,7 +331,7 @@ func TestHandleBoardAgentExit_PhantomCommitFailsLoudly(t *testing.T) {
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	var chained bool
 	chain := func(string) error { chained = true; return nil }
-	commitsPresent := func(string, []string) bool { return false }
+	commitsPresent := func(string, []string) ProbeResult { return ProbeResult{Status: ProbeAbsent} }
 
 	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, chain, nil, nil, alwaysReachable, commitsPresent, nil, nil, StageRetry{}, "", zerolog.Nop())
 
@@ -353,7 +353,7 @@ func TestHandleBoardAgentExit_PresentCommitsChainReview(t *testing.T) {
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	var chained bool
 	chain := func(string) error { chained = true; return nil }
-	commitsPresent := func(string, []string) bool { return true }
+	commitsPresent := func(string, []string) ProbeResult { return ProbeResult{Status: ProbePresent} }
 
 	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, chain, nil, nil, alwaysReachable, commitsPresent, nil, nil, StageRetry{}, "", zerolog.Nop())
 
@@ -361,6 +361,61 @@ func TestHandleBoardAgentExit_PresentCommitsChainReview(t *testing.T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	assert.Empty(t, c.added, "a legitimate handoff must post no failure marker")
+}
+
+// A commit-presence check that could not be PERFORMED (git error, timeout,
+// unresolvable project dir) must never be read as evidence the commits are
+// missing — the live chain must not red the card, and must surface which probe
+// failed and why so a human or a later daemon can act (SC-2403).
+func TestHandleBoardAgentExit_UnreadableCommitCheckDoesNotFail(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var chained bool
+	chain := func(string) error { chained = true; return nil }
+	commitsPresent := func(string, []string) ProbeResult {
+		return ProbeResult{Status: ProbeUnreadable, Detail: "probe timed out"}
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, chain, nil, nil, alwaysReachable, commitsPresent, nil, nil, StageRetry{}, "", zerolog.Nop())
+
+	assert.False(t, chained, "an unreadable check must not chain a review")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.True(t, strings.HasPrefix(c.added[0], HandoffCheckUnreadableHeader),
+		"expected a handoff-check-unreadable diagnostic, got %q", c.added[0])
+	assert.False(t, strings.HasPrefix(c.added[0], ImplementationFailedHeader),
+		"an unreadable check must not post the loud implementation-failed marker")
+	assert.Contains(t, c.added[0], "probe timed out")
+}
+
+// The same distinction applies to the branch-reachability probe: an unreadable
+// reachability check must not be treated as "branch absent" and must surface
+// its reason instead of silently leaving the card with no explanation.
+func TestHandleBoardAgentExit_UnreadableBranchCheckDoesNotFail(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var chained bool
+	chain := func(string) error { chained = true; return nil }
+	reachable := func(string) ProbeResult {
+		return ProbeResult{Status: ProbeUnreadable, Detail: "project dir unresolved"}
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, chain, nil, nil, reachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+
+	assert.False(t, chained, "an unreadable branch check must not chain a review")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.True(t, strings.HasPrefix(c.added[0], HandoffCheckUnreadableHeader),
+		"expected a handoff-check-unreadable diagnostic, got %q", c.added[0])
+	assert.False(t, strings.HasPrefix(c.added[0], ImplementationFailedHeader),
+		"an unreadable check must not post the loud implementation-failed marker")
+	assert.Contains(t, c.added[0], "project dir unresolved")
 }
 
 // SC-782 merged verification stage: the autofix implementation container now
@@ -591,7 +646,7 @@ func TestRunBoardFailureWatch_SkipsChainWhenBranchUnreachable(t *testing.T) {
 		commenterFor := func() (tracker.Commenter, error) { return c, nil }
 		chained := make(chan string, 1)
 		chain := func(pmKey string) error { chained <- pmKey; return nil }
-		unreachable := func(string) bool { return false }
+		unreachable := func(string) ProbeResult { return ProbeResult{Status: ProbeAbsent} }
 
 		ctx := t.Context()
 		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, nil, unreachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
