@@ -62,6 +62,61 @@ func TestEmbeddedPromptsCarryNoTrackerKeys(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// everyProjectGateFixers are the shipped agents/skills that run on ANY card —
+// not only in this repo — so each must express its test/lint gate as intent +
+// detection, never as this repo's bare Makefile targets. SC-1793 fixed the two
+// bug agents this way; SC-2328 extends it to the fixer/verify/gardening agents.
+// The two bug agents stay in the list as passing anchors that guard the idiom.
+var everyProjectGateFixers = []string{
+	"human-pr-fixer-agent.md",
+	"human-deploy-fixer-agent.md",
+	"human-gardening-skill.md",
+	"gardening-triage-agent.md",
+	"human-security-verify-agent.md",
+	"human-bug-fixer-agent.md",
+	"human-bug-verify-agent.md",
+}
+
+// makeGatePattern matches a bare invocation of this repo's own Makefile gate.
+var makeGatePattern = regexp.MustCompile(`make (test|lint|check)`)
+
+// ecosystemRunnerTokens are the non-Make runners a detect-first instruction
+// names so the same gate is followable on a Node/Go/Python/Rust project.
+var ecosystemRunnerTokens = []string{"npm test", "go test", "pytest", "cargo test"}
+
+// TestEveryProjectGateFixersDetectTheirGate locks the SC-2328 fix: an agent that
+// runs on every card must not name this repo's `make test`/`make lint`/`make
+// check` as if universal. Whenever such a prompt still references a make gate
+// (kept legitimately as the example of the lean-vs-heavy split), it must also
+// carry the detect-first idiom — the word "detect" plus at least one
+// per-ecosystem runner — so a project without a Makefile gets a followable
+// instruction and a stated fallback instead of a command it cannot run.
+func TestEveryProjectGateFixersDetectTheirGate(t *testing.T) {
+	for _, name := range everyProjectGateFixers {
+		t.Run(name, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join("embed", name))
+			require.NoError(t, err)
+			content := expanded(t, body)
+			if !makeGatePattern.MatchString(content) {
+				return // no make gate named at all — nothing to qualify
+			}
+			if !strings.Contains(strings.ToLower(content), "detect") {
+				t.Errorf("%s: names a `make` gate but never tells the agent to DETECT the project's runner; express intent + detection the way human-done/human-bug-fixer do", name)
+			}
+			hasEcosystem := false
+			for _, tok := range ecosystemRunnerTokens {
+				if strings.Contains(content, tok) {
+					hasEcosystem = true
+					break
+				}
+			}
+			if !hasEcosystem {
+				t.Errorf("%s: names a `make` gate but lists no per-ecosystem runner (%v) as a fallback; a non-Makefile project has nothing to run", name, ecosystemRunnerTokens)
+			}
+		})
+	}
+}
+
 type mockFileWriter struct {
 	files   map[string][]byte
 	dirs    map[string]bool
