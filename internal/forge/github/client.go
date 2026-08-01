@@ -228,12 +228,23 @@ func (c *Client) PullRequestChecks(ctx context.Context, repoName string, number 
 
 // combineChecks folds check runs and the combined commit status into one
 // verdict. Failure anywhere wins over pending, pending wins over passing.
+//
+// A "cancelled" conclusion is a non-answer, not a "no": cancel-in-progress
+// concurrency deliberately calls off a superseded build when a branch is
+// rebased, so a cancelled run is treated as non-conclusive (pending) and the
+// gate keeps waiting for the run that matters rather than misreading routine
+// housekeeping as a red build (SC-2602). deployTimeout bounds a build a human
+// stopped for good. Runs are judged latest-per-name so a passed re-run overrides
+// the cancelled attempt it replaced.
 func combineChecks(runs checkRunsResponse, combined combinedStatusResponse) forge.ChecksState {
 	state := forge.ChecksPassing
-	for _, run := range runs.CheckRuns {
+	for _, run := range latestRunPerName(runs.CheckRuns) {
 		switch run.Conclusion {
-		case "failure", "timed_out", "cancelled", "action_required":
+		case "failure", "timed_out", "action_required":
 			return forge.ChecksFailing
+		case "cancelled":
+			state = forge.ChecksPending
+			continue
 		}
 		if run.Status != "completed" {
 			state = forge.ChecksPending
@@ -250,6 +261,31 @@ func combineChecks(runs checkRunsResponse, combined combinedStatusResponse) forg
 		}
 	}
 	return state
+}
+
+// latestRunPerName keeps only the most recent attempt of each named check, so a
+// superseded (cancelled) attempt does not overrule the re-run that replaced it.
+// GitHub returns every attempt for a head SHA; started_at (RFC3339 UTC) orders
+// them, ties keeping the later element. Runs with no name (degenerate payloads)
+// are kept as distinct entries so they cannot collapse into one another.
+func latestRunPerName(runs []checkRun) []checkRun {
+	indexByName := map[string]int{}
+	result := make([]checkRun, 0, len(runs))
+	for _, run := range runs {
+		if run.Name == "" {
+			result = append(result, run)
+			continue
+		}
+		if i, ok := indexByName[run.Name]; ok {
+			if run.StartedAt >= result[i].StartedAt {
+				result[i] = run
+			}
+			continue
+		}
+		indexByName[run.Name] = len(result)
+		result = append(result, run)
+	}
+	return result
 }
 
 // pullHeadSHA fetches the head commit of a pull request, the ref both CI
