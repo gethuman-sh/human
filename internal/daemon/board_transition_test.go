@@ -691,6 +691,11 @@ func TestCloseFailedHeaderUnregistered(t *testing.T) {
 	assert.False(t, ok, "close-failed marker must never drive a stage/state transition")
 }
 
+func TestHandoffCheckUnreadableHeaderUnregistered(t *testing.T) {
+	_, _, ok := ClassifyMarker(HandoffCheckUnreadableHeader)
+	assert.False(t, ok, "handoff-check-unreadable marker must never drive a stage/state transition")
+}
+
 func TestApplyTransitionDeployWaitsForPendingChecks(t *testing.T) {
 	syncDeploy(t)
 	c := &fakeCommenter{comments: []tracker.Comment{

@@ -39,6 +39,26 @@ type ReconcileCard struct {
 // stays pure and testable.
 type ReconcileLister func(ctx context.Context) ([]ReconcileCard, error)
 
+// ProbeStatus is the tri-state a board git probe now answers with: the fact was
+// read as present, read as a clean absence, or could not be read at all (an
+// unresolvable project dir, a git error, or a probe past its timeout). Widening
+// the probe result from a bare bool is what lets the live chain stop reddening a
+// card on a check that never completed (SC-2403).
+type ProbeStatus int
+
+const (
+	ProbeUnreadable ProbeStatus = iota // zero value: the safe default that never reds a card
+	ProbePresent
+	ProbeAbsent
+)
+
+// ProbeResult carries a probe's tri-state outcome and, when Unreadable, a
+// human-readable reason (which probe and why, plus a remedy) for the card.
+type ProbeResult struct {
+	Status ProbeStatus
+	Detail string // populated only for ProbeUnreadable
+}
+
 // BranchReachable reports whether a handoff branch resolves on THIS machine —
 // as a local ref or on origin. A board-context fix leaves its branch local on
 // the machine that produced it, so a daemon on another machine cannot serve a
@@ -46,7 +66,7 @@ type ReconcileLister func(ctx context.Context) ([]ReconcileCard, error)
 // for a daemon that can reach the branch. A nil predicate disables the gate
 // (every branch treated as reachable), matching the package's "nil disables"
 // convention for optional deps.
-type BranchReachable func(branch string) bool
+type BranchReachable func(branch string) ProbeResult
 
 // CommitsPresent reports whether every named commit is reachable from branch on
 // THIS machine (local ref or origin/<branch>). It layers on BranchReachable: a
@@ -55,7 +75,7 @@ type BranchReachable func(branch string) bool
 // retry's handoff naming SHAs that were never pushed anywhere is the failure it
 // guards (735). A nil predicate disables the gate, matching the package's "nil
 // disables" convention for optional deps.
-type CommitsPresent func(branch string, commits []string) bool
+type CommitsPresent func(branch string, commits []string) ProbeResult
 
 // PRMergedProbe reports whether the pull request identified by prURL has been
 // merged on the forge — the "confirmed shipped" signal for an out-of-band
@@ -459,7 +479,7 @@ func branchActionableHere(derived BoardCard, reachable BranchReachable) bool {
 	if reachable == nil || derived.Branch == "" {
 		return true
 	}
-	return reachable(derived.Branch)
+	return reachable(derived.Branch).Status == ProbePresent
 }
 
 // stuckRunningReason is the one-line badge text for a card the stuck-running
@@ -539,13 +559,14 @@ func reconcileOrphanedHandoffs(drivable DrivableCards, commitsPresent CommitsPre
 		if derived.Stage != BoardImplementation || derived.State != BoardDone {
 			continue
 		}
-		// Skip-and-leave on a phantom-commit handoff: the durable reconcile pass is
-		// a periodic scan that must not red a card another machine can legitimately
-		// serve, so an unverifiable handoff is left rather than failed (735). The
-		// loud failure lives on the live chain (board_failure.go).
-		if handoffNamesPhantomCommits(card.Comments, derived.Branch, commitsPresent) {
+		// Skip-and-leave when the commits are not DEFINITELY present — a clean
+		// absence (a retry that never pushed) or an unreadable check (this machine
+		// cannot reach the repo). A periodic scan must never red a card another
+		// machine can serve; the loud failure lives on the live chain, and only on
+		// a definite absence (SC-2403).
+		if commitPresenceForHandoff(card.Comments, derived.Branch, commitsPresent).Status != ProbePresent {
 			logger.Warn().Str("pm", card.Key).Str("branch", derived.Branch).
-				Msg("board reconcile: handoff names commits absent from branch on this machine, leaving it")
+				Msg("board reconcile: handoff commits not verifiable on this machine, leaving it")
 			continue
 		}
 		if err := chainReview(card.Key); err != nil {
