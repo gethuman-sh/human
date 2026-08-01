@@ -143,45 +143,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot list comments")
 		return
 	}
-	_, state := latestStageState(comments, stage)
-	if state == BoardDone {
-		// A clean finish clears the automatic-retry budget: the next failure on
-		// this stage is a fresh problem and deserves its own attempts, not the
-		// remainder of an older one's.
-		retry.reset(pmKey, stage)
-		// A clean finish is the positive success signal: authorize reclaiming the
-		// run's worktree (the work is safely committed on its branch).
-		if onHandoff != nil {
-			onHandoff(agentName)
-		}
-		if stage == BoardImplementation {
-			chainReviewAfterCleanBuild(ctx, pmKey, agentName, errorType, cleanExit, comments, commenter, chainReview, reachable, commitsPresent, diagnose, daemonID, logger)
-		}
-		return
-	}
-	// Two more clean endings, neither a crash, both reclaimed like a handoff with
-	// NO failed marker:
-	//   1. A terminal BoardResolved marker with no handoff — implementation reaches
-	//      it when triage concludes no fix is warranted ([human:no-fix-needed],
-	//      ticket 405); planning when the work is already merged so there is nothing
-	//      left to plan ([human:nothing-to-do], ticket 454). Stage-agnostic on
-	//      purpose: BoardResolved is only ever produced by these terminal markers,
-	//      never by a crash, so any stage that reaches it is a clean stop — scoping
-	//      this to Implementation is what let the same defect class ship again on
-	//      Planning.
-	//   2. An open [human:options] block for the stage's OWN stage — a deliberate
-	//      up-front human decision (see stagePausedOnOptions). Posting a *-failed
-	//      here would red the card and loop re-planning forever (SC-751).
-	//   3. A recorded DELIBERATE stop verdict from any gate (deliberateStopRecorded):
-	//      a gate that concluded the ticket must not be worked. Stage-agnostic on
-	//      purpose — the ticket-review gate runs under PLANNING but files its
-	//      verdict under BACKLOG, so scoping this to the running stage is exactly
-	//      what let this defect class recur (SC-2302).
-	if state == BoardResolved || stagePausedOnOptions(comments, stage) || deliberateStopRecorded(comments) {
-		retry.reset(pmKey, stage)
-		if onHandoff != nil {
-			onHandoff(agentName)
-		}
+	if handleCleanStageEnding(ctx, pmKey, stage, agentName, errorType, cleanExit, comments, commenter, chainReview, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger) {
 		return
 	}
 	// A stage that reported the substrate was down (ExitOutage) is not a failure:
@@ -209,6 +171,62 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 	// dead container — is relaunched here rather than waiting for someone to
 	// click Retry. The failure stays on the record either way.
 	retry.tryRelaunch(ctx, pmKey, stage, commenter, daemonID, logger)
+}
+
+// handleCleanStageEnding deals with every way a stage exit is NOT a failure, and
+// reports whether it handled the exit. Split out of handleBoardAgentExit so that
+// function stays inside the complexity gate: the clean endings are one subject
+// and they carry most of its branches.
+//
+// Three shapes, all reclaimed like a handoff with NO failed marker:
+//
+//  1. The stage's own done-marker is latest — the ordinary clean finish.
+//  2. A terminal BoardResolved marker with no handoff: implementation reaches it
+//     when triage concludes no fix is warranted ([human:no-fix-needed], ticket
+//     405); planning when the work is already merged so there is nothing left to
+//     plan ([human:nothing-to-do], ticket 454). Stage-agnostic on purpose —
+//     BoardResolved is only ever produced by these terminal markers, never by a
+//     crash, so any stage that reaches it is a clean stop. Scoping this to
+//     Implementation is what let the same defect class ship again on Planning.
+//  3. An open [human:options] block for the stage's OWN stage — a deliberate
+//     up-front human decision (see stagePausedOnOptions) — or a recorded
+//     deliberate stop verdict from any gate (deliberateStopRecorded), a gate
+//     concluding the ticket must not be worked. Posting a *-failed for either
+//     would red the card and loop re-planning forever (SC-751). The verdict case
+//     is stage-agnostic for the same reason as (2): the ticket-review gate runs
+//     under PLANNING but files its verdict under BACKLOG, so scoping it to the
+//     running stage is exactly what let this defect class recur (SC-2302).
+//
+// endedDeliberately reports the clean endings that are not the stage's own
+// done-marker: a terminal resolution, a pause on an open decision, or a gate's
+// recorded stop verdict. Kept beside its only caller as a named condition so the
+// caller reads as "clean, or deliberately ended" rather than as a negated
+// disjunction.
+func endedDeliberately(comments []tracker.Comment, stage BoardStage, state BoardState) bool {
+	return state == BoardResolved ||
+		stagePausedOnOptions(comments, stage) ||
+		deliberateStopRecorded(comments)
+}
+
+func handleCleanStageEnding(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, cleanExit bool, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) bool {
+	_, state := latestStageState(comments, stage)
+	clean := state == BoardDone
+	if !clean && !endedDeliberately(comments, stage, state) {
+		return false
+	}
+	// A clean finish clears the automatic-retry budget: the next failure on this
+	// stage is a fresh problem and deserves its own attempts, not the remainder
+	// of an older one's.
+	retry.reset(pmKey, stage)
+	// It is also the positive success signal: authorize reclaiming the run's
+	// worktree (the work is safely committed on its branch).
+	if onHandoff != nil {
+		onHandoff(agentName)
+	}
+	if clean && stage == BoardImplementation {
+		chainReviewAfterCleanBuild(ctx, pmKey, agentName, errorType, cleanExit, comments, commenter, chainReview, reachable, commitsPresent, diagnose, daemonID, logger)
+	}
+	return true
 }
 
 // chainReviewAfterCleanBuild handles a cleanly finished implementation stage's
