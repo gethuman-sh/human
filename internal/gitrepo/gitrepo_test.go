@@ -3,6 +3,8 @@ package gitrepo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -366,6 +368,82 @@ func TestCommitReachable_emptyInputs(t *testing.T) {
 	}
 	if called {
 		t.Error("git must not be invoked for empty inputs")
+	}
+}
+
+// exitErrWithCode runs a trivial subprocess that exits with code, returning the
+// resulting *exec.ExitError so a runner stub can mimic git failing with a
+// specific exit status (exit 1 = clean not-an-ancestor; >1 = a real git error).
+func exitErrWithCode(t *testing.T, code int) error {
+	t.Helper()
+	err := exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+	if err == nil {
+		t.Fatalf("subprocess exiting %d produced no error", code)
+	}
+	return err
+}
+
+// TestCommitReachability_distinguishesAbsentFromUnknown is the regression test
+// for SC-2403: a merge-base probe that errored or timed out must never be read
+// as the same clean "no" a genuine exit-1 not-an-ancestor answer produces.
+func TestCommitReachability_distinguishesAbsentFromUnknown(t *testing.T) {
+	cases := []struct {
+		name      string
+		mergeBase func(t *testing.T) error // error the merge-base call returns
+		want      Reachability
+	}{
+		{"exit-1 merge-base is a clean absence", func(t *testing.T) error { return exitErrWithCode(t, 1) }, ReachabilityAbsent},
+		{"exit-128 merge-base must not be read as absence", func(t *testing.T) error { return exitErrWithCode(t, 128) }, ReachabilityUnknown},
+		{"a timeout must not be read as absence", func(t *testing.T) error { return context.DeadlineExceeded }, ReachabilityUnknown},
+		{"a reachable commit is present", func(t *testing.T) error { return nil }, ReachabilityPresent},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				if len(args) > 2 && args[2] == "rev-parse" && contains(args, "--verify") {
+					return []byte("deadbeef\n"), nil // branch resolves locally
+				}
+				return nil, tc.mergeBase(t)
+			})
+			if got := CommitReachability(context.Background(), "/repo", "feat/x", "abc123"); got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBranchReachability_distinguishesAbsentFromUnknown(t *testing.T) {
+	// local exit-1 + remote empty-nil => Absent.
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[2] == "rev-parse" {
+			return nil, exitErrWithCode(t, 1)
+		}
+		return []byte("\n"), nil
+	})
+	if got := BranchReachability(context.Background(), "/repo", "autofix/sc-1"); got != ReachabilityAbsent {
+		t.Errorf("local exit-1 + remote empty: got %v, want ReachabilityAbsent", got)
+	}
+
+	// local exit-1 + remote erroring => Unknown.
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[2] == "rev-parse" {
+			return nil, exitErrWithCode(t, 1)
+		}
+		return nil, errors.New("network down")
+	})
+	if got := BranchReachability(context.Background(), "/repo", "autofix/sc-1"); got != ReachabilityUnknown {
+		t.Errorf("local exit-1 + remote error: got %v, want ReachabilityUnknown", got)
+	}
+
+	// local returns a sha => Present, remote never consulted.
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 2 && args[2] == "ls-remote" {
+			t.Errorf("ls-remote consulted after a local hit: %v", args)
+		}
+		return []byte("deadbeef\n"), nil
+	})
+	if got := BranchReachability(context.Background(), "/repo", "autofix/sc-1"); got != ReachabilityPresent {
+		t.Errorf("local hit: got %v, want ReachabilityPresent", got)
 	}
 }
 
