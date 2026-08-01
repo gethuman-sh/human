@@ -67,7 +67,7 @@ For each validated finding, create a fix plan:
 
 1. **Prerequisites**: What tests must exist before the fix? If test coverage is insufficient, the fix plan starts with "write tests first."
 2. **Fix steps**: Specific refactoring steps. Each step must be behavior-preserving.
-3. **Verification**: `make test` before, apply fix, `make test` after, `make lint`.
+3. **Verification**: run the project's tests before, apply the fix, run its tests after, then its lean lint — detect what the project provides the way `human-done` does (a `Makefile` `test`/`lint` target, else per-ecosystem tools: `npm test`/`npm run lint`, `go test ./...`/`go vet ./...`, `pytest`/`ruff`, `cargo test`/`cargo clippy`); run only what exists, and note it if none is found.
 4. **Independence**: Can this fix be applied independently or does it depend on other fixes being applied first?
 5. **Effort estimate**: small (< 1 hour), medium (1-4 hours), large (> 4 hours).
 
@@ -148,7 +148,7 @@ This removes ALL intermediate dot-files (the survey, the candidates file, pipeli
   1. Prerequisites: <tests that must exist>
   2. <step 1>
   3. <step 2>
-  4. Verify: `make test && make lint`
+  4. Verify: run the project's tests then its lean lint — detect what the project provides the way `human-done` does (a `Makefile` `test`/`lint` target, else `npm test`/`go test ./...`/`pytest`/`cargo test` and the matching lint); note it if none is found.
 - **Effort**: small / medium / large
 - **Independent**: yes / no (depends on finding #N)
 
