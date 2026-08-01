@@ -66,6 +66,10 @@ When the human daemon is running, all CLI commands (except `daemon`, `install`, 
 
 The daemon is auto-discovered via `~/.human/daemon.json`. Check with `human daemon status`.
 
+## Agent state and recall are per-project
+
+`~/.human/state.db` (`internal/agentstate`) and the recall search index (`internal/recall`) are keyed by `(project, …)`, not by ticket key alone — two registered projects whose keys collide (e.g. both have a `SC-1`) never share a run's working memory, retry budgets, or stage leases. The project is resolved daemon-side from the ticket key via `ProjectRegistry.EntryForKey` — the same routing the board driver already uses — and injected into a forwarded `human state` command as `HUMAN_STATE_PROJECT`; no prompt names the project. Single-project installs, direct CLI use, and rows written before this existed all resolve to the empty string, the "default project" — so an existing `state.db` migrates in place with no reconfiguration and no visible migration step. The recall index makes the same call: `project` is folded into its dedup identity (`UNIQUE(key, source, project)`) so two projects indexing the same tracker instance and key no longer silently replace each other's entry in search results.
+
 # Tracker Tokens (Daemon Host Setup)
 
 These tokens only need to be set **once on the host where the daemon runs**. They are NOT needed for individual CLI invocations when the daemon is running.
