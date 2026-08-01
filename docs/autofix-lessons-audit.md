@@ -10,9 +10,16 @@ already applied there?**
 commits, 84 tickets.
 **Feature pipeline:** ideate → ticket-review → plan → implement → review → PR
 review/fix loop → deploy.
-**Method:** read each commit body for the lesson, then check the code or the
-shipped prompt for whether the feature path carries it. Regenerate the corpus
+**Method:** read each ticket (`human get <KEY>`) for the reported problem *and*
+each commit body for what was actually built — they differ, and the gap between
+them is where this audit's findings live. Then check the code or the shipped
+prompt for whether the feature path carries the lesson. Regenerate the corpus
 with, for each autofix merge `m`: `git log --pretty="=== %h%n%B" $m^1..$m^2`.
+
+Reading the tickets matters because several close with an explicit *"worth
+checking whether this also affects X"* note that nobody carried out. Those notes
+are the highest-yield part of the record: the author already saw the
+generalization and stopped at the instance in front of them.
 
 A ticket is **not** a gap when its fix lives in code that already serves every
 stage — the board derivation, the failure watcher, the claim arbiter, the zombie
@@ -48,6 +55,20 @@ inferred.
   run on **every** card: `openDraftPRAndReview` opens the draft PR and starts the
   review/fix loop for any Deploy transition, feature or bug. *Fix: apply the
   SC-1793 detect-first rewrite to both.*
+
+- [ ] **Agent state is one global store with no project dimension.** SC-1654
+  made the board cache, the view preferences and the idea-space per-project, and
+  closed with an explicit unverified note: *"`codenav.db`, `index.db` (recall),
+  `ideation.db` and `state.db` … may already be keyed by repo path internally —
+  worth confirming rather than assuming."* Confirmed now, and they are not:
+  `agentstate.DefaultDBPath()` is a single `~/.human/state.db`, and
+  `NormalizeScope` is nothing but the uppercased ticket key. Two registered
+  projects whose key spaces overlap — two Jira projects with `KAN-1`, a reused
+  Linear prefix — share one namespace, so stage reports, retry budgets,
+  `capabilities` and `decisions` collide silently and last-writer-wins. This is
+  reachable now that SC-1694 made board actions multi-project. `index.db` is
+  global too, though a search index degrades rather than corrupting. *Fix: add a
+  project dimension to the scope, the way the three sibling stores got one.*
 
 - [ ] **Verify whether the planner and reviewer need a stage lease.** The
   `stage-lease` fragment is included by `human-bug-fixer`, `human-bug-triage`,
@@ -114,6 +135,19 @@ detect-the-project's-gate rewrite reached `human-bug-fixer` and
 open items above.
 
 ---
+
+## The "worth checking" notes, and what became of them
+
+Tickets that closed by naming a generalization they did not do:
+
+| Ticket | The note | Outcome |
+|---|---|---|
+| SC-1654 | are `state.db`, `index.db`, `codenav.db`, `ideation.db` project-keyed? | **Not checked. `state.db` is not** — see open items |
+| SC-1996 | do check-waits, merges and ticket transitions share the habit of collapsing "could not determine" into a specific negative? | deploy's three sites fixed; ticket close is covered by SC-341's surfaced best-effort |
+| SC-2133 | are other handoff-posting stages exposed to the same mismatch? | the clean-exit signal is threaded generically through `handleBoardAgentExit`, so all stages benefit |
+| SC-1959 | does the same conflation affect the other supported trackers? | done — `create_in` threaded through every provider config |
+| SC-1450 | an auth preflight before claiming, or a circuit breaker after N identical auth deaths | preflight shipped as SC-912; the breaker is the stage retry cap |
+| SC-731 | planning must never emit sign-off-gated steps | done — the planner carries two hard autonomy rules and the plan skill scans the finished plan for mid-execution gates |
 
 ## The pattern worth remembering
 
