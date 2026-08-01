@@ -98,9 +98,12 @@ func (a *App) Cards() (BoardData, error) {
 	}
 	project := projectKeyOf(info)
 	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project))
+	// The keep sets come from `results` — the same fetch CanPrune judges — not
+	// from the composed view, which is a separate request that can answer with
+	// an empty board while this one is healthy (SC-2400).
 	board.PrunePrefs(results, project,
-		board.PruneTarget{Store: a.prefs, Keep: boardPrefsKeep(data)},
-		board.PruneTarget{Store: a.ideas, Keep: ideaSpaceKeep(data)},
+		board.PruneTarget{Store: a.prefs, Keep: board.PrefsKeep(results)},
+		board.PruneTarget{Store: a.ideas, Keep: board.IdeaKeep(results)},
 	)
 	return data, nil
 }
@@ -161,19 +164,6 @@ func (a *App) GetIssueDetail(trackerKind, trackerName, key string) (IssueDetail,
 	}, nil
 }
 
-// ideaSpaceKeep is the set of ticket keys still occupying the idea space
-// (idea-stage cards). board.PrunePrefs drops idea placements outside it — but
-// only on a trustworthy fetch (see board.CanPrune).
-func ideaSpaceKeep(data BoardData) map[string]struct{} {
-	keys := make(map[string]struct{})
-	for _, card := range data.Cards {
-		if card.Stage == string(daemon.BoardIdeas) {
-			keys[card.Key] = struct{}{}
-		}
-	}
-	return keys
-}
-
 // SetIdeaColumn persists the idea-space placement for one ticket. Purely
 // local UI state — never a tracker write or a board transition.
 func (a *App) SetIdeaColumn(pmKey string, col int) error {
@@ -202,17 +192,6 @@ func (a *App) SetCardHidden(pmKey string, hidden bool) error {
 		return err
 	}
 	return a.prefs.SetHidden(projectKeyOf(info), pmKey, hidden)
-}
-
-// boardPrefsKeep is the set of every ticket key currently on the board.
-// board.PrunePrefs drops order slots and hidden flags outside it — but only on a
-// trustworthy fetch (see board.CanPrune).
-func boardPrefsKeep(data BoardData) map[string]struct{} {
-	keys := make(map[string]struct{}, len(data.Cards))
-	for _, card := range data.Cards {
-		keys[card.Key] = struct{}{}
-	}
-	return keys
 }
 
 // CardsQuick fetches issue titles only — skipping the per-ticket comment scan
