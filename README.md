@@ -88,7 +88,6 @@ devcontainer up --workspace-folder .
 | Infrastructure | Daemon mode, HTTPS proxy/firewall, Chrome Bridge, OAuth forwarding |
 | Governance | Declarative policy rules in `.humanconfig` (block/confirm agent operations) |
 | Skills | Ideate, sprint, ready, brainstorm, plan, execute, review, done, findbugs, security |
-| Dashboard | TUI with agent monitoring, token usage, tracker issues, pipeline state |
 | Search | Cross-tracker and Notion full-text index |
 
 ## Module features
@@ -147,24 +146,6 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 - [Command Flags](internal/cliflags/README.md) — consistent CLI option parsing
 - [Platform Detection](internal/platform/README.md) — adapt behavior per operating system
 - [CLI Banner](internal/logo/README.md) — the gradient `human` startup banner
-
-## Dashboard
-
-```bash
-human tui
-```
-
-<img src="human-tui.png" width="960" alt="human TUI dashboard">
-
-The TUI shows running Claude Code instances, token usage per 5-hour window, daemon status, and connected containers — all in one view. It auto-starts the daemon if needed.
-
-Agent spawn (`a`) and dispatch (`⏎`) require **tmux** on the host and that the TUI itself runs inside a tmux session. Browsing issues and every other view work without it. If tmux is missing, install it (`brew install tmux` on macOS, `sudo apt-get install tmux` on Debian/Ubuntu, or your distro's package). To run the TUI inside a session, launch it as:
-
-```bash
-tmux new -s human "human tui"
-```
-
-The TUI runs a launch-time preflight and shows a banner with the exact command to run if either check fails.
 
 ## CLI usage
 

@@ -56,13 +56,11 @@ commits: 2037e40, 64bb370
 
 The `human-executor` agent posts this comment automatically as its final step. A reviewer (today: another user runs `/human-pickup-review <PM_KEY>`; future: daemon polling) reads the binding via `human handoff show`, runs `human-reviewer` against each engineering key (or against the PM key when the `engineering:` line is absent), and posts a `[human:review-complete]` follow-up marker (`human marker post`) on the same PM ticket with the verdict.
 
-The TUI marks engineering tickets whose PM ticket carries an unresolved `[human:ready-for-review]` comment with an `(R)` annotation in the tracker view.
-
 Do NOT use a custom tracker status for review signalling — that would require every team to reconfigure their tracker. Comments are the universal primitive.
 
 # Daemon
 
-When the human daemon is running, all CLI commands (except `daemon`, `install`, `init`, `tui`) are automatically forwarded to it. The daemon holds all tracker credentials on the host — **do NOT set tokens manually when the daemon is running**. Just run `human` commands directly.
+When the human daemon is running, all CLI commands (except `daemon`, `install` and `init`) are automatically forwarded to it. The daemon holds all tracker credentials on the host — **do NOT set tokens manually when the daemon is running**. Just run `human` commands directly.
 
 The daemon is auto-discovered via `~/.human/daemon.json`. Check with `human daemon status`.
 

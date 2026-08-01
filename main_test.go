@@ -906,7 +906,6 @@ func TestIsLocalSubcommand(t *testing.T) {
 		{[]string{"--tracker=work", "daemon", "stop"}, true},
 		{[]string{"--github-token", "ghp_xx", "install"}, true},
 		{[]string{"--clickup-token", "X", "index"}, true},
-		{[]string{"--tracker", "work", "tui"}, true},
 		{[]string{"--tracker", "work", "init"}, true},
 		// Tracker-forwarded commands should stay forwarded even with space flags.
 		{[]string{"--tracker", "work", "jira", "issue", "get", "KAN-1"}, false},

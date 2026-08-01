@@ -13,7 +13,7 @@ import (
 
 // ModelUsage is the frontend-facing per-model token tally for one instance. The
 // frontend derives each bar's percentage from the sum of these, mirroring the
-// TUI's renderModelBars grand-total logic rather than trusting a server-computed
+// monitor's own grand-total logic rather than trusting a server-computed
 // percentage that could drift from the displayed in/out figures.
 type ModelUsage struct {
 	Name         string `json:"name"`
@@ -34,7 +34,7 @@ type SubagentInfo struct {
 }
 
 // AgentInstance is the flat, frontend-facing shape of one running Claude Code
-// instance — the desktop equivalent of a TUI instance row. Only scalar fields
+// instance — one row of the Agents view. Only scalar fields
 // are mapped; the discovery types carry a DirWalker interface and pointer memory
 // info that do not round-trip through JSON.
 type AgentInstance struct {
@@ -70,9 +70,8 @@ type InstancesData struct {
 // Instances discovers the running Claude Code instances (host processes and
 // containers) and maps them to the frontend shape. Unlike the board methods this
 // does NOT go through the daemon: instance discovery needs no credentials, and
-// running the monitor in-process reuses the exact code path the TUI renders (see
-// cmd/cmdtui/tui.go), guaranteeing the desktop Agents view matches it. It cannot
-// be served from the daemon anyway — internal/claude/monitor imports
+// running the monitor in-process is the cheapest correct path. It cannot be
+// served from the daemon anyway — internal/claude/monitor imports
 // internal/daemon, so the daemon importing monitor would be a cycle.
 func (a *App) Instances() (InstancesData, error) {
 	finder, dc := buildInstanceFinder()
@@ -88,9 +87,9 @@ func (a *App) Instances() (InstancesData, error) {
 	return data, nil
 }
 
-// buildInstanceFinder assembles the same host+docker finder the TUI uses
-// (cmd/cmdtui/tui.go buildFinder). Docker discovery is added only when an engine
-// is reachable; the returned client is nil otherwise, which monitor tolerates.
+// buildInstanceFinder assembles the host+docker finder the Agents view needs.
+// Docker discovery is added only when an engine is reachable; the returned
+// client is nil otherwise, which monitor tolerates.
 func buildInstanceFinder() (claude.InstanceFinder, claude.DockerClient) {
 	home, err := os.UserHomeDir()
 	if err != nil {
