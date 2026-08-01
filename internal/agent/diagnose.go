@@ -15,9 +15,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/gethuman-sh/human/internal/redact"
 )
 
 // FailureDiagnosis is the distilled cause of a dead agent run. Headline is a
@@ -67,7 +68,7 @@ func DiagnoseFailure(agentName, hookErrorType string) FailureDiagnosis {
 	outcome := waitForRunEnd(exe.Dir())
 	scan := readOutputTail(exe.Dir(), diagnoseScanLines)
 	exitCode, haveExit := parseExitTrailer(scan)
-	errLine := sanitizeForTracker(lastErrorLine(scan))
+	errLine := redact.Text(lastErrorLine(scan))
 
 	reaped := outcome != nil && outcome.Reason == "reaped"
 	headline := truncateRunes(headlineFor(hookErrorType, reaped, exitCode, haveExit, errLine), diagnoseMaxHeadline)
@@ -257,7 +258,7 @@ func fenceSafeTail(scan []string) []string {
 		if t := strings.TrimSpace(l); t != "" && strings.Trim(t, "~") == "" {
 			continue
 		}
-		out = append(out, truncateRunes(sanitizeForTracker(l), diagnoseMaxLineLen))
+		out = append(out, truncateRunes(redact.Text(l), diagnoseMaxLineLen))
 	}
 	return out
 }
@@ -288,84 +289,6 @@ func runDuration(exe *Execution, outcome *OutcomeRecord) string {
 		return time.Since(exe.Launch.StartedAt).Truncate(time.Second).String()
 	}
 	return ""
-}
-
-// secretShapeRes match well-known token formats regardless of where they came
-// from. The marker body lands on the tracker — public relative to the host —
-// so anything token-shaped is scrubbed even if it is not one of ours.
-var secretShapeRes = []*regexp.Regexp{
-	regexp.MustCompile(`gh[opsru]_[A-Za-z0-9]{16,}`),
-	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`),
-	regexp.MustCompile(`xox[a-z]-[A-Za-z0-9-]{8,}`),
-	regexp.MustCompile(`lin_api_[A-Za-z0-9]{8,}`),
-	regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{8,}`),
-	regexp.MustCompile(`glpat-[A-Za-z0-9_-]{8,}`),
-	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}`),
-}
-
-// isSecretEnvName marks env vars whose VALUES must never reach a tracker
-// comment; it deliberately mirrors the <TRACKER>_<NAME>_TOKEN / _KEY
-// convention the daemon documents. Matching whole underscore-segments (not
-// substrings) keeps PATH out while catching GITHUB_PAT.
-func isSecretEnvName(name string) bool {
-	for seg := range strings.SplitSeq(strings.ToUpper(name), "_") {
-		switch seg {
-		case "TOKEN", "SECRET", "KEY", "PASSWORD", "PASSWD", "PAT", "CREDENTIAL", "CREDENTIALS", "APIKEY":
-			return true
-		}
-	}
-	return false
-}
-
-// minSecretEnvLen keeps trivially short values (e.g. KEY=1) out of the
-// redaction list — replacing those would shred ordinary log text.
-const minSecretEnvLen = 8
-
-var (
-	secretEnvOnce   sync.Once
-	secretEnvValues []string
-)
-
-// secretEnvList caches the env-derived redaction list; the daemon's environ is
-// stable for the process lifetime.
-func secretEnvList() []string {
-	secretEnvOnce.Do(func() { secretEnvValues = collectSecretEnv(os.Environ()) })
-	return secretEnvValues
-}
-
-// collectSecretEnv extracts the values of secret-named env vars from environ.
-func collectSecretEnv(environ []string) []string {
-	var vals []string
-	for _, kv := range environ {
-		name, val, ok := strings.Cut(kv, "=")
-		if !ok || len(val) < minSecretEnvLen {
-			continue
-		}
-		if isSecretEnvName(name) {
-			vals = append(vals, val)
-		}
-	}
-	return vals
-}
-
-// sanitizeForTracker scrubs a line for posting to a tracker comment.
-func sanitizeForTracker(s string) string {
-	return sanitizeText(s, secretEnvList())
-}
-
-// sanitizeText replaces token-shaped strings and known secret values with
-// [redacted] and de-identifies the home directory.
-func sanitizeText(s string, secrets []string) string {
-	for _, re := range secretShapeRes {
-		s = re.ReplaceAllString(s, "[redacted]")
-	}
-	for _, sec := range secrets {
-		s = strings.ReplaceAll(s, sec, "[redacted]")
-	}
-	if home, err := os.UserHomeDir(); err == nil && len(home) > 1 {
-		s = strings.ReplaceAll(s, home, "~")
-	}
-	return s
 }
 
 // truncateRunes caps s at max runes, marking the cut with an ellipsis.
