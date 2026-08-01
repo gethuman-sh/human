@@ -23,6 +23,7 @@ import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
 import { reconcilePending, dropPending } from "./board-pending.js";
+import { reconcilePendingMoves, dropPendingMove, pendingMovesForBatch, } from "./board-pending-move.js";
 export {};
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
@@ -732,15 +733,28 @@ async function fixBug(key, title) {
     if (card) {
         card.stage = "implementation";
         card.state = "running";
+        // Shield the optimistic move from a stale reconcile that predates it
+        // (SC-2521), same as a drag; replace any prior record for this key.
+        if (prevStage !== undefined) {
+            pendingMoves = dropPendingMove(pendingMoves, key);
+            pendingMoves.push({
+                key,
+                fromStage: prevStage,
+                toStage: "implementation",
+                expiresAt: Date.now() + PENDING_MOVE_TTL_MS,
+            });
+        }
         render();
     }
     await runGuardedAction(() => go().FixBug(key, title), (err) => {
         // Revert the optimistic move so a failed launch doesn't leave the card
-        // looking like it's running when it never started (SC-637).
+        // looking like it's running when it never started (SC-637), and drop the
+        // shield so the next reconcile isn't pinned to the reverted move.
         if (card && prevStage !== undefined && prevState !== undefined) {
             card.stage = prevStage;
             card.state = prevState;
         }
+        pendingMoves = dropPendingMove(pendingMoves, key);
         showError(errMessage(err));
     }, reconcile);
 }
@@ -749,15 +763,30 @@ async function fixBug(key, title) {
 // column and the same daemon-is-authoritative contract.
 async function fixSecurity(key, title) {
     const card = current.cards.find((c) => c.key === key);
+    const prevStage = card?.stage;
     if (card) {
         card.stage = "implementation";
         card.state = "running";
+        // Shield the optimistic move from a stale reconcile that predates it
+        // (SC-2521), same as a drag; replace any prior record for this key.
+        if (prevStage !== undefined) {
+            pendingMoves = dropPendingMove(pendingMoves, key);
+            pendingMoves.push({
+                key,
+                fromStage: prevStage,
+                toStage: "implementation",
+                expiresAt: Date.now() + PENDING_MOVE_TTL_MS,
+            });
+        }
         render();
     }
     try {
         await go().FixSecurity(key, title);
     }
     catch (err) {
+        // Drop the shield so the next reconcile isn't pinned to a move that never
+        // launched (SC-2521).
+        pendingMoves = dropPendingMove(pendingMoves, key);
         showError(errMessage(err));
     }
     await reconcile();
@@ -771,6 +800,18 @@ let pendingBugs = [];
 // Security tickets filed from the Security half but not yet confirmed by a
 // board fetch — the Security counterpart to pendingBugs, same handover rule.
 let pendingSecurity = [];
+// Cards dragged to a new stage but not yet confirmed by a board fetch — the
+// move-side counterpart to the pending* placeholders above (SC-2521). A drop
+// moves the card in memory at once; the next reconcile can fetch a board that
+// predates the move becoming readable and would snap the card back. Each record
+// holds the move against exactly that stale read (fetch still at fromStage)
+// while yielding to a confirmed target, a daemon-chosen third stage, or expiry.
+// See board-pending-move.ts for the discrimination rules.
+let pendingMoves = [];
+// Wall-clock lifetime of a pending-move shield: comfortably above the observed
+// ~2s read-after-write lag, yet bounded so a move that never confirms yields to
+// the truth rather than showing a comfortable lie.
+const PENDING_MOVE_TTL_MS = 20_000;
 // True while a findbugs sweep is running for the project — drives the Bugs
 // pane's hunt indicator. Refreshed in reconcile() and set optimistically on a
 // Findbugs click so the button responds instantly.
@@ -956,6 +997,15 @@ async function deployReady(side) {
     if (ready.length === 0)
         return;
     const prior = new Map(ready.map((c) => [c.key, { stage: c.stage, state: c.state }]));
+    // Shield the whole batch from a stale closing reconcile the same way a single
+    // drag is shielded (SC-2521): the ship's one reconcile() races the tracker's
+    // read-after-write lag, and without a pending-move record per card that stale
+    // fetch snaps every just-shipped card back to its origin. Built from the
+    // origin stages BEFORE the mutation loop rewrites them to "done".
+    const shipMoves = pendingMovesForBatch(ready, "done", Date.now(), PENDING_MOVE_TTL_MS);
+    for (const m of shipMoves)
+        pendingMoves = dropPendingMove(pendingMoves, m.key);
+    pendingMoves.push(...shipMoves);
     for (const card of ready) {
         card.stage = "done";
         card.state = "running";
@@ -975,6 +1025,9 @@ async function deployReady(side) {
                 card.stage = prev.stage;
                 card.state = prev.state;
             }
+            // Drop this card's shield so the next reconcile isn't pinned to a ship
+            // that never took; the cards that shipped keep theirs until confirmed.
+            pendingMoves = dropPendingMove(pendingMoves, card.key);
             showError(errMessage(err));
         }
     }
@@ -1403,15 +1456,29 @@ async function transition(key, title, from, to) {
     if (card) {
         card.stage = to;
         card.state = "running";
+        // Shield the optimistic move from a stale reconcile that predates it
+        // (SC-2521). Replace any prior record for this key so a re-drag re-anchors
+        // the origin and expiry rather than compounding.
+        if (prevStage !== undefined) {
+            pendingMoves = dropPendingMove(pendingMoves, key);
+            pendingMoves.push({
+                key,
+                fromStage: prevStage,
+                toStage: to,
+                expiresAt: Date.now() + PENDING_MOVE_TTL_MS,
+            });
+        }
         render();
     }
     await runGuardedAction(() => go().Transition(key, title, from, to), (err) => {
         // Revert the optimistic move so a failed launch doesn't leave the card
-        // looking like it's running or already moved (SC-637).
+        // looking like it's running or already moved (SC-637), and drop the
+        // shield so the next reconcile isn't pinned to the reverted move.
         if (card && prevStage !== undefined && prevState !== undefined) {
             card.stage = prevStage;
             card.state = prevState;
         }
+        pendingMoves = dropPendingMove(pendingMoves, key);
         showError(errMessage(err));
     }, reconcile);
 }
@@ -1945,6 +2012,22 @@ async function reconcile(opts = {}) {
         const keys = new Set(securityCards.map((c) => c.key));
         const titles = new Set(securityCards.map((c) => c.title));
         pendingSecurity = reconcilePending(pendingSecurity, keys, titles);
+    }
+    if (pendingMoves.length) {
+        // Hold each optimistic drag against a fetch that predates the move
+        // becoming readable (SC-2521): a fetch still showing the origin stage is
+        // stale and its card is pinned back to the target, while a confirmed
+        // target, a daemon-chosen third stage, or expiry retires the shield.
+        const stageByKey = new Map(current.cards.map((c) => [c.key, c.stage]));
+        const { moves, overrides } = reconcilePendingMoves(pendingMoves, stageByKey, Date.now());
+        pendingMoves = moves;
+        for (const o of overrides) {
+            const c = current.cards.find((card) => card.key === o.key);
+            if (c) {
+                c.stage = o.toStage;
+                c.state = "running";
+            }
+        }
     }
     boardLoading = false;
     stagesLoading = false;
