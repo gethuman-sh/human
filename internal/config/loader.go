@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 )
@@ -129,15 +130,76 @@ func LoadInstances[C any, I any](dir string, spec InstanceSpec[C, I]) ([]I, erro
 			warnSkippedInstance(spec, cfg)
 			continue
 		}
+		// An entry that builds is healthy, so drop what was remembered about it:
+		// a credential that disappears again has to be reported afresh, not
+		// swallowed as something already said.
+		if spec.GetName != nil {
+			forgetSkippedInstance(spec.Section, spec.GetName(cfg))
+		}
 		instances = append(instances, inst)
 	}
 	return instances, nil
 }
 
+// skippedInstances remembers why each configured entry was last reported as
+// skipped, so the same news is not delivered twice.
+//
+// Config is rebuilt on demand — in the daemon, several times a second while the
+// board polls — but the reason an entry is skipped cannot change in between: a
+// credential that is missing stays missing until someone edits config or the
+// environment. Re-stating it every rebuild fills the log with thousands of
+// identical lines and teaches the reader that warnings are noise, which is
+// exactly when the one that matters gets scrolled past.
+//
+// Guarded by a mutex because the daemon serves requests concurrently.
+var skippedInstances = struct {
+	mu       sync.Mutex
+	reported map[string]string
+}{reported: map[string]string{}}
+
+// The two kinds of skip carry distinct prefixes so neither can ever be mistaken
+// for the other: an entry that goes from "incomplete" to "missing a token" has
+// genuinely changed state and deserves a fresh line.
+const (
+	incompleteConfigReason = "incomplete"
+	missingFieldsReason    = "missing:"
+)
+
+// skippedInstanceKey identifies an entry across rebuilds. Name alone is not
+// enough — two sections may both configure an instance called "bot".
+func skippedInstanceKey(section, name string) string {
+	return section + "/" + name
+}
+
+// shouldWarnSkipped reports whether this skip is news — never reported, or
+// reported for a different reason than last time — and records it either way.
+// A changed reason is worth saying again: losing a second credential is a
+// different state from losing the first.
+func shouldWarnSkipped(section, name, reason string) bool {
+	skippedInstances.mu.Lock()
+	defer skippedInstances.mu.Unlock()
+
+	key := skippedInstanceKey(section, name)
+	if previous, seen := skippedInstances.reported[key]; seen && previous == reason {
+		return false
+	}
+	skippedInstances.reported[key] = reason
+	return true
+}
+
+// forgetSkippedInstance clears what was remembered about an entry that now
+// builds, so the next failure is reported rather than mistaken for a repeat.
+func forgetSkippedInstance(section, name string) {
+	skippedInstances.mu.Lock()
+	defer skippedInstances.mu.Unlock()
+
+	delete(skippedInstances.reported, skippedInstanceKey(section, name))
+}
+
 // warnSkippedInstance emits a diagnostic when a configured entry was dropped by
 // Build. Every entry in configs came straight from YAML, so a rejected build
 // means "configured but incomplete" and warrants naming the culprit and the
-// exact env vars that would satisfy it.
+// exact env vars that would satisfy it — once, until the reason changes.
 func warnSkippedInstance[C any, I any](spec InstanceSpec[C, I], cfg C) {
 	name := ""
 	if spec.GetName != nil {
@@ -168,10 +230,19 @@ func warnSkippedInstance[C any, I any](spec InstanceSpec[C, I], cfg C) {
 	if len(missing) == 0 {
 		// Build rejected for a reason not tied to an empty EnvField (future
 		// provider): still surface that the entry was dropped.
+		if !shouldWarnSkipped(spec.Section, name, incompleteConfigReason) {
+			return
+		}
 		log.Warn().
 			Str("section", spec.Section).
 			Str("instance", name).
 			Msg("skipped configured instance: required configuration is incomplete")
+		return
+	}
+
+	// The missing fields ARE the reason, so they are what makes a later skip
+	// worth reporting again.
+	if !shouldWarnSkipped(spec.Section, name, missingFieldsReason+strings.Join(missing, ",")) {
 		return
 	}
 
