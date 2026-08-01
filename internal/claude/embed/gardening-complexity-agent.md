@@ -124,7 +124,7 @@ If no complexity issues are found, append nothing and state in your final reply 
 - Complexity is contextual. A 60-line switch statement mapping enum values is fine -- it's repetitive but not complex. A 40-line function with 5 levels of nesting and 3 error paths is worse.
 - Focus on functions where complexity makes **behavior hard to predict**. Can you read the function and confidently say what it does for all inputs?
 - Dead code claims must be verified with Grep. An exported function with no callers might be used by external consumers or through reflection.
-- Stale TODOs with ticket references (e.g., `TODO(HUM-42)`) are not stale -- they have an owner.
+- Stale TODOs with ticket references (e.g., `TODO(<TICKET_KEY>)`) are not stale -- they have an owner.
 - The goal is not to make every function short. The goal is to make every function understandable.
 
 Do NOT use `AskUserQuestion` -- you cannot interact with the user. Write your analysis and finish.

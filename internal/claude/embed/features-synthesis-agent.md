@@ -143,7 +143,7 @@ human commits touched <path> [<path> ...] [--ref <override>]
            {
              "group": "Issue trackers",
              "features": [
-               { "name": "Issue tracker sync", "description": "Two-way sync with Jira, Linear, GitHub, GitLab, Shortcut, Azure DevOps, ClickUp", "tickets": ["SC-102"] }
+               { "name": "Issue tracker sync", "description": "Two-way sync with Jira, Linear, GitHub, GitLab, Shortcut, Azure DevOps, ClickUp", "tickets": ["<TICKET_KEY>"] }
              ]
            }
          ]

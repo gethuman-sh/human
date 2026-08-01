@@ -118,6 +118,10 @@ type daemonState struct {
 	confirmDB     *daemon.ConfirmDB
 	ideationDB    *daemon.IdeationDB
 	daemonID      string
+	// info is the on-disk identity this process will claim once it is actually
+	// serving. It is built here but written only after readiness, so a stalled
+	// startup never records a process that is not yet answering.
+	info daemon.DaemonInfo
 }
 
 // runMaintenanceLoop periodically cleans up stale pending confirmations and
@@ -219,10 +223,6 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		}
 	}
 
-	if err := WritePidFile(os.Getpid()); err != nil {
-		return nil, errors.WrapWithDetails(err, "failed to write PID file")
-	}
-
 	projectRegistry, projectInfos, err := buildProjectRegistry(projectDirs)
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "failed to build project registry")
@@ -246,9 +246,6 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		DaemonID:   daemonID,
 		Projects:   projectInfos,
 	}
-	if err := daemon.WriteInfo(info); err != nil {
-		return nil, errors.WrapWithDetails(err, "failed to write daemon info")
-	}
 
 	printStartBanner(out, token, daemonID, addr, chromeAddr, proxyAddr, daemonAddr, chromeFullAddr, proxyFullAddr, projectInfos)
 
@@ -261,11 +258,6 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	// up rather than inheriting the parent's protection.
 	daemon.HardenProcess(logger)
 	vaultResolver := buildVaultResolver(projectRegistry, logger)
-
-	// Turn a silent split->single topology fallback into a loud startup signal:
-	// a tracker declared role: engineering whose token does not resolve would run
-	// single-tracker here and split elsewhere from the same config (SC-660 rule 7).
-	warnTopologyDivergence(projectRegistry, vaultResolver, out, logger)
 
 	connTracker := daemon.NewConnectedTracker()
 	// Persist hook events to the host so they survive the in-memory ring's
@@ -407,6 +399,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		confirmDB:     confirmDB,
 		ideationDB:    ideationDB,
 		daemonID:      daemonID,
+		info:          info,
 	}, nil
 }
 
@@ -450,6 +443,42 @@ func removeStatsFilesUnlessHandedOver(handedOver *atomic.Bool, statsPath, connec
 	}
 	proxy.RemoveStats(statsPath)
 	daemon.RemoveConnected(connectedPath)
+}
+
+// startProxyServer builds the HTTPS proxy on the pre-owned listener, prints its
+// one-line status, and serves it in the background. It returns the server so the
+// stats writer can report on it.
+func startProxyServer(ctx context.Context, proxyAddr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, ln net.Listener, out io.Writer) (*proxy.Server, error) {
+	proxySrv, proxyStatus, err := buildProxyServer(proxyAddr, interactive, logger, emitter)
+	if err != nil {
+		return nil, err
+	}
+	proxySrv.Listener = ln
+	if proxyStatus != "" {
+		_, _ = fmt.Fprintln(out, proxyStatus)
+	}
+	go func() {
+		if err := proxySrv.ListenAndServe(ctx); err != nil {
+			logger.Error().Err(err).Msg("https proxy failed")
+		}
+	}()
+	return proxySrv, nil
+}
+
+// claimDaemonIdentity is called only once the listeners are accepting: it
+// signals a handover parent to step down and records this process as the live
+// daemon (pidfile + daemon.json). Deferring it out of runDaemonForeground keeps
+// the identity claim off the readiness path — a locked vault can never freeze
+// the process before it is recorded as serving (SC-2138).
+func claimDaemonIdentity(ds *daemonState, logger zerolog.Logger) error {
+	signalHandoverReady(logger)
+	if err := WritePidFile(os.Getpid()); err != nil {
+		return errors.WrapWithDetails(err, "failed to write PID file")
+	}
+	if err := daemon.WriteInfo(ds.info); err != nil {
+		return errors.WrapWithDetails(err, "failed to write daemon info")
+	}
+	return nil
 }
 
 func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, interactive, safe, debug bool, projectDirs []string, cmdFactory func() *cobra.Command, version string) error {
@@ -504,20 +533,20 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	chromeSvcs := startChromeServices(ctx, chromeAddr, ds.srv.Token, listeners.chrome, logger)
 
-	proxySrv, proxyStatus, proxyErr := buildProxyServer(proxyAddr, interactive, logger, ds.networkStore)
-	if proxyErr != nil {
-		return proxyErr
-	}
-	proxySrv.Listener = listeners.proxy
-	if proxyStatus != "" {
-		_, _ = fmt.Fprintln(out, proxyStatus)
+	proxySrv, err := startProxyServer(ctx, proxyAddr, interactive, logger, ds.networkStore, listeners.proxy, out)
+	if err != nil {
+		return err
 	}
 
-	go func() {
-		if err := proxySrv.ListenAndServe(ctx); err != nil {
-			logger.Error().Err(err).Msg("https proxy failed")
-		}
-	}()
+	// The listeners are accepting, so this process is serving. Only now does it
+	// claim the on-disk identity and (if it is a handover child) tell the parent
+	// to step down. Doing this before any vault-touching startup work means a
+	// locked vault can never freeze the child before it is recorded as the live
+	// daemon — and a stalled child never leaves the pidfile/daemon.json naming a
+	// process that is not answering (SC-2138).
+	if err := claimDaemonIdentity(ds, logger); err != nil {
+		return err
+	}
 
 	statsPath := proxy.StatsPath()
 	connectedPath := daemon.ConnectedPath()
@@ -539,13 +568,26 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		defer unmount()
 	}
 
-	slackNotifier, slackStatus := startSlackNotifier(logger, ds.vaultResolver)
-	if slackStatus != "" {
-		_, _ = fmt.Fprintln(out, "Slack notifications:", slackStatus)
-	}
+	// Slack, Telegram and the topology divergence warning all eagerly resolve
+	// tracker/messaging secrets from the vault. That must not sit on the
+	// readiness path: a locked vault would otherwise freeze the daemon before it
+	// records itself as serving (SC-2138). They are best-effort and logged, so a
+	// locked vault degrades them without holding up the daemon.
+	go func() {
+		// Turn a silent split->single topology fallback into a loud startup
+		// signal: a tracker declared role: engineering whose token does not
+		// resolve would run single-tracker here and split elsewhere from the same
+		// config (SC-660 rule 7).
+		warnTopologyDivergence(ds.srv.Projects, ds.vaultResolver, out, logger)
 
-	telegramStatus := startTelegramDispatcher(ctx, logger, slackNotifier, ds.vaultResolver)
-	_, _ = fmt.Fprintln(out, "Telegram dispatch:", telegramStatus)
+		slackNotifier, slackStatus := startSlackNotifier(logger, ds.vaultResolver)
+		if slackStatus != "" {
+			_, _ = fmt.Fprintln(out, "Slack notifications:", slackStatus)
+		}
+
+		telegramStatus := startTelegramDispatcher(ctx, logger, slackNotifier, ds.vaultResolver)
+		_, _ = fmt.Fprintln(out, "Telegram dispatch:", telegramStatus)
+	}()
 
 	if err := claude.InstallHooks(out, claude.OSFileWriter{}); err != nil {
 		logger.Warn().Err(err).Msg("hook upgrade failed")
@@ -714,10 +756,10 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		activeConns: func() int64 { return proxySrv.ActiveConns() + chromeSvcs.activeConns() },
 		retire:      chromeSvcs.retire,
 	}
-	maybeWatchBinary(ctx, listeners, ds.srv, handover, ds.stop, &handedOver, logger)
-	// If this process is itself a handover child, tell the parent we are serving
-	// so it can stop; a no-op on a normal start.
-	signalHandoverReady(logger)
+	// The watcher's failure path restores this parent's identity from ds.info, so
+	// a child that never comes up leaves the pidfile/daemon.json naming the
+	// survivor (SC-2138).
+	maybeWatchBinary(ctx, listeners, ds.srv, handover, ds.stop, &handedOver, ds.info, logger)
 
 	return ds.srv.ListenAndServe(ctx)
 }
@@ -989,6 +1031,14 @@ func buildDaemonStatusCmd() *cobra.Command {
 			if info.Commit != "" {
 				_, _ = fmt.Fprintf(out, "Build: %s (%s)\n", info.Version, info.Commit)
 			}
+			// A failed self-restart handover leaves the old build serving while a
+			// newer binary sits on disk. Surface that here — comparing the running
+			// daemon's build against the build of the binary running this status
+			// command (which is by definition the one on disk) — so the silent
+			// failure becomes visible where someone will look (SC-2138).
+			if notice := staleBuildNotice(info.Commit, daemon.BuildRevision()); notice != "" {
+				_, _ = fmt.Fprintln(out, notice)
+			}
 
 			// Show registered projects if available.
 			if info, err := daemon.ReadInfo(); err == nil && len(info.Projects) > 0 {
@@ -1004,6 +1054,20 @@ func buildDaemonStatusCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&addr, "addr", "localhost:19285", "Daemon address to check")
 	return cmd
+}
+
+// staleBuildNotice reports that the running daemon is an older build than the
+// one on disk — the visible symptom of a failed self-restart handover (SC-2138).
+// It stays empty unless both revisions are known and differ, so a daemon with no
+// recorded build (or a status binary with no VCS stamp) never produces a false
+// alarm.
+func staleBuildNotice(runningCommit, onDiskCommit string) string {
+	if runningCommit == "" || onDiskCommit == "" || runningCommit == onDiskCommit {
+		return ""
+	}
+	return fmt.Sprintf(
+		"WARNING: the daemon is running an older build (%s) than the one on disk (%s); a self-restart likely failed — run `human daemon stop && human daemon start`",
+		runningCommit, onDiskCommit)
 }
 
 func buildDaemonStopCmd() *cobra.Command {

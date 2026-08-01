@@ -277,7 +277,7 @@ func TestHandleBoardAgentExit_MalformedName(t *testing.T) {
 		return &syncCommenter{}, nil
 	}
 	// A name that does not parse must short-circuit before resolving a commenter.
-	handleBoardAgentExit(context.Background(), "board-", "", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-", "", "", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
 	assert.False(t, called)
 }
 
@@ -297,7 +297,7 @@ func TestHandleBoardAgentExit_prReviewStage_drivesLoop(t *testing.T) {
 	var reclaimed string
 	onHandoff := func(agentName string) { reclaimed = agentName }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-prreview", "crashed", commenterFor, nil, advance, nil, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-prreview", "crashed", "", commenterFor, nil, advance, nil, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
 
 	assert.Equal(t, []string{"SC-1"}, advanced, "the PR loop driver must be invoked once")
 	// A step that dies before recording an outcome can only be explained from its
@@ -313,7 +313,7 @@ func TestHandleBoardAgentExit_CommenterError(t *testing.T) {
 		return nil, assertErr{}
 	}
 	// Must not panic when the commenter cannot be resolved.
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", "", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
 }
 
 type assertErr struct{}
@@ -333,7 +333,7 @@ func TestHandleBoardAgentExit_PhantomCommitFailsLoudly(t *testing.T) {
 	chain := func(string) error { chained = true; return nil }
 	commitsPresent := func(string, []string) bool { return false }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, nil, nil, alwaysReachable, commitsPresent, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, chain, nil, nil, alwaysReachable, commitsPresent, nil, nil, StageRetry{}, "", zerolog.Nop())
 
 	assert.False(t, chained, "a phantom-commit handoff must not chain a review")
 	c.mu.Lock()
@@ -355,7 +355,7 @@ func TestHandleBoardAgentExit_PresentCommitsChainReview(t *testing.T) {
 	chain := func(string) error { chained = true; return nil }
 	commitsPresent := func(string, []string) bool { return true }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, nil, nil, alwaysReachable, commitsPresent, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, chain, nil, nil, alwaysReachable, commitsPresent, nil, nil, StageRetry{}, "", zerolog.Nop())
 
 	assert.True(t, chained, "a handoff whose commits are present must chain its review")
 	c.mu.Lock()
@@ -378,7 +378,7 @@ func TestHandleBoardAgentExit_InContainerReviewCompleteDoesNotChain(t *testing.T
 	var chained bool
 	chain := func(string) error { chained = true; return nil }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
 
 	assert.False(t, chained, "an in-container review-complete must not chain a second review")
 	c.mu.Lock()
@@ -400,7 +400,7 @@ func TestHandleBoardAgentExit_InContainerReviewFailedDoesNotChain(t *testing.T) 
 	var chained bool
 	chain := func(string) error { chained = true; return nil }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
 
 	assert.False(t, chained, "an in-container review-complete (fail verdict) must not chain a second review")
 	c.mu.Lock()
@@ -413,6 +413,7 @@ func TestHandleBoardAgentExit_InContainerReviewFailedDoesNotChain(t *testing.T) 
 // [human:review-failed] instead of leaving the card spinning on a verification
 // stage no agent owns — and must not chain a second cold review container.
 func TestHandleBoardAgentExit_MidReviewCrashPostsReviewFailed(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	c := &syncCommenter{
 		comments: []tracker.Comment{
 			cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
@@ -423,7 +424,7 @@ func TestHandleBoardAgentExit_MidReviewCrashPostsReviewFailed(t *testing.T) {
 	var chained bool
 	chain := func(string) error { chained = true; return nil }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "StopFailure", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
 
 	assert.False(t, chained, "a mid-review crash must not chain a second review")
 	c.mu.Lock()
@@ -437,6 +438,7 @@ func TestHandleBoardAgentExit_MidReviewCrashPostsReviewFailed(t *testing.T) {
 // review-failed marker instead of the generic "retry the review" text. Pre-fix
 // chainReviewAfterCleanBuild ignored the diagnoser and posted a hardcoded body.
 func TestHandleBoardAgentExit_MidReviewCrash_PostsDiagnosedReason(t *testing.T) {
+	withInstantBoardExitRecheck(t)
 	c := &syncCommenter{
 		comments: []tracker.Comment{
 			cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
@@ -449,7 +451,7 @@ func TestHandleBoardAgentExit_MidReviewCrash_PostsDiagnosedReason(t *testing.T) 
 		return FailureDiagnosis{Headline: "command not found: gh", Detail: "exit code: 127"}
 	}
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, chain, nil, nil, alwaysReachable, nil, diagnose, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "StopFailure", commenterFor, chain, nil, nil, alwaysReachable, nil, diagnose, nil, StageRetry{}, "", zerolog.Nop())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -460,6 +462,95 @@ func TestHandleBoardAgentExit_MidReviewCrash_PostsDiagnosedReason(t *testing.T) 
 		"marker must carry the diagnosed reason, got %q", c.added[0])
 	assert.NotContains(t, c.added[0], "exited before completing the in-container review",
 		"marker must not fall back to the hardcoded generic body")
+	// AC #3 (SC-2133): when a handoff really is absent, the failure states what
+	// was searched for, so the mismatch is diagnosable without reading agent logs.
+	assert.Contains(t, c.added[0], ReviewCompleteHeader,
+		"marker must name what it searched for, got %q", c.added[0])
+}
+
+// SC-2133: a merged implementation+review container posts BOTH
+// [human:ready-for-review] and [human:review-started], then a moment later
+// [human:review-complete] (pass), and exits cleanly (SessionEnd). The tracker
+// read that fires on the exit event can race the second handoff exactly like
+// SC-1484 raced the first — the settle-wait must keep re-reading while
+// verification looks in-flight so the completed review is seen, and even if it
+// is not seen in time, a clean exit must never be misread as a mid-review
+// death. Neither a [human:review-failed] marker nor a second chained review
+// may result.
+func TestRunBoardFailureWatch_CleanExitLateReviewCompleteNoReviewFailed(t *testing.T) {
+	origStep, origTries := boardExitRecheckStep, boardExitRecheckTries
+	boardExitRecheckStep = 10 * time.Millisecond
+	boardExitRecheckTries = 3
+	t.Cleanup(func() {
+		boardExitRecheckStep, boardExitRecheckTries = origStep, origTries
+	})
+
+	synctest.Test(t, func(t *testing.T) {
+		store := NewHookEventStore()
+		c := &raceCommenter{
+			snapshots: [][]tracker.Comment{
+				{
+					cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+					cmt(ReviewStartedHeader, time.Unix(2, 0)),
+				},
+				{
+					cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+					cmt(ReviewStartedHeader, time.Unix(2, 0)),
+					cmt(ReviewCompleteHeader+"\nverdict: pass", time.Unix(3, 0)),
+				},
+			},
+			addCh: make(chan string, 4),
+		}
+		commenterFor := func() (tracker.Commenter, error) { return c, nil }
+		chained := make(chan string, 1)
+		chain := func(pmKey string) error { chained <- pmKey; return nil }
+
+		ctx := t.Context()
+		go RunBoardFailureWatch(ctx, store, commenterFor, chain, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+		time.Sleep(50 * time.Millisecond)
+
+		// A clean exit-0, not a reap: the container ran the review in place and
+		// finished successfully.
+		store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-SC-1-implementation", Timestamp: time.Now()})
+
+		select {
+		case body := <-c.addCh:
+			t.Fatalf("a clean exit whose review-complete merely lagged the read must not post any marker, got: %q", body)
+		case <-chained:
+			t.Fatal("a clean exit whose review already completed must not chain a second review")
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		assert.Empty(t, c.added, "no failed marker for a clean exit racing its own late-propagating review-complete")
+	})
+}
+
+// SC-2133: a clean exit (SessionEnd) whose review NEVER completes — not a race,
+// genuinely still open — must still never be recorded as review-failed. Only a
+// non-clean exit (StopFailure) may mean the review died mid-flight; a clean
+// exit-0 racing a review-started marker means propagation hasn't caught up,
+// never that the review died. The settle-wait's retry budget
+// (boardExitRecheckTries) runs out against a comment thread that never changes.
+func TestHandleBoardAgentExit_CleanExitReviewNeverCompletesNoReviewFailed(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+			cmt(ReviewStartedHeader, time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var chained bool
+	chain := func(string) error { chained = true; return nil }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "SessionEnd", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+
+	assert.False(t, chained, "a clean exit must never chain a second review")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Empty(t, c.added, "a clean exit is never a mid-review death — no review-failed for a review that has not (yet) completed")
 }
 
 func TestRunBoardFailureWatch_ChainsReviewAfterCleanBuild(t *testing.T) {
@@ -775,7 +866,7 @@ func TestHandleBoardAgentExit_UsesDiagnoserHeadlineAndDetail(t *testing.T) {
 		}
 	}
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", commenterFor, nil, nil, nil, alwaysReachable, nil, diag, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, nil, nil, nil, alwaysReachable, nil, diag, nil, StageRetry{}, "", zerolog.Nop())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -794,7 +885,7 @@ func TestHandleBoardAgentExit_NilDiagnoserFallsBackToGeneric(t *testing.T) {
 	}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", "", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -810,7 +901,7 @@ func TestHandleBoardAgentExit_EmptyHeadlineFallsBackToGeneric(t *testing.T) {
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	diag := func(string, string) FailureDiagnosis { return FailureDiagnosis{} }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", commenterFor, nil, nil, nil, alwaysReachable, nil, diag, nil, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "", "", commenterFor, nil, nil, nil, alwaysReachable, nil, diag, nil, StageRetry{}, "", zerolog.Nop())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -875,6 +966,75 @@ func TestRunBoardFailureWatch_IgnoresNonBoardAgents(t *testing.T) {
 	})
 }
 
+// SC-2302: the pre-planning ticket-review gate runs UNDER the planning agent
+// but files its verdict as a [human:ticket-review] marker classified to the
+// BACKLOG stage. A deliberate hard-stop verdict (rejected/superseded/escalated)
+// is the gate correctly refusing to start work — a clean stop, not a crash. The
+// watcher must post NO planning-failed marker, must NOT chain a review, and must
+// reclaim the run's worktree (onHandoff fired) exactly like every other clean
+// ending. Because the marker is classified to backlog, scoping the clean-stop
+// check to the running (planning) stage misses it — the fix reads the verdict
+// stage-agnostically via deliberateStopRecorded.
+func assertTicketReviewVerdictIsCleanStop(t *testing.T, verdict string) {
+	t.Helper()
+	withInstantBoardExitRecheck(t)
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt(PlanningStartedHeader, time.Unix(1, 0)),
+			cmt(TicketReviewedHeader+" "+verdict, time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var chained []string
+	chain := func(pmKey string) error { chained = append(chained, pmKey); return nil }
+	var reclaimed string
+	onHandoff := func(agentName string) { reclaimed = agentName }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "crashed", commenterFor, chain, nil, nil, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
+
+	c.mu.Lock()
+	assert.Empty(t, c.added, "a deliberate %s stop must post no failed marker", verdict)
+	c.mu.Unlock()
+	assert.Empty(t, chained, "a deliberate %s stop must not chain a review", verdict)
+	assert.Equal(t, "board-SC-1-planning", reclaimed, "a deliberate %s stop must reclaim the worktree", verdict)
+}
+
+func TestRunBoardFailureWatch_TicketReviewRejectedIsCleanStop(t *testing.T) {
+	assertTicketReviewVerdictIsCleanStop(t, "rejected")
+}
+
+func TestRunBoardFailureWatch_TicketReviewSupersededIsCleanStop(t *testing.T) {
+	assertTicketReviewVerdictIsCleanStop(t, "superseded")
+}
+
+func TestRunBoardFailureWatch_TicketReviewEscalatedIsCleanStop(t *testing.T) {
+	assertTicketReviewVerdictIsCleanStop(t, "escalated")
+}
+
+// SC-2302 guard: the distinction follows the verdict, not the mere presence of a
+// ticket-review marker. `ready` (and `reframed`) mean the ticket is fine and the
+// work continues into planning. A planning agent that carries a `ready` verdict
+// but dies before posting [human:plan-ready] is a genuine crash and MUST still
+// post a planning-failed marker — proving deliberateStopRecorded does not swallow
+// the non-stop verdicts.
+func TestRunBoardFailureWatch_TicketReviewReadyThenCrashStillFails(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	c := &syncCommenter{
+		comments: []tracker.Comment{
+			cmt(PlanningStartedHeader, time.Unix(1, 0)),
+			cmt(TicketReviewedHeader+" ready", time.Unix(2, 0)),
+		},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-planning", "crashed", commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, "", zerolog.Nop())
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1, "a ready verdict that then crashes must still surface a real failure")
+	assert.Contains(t, c.added[0], PlanningFailedHeader)
+}
+
 // A deploy-fixer's Stop event routes to AdvanceDeployFix (reclaiming its
 // worktree first) and is fully handled there — never falling through to the
 // generic stage-failure diagnoser that would red the card.
@@ -886,7 +1046,7 @@ func TestHandleBoardAgentExit_DeployFixStage_RoutesToAdvance(t *testing.T) {
 	var reclaimed string
 	onHandoff := func(agentName string) { reclaimed = agentName }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-deployfix", "", commenterFor, nil, nil, advanceDeployFix, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), "board-SC-1-deployfix", "", "", commenterFor, nil, nil, advanceDeployFix, alwaysReachable, nil, nil, onHandoff, StageRetry{}, "", zerolog.Nop())
 
 	assert.Equal(t, []string{"SC-1"}, advanced, "the deploy-fix driver must be invoked once")
 	assert.Equal(t, "board-SC-1-deployfix", reclaimed, "the fixer's worktree must be reclaimed")

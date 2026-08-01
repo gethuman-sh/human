@@ -3,8 +3,11 @@ package claude
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +26,40 @@ func expanded(t *testing.T, content []byte) string {
 		t.Fatalf("expanding fragments: %v", err)
 	}
 	return string(out)
+}
+
+// trackerKeyPattern matches human's own tracker key formats (Shortcut SC-* and
+// Linear HUM-*). These are unrelated to whatever tracker a user's project
+// runs, so a prompt that cites one ships confusing, unresolvable rationale
+// into every installed project and collides with a user's own SC- keys.
+var trackerKeyPattern = regexp.MustCompile(`\b(SC|HUM)-\d+\b`)
+
+// TestEmbeddedPromptsCarryNoTrackerKeys locks the fix for the bug where
+// prompts under embed/ cited human's own tracker keys (e.g. "SC-782",
+// "HUM-59") as rationale or as illustrative examples. Install ships each
+// prompt verbatim after expandIncludes, so those keys landed in every user's
+// ./.claude, where "SC-" collides 1:1 with the user's own Shortcut keys and
+// is unresolvable rationale at best. Every prompt body — including shared
+// fragments substituted via expandIncludes — must be free of both formats;
+// illustrative examples must use the corpus's existing placeholder tokens
+// (<PM_KEY>, <ENG_KEY>, <TICKET_KEY>, <PROJECT_KEY>) instead.
+func TestEmbeddedPromptsCarryNoTrackerKeys(t *testing.T) {
+	err := filepath.WalkDir("embed", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+			return nil
+		}
+		body, readErr := os.ReadFile(path)
+		require.NoError(t, readErr)
+		content := expanded(t, body)
+		if m := trackerKeyPattern.FindString(content); m != "" {
+			t.Errorf("%s: shipped prompt body contains tracker key %q; use a placeholder like <TICKET_KEY> instead", path, m)
+		}
+		return nil
+	})
+	require.NoError(t, err)
 }
 
 type mockFileWriter struct {

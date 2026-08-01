@@ -3,10 +3,10 @@
 Before doing any work, lease the stage. It is one command, and it is what makes a crashed run recoverable rather than repeated:
 
 ```bash
-human state lease SC-123 --stage fix --agent "$HUMAN_AGENT_NAME" --json
+human state lease <TICKET_KEY> --stage fix --agent "$HUMAN_AGENT_NAME" --json
 ```
 
-Substitute your ticket key and your stage — `SC-123` and `fix` are examples.
+Substitute your ticket key and your stage — `<TICKET_KEY>` and `fix` are examples.
 
 Read the result:
 
@@ -14,7 +14,7 @@ Read the result:
 - **`granted: true` with `displaced`** — the previous holder died. `inherited_keys` lists the state it left behind. **Read those keys before starting**: they are what it had already worked out, and redoing that work is the waste this exists to prevent.
 
   ```bash
-  human state get SC-123 fix.evidence   # whatever inherited_keys named
+  human state get <TICKET_KEY> fix.evidence   # whatever inherited_keys named
   ```
 
 - **`granted: true` with no `displaced`** — a clean start, nothing to inherit.

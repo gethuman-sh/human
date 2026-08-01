@@ -37,9 +37,9 @@ human <TRACKER> issue comment list <TICKET_KEY>
    - Otherwise fall back to `.human/bugs/<key>.md` (a bug analysis with a fix plan).
    - If no source provides a plan, stop and report that a plan must be created first with `/human-plan` or `/human-bug-plan`.
 2. **Parse ticket keys** from the plan header:
-   - `**PM ticket**: <PM_KEY>` — the original PM ticket (e.g. `SC-79`)
+   - `**PM ticket**: <PM_KEY>` — the original PM ticket
    - `**Engineering ticket**: <ENG_KEY>` — present only in split topology
-   Record what exists. Get the canonical commit-subject prefix with `human commits prefix <PM_KEY> [<ENG_KEY>]` (pass the engineering key only when one exists; it prints e.g. `[SC-79] [HUM-59]`) and start every commit subject with it — that preserves the PM → engineering → commit trail. If the plan came from a `[human:plan]` comment without header lines, the key you were given IS the PM key. If no PM key can be determined, stop and ask the user before making commits.
+   Record what exists. Get the canonical commit-subject prefix with `human commits prefix <PM_KEY> [<ENG_KEY>]` (pass the engineering key only when one exists; it prints e.g. `[<PM_KEY>] [<ENG_KEY>]`) and start every commit subject with it — that preserves the PM → engineering → commit trail. If the plan came from a `[human:plan]` comment without header lines, the key you were given IS the PM key. If no PM key can be determined, stop and ask the user before making commits.
 3. **Parse** the plan's changes section into ordered tasks
 4. **Execute** each task sequentially:
    - Read the target file before modifying it
@@ -57,7 +57,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
    - Single-tracker topology (no engineering ticket): omit `--engineering` entirely — the reviewer works from the PM key the comment sits on.
    - If multiple engineering tickets were executed in this run, pass them all: `--engineering <K1>,<K2>` (the command unions their commit SHAs).
    - **Board context** (the dispatch prompt contains "BOARD CONTEXT"): do NOT push — the container holds no push credentials and the daemon's Deploy stage ships the local branch. A local-only branch is a VALID handoff: the reachability check accepts local refs. Post the handoff and stop; never end the run asking whether to push — there is no user, and an unanswered question fails the stage.
-   The command derives the rest — `branch:` from the current git branch, `commits:` from the commits referencing the work key(s), `daemon:` from the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (SC-660 rule 1; the line is omitted when the var is unset) — then verifies every SHA is reachable on the branch (fetching origin first) and refuses to post otherwise. The posted comment looks like:
+   The command derives the rest — `branch:` from the current git branch, `commits:` from the commits referencing the work key(s), `daemon:` from the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (the line is omitted when the var is unset) — then verifies every SHA is reachable on the branch (fetching origin first) and refuses to post otherwise. The posted comment looks like:
    ```
    [human:ready-for-review]
    engineering: <ENG_KEY>
@@ -122,7 +122,7 @@ A run never ends with the card in a non-terminal state AND no live agent. The on
 - Follow the plan's order. Do not skip steps or reorder without cause.
 - If a plan step is ambiguous, read the surrounding code to resolve the ambiguity rather than guessing.
 - Run tests after completing all changes to catch regressions early.
-- Preserve the ticket trail throughout. Prefix every commit subject with the output of `human commits prefix <PM_KEY> [<ENG_KEY>]` (e.g. `[SC-79] [HUM-59] Add validation for email field` in split topology, `[SC-79] Add validation for email field` in single-tracker topology) — the two keys usually live on different trackers, the format is the same regardless.
+- Preserve the ticket trail throughout. Prefix every commit subject with the output of `human commits prefix <PM_KEY> [<ENG_KEY>]` (e.g. `[<PM_KEY>] [<ENG_KEY>] Add validation for email field` in split topology, `[<PM_KEY>] Add validation for email field` in single-tracker topology) — the two keys usually live on different trackers, the format is the same regardless.
 - **Boil the Lake**: When the complete implementation costs minutes more than a partial one, do the complete thing. Handle all edge cases, all error paths, all related tests. Completeness is cheap with AI — do not leave known gaps for follow-up tickets.
 - **User Sovereignty**: Recommend, do not decide. When a plan step has multiple valid approaches or a judgment call, present both sides with trade-offs and let the user choose. Never silently make opinionated choices on the user's behalf.
 

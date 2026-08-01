@@ -102,14 +102,23 @@ type handoverCoordinator struct {
 	// Injectable seams for tests.
 	interval     time.Duration
 	drainTimeout time.Duration
+	readyTimeout time.Duration
 	statOf       func(path string) (binStat, error)
 	sanity       func(ctx context.Context, path string) error
 	reexec       func(ctx context.Context, c *handoverCoordinator) error
+	// buildChildCmd constructs the re-exec'd child, wiring it the inherited
+	// listener fds and the readiness pipe fd. A seam so a test can substitute a
+	// process that never signals ready without touching the real daemon binary.
+	buildChildCmd func(readyFD int, extra []*os.File) *exec.Cmd
+	// restoreIdentity re-stamps the parent's own pidfile/daemon.json after a
+	// failed handover, so the on-disk identity keeps naming the survivor rather
+	// than a child that never came up.
+	restoreIdentity func()
 }
 
 // maybeWatchBinary starts the self-restart watcher unless it is disabled or the
 // binary path cannot be resolved. Safe to call unconditionally.
-func maybeWatchBinary(ctx context.Context, ls *listenerSet, srv *daemon.Server, hooks handoverHooks, stop context.CancelFunc, handedOver *atomic.Bool, logger zerolog.Logger) {
+func maybeWatchBinary(ctx context.Context, ls *listenerSet, srv *daemon.Server, hooks handoverHooks, stop context.CancelFunc, handedOver *atomic.Bool, parentInfo daemon.DaemonInfo, logger zerolog.Logger) {
 	if watchBinaryDisabled() {
 		logger.Info().Msg("daemon self-restart on binary change disabled (HUMAN_DAEMON_WATCH_BINARY)")
 		return
@@ -120,21 +129,54 @@ func maybeWatchBinary(ctx context.Context, ls *listenerSet, srv *daemon.Server, 
 		return
 	}
 	c := &handoverCoordinator{
-		listeners:    ls,
-		blockingOps:  srv.BlockingOps,
-		activeConns:  hooks.activeConns,
-		retire:       hooks.retire,
-		stop:         stop,
-		handedOver:   handedOver,
-		logger:       logger,
-		execPath:     execPath,
-		interval:     watchBinaryInterval,
-		drainTimeout: handoverDrainTimeout,
-		statOf:       defaultBinStat,
-		sanity:       defaultSanityCheck,
-		reexec:       reexecChild,
+		listeners:     ls,
+		blockingOps:   srv.BlockingOps,
+		activeConns:   hooks.activeConns,
+		retire:        hooks.retire,
+		stop:          stop,
+		handedOver:    handedOver,
+		logger:        logger,
+		execPath:      execPath,
+		interval:      watchBinaryInterval,
+		drainTimeout:  handoverDrainTimeout,
+		readyTimeout:  handoverReadyTimeout,
+		statOf:        defaultBinStat,
+		sanity:        defaultSanityCheck,
+		reexec:        reexecChild,
+		buildChildCmd: defaultBuildChildCmd(execPath),
+		// A failed handover must leave the on-disk identity naming this parent —
+		// the process that is still serving — not the child that never came up.
+		restoreIdentity: func() {
+			if err := WritePidFile(os.Getpid()); err != nil {
+				logger.Warn().Err(err).Msg("restoring parent pidfile after failed handover")
+			}
+			if err := daemon.WriteInfo(parentInfo); err != nil {
+				logger.Warn().Err(err).Msg("restoring parent daemon.json after failed handover")
+			}
+		},
 	}
 	go c.watch(ctx)
+}
+
+// defaultBuildChildCmd constructs the real re-exec of our own binary, handing it
+// the inherited listener fds plus the readiness pipe fd. The path is our own
+// resolved executable and the args are this process's, so neither reaches us
+// from an external caller.
+func defaultBuildChildCmd(execPath string) func(readyFD int, extra []*os.File) *exec.Cmd {
+	return func(readyFD int, extra []*os.File) *exec.Cmd {
+		// #nosec G204 G702 -- re-exec of our own binary with our own args.
+		cmd := exec.Command(execPath, os.Args[1:]...) //nolint:nilaway // os.Args is always set for a running process
+		cmd.Env = append(os.Environ(),
+			daemonChildEnv+"=1",
+			envInheritListeners+"="+handoverListenerSpec,
+			fmt.Sprintf("%s=%d", envHandoverReadyFD, readyFD),
+		)
+		cmd.Stdout = os.Stdout // inherit the daemon log file the parent writes to
+		cmd.Stderr = os.Stderr
+		cmd.ExtraFiles = extra
+		cmd.SysProcAttr = detachSysProcAttr()
+		return cmd
+	}
 }
 
 func defaultBinStat(path string) (binStat, error) {
@@ -224,19 +266,11 @@ func reexecChild(ctx context.Context, c *handoverCoordinator) error {
 	extra := append(files, readyW) // #nosec G601 -- files is not retained after this call
 	readyFD := 3 + len(files)
 
-	// #nosec G204 G702 -- re-exec of our own binary with our own args: the
-	// path is our own resolved executable and the args are this process's,
-	// neither reaches us from an external caller.
-	cmd := exec.Command(c.execPath, os.Args[1:]...) //nolint:nilaway // os.Args is always set for a running process
-	cmd.Env = append(os.Environ(),
-		daemonChildEnv+"=1",
-		envInheritListeners+"="+handoverListenerSpec,
-		fmt.Sprintf("%s=%d", envHandoverReadyFD, readyFD),
-	)
-	cmd.Stdout = os.Stdout // inherit the daemon log file the parent writes to
-	cmd.Stderr = os.Stderr
-	cmd.ExtraFiles = extra
-	cmd.SysProcAttr = detachSysProcAttr()
+	build := c.buildChildCmd
+	if build == nil {
+		build = defaultBuildChildCmd(c.execPath)
+	}
+	cmd := build(readyFD, extra)
 
 	if err := cmd.Start(); err != nil {
 		closeAllFiles(files)
@@ -249,8 +283,20 @@ func reexecChild(ctx context.Context, c *handoverCoordinator) error {
 	_ = readyW.Close()
 	defer func() { _ = readyR.Close() }()
 
-	if err := waitHandoverReady(ctx, readyR, handoverReadyTimeout); err != nil {
+	readyTimeout := c.readyTimeout
+	if readyTimeout <= 0 {
+		readyTimeout = handoverReadyTimeout
+	}
+	if err := waitHandoverReady(ctx, readyR, readyTimeout); err != nil {
+		// The child never came up. Kill it, then Wait to reap it so it does not
+		// linger as a zombie, and restore this parent's on-disk identity so the
+		// pidfile/daemon.json keeps naming the process that is still serving —
+		// never the corpse (SC-2138).
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if c.restoreIdentity != nil {
+			c.restoreIdentity()
+		}
 		return err
 	}
 	_ = cmd.Process.Release()

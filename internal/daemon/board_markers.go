@@ -19,6 +19,16 @@ const (
 	BoardVerification   BoardStage = "verification"
 	BoardDoneStage      BoardStage = "done"
 	BoardHidden         BoardStage = "hidden"
+
+	// BoardTicketReview is a PSEUDO-stage: the ticket-review gate that runs as the
+	// first phase of the planning dispatch (planPrompt), before any code is
+	// planned. It is never a board column and never a ClassifyMarker output — its
+	// markers ([human:ticket-review]/[human:ticket-review-started]) map to
+	// BoardBacklog — so it deliberately carries no stageRank. It exists only as the
+	// stage a [human:options] decision the gate raises names ("stage: ticket-review"),
+	// which optionStageAliases resolves back to BoardPlanning so the decision reaches
+	// the board and resuming it re-runs the gate (SC-2137).
+	BoardTicketReview BoardStage = "ticket-review"
 )
 
 // BoardState is the within-stage status of a card: empty for an idle card

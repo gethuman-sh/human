@@ -159,6 +159,33 @@ func TestDaemonCmd_StopRegistered(t *testing.T) {
 	assert.True(t, found, "expected stop subcommand to be registered")
 }
 
+func TestStaleBuildNotice(t *testing.T) {
+	tests := []struct {
+		name         string
+		running      string
+		onDisk       string
+		wantContains string // empty means the notice must be empty
+	}{
+		{"same build is quiet", "abc123", "abc123", ""},
+		{"running build unknown is quiet", "", "abc123", ""},
+		{"on-disk build unknown is quiet", "abc123", "", ""},
+		{"both unknown is quiet", "", "", ""},
+		{"stale build warns", "old111", "new222", "older build"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := staleBuildNotice(tt.running, tt.onDisk)
+			if tt.wantContains == "" {
+				assert.Empty(t, got)
+				return
+			}
+			assert.Contains(t, got, tt.wantContains)
+			assert.Contains(t, got, tt.running)
+			assert.Contains(t, got, tt.onDisk)
+		})
+	}
+}
+
 func TestSwapLoopbackHost(t *testing.T) {
 	tests := []struct {
 		name  string
