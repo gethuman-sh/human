@@ -74,7 +74,7 @@ func TestAgentProgress_LongRunningButActiveIsNeverStalled(t *testing.T) {
 func TestAgentProgress_TranscriptOutputDefersTheHang(t *testing.T) {
 	now := time.Unix(100_000, 0)
 	p := AgentProgress{
-		LastEventAt:    now.Add(-4 * time.Minute), // past ThinkingIdleGrace on hooks alone
+		LastEventAt:    now.Add(-4 * time.Minute),  // past ThinkingIdleGrace on hooks alone
 		LastProgressAt: now.Add(-10 * time.Second), // still streaming to the transcript
 	}
 
