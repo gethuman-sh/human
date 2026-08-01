@@ -1123,8 +1123,11 @@ func TestApplyTransitionReworkAfterFailedVerdict(t *testing.T) {
 	// The one sanctioned backward move: a build whose review failed may be
 	// rebuilt, dispatched with a pointer at the review findings.
 	c := &fakeCommenter{comments: []tracker.Comment{
-		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
-		cmt("[human:review-complete]\nverdict: fail\n\nmissing error handling", time.Unix(2, 0)),
+		// The plan the original build carried out — its presence is what lets the
+		// rework rebuild pass the implementation launch's plan gate (SC-2596).
+		cmt("[human:plan-ready]", time.Unix(1, 0)),
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(2, 0)),
+		cmt("[human:review-complete]\nverdict: fail\n\nmissing error handling", time.Unix(3, 0)),
 	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
@@ -1140,7 +1143,10 @@ func TestApplyTransitionReworkAllowedWhenNoBranchRecorded(t *testing.T) {
 	// has nothing to ship — the only repair is a rebuild, so the backward move
 	// onto the build stage must be allowed exactly like a failed verdict.
 	c := &fakeCommenter{comments: []tracker.Comment{
-		cmt("[human:review-complete]\nverdict: pass", time.Unix(1, 0)),
+		// Plan evidence from the original build, so the rebuild clears the plan gate
+		// (SC-2596); the rework itself is triggered by the branch-less passed review.
+		cmt("[human:plan-ready]", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: pass", time.Unix(2, 0)),
 	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})

@@ -44,6 +44,7 @@ var specs = map[string]spec{
 	"plan-ready":            {},
 	"planning-failed":       {},
 	"implementation-failed": {},
+	"needs-planning":        {},
 	"ready-for-review":      {required: []string{"branch", "commits"}},
 	"review-started":        {},
 	"review-complete":       {required: []string{"verdict"}},

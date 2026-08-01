@@ -141,6 +141,19 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 
 	state = pauseOnOpenOptions(state, furthest, comments)
 
+	// A [human:needs-planning] refusal is the last word: the implementation
+	// launch was refused because the ticket has no plan (SC-2596). It is a
+	// planning-stage marker, but the ticket's furthest markers are the phantom
+	// implementation launches it refused, which furthest-stage-wins would show
+	// as a running/failed build instead. Surface the refusal explicitly so the
+	// card returns to Planning carrying the determination — where a human can
+	// trigger the plan (isPlanningRetry) — and no phantom running marker reds it
+	// as a crash. Placed after the decision-queue override so a refusal strictly
+	// newer than a stale option-chosen still wins.
+	if np, ok := newestNeedsPlanning(comments); ok {
+		furthest, state, latest, anyMarker = BoardPlanning, BoardFailed, np, true
+	}
+
 	if !anyMarker {
 		// No pipeline activity yet: the open ticket waits in Backlog.
 		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
@@ -299,6 +312,40 @@ func latestMarkerOverall(comments []tracker.Comment) (tracker.Comment, BoardStag
 		}
 	}
 	return latest, stage, state, have
+}
+
+// hasPlanEvidence reports whether the ticket has been planned. Two proofs, one
+// per topology: a [human:plan] comment (the plan itself lives on the ticket,
+// single-tracker topology) or a [human:plan-ready] marker (planning completed;
+// both topologies post it, carrying the engineering key in split topology).
+// Either is sufficient that the implementation stage has a plan to carry out —
+// the precondition the launch guard checks (SC-2596).
+func hasPlanEvidence(comments []tracker.Comment) bool {
+	if _, ok := latestPlanComment(comments); ok {
+		return true
+	}
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), PlanReadyHeader) {
+			return true
+		}
+	}
+	return false
+}
+
+// newestNeedsPlanning reports whether the ticket's newest board marker is a
+// [human:needs-planning] refusal, returning that marker so its message reaches
+// the card. Newest-overall (not furthest-stage) on purpose: the refusal must win
+// over the phantom implementation markers it refused, which outrank the planning
+// stage it maps to (SC-2596).
+func newestNeedsPlanning(comments []tracker.Comment) (tracker.Comment, bool) {
+	newest, _, _, ok := latestMarkerOverall(comments)
+	if !ok {
+		return tracker.Comment{}, false
+	}
+	if strings.HasPrefix(strings.TrimSpace(newest.Body), NeedsPlanningHeader) {
+		return newest, true
+	}
+	return tracker.Comment{}, false
 }
 
 // latestPlanComment returns the body of the newest [human:plan] comment with
