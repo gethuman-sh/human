@@ -274,37 +274,6 @@ func TestDoneGatePromptsClassifyRedSuites(t *testing.T) {
 	})
 }
 
-// The acceptance criterion is what must become true, never the remedy a ticket
-// or a plan sketches. Both review gates — the standalone reviewer and the
-// pre-merge PR reviewer that runs unattended in a fix loop — must carry the
-// identical, plan-covering rule, or a correct-but-different diff gets argued
-// back to the plan on the one gate that acts without a human (SC-2327).
-func TestReviewerJudgesOutcomesNotTheMechanism(t *testing.T) {
-	for _, name := range []string{
-		"human-reviewer-agent.md",
-		"human-pr-reviewer-agent.md",
-	} {
-		t.Run(name, func(t *testing.T) {
-			body, err := os.ReadFile(filepath.Join("embed", name))
-			require.NoError(t, err)
-			content := string(body)
-
-			assert.Contains(t, content, "The outcome is the criterion, not the mechanism.",
-				"%s must carry the outcome-over-mechanism rule", name)
-			assert.Contains(t, content, "This holds for the **plan** as much as for the ticket",
-				"%s must extend the rule to the plan, not only the ticket's own wording", name)
-			assert.Contains(t, content, "different, equivalent, or cheaper route",
-				"%s must state a cheaper/equivalent route is a PASS", name)
-			assert.Contains(t, content, "ask about a skipped step only when its absence means something the ticket promised is missing",
-				"%s must block a skipped step only when it leaves something promised missing", name)
-			assert.Contains(t, content, "**Required approach**",
-				"%s must keep an explicit Required approach binding", name)
-			assert.NotContains(t, content, "For a bug ticket the acceptance criterion is the stated",
-				"%s must not scope the rule to bug tickets alone", name)
-		})
-	}
-}
-
 func TestInstall_CreatesNewFiles(t *testing.T) {
 	fw := newMockFileWriter()
 	var buf bytes.Buffer

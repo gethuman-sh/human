@@ -24,14 +24,22 @@ var modelTiersFragment []byte
 //go:embed embed/shared/stage-lease.md
 var stageLeaseFragment []byte
 
+//go:embed embed/shared/build-gate.md
+var buildGateFragment []byte
+
+//go:embed embed/shared/outcome-not-mechanism.md
+var outcomeNotMechanismFragment []byte
+
 // sharedFragments are prompt blocks that must read identically in every skill
 // and agent that carries them. Keeping one copy here and substituting it at
 // install time is what stops twenty prompts from drifting apart, which is how
 // the pipeline accumulated a different phrasing of the same rule per stage.
 var sharedFragments = map[string][]byte{
-	"exit-contract": exitContractFragment,
-	"model-tiers":   modelTiersFragment,
-	"stage-lease":   stageLeaseFragment,
+	"exit-contract":         exitContractFragment,
+	"model-tiers":           modelTiersFragment,
+	"stage-lease":           stageLeaseFragment,
+	"build-gate":            buildGateFragment,
+	"outcome-not-mechanism": outcomeNotMechanismFragment,
 }
 
 // includePattern matches a whole-line include directive:
