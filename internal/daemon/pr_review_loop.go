@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"strings"
+	"time"
 
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -127,6 +128,32 @@ func latestPRLoopStage(comments []tracker.Comment) PRLoopStage {
 	return stage
 }
 
+// LatestMarkerTime returns the Created time of the newest comment whose body
+// starts with header, and whether one was found at all. It is the identity
+// anchor the cmd-layer state reads settle against (SC-2378): the daemon posts
+// a round's started-marker BEFORE launching the agent, and the agent writes
+// its report only at the very end of the round, so any state-store write for
+// this round is necessarily timestamped at or after the marker — a record
+// older than the marker can only be a previous round's leftover.
+// commentNewer breaks same-second ties deterministically, the same rule every
+// other "latest marker" scan in this package already relies on.
+func LatestMarkerTime(comments []tracker.Comment, header string) (time.Time, bool) {
+	var latest tracker.Comment
+	found := false
+	for _, c := range comments {
+		if !strings.HasPrefix(strings.TrimSpace(c.Body), header) {
+			continue
+		}
+		if !found || commentNewer(c, latest) {
+			latest, found = c, true
+		}
+	}
+	if !found {
+		return time.Time{}, false
+	}
+	return latest.Created, true
+}
+
 // prReviewRounds counts completed review rounds — one per pr-review-started
 // marker — the value the decider bounds against DefaultPRReviewRounds.
 func prReviewRounds(comments []tracker.Comment) int {
@@ -172,6 +199,15 @@ type PRLoopOutcome struct {
 	FixSummary string
 	Agent      string
 	ErrorType  string
+	// ReviewStale/FixStale report that the corresponding record above was NOT
+	// confirmed to be this round's own write — the cmd-layer reader raced ahead
+	// of the reviewer/fixer's final write and, after its bounded settle backoff,
+	// still could not tell whether it was reading this step's outcome or the
+	// previous round's leftover. A stale record must never be acted on: the loop
+	// escalates instead of trusting a verdict/exit it cannot confirm is current
+	// (SC-2378).
+	ReviewStale bool
+	FixStale    bool
 }
 
 // headStalled reports the convergence-guard condition: the fixer finished but the
@@ -197,6 +233,20 @@ func (o PRLoopOutcome) stepRecorded(stage PRLoopStage) bool {
 	}
 }
 
+// stepStale reports whether the just-finished step's own record was NOT
+// confirmed to be this round's write — see ReviewStale/FixStale. PRStageNone
+// has no step behind it, so nothing can be stale.
+func (o PRLoopOutcome) stepStale(stage PRLoopStage) bool {
+	switch stage {
+	case PRStageReview:
+		return o.ReviewStale
+	case PRStageFix:
+		return o.FixStale
+	default:
+		return false
+	}
+}
+
 // EvaluatePRLoop bridges the recorded board state to the decider: it reads which
 // loop step last ran (from the markers) and how many review rounds have
 // completed, pairs the step with the outcome that step recorded — the reviewer's
@@ -206,13 +256,28 @@ func (o PRLoopOutcome) stepRecorded(stage PRLoopStage) bool {
 // tested without a daemon; the caller executes the action (launch an agent,
 // mark-ready + merge, or red the card).
 //
-// On top of the pure transition it enforces the convergence guard: a fix that
-// finished `done` but left the branch tip on the SAME SHA the preceding review
-// read (headStalled) escalates instead of re-reviewing, so a fixer that produced
-// no new commit fails loudly rather than driving an endless review→fix loop
+// On top of the pure transition it enforces two further rules, checked in
+// order.
+//
+// First, staleness (SC-2378): the loop never acts on a step's outcome until
+// that step's own record is the one being read. If the just-finished step's
+// record could not be confirmed as THIS round's write — the cmd-layer reader
+// raced ahead of the reviewer/fixer's final write — it escalates immediately,
+// before the outcome is even looked at, rather than risk treating a
+// superseded verdict/exit as current.
+//
+// Second, the convergence guard: a fix that finished `done` but left the
+// branch tip on the SAME SHA the preceding review read (headStalled) means
+// the fixer added no commit. When the preceding review had already APPROVED,
+// that is not a failure to converge — there was nothing left to fix — so it
+// merges (SC-2307/AD3); any other preceding verdict is a genuine
+// non-convergence and still escalates rather than re-reviewing forever
 // (SC-1760).
 func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAction {
 	stage := latestPRLoopStage(comments)
+	if outcome.stepStale(stage) {
+		return PRActionEscalate
+	}
 	var step string
 	switch stage {
 	case PRStageReview:
@@ -222,6 +287,9 @@ func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAct
 	}
 	action := NextPRLoopAction(stage, step, prReviewRounds(comments), DefaultPRReviewRounds)
 	if stage == PRStageFix && action == PRActionReview && outcome.headStalled() {
+		if outcome.ReviewVerdict == PRVerdictApproved {
+			return PRActionMerge
+		}
 		return PRActionEscalate
 	}
 	return action

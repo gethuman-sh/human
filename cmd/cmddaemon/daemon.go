@@ -2740,21 +2740,35 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, li
 // is long gone (SC-1892).
 func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
 	return func(pmKey, agentName, errorType string) error {
-		project := boardStateProject(ds.srv.Projects, pmKey)
-		verdict, reviewHead, verdictRecorded := readPRReviewVerdict(ctx, project, pmKey, logger)
-		exit, options, summary, fixHead, exitRecorded := readPRFixReport(ctx, project, pmKey, logger)
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 		if err != nil {
 			return err
 		}
 		deps.Diagnose = diagnose
+
+		// The identity anchor for the reads below (SC-2378/AD2): the round's own
+		// started-marker time. A state-store write timestamped before it can only
+		// be a previous round's leftover, never this round's outcome. Comments are
+		// listed once here and reused for both anchors rather than re-listed per
+		// read.
+		project := boardStateProject(ds.srv.Projects, pmKey)
+		var reviewAnchor, fixAnchor time.Time
+		if comments, cerr := deps.Commenter.ListComments(ctx, pmKey); cerr == nil {
+			reviewAnchor, _ = daemon.LatestMarkerTime(comments, daemon.PRReviewStartedHeader)
+			fixAnchor, _ = daemon.LatestMarkerTime(comments, daemon.PRFixStartedHeader)
+		}
+
+		verdict, reviewHead, verdictRecorded, verdictFresh := readPRReviewVerdict(ctx, project, pmKey, reviewAnchor, logger)
+		exit, options, summary, fixHead, exitRecorded, exitFresh := readPRFixReport(ctx, project, pmKey, fixAnchor, logger)
 		return deps.AdvancePRLoop(ctx, pmKey, daemon.PRLoopOutcome{
 			ReviewVerdict:  verdict,
 			ReviewRecorded: verdictRecorded,
 			ReviewHead:     reviewHead,
+			ReviewStale:    verdictRecorded && !verdictFresh,
 			FixExit:        exit,
 			FixRecorded:    exitRecorded,
 			FixHead:        fixHead,
+			FixStale:       exitRecorded && !exitFresh,
 			FixOptions:     options,
 			FixSummary:     summary,
 			Agent:          agentName,
@@ -2768,11 +2782,15 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 // executor, which re-runs Deploy on `done` or reds the card on anything else.
 func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
 	return func(pmKey string) error {
-		exit := readDeployFixExit(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, logger)
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
+		var anchor time.Time
+		if comments, cerr := deps.Commenter.ListComments(ctx, pmKey); cerr == nil {
+			anchor, _ = daemon.LatestMarkerTime(comments, daemon.DeployFixStartedHeader)
+		}
+		exit := readDeployFixExit(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, anchor, logger)
 		return deps.AdvanceDeployFix(ctx, pmKey, exit)
 	}
 }

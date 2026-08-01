@@ -686,6 +686,8 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 // missing instead of implying something unparseable was found.
 func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose BoardFailureDiagnoser) string {
 	switch {
+	case outcome.stepStale(stage):
+		return staleStepReason(stage)
 	case stage == PRStageFix && outcome.FixExit == PRFixDone && outcome.headStalled():
 		return "the PR fixer recorded done but added no commit — the reviewed head is unchanged, so another review would loop; check the fixer's log and the PR, then re-run Deploy"
 	case outcome.FixExit == ExitNeedsInput:
@@ -699,6 +701,22 @@ func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Board
 	default:
 		return "the PR review→fix loop stopped on an outcome it could not classify — check the PR and its review, then re-run Deploy"
 	}
+}
+
+// staleStepReason names the record the loop could not confirm was current
+// (SC-2378): a state-store read that raced ahead of the reviewer's or fixer's
+// final write, and stayed unconfirmed through its bounded settle backoff. The
+// loop escalates rather than risk acting on a superseded verdict or exit —
+// this is the operator-facing explanation of which one it was.
+func staleStepReason(stage PRLoopStage) string {
+	what := "the PR review→fix loop step's outcome"
+	switch stage {
+	case PRStageReview:
+		what = "the review verdict"
+	case PRStageFix:
+		what = "the fixer's exit"
+	}
+	return "the loop could not confirm " + what + " was fully written before acting on it — check the PR and its review, then re-run Deploy"
 }
 
 // unrecordedStepReason explains a loop step that left no outcome behind.
