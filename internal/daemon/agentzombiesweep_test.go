@@ -22,8 +22,23 @@ type mockSweeper struct {
 	// cancelled), modelling a reap hung inside CopyTranscript.
 	blockDelete map[string]chan struct{}
 
+	// transcriptMtime, keyed by containerID, is what NewestTranscriptMtime
+	// reports; absent entries report ok=false ("no transcript yet").
+	transcriptMtime map[string]time.Time
+	transcriptErr   map[string]error
+
 	mu      sync.Mutex
 	deleted []string
+}
+
+func (m *mockSweeper) NewestTranscriptMtime(_ context.Context, containerID string) (time.Time, bool, error) {
+	if m.transcriptErr != nil {
+		if err, ok := m.transcriptErr[containerID]; ok {
+			return time.Time{}, false, err
+		}
+	}
+	mtime, ok := m.transcriptMtime[containerID]
+	return mtime, ok, nil
 }
 
 func (m *mockSweeper) RunningAgents() ([]AgentInfo, error) {
@@ -140,7 +155,7 @@ func TestSweepZombieAgents_MixedAgents(t *testing.T) {
 
 func TestRunAgentZombieSweep_NilSweeper(t *testing.T) {
 	// Should return immediately without panic.
-	RunAgentZombieSweep(context.Background(), nil, nil, nil, zerolog.Nop())
+	RunAgentZombieSweep(context.Background(), nil, nil, nil, nil, zerolog.Nop())
 }
 
 // SC-236: a deliberately idle agent (bare `human agent start NAME`, empty
@@ -244,7 +259,7 @@ func TestSweepZombieAgents_NotifiesOnReap(t *testing.T) {
 		processUp: map[string]bool{"c1": false},
 	}
 	var reaped []string
-	onReaped := func(name string) { reaped = append(reaped, name) }
+	onReaped := func(name string, _ ReapReason) { reaped = append(reaped, name) }
 
 	newZombieSweep().sweepZombieAgents(context.Background(), s, onReaped, zerolog.Nop())
 
@@ -263,7 +278,7 @@ func TestSweepZombieAgents_NoNotifyWhenDeleteFails(t *testing.T) {
 		deleteErr: map[string]error{"board-204-implementation": assertErr{}},
 	}
 	var reaped []string
-	onReaped := func(name string) { reaped = append(reaped, name) }
+	onReaped := func(name string, _ ReapReason) { reaped = append(reaped, name) }
 
 	newZombieSweep().sweepZombieAgents(context.Background(), s, onReaped, zerolog.Nop())
 
@@ -295,7 +310,7 @@ func TestSweepZombieAgents_ReapsAfterPersistentCheckError(t *testing.T) {
 		processErr: map[string]error{"c1": assertErr{}},
 	}
 	var reaped []string
-	onReaped := func(name string) { reaped = append(reaped, name) }
+	onReaped := func(name string, _ ReapReason) { reaped = append(reaped, name) }
 
 	sweep := newZombieSweep()
 	for range zombieMaxProcessCheckFailures {
@@ -365,6 +380,36 @@ func TestSweepZombieAgents_ReapsHungBoardAgent(t *testing.T) {
 	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
 
 	assert.Equal(t, []string{"board-1557-implementation"}, s.deleted)
+}
+
+// SC-2447: hook silence alone is not the whole story. A hook-idle agent whose
+// container transcript is still advancing is thinking, not hung — the sweep
+// must fold the fresh transcript mtime into progress BEFORE judging the hang,
+// so it is spared exactly like a live TestSweepZombieAgents_SparesWorkingBoardAgent case.
+func TestSweepZombieAgents_FreshTranscriptSparesHungLookingAgent(t *testing.T) {
+	now := time.Now()
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "board-1557-implementation", ContainerID: "c1", CreatedAt: now.Add(-3 * time.Hour)},
+		},
+		processUp:       map[string]bool{"c1": true},
+		transcriptMtime: map[string]time.Time{"c1": now}, // still producing output right now
+	}
+	sweep := newZombieSweep()
+	progress := map[string]AgentProgress{
+		"board-1557-implementation": {LastEventAt: now.Add(-40 * time.Minute)}, // hook-idle, past ThinkingIdleGrace
+	}
+	sweep.progress = func(agentName string) (AgentProgress, bool) {
+		p, ok := progress[agentName]
+		return p, ok
+	}
+	sweep.recordProgress = func(agentName string, at time.Time) {
+		recordAgentOutput(progress, agentName, at)
+	}
+
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+
+	assert.Empty(t, s.deleted, "fresh transcript output means the agent is thinking, not hung")
 }
 
 // A board agent silent for only a short time is well within its idle budget

@@ -1090,6 +1090,59 @@ func TestRunBoardFailureWatch_TicketReviewReadyThenCrashStillFails(t *testing.T)
 	assert.Contains(t, c.added[0], PlanningFailedHeader)
 }
 
+// SC-2447: a silence-reap (the zombie sweep reaping a board agent that went
+// quiet past its idle budget with no sign of life) is a machine-chosen stop,
+// not a stage failure — it must not consume the ticket's automatic-retry
+// budget. The sentinel ErrorType carries the observed idle so the marker can
+// say plainly what was observed and why.
+func TestHandleBoardAgentExit_SilenceReapDoesNotChargeRetry(t *testing.T) {
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var attemptsCalled bool
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
+		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", ReapSilenceErrorType+":18m0s", "StopFailure",
+		commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, retry, "", zerolog.Nop())
+
+	assert.False(t, attemptsCalled, "a silence reap must never read/bump the charged attempt counter")
+	assert.Equal(t, []BoardStage{BoardImplementation}, relaunched, "the stage is still relaunched")
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.True(t, strings.HasPrefix(c.added[0], ImplementationFailedHeader))
+	assert.Contains(t, c.added[0], "18m", "the marker must state what was observed")
+	assert.Contains(t, c.added[0], "not charged", "the marker must state the rule applied")
+}
+
+// A genuine StopFailure — no silence sentinel — must still charge the retry
+// budget exactly as before; only a recognized silence-reap sentinel is exempt.
+func TestHandleBoardAgentExit_GenuineStopFailureStillCharges(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	c := &syncCommenter{
+		comments: []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))},
+	}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var attemptsCalled bool
+	retry := StageRetry{
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
+		Relaunch: func(string, BoardStage) error { return nil },
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "StopFailure",
+		commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, retry, "", zerolog.Nop())
+
+	assert.True(t, attemptsCalled, "an empty-ErrorType StopFailure must still charge the retry budget")
+}
+
 // A deploy-fixer's Stop event routes to AdvanceDeployFix (reclaiming its
 // worktree first) and is fully handled there — never falling through to the
 // generic stage-failure diagnoser that would red the card.

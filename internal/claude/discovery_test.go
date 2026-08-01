@@ -939,6 +939,28 @@ func TestSortFilesByMtime_Empty(t *testing.T) {
 	}
 }
 
+// SC-2447: the zombie sweep's reasoning-heartbeat probe reads the same
+// TranscriptStatCommand output and needs only the newest timestamp, not the
+// paths — this is its parser.
+func TestNewestTranscriptMtime_PicksNewest(t *testing.T) {
+	input := []byte("1700000000 /a.jsonl\n1700000600 /b.jsonl\n")
+	mtime, ok := NewestTranscriptMtime(input)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if want := time.Unix(1700000600, 0); !mtime.Equal(want) {
+		t.Errorf("mtime = %v, want %v", mtime, want)
+	}
+}
+
+func TestNewestTranscriptMtime_Empty(t *testing.T) {
+	for _, input := range [][]byte{nil, []byte(""), []byte("not a stat line\n")} {
+		if _, ok := NewestTranscriptMtime(input); ok {
+			t.Errorf("expected ok=false for input %q — a container with no transcript yet must never be read as a hang", input)
+		}
+	}
+}
+
 func TestDockerFinder_SkipsContainerWithoutClaude(t *testing.T) {
 	dc := &mockDockerClient{
 		containers: []ContainerInfo{

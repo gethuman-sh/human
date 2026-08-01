@@ -597,14 +597,25 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	hookEvents := ds.srv.HookEvents
 	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, func(name string) (daemon.AgentProgress, bool) {
 		return hookEvents.AgentProgress(name)
-	}, func(agentName string) {
+	}, hookEvents.RecordAgentOutput, func(agentName string, reason daemon.ReapReason) {
 		// A reaped agent died without firing hooks, so no exit event exists
 		// for the board failure watcher to act on; synthesizing one converges
 		// the reap path with the hook-driven exit paths — one marker-posting
 		// code path (SC-206).
+		//
+		// A silence reap carries its reason as a sentinel ErrorType
+		// ("reaped-silent:<idle>") so the exit handler routes it to the
+		// uncharged relaunch instead of the charged failure path — the
+		// machine's own judgement must not spend the ticket's retry budget
+		// (SC-2447).
+		errorType := ""
+		if reason.Silent {
+			errorType = daemon.ReapSilenceErrorType + ":" + reason.Idle.Round(time.Second).String()
+		}
 		hookEvents.Append(hookevents.Event{
 			EventName: "StopFailure",
 			AgentName: agentName,
+			ErrorType: errorType,
 			Timestamp: time.Now().UTC(),
 		})
 	}, logger)
@@ -3598,6 +3609,43 @@ func (s *dockerAgentSweeper) IsProcessRunning(ctx context.Context, containerID s
 		return false, err
 	}
 	return inspect.ExitCode == 0, nil
+}
+
+// NewestTranscriptMtime reads the newest session transcript modification time
+// from the container — the real-output evidence a thinking agent produces
+// even between hook events, since Claude Code appends to the active
+// transcript as it streams (SC-2447). Same exec/drain/stall-guard shape as
+// IsProcessRunning: the drain must never park the single zombie-sweep
+// goroutine on a stalled stream.
+func (s *dockerAgentSweeper) NewestTranscriptMtime(ctx context.Context, containerID string) (time.Time, bool, error) {
+	docker, err := devcontainer.NewDockerClient()
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	defer func() { _ = docker.Close() }()
+
+	execID, err := docker.ExecCreate(ctx, containerID, []string{"sh", "-c", claude.TranscriptStatCommand}, devcontainer.ExecOptions{})
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	resp, err := docker.ExecAttach(ctx, execID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	stop := closeExecOnContextDone(ctx, resp)
+	out, readErr := io.ReadAll(resp.Reader)
+	stop()
+	_ = resp.Close()
+	if readErr != nil {
+		return time.Time{}, false, readErr
+	}
+
+	if _, err := docker.ExecInspect(ctx, execID); err != nil {
+		return time.Time{}, false, err
+	}
+
+	mtime, ok := claude.NewestTranscriptMtime(out)
+	return mtime, ok, nil
 }
 
 // closeExecOnContextDone starts a watchdog that closes the exec attachment when

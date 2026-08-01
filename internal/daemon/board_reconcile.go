@@ -356,6 +356,39 @@ func stuckRunningCandidate(derived BoardCard, comments []tracker.Comment) bool {
 // correct for every card that reaches it, because a card owned elsewhere never
 // does (SC-2047: ownership binds a running stage to its machine, so the
 // delay-only StuckRunningForeignGrace is retired rather than lengthened).
+// hungLiveAgent decides, for a card whose stage agent is still alive, whether
+// that agent has stopped making progress and, if so, stops it before anything
+// relaunches. It reports whether the caller should proceed to red the card
+// (false covers both "genuinely working" and "could not be stopped" — neither
+// is evidence the card is dead) and, when proceeding, whether the stop was
+// this pass's own judgement (silenced) plus the idle duration to report.
+// Pulled out of reconcileStuckRunning to keep that function's branching
+// inside the complexity gate.
+func hungLiveAgent(progress AgentProgressProbe, agentName string, now time.Time, stopAgent func(agentName string) error, pmKey string, stage BoardStage, logger zerolog.Logger) (proceed, silenced bool, idleReason string) {
+	// A live container is not the same as a working agent: a hung agent looks
+	// perfectly healthy here, which is why a hang was previously never
+	// detected at all. Ask whether it is still making progress.
+	stalled, idle := stageStalled(progress, agentName, now)
+	if !stalled {
+		return false, false, "" // genuinely working, however long it has been running
+	}
+	logger.Warn().Str("pm", pmKey).Str("stage", string(stage)).
+		Dur("idle", idle).Msg("board reconcile: agent alive but making no progress, treating as hung")
+	// A hung agent still holds its container and workspace, so it must be
+	// stopped before anything relaunches — otherwise two agents work the same
+	// stage. A stop that fails (or is unwired) leaves the card alone rather
+	// than risking that.
+	if stopAgent == nil {
+		return false, false, ""
+	}
+	if err := stopAgent(agentName); err != nil {
+		logger.Warn().Err(err).Str("agent", agentName).
+			Msg("board reconcile: cannot stop hung agent, leaving the card as-is")
+		return false, false, ""
+	}
+	return true, true, idle.Round(time.Second).String()
+}
+
 func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) int {
 	if liveAgents == nil || postFailed == nil {
 		return 0
@@ -387,42 +420,45 @@ func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgen
 			continue
 		}
 		agentName := agentNameFor(card.Key, derived.Stage)
+		// silenced marks a stop THIS pass chose because a live agent stopped
+		// making progress — a machine-chosen stop, not a stage failure, so it
+		// must not consume the ticket's retry budget (SC-2447). A vanished
+		// agent (no entry in alive) is a genuine, unexplained death and stays
+		// on the charged path unchanged.
+		var silenced bool
+		var idleReason string
 		if _, ok := alive[agentName]; ok {
-			// A live container is not the same as a working agent: a hung agent
-			// looks perfectly healthy here, which is why a hang was previously
-			// never detected at all. Ask whether it is still making progress.
-			stalled, idle := stageStalled(progress, agentName, now)
-			if !stalled {
-				continue // genuinely working, however long it has been running
-			}
-			logger.Warn().Str("pm", card.Key).Str("stage", string(derived.Stage)).
-				Dur("idle", idle).Msg("board reconcile: agent alive but making no progress, treating as hung")
-			// A hung agent still holds its container and workspace, so it must be
-			// stopped before anything relaunches — otherwise two agents work the
-			// same stage. A stop that fails leaves the card alone rather than
-			// risking that.
-			if stopAgent == nil {
+			proceed, s, reason := hungLiveAgent(progress, agentName, now, stopAgent, card.Key, derived.Stage, logger)
+			if !proceed {
 				continue
 			}
-			if err := stopAgent(agentName); err != nil {
-				logger.Warn().Err(err).Str("agent", agentName).
-					Msg("board reconcile: cannot stop hung agent, leaving the card as-is")
-				continue
-			}
+			silenced, idleReason = s, reason
 		}
 		body := header + "\n" + stuckRunningReason(derived.Stage)
+		if silenced {
+			body = header + "\n" + silenceReapReason(idleReason)
+		}
 		if err := postFailed(ctx, card.Key, body); err != nil {
 			logger.Warn().Err(err).Str("pm", card.Key).
 				Msg("board reconcile: cannot red stuck-running card")
 			continue
 		}
 		reddened++
+		if silenced {
+			// A live agent this pass judged hung and stopped itself: uncharged,
+			// like the live failure watcher's silence-reap path (SC-2447) — the
+			// work did not fail, a judgement about the work did.
+			retry.relaunchSilenceReap(card.Key, derived.Stage, logger)
+			continue
+		}
 		// This is the fallback path the live failure watcher misses — an agent
-		// that died with no exit hook (a daemon restart, a dropped event). The
-		// same bounded relaunch applies, so a silently-dead stage recovers here
-		// too instead of only reddening. The just-posted failed marker is the
-		// trail record, so no separate retry note (nil commenter); the shared
-		// per-stage budget bounds this path and the watcher's together.
+		// that died with no exit hook (a daemon restart, a dropped event). A
+		// vanished agent IS a real, unexplained death, so it stays on the
+		// charged path: the same bounded relaunch applies, so a silently-dead
+		// stage recovers here too instead of only reddening. The just-posted
+		// failed marker is the trail record, so no separate retry note (nil
+		// commenter); the shared per-stage budget bounds this path and the
+		// watcher's together.
 		retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger)
 	}
 	return reddened

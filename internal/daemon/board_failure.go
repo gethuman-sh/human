@@ -159,6 +159,24 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 		}
 		return
 	}
+	// A silence reap (the zombie sweep reaping an agent that went quiet — no
+	// hook event and no transcript output — past its idle budget) is a
+	// machine-chosen stop, not a stage failure: the card still reads red (the
+	// stage did not finish), but the retry budget must not be charged for it and
+	// the trail must say plainly what was observed and why (SC-2447). Checked
+	// before the generic failure path so the sentinel never falls through to the
+	// charged branch below.
+	if idle, ok := silenceReapIdle(errorType); ok && retry.enabled() {
+		if header := failedHeaderFor(stage); header != "" {
+			body := header + "\n" + silenceReapReason(idle)
+			if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+				logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap marker")
+				return
+			}
+			retry.relaunchSilenceReap(pmKey, stage, logger)
+			return
+		}
+	}
 	body := failedHeaderFor(stage) + "\n" + failureMarkerBody(diagnose, agentName, errorType)
 	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
@@ -528,6 +546,17 @@ func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
 func verificationInFlight(comments []tracker.Comment) bool {
 	ok, state := latestStageState(comments, BoardVerification)
 	return ok && state == BoardRunning
+}
+
+// silenceReapReason composes the plain, self-explaining line a silence-reap
+// posts in place of the generic diagnosis: what the daemon observed, and
+// exactly what rule it applied — a machine that reaps an agent for silence
+// must not leave a reader guessing between a crash, a kill, and a restart
+// (SC-2447's third and fourth wanted outcomes).
+func silenceReapReason(idle string) string {
+	return "the daemon observed " + idle + " with no sign of life — no tool activity and no transcript " +
+		"output — past the idle budget, and stopped the stage. This is a machine-chosen stop, not a stage " +
+		"failure, so it is not charged against the retry budget. The stage was relaunched automatically."
 }
 
 // failureMarkerBody composes the failed marker's body: a one-line headline
