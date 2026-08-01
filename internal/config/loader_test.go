@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -156,13 +157,32 @@ func TestLoadInstances_incompleteSkipped(t *testing.T) {
 
 // captureLog redirects the global zerolog logger to a buffer for the duration
 // of the test, restoring the previous logger afterwards.
+//
+// It also clears the record of already-reported skips. That record is
+// process-global by design (it has to outlive a single config rebuild), so
+// without this an earlier test that skipped the same entry would suppress the
+// warning this test is asserting on.
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
+	forgetAllSkippedInstances()
 	var buf bytes.Buffer
 	prev := log.Logger
 	log.Logger = zerolog.New(&buf)
 	t.Cleanup(func() { log.Logger = prev })
 	return &buf
+}
+
+// forgetAllSkippedInstances resets the skip memory so each test starts from a
+// clean slate.
+func forgetAllSkippedInstances() {
+	skippedInstances.mu.Lock()
+	defer skippedInstances.mu.Unlock()
+	skippedInstances.reported = map[string]string{}
+}
+
+// countWarnings reports how many log lines mention a skipped instance.
+func countWarnings(buf *bytes.Buffer) int {
+	return strings.Count(buf.String(), "skipped configured instance")
 }
 
 func TestLoadInstances_warnsOnSkippedInstance(t *testing.T) {
@@ -181,6 +201,114 @@ func TestLoadInstances_warnsOnSkippedInstance(t *testing.T) {
 	assert.Contains(t, out, "TEST_WORK_TOKEN")
 	assert.Contains(t, out, "TEST_TOKEN")
 	assert.Contains(t, out, "skipped")
+}
+
+// A missing credential cannot appear between two rebuilds, and the daemon
+// rebuilds several times a second — so the warning must be said once, not once
+// per rebuild (SC-2605).
+func TestLoadInstances_warnsOnceWhileReasonUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "tests:\n  - name: work\n    url: https://example.com\n")
+	unsetTestEnv(t)
+
+	buf := captureLog(t)
+
+	for range 5 {
+		instances, err := LoadInstances(dir, testSpec(""))
+		require.NoError(t, err)
+		require.Empty(t, instances)
+	}
+
+	assert.Equal(t, 1, countWarnings(buf), "an unchanged condition is news only the first time")
+}
+
+// Losing a different credential is a different state, so it is worth saying
+// again rather than being swallowed as a repeat.
+func TestLoadInstances_warnsAgainWhenReasonChanges(t *testing.T) {
+	unsetTestEnv(t)
+	buf := captureLog(t)
+
+	// Build always refuses, so the reason is whichever fields resolve empty.
+	spec := testSpec("")
+	spec.Build = func(testConfig) (testInstance, bool) { return testInstance{}, false }
+
+	missingToken := t.TempDir()
+	writeTestConfig(t, missingToken, "tests:\n  - name: work\n    url: https://example.com\n")
+	missingURL := t.TempDir()
+	writeTestConfig(t, missingURL, "tests:\n  - name: work\n    token: tok\n")
+
+	for _, dir := range []string{missingToken, missingToken, missingURL, missingURL} {
+		_, err := LoadInstances(dir, spec)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 2, countWarnings(buf), "one line per distinct reason, not per rebuild")
+}
+
+// A credential that comes back and goes missing again has to be reported
+// afresh — the second outage is not a repeat of the first.
+func TestLoadInstances_warnsAgainAfterInstanceRecovers(t *testing.T) {
+	unsetTestEnv(t)
+	buf := captureLog(t)
+
+	broken := t.TempDir()
+	writeTestConfig(t, broken, "tests:\n  - name: work\n    url: https://example.com\n")
+	healthy := t.TempDir()
+	writeTestConfig(t, healthy, "tests:\n  - name: work\n    url: https://example.com\n    token: tok\n")
+
+	for _, dir := range []string{broken, healthy, broken} {
+		_, err := LoadInstances(dir, testSpec(""))
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 2, countWarnings(buf), "the outage after a recovery is new news")
+}
+
+// Two sections may each configure an instance called "work"; one being skipped
+// must not silence the other.
+func TestLoadInstances_warnsPerSectionForSameInstanceName(t *testing.T) {
+	unsetTestEnv(t)
+	buf := captureLog(t)
+
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "tests:\n  - name: work\n    url: https://example.com\n")
+
+	first := testSpec("")
+	second := testSpec("")
+	second.Section = "others"
+
+	for _, spec := range []InstanceSpec[testConfig, testInstance]{first, second} {
+		_, err := LoadInstances(dir, spec)
+		require.NoError(t, err)
+	}
+
+	// Only "tests" is present in the file, so "others" loads nothing and warns
+	// nothing; the point is that the key is not the bare instance name.
+	assert.Equal(t, 1, countWarnings(buf))
+	assert.NotEqual(t, skippedInstanceKey("tests", "work"), skippedInstanceKey("others", "work"))
+}
+
+// An entry rejected for a reason not tied to an empty credential field takes
+// the other branch, which must dedupe too.
+func TestLoadInstances_warnsOnceForIncompleteConfig(t *testing.T) {
+	unsetTestEnv(t)
+	buf := captureLog(t)
+
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "tests:\n  - name: work\n    url: https://example.com\n    token: tok\n")
+
+	spec := testSpec("")
+	spec.EnvFields = nil // nothing resolves empty, so no field explains the skip
+	spec.Build = func(testConfig) (testInstance, bool) { return testInstance{}, false }
+
+	for range 3 {
+		_, err := LoadInstances(dir, spec)
+		require.NoError(t, err)
+	}
+
+	out := buf.String()
+	assert.Equal(t, 1, countWarnings(buf))
+	assert.Contains(t, out, "required configuration is incomplete")
 }
 
 func TestLoadInstances_noWarnOnValidInstance(t *testing.T) {
