@@ -108,6 +108,31 @@ func TestAdvancePRLoop_fixDoneUnchangedHead_escalates(t *testing.T) {
 	assert.Zero(t, p.merged, "escalation must never merge")
 }
 
+// TestAdvancePRLoop_staleReview_escalatesWithoutFixer is the SC-2378
+// end-to-end regression: a review record the cmd-layer reader could not
+// confirm as this round's own write (ReviewStale) must never be treated as
+// this round's verdict — the loop escalates, naming the record it could not
+// read fresh, and dispatches no fixer, even though the (stale, possibly
+// superseded) verdict it carries says "approved".
+func TestAdvancePRLoop_staleReview_escalatesWithoutFixer(t *testing.T) {
+	c := &fakeCommenter{comments: reviewStartedComments(1, "https://example/pr/7", 7, "feat/x")}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{}
+	deps := newDeps(c, l, p)
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{
+		ReviewVerdict: PRVerdictApproved, ReviewRecorded: true, ReviewStale: true,
+	}))
+
+	_, fixStarted := posted(c, PRFixStartedHeader)
+	assert.False(t, fixStarted, "a stale review must never dispatch a fixer")
+	failed, ok := posted(c, PRReviewFailedHeader)
+	require.True(t, ok, "a stale review must escalate")
+	assert.Contains(t, failed, "the review verdict")
+	assert.Zero(t, l.calls, "escalation on a stale record must launch no agent")
+	assert.Zero(t, p.merged, "a stale (unconfirmed) approval must never merge")
+}
+
 func TestAdvancePRLoop_budgetExhausted_escalates(t *testing.T) {
 	c := &fakeCommenter{comments: reviewStartedComments(DefaultPRReviewRounds, "https://example/pr/7", 7, "feat/x")}
 	l := &fakeLauncher{}

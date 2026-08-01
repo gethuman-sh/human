@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -43,9 +44,12 @@ func TestStageExitClass_ReadsTheRecordedExit(t *testing.T) {
 }
 
 // An agent that died before writing a report leaves nothing — the caller must
-// be able to tell that apart from a recorded outcome.
+// be able to tell that apart from a recorded outcome. This exhausts the
+// presence-settle backoff (SC-2378), so the backoff is shrunk to keep the test
+// fast.
 func TestStageExitClass_MissingReportIsNotFound(t *testing.T) {
 	isolateState(t)
+	shrinkPRLoopReadBackoff(t)
 
 	exit, found := stageExitClass(context.Background(), "", "SC-1", daemon.BoardImplementation, zerolog.Nop())
 
@@ -55,6 +59,7 @@ func TestStageExitClass_MissingReportIsNotFound(t *testing.T) {
 
 func TestStageExitClass_UnparseableReportIsNotFound(t *testing.T) {
 	isolateState(t)
+	shrinkPRLoopReadBackoff(t)
 	store, err := agentstate.Open(agentstate.DefaultDBPath())
 	require.NoError(t, err)
 	_, err = store.Set(context.Background(), "", "SC-1", stageReportName(daemon.BoardImplementation),
@@ -69,10 +74,34 @@ func TestStageExitClass_UnparseableReportIsNotFound(t *testing.T) {
 // A report with no exit field is not an outcome the board can act on.
 func TestStageExitClass_EmptyExitIsNotFound(t *testing.T) {
 	isolateState(t)
+	shrinkPRLoopReadBackoff(t)
 	writeStageReport(t, "SC-1", daemon.BoardImplementation, `{"summary":"no exit here"}`)
 
 	_, found := stageExitClass(context.Background(), "", "SC-1", daemon.BoardImplementation, zerolog.Nop())
 	require.False(t, found)
+}
+
+// A report that lands just after the first (racy) read is picked up on the
+// presence-settle re-read rather than being reported missing (SC-2378).
+func TestStageExitClass_SettlesOnDelayedReport(t *testing.T) {
+	isolateState(t)
+	origStep, origTries := prLoopReadRecheckStep, prLoopReadRecheckTries
+	prLoopReadRecheckStep = 2 * time.Millisecond
+	prLoopReadRecheckTries = 10
+	t.Cleanup(func() { prLoopReadRecheckStep, prLoopReadRecheckTries = origStep, origTries })
+
+	written := make(chan struct{})
+	go func() {
+		time.Sleep(3 * prLoopReadRecheckStep)
+		writeStageReport(t, "SC-1", daemon.BoardImplementation, `{"exit":"done"}`)
+		close(written)
+	}()
+
+	exit, found := stageExitClass(context.Background(), "", "SC-1", daemon.BoardImplementation, zerolog.Nop())
+	<-written
+
+	require.True(t, found, "the presence-settle backoff must pick up the delayed report")
+	require.Equal(t, "done", exit)
 }
 
 func TestBumpAndClearStageRetries(t *testing.T) {

@@ -61,6 +61,29 @@ func TestNextPRLoopAction(t *testing.T) {
 	}
 }
 
+// TestLatestMarkerTime proves the identity anchor (SC-2378/AD2): it picks the
+// NEWEST comment matching the given header (deterministic same-second
+// ordering via commentNewer, mirroring every other "latest marker" scan in
+// this package) and reports absence honestly when no comment matches.
+func TestLatestMarkerTime(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		cmt(PRReviewStartedHeader, t0),
+		cmt(PRFixStartedHeader, t1),
+		cmt(PRReviewStartedHeader, t1.Add(time.Hour)),
+	}
+
+	got, ok := LatestMarkerTime(comments, PRReviewStartedHeader)
+	if !ok || !got.Equal(t1.Add(time.Hour)) {
+		t.Fatalf("LatestMarkerTime() = %v, %v; want %v, true", got, ok, t1.Add(time.Hour))
+	}
+
+	if _, ok := LatestMarkerTime(comments, PRReviewFailedHeader); ok {
+		t.Fatalf("LatestMarkerTime() found a match for a header with none present")
+	}
+}
+
 func TestEvaluatePRLoop(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	t1 := time.Unix(2000, 0)
@@ -116,5 +139,50 @@ func TestEvaluatePRLoop(t *testing.T) {
 				t.Fatalf("EvaluatePRLoop() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestEvaluatePRLoop_headStalledAfterApproval_merges is the SC-2307 recovery
+// case (AD3): a fixer that finished done but left the branch tip unchanged
+// after a review that had already APPROVED added no commit because there was
+// nothing to fix — the branch was already good. Escalating that (the old
+// behaviour) reds a card whose PR is approved, green and ready; it must merge
+// instead.
+func TestEvaluatePRLoop_headStalledAfterApproval_merges(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{cmt(PRReviewStartedHeader, t0), cmt(PRFixStartedHeader, t1)}
+	outcome := PRLoopOutcome{
+		ReviewVerdict: PRVerdictApproved,
+		FixExit:       PRFixDone,
+		ReviewHead:    "abc123",
+		FixHead:       "abc123",
+	}
+
+	got := EvaluatePRLoop(comments, outcome)
+
+	if got != PRActionMerge {
+		t.Fatalf("EvaluatePRLoop() = %d, want PRActionMerge (%d)", got, PRActionMerge)
+	}
+}
+
+// TestEvaluatePRLoop_staleReviewRecord_escalates proves the loop never acts on
+// a step's outcome until that step's own record is the one it read: a review
+// record flagged stale (superseded by a write the reader raced ahead of) must
+// escalate — naming what could not be read fresh — rather than being treated
+// as this round's approval and driving a merge on a verdict that was never
+// confirmed current (SC-2378).
+func TestEvaluatePRLoop_staleReviewRecord_escalates(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	comments := []tracker.Comment{cmt(PRReviewStartedHeader, t0)}
+	outcome := PRLoopOutcome{
+		ReviewVerdict: PRVerdictApproved,
+		ReviewStale:   true,
+	}
+
+	got := EvaluatePRLoop(comments, outcome)
+
+	if got != PRActionEscalate {
+		t.Fatalf("EvaluatePRLoop() = %d, want PRActionEscalate (%d)", got, PRActionEscalate)
 	}
 }

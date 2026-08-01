@@ -3,6 +3,7 @@ package cmddaemon
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -44,7 +45,31 @@ func withStateStore(fn func(agentstate.Store) error) error {
 // project the ticket key belongs to, resolved by the caller via
 // ProjectRegistry.EntryForKey — so a retry never reads another project's
 // report for a colliding key.
+//
+// This caller runs after listStageSettled has already settled the comment
+// thread (SC-1484/SC-2133), and has no uniform per-round started-marker to
+// anchor an identity check on the way the PR loop's reads do. So rather than
+// the full freshness settle, it re-reads with the same bounded backoff only
+// while the record is ABSENT — closing the plainer half of the same
+// read-after-write race: an exit written just before this read landed, but not
+// yet visible to it (SC-2378).
 func stageExitClass(ctx context.Context, project, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (string, bool) {
+	exit, found := readStageExitOnce(ctx, project, pmKey, stage, logger)
+	for try := 0; !found && try < prLoopReadRecheckTries-1; try++ {
+		select {
+		case <-ctx.Done():
+			return exit, found
+		case <-time.After(prLoopReadRecheckStep):
+		}
+		exit, found = readStageExitOnce(ctx, project, pmKey, stage, logger)
+	}
+	return exit, found
+}
+
+// readStageExitOnce performs a single, non-retrying read of a stage's exit
+// class — extracted so stageExitClass can wrap it in the presence-settle
+// backoff above without duplicating the store/parse logic.
+func readStageExitOnce(ctx context.Context, project, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (string, bool) {
 	var exit string
 	var found bool
 	err := withStateStore(func(store agentstate.Store) error {
