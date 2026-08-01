@@ -106,6 +106,81 @@ func TestReconcileStuckRunning_OpenOptionsForEarlierStageIsCleanPause(t *testing
 	require.Empty(t, relaunched, "nothing to relaunch — the card is not dead, it is waiting on a human")
 }
 
+// The backoff: an outage card whose stage agent is not alive on this machine is
+// re-driven each reconcile tick, WITHOUT charging the retry budget (SC-2307).
+func TestReconcileOutage_RelaunchesWhenAgentDead(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, now.Add(-time.Hour)),
+			cmt(ImplementationOutageHeader+"\nop timed out", now.Add(-time.Minute)),
+		},
+	}}
+	var relaunched []BoardStage
+	attempts := 0
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
+		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+	}
+
+	n := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), retry, "d1", zerolog.Nop())
+
+	require.Equal(t, 1, n, "the outage card is re-driven")
+	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
+	require.Zero(t, attempts, "an outage re-drive never charges the retry budget")
+}
+
+// A live stage agent means the relaunch already happened this cycle — the pass
+// leaves the card alone rather than racing a second launch.
+func TestReconcileOutage_SkipsWhenAgentAlive(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, now.Add(-time.Hour)),
+			cmt(ImplementationOutageHeader+"\nop timed out", now.Add(-time.Minute)),
+		},
+	}}
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
+		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+	}
+	alive := liveAgents(agentNameFor("SC-1", BoardImplementation))
+
+	n := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), alive, retry, "d1", zerolog.Nop())
+
+	require.Equal(t, 0, n, "a live agent means the relaunch already happened")
+	require.Empty(t, relaunched)
+}
+
+// A non-outage card (a plain running stage) is not the outage pass's concern —
+// it is left for the stuck-running pass.
+func TestReconcileOutage_IgnoresNonOutageCards(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt(ImplementationStartedHeader, now.Add(-time.Hour))},
+	}}
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
+		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+	}
+
+	n := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), retry, "d1", zerolog.Nop())
+
+	require.Equal(t, 0, n)
+	require.Empty(t, relaunched)
+}
+
 // The shared budget bounds both paths together: once the count is spent, the
 // relaunch stops even though the card keeps reddening.
 func TestReconcileStuckRunning_RelaunchRespectsTheBudget(t *testing.T) {

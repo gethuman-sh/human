@@ -17,6 +17,12 @@ const (
 	ExitNeedsInput     = "needs-input"
 	ExitNeedsHumanWork = "needs-human-work"
 	ExitDone           = "done"
+	// ExitOutage records that the substrate a stage needs was unreachable — a
+	// credential store timeout, a tracker it could not reach. The work was not
+	// attempted, so it is relaunched with backoff and NEVER charged against
+	// DefaultStageRetries (SC-2307). Distinct from ExitRetryable, which is a
+	// flake or a dead container that a bounded, immediate relaunch absorbs.
+	ExitOutage = "outage"
 )
 
 // DefaultStageRetries bounds automatic relaunches of one stage. Two is chosen
@@ -65,21 +71,41 @@ func (r StageRetry) max() int {
 	return r.Max
 }
 
-// mayRelaunch decides from the recorded exit class alone whether another
-// attempt is warranted.
+// relaunchKind decides how a failed stage is relaunched, if at all. It splits
+// the old boolean mayRelaunch into three because an outage must be relaunched on
+// a DIFFERENT path from a flake: uncharged and backoff-driven rather than
+// bounded and immediate.
+type relaunchKind int
+
+const (
+	relaunchNone    relaunchKind = iota // deliberate/unparseable exit: leave for a human
+	relaunchBounded                     // flake / dead container / undiagnosed death: charged, capped
+	relaunchOutage                      // substrate down: uncharged, reconcile-backoff relaunch
+)
+
+// classifyRelaunch decides, from the recorded exit alone, how (if at all) a
+// failed stage is relaunched.
 //
-// An unrecorded outcome counts as retryable: the agent died before it could
-// write one, which is exactly the crash an automatic retry exists to absorb.
-// That is also the safe direction, because the attempt cap bounds it — whereas
-// treating a vanished agent as terminal is how a card ends up red with nobody
-// having looked at it. An outcome we do not recognise is NOT retried: the agent
-// said something deliberate, and looping on a sentence we cannot parse would
-// burn attempts to no purpose.
-func mayRelaunch(outcome string, recorded bool) bool {
+// An UNRECORDED outcome stays bounded: the agent died before it could write one,
+// which is exactly the crash an automatic retry exists to absorb, and the
+// attempt cap keeps a vanished agent from looping unbounded — an undiagnosed
+// crash must never be mistaken for an outage's indefinite backoff. A recorded
+// ExitOutage is the substrate being down, relaunched uncharged. ExitRetryable is
+// a flake, relaunched charged. Anything else is a deliberate exit we do not
+// recognise and is left for a human rather than looped on a sentence we cannot
+// parse.
+func classifyRelaunch(outcome string, recorded bool) relaunchKind {
 	if !recorded {
-		return true
+		return relaunchBounded
 	}
-	return outcome == ExitRetryable
+	switch outcome {
+	case ExitOutage:
+		return relaunchOutage
+	case ExitRetryable:
+		return relaunchBounded
+	default:
+		return relaunchNone
+	}
 }
 
 // reset clears a stage's attempt count after a clean finish.
@@ -102,12 +128,17 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 		return false
 	}
 	outcome, recorded := r.Outcome(pmKey, stage)
-	if !mayRelaunch(outcome, recorded) {
+	switch classifyRelaunch(outcome, recorded) {
+	case relaunchNone:
 		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("exit", outcome).
 			Msg("board retry: stage exit is not retryable, leaving the card for a human")
 		return false
+	case relaunchOutage:
+		return r.relaunchOutage(ctx, pmKey, stage, commenter, daemonID, logger)
 	}
 
+	// relaunchBounded: the charged, capped path for a flake, a dead container, or
+	// an undiagnosed death.
 	attempt, err := r.Attempts(pmKey, stage)
 	if err != nil {
 		// Without a trustworthy count an automatic relaunch could loop, so fall
@@ -132,6 +163,41 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 	logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Int("attempt", attempt).
 		Msg("board retry: stage relaunched automatically")
 	return true
+}
+
+// relaunchOutage re-drives a stage that reported the substrate was down. The
+// retry budget is deliberately untouched: an outage costs time and nothing
+// else, so it retries indefinitely with the reconcile interval as its backoff
+// until the substrate returns (SC-2307). Reads and bumps no counter — that is
+// the whole point, an outage is never allowed to exhaust the budget a real
+// failure needs.
+func (r StageRetry) relaunchOutage(ctx context.Context, pmKey string, stage BoardStage, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) bool {
+	if commenter != nil {
+		body := StampDaemon("[human:retry] waiting on the substrate to return — this attempt is not charged against the retry budget (SC-2307).", daemonID)
+		if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+			logger.Warn().Err(err).Str("pm", pmKey).Msg("board retry: cannot post outage note")
+		}
+	}
+	if err := r.Relaunch(pmKey, stage); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
+			Msg("board retry: outage relaunch failed, leaving the outage marker in place")
+		return false
+	}
+	logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+		Msg("board retry: stage relaunched after substrate outage (budget untouched)")
+	return true
+}
+
+// recordedOutage reports whether the stage recorded ExitOutage. It is what the
+// live exit handler consults BEFORE it composes any marker, so an outage is
+// routed to its own *-outage marker instead of a *-failed one. False when retry
+// is unwired, so an unconfigured StageRetry keeps prior behaviour.
+func (r StageRetry) recordedOutage(pmKey string, stage BoardStage) bool {
+	if !r.enabled() || r.Outcome == nil {
+		return false
+	}
+	outcome, recorded := r.Outcome(pmKey, stage)
+	return recorded && outcome == ExitOutage
 }
 
 // note records the automatic retry on the ticket so the trail shows why the

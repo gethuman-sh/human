@@ -423,6 +423,41 @@ func TestDeriveBoardCard_DeployPhasePRReview(t *testing.T) {
 	assert.Equal(t, "pr-review", card.DeployPhase)
 }
 
+// An implementation stage that reported the substrate was down derives to the
+// distinct BoardOutage state (not BoardFailed) and carries the reason line so
+// the badge can read WHAT is down (SC-2307).
+func TestDeriveBoardCard_OutageState(t *testing.T) {
+	base := time.Unix(1, 0)
+	comments := []tracker.Comment{
+		cmt(ImplementationStartedHeader, base),
+		cmt(ImplementationOutageHeader+"\nop timed out", base.Add(time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardImplementation, card.Stage)
+	assert.Equal(t, BoardOutage, card.State)
+	assert.NotEqual(t, BoardFailed, card.State)
+	assert.Equal(t, "op timed out", card.Error)
+}
+
+// An outage marker is transient: a strictly-newer *-started marker from the
+// reconcile relaunch retires it and the card follows the current activity
+// (SC-2307), exactly like a stale failure does.
+func TestDeriveBoardCard_OutageSupersededByNewerStarted(t *testing.T) {
+	base := time.Unix(1, 0)
+	comments := []tracker.Comment{
+		cmt(ImplementationStartedHeader, base),
+		cmt(ImplementationOutageHeader+"\nop timed out", base.Add(time.Minute)),
+		cmt(ImplementationStartedHeader, base.Add(2*time.Minute)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardImplementation, card.Stage)
+	assert.Equal(t, BoardRunning, card.State, "a newer started marker retires the outage")
+}
+
 // A plain deploy (deploy-started, not a loop marker) has no loop sub-phase, so
 // DeployPhase stays empty and the badge reads "deploying…".
 func TestDeriveBoardCard_DeployPhaseEmptyForPlainDeploy(t *testing.T) {

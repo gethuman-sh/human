@@ -31,6 +31,11 @@ func TestClassifyMarker(t *testing.T) {
 		{"pr-started", "[human:pr-started]", BoardDoneStage, BoardRunning, true},
 		{"pr-pushed", "[human:pr-pushed]\npr: https://x", BoardDoneStage, BoardDone, true},
 		{"pr-failed", "[human:pr-failed]\nx", BoardDoneStage, BoardFailed, true},
+		// Outage markers are the non-failing transient twin per stage (SC-2307).
+		{"planning-outage", "[human:planning-outage]\nop timed out", BoardPlanning, BoardOutage, true},
+		{"implementation-outage", "[human:implementation-outage]\nop timed out", BoardImplementation, BoardOutage, true},
+		{"review-outage", "[human:review-outage]\ntracker unreachable", BoardVerification, BoardOutage, true},
+		{"deploy-outage", "[human:deploy-outage]\ntracker unreachable", BoardDoneStage, BoardOutage, true},
 		{"quoted header mid-body is not a marker", "discussion: [human:planning-started]", "", "", false},
 		{"non-marker", "just a normal comment", "", "", false},
 		{"empty", "", "", "", false},

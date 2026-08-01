@@ -160,6 +160,14 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate
 	if n := reconcilePRLoops(ctx, gate.forReview(cards), liveAgents, driveLoop, logger); n > 0 {
 		logger.Info().Int("redriven", n).Msg("board reconcile: re-drove stalled PR review→fix loops")
 	}
+	// An outage card is re-driven BEFORE the stuck-running pass: it is not a hang
+	// to be reddened but a stage waiting on the substrate, relaunched uncharged
+	// each tick (the backoff) until the substrate returns (SC-2307). It rides the
+	// same forTakeover gate — an outage relaunch takes over the stage on this
+	// machine exactly as a stuck-running reclaim does.
+	if n := reconcileOutage(ctx, gate.forTakeover(cards), liveAgents, retry, daemonID, logger); n > 0 {
+		logger.Info().Int("redriven", n).Msg("board reconcile: re-drove stages waiting on the substrate")
+	}
 	if n := reconcileStuckRunning(ctx, gate.forTakeover(cards), liveAgents, postFailed, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
 	}
@@ -246,6 +254,48 @@ func reconcilePRLoops(ctx context.Context, drivable DrivableCards, liveAgents Li
 			continue
 		}
 		redriven++
+	}
+	return redriven
+}
+
+// reconcileOutage relaunches a card that recorded an outage (ExitOutage) and
+// whose stage agent is not alive on this machine. This is the backoff: each
+// reconcile tick re-drives it (retry.tryRelaunch classifies the recorded outage
+// and relaunches WITHOUT charging DefaultStageRetries) until the substrate
+// returns and the relaunched agent posts a *-started marker that supersedes the
+// outage. Unbounded by design — an outage costs time and nothing else (SC-2307).
+//
+// A live agent for the stage means the relaunch already happened this cycle, so
+// the card is left alone rather than racing a second launch onto the same stage
+// — the same alive-guard reconcilePRLoops and reconcileStuckRunning use. nil
+// deps or an unwired retry disable the pass (the package's "nil disables"
+// convention).
+func reconcileOutage(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, retry StageRetry, daemonID string, logger zerolog.Logger) int {
+	if liveAgents == nil || !retry.enabled() {
+		return 0
+	}
+	names, err := liveAgents()
+	if err != nil {
+		logger.Warn().Err(err).Msg("board reconcile: cannot list live agents for outage re-drive")
+		return 0
+	}
+	alive := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		alive[n] = struct{}{}
+	}
+	redriven := 0
+	for _, card := range drivable.cards {
+		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
+		if derived.State != BoardOutage {
+			continue
+		}
+		// A live agent means the relaunch already happened this cycle — leave it.
+		if _, ok := alive[agentNameFor(card.Key, derived.Stage)]; ok {
+			continue
+		}
+		if retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger) {
+			redriven++
+		}
 	}
 	return redriven
 }

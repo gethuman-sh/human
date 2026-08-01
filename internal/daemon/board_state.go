@@ -152,7 +152,11 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
 	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
 	card.PRURL = derivePRURL(comments)
-	if state == BoardFailed {
+	// An outage card carries the same one-line reason a failed card does (the
+	// substrate that was unreachable), so the badge can say WHAT is down, not just
+	// that it is — the outage marker's body is composed exactly like a failure's
+	// (SC-2307).
+	if state == BoardFailed || state == BoardOutage {
 		card.Error = failureReason(latest.Body)
 	}
 	card.DeployPhase = deployPhaseFor(card, comments)
@@ -194,7 +198,12 @@ func pauseOnOpenOptions(state BoardState, furthest BoardStage, comments []tracke
 // implementation-started marker retires the loop marker so the card leaves the
 // done lane back to Building.
 func supersededByNewerMarker(state BoardState, furthest BoardStage, comments []tracker.Comment) bool {
-	return state == BoardFailed || (furthest == BoardDoneStage && doneStageLoopActive(comments))
+	// An outage marker is transient — a newer *-started marker from the reconcile
+	// relaunch retires it, exactly like a stale failure (SC-2307). Without this
+	// the card would sit on "machine down" even after the substrate returned and
+	// the relaunched agent posted its started marker.
+	return state == BoardFailed || state == BoardOutage ||
+		(furthest == BoardDoneStage && doneStageLoopActive(comments))
 }
 
 // deployPhaseFor names the done-stage sub-phase of a running card: "pr-review"
