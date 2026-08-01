@@ -52,4 +52,6 @@ EOF
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
 
+<!-- human:include stage-lease -->
+
 <!-- human:include exit-contract -->
