@@ -146,4 +146,6 @@ For each new or modified behavior:
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Either return a complete, gate-free plan or, for a genuine human fork, the `DECISION REQUIRED:` terminal verdict. Then finish.
 
+<!-- human:include stage-lease -->
+
 <!-- human:include exit-contract -->

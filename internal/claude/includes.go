@@ -13,6 +13,14 @@ var exitContractFragment []byte
 //go:embed embed/shared/model-tiers.md
 var modelTiersFragment []byte
 
+// The rule (SC-2329): every board-launched stage carries the stage-lease
+// include, so all nine agents the board can launch — planner, executor,
+// reviewer, pr-reviewer, pr-fixer, deploy-fixer, bug-fixer, bug-triage,
+// security-triage — hold a prompt-level lease as a uniform second line of
+// defence behind the daemon's cross-daemon claim arbiter. A new board-launched
+// stage inherits the rule rather than a precedent to guess at: add
+// `<!-- human:include stage-lease -->` to its prompt.
+//
 //go:embed embed/shared/stage-lease.md
 var stageLeaseFragment []byte
 
