@@ -226,6 +226,22 @@ func TestPullRequestChecks_verdicts(t *testing.T) {
 			`{"state":"pending","total_count":0}`, forge.ChecksPassing},
 		{"skipped and neutral pass", `{"check_runs":[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"neutral"}]}`,
 			`{"state":"pending","total_count":0}`, forge.ChecksPassing},
+		// SC-2602: a superseded build is called off, not failed. A cancelled run with
+		// no conclusive sibling is non-conclusive — the gate must keep waiting, never
+		// declare a failure.
+		{"cancelled superseded, sibling passed", `{"check_runs":[{"name":"unit","status":"completed","conclusion":"success","started_at":"2026-08-01T10:00:00Z"},{"name":"build","status":"completed","conclusion":"cancelled","started_at":"2026-08-01T10:00:00Z"}]}`,
+			`{"state":"success","total_count":0}`, forge.ChecksPending},
+		// SC-2602: a cancelled attempt must not overrule the re-run that replaced it —
+		// judge the latest run per check name, so a passed re-run settles the gate green.
+		{"cancelled then passing rerun same name", `{"check_runs":[{"name":"build","status":"completed","conclusion":"cancelled","started_at":"2026-08-01T10:00:00Z"},{"name":"build","status":"completed","conclusion":"success","started_at":"2026-08-01T10:05:00Z"}]}`,
+			`{"state":"success","total_count":0}`, forge.ChecksPassing},
+		// SC-2602: a real failure among cancellations still fails, exactly as today.
+		{"cancelled and a real failure", `{"check_runs":[{"name":"build","status":"completed","conclusion":"cancelled","started_at":"2026-08-01T10:00:00Z"},{"name":"unit","status":"completed","conclusion":"failure","started_at":"2026-08-01T10:00:00Z"}]}`,
+			`{"state":"success","total_count":0}`, forge.ChecksFailing},
+		// SC-2602: order-independence — a later cancelled attempt does not shadow an
+		// earlier success of the same check.
+		{"passing then cancelled rerun same name", `{"check_runs":[{"name":"build","status":"completed","conclusion":"success","started_at":"2026-08-01T10:00:00Z"},{"name":"build","status":"completed","conclusion":"cancelled","started_at":"2026-08-01T10:05:00Z"}]}`,
+			`{"state":"success","total_count":0}`, forge.ChecksPending},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
