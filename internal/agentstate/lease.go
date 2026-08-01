@@ -21,6 +21,7 @@ func (s *SQLiteStore) Lease(ctx context.Context, req LeaseRequest) (LeaseResult,
 	if err != nil {
 		return LeaseResult{}, err
 	}
+	normProject := req.Project
 	ttl := req.TTL
 	if ttl <= 0 {
 		ttl = DefaultLeaseTTL
@@ -33,7 +34,7 @@ func (s *SQLiteStore) Lease(ctx context.Context, req LeaseRequest) (LeaseResult,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	existing, found, err := readLease(ctx, tx, normScope, req.Stage)
+	existing, found, err := readLease(ctx, tx, normProject, normScope, req.Stage)
 	if err != nil {
 		return LeaseResult{}, err
 	}
@@ -50,14 +51,14 @@ func (s *SQLiteStore) Lease(ctx context.Context, req LeaseRequest) (LeaseResult,
 		LeasedAt:    leaseStart(existing, found, req.Meta.Agent, now),
 		HeartbeatAt: now,
 	}
-	if err := writeLease(ctx, tx, granted); err != nil {
+	if err := writeLease(ctx, tx, normProject, granted); err != nil {
 		return LeaseResult{}, err
 	}
 
 	result := LeaseResult{Granted: true, Lease: granted}
 	if displaced, ok := displacedBy(existing, found, req.Meta.Agent); ok {
 		result.Displaced = &displaced
-		keys, err := inheritedKeys(ctx, tx, normScope, displaced.Agent)
+		keys, err := inheritedKeys(ctx, tx, normProject, normScope, displaced.Agent)
 		if err != nil {
 			return LeaseResult{}, err
 		}
@@ -70,8 +71,9 @@ func (s *SQLiteStore) Lease(ctx context.Context, req LeaseRequest) (LeaseResult,
 	return result, nil
 }
 
-// validateLeaseRequest normalises the scope and rejects a lease that could not
-// be attributed — an anonymous lease could never be taken over safely.
+// validateLeaseRequest normalises the scope and project and rejects a lease
+// that could not be attributed — an anonymous lease could never be taken over
+// safely.
 func (s *SQLiteStore) validateLeaseRequest(req *LeaseRequest) (string, error) {
 	normScope, err := NormalizeScope(req.Scope)
 	if err != nil {
@@ -83,6 +85,7 @@ func (s *SQLiteStore) validateLeaseRequest(req *LeaseRequest) (string, error) {
 	if req.Meta.Agent == "" {
 		return "", errors.WithDetails("lease requires an agent name", "scope", normScope, "stage", req.Stage)
 	}
+	req.Project = NormalizeProject(req.Project)
 	return normScope, nil
 }
 
@@ -129,7 +132,7 @@ func displacedBy(existing Lease, found bool, agent string) (Lease, bool) {
 // Release marks a stage lease as handed back. When agent is non-empty the
 // release only applies to that agent's lease, so a stale process cannot release
 // its successor's hold.
-func (s *SQLiteStore) Release(ctx context.Context, scope, stage, agent string) (bool, error) {
+func (s *SQLiteStore) Release(ctx context.Context, project, scope, stage, agent string) (bool, error) {
 	normScope, err := NormalizeScope(scope)
 	if err != nil {
 		return false, err
@@ -137,9 +140,10 @@ func (s *SQLiteStore) Release(ctx context.Context, scope, stage, agent string) (
 	if err := ValidateStage(stage); err != nil {
 		return false, err
 	}
+	normProject := NormalizeProject(project)
 
-	q := `UPDATE agent_leases SET released_at = ? WHERE scope = ? AND stage = ? AND released_at IS NULL`
-	args := []any{s.now().UTC().Format(TimeFormat), normScope, stage}
+	q := `UPDATE agent_leases SET released_at = ? WHERE project = ? AND scope = ? AND stage = ? AND released_at IS NULL`
+	args := []any{s.now().UTC().Format(TimeFormat), normProject, normScope, stage}
 	if agent != "" {
 		q += ` AND agent = ?`
 		args = append(args, agent)
@@ -147,7 +151,7 @@ func (s *SQLiteStore) Release(ctx context.Context, scope, stage, agent string) (
 
 	res, err := s.db.ExecContext(ctx, q, args...)
 	if err != nil {
-		return false, errors.WrapWithDetails(err, "release lease", "scope", normScope, "stage", stage)
+		return false, errors.WrapWithDetails(err, "release lease", "project", normProject, "scope", normScope, "stage", stage)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
@@ -155,18 +159,19 @@ func (s *SQLiteStore) Release(ctx context.Context, scope, stage, agent string) (
 
 // Leases lists every lease on a scope, newest heartbeat first, so an operator
 // can see who holds what.
-func (s *SQLiteStore) Leases(ctx context.Context, scope string) ([]Lease, error) {
+func (s *SQLiteStore) Leases(ctx context.Context, project, scope string) ([]Lease, error) {
 	normScope, err := NormalizeScope(scope)
 	if err != nil {
 		return nil, err
 	}
+	normProject := NormalizeProject(project)
 	const q = `
 		SELECT scope, stage, agent, run_id, ttl_seconds, leased_at, heartbeat_at, released_at
-		FROM agent_leases WHERE scope = ? ORDER BY heartbeat_at DESC
+		FROM agent_leases WHERE project = ? AND scope = ? ORDER BY heartbeat_at DESC
 	`
-	rows, err := s.db.QueryContext(ctx, q, normScope)
+	rows, err := s.db.QueryContext(ctx, q, normProject, normScope)
 	if err != nil {
-		return nil, errors.WrapWithDetails(err, "list leases", "scope", normScope)
+		return nil, errors.WrapWithDetails(err, "list leases", "project", normProject, "scope", normScope)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -179,17 +184,17 @@ func (s *SQLiteStore) Leases(ctx context.Context, scope string) ([]Lease, error)
 		leases = append(leases, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.WrapWithDetails(err, "read leases", "scope", normScope)
+		return nil, errors.WrapWithDetails(err, "read leases", "project", normProject, "scope", normScope)
 	}
 	return leases, nil
 }
 
-func readLease(ctx context.Context, tx *sql.Tx, scope, stage string) (Lease, bool, error) {
+func readLease(ctx context.Context, tx *sql.Tx, project, scope, stage string) (Lease, bool, error) {
 	const q = `
 		SELECT scope, stage, agent, run_id, ttl_seconds, leased_at, heartbeat_at, released_at
-		FROM agent_leases WHERE scope = ? AND stage = ?
+		FROM agent_leases WHERE project = ? AND scope = ? AND stage = ?
 	`
-	c, err := scanLease(tx.QueryRowContext(ctx, q, scope, stage))
+	c, err := scanLease(tx.QueryRowContext(ctx, q, project, scope, stage))
 	if err != nil {
 		if stderrors.Is(err, ErrNotFound) {
 			return Lease{}, false, nil
@@ -199,11 +204,11 @@ func readLease(ctx context.Context, tx *sql.Tx, scope, stage string) (Lease, boo
 	return c, true, nil
 }
 
-func writeLease(ctx context.Context, tx *sql.Tx, c Lease) error {
+func writeLease(ctx context.Context, tx *sql.Tx, project string, c Lease) error {
 	const q = `
-		INSERT INTO agent_leases (scope, stage, agent, run_id, ttl_seconds, leased_at, heartbeat_at, released_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-		ON CONFLICT(scope, stage) DO UPDATE SET
+		INSERT INTO agent_leases (project, scope, stage, agent, run_id, ttl_seconds, leased_at, heartbeat_at, released_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+		ON CONFLICT(project, scope, stage) DO UPDATE SET
 			agent        = excluded.agent,
 			run_id       = excluded.run_id,
 			ttl_seconds  = excluded.ttl_seconds,
@@ -211,21 +216,21 @@ func writeLease(ctx context.Context, tx *sql.Tx, c Lease) error {
 			heartbeat_at = excluded.heartbeat_at,
 			released_at  = NULL
 	`
-	_, err := tx.ExecContext(ctx, q, c.Scope, c.Stage, c.Agent, c.RunID, int64(c.TTL/time.Second),
+	_, err := tx.ExecContext(ctx, q, project, c.Scope, c.Stage, c.Agent, c.RunID, int64(c.TTL/time.Second),
 		c.LeasedAt.Format(TimeFormat), c.HeartbeatAt.Format(TimeFormat))
 	if err != nil {
-		return errors.WrapWithDetails(err, "write lease", "scope", c.Scope, "stage", c.Stage)
+		return errors.WrapWithDetails(err, "write lease", "project", project, "scope", c.Scope, "stage", c.Stage)
 	}
 	return nil
 }
 
 // inheritedKeys lists the state a displaced agent left behind in the scope —
 // the successor's inheritance.
-func inheritedKeys(ctx context.Context, tx *sql.Tx, scope, agent string) ([]string, error) {
+func inheritedKeys(ctx context.Context, tx *sql.Tx, project, scope, agent string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT name FROM agent_state WHERE scope = ? AND agent = ? ORDER BY name`, scope, agent)
+		`SELECT name FROM agent_state WHERE project = ? AND scope = ? AND agent = ? ORDER BY name`, project, scope, agent)
 	if err != nil {
-		return nil, errors.WrapWithDetails(err, "list inherited keys", "scope", scope, "agent", agent)
+		return nil, errors.WrapWithDetails(err, "list inherited keys", "project", project, "scope", scope, "agent", agent)
 	}
 	defer func() { _ = rows.Close() }()
 

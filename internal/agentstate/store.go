@@ -101,6 +101,7 @@ type Lease struct {
 // the explicit override for when an operator knows the holder is gone before
 // its heartbeat has expired.
 type LeaseRequest struct {
+	Project  string
 	Scope    string
 	Stage    string
 	Meta     Meta
@@ -122,16 +123,16 @@ type LeaseResult struct {
 // Store is the persistence seam. Commands accept this interface so their tests
 // need no database, and an alternative backend never has to touch the CLI.
 type Store interface {
-	Set(ctx context.Context, scope, name, value, format string, meta Meta) (Entry, error)
-	Get(ctx context.Context, scope, name string) (Entry, error)
-	List(ctx context.Context, scope, prefix string) ([]Entry, error)
-	Delete(ctx context.Context, scope, name string) (bool, error)
-	DeletePrefix(ctx context.Context, scope, prefix string) (int, error)
-	DeleteScope(ctx context.Context, scope string) (int, error)
-	Incr(ctx context.Context, scope, name string, by int64, meta Meta) (int64, error)
+	Set(ctx context.Context, project, scope, name, value, format string, meta Meta) (Entry, error)
+	Get(ctx context.Context, project, scope, name string) (Entry, error)
+	List(ctx context.Context, project, scope, prefix string) ([]Entry, error)
+	Delete(ctx context.Context, project, scope, name string) (bool, error)
+	DeletePrefix(ctx context.Context, project, scope, prefix string) (int, error)
+	DeleteScope(ctx context.Context, project, scope string) (int, error)
+	Incr(ctx context.Context, project, scope, name string, by int64, meta Meta) (int64, error)
 	Lease(ctx context.Context, req LeaseRequest) (LeaseResult, error)
-	Release(ctx context.Context, scope, stage, agent string) (bool, error)
-	Leases(ctx context.Context, scope string) ([]Lease, error)
+	Release(ctx context.Context, project, scope, stage, agent string) (bool, error)
+	Leases(ctx context.Context, project, scope string) ([]Lease, error)
 	Prune(ctx context.Context, cutoff time.Time) (int, error)
 	Close() error
 }
@@ -144,6 +145,15 @@ func NormalizeScope(scope string) (string, error) {
 		return "", errors.WithDetails("scope must not be empty")
 	}
 	return s, nil
+}
+
+// NormalizeProject trims the project identity. The empty string is the
+// "default project": the namespace used by single-project installs, direct
+// CLI use, and rows migrated from before state was project-scoped. Names are
+// left as-is (not upper-cased) because a project name is arbitrary, unlike a
+// ticket key.
+func NormalizeProject(project string) string {
+	return strings.TrimSpace(project)
 }
 
 // ValidateName rejects names that would make the namespace unqueryable.
