@@ -3,6 +3,7 @@ module github.com/gethuman-sh/human
 go 1.26.5
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/awnumar/memguard v0.23.0
 	github.com/charmbracelet/huh v1.0.0

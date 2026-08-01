@@ -56,6 +56,10 @@ func main() {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	go a.subscribe(ctx)
+	// The tray is a second, smaller window onto the same question the board
+	// answers: what is running. It must never be able to hold the board up, so
+	// it runs on its own goroutine and its failures stay its own.
+	go a.runTray(ctx)
 }
 
 // subscribe opens the daemon subscribe stream and forwards each change as a
