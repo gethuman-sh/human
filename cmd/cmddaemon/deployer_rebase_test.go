@@ -28,16 +28,23 @@ type rebaseGitStubs struct {
 	remoteTip      string
 	ancestorAfter  bool
 	rebaseErr      error
+	// behindOrigin drives the SC-2322 behind-publish guard: when set, the
+	// rebased tip is reported as strictly behind origin so refuseIfBehind must
+	// abort before the lease push. Default false keeps the guard a no-op so the
+	// existing rebase-path assertions are unaffected.
+	behindOrigin bool
 }
 
 func (s *rebaseGitStubs) install() {
 	prevDefault, prevFetch, prevExistsRemote, prevRevParse := gitrepo.DefaultBranch, gitrepo.Fetch, gitrepo.BranchExistsRemote, gitrepo.RevParse
 	prevIsAncestor, prevAdd, prevRemove := gitrepo.IsAncestor, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove
 	prevRebaseHead, prevPushHead, prevPushHeadLease := gitrepo.RebaseHead, gitrepo.PushHead, gitrepo.PushHeadWithLease
+	prevCommitsBetween := gitrepo.CommitsBetween
 	s.t.Cleanup(func() {
 		gitrepo.DefaultBranch, gitrepo.Fetch, gitrepo.BranchExistsRemote, gitrepo.RevParse = prevDefault, prevFetch, prevExistsRemote, prevRevParse
 		gitrepo.IsAncestor, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove = prevIsAncestor, prevAdd, prevRemove
 		gitrepo.RebaseHead, gitrepo.PushHead, gitrepo.PushHeadWithLease = prevRebaseHead, prevPushHead, prevPushHeadLease
+		gitrepo.CommitsBetween = prevCommitsBetween
 	})
 
 	gitrepo.DefaultBranch = func(_ context.Context, _ string) string { return "main" }
@@ -56,11 +63,20 @@ func (s *rebaseGitStubs) install() {
 		}
 		return s.localTip, nil
 	}
-	gitrepo.IsAncestor = func(_ context.Context, _, _, descendant string) bool {
+	gitrepo.IsAncestor = func(_ context.Context, _, ancestor, descendant string) bool {
+		// Mergeability probe: is the base tip an ancestor of the rebased tip.
 		if descendant == "rebasedtip" {
 			return s.ancestorAfter
 		}
+		// Behind probe (SC-2322): is the rebased source an ancestor of origin,
+		// i.e. strictly behind it.
+		if ancestor == "rebasedtip" {
+			return s.behindOrigin
+		}
 		return false
+	}
+	gitrepo.CommitsBetween = func(_ context.Context, _, _, _ string) ([]gitrepo.Commit, error) {
+		return []gitrepo.Commit{{ShortSHA: "beef", Subject: "newer origin work"}}, nil
 	}
 	gitrepo.WorktreeAdd = func(_ context.Context, repoDir, worktreePath, base string) error {
 		s.worktreePath = worktreePath
@@ -176,6 +192,20 @@ func TestEnsureMergeable_stillBehindAfterRebaseFails(t *testing.T) {
 	s := &rebaseGitStubs{branchOnRemote: true, remoteTip: "staletip", ancestorAfter: false}
 	if err := ensureMergeable(t, s); err == nil {
 		t.Fatal("expected an error when the rebased tip still lacks the base")
+	}
+}
+
+// TestEnsureMergeable_RefusesBehindPublish proves the sibling publish site
+// honours the same never-publish-behind-origin invariant as pushBranch: when
+// the rebased tip is strictly behind origin, EnsureMergeable must fail and must
+// NOT lease-push the stale tip over the newer origin work (SC-2322).
+func TestEnsureMergeable_RefusesBehindPublish(t *testing.T) {
+	s := &rebaseGitStubs{branchOnRemote: true, remoteTip: "staletip", ancestorAfter: true, behindOrigin: true}
+	if err := ensureMergeable(t, s); err == nil {
+		t.Fatal("expected a behind-origin publish to fail the deploy")
+	}
+	if s.sawCall("push-head-lease") {
+		t.Errorf("a source behind origin must not be lease-pushed, calls: %v", s.calls)
 	}
 }
 

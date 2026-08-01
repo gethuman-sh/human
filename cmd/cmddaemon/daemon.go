@@ -2254,11 +2254,70 @@ func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) error
 	if !gitrepo.BranchExistsRemote(ctx, dir, branch) {
 		return gitrepo.Push(ctx, dir, branch)
 	}
+	sourceSHA, err := gitrepo.RevParse(ctx, dir, branch)
+	if err != nil {
+		return err
+	}
+	if err := refuseIfBehind(ctx, dir, branch, sourceSHA); err != nil {
+		return err
+	}
 	remoteSHA, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
 	if err != nil {
 		return err
 	}
 	return gitrepo.PushWithLease(ctx, dir, branch, remoteSHA)
+}
+
+// refuseIfBehind is the never-publish-behind-origin guard shared by every deploy
+// publish site. --force-with-lease guards a DIVERGED remote but not a source
+// that is strictly BEHIND origin, so without this a frozen or stale local tip
+// silently overwrites newer origin work — the exact data loss SC-2322 exposes.
+// It fetches origin/<branch> fresh, then refuses ONLY when sourceSHA is strictly
+// behind origin (an ancestor of, and not equal to, the origin tip); the equal
+// case proceeds and the ahead/diverged case is left to the existing lease. The
+// refusal error's MESSAGE (not just its structured details) names the commits
+// that would be lost, because errors.CauseChain renders err.Error() text — so
+// the deploy-failed marker can point the reader at what to recover.
+func refuseIfBehind(ctx context.Context, dir, branch, sourceSHA string) error {
+	if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
+		return err
+	}
+	originSHA, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+	if err != nil {
+		return err
+	}
+	if sourceSHA == originSHA {
+		return nil
+	}
+	if !gitrepo.IsAncestor(ctx, dir, sourceSHA, originSHA) {
+		return nil // ahead or diverged — not behind, not this guard's concern
+	}
+	lost, err := gitrepo.CommitsBetween(ctx, dir, sourceSHA, originSHA)
+	if err != nil {
+		return err
+	}
+	return errors.WithDetails(
+		"refusing to publish %s: the source is behind origin and would overwrite %d newer commit(s) that must survive:\n%s",
+		"branch", branch,
+		"lost", len(lost),
+		"commits", describeCommits(lost),
+		"local", sourceSHA,
+		"origin", originSHA,
+	)
+}
+
+// describeCommits renders one indented "<short> <subject>" line per commit, so
+// a behind-publish refusal names exactly the newer work it protected.
+func describeCommits(commits []gitrepo.Commit) string {
+	var b strings.Builder
+	for _, c := range commits {
+		b.WriteString("  ")
+		b.WriteString(c.ShortSHA)
+		b.WriteString(" ")
+		b.WriteString(c.Subject)
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // EnsureMergeable makes the handoff branch current with the base before the
@@ -2308,6 +2367,11 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 	// Lease against the recorded pre-rebase tip when the branch is on origin so
 	// a concurrent push is refused, not clobbered.
 	if onOrigin {
+		// Same never-publish-behind-origin invariant as pushBranch: refuse before
+		// the lease push if the rebased tip is strictly behind origin (SC-2322).
+		if err := refuseIfBehind(ctx, dir, branch, newTip); err != nil {
+			return false, err
+		}
 		if err := gitrepo.PushHeadWithLease(ctx, wt, branch, tip); err != nil {
 			return false, err
 		}
