@@ -75,6 +75,7 @@ import { reconcilePending, dropPending, type Pending } from "./board-pending.js"
 import {
   reconcilePendingMoves,
   dropPendingMove,
+  pendingMovesForBatch,
   type PendingMove,
 } from "./board-pending-move.js";
 
@@ -1403,6 +1404,14 @@ async function deployReady(side: DeploySide): Promise<void> {
   const ready = deployableCards(current.cards, side);
   if (ready.length === 0) return;
   const prior = new Map(ready.map((c) => [c.key, { stage: c.stage, state: c.state }]));
+  // Shield the whole batch from a stale closing reconcile the same way a single
+  // drag is shielded (SC-2521): the ship's one reconcile() races the tracker's
+  // read-after-write lag, and without a pending-move record per card that stale
+  // fetch snaps every just-shipped card back to its origin. Built from the
+  // origin stages BEFORE the mutation loop rewrites them to "done".
+  const shipMoves = pendingMovesForBatch(ready, "done", Date.now(), PENDING_MOVE_TTL_MS);
+  for (const m of shipMoves) pendingMoves = dropPendingMove(pendingMoves, m.key);
+  pendingMoves.push(...shipMoves);
   for (const card of ready) {
     card.stage = "done";
     card.state = "running";
@@ -1421,6 +1430,9 @@ async function deployReady(side: DeploySide): Promise<void> {
         card.stage = prev.stage;
         card.state = prev.state;
       }
+      // Drop this card's shield so the next reconcile isn't pinned to a ship
+      // that never took; the cards that shipped keep theirs until confirmed.
+      pendingMoves = dropPendingMove(pendingMoves, card.key);
       showError(errMessage(err));
     }
   }

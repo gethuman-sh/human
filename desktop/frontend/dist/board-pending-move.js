@@ -31,3 +31,18 @@ export function reconcilePendingMoves(moves, fetchedStageByKey, now) {
 export function dropPendingMove(moves, key) {
     return moves.filter((m) => m.key !== key);
 }
+// Build the pending-move shields for a BATCH shipped in one gesture — the
+// bulk Deploy button optimistically sends every ready card to one target stage
+// at once (SC-2521 follow-up), and its single closing reconcile races the same
+// read-after-write lag as a single drag. Each card's fromStage is captured
+// here, from the stage it holds BEFORE the caller mutates it to the target, so
+// a stale fetch is discriminated against the right origin. Callers push the
+// result and drop any per-card entry whose transition fails.
+export function pendingMovesForBatch(cards, toStage, now, ttlMs) {
+    return cards.map((c) => ({
+        key: c.key,
+        fromStage: c.stage,
+        toStage,
+        expiresAt: now + ttlMs,
+    }));
+}

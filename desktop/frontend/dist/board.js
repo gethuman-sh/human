@@ -23,7 +23,7 @@ import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
 import { reconcilePending, dropPending } from "./board-pending.js";
-import { reconcilePendingMoves, dropPendingMove, } from "./board-pending-move.js";
+import { reconcilePendingMoves, dropPendingMove, pendingMovesForBatch, } from "./board-pending-move.js";
 export {};
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
@@ -997,6 +997,15 @@ async function deployReady(side) {
     if (ready.length === 0)
         return;
     const prior = new Map(ready.map((c) => [c.key, { stage: c.stage, state: c.state }]));
+    // Shield the whole batch from a stale closing reconcile the same way a single
+    // drag is shielded (SC-2521): the ship's one reconcile() races the tracker's
+    // read-after-write lag, and without a pending-move record per card that stale
+    // fetch snaps every just-shipped card back to its origin. Built from the
+    // origin stages BEFORE the mutation loop rewrites them to "done".
+    const shipMoves = pendingMovesForBatch(ready, "done", Date.now(), PENDING_MOVE_TTL_MS);
+    for (const m of shipMoves)
+        pendingMoves = dropPendingMove(pendingMoves, m.key);
+    pendingMoves.push(...shipMoves);
     for (const card of ready) {
         card.stage = "done";
         card.state = "running";
@@ -1016,6 +1025,9 @@ async function deployReady(side) {
                 card.stage = prev.stage;
                 card.state = prev.state;
             }
+            // Drop this card's shield so the next reconcile isn't pinned to a ship
+            // that never took; the cards that shipped keep theirs until confirmed.
+            pendingMoves = dropPendingMove(pendingMoves, card.key);
             showError(errMessage(err));
         }
     }
