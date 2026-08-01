@@ -25,12 +25,12 @@ import (
 // origin's — SC-1760). The loop's convergence guard compares it against the head
 // the following fix leaves behind, so a fix that adds no commit escalates instead
 // of driving an endless re-review.
-func readPRReviewVerdict(ctx context.Context, pmKey string, logger zerolog.Logger) (verdict, head string, recorded bool) {
+func readPRReviewVerdict(ctx context.Context, project, pmKey string, logger zerolog.Logger) (verdict, head string, recorded bool) {
 	var v struct {
 		Verdict string `json:"verdict"`
 		Head    string `json:"head"`
 	}
-	recorded = readStageReport(ctx, pmKey, "stage.pr-review", &v, logger)
+	recorded = readStageReport(ctx, project, pmKey, "stage.pr-review", &v, logger)
 	return v.Verdict, v.Head, recorded
 }
 
@@ -40,7 +40,7 @@ func readPRReviewVerdict(ctx context.Context, pmKey string, logger zerolog.Logge
 // behind (head — fed to the loop's convergence guard), plus whether a report was
 // found at all. Absent fields stay zero — the loop driver treats a missing exit
 // as escalate.
-func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary, head string, recorded bool) {
+func readPRFixReport(ctx context.Context, project, pmKey string, logger zerolog.Logger) (exit string, options []daemon.BoardOption, summary, head string, recorded bool) {
 	var v struct {
 		Exit     string               `json:"exit"`
 		Options  []daemon.BoardOption `json:"options"`
@@ -48,7 +48,7 @@ func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (
 		Summary  string               `json:"summary"`
 		Head     string               `json:"head"`
 	}
-	recorded = readStageReport(ctx, pmKey, "stage.pr-fix", &v, logger)
+	recorded = readStageReport(ctx, project, pmKey, "stage.pr-fix", &v, logger)
 	summary = v.Deferred
 	if summary == "" {
 		summary = v.Summary
@@ -58,11 +58,11 @@ func readPRFixReport(ctx context.Context, pmKey string, logger zerolog.Logger) (
 
 // readDeployFixExit returns the deploy fixer's exit recorded in stage.deploy-fix
 // ("" when absent — the driver treats a non-done exit, including absence, as red).
-func readDeployFixExit(ctx context.Context, pmKey string, logger zerolog.Logger) string {
+func readDeployFixExit(ctx context.Context, project, pmKey string, logger zerolog.Logger) string {
 	var v struct {
 		Exit string `json:"exit"`
 	}
-	_ = readStageReport(ctx, pmKey, "stage.deploy-fix", &v, logger)
+	_ = readStageReport(ctx, project, pmKey, "stage.deploy-fix", &v, logger)
 	return v.Exit
 }
 
@@ -72,9 +72,9 @@ func readDeployFixExit(ctx context.Context, pmKey string, logger zerolog.Logger)
 // value, which the decider treats as escalate (never merge on a state it cannot
 // read) — but the caller still needs to know it was MISSING rather than empty,
 // so the escalation can say which.
-func readStageReport(ctx context.Context, pmKey, name string, out any, logger zerolog.Logger) bool {
+func readStageReport(ctx context.Context, project, pmKey, name string, out any, logger zerolog.Logger) bool {
 	err := withStateStore(func(store agentstate.Store) error {
-		entry, err := store.Get(ctx, pmKey, name)
+		entry, err := store.Get(ctx, project, pmKey, name)
 		if err != nil {
 			return err
 		}

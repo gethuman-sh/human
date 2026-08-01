@@ -39,11 +39,16 @@ func withStateStore(fn func(agentstate.Store) error) error {
 // The second result reports whether an outcome was found at all: a stage whose
 // agent died before writing one leaves nothing, and the retry policy treats
 // that absence as retryable rather than terminal.
-func stageExitClass(ctx context.Context, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (string, bool) {
+//
+// project routes the read to the same namespace the agent wrote under — the
+// project the ticket key belongs to, resolved by the caller via
+// ProjectRegistry.EntryForKey — so a retry never reads another project's
+// report for a colliding key.
+func stageExitClass(ctx context.Context, project, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (string, bool) {
 	var exit string
 	var found bool
 	err := withStateStore(func(store agentstate.Store) error {
-		entry, err := store.Get(ctx, pmKey, stageReportName(stage))
+		entry, err := store.Get(ctx, project, pmKey, stageReportName(stage))
 		if err != nil {
 			return err
 		}
@@ -66,11 +71,11 @@ func stageExitClass(ctx context.Context, pmKey string, stage daemon.BoardStage, 
 }
 
 // bumpStageRetries increments and returns this stage's automatic-retry count.
-func bumpStageRetries(ctx context.Context, pmKey string, stage daemon.BoardStage) (int, error) {
+func bumpStageRetries(ctx context.Context, project, pmKey string, stage daemon.BoardStage) (int, error) {
 	var n int64
 	err := withStateStore(func(store agentstate.Store) error {
 		var incrErr error
-		n, incrErr = store.Incr(ctx, pmKey, retryCounterName(stage), 1,
+		n, incrErr = store.Incr(ctx, project, pmKey, retryCounterName(stage), 1,
 			agentstate.Meta{Agent: "daemon-board-retry"})
 		return incrErr
 	})
@@ -79,9 +84,9 @@ func bumpStageRetries(ctx context.Context, pmKey string, stage daemon.BoardStage
 
 // clearStageRetries drops the count after a clean finish, so the next failure
 // on this stage gets a full budget rather than the remainder of an older one.
-func clearStageRetries(ctx context.Context, pmKey string, stage daemon.BoardStage) {
+func clearStageRetries(ctx context.Context, project, pmKey string, stage daemon.BoardStage) {
 	_ = withStateStore(func(store agentstate.Store) error {
-		_, err := store.Delete(ctx, pmKey, retryCounterName(stage))
+		_, err := store.Delete(ctx, project, pmKey, retryCounterName(stage))
 		return err
 	})
 }
