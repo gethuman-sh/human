@@ -22,7 +22,7 @@ import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
-import { reconcilePending, dropPending } from "./board-pending.js";
+import { reconcilePending, dropPending, applyPendingMoves } from "./board-pending.js";
 export {};
 // openExternal routes a URL to the system browser via the Wails runtime.
 // Anchor clicks with target=_blank are NOT reliably forwarded by the Linux
@@ -730,6 +730,7 @@ async function fixBug(key, title) {
     const prevStage = card?.stage;
     const prevState = card?.state;
     if (card) {
+        holdMove(key, card.stage, "implementation", "running");
         card.stage = "implementation";
         card.state = "running";
         render();
@@ -741,6 +742,7 @@ async function fixBug(key, title) {
             card.stage = prevStage;
             card.state = prevState;
         }
+        releaseMove(key);
         showError(errMessage(err));
     }, reconcile);
 }
@@ -750,6 +752,7 @@ async function fixBug(key, title) {
 async function fixSecurity(key, title) {
     const card = current.cards.find((c) => c.key === key);
     if (card) {
+        holdMove(key, card.stage, "implementation", "running");
         card.stage = "implementation";
         card.state = "running";
         render();
@@ -758,6 +761,9 @@ async function fixSecurity(key, title) {
         await go().FixSecurity(key, title);
     }
     catch (err) {
+        // The launch never happened, so the optimistic placement must not be held
+        // against the next fetch — the reconcile below then puts the card back.
+        releaseMove(key);
         showError(errMessage(err));
     }
     await reconcile();
@@ -1403,6 +1409,7 @@ async function transition(key, title, from, to) {
     if (card) {
         card.stage = to;
         card.state = "running";
+        holdMove(key, prevStage ?? from, to, "running");
         render();
     }
     await runGuardedAction(() => go().Transition(key, title, from, to), (err) => {
@@ -1412,6 +1419,7 @@ async function transition(key, title, from, to) {
             card.stage = prevStage;
             card.state = prevState;
         }
+        releaseMove(key);
         showError(errMessage(err));
     }, reconcile);
 }
@@ -1897,6 +1905,24 @@ async function initialLoad() {
 // write `current` — a slower stale response would otherwise overwrite fresh
 // state and resurrect cards that already left the board. closeTicket also
 // bumps the epoch when it mutates `current` directly, for the same reason.
+// Moves the person made that no fetch has confirmed yet. A refresh answering
+// from before the drop would otherwise undo the action on screen (SC-2521).
+let pendingMoves = [];
+// PENDING_MOVE_GRACE bounds how long an unconfirmed move is held. Long enough
+// to cover a tracker that has not made the new marker readable yet; short
+// enough that a launch which silently did nothing returns to the truth while
+// the person is still looking at it.
+const PENDING_MOVE_GRACE = 30_000;
+// holdMove records an optimistic placement so the next fetch cannot undo it.
+function holdMove(key, from, to, state) {
+    pendingMoves = pendingMoves.filter((m) => m.key !== key);
+    pendingMoves.push({ key, from, to, state, expiresAt: Date.now() + PENDING_MOVE_GRACE });
+}
+// releaseMove drops the hold when the action itself failed: the card has
+// already been reverted, and holding would re-apply a move that never happened.
+function releaseMove(key) {
+    pendingMoves = pendingMoves.filter((m) => m.key !== key);
+}
 let reconcileEpoch = 0;
 // reconcile fetches the full board (including derived stages) and renders it. It
 // is the single source of truth after the initial load: board:changed events and
@@ -1908,6 +1934,12 @@ async function reconcile(opts = {}) {
         if (epoch !== reconcileEpoch)
             return;
         current = boardStateFromPayload(data);
+        // A fetch that predates the drop still shows the card where it was. Hold
+        // the move rather than letting it undo what the person just did; every
+        // other answer — the destination, a different stage, a card that left —
+        // ends the hold (SC-2521).
+        const settled = applyPendingMoves(current.cards, pendingMoves, Date.now());
+        pendingMoves = settled.moves;
         findbugsHunting = await go()
             .FindbugsHunting()
             .catch(() => false);
