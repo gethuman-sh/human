@@ -155,13 +155,13 @@ Tickets that closed by naming a generalization they did not do:
 | Ticket | The note | Outcome |
 |---|---|---|
 | SC-1654 | are `state.db`, `index.db`, `codenav.db`, `ideation.db` project-keyed? | **Not checked. `state.db` is not** — see open items |
-| SC-1996 | do check-waits, merges and ticket transitions share the habit of collapsing "could not determine" into a specific negative? | deploy's three sites fixed; ticket close is covered by SC-341's surfaced best-effort |
+| SC-1996 | do check-waits, merges and ticket transitions share the habit of collapsing "could not determine" into a specific negative? | **This audit answered it too quickly.** Deploy is genuinely covered; the note asked about *other gates*, and one was never checked — the handoff commit-presence probe returns a bare boolean, so a git error reads as "the commits are missing" and reds good work. Now SC-2403 |
 | SC-2133 | are other handoff-posting stages exposed to the same mismatch? | the clean-exit signal is threaded generically through `handleBoardAgentExit`, so all stages benefit |
 | SC-1959 | does the same conflation affect the other supported trackers? | done — `create_in` threaded through every provider config |
 | SC-1450 | an auth preflight before claiming, or a circuit breaker after N identical auth deaths | preflight shipped as SC-912; the breaker is the stage retry cap |
 | SC-731 | planning must never emit sign-off-gated steps | done — the planner carries two hard autonomy rules and the plan skill scans the finished plan for mid-execution gates |
 
-## The pattern worth remembering
+## The pattern worth remembering — now SC-2404
 
 Three of the four gaps found across this audit and the work that preceded it are
 the same shape: **a rule that was right, scoped to the stage that discovered
@@ -174,3 +174,8 @@ So when a pipeline bug is fixed, the question is not only "is this fixed" but
 **"which sibling stages have the same hole"** — and prompts are where to look
 first, because shared Go code updates every stage at once and a prompt updates
 exactly one agent.
+
+That pattern is itself filed as SC-2404: a rule shared by a family of agents should
+be enforced across the family, so a member drifting from it fails a check instead
+of shipping. It waits on SC-2328, since the known divergence should be closed
+before the guard that would fail on it goes in.
