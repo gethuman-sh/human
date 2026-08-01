@@ -2043,9 +2043,18 @@ function drawBlockerArrows(): void {
   // Cleared unconditionally: a resize redraws without rebuilding the DOM, so
   // last layout's gaps would otherwise linger beside arrows that have moved.
   document.querySelectorAll<HTMLElement>(".card").forEach(clearArrowGaps);
-  const bodies = [...document.querySelectorAll<HTMLElement>(".column-body")];
-  bodies.forEach((body) => body.querySelector(".blocker-arrows")?.remove());
+  const all = [...document.querySelectorAll<HTMLElement>(".column-body")];
+  all.forEach((body) => body.querySelector(".blocker-arrows")?.remove());
+  observeForSize(all);
   if (blockers.size === 0) return;
+  // A hidden column measures zero on every card, so an arrow computed here
+  // would be drawn at the origin and never seen. The Bugs pane is rebuilt on
+  // every render even while the workflow board is showing, which is exactly
+  // that case: the gaps land (they are CSS, and correct the moment the pane
+  // appears) while the arrow does not, and it only shows up whenever the next
+  // render happens to run with the pane open. Skipping here and redrawing when
+  // the column gains size is what keeps the two in step.
+  const bodies = all.filter(hasLayout);
 
   const work = bodies.map((body) => {
     const cards = cardsIn(body);
@@ -2067,6 +2076,31 @@ function drawBlockerArrows(): void {
     const boxes = new Map([...cards].map(([key, el]) => [key, boxOf(el)]));
     body.appendChild(arrowLayer(body, bodies.indexOf(body), drawn, boxes));
   }
+}
+
+// hasLayout reports whether an element is actually laid out — false inside a
+// `display: none` subtree, where every offset reads zero.
+function hasLayout(el: HTMLElement): boolean {
+  return el.offsetParent !== null && el.offsetWidth > 0 && el.offsetHeight > 0;
+}
+
+// sizeWatcher redraws when a column's size changes: when a hidden pane is
+// opened (zero → real), when a web font finishes loading and reflows the cards,
+// and when the window resizes. Watching the elements rather than the window
+// covers all three with one mechanism, including the pane switch, which fires
+// no resize event at all.
+const sizeWatcher =
+  typeof ResizeObserver === "undefined"
+    ? null
+    : new ResizeObserver(() => requestAnimationFrame(drawBlockerArrows));
+
+// observeForSize points the watcher at the current columns. render() rebuilds
+// them, so the previous observations are dropped first — an observer holding
+// detached nodes would keep firing for elements nobody can see.
+function observeForSize(bodies: HTMLElement[]): void {
+  if (!sizeWatcher) return;
+  sizeWatcher.disconnect();
+  for (const body of bodies) sizeWatcher.observe(body);
 }
 
 const ARROW_GAP_SIDES: Side[] = ["left", "right", "top", "bottom"];
@@ -3660,10 +3694,8 @@ function init(): void {
   document.getElementById("ideation-draft-submit")?.addEventListener("click", () => void approveIdeation());
 }
 
-// The bug grid reflows on width (auto-fill columns), so a resize moves cards
-// out from under arrows drawn for the old layout. Redrawing on the next frame
-// re-measures rather than trying to transform what was already drawn.
-window.addEventListener("resize", () => requestAnimationFrame(drawBlockerArrows));
+// Window resizes are covered by sizeWatcher (the columns resize with the
+// window), so no separate resize listener is needed.
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init);
