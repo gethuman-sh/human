@@ -76,21 +76,26 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	return s, nil
 }
 
+// entriesCreate is shared between ensureSchema and migrateProjectUnique
+// (which rebuilds entries under the same definition once the pre-SC-2326
+// UNIQUE(key, source) no longer covers project).
+const entriesCreate = `
+	CREATE TABLE IF NOT EXISTS entries (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		key        TEXT NOT NULL,
+		source     TEXT NOT NULL,
+		kind       TEXT NOT NULL,
+		project    TEXT NOT NULL DEFAULT '',
+		title      TEXT NOT NULL DEFAULT '',
+		status     TEXT NOT NULL DEFAULT '',
+		assignee   TEXT NOT NULL DEFAULT '',
+		url        TEXT NOT NULL DEFAULT '',
+		indexed_at DATETIME NOT NULL DEFAULT (datetime('now')),
+		UNIQUE (key, source, project)
+	)`
+
 func (s *SQLiteStore) ensureSchema() error {
-	const schema = `
-		CREATE TABLE IF NOT EXISTS entries (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			key        TEXT NOT NULL,
-			source     TEXT NOT NULL,
-			kind       TEXT NOT NULL,
-			project    TEXT NOT NULL DEFAULT '',
-			title      TEXT NOT NULL DEFAULT '',
-			status     TEXT NOT NULL DEFAULT '',
-			assignee   TEXT NOT NULL DEFAULT '',
-			url        TEXT NOT NULL DEFAULT '',
-			indexed_at DATETIME NOT NULL DEFAULT (datetime('now')),
-			UNIQUE (key, source)
-		);
+	const schema = entriesCreate + `;
 
 		CREATE TABLE IF NOT EXISTS entry_files (
 			key    TEXT NOT NULL,
@@ -110,11 +115,67 @@ func (s *SQLiteStore) ensureSchema() error {
 			tokenize='porter unicode61'
 		);
 	`
-	_, err := s.db.Exec(schema)
-	if err != nil {
+	if _, err := s.db.Exec(schema); err != nil {
 		return errors.WrapWithDetails(err, "create index schema")
 	}
+	return s.migrateProjectUnique()
+}
+
+// migrateProjectUnique upgrades a database created before SC-2326, when
+// entries carried a project column but the dedup identity was UNIQUE(key,
+// source) alone: two projects sharing both a source and a key upserted onto
+// one row, so one project's indexed issue silently replaced the other's in
+// search results. It rebuilds entries under UNIQUE(key, source, project),
+// preserving id so entries_fts rowids (which reference it) stay aligned — no
+// re-index needed, and it is a no-op once the wider constraint is in place.
+func (s *SQLiteStore) migrateProjectUnique() error {
+	wide, err := s.hasProjectUniqueIndex()
+	if err != nil {
+		return err
+	}
+	if wide {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return errors.WrapWithDetails(err, "begin project-unique migration")
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	cols := "id, key, source, kind, project, title, status, assignee, url, indexed_at"
+	stmts := []string{
+		"ALTER TABLE entries RENAME TO entries_legacy",
+		entriesCreate,
+		"INSERT INTO entries (" + cols + ") SELECT " + cols + " FROM entries_legacy",
+		"DROP TABLE entries_legacy",
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return errors.WrapWithDetails(err, "migrate entries to project-scoped unique index", "stmt", stmt)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.WrapWithDetails(err, "commit project-unique migration")
+	}
 	return nil
+}
+
+// hasProjectUniqueIndex reports whether entries' unique index already covers
+// project, by checking sqlite_master's stored CREATE TABLE text for the
+// column — the guard that makes migrateProjectUnique idempotent.
+func (s *SQLiteStore) hasProjectUniqueIndex() (bool, error) {
+	var sqlText sql.NullString
+	err := s.db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entries'`,
+	).Scan(&sqlText)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return true, nil // no table yet — the CREATE above just made the current shape
+		}
+		return false, errors.WrapWithDetails(err, "read entries table definition")
+	}
+	return strings.Contains(sqlText.String, "UNIQUE (key, source, project)"), nil
 }
 
 // UpsertEntry inserts or updates an entry and its FTS index.
@@ -125,11 +186,13 @@ func (s *SQLiteStore) UpsertEntry(ctx context.Context, entry Entry, description 
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	// Check if entry exists.
+	// Check if entry exists. project is part of the identity (SC-2326): two
+	// projects that share both a source and a key are distinct entries, not
+	// one row upserting over the other.
 	var existingID int64
 	err = tx.QueryRowContext(ctx,
-		"SELECT id FROM entries WHERE key = ? AND source = ?",
-		entry.Key, entry.Source,
+		"SELECT id FROM entries WHERE key = ? AND source = ? AND project = ?",
+		entry.Key, entry.Source, entry.Project,
 	).Scan(&existingID)
 
 	switch err {

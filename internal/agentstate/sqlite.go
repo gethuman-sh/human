@@ -70,9 +70,13 @@ func Open(dbPath string, opts ...Option) (*SQLiteStore, error) {
 	return s, nil
 }
 
-func (s *SQLiteStore) ensureSchema() error {
-	const schema = `
+// agentStateCreate and agentLeasesCreate are shared between ensureSchema and
+// migrateProjectColumn (which rebuilds the table under the same definition
+// after renaming the pre-project one aside).
+const (
+	agentStateCreate = `
 		CREATE TABLE IF NOT EXISTS agent_state (
+			project    TEXT NOT NULL DEFAULT '',
 			scope      TEXT NOT NULL,
 			name       TEXT NOT NULL,
 			value      TEXT NOT NULL,
@@ -80,13 +84,11 @@ func (s *SQLiteStore) ensureSchema() error {
 			agent      TEXT NOT NULL DEFAULT '',
 			run_id     TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL,
-			PRIMARY KEY (scope, name)
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_agent_state_updated
-			ON agent_state (updated_at);
-
+			PRIMARY KEY (project, scope, name)
+		)`
+	agentLeasesCreate = `
 		CREATE TABLE IF NOT EXISTS agent_leases (
+			project      TEXT NOT NULL DEFAULT '',
 			scope        TEXT NOT NULL,
 			stage        TEXT NOT NULL,
 			agent        TEXT NOT NULL,
@@ -95,16 +97,111 @@ func (s *SQLiteStore) ensureSchema() error {
 			leased_at   TEXT NOT NULL,
 			heartbeat_at TEXT NOT NULL,
 			released_at  TEXT,
-			PRIMARY KEY (scope, stage)
-		);
+			PRIMARY KEY (project, scope, stage)
+		)`
+)
 
+func (s *SQLiteStore) ensureSchema() error {
+	const schema = agentStateCreate + `;
+		CREATE INDEX IF NOT EXISTS idx_agent_state_updated
+			ON agent_state (updated_at);
+		` + agentLeasesCreate + `;
 		CREATE INDEX IF NOT EXISTS idx_agent_leases_heartbeat
 			ON agent_leases (heartbeat_at);
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		return errors.WrapWithDetails(err, "create state schema")
 	}
+	return s.migrateProjectColumn()
+}
+
+// migrateProjectColumn upgrades a database created before SC-2326, when
+// agent_state/agent_leases had no project column, so existing rows are not
+// lost and are reachable under the default project "" — the same value a
+// single-project install now writes under, so old and new rows line up with
+// no reconfiguration and no visible migration step.
+func (s *SQLiteStore) migrateProjectColumn() error {
+	tables := []struct {
+		name   string
+		create string
+		cols   string
+		index  string
+	}{
+		{
+			name:   "agent_state",
+			create: agentStateCreate,
+			cols:   "scope, name, value, format, agent, run_id, updated_at",
+			index:  "CREATE INDEX IF NOT EXISTS idx_agent_state_updated ON agent_state (updated_at)",
+		},
+		{
+			name:   "agent_leases",
+			create: agentLeasesCreate,
+			cols:   "scope, stage, agent, run_id, ttl_seconds, leased_at, heartbeat_at, released_at",
+			index:  "CREATE INDEX IF NOT EXISTS idx_agent_leases_heartbeat ON agent_leases (heartbeat_at)",
+		},
+	}
+
+	for _, t := range tables {
+		has, err := s.hasColumn(t.name, "project")
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+
+		tx, err := s.db.Begin()
+		if err != nil {
+			return errors.WrapWithDetails(err, "begin project migration", "table", t.name)
+		}
+		legacy := t.name + "_legacy"
+		stmts := []string{
+			"ALTER TABLE " + t.name + " RENAME TO " + legacy,
+			t.create,
+			"INSERT INTO " + t.name + " (project, " + t.cols + ") SELECT '', " + t.cols + " FROM " + legacy,
+			"DROP TABLE " + legacy,
+			t.index,
+		}
+		for _, stmt := range stmts {
+			if _, err := tx.Exec(stmt); err != nil {
+				_ = tx.Rollback()
+				return errors.WrapWithDetails(err, "migrate table to project column", "table", t.name, "stmt", stmt)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return errors.WrapWithDetails(err, "commit project migration", "table", t.name)
+		}
+	}
 	return nil
+}
+
+// hasColumn reports whether table already carries col, using PRAGMA
+// table_info — the guard that makes migrateProjectColumn idempotent and a
+// no-op on a database that already has the project column.
+func (s *SQLiteStore) hasColumn(table, col string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, errors.WrapWithDetails(err, "read table info", "table", table)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return false, errors.WrapWithDetails(err, "scan table info", "table", table)
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, errors.WrapWithDetails(err, "read table info rows", "table", table)
+	}
+	return false, nil
 }
 
 // Close releases the database handle.
@@ -116,16 +213,17 @@ func (s *SQLiteStore) Close() error {
 }
 
 // Set writes (or overwrites) one entry and returns what was stored.
-func (s *SQLiteStore) Set(ctx context.Context, scope, name, value, format string, meta Meta) (Entry, error) {
+func (s *SQLiteStore) Set(ctx context.Context, project, scope, name, value, format string, meta Meta) (Entry, error) {
 	e, err := s.buildEntry(scope, name, value, format, meta)
 	if err != nil {
 		return Entry{}, err
 	}
+	normProject := NormalizeProject(project)
 
 	const q = `
-		INSERT INTO agent_state (scope, name, value, format, agent, run_id, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(scope, name) DO UPDATE SET
+		INSERT INTO agent_state (project, scope, name, value, format, agent, run_id, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(project, scope, name) DO UPDATE SET
 			value      = excluded.value,
 			format     = excluded.format,
 			agent      = excluded.agent,
@@ -133,9 +231,9 @@ func (s *SQLiteStore) Set(ctx context.Context, scope, name, value, format string
 			updated_at = excluded.updated_at
 	`
 	_, err = s.db.ExecContext(ctx, q,
-		e.Scope, e.Name, e.Value, e.Format, e.Agent, e.RunID, e.UpdatedAt.Format(TimeFormat))
+		normProject, e.Scope, e.Name, e.Value, e.Format, e.Agent, e.RunID, e.UpdatedAt.Format(TimeFormat))
 	if err != nil {
-		return Entry{}, errors.WrapWithDetails(err, "write state entry", "scope", e.Scope, "name", e.Name)
+		return Entry{}, errors.WrapWithDetails(err, "write state entry", "project", normProject, "scope", e.Scope, "name", e.Name)
 	}
 	return e, nil
 }
@@ -169,17 +267,18 @@ func (s *SQLiteStore) buildEntry(scope, name, value, format string, meta Meta) (
 }
 
 // Get returns one entry, or ErrNotFound.
-func (s *SQLiteStore) Get(ctx context.Context, scope, name string) (Entry, error) {
+func (s *SQLiteStore) Get(ctx context.Context, project, scope, name string) (Entry, error) {
 	normScope, err := NormalizeScope(scope)
 	if err != nil {
 		return Entry{}, err
 	}
+	normProject := NormalizeProject(project)
 
 	const q = `
 		SELECT scope, name, value, format, agent, run_id, updated_at
-		FROM agent_state WHERE scope = ? AND name = ?
+		FROM agent_state WHERE project = ? AND scope = ? AND name = ?
 	`
-	row := s.db.QueryRowContext(ctx, q, normScope, name)
+	row := s.db.QueryRowContext(ctx, q, normProject, normScope, name)
 	e, err := scanEntry(row)
 	if err != nil {
 		return Entry{}, err
@@ -189,21 +288,22 @@ func (s *SQLiteStore) Get(ctx context.Context, scope, name string) (Entry, error
 
 // List returns every entry in a scope, optionally restricted to a name prefix,
 // ordered by name so output is stable across runs.
-func (s *SQLiteStore) List(ctx context.Context, scope, prefix string) ([]Entry, error) {
+func (s *SQLiteStore) List(ctx context.Context, project, scope, prefix string) ([]Entry, error) {
 	normScope, err := NormalizeScope(scope)
 	if err != nil {
 		return nil, err
 	}
+	normProject := NormalizeProject(project)
 
 	const q = `
 		SELECT scope, name, value, format, agent, run_id, updated_at
 		FROM agent_state
-		WHERE scope = ? AND name LIKE ? ESCAPE '\'
+		WHERE project = ? AND scope = ? AND name LIKE ? ESCAPE '\'
 		ORDER BY name
 	`
-	rows, err := s.db.QueryContext(ctx, q, normScope, escapeLike(prefix)+"%")
+	rows, err := s.db.QueryContext(ctx, q, normProject, normScope, escapeLike(prefix)+"%")
 	if err != nil {
-		return nil, errors.WrapWithDetails(err, "list state entries", "scope", normScope)
+		return nil, errors.WrapWithDetails(err, "list state entries", "project", normProject, "scope", normScope)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -216,20 +316,22 @@ func (s *SQLiteStore) List(ctx context.Context, scope, prefix string) ([]Entry, 
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errors.WrapWithDetails(err, "read state entries", "scope", normScope)
+		return nil, errors.WrapWithDetails(err, "read state entries", "project", normProject, "scope", normScope)
 	}
 	return entries, nil
 }
 
 // Delete removes one entry, reporting whether it existed.
-func (s *SQLiteStore) Delete(ctx context.Context, scope, name string) (bool, error) {
+func (s *SQLiteStore) Delete(ctx context.Context, project, scope, name string) (bool, error) {
 	normScope, err := NormalizeScope(scope)
 	if err != nil {
 		return false, err
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM agent_state WHERE scope = ? AND name = ?`, normScope, name)
+	normProject := NormalizeProject(project)
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM agent_state WHERE project = ? AND scope = ? AND name = ?`, normProject, normScope, name)
 	if err != nil {
-		return false, errors.WrapWithDetails(err, "delete state entry", "scope", normScope, "name", name)
+		return false, errors.WrapWithDetails(err, "delete state entry", "project", normProject, "scope", normScope, "name", name)
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
@@ -241,7 +343,7 @@ func (s *SQLiteStore) Delete(ctx context.Context, scope, name string) (bool, err
 // the ticket's state. An empty prefix is refused rather than silently meaning
 // "everything": that is what DeleteScope is for, and a typo should not wipe a
 // ticket.
-func (s *SQLiteStore) DeletePrefix(ctx context.Context, scope, prefix string) (int, error) {
+func (s *SQLiteStore) DeletePrefix(ctx context.Context, project, scope, prefix string) (int, error) {
 	normScope, err := NormalizeScope(scope)
 	if err != nil {
 		return 0, err
@@ -249,12 +351,13 @@ func (s *SQLiteStore) DeletePrefix(ctx context.Context, scope, prefix string) (i
 	if strings.TrimSpace(prefix) == "" {
 		return 0, errors.WithDetails("prefix must not be empty; use DeleteScope to clear a whole scope", "scope", normScope)
 	}
+	normProject := NormalizeProject(project)
 
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM agent_state WHERE scope = ? AND name LIKE ? ESCAPE '\'`,
-		normScope, escapeLike(prefix)+"%")
+		`DELETE FROM agent_state WHERE project = ? AND scope = ? AND name LIKE ? ESCAPE '\'`,
+		normProject, normScope, escapeLike(prefix)+"%")
 	if err != nil {
-		return 0, errors.WrapWithDetails(err, "delete state prefix", "scope", normScope, "prefix", prefix)
+		return 0, errors.WrapWithDetails(err, "delete state prefix", "project", normProject, "scope", normScope, "prefix", prefix)
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
@@ -262,18 +365,21 @@ func (s *SQLiteStore) DeletePrefix(ctx context.Context, scope, prefix string) (i
 
 // DeleteScope removes every entry and lease of a scope, returning the entry
 // count. Used by `state rm --all` when a ticket's run is abandoned.
-func (s *SQLiteStore) DeleteScope(ctx context.Context, scope string) (int, error) {
+func (s *SQLiteStore) DeleteScope(ctx context.Context, project, scope string) (int, error) {
 	normScope, err := NormalizeScope(scope)
 	if err != nil {
 		return 0, err
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM agent_state WHERE scope = ?`, normScope)
+	normProject := NormalizeProject(project)
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM agent_state WHERE project = ? AND scope = ?`, normProject, normScope)
 	if err != nil {
-		return 0, errors.WrapWithDetails(err, "delete scope", "scope", normScope)
+		return 0, errors.WrapWithDetails(err, "delete scope", "project", normProject, "scope", normScope)
 	}
 	n, _ := res.RowsAffected()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM agent_leases WHERE scope = ?`, normScope); err != nil {
-		return 0, errors.WrapWithDetails(err, "delete scope leases", "scope", normScope)
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM agent_leases WHERE project = ? AND scope = ?`, normProject, normScope); err != nil {
+		return 0, errors.WrapWithDetails(err, "delete scope leases", "project", normProject, "scope", normScope)
 	}
 	return int(n), nil
 }
@@ -281,7 +387,7 @@ func (s *SQLiteStore) DeleteScope(ctx context.Context, scope string) (int, error
 // Incr adds to a counter entry and returns the new total, creating it at zero
 // first. It runs in a transaction so two stages racing on a retry budget cannot
 // both read the same value and overwrite each other.
-func (s *SQLiteStore) Incr(ctx context.Context, scope, name string, by int64, meta Meta) (int64, error) {
+func (s *SQLiteStore) Incr(ctx context.Context, project, scope, name string, by int64, meta Meta) (int64, error) {
 	normScope, err := NormalizeScope(scope)
 	if err != nil {
 		return 0, err
@@ -289,6 +395,7 @@ func (s *SQLiteStore) Incr(ctx context.Context, scope, name string, by int64, me
 	if err := ValidateName(name); err != nil {
 		return 0, err
 	}
+	normProject := NormalizeProject(project)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -296,25 +403,25 @@ func (s *SQLiteStore) Incr(ctx context.Context, scope, name string, by int64, me
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	current, err := readCounter(ctx, tx, normScope, name)
+	current, err := readCounter(ctx, tx, normProject, normScope, name)
 	if err != nil {
 		return 0, err
 	}
 	next := current + by
 
 	const q = `
-		INSERT INTO agent_state (scope, name, value, format, agent, run_id, updated_at)
-		VALUES (?, ?, ?, 'text', ?, ?, ?)
-		ON CONFLICT(scope, name) DO UPDATE SET
+		INSERT INTO agent_state (project, scope, name, value, format, agent, run_id, updated_at)
+		VALUES (?, ?, ?, ?, 'text', ?, ?, ?)
+		ON CONFLICT(project, scope, name) DO UPDATE SET
 			value      = excluded.value,
 			agent      = excluded.agent,
 			run_id     = excluded.run_id,
 			updated_at = excluded.updated_at
 	`
-	_, err = tx.ExecContext(ctx, q, normScope, name, strconv.FormatInt(next, 10),
+	_, err = tx.ExecContext(ctx, q, normProject, normScope, name, strconv.FormatInt(next, 10),
 		meta.Agent, meta.RunID, s.now().UTC().Format(TimeFormat))
 	if err != nil {
-		return 0, errors.WrapWithDetails(err, "write counter", "scope", normScope, "name", name)
+		return 0, errors.WrapWithDetails(err, "write counter", "project", normProject, "scope", normScope, "name", name)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, errors.WrapWithDetails(err, "commit counter transaction")
@@ -324,19 +431,19 @@ func (s *SQLiteStore) Incr(ctx context.Context, scope, name string, by int64, me
 
 // readCounter returns the current counter value, treating a missing entry as
 // zero and refusing a non-numeric one rather than silently resetting it.
-func readCounter(ctx context.Context, tx *sql.Tx, scope, name string) (int64, error) {
+func readCounter(ctx context.Context, tx *sql.Tx, project, scope, name string) (int64, error) {
 	var raw string
-	err := tx.QueryRowContext(ctx, `SELECT value FROM agent_state WHERE scope = ? AND name = ?`,
-		scope, name).Scan(&raw)
+	err := tx.QueryRowContext(ctx, `SELECT value FROM agent_state WHERE project = ? AND scope = ? AND name = ?`,
+		project, scope, name).Scan(&raw)
 	if err != nil {
 		if isNoRows(err) {
 			return 0, nil
 		}
-		return 0, errors.WrapWithDetails(err, "read counter", "scope", scope, "name", name)
+		return 0, errors.WrapWithDetails(err, "read counter", "project", project, "scope", scope, "name", name)
 	}
 	n, convErr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	if convErr != nil {
-		return 0, errors.WithDetails("existing value is not a counter", "scope", scope, "name", name, "value", raw)
+		return 0, errors.WithDetails("existing value is not a counter", "project", project, "scope", scope, "name", name, "value", raw)
 	}
 	return n, nil
 }

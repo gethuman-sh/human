@@ -360,9 +360,12 @@ func TestSync_incrementalSkipsPruning(t *testing.T) {
 	ctx := context.Background()
 	var buf bytes.Buffer
 
-	// Pre-populate entries including a "stale" one.
-	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "KAN-1", Source: "work", Kind: "jira"}, "d"))
-	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "KAN-99", Source: "work", Kind: "jira"}, "stale"))
+	// Pre-populate entries including a "stale" one. Project must match what the
+	// sync below will write (the instance's configured project "KAN") — project
+	// is part of the entry's identity (SC-2326), so a mismatch here would
+	// insert a second row instead of updating this one.
+	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "KAN-1", Source: "work", Kind: "jira", Project: "KAN"}, "d"))
+	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "KAN-99", Source: "work", Kind: "jira", Project: "KAN"}, "stale"))
 
 	provider := &mockProvider{
 		listFn: func(_ context.Context, _ tracker.ListOptions) ([]tracker.Issue, error) {

@@ -669,13 +669,13 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	stageRetry := daemon.StageRetry{
 		Max: daemon.DefaultStageRetries,
 		Outcome: func(pmKey string, stage daemon.BoardStage) (string, bool) {
-			return stageExitClass(ctx, pmKey, stage, logger)
+			return stageExitClass(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage, logger)
 		},
 		Attempts: func(pmKey string, stage daemon.BoardStage) (int, error) {
-			return bumpStageRetries(ctx, pmKey, stage)
+			return bumpStageRetries(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage)
 		},
 		Reset: func(pmKey string, stage daemon.BoardStage) {
-			clearStageRetries(ctx, pmKey, stage)
+			clearStageRetries(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage)
 		},
 		Relaunch: func(pmKey string, stage daemon.BoardStage) error {
 			// From is unused by the in-place retry rules; the card's own derived
@@ -2734,8 +2734,9 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, li
 // is long gone (SC-1892).
 func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
 	return func(pmKey, agentName, errorType string) error {
-		verdict, reviewHead, verdictRecorded := readPRReviewVerdict(ctx, pmKey, logger)
-		exit, options, summary, fixHead, exitRecorded := readPRFixReport(ctx, pmKey, logger)
+		project := boardStateProject(ds.srv.Projects, pmKey)
+		verdict, reviewHead, verdictRecorded := readPRReviewVerdict(ctx, project, pmKey, logger)
+		exit, options, summary, fixHead, exitRecorded := readPRFixReport(ctx, project, pmKey, logger)
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
 		if err != nil {
 			return err
@@ -2761,13 +2762,30 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 // executor, which re-runs Deploy on `done` or reds the card on anything else.
 func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
 	return func(pmKey string) error {
-		exit := readDeployFixExit(ctx, pmKey, logger)
+		exit := readDeployFixExit(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, logger)
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate)
 		if err != nil {
 			return err
 		}
 		return deps.AdvanceDeployFix(ctx, pmKey, exit)
 	}
+}
+
+// boardStateProject resolves the project a board-driven state read/write for
+// pmKey belongs to, so the daemon's own driver reads back exactly what an
+// agent working that ticket wrote — the same routing HUMAN_STATE_PROJECT
+// gives a forwarded "human state" command (SC-2326). Fewer than two
+// registered projects, or a key the registry cannot place, resolve to the
+// default project "" rather than guessing.
+func boardStateProject(reg *daemon.ProjectRegistry, pmKey string) string {
+	if reg == nil || len(reg.Entries()) < 2 {
+		return ""
+	}
+	entry, err := reg.EntryForKey(pmKey)
+	if err != nil {
+		return ""
+	}
+	return entry.Name
 }
 
 // boardTransitionDepsFor resolves the transition engine's collaborators for

@@ -331,6 +331,17 @@ func (s *Server) executeCommand(conn net.Conn, req Request, projectDir string) {
 		}
 		req.Env["HUMAN_PROJECT_DIR"] = projectDir
 	}
+	// A forwarded "human state" command carries no way to name its own
+	// project — the scope argument is the ticket key. Resolve it here from
+	// the same registry the board driver uses, so no prompt change is needed.
+	if len(req.Args) > 0 && req.Args[0] == "state" {
+		if stateProject := s.resolveStateProject(req.Args); stateProject != "" {
+			if req.Env == nil {
+				req.Env = make(map[string]string)
+			}
+			req.Env["HUMAN_STATE_PROJECT"] = stateProject
+		}
+	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd := s.CmdFactory()
@@ -1306,6 +1317,79 @@ func (s *Server) resolveProjectDir(cwd string) (string, error) {
 			cwd, strings.Join(dirs, "\n  "))
 	}
 	return entry.Dir, nil
+}
+
+// stateValueFlags are the "human state" subcommands' own flags that consume a
+// separate value token. Mirrors cliflags.ValueFlags (the global persistent
+// flags detectDestructive already strips) so stateScopeArg can find the scope
+// positional regardless of which flags precede it.
+var stateValueFlags = map[string]bool{
+	"--value":      true,
+	"--body-file":  true,
+	"--agent":      true,
+	"--by":         true,
+	"--default":    true,
+	"--field":      true,
+	"--prefix":     true,
+	"--stage":      true,
+	"--ttl":        true,
+	"--older-than": true,
+}
+
+// stateVerbsWithScope lists the "state" subcommands whose first positional
+// argument is the ticket key (scope). "prune" carries no key at all — it
+// sweeps every project — so it is deliberately absent.
+var stateVerbsWithScope = map[string]bool{
+	"set": true, "get": true, "list": true, "rm": true, "incr": true,
+	"lease": true, "release": true, "leases": true,
+}
+
+// stateScopeArg extracts the scope (ticket key) positional from a forwarded
+// "human state <verb> ..." command, tolerating flags — including value flags
+// like --agent — placed ahead of the positionals. Returns "" for a command
+// that carries no scope, e.g. "state prune", or that isn't "state" at all.
+func stateScopeArg(args []string) string {
+	if len(args) < 2 || args[0] != "state" || !stateVerbsWithScope[args[1]] {
+		return ""
+	}
+
+	cleaned := make([]string, 0, len(args)-2)
+	for i := 2; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			if !strings.Contains(a, "=") && (cliflags.ValueFlags[a] || stateValueFlags[a]) && i+1 < len(args) {
+				i++ // skip the flag's value token
+			}
+			continue
+		}
+		cleaned = append(cleaned, a)
+	}
+	if len(cleaned) == 0 {
+		return ""
+	}
+	return cleaned[0]
+}
+
+// resolveStateProject resolves which project's state namespace a forwarded
+// "human state" command touches, by routing its scope (ticket key) argument
+// through the same ProjectRegistry.EntryForKey the board driver uses — so an
+// agent's write and the daemon's own read of that ticket's state resolve to
+// the identical project value. Single/zero registered projects, an
+// unrecognised command, or a key the registry cannot place all resolve to ""
+// (the default project), never guessing.
+func (s *Server) resolveStateProject(args []string) string {
+	if s.Projects == nil || len(s.Projects.Entries()) < 2 {
+		return ""
+	}
+	scope := stateScopeArg(args)
+	if scope == "" {
+		return ""
+	}
+	entry, err := s.Projects.EntryForKey(strings.ToUpper(strings.TrimSpace(scope)))
+	if err != nil {
+		return ""
+	}
+	return entry.Name
 }
 
 // --- destructive operation confirmation ---

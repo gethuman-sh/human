@@ -33,9 +33,15 @@ func newFakeStore() *fakeStore {
 	}
 }
 
-func (f *fakeStore) key(scope, name string) string { return strings.ToUpper(scope) + "\x00" + name }
+func (f *fakeStore) key(project, scope, name string) string {
+	return project + "\x00" + strings.ToUpper(scope) + "\x00" + name
+}
 
-func (f *fakeStore) Set(_ context.Context, scope, name, value, format string, meta agentstate.Meta) (agentstate.Entry, error) {
+func (f *fakeStore) leaseKey(project, scope, stage string) string {
+	return project + "\x00" + strings.ToUpper(scope) + "\x00" + stage
+}
+
+func (f *fakeStore) Set(_ context.Context, project, scope, name, value, format string, meta agentstate.Meta) (agentstate.Entry, error) {
 	if format == agentstate.FormatJSON && !json.Valid([]byte(value)) {
 		return agentstate.Entry{}, agentstate.ErrNotFound
 	}
@@ -47,22 +53,22 @@ func (f *fakeStore) Set(_ context.Context, scope, name, value, format string, me
 		Scope: strings.ToUpper(scope), Name: name, Value: value, Format: format,
 		Agent: meta.Agent, RunID: meta.RunID, UpdatedAt: time.Unix(0, 0).UTC(),
 	}
-	f.entries[f.key(scope, name)] = e
+	f.entries[f.key(project, scope, name)] = e
 	return e, nil
 }
 
-func (f *fakeStore) Get(_ context.Context, scope, name string) (agentstate.Entry, error) {
-	e, ok := f.entries[f.key(scope, name)]
+func (f *fakeStore) Get(_ context.Context, project, scope, name string) (agentstate.Entry, error) {
+	e, ok := f.entries[f.key(project, scope, name)]
 	if !ok {
 		return agentstate.Entry{}, agentstate.ErrNotFound
 	}
 	return e, nil
 }
 
-func (f *fakeStore) List(_ context.Context, scope, prefix string) ([]agentstate.Entry, error) {
+func (f *fakeStore) List(_ context.Context, project, scope, prefix string) ([]agentstate.Entry, error) {
 	out := []agentstate.Entry{}
-	for _, e := range f.entries {
-		if e.Scope == strings.ToUpper(scope) && strings.HasPrefix(e.Name, prefix) {
+	for k, e := range f.entries {
+		if strings.HasPrefix(k, project+"\x00"+strings.ToUpper(scope)+"\x00") && strings.HasPrefix(e.Name, prefix) {
 			out = append(out, e)
 		}
 	}
@@ -70,8 +76,8 @@ func (f *fakeStore) List(_ context.Context, scope, prefix string) ([]agentstate.
 	return out, nil
 }
 
-func (f *fakeStore) Delete(_ context.Context, scope, name string) (bool, error) {
-	k := f.key(scope, name)
+func (f *fakeStore) Delete(_ context.Context, project, scope, name string) (bool, error) {
+	k := f.key(project, scope, name)
 	if _, ok := f.entries[k]; !ok {
 		return false, nil
 	}
@@ -79,10 +85,11 @@ func (f *fakeStore) Delete(_ context.Context, scope, name string) (bool, error) 
 	return true, nil
 }
 
-func (f *fakeStore) DeletePrefix(_ context.Context, scope, prefix string) (int, error) {
+func (f *fakeStore) DeletePrefix(_ context.Context, project, scope, prefix string) (int, error) {
 	n := 0
+	prefixKey := project + "\x00" + strings.ToUpper(scope) + "\x00"
 	for k, e := range f.entries {
-		if e.Scope == strings.ToUpper(scope) && strings.HasPrefix(e.Name, prefix) {
+		if strings.HasPrefix(k, prefixKey) && strings.HasPrefix(e.Name, prefix) {
 			delete(f.entries, k)
 			n++
 		}
@@ -90,10 +97,11 @@ func (f *fakeStore) DeletePrefix(_ context.Context, scope, prefix string) (int, 
 	return n, nil
 }
 
-func (f *fakeStore) DeleteScope(_ context.Context, scope string) (int, error) {
+func (f *fakeStore) DeleteScope(_ context.Context, project, scope string) (int, error) {
 	n := 0
-	for k, e := range f.entries {
-		if e.Scope == strings.ToUpper(scope) {
+	prefixKey := project + "\x00" + strings.ToUpper(scope) + "\x00"
+	for k := range f.entries {
+		if strings.HasPrefix(k, prefixKey) {
 			delete(f.entries, k)
 			n++
 		}
@@ -101,9 +109,9 @@ func (f *fakeStore) DeleteScope(_ context.Context, scope string) (int, error) {
 	return n, nil
 }
 
-func (f *fakeStore) Incr(_ context.Context, scope, name string, by int64, meta agentstate.Meta) (int64, error) {
+func (f *fakeStore) Incr(_ context.Context, project, scope, name string, by int64, meta agentstate.Meta) (int64, error) {
 	f.lastMeta = meta
-	k := f.key(scope, name)
+	k := f.key(project, scope, name)
 	current := int64(0)
 	if e, ok := f.entries[k]; ok {
 		current, _ = strconv.ParseInt(e.Value, 10, 64)
@@ -125,12 +133,12 @@ func (f *fakeStore) Lease(_ context.Context, req agentstate.LeaseRequest) (agent
 		Scope: strings.ToUpper(req.Scope), Stage: req.Stage, Agent: req.Meta.Agent,
 		LeasedAt: time.Unix(0, 0).UTC(), HeartbeatAt: time.Unix(0, 0).UTC(),
 	}
-	f.leases[f.key(req.Scope, req.Stage)] = c
+	f.leases[f.leaseKey(req.Project, req.Scope, req.Stage)] = c
 	return agentstate.LeaseResult{Granted: true, Lease: c}, nil
 }
 
-func (f *fakeStore) Release(_ context.Context, scope, stage, agent string) (bool, error) {
-	k := f.key(scope, stage)
+func (f *fakeStore) Release(_ context.Context, project, scope, stage, agent string) (bool, error) {
+	k := f.leaseKey(project, scope, stage)
 	c, ok := f.leases[k]
 	if !ok || (agent != "" && c.Agent != agent) {
 		return false, nil
@@ -139,10 +147,11 @@ func (f *fakeStore) Release(_ context.Context, scope, stage, agent string) (bool
 	return true, nil
 }
 
-func (f *fakeStore) Leases(_ context.Context, scope string) ([]agentstate.Lease, error) {
+func (f *fakeStore) Leases(_ context.Context, project, scope string) ([]agentstate.Lease, error) {
 	out := []agentstate.Lease{}
-	for _, c := range f.leases {
-		if c.Scope == strings.ToUpper(scope) {
+	prefixKey := project + "\x00" + strings.ToUpper(scope) + "\x00"
+	for k, c := range f.leases {
+		if strings.HasPrefix(k, prefixKey) {
 			out = append(out, c)
 		}
 	}
@@ -192,7 +201,7 @@ func TestSet_ReadsValueFromStdin(t *testing.T) {
 	cmd.SetContext(context.Background())
 	require.NoError(t, cmd.Execute())
 
-	got, err := store.Get(context.Background(), "SC-1", "stage.triage")
+	got, err := store.Get(context.Background(), "", "SC-1", "stage.triage")
 	require.NoError(t, err)
 	require.Equal(t, `{"status":"confirmed"}`, got.Value, "the trailing newline is trimmed")
 	require.Equal(t, agentstate.FormatJSON, got.Format)
@@ -236,6 +245,23 @@ func TestSet_AgentFlagOverridesContextEnv(t *testing.T) {
 	require.Equal(t, "alpha", store.lastMeta.Agent)
 }
 
+// The daemon injects HUMAN_STATE_PROJECT per request so a state write routes
+// to the project the ticket key belongs to without any prompt naming one.
+func TestSet_UsesInjectedProject(t *testing.T) {
+	store := newFakeStore()
+	ctx := env.WithEnv(context.Background(), map[string]string{"HUMAN_STATE_PROJECT": "beta"})
+
+	_, err := run(t, store, ctx, "set", "SC-1", "k", "--value", "v")
+	require.NoError(t, err)
+
+	got, err := store.Get(context.Background(), "beta", "SC-1", "k")
+	require.NoError(t, err)
+	require.Equal(t, "v", got.Value)
+
+	_, err = store.Get(context.Background(), "", "SC-1", "k")
+	require.ErrorIs(t, err, agentstate.ErrNotFound, "a write scoped to beta must not land in the default project")
+}
+
 func TestGet_MissingFailsUnlessDefaultGiven(t *testing.T) {
 	store := newFakeStore()
 
@@ -253,7 +279,7 @@ func TestGet_FieldExtractsFromAJSONStageReport(t *testing.T) {
 	store := newFakeStore()
 	ctx := context.Background()
 	report := `{"exit":"done","summary":"fix verified","attempts":2,"blockers":null}`
-	_, err := store.Set(ctx, "SC-1", "stage.verify", report, agentstate.FormatJSON, agentstate.Meta{})
+	_, err := store.Set(ctx, "", "SC-1", "stage.verify", report, agentstate.FormatJSON, agentstate.Meta{})
 	require.NoError(t, err)
 
 	out, err := run(t, store, ctx, "get", "SC-1", "stage.verify", "--field", "exit")
@@ -272,7 +298,7 @@ func TestGet_FieldExtractsFromAJSONStageReport(t *testing.T) {
 func TestGet_MissingFieldFailsUnlessDefaultGiven(t *testing.T) {
 	store := newFakeStore()
 	ctx := context.Background()
-	_, err := store.Set(ctx, "SC-1", "stage.verify", `{"exit":"done"}`, agentstate.FormatJSON, agentstate.Meta{})
+	_, err := store.Set(ctx, "", "SC-1", "stage.verify", `{"exit":"done"}`, agentstate.FormatJSON, agentstate.Meta{})
 	require.NoError(t, err)
 
 	_, err = run(t, store, ctx, "get", "SC-1", "stage.verify", "--field", "absent")
@@ -288,7 +314,7 @@ func TestGet_MissingFieldFailsUnlessDefaultGiven(t *testing.T) {
 func TestGet_FieldOnNonJSONValueFails(t *testing.T) {
 	store := newFakeStore()
 	ctx := context.Background()
-	_, err := store.Set(ctx, "SC-1", "notes", "just prose", "", agentstate.Meta{})
+	_, err := store.Set(ctx, "", "SC-1", "notes", "just prose", "", agentstate.Meta{})
 	require.NoError(t, err)
 
 	_, err = run(t, store, ctx, "get", "SC-1", "notes", "--field", "exit")
@@ -297,7 +323,7 @@ func TestGet_FieldOnNonJSONValueFails(t *testing.T) {
 
 func TestGet_MetaEmitsProvenanceJSON(t *testing.T) {
 	store := newFakeStore()
-	_, err := store.Set(context.Background(), "SC-1", "k", "v", "", agentstate.Meta{Agent: "alpha"})
+	_, err := store.Set(context.Background(), "", "SC-1", "k", "v", "", agentstate.Meta{Agent: "alpha"})
 	require.NoError(t, err)
 
 	out, err := run(t, store, context.Background(), "get", "SC-1", "k", "--meta")
@@ -312,7 +338,7 @@ func TestList_TableAndPrefixAndJSON(t *testing.T) {
 	store := newFakeStore()
 	ctx := context.Background()
 	for _, n := range []string{"budget.fix.attempts", "fix.evidence"} {
-		_, err := store.Set(ctx, "SC-1", n, "v", "", agentstate.Meta{})
+		_, err := store.Set(ctx, "", "SC-1", n, "v", "", agentstate.Meta{})
 		require.NoError(t, err)
 	}
 
@@ -342,9 +368,9 @@ func TestList_EmptyScopeSaysSo(t *testing.T) {
 func TestRm_SingleAndAll(t *testing.T) {
 	store := newFakeStore()
 	ctx := context.Background()
-	_, err := store.Set(ctx, "SC-1", "a", "1", "", agentstate.Meta{})
+	_, err := store.Set(ctx, "", "SC-1", "a", "1", "", agentstate.Meta{})
 	require.NoError(t, err)
-	_, err = store.Set(ctx, "SC-1", "b", "2", "", agentstate.Meta{})
+	_, err = store.Set(ctx, "", "SC-1", "b", "2", "", agentstate.Meta{})
 	require.NoError(t, err)
 
 	out, err := run(t, store, ctx, "rm", "SC-1", "a")
@@ -376,7 +402,7 @@ func TestRm_PrefixClearsANamespace(t *testing.T) {
 	store := newFakeStore()
 	ctx := context.Background()
 	for _, n := range []string{"budget.fix.attempts", "budget.review.attempts", "fix.evidence"} {
-		_, err := store.Set(ctx, "SC-1", n, "3", "", agentstate.Meta{})
+		_, err := store.Set(ctx, "", "SC-1", n, "3", "", agentstate.Meta{})
 		require.NoError(t, err)
 	}
 
@@ -384,7 +410,7 @@ func TestRm_PrefixClearsANamespace(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, "removed 2 entries")
 
-	left, err := store.List(ctx, "SC-1", "")
+	left, err := store.List(ctx, "", "SC-1", "")
 	require.NoError(t, err)
 	require.Len(t, left, 1)
 	require.Equal(t, "fix.evidence", left[0].Name)

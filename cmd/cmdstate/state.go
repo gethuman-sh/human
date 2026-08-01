@@ -87,6 +87,14 @@ func metaFromContext(ctx context.Context, agentOverride string) agentstate.Meta 
 	return agentstate.Meta{Agent: agent, RunID: env.Lookup(ctx, "HUMAN_DAEMON_ID")}
 }
 
+// projectFromContext resolves which project's state namespace this command
+// touches. The daemon injects HUMAN_STATE_PROJECT per request (empty for
+// single-project and direct-CLI use — the default namespace). No prompt names
+// the project; the agent's forwarded request carries it.
+func projectFromContext(ctx context.Context) string {
+	return agentstate.NormalizeProject(env.Lookup(ctx, "HUMAN_STATE_PROJECT"))
+}
+
 func buildSetCmd(open storeOpener) *cobra.Command {
 	var value, bodyFile, agent string
 	var asJSON bool
@@ -104,7 +112,7 @@ func buildSetCmd(open storeOpener) *cobra.Command {
 				format = agentstate.FormatJSON
 			}
 			return withStore(open, func(store agentstate.Store) error {
-				entry, err := store.Set(cmd.Context(), args[0], args[1], body, format,
+				entry, err := store.Set(cmd.Context(), projectFromContext(cmd.Context()), args[0], args[1], body, format,
 					metaFromContext(cmd.Context(), agent))
 				if err != nil {
 					return err
@@ -141,7 +149,7 @@ as data rather than parsed out of prose:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hasFallback = cmd.Flags().Changed("default")
 			return withStore(open, func(store agentstate.Store) error {
-				entry, err := store.Get(cmd.Context(), args[0], args[1])
+				entry, err := store.Get(cmd.Context(), projectFromContext(cmd.Context()), args[0], args[1])
 				if stderrors.Is(err, agentstate.ErrNotFound) && hasFallback {
 					_, printErr := fmt.Fprintln(cmd.OutOrStdout(), fallback)
 					return printErr
@@ -214,7 +222,7 @@ func buildListCmd(open storeOpener) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withStore(open, func(store agentstate.Store) error {
-				entries, err := store.List(cmd.Context(), args[0], prefix)
+				entries, err := store.List(cmd.Context(), projectFromContext(cmd.Context()), args[0], prefix)
 				if err != nil {
 					return err
 				}
@@ -249,7 +257,7 @@ otherwise read as already spent:
 				return err
 			}
 			return withStore(open, func(store agentstate.Store) error {
-				n, err := runRm(cmd.Context(), store, args, prefix, all)
+				n, err := runRm(cmd.Context(), store, projectFromContext(cmd.Context()), args, prefix, all)
 				if err != nil {
 					return err
 				}
@@ -283,14 +291,14 @@ func checkRmTarget(hasName, hasPrefix, all bool) error {
 }
 
 // runRm performs the selected removal and returns how many entries went.
-func runRm(ctx context.Context, store agentstate.Store, args []string, prefix string, all bool) (int, error) {
+func runRm(ctx context.Context, store agentstate.Store, project string, args []string, prefix string, all bool) (int, error) {
 	switch {
 	case all:
-		return store.DeleteScope(ctx, args[0])
+		return store.DeleteScope(ctx, project, args[0])
 	case prefix != "":
-		return store.DeletePrefix(ctx, args[0], prefix)
+		return store.DeletePrefix(ctx, project, args[0], prefix)
 	default:
-		removed, err := store.Delete(ctx, args[0], args[1])
+		removed, err := store.Delete(ctx, project, args[0], args[1])
 		if err != nil || !removed {
 			return 0, err
 		}
@@ -318,7 +326,7 @@ established that a failure is real, so a flaky test never consumes the run.`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withStore(open, func(store agentstate.Store) error {
-				n, err := store.Incr(cmd.Context(), args[0], args[1], by, metaFromContext(cmd.Context(), agent))
+				n, err := store.Incr(cmd.Context(), projectFromContext(cmd.Context()), args[0], args[1], by, metaFromContext(cmd.Context(), agent))
 				if err != nil {
 					return err
 				}
@@ -349,6 +357,7 @@ and the state keys it left behind, so its work is inherited rather than redone.`
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withStore(open, func(store agentstate.Store) error {
 				res, err := store.Lease(cmd.Context(), agentstate.LeaseRequest{
+					Project:  projectFromContext(cmd.Context()),
 					Scope:    args[0],
 					Stage:    stage,
 					Meta:     metaFromContext(cmd.Context(), agent),
@@ -422,7 +431,7 @@ func buildReleaseCmd(open storeOpener) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withStore(open, func(store agentstate.Store) error {
-				released, err := store.Release(cmd.Context(), args[0], stage,
+				released, err := store.Release(cmd.Context(), projectFromContext(cmd.Context()), args[0], stage,
 					metaFromContext(cmd.Context(), agent).Agent)
 				if err != nil {
 					return err
@@ -453,7 +462,7 @@ func buildClaimsCmd(open storeOpener) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return withStore(open, func(store agentstate.Store) error {
-				leases, err := store.Leases(cmd.Context(), args[0])
+				leases, err := store.Leases(cmd.Context(), projectFromContext(cmd.Context()), args[0])
 				if err != nil {
 					return err
 				}

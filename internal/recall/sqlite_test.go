@@ -479,6 +479,32 @@ func TestUpsertEntry_multipleSourcesSameKey(t *testing.T) {
 	}
 }
 
+// Two projects that share both a source and a key must not collapse onto one
+// row — before SC-2326 the second upsert silently replaced the first's title
+// in search results, even though they are unrelated issues in two projects.
+func TestUpsertEntry_ProjectsAreIsolated(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.UpsertEntry(ctx,
+		Entry{Key: "KAN-1", Source: "work", Kind: "jira", Project: "alpha", Title: "Alpha's KAN-1"}, "d"))
+	require.NoError(t, s.UpsertEntry(ctx,
+		Entry{Key: "KAN-1", Source: "work", Kind: "jira", Project: "beta", Title: "Beta's KAN-1"}, "d"))
+
+	stats, err := s.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, stats.TotalEntries, "same key+source in two projects are two distinct entries")
+
+	results, err := s.Search(ctx, "KAN-1", 10)
+	require.NoError(t, err)
+	titles := []string{}
+	for _, r := range results {
+		titles = append(titles, r.Title)
+	}
+	assert.ElementsMatch(t, []string{"Alpha's KAN-1", "Beta's KAN-1"}, titles,
+		"both projects' entries must be findable — neither silently replaced the other")
+}
+
 func TestNewSQLiteStore_fileDB(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "subdir", "test.db")
@@ -517,6 +543,65 @@ func TestNewSQLiteStore_invalidPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid path")
 	}
+}
+
+// A database created before SC-2326 has UNIQUE(key, source) without project;
+// reopening it must migrate to UNIQUE(key, source, project) — preserving the
+// existing row (and its id, so entries_fts stays aligned) — and, from then on,
+// let a same key+source pair from a second project index as its own entry
+// instead of upserting over the legacy row.
+func TestNewSQLiteStore_MigratesRecallUnique(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+
+	legacy, err := NewSQLiteStore(path)
+	require.NoError(t, err)
+	// Force the legacy shape directly, bypassing ensureSchema's migration, to
+	// simulate a database created before SC-2326.
+	_, err = legacy.db.Exec(`DROP TABLE entries`)
+	require.NoError(t, err)
+	_, err = legacy.db.Exec(`
+		CREATE TABLE entries (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			key        TEXT NOT NULL,
+			source     TEXT NOT NULL,
+			kind       TEXT NOT NULL,
+			project    TEXT NOT NULL DEFAULT '',
+			title      TEXT NOT NULL DEFAULT '',
+			status     TEXT NOT NULL DEFAULT '',
+			assignee   TEXT NOT NULL DEFAULT '',
+			url        TEXT NOT NULL DEFAULT '',
+			indexed_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			UNIQUE (key, source)
+		)`)
+	require.NoError(t, err)
+	require.NoError(t, legacy.UpsertEntry(context.Background(),
+		Entry{Key: "KAN-1", Source: "work", Kind: "jira", Project: "alpha", Title: "Legacy row"}, "d"))
+	require.NoError(t, legacy.Close())
+
+	reopened, err := NewSQLiteStore(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	ctx := context.Background()
+	keys, err := reopened.AllKeys(ctx, "work")
+	require.NoError(t, err)
+	require.Equal(t, []string{"KAN-1"}, keys, "the pre-migration row survives")
+
+	// A second project's same key+source must no longer upsert over it.
+	require.NoError(t, reopened.UpsertEntry(ctx,
+		Entry{Key: "KAN-1", Source: "work", Kind: "jira", Project: "beta", Title: "Beta row"}, "d"))
+	stats, err := reopened.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, stats.TotalEntries)
+
+	results, err := reopened.Search(ctx, "row", 10)
+	require.NoError(t, err)
+	titles := []string{}
+	for _, r := range results {
+		titles = append(titles, r.Title)
+	}
+	assert.ElementsMatch(t, []string{"Legacy row", "Beta row"}, titles)
 }
 
 func TestAllKeys_emptySource(t *testing.T) {
