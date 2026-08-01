@@ -27,6 +27,22 @@ type AgentZombieSweeper interface {
 	RunningAgents() ([]AgentInfo, error)
 	IsProcessRunning(ctx context.Context, containerID string, process string) (bool, error)
 	DeleteAgent(ctx context.Context, name string) error
+	// NewestTranscriptMtime reports the newest modification time among the
+	// container's session transcripts — real output evidence a thinking agent
+	// produces even between hook events (SC-2447). ok is false when the
+	// container has no transcript yet or the read failed; the caller must
+	// treat that as "no new evidence", never as a hang.
+	NewestTranscriptMtime(ctx context.Context, containerID string) (time.Time, bool, error)
+}
+
+// ReapReason records why the sweep reaped an agent, so the caller can tell a
+// genuine death (claude vanished) from a silence-reap (claude is still up but
+// produced no sign of life — no hook event and no transcript output — past
+// its idle budget). Silent is false for a genuine death; Idle is the observed
+// silence duration for a silence-reap.
+type ReapReason struct {
+	Silent bool
+	Idle   time.Duration
 }
 
 const (
@@ -71,6 +87,11 @@ type zombieSweep struct {
 	// nil value keeps every existing call site compiling and behaving
 	// unchanged (SC-1600).
 	progress AgentProgressProbe
+	// recordProgress folds an observed transcript mtime into the shared
+	// progress map BEFORE the hang is judged, so a thinking agent's output is
+	// counted as a sign of life on the very same tick it is observed
+	// (SC-2447). nil disables the recording (progress still consulted as-is).
+	recordProgress func(agentName string, at time.Time)
 }
 
 func newZombieSweep() *zombieSweep {
@@ -96,7 +117,11 @@ func newZombieSweep() *zombieSweep {
 // progress additionally catches a board agent whose claude process is still
 // up but has gone silent past its idle budget (SC-1600) — process liveness
 // alone reports such an agent as healthy forever. nil disables this check.
-func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, progress AgentProgressProbe, onReaped func(agentName string), logger zerolog.Logger) {
+//
+// recordProgress folds each running board agent's transcript mtime into the
+// shared progress map before the hang is judged (SC-2447); nil disables it,
+// leaving the hang decision on hook events alone (previous behaviour).
+func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, progress AgentProgressProbe, recordProgress func(agentName string, at time.Time), onReaped func(agentName string, reason ReapReason), logger zerolog.Logger) {
 	if sweeper == nil {
 		return
 	}
@@ -108,6 +133,7 @@ func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, progre
 
 	sweep := newZombieSweep()
 	sweep.progress = progress
+	sweep.recordProgress = recordProgress
 
 	for {
 		select {
@@ -119,7 +145,7 @@ func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, progre
 	}
 }
 
-func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, onReaped func(agentName string), logger zerolog.Logger) {
+func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombieSweeper, onReaped func(agentName string, reason ReapReason), logger zerolog.Logger) {
 	agents, err := sweeper.RunningAgents()
 	if err != nil {
 		logger.Warn().Err(err).Msg("zombie sweep: failed to list agents")
@@ -161,14 +187,29 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 				// agent, even one flagged idle — this is what preserves the
 				// crashed-agent contract for agents that once ran claude (SC-236).
 				z.seenClaude[a.Name] = true
+				// Fold the container's transcript mtime into the shared progress
+				// map BEFORE judging the hang, so a thinking agent's output —
+				// which fires no hook event at all — still counts as a sign of
+				// life (SC-2447). A read error or "no transcript yet" is absent
+				// evidence, never treated as a hang; NewestTranscriptMtime's own
+				// ok=false already carries that meaning.
+				if z.recordProgress != nil {
+					if mtime, ok, mtErr := sweeper.NewestTranscriptMtime(ctx, a.ContainerID); mtErr == nil && ok {
+						z.recordProgress(a.Name, mtime)
+					}
+				}
 				// A live claude is normally spared here. But a board agent
 				// silent past its idle budget is hung, not healthy — process
 				// liveness alone can never detect that, so fall through to
 				// the reap gate instead of sparing it (SC-1600).
-				if !z.hungBoardAgent(a.Name, time.Now()) {
+				stalled, idle := z.hungBoardAgent(a.Name, time.Now())
+				if !stalled {
 					continue
 				}
-				logger.Warn().Str("agent", a.Name).Msg("zombie sweep: board agent silent past its idle budget, reaping")
+				logger.Warn().Str("agent", a.Name).Dur("idle", idle).
+					Msg("zombie sweep: board agent silent past its idle budget, reaping")
+				z.reap(ctx, sweeper, a.Name, ReapReason{Silent: true, Idle: idle}, onReaped, logger)
+				continue
 			}
 		}
 
@@ -179,30 +220,30 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 			continue
 		}
 
-		z.reap(ctx, sweeper, a.Name, onReaped, logger)
+		z.reap(ctx, sweeper, a.Name, ReapReason{}, onReaped, logger)
 	}
 }
 
 // hungBoardAgent reports whether name is a board agent whose claude has gone
-// silent past its idle budget. Board stage agents are autonomous with no
-// human at the keyboard, so a stall is unambiguous; an interactive agent is
-// deliberately excluded — a human simply thinking between turns looks
-// identical to a hang, and reaping it would discard live work (SC-1600).
-// Absent evidence (no probe, non-board name, or an agent the probe does not
-// know about) is never read as a hang, matching stageStalled's contract.
-func (z *zombieSweep) hungBoardAgent(name string, now time.Time) bool {
+// silent past its idle budget, and for how long. Board stage agents are
+// autonomous with no human at the keyboard, so a stall is unambiguous; an
+// interactive agent is deliberately excluded — a human simply thinking
+// between turns looks identical to a hang, and reaping it would discard live
+// work (SC-1600). Absent evidence (no probe, non-board name, or an agent the
+// probe does not know about) is never read as a hang, matching stageStalled's
+// contract.
+func (z *zombieSweep) hungBoardAgent(name string, now time.Time) (bool, time.Duration) {
 	if z.progress == nil {
-		return false
+		return false, 0
 	}
 	if _, _, ok := parseAgentName(name); !ok {
-		return false
+		return false, 0
 	}
 	p, ok := z.progress(name)
 	if !ok {
-		return false
+		return false, 0
 	}
-	stalled, _ := p.Stalled(now)
-	return stalled
+	return p.Stalled(now)
 }
 
 // reap deletes one agent under a hard deadline that the sweep loop can never be
@@ -212,7 +253,7 @@ func (z *zombieSweep) hungBoardAgent(name string, now time.Time) bool {
 // (SC-427). The abandoned goroutine still finishes into the buffered channel,
 // and the agent's cross-tick memory is intentionally left so a later tick
 // retries it.
-func (z *zombieSweep) reap(ctx context.Context, sweeper AgentZombieSweeper, name string, onReaped func(agentName string), logger zerolog.Logger) {
+func (z *zombieSweep) reap(ctx context.Context, sweeper AgentZombieSweeper, name string, reason ReapReason, onReaped func(agentName string, reason ReapReason), logger zerolog.Logger) {
 	logger.Info().Str("agent", name).Msg("zombie sweep: cleaning orphaned agent")
 
 	deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -242,7 +283,7 @@ func (z *zombieSweep) reap(ctx context.Context, sweeper AgentZombieSweeper, name
 		if onReaped != nil {
 			// Notify only on a completed reap: a failed delete is retried on the
 			// next tick and must not mark the stage failed prematurely.
-			onReaped(name)
+			onReaped(name, reason)
 		}
 	case <-timer.C:
 		// Abandon the hung reap to keep the single sweep goroutine alive. The

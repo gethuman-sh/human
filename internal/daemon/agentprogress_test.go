@@ -66,6 +66,37 @@ func TestAgentProgress_LongRunningButActiveIsNeverStalled(t *testing.T) {
 	require.False(t, stalled, "a working agent is never stalled regardless of total runtime")
 }
 
+// SC-2447: a thinking agent emits no hook event at all — the model reasons
+// for minutes between tool calls — but it IS producing output, streamed to
+// its own transcript. That output is real evidence of life the hook-event
+// clock cannot see, so it must defer the hang past the point the hook-only
+// clock would have called it stalled.
+func TestAgentProgress_TranscriptOutputDefersTheHang(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	p := AgentProgress{
+		LastEventAt:    now.Add(-4 * time.Minute), // past ThinkingIdleGrace on hooks alone
+		LastProgressAt: now.Add(-10 * time.Second), // still streaming to the transcript
+	}
+
+	stalled, _ := p.Stalled(now)
+	require.False(t, stalled, "fresh transcript output means the agent is thinking, not stuck")
+}
+
+// The other half: with NEITHER a hook event NOR transcript output for longer
+// than ThinkingIdleGrace, the agent really has gone silent and must still be
+// caught — the short budget still bounds total silence.
+func TestAgentProgress_NoOutputOfAnyKindIsStalled(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	p := AgentProgress{
+		LastEventAt:    now.Add(-4 * time.Minute),
+		LastProgressAt: now.Add(-4 * time.Minute),
+	}
+
+	stalled, idle := p.Stalled(now)
+	require.True(t, stalled, "total silence past the budget is still a hang")
+	require.Greater(t, idle, ThinkingIdleGrace)
+}
+
 // An agent waiting on a permission prompt needs an answer, not a relaunch —
 // retrying it would discard the question.
 func TestAgentProgress_BlockedIsNotStalled(t *testing.T) {

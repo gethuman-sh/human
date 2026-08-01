@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/rs/zerolog"
 
@@ -24,6 +25,29 @@ const (
 	// flake or a dead container that a bounded, immediate relaunch absorbs.
 	ExitOutage = "outage"
 )
+
+// ReapSilenceErrorType is the sentinel prefix the zombie sweep's synthesized
+// StopFailure event carries in its ErrorType when the reap was a silence-reap
+// — the agent went silent (no hook event AND no transcript output) past its
+// idle budget, rather than genuinely dying. The full sentinel is
+// "reaped-silent:<idle>" (e.g. "reaped-silent:18m0s"); silenceReapIdle parses
+// the idle back out. A machine-chosen stop like this must never consume the
+// stage's automatic-retry budget — the work did not fail, a judgement about
+// the work did (SC-2447).
+const ReapSilenceErrorType = "reaped-silent"
+
+// silenceReapIdle reports whether errorType is a silence-reap sentinel and,
+// if so, the idle duration it carries formatted for a human to read (as
+// produced by ReapReason.Idle.Round(time.Second).String() at the point the
+// sentinel was composed). ok is false for any other errorType, including the
+// empty string a genuine StopFailure carries.
+func silenceReapIdle(errorType string) (string, bool) {
+	rest, ok := strings.CutPrefix(errorType, ReapSilenceErrorType+":")
+	if !ok || rest == "" {
+		return "", false
+	}
+	return rest, true
+}
 
 // DefaultStageRetries bounds automatic relaunches of one stage. Two is chosen
 // against the failure it exists for: a flaky check or a container that died
@@ -185,6 +209,25 @@ func (r StageRetry) relaunchOutage(ctx context.Context, pmKey string, stage Boar
 	}
 	logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
 		Msg("board retry: stage relaunched after substrate outage (budget untouched)")
+	return true
+}
+
+// relaunchSilenceReap re-drives a stage the zombie sweep reaped for silence
+// (no hook event AND no transcript output past the idle budget) rather than a
+// genuine crash. Sibling of relaunchOutage: it deliberately never reads or
+// bumps the attempt counter, because the reap was the machine's own
+// judgement, not a stage failure — charging the budget for it would let a
+// misjudged stop cost the ticket its ability to recover on its own, exactly
+// the harm SC-2447 reports. The caller has already posted the marker
+// explaining what was observed and why, so this only relaunches.
+func (r StageRetry) relaunchSilenceReap(pmKey string, stage BoardStage, logger zerolog.Logger) bool {
+	if err := r.Relaunch(pmKey, stage); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
+			Msg("board retry: silence-reap relaunch failed, leaving the card as failed")
+		return false
+	}
+	logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+		Msg("board retry: stage relaunched after a silence reap (budget untouched)")
 	return true
 }
 
