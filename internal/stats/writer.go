@@ -3,7 +3,6 @@ package stats
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/rs/zerolog"
 
@@ -89,14 +88,10 @@ func (w *Writer) drain(ctx context.Context) {
 	}
 }
 
-// insert wraps the store call so the timestamp fallback and error logging
-// live in one place.
+// insert wraps the store call so error logging lives in one place. The
+// zero-timestamp fallback now lives in InsertEvent.
 func (w *Writer) insert(ctx context.Context, evt hookevents.Event) {
-	ts := evt.Timestamp
-	if ts.IsZero() {
-		ts = time.Now().UTC()
-	}
-	if err := w.store.InsertEvent(ctx, evt.SessionID, evt.EventName, evt.ToolName, evt.Cwd, evt.ErrorType, ts); err != nil {
+	if err := w.store.InsertEvent(ctx, evt); err != nil {
 		w.logger.Warn().Err(err).Msg("failed to persist tool event")
 	}
 }

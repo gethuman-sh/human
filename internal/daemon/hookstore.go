@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/redact"
 )
 
 // maxHookEventsPerSession caps per-session buffered events so a burst
@@ -232,8 +233,17 @@ func clampField(s string) string {
 	return s
 }
 
+// redactField scrubs secrets on the same terms the pipeline applies elsewhere,
+// then bounds the result — command text and tool inputs must never persist raw
+// or unbounded (SC-2461). Redaction runs before the length cap so a token is
+// never split by truncation into an unredacted remainder.
+func redactField(s string) string { return clampField(redact.Text(s)) }
+
 // ParseHookEventArgs converts daemon request args into a hook event.
-// Expected args: [event, session_id, cwd, notification_type, tool_name, error_type, agent_name].
+// Expected args: [event, session_id, cwd, notification_type, tool_name,
+// error_type, agent_name, tool_input, subagent_type, model]. Trailing fields
+// are optional and read behind a length guard, so older clients that stop at
+// agent_name still parse (SC-2461 appended the last three).
 //
 // Every field is length-capped and Cwd must be absolute — both as
 // defence against abusive clients that could otherwise poison the
@@ -270,5 +280,37 @@ func ParseHookEventArgs(args []string) hookevents.Event {
 	if len(args) > 6 {
 		evt.AgentName = clampField(args[6])
 	}
+	if len(args) > 7 {
+		evt.ToolInput = redactField(args[7])
+	}
+	if len(args) > 8 {
+		evt.SubagentType = clampField(args[8])
+	}
+	if len(args) > 9 {
+		evt.Model = clampField(args[9])
+	}
 	return evt
+}
+
+// DurationMsSincePre returns the wall time in ms from the most recent
+// PreToolUse for this session+tool to postTS, or 0 when no match is buffered.
+// The pairing makes tool cost a stored fact on the Post event rather than a
+// later join across separate sources by timestamp (SC-2461).
+func (s *HookEventStore) DurationMsSincePre(sessionID, toolName string, postTS time.Time) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.events) - 1; i >= 0; i-- {
+		e := s.events[i]
+		if e.SessionID != sessionID || e.ToolName != toolName {
+			continue
+		}
+		if e.EventName == "PreToolUse" {
+			d := postTS.Sub(e.Timestamp).Milliseconds()
+			if d < 0 {
+				return 0
+			}
+			return d
+		}
+	}
+	return 0
 }
