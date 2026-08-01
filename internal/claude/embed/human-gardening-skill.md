@@ -69,7 +69,7 @@ The ticket key is returned by the command. This ticket can then be executed with
 
 After the ticket is created, present the user with three choices:
 
-- **(A) Apply all high-impact fixes**: For each high-impact finding, in the order recommended by the triage report: run `make test` before, apply the refactoring, run `make test` after, run `make lint`, and create an atomic commit referencing the finding. Revert the change if tests fail.
+- **(A) Apply all high-impact fixes**: For each high-impact finding, in the order recommended by the triage report: run the project's tests before, apply the refactoring, run its tests after, then its lean lint, and create an atomic commit referencing the finding. Detect what the project provides the way `human-done` does — a `Makefile` `test`/`lint` target, else per-ecosystem tools (`npm test` + `npm run lint`, `go test ./...` + `go vet ./...`/`golangci-lint run`, `pytest` + `ruff`, `cargo test` + `cargo clippy`); run only what exists, and if the project offers no test runner, say so plainly. Revert the change if tests fail.
 - **(B) Choose individual fixes**: Present the numbered list of findings. The user picks which ones to fix. Apply each chosen fix using the same test-before/refactor/test-after/lint/commit cycle.
 - **(C) Skip fixes**: No fixes applied now. The user can run `/human-execute <KEY>` later to execute the fix plan from the ticket.
 
