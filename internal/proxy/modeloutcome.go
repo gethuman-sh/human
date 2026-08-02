@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -15,12 +16,13 @@ const DefaultModelAPIHost = "api.anthropic.com"
 // the transport error ALONE — never from response content — so classification
 // costs nothing beyond what the MITM loop already holds and stores no transcript.
 const (
-	ClassOK        = "ok"         // 2xx
-	ClassAuth      = "auth"       // 401/403 — an authentication lapse
-	ClassRateLimit = "rate-limit" // 429 — throttled
-	ClassOverload  = "overload"   // 529 — Anthropic upstream overloaded
-	ClassNetwork   = "network"    // a connection that never completed / errored before a response
-	ClassOther     = "other"      // any other status (incl. 400: a spend-limit is only distinguishable from the body, out of scope by constraint)
+	ClassOK         = "ok"          // 2xx
+	ClassAuth       = "auth"        // 401/403 — an authentication lapse
+	ClassRateLimit  = "rate-limit"  // 429 — throttled
+	ClassOverload   = "overload"    // 529 — Anthropic upstream overloaded
+	ClassSpendLimit = "spend-limit" // 400 whose error.type enum token marks a billing/credit exhaustion
+	ClassNetwork    = "network"     // a connection that never completed / errored before a response
+	ClassOther      = "other"       // any other status (incl. a plain 400)
 )
 
 // ModelCallOutcome is a content-free record of a single model-API call. It
@@ -41,10 +43,14 @@ type ModelCallOutcome struct {
 	Duration   time.Duration `json:"duration"`
 }
 
-// classify maps a call to its outcome class from the status line or transport
-// error only. A non-nil transportErr means the call never produced a response
-// line, so it is a network outcome regardless of any (zero) status code.
-func classify(statusCode int, transportErr error) string {
+// classify maps a call to its outcome class from the status line, the transport
+// error, and — for a 400 alone — the response envelope's fixed error.type enum
+// token. A non-nil transportErr means the call never produced a response line,
+// so it is a network outcome regardless of any (zero) status code. errType is
+// empty for every path except a 400 with a decodable envelope; it is the ONLY
+// signal that splits a billing/credit exhaustion from an ordinary bad request,
+// and it is a machine classification code, never prose (SC-2555).
+func classify(statusCode int, transportErr error, errType string) string {
 	if transportErr != nil {
 		return ClassNetwork
 	}
@@ -55,11 +61,47 @@ func classify(statusCode int, transportErr error) string {
 		return ClassRateLimit
 	case 529:
 		return ClassOverload
+	case 400:
+		if isSpendLimitType(errType) {
+			return ClassSpendLimit
+		}
+		return ClassOther
 	}
 	if statusCode >= 200 && statusCode < 300 {
 		return ClassOK
 	}
 	return ClassOther
+}
+
+// anthropicErrorType extracts ONLY the fixed error.type enum token from a
+// model-API error envelope. It decodes a struct that carries that single field
+// and nothing else, so no prompt/response prose is ever read and the body is
+// not retained — the token is a machine classification code, not content
+// (SC-2555: a fixed enum token is metadata, the only signal that splits a
+// spend-limit 400 from a generic one). It returns "" for any body that does not
+// carry the token or does not parse.
+func anthropicErrorType(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var env struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return ""
+	}
+	return env.Error.Type
+}
+
+// isSpendLimitType reports whether a model-API error.type enum token denotes a
+// billing/credit exhaustion. The match is on the enum token alone (Anthropic's
+// billing_error and any billing/credit-named variant), never on the human
+// message that accompanies it, keeping the classification content-free.
+func isSpendLimitType(errType string) bool {
+	t := strings.ToLower(strings.TrimSpace(errType))
+	return strings.Contains(t, "billing") || strings.Contains(t, "credit")
 }
 
 // ModelOutcomeRecorder receives a content-free outcome for accounting. It is
@@ -92,7 +134,12 @@ func (li *LoggingInterceptor) isModelHost(host string) bool {
 // only the model API is inspected), it is a no-op without a recorder, and its
 // whole body — attribution and the record hand-off — is recover()-guarded so a
 // recording fault can never break the call it is measuring.
-func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode int, transportErr error, start time.Time) {
+// body carries the captured response bytes ONLY so a 400 can be split into
+// spend-limit vs other by its error.type enum token; it is nil on every path
+// that has no response line (a transport failure) and is never stored — the
+// outcome struct stays content-free. The peek is gated to statusCode == 400 so
+// no other outcome ever touches the body at all.
+func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode int, transportErr error, start time.Time, body []byte) {
 	if li.RecordOutcome == nil || !li.isModelHost(host) {
 		return
 	}
@@ -104,12 +151,16 @@ func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode in
 			ticket, stage = t, s
 		}
 	}
+	errType := ""
+	if statusCode == 400 {
+		errType = anthropicErrorType(body)
+	}
 	li.RecordOutcome(ModelCallOutcome{
 		Ticket:     ticket,
 		Stage:      stage,
 		Host:       host,
 		StatusCode: statusCode,
-		Class:      classify(statusCode, transportErr),
+		Class:      classify(statusCode, transportErr, errType),
 		StartedAt:  start,
 		Duration:   time.Since(start),
 	})

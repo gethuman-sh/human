@@ -21,28 +21,62 @@ import (
 func TestClassify(t *testing.T) {
 	dialErr := errors.New("dial tcp: connection refused")
 	cases := []struct {
-		name   string
-		status int
-		err    error
-		want   string
+		name    string
+		status  int
+		err     error
+		errType string
+		want    string
 	}{
-		{"transport error before response", 0, dialErr, ClassNetwork},
-		{"transport error trumps a status", 200, dialErr, ClassNetwork},
-		{"200 ok", 200, nil, ClassOK},
-		{"299 still ok", 299, nil, ClassOK},
-		{"401 auth", 401, nil, ClassAuth},
-		{"403 auth", 403, nil, ClassAuth},
-		{"429 rate limit", 429, nil, ClassRateLimit},
-		{"529 overload", 529, nil, ClassOverload},
-		{"400 is other (spend-limit only distinguishable from body)", 400, nil, ClassOther},
-		{"500 other", 500, nil, ClassOther},
-		{"302 other", 302, nil, ClassOther},
+		{"transport error before response", 0, dialErr, "", ClassNetwork},
+		{"transport error trumps a status", 200, dialErr, "", ClassNetwork},
+		{"200 ok", 200, nil, "", ClassOK},
+		{"299 still ok", 299, nil, "", ClassOK},
+		{"401 auth", 401, nil, "", ClassAuth},
+		{"403 auth", 403, nil, "", ClassAuth},
+		{"429 rate limit", 429, nil, "", ClassRateLimit},
+		{"529 overload", 529, nil, "", ClassOverload},
+		{"400 with no error type is other", 400, nil, "", ClassOther},
+		{"400 invalid_request_error stays other", 400, nil, "invalid_request_error", ClassOther},
+		{"400 billing_error is spend-limit", 400, nil, "billing_error", ClassSpendLimit},
+		{"400 credit-named type is spend-limit", 400, nil, "credit_exhausted", ClassSpendLimit},
+		{"error type only matters for a 400", 401, nil, "billing_error", ClassAuth},
+		{"500 other", 500, nil, "", ClassOther},
+		{"302 other", 302, nil, "", ClassOther},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, classify(tc.status, tc.err))
+			assert.Equal(t, tc.want, classify(tc.status, tc.err, tc.errType))
 		})
 	}
+}
+
+// The 400 body is peeked ONLY for its fixed error.type enum token: a spend-limit
+// envelope classifies as spend-limit, a generic 400 stays other, and no prose is
+// ever read (SC-2555 step 2 decision).
+func TestEmitOutcome_SpendLimitFrom400Body(t *testing.T) {
+	var got ModelCallOutcome
+	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
+
+	billing := []byte(`{"type":"error","error":{"type":"billing_error","message":"secret prose that must never be read"}}`)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), billing)
+	assert.Equal(t, ClassSpendLimit, got.Class, "a billing_error 400 is a spend-limit")
+
+	generic := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), generic)
+	assert.Equal(t, ClassOther, got.Class, "a non-billing 400 stays other")
+
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), nil)
+	assert.Equal(t, ClassOther, got.Class, "a 400 with no body is other, never a panic")
+}
+
+// anthropicErrorType reads the enum token and nothing else — a decode failure or
+// a body without the field yields "", so a peek can never mistake prose for a
+// classification.
+func TestAnthropicErrorType(t *testing.T) {
+	assert.Equal(t, "billing_error", anthropicErrorType([]byte(`{"error":{"type":"billing_error"}}`)))
+	assert.Equal(t, "", anthropicErrorType(nil))
+	assert.Equal(t, "", anthropicErrorType([]byte(`not json`)))
+	assert.Equal(t, "", anthropicErrorType([]byte(`{"error":{"message":"only prose here"}}`)))
 }
 
 func TestModelAPIHost_DefaultAndOverride(t *testing.T) {
@@ -62,17 +96,17 @@ func TestModelAPIHost_DefaultAndOverride(t *testing.T) {
 func TestEmitOutcome_NilRecorderNoOp(t *testing.T) {
 	li := &LoggingInterceptor{}
 	// Must not panic with no recorder wired.
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now())
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil)
 }
 
 func TestEmitOutcome_GatedOnModelHost(t *testing.T) {
 	var got []ModelCallOutcome
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = append(got, o) }}
 
-	li.emitOutcome("1.2.3.4:5", "example.com", 200, nil, time.Now())
+	li.emitOutcome("1.2.3.4:5", "example.com", 200, nil, time.Now(), nil)
 	assert.Empty(t, got, "a non-model host is never accounted")
 
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now())
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil)
 	require.Len(t, got, 1, "the model host is accounted")
 	assert.Equal(t, ClassOK, got[0].Class)
 	assert.Equal(t, "api.anthropic.com", got[0].Host)
@@ -87,7 +121,7 @@ func TestEmitOutcome_Attribution(t *testing.T) {
 			return "SC-2555", "implementation", true
 		},
 	}
-	li.emitOutcome("10.0.0.7:44003", "api.anthropic.com", 200, nil, time.Now())
+	li.emitOutcome("10.0.0.7:44003", "api.anthropic.com", 200, nil, time.Now(), nil)
 	assert.Equal(t, "SC-2555", got.Ticket)
 	assert.Equal(t, "implementation", got.Stage)
 }
@@ -99,7 +133,7 @@ func TestEmitOutcome_UnattributedIsStillRecorded(t *testing.T) {
 		RecordOutcome: func(o ModelCallOutcome) { got = o; recorded = true },
 		Attribute:     func(string) (string, string, bool) { return "", "", false },
 	}
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 401, nil, time.Now())
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 401, nil, time.Now(), nil)
 	require.True(t, recorded, "an unattributed failure is recorded, not dropped")
 	assert.Empty(t, got.Ticket)
 	assert.Empty(t, got.Stage)
@@ -113,7 +147,7 @@ func TestEmitOutcome_PanicInSinkSwallowed(t *testing.T) {
 	}
 	// Constraint 1: a recording fault must never escape to break the call.
 	assert.NotPanics(t, func() {
-		li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now())
+		li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil)
 	})
 }
 
