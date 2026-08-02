@@ -420,6 +420,34 @@ func TestFindOpenWork_branchNamingKey_isFound(t *testing.T) {
 	assert.Equal(t, "autofix/sc-2648", work[0].Ref)
 }
 
+func TestFindOpenWork_shorterKeyIsNotAPrefixMatch(t *testing.T) {
+	// Ticket keys are sequential, so every key is a prefix of its later
+	// siblings. SC-264 must not be "found" in SC-2648's work — reporting it
+	// would stop a run over a pull request belonging to another ticket, the
+	// false positive this signal exists to remove.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/octocat/hello-world/pulls":
+			_, _ = fmt.Fprint(w, `[{"number":57,"title":"[SC-2648] fix dragged card","html_url":"u","head":{"ref":"autofix/sc-2648"}}]`)
+		case "/repos/octocat/hello-world/branches":
+			_, _ = fmt.Fprint(w, `[{"name":"autofix/sc-2648"},{"name":"main"}]`)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	work, err := client.FindOpenWork(context.Background(), "octocat/hello-world", "SC-264")
+	require.NoError(t, err)
+	assert.Empty(t, work)
+
+	// The real key still matches, so the boundary rule did not cost the signal.
+	work, err = client.FindOpenWork(context.Background(), "octocat/hello-world", "SC-2648")
+	require.NoError(t, err)
+	require.Len(t, work, 1)
+}
+
 func TestFindOpenWork_nothingOpen_returnsEmpty(t *testing.T) {
 	// The bug's false positive: a stale ticket overlaps in wording but has NO
 	// open PR or branch. The forge finder reports nothing, so preflight must not

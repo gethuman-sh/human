@@ -226,10 +226,42 @@ func (c *Client) FindOpenWork(ctx context.Context, repoName, key string) ([]forg
 	return out, nil
 }
 
-// referencesKey reports whether text contains needle (already lowercased) as a
-// case-insensitive substring. An empty needle never matches.
+// referencesKey reports whether text names the ticket needle (already
+// lowercased), case-insensitively.
+//
+// The match must not run into an adjacent alphanumeric on either side. Ticket
+// keys are sequential, so plain substring matching makes every key a prefix of
+// its later siblings: SC-264 would be "found" in the branch autofix/sc-2648 and
+// stop a run because of a pull request belonging to a different ticket. Halting
+// work over a collision that is not happening is precisely what this signal
+// exists to stop doing.
 func referencesKey(needle, text string) bool {
-	return needle != "" && strings.Contains(strings.ToLower(text), needle)
+	if needle == "" {
+		return false
+	}
+	hay := strings.ToLower(text)
+	for at := 0; ; {
+		i := strings.Index(hay[at:], needle)
+		if i < 0 {
+			return false
+		}
+		i += at
+		end := i + len(needle)
+		if !alnumAt(hay, i-1) && !alnumAt(hay, end) {
+			return true
+		}
+		at = i + 1
+	}
+}
+
+// alnumAt reports whether s has an ASCII letter or digit at i, treating an
+// out-of-range index as a boundary.
+func alnumAt(s string, i int) bool {
+	if i < 0 || i >= len(s) {
+		return false
+	}
+	c := s[i]
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // listAllOpenPulls returns every open pull request, following pagination.
