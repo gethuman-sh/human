@@ -160,6 +160,8 @@ type daemonState struct {
 	logger        zerolog.Logger
 	connTracker   *daemon.ConnectedTracker
 	networkStore  *daemon.NetworkEventStore
+	modelSink     *daemon.ModelOutcomeSink
+	agentIPs      *daemon.AgentIPRegistry
 	vaultResolver *vault.Resolver
 	statsStore    *stats.StatsStore
 	statsWriter   *stats.Writer
@@ -315,6 +317,11 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	// eviction and daemon restarts, keyed to the emitting agent's execution log.
 	hookStore := daemon.NewHookEventStore().WithPersistence(agent.HookEventSink)
 	networkStore := daemon.NewNetworkEventStore()
+	// The model-call accounting boundary: the sink drains outcomes off the
+	// request path, and the IP registry attributes each proxy connection to the
+	// board agent (ticket+stage) that owns it (SC-2555).
+	modelSink := daemon.NewModelOutcomeSink(ctx)
+	agentIPs := daemon.NewAgentIPRegistry()
 	confirmStore := daemon.NewPendingConfirmStore()
 	// Approvals are durable: a restarted daemon re-offers undecided prompts
 	// and honors unredeemed grants instead of silently dropping them. A failed
@@ -400,6 +407,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		ConnectedPIDs:      connTracker,
 		HookEvents:         hookStore,
 		NetworkEvents:      networkStore,
+		ModelOutcomes:      modelSink,
 		IssueFetcher:       issueFetcher,
 		LiteIssueFetcher:   fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
 		BoardViewFetcher:   boardViewFunc(issueFetcher, doctor, projectRegistry, boardcache.NewStore(boardcache.DefaultPath()), logger),
@@ -414,10 +422,10 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		AuditStore:         auditStore,
 		AgentCleaner:       &dockerAgentCleaner{},
 		VaultResolver:      vaultResolver,
-		BoardTransitioner:  boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
-		BoardFixer:         boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
-		BoardSecurityFixer: securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
-		BoardOptioner:      boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
+		BoardTransitioner:  boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
+		BoardFixer:         boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
+		BoardSecurityFixer: securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
+		BoardOptioner:      boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
 		BugCreator:         bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID)),
 		SecurityCreator:    securityCreatorFunc(projectRegistry, vaultResolver),
 		CloseTicketer:      closeTicketerFunc(projectRegistry, vaultResolver, liveBoardAgents, (&dockerAgentCleaner{}).DeleteAgent, logger),
@@ -443,6 +451,8 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		logger:        logger,
 		connTracker:   connTracker,
 		networkStore:  networkStore,
+		modelSink:     modelSink,
+		agentIPs:      agentIPs,
 		vaultResolver: vaultResolver,
 		statsStore:    statsStore,
 		statsWriter:   statsWriter,
@@ -500,8 +510,8 @@ func removeStatsFilesUnlessHandedOver(handedOver *atomic.Bool, statsPath, connec
 // startProxyServer builds the HTTPS proxy on the pre-owned listener, prints its
 // one-line status, and serves it in the background. It returns the server so the
 // stats writer can report on it.
-func startProxyServer(ctx context.Context, proxyAddr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, ln net.Listener, out io.Writer) (*proxy.Server, error) {
-	proxySrv, proxyStatus, err := buildProxyServer(proxyAddr, interactive, logger, emitter)
+func startProxyServer(ctx context.Context, proxyAddr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor, ln net.Listener, out io.Writer) (*proxy.Server, error) {
+	proxySrv, proxyStatus, err := buildProxyServer(proxyAddr, interactive, logger, emitter, recorder, attribute)
 	if err != nil {
 		return nil, err
 	}
@@ -585,7 +595,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	chromeSvcs := startChromeServices(ctx, chromeAddr, ds.srv.Token, listeners.chrome, logger)
 
-	proxySrv, err := startProxyServer(ctx, proxyAddr, interactive, logger, ds.networkStore, listeners.proxy, out)
+	proxySrv, err := startProxyServer(ctx, proxyAddr, interactive, logger, ds.networkStore, ds.modelSink.Record, ds.agentIPs.Attribute, listeners.proxy, out)
 	if err != nil {
 		return err
 	}
@@ -678,7 +688,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	reviewLaunchGate := func(ctx context.Context) []daemon.DoctorCheck {
 		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchRefusalChecks())
 	}
-	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
+	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ds.agentIPs)
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by
 	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
@@ -1356,7 +1366,7 @@ func writeDaemonStats(ctx context.Context, proxySrv *proxy.Server, tracker *daem
 // MITM interceptor. Returns a status string for the startup banner.
 // emitter is injected so the proxy can publish ambient network activity to
 // the daemon's in-memory store without circular imports.
-func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter) (*proxy.Server, string, error) {
+func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor) (*proxy.Server, string, error) {
 	proxyCfg, _ := proxy.LoadConfig(".")
 
 	var policy proxy.Decider
@@ -1389,7 +1399,7 @@ func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emit
 		}
 	}
 
-	interceptor, interceptStatus := buildInterceptor(proxyCfg, logger)
+	interceptor, interceptStatus := buildInterceptor(proxyCfg, logger, recorder, attribute)
 	if interceptStatus != "" {
 		status += interceptStatus
 	}
@@ -1407,7 +1417,7 @@ func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emit
 
 // buildInterceptor creates a MITM logging interceptor if intercept domains
 // are configured. Returns (nil, "") when not configured.
-func buildInterceptor(proxyCfg *proxy.Config, logger zerolog.Logger) (proxy.Interceptor, string) {
+func buildInterceptor(proxyCfg *proxy.Config, logger zerolog.Logger, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor) (proxy.Interceptor, string) {
 	if proxyCfg == nil || len(proxyCfg.Intercept) == 0 {
 		return nil, ""
 	}
@@ -1427,6 +1437,11 @@ func buildInterceptor(proxyCfg *proxy.Config, logger zerolog.Logger) (proxy.Inte
 		LeafCache: &proxy.LeafCache{CACert: caCert, CAKey: caKey},
 		Logger:    logger,
 		LogDir:    logDir,
+		// The SC-2555 accounting seam: content-free outcome recording, gated on
+		// the model-API host and attributed by connection source. nil-safe both,
+		// so a proxy without a daemon sink still MITMs and logs unchanged.
+		RecordOutcome: recorder,
+		Attribute:     attribute,
 	}
 
 	return interceptor, fmt.Sprintf("MITM intercept: %v\n  CA cert: %s\n  Traffic logs: %s",
@@ -2177,6 +2192,11 @@ type dockerAgentLauncher struct {
 	// (ready-for-review, plan-ready) are attributed to this machine's bot like
 	// the daemon-posted ones (SC-660 rule 1).
 	daemonID string
+	// agentIPs, when set, learns the launched container's bridge IP so a model
+	// call arriving at the proxy from that IP attributes to this agent's
+	// ticket+stage (SC-2555). nil disables the mapping; accounting still records
+	// the call, just without attribution.
+	agentIPs *daemon.AgentIPRegistry
 }
 
 func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace, configDir string) error {
@@ -2187,7 +2207,7 @@ func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace
 	defer func() { _ = docker.Close() }()
 
 	mgr := &agent.Manager{Docker: docker}
-	_, err = mgr.Start(ctx, agent.StartOpts{
+	meta, err := mgr.Start(ctx, agent.StartOpts{
 		Name:      name,
 		Prompt:    prompt,
 		SkipPerms: true,
@@ -2195,7 +2215,32 @@ func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace
 		ConfigDir: configDir,
 		DaemonID:  l.daemonID,
 	})
+	if err == nil {
+		l.registerAgentIP(ctx, docker, meta.ContainerID, name)
+	}
 	return translateLaunchErr(err)
+}
+
+// containerInspector is the sliver of the Docker client registerAgentIP needs:
+// resolving a container's network address. Narrowed to an interface so the
+// attribution wiring is unit-testable without a full Docker fake.
+type containerInspector interface {
+	ContainerInspect(ctx context.Context, containerID string) (devcontainer.ContainerInspectResponse, error)
+}
+
+// registerAgentIP maps the launched container's bridge IP to its agent name so
+// proxy connections attribute to the right run. Best-effort by contract: an
+// inspect failure or an address-less container leaves accounting unattributed
+// rather than failing the launch.
+func (l dockerAgentLauncher) registerAgentIP(ctx context.Context, docker containerInspector, containerID, name string) {
+	if l.agentIPs == nil || containerID == "" {
+		return
+	}
+	inspect, err := docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return
+	}
+	l.agentIPs.Register(inspect.IPAddress, name)
 }
 
 // translateLaunchErr bridges the agent package's single-flight sentinel to the
@@ -2850,7 +2895,7 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, li
 // is long gone (SC-1892).
 func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
 	return func(pmKey, agentName, errorType string) error {
-		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate)
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ds.agentIPs)
 		if err != nil {
 			return err
 		}
@@ -2892,7 +2937,7 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 // executor, which re-runs Deploy on `done` or reds the card on anything else.
 func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey string) error {
 	return func(pmKey string) error {
-		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, launchGate, ds.agentIPs)
 		if err != nil {
 			return err
 		}
@@ -2927,7 +2972,7 @@ func boardStateProject(reg *daemon.ProjectRegistry, pmKey string) string {
 // and the forge publisher against the resolved project dir. Shared by the
 // board-transition and board-fix closures so both routes drive the exact same
 // engine.
-func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) (daemon.BoardTransitionDeps, error) {
+func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs *daemon.AgentIPRegistry) (daemon.BoardTransitionDeps, error) {
 	entry, err := reg.EntryForKey(pmKey)
 	if err != nil {
 		return daemon.BoardTransitionDeps{}, err
@@ -2939,7 +2984,7 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 	}
 	return daemon.BoardTransitionDeps{
 		Commenter: commenter,
-		Launcher:  dockerAgentLauncher{daemonID: daemonID},
+		Launcher:  dockerAgentLauncher{daemonID: daemonID, agentIPs: agentIPs},
 		Deployer:  forgeDeployer{resolver: resolver, lookup: lookup},
 		CloseTicket: func(pmKey string) error {
 			transitioner, err := resolvePMTransitioner(entry.Dir, lookup, resolver)
@@ -2960,9 +3005,9 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 // boardTransitionerFunc builds the daemon's BoardTransitioner closure: it
 // resolves the PM commenter by role per request and applies the transition with
 // the Docker launcher and forge publisher against the resolved project dir.
-func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardTransitionRequest) error {
+func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs *daemon.AgentIPRegistry) func(daemon.BoardTransitionRequest) error {
 	return func(req daemon.BoardTransitionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
 		if err != nil {
 			return err
 		}
@@ -2975,9 +3020,9 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 // (planning gate skipped — autofix triages, plans and fixes in one run).
 // boardOptionerFunc builds the daemon's BoardOptioner closure: it records a
 // chosen option and relaunches the block's stage with the choice injected.
-func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardOptionRequest) error {
+func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs *daemon.AgentIPRegistry) func(daemon.BoardOptionRequest) error {
 	return func(req daemon.BoardOptionRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
 		if err != nil {
 			return err
 		}
@@ -2985,9 +3030,9 @@ func boardOptionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, da
 	}
 }
 
-func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.BoardFixRequest) error {
+func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs *daemon.AgentIPRegistry) func(daemon.BoardFixRequest) error {
 	return func(req daemon.BoardFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
 		if err != nil {
 			return err
 		}
@@ -2999,9 +3044,9 @@ func boardFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemo
 // collaborators to a bug fix, but the entry point is the security-fix pipeline
 // (/human-security-fix) — a security-tuned triage/verify pass over the same
 // containerized agent path.
-func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck) func(daemon.SecurityFixRequest) error {
+func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs *daemon.AgentIPRegistry) func(daemon.SecurityFixRequest) error {
 	return func(req daemon.SecurityFixRequest) error {
-		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate)
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
 		if err != nil {
 			return err
 		}
