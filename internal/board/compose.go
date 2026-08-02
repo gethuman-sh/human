@@ -71,6 +71,9 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			HasRelatedRecord: card.HasRelatedRecord,
 			Options:          card.Options,
 			OptionsContext:   card.OptionsContext,
+			StopDecision:     card.StopDecision,
+			StopLinkedKey:    card.StopLinkedKey,
+			StopReasoning:    card.StopReasoning,
 		})
 	}
 	markBlocked(view.Cards, blockedBy)

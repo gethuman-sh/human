@@ -215,6 +215,15 @@ type BoardViewCard struct {
 	// and a human must pick a direction. OptionsContext is the one-line why.
 	Options        []BoardOption `json:"options,omitempty"`
 	OptionsContext string        `json:"optionsContext,omitempty"`
+	// StopDecision/StopLinkedKey/StopReasoning render a pre-planning gate's
+	// recorded STOP verdict on the card (superseded/escalated/rejected) so a
+	// decided card is distinguishable from one merely waiting. StopDecision is the
+	// raw head (frontend maps it to human phrasing); StopLinkedKey is the ticket
+	// the decision names (reachable from the card); StopReasoning is the recorded
+	// evidence. All empty for a card with no such decision (SC-2699).
+	StopDecision  string `json:"stopDecision,omitempty"`
+	StopLinkedKey string `json:"stopLinkedKey,omitempty"`
+	StopReasoning string `json:"stopReasoning,omitempty"`
 	// MockupSlug/MockupState link the card to a locally generated mockup set:
 	// "ready" once mockups/<slug>/index.json is valid, "creating" while a
 	// launched generation has not produced it yet. Local file state — never

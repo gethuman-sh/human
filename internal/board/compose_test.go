@@ -69,6 +69,28 @@ func TestCompose_HasRelatedRecordCopied(t *testing.T) {
 	assert.False(t, cardByKey(t, view, "SC-2").HasRelatedRecord)
 }
 
+// The pre-planning stop decision rides from the derived card onto the wire card
+// so the desktop can render the "decided" badge and Decision section (SC-2699).
+func TestCompose_carriesStopDecision(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "decided"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {
+				Stage:         daemon.BoardBacklog,
+				State:         daemon.BoardDone,
+				StopDecision:  "superseded",
+				StopLinkedKey: "SC-100",
+				StopReasoning: "Same surface as SC-100, which carries the work",
+			},
+		},
+	)}, true)
+
+	c := cardByKey(t, view, "SC-1")
+	assert.Equal(t, "superseded", c.StopDecision)
+	assert.Equal(t, "SC-100", c.StopLinkedKey)
+	assert.Equal(t, "Same surface as SC-100, which carries the work", c.StopReasoning)
+}
+
 // Hidden cards must still be composed: the frontend filters them, so dropping
 // them here would make "reveal hidden" impossible without a refetch.
 func TestCompose_ReturnsCardsTheViewerMayHide(t *testing.T) {
