@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -44,7 +45,9 @@ func (m *Manager) isolateWorkspace(ctx context.Context, projectDir, name string)
 // mountSourceForRun resolves the per-run bind-mount source: a private detached
 // git worktree of the shared checkout so concurrent agents never share
 // HEAD/index/tree. Non-git workspaces have no corruption hazard and mount
-// directly.
+// directly. The worktree is rooted at the fetched published tip
+// (origin/<default>), falling back to the local ref with a stderr notice when
+// origin is unreachable.
 func (m *Manager) mountSourceForRun(ctx context.Context, projectDir, agentName string) (string, error) {
 	if !gitrepo.IsRepo(ctx, projectDir) {
 		return projectDir, nil
@@ -55,7 +58,23 @@ func (m *Manager) mountSourceForRun(ctx context.Context, projectDir, agentName s
 	if err := os.MkdirAll(WorktreesDir(), 0o700); err != nil {
 		return "", errors.WrapWithDetails(err, "creating worktrees dir", "dir", WorktreesDir())
 	}
-	base := gitrepo.DefaultBranch(ctx, projectDir)
+	// Root the run at the project's CURRENT PUBLISHED state, not the local
+	// checkout as a human last left it: fetch origin's default branch and detach
+	// the private worktree at origin/<base>. This establishes freshness AT RUN
+	// START (the symmetric counterpart to the deploy end's fetch) so a run cannot
+	// silently start in the past, and — because the base is the remote tip —
+	// cannot carry unpublished local commits into its changes (SC-2742).
+	branch := gitrepo.DefaultBranch(ctx, projectDir)
+	base := "origin/" + branch
+	if err := gitrepo.Fetch(ctx, projectDir, branch); err != nil {
+		// Origin is unreachable — a network problem, not a broken ticket. Start
+		// from the local copy and SAY SO (into the captured launch log) rather
+		// than failing the launch (SC-2742).
+		base = branch
+		_, _ = fmt.Fprintf(os.Stderr,
+			"human: could not reach origin at run start (%v); started from local copy of %q — it may be behind the published state\n",
+			err, branch)
+	}
 	if err := gitrepo.WorktreeAdd(ctx, projectDir, worktreePath, base); err != nil {
 		return "", err
 	}
