@@ -7,6 +7,7 @@ package marker
 
 import (
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -37,6 +38,50 @@ type spec struct {
 	required  []string
 	headEnum  []string
 	needsHead bool
+	// validate carries a contract the required/head fields cannot express.
+	validate func(Marker) error
+}
+
+// MinDecisionOptions is the fewest answers a decision block may offer. A block
+// with one answer is not a decision: it parks the card until a human clicks the
+// only thing on offer, which is a dead end dressed as a choice. Rejecting it at
+// post time is what stops a stage from turning a condition it should have
+// handled itself into a question.
+const MinDecisionOptions = 2
+
+// reservedOptionKeys are the option-block lines that are metadata rather than
+// answers. `daemon` is the provenance stamp every marker body carries, and it
+// has the same `id: label` shape as a real answer — counting it is how a
+// one-answer block passed for a two-answer one.
+var reservedOptionKeys = map[string]bool{"stage": true, "context": true, "daemon": true}
+
+// validateOptions counts the answers a decision block actually offers. They
+// arrive as numbered fields when posted and as body lines when read back, so
+// both are counted.
+func validateOptions(m Marker) error {
+	ids := map[string]bool{}
+	for key, value := range m.Fields {
+		if !reservedOptionKeys[key] && strings.TrimSpace(value) != "" {
+			ids[key] = true
+		}
+	}
+	for _, line := range strings.Split(m.Body, "\n") {
+		line = strings.TrimSpace(line)
+		id, label, ok := strings.Cut(line, ":")
+		id = strings.TrimSpace(id)
+		if !ok || id == "" || strings.ContainsAny(id, " \t") || reservedOptionKeys[id] {
+			continue
+		}
+		if strings.TrimSpace(label) != "" {
+			ids[id] = true
+		}
+	}
+	if len(ids) < MinDecisionOptions {
+		return errors.WithDetails(
+			"a decision block must offer at least two answers",
+			"type", m.Type, "answers", len(ids), "minimum", MinDecisionOptions)
+	}
+	return nil
 }
 
 var specs = map[string]spec{
@@ -56,7 +101,7 @@ var specs = map[string]spec{
 	"deployed":              {required: []string{"pr"}},
 	"bug-verdict":           {needsHead: true, headEnum: []string{"confirmed", "not-a-bug", "undetermined"}},
 	"bug-verify":            {needsHead: true, headEnum: []string{"DONE", "NOT DONE"}},
-	"options":               {required: []string{"stage"}},
+	"options":               {required: []string{"stage"}, validate: validateOptions},
 	// The ticket-review gate's verdict. The head carries the outcome so a reader
 	// can classify it without parsing the body, exactly as bug-verdict does; the
 	// gate ACTS on every outcome, so these name what it did, not what it asks for.
@@ -99,13 +144,11 @@ func Validate(m Marker) error {
 	if s.needsHead && strings.TrimSpace(m.Head) == "" {
 		return errors.WithDetails("marker requires a head token", "type", m.Type, "allowed", strings.Join(s.headEnum, "|"))
 	}
-	if len(s.headEnum) > 0 && m.Head != "" {
-		for _, allowed := range s.headEnum {
-			if m.Head == allowed {
-				return nil
-			}
-		}
+	if len(s.headEnum) > 0 && m.Head != "" && !slices.Contains(s.headEnum, m.Head) {
 		return errors.WithDetails("marker head token not in allowed set", "type", m.Type, "head", m.Head, "allowed", strings.Join(s.headEnum, "|"))
+	}
+	if s.validate != nil {
+		return s.validate(m)
 	}
 	return nil
 }
