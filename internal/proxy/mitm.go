@@ -112,6 +112,20 @@ type LoggingInterceptor struct {
 	// Dialer connects to upstream servers. Injected for testing.
 	// If nil, tls.Dial is used.
 	Dialer func(ctx context.Context, network, address string) (net.Conn, error)
+
+	// RecordOutcome receives a content-free record of every model-API call the
+	// MITM loop observes — including the calls that fail before any transcript
+	// exists. Injected as a function field so the proxy never depends on the
+	// daemon's sink; nil disables recording (same nil-safety as the Emitter).
+	RecordOutcome ModelOutcomeRecorder
+	// Attribute maps a connection's remote address to the ticket+stage that own
+	// it. nil (or an unknown source) records the outcome with empty attribution
+	// rather than dropping it.
+	Attribute ConnAttributor
+	// ModelAPIHost overrides the host that outcome recording is gated on. Empty
+	// uses DefaultModelAPIHost. Gating here — not on the intercept domain list —
+	// keeps accounting fixed to the model API even as traffic logging widens.
+	ModelAPIHost string
 }
 
 // ShouldIntercept returns true if hostname matches a configured intercept domain.
@@ -128,6 +142,15 @@ func (li *LoggingInterceptor) ShouldIntercept(hostname string) bool {
 // Intercept performs a MITM TLS handshake with the client, dials the real upstream,
 // and proxies HTTP traffic while logging request/response bodies.
 func (li *LoggingInterceptor) Intercept(ctx context.Context, conn net.Conn, hostname string, peeked []byte) error {
+	// Capture the client's remote address before the connection is wrapped: it
+	// identifies the container, which attribution resolves to a ticket+stage.
+	remoteAddr := ""
+	if conn != nil {
+		if a := conn.RemoteAddr(); a != nil {
+			remoteAddr = a.String()
+		}
+	}
+
 	// Get or generate a leaf cert for this hostname.
 	leaf, err := li.LeafCache.Get(hostname)
 	if err != nil {
@@ -151,19 +174,25 @@ func (li *LoggingInterceptor) Intercept(ctx context.Context, conn net.Conn, host
 	}
 	defer func() { _ = clientTLS.Close() }()
 
-	// Dial real upstream with TLS.
+	// Dial real upstream with TLS. A dial failure is a model call that never
+	// completed — one of the pre-output failures files structurally cannot see —
+	// so record it (content-free, StatusCode 0) before returning.
+	dialStart := time.Now()
 	upstreamConn, err := li.dialUpstream(ctx, hostname)
 	if err != nil {
+		li.emitOutcome(remoteAddr, hostname, 0, err, dialStart)
 		return errors.WrapWithDetails(err, "upstream dial failed", "hostname", hostname)
 	}
 	defer func() { _ = upstreamConn.Close() }()
 
 	// Proxy HTTP requests over the established TLS connections.
-	return li.proxyHTTP(ctx, clientTLS, upstreamConn, hostname)
+	return li.proxyHTTP(ctx, clientTLS, upstreamConn, hostname, remoteAddr)
 }
 
 // proxyHTTP reads HTTP requests from client, forwards to upstream, and logs bodies.
-func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream net.Conn, hostname string) error {
+// remoteAddr is the client connection's source, carried through so each recorded
+// outcome can be attributed to the container that made the call.
+func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream net.Conn, hostname, remoteAddr string) error {
 	clientReader := bufio.NewReader(client)
 	upstreamReader := bufio.NewReader(upstream)
 
@@ -179,8 +208,15 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 			if err == io.EOF || isConnClosed(err) {
 				return nil // client closed connection
 			}
+			// A genuine read error before any call went out is a pre-output
+			// failure worth recording (content-free, StatusCode 0).
+			li.emitOutcome(remoteAddr, hostname, 0, err, time.Now())
 			return errors.WrapWithDetails(err, "reading client request", "hostname", hostname)
 		}
+
+		// Timing anchors here, before the request is written upstream: duration
+		// runs to the response read (or to the failure that precedes it).
+		start := time.Now()
 
 		// Read and log request body.
 		var reqBody []byte
@@ -188,6 +224,7 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 			reqBody, err = io.ReadAll(io.LimitReader(req.Body, maxBodyLog))
 			_ = req.Body.Close()
 			if err != nil {
+				li.emitOutcome(remoteAddr, hostname, 0, err, start)
 				return errors.WrapWithDetails(err, "reading request body", "hostname", hostname)
 			}
 		}
@@ -205,12 +242,15 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 		// Forward request to upstream with body.
 		req.Body = io.NopCloser(bytes.NewReader(reqBody))
 		if err := req.Write(upstream); err != nil {
+			li.emitOutcome(remoteAddr, hostname, 0, err, start)
 			return errors.WrapWithDetails(err, "writing to upstream", "hostname", hostname)
 		}
 
-		// Read response from upstream.
+		// Read response from upstream. A read failure here is a call that never
+		// produced a response line — the core pre-transcript case.
 		resp, err := http.ReadResponse(upstreamReader, req)
 		if err != nil {
+			li.emitOutcome(remoteAddr, hostname, 0, err, start)
 			return errors.WrapWithDetails(err, "reading upstream response", "hostname", hostname)
 		}
 
@@ -234,6 +274,11 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 			Body:      respBodyBuf.String(),
 			BodySize:  int64(respBodyBuf.Len()),
 		})
+
+		// Record the outcome AFTER the client write (success and non-2xx alike),
+		// mirroring the existing write-then-log order so accounting can never
+		// delay or break the proxied response (SC-2555 constraint 1).
+		li.emitOutcome(remoteAddr, hostname, resp.StatusCode, nil, start)
 
 		if writeErr != nil {
 			return errors.WrapWithDetails(writeErr, "writing to client", "hostname", hostname)
