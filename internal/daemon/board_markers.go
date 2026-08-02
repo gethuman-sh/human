@@ -83,6 +83,15 @@ const (
 	PlanningFailedHeader        = "[human:planning-failed]"
 	ImplementationStartedHeader = "[human:implementation-started]"
 	ImplementationFailedHeader  = "[human:implementation-failed]"
+	// NeedsPlanningHeader is the implementation launch's refuse-and-surface
+	// marker: the stage that exists only to carry out a plan was launched on a
+	// ticket that has none, so the launch is refused before any agent claims the
+	// ticket (SC-2596). It maps to the PLANNING stage (BoardFailed) so the card
+	// surfaces back where a human can trigger planning, rather than sitting on a
+	// phantom implementation run that the stuck-running reconcile would later red
+	// as a crash. DeriveBoardCard promotes it over the phantom implementation
+	// markers it refused (newestNeedsPlanning).
+	NeedsPlanningHeader = "[human:needs-planning]"
 	// NoFixNeededHeader is the autofix pipeline's second clean terminal marker:
 	// triage concluded the reported bug warrants no code change (not-a-bug or
 	// undetermined). It carries no [human:ready-for-review] handoff, so the
@@ -189,6 +198,9 @@ var orderedMarkerSpecs = []markerSpec{
 	{ImplementationStartedHeader, BoardImplementation, BoardRunning},
 	{ReadyForReviewHeader, BoardImplementation, BoardDone},
 	{ImplementationFailedHeader, BoardImplementation, BoardFailed},
+	// A refused implementation launch surfaces as a failed PLANNING card (not a
+	// failed implementation one) so the planning gesture can retrigger the plan.
+	{NeedsPlanningHeader, BoardPlanning, BoardFailed},
 	{NoFixNeededHeader, BoardImplementation, BoardResolved},
 	{ReviewStartedHeader, BoardVerification, BoardRunning},
 	{ReviewCompleteHeader, BoardVerification, BoardDone},

@@ -112,6 +112,9 @@ func TestDeriveBoardCard_StageStartConsumesOptions(t *testing.T) {
 func TestApplyOptionPostsChoiceAndRelaunches(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
 	c := &fakeCommenter{comments: []tracker.Comment{
+		// A plan exists — this decision resumes an in-flight implementation, so the
+		// relaunch clears the plan gate and starts the build (SC-2596).
+		cmt(PlanReadyHeader, base.Add(-time.Minute)),
 		cmt(ImplementationStartedHeader, base),
 		cmt(ReviewCompleteHeader+"\nverdict: fail", base.Add(1*time.Minute)),
 		cmt(optionsBody, base.Add(2*time.Minute)),

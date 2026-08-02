@@ -129,17 +129,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		}
 	}
 
-	// A recorded decision ([human:option-chosen]) that no started/terminal marker
-	// has yet superseded: the chosen stage is (re)queued while the relaunch's
-	// started marker is pending or its launch was deferred to a healthy daemon.
-	// Without this the card collapses to the pre-decision running marker and the
-	// stuck-running pass falsely reds it (SC-1320). Placed after the SC-910
-	// supersede so a decision strictly newer than a stale failure still wins.
-	if qStage, qChosen, ok := optionChosenQueued(comments); ok {
-		furthest, state, latest, anyMarker = qStage, BoardQueued, qChosen, true
-	}
-
-	state = pauseOnOpenOptions(state, furthest, comments)
+	furthest, state, latest, anyMarker = applyStateOverrides(comments, furthest, state, latest, anyMarker)
 
 	if !anyMarker {
 		// No pipeline activity yet: the open ticket waits in Backlog.
@@ -162,6 +152,42 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.DeployPhase = deployPhaseFor(card, comments)
 	attachOpenOptions(&card, comments)
 	return card
+}
+
+// applyStateOverrides layers the two derivation overrides that must run after
+// the furthest-stage/latest-marker pass but before the Backlog short-circuit:
+// a queued option-decision and a needs-planning refusal. Split out of
+// DeriveBoardCard so the two independent `if`s cost this helper's complexity
+// budget rather than the parent's (SC-2596 pushed DeriveBoardCard over the
+// gocyclo threshold; extracting keeps the override chain readable in one place
+// without re-flattening it into the main derivation).
+func applyStateOverrides(comments []tracker.Comment, furthest BoardStage, state BoardState, latest tracker.Comment, anyMarker bool) (BoardStage, BoardState, tracker.Comment, bool) {
+	// A recorded decision ([human:option-chosen]) that no started/terminal marker
+	// has yet superseded: the chosen stage is (re)queued while the relaunch's
+	// started marker is pending or its launch was deferred to a healthy daemon.
+	// Without this the card collapses to the pre-decision running marker and the
+	// stuck-running pass falsely reds it (SC-1320). Placed after the SC-910
+	// supersede so a decision strictly newer than a stale failure still wins.
+	if qStage, qChosen, ok := optionChosenQueued(comments); ok {
+		furthest, state, latest, anyMarker = qStage, BoardQueued, qChosen, true
+	}
+
+	state = pauseOnOpenOptions(state, furthest, comments)
+
+	// A [human:needs-planning] refusal is the last word: the implementation
+	// launch was refused because the ticket has no plan (SC-2596). It is a
+	// planning-stage marker, but the ticket's furthest markers are the phantom
+	// implementation launches it refused, which furthest-stage-wins would show
+	// as a running/failed build instead. Surface the refusal explicitly so the
+	// card returns to Planning carrying the determination — where a human can
+	// trigger the plan (isPlanningRetry) — and no phantom running marker reds it
+	// as a crash. Placed after the decision-queue override so a refusal strictly
+	// newer than a stale option-chosen still wins.
+	if np, ok := newestNeedsPlanning(comments); ok {
+		furthest, state, latest, anyMarker = BoardPlanning, BoardFailed, np, true
+	}
+
+	return furthest, state, latest, anyMarker
 }
 
 // pauseOnOpenOptions turns a running OR failed state into a waiting-on-human
@@ -299,6 +325,40 @@ func latestMarkerOverall(comments []tracker.Comment) (tracker.Comment, BoardStag
 		}
 	}
 	return latest, stage, state, have
+}
+
+// hasPlanEvidence reports whether the ticket has been planned. Two proofs, one
+// per topology: a [human:plan] comment (the plan itself lives on the ticket,
+// single-tracker topology) or a [human:plan-ready] marker (planning completed;
+// both topologies post it, carrying the engineering key in split topology).
+// Either is sufficient that the implementation stage has a plan to carry out —
+// the precondition the launch guard checks (SC-2596).
+func hasPlanEvidence(comments []tracker.Comment) bool {
+	if _, ok := latestPlanComment(comments); ok {
+		return true
+	}
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), PlanReadyHeader) {
+			return true
+		}
+	}
+	return false
+}
+
+// newestNeedsPlanning reports whether the ticket's newest board marker is a
+// [human:needs-planning] refusal, returning that marker so its message reaches
+// the card. Newest-overall (not furthest-stage) on purpose: the refusal must win
+// over the phantom implementation markers it refused, which outrank the planning
+// stage it maps to (SC-2596).
+func newestNeedsPlanning(comments []tracker.Comment) (tracker.Comment, bool) {
+	newest, _, _, ok := latestMarkerOverall(comments)
+	if !ok {
+		return tracker.Comment{}, false
+	}
+	if strings.HasPrefix(strings.TrimSpace(newest.Body), NeedsPlanningHeader) {
+		return newest, true
+	}
+	return tracker.Comment{}, false
 }
 
 // latestPlanComment returns the body of the newest [human:plan] comment with

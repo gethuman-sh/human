@@ -282,7 +282,7 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 			executePrompt(dispatchKey(req.PMKey, card),
 				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first"),
-			WaitCauseChain)
+			WaitCauseChain, true)
 
 	// Planning retry: a failed planning run is relaunched in place. The retry
 	// gesture targets planning while the card already derives to planning, so
@@ -291,7 +291,7 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// guard already returned for it.
 	case isPlanningRetry(req.To, card):
 		return true, d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			planPrompt(req.PMKey), WaitCauseRetry)
+			planPrompt(req.PMKey), WaitCauseRetry, false)
 
 	// Build retry: the same sanctioned in-place relaunch for a failed
 	// implementation run — without it a failed build is a dead end, since the
@@ -300,7 +300,7 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// executor picks it up.
 	case isBuildRetry(req.To, card):
 		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			executePrompt(dispatchKey(req.PMKey, card), ""), WaitCauseRetry)
+			executePrompt(dispatchKey(req.PMKey, card), ""), WaitCauseRetry, true)
 
 	// Review retry: a stage-failed review is otherwise a dead end. The rework
 	// re-drop keys on a DONE verification with a failing verdict, and a
@@ -310,7 +310,7 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// the same handoff (SC-695). A RUNNING review is caught by the idempotency guard.
 	case isReviewRetry(req.To, card):
 		return true, d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			reviewPrompt(dispatchKey(req.PMKey, card), card), WaitCauseRetry)
+			reviewPrompt(dispatchKey(req.PMKey, card), card), WaitCauseRetry, false)
 
 	// Deploy retry: a card sitting on a failed deploy, re-dropped on Deploy, must
 	// re-run the deploy pipeline — the freshness stage rebases the already-reviewed
@@ -330,13 +330,13 @@ func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTr
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
-			planPrompt(req.PMKey), req.Cause)
+			planPrompt(req.PMKey), req.Cause, false)
 	case BoardImplementation:
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-			executePrompt(dispatchKey(req.PMKey, card), ""), req.Cause)
+			executePrompt(dispatchKey(req.PMKey, card), ""), req.Cause, true)
 	case BoardVerification:
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
-			reviewPrompt(dispatchKey(req.PMKey, card), card), req.Cause)
+			reviewPrompt(dispatchKey(req.PMKey, card), card), req.Cause, false)
 	case BoardDoneStage:
 		return d.runDoneStage(ctx, req, card)
 	default:
@@ -385,8 +385,11 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 	// review handoff. Relying on the HUMAN_AGENT_NAME env var alone let a fixer
 	// push and fail — the fix completed and passed review but the card ended red
 	// (SC-252).
+	// The autofix pipeline triages, plans and fixes in one run, so it legitimately
+	// launches the implementation stage with no pre-written plan: requiresPlan is
+	// false (SC-2596).
 	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-		"/human-autofix "+req.PMKey+" --board", WaitCause(""))
+		"/human-autofix "+req.PMKey+" --board", WaitCause(""), false)
 }
 
 // SecurityFixRequest is the wire request for launching the security-fix pipeline
@@ -416,8 +419,10 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 	if _, state := latestStageState(comments, BoardVerification); state == BoardRunning {
 		return nil
 	}
+	// Like autofix, the security-fix pipeline produces its own plan within the
+	// run, so requiresPlan is false (SC-2596).
 	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-		"/human-security-fix "+req.PMKey+" --board", WaitCause(""))
+		"/human-security-fix "+req.PMKey+" --board", WaitCause(""), false)
 }
 
 // startAgentStage posts the stage's started marker, then launches the agent. On
@@ -444,7 +449,13 @@ func (d BoardTransitionDeps) launchAgent(ctx context.Context, name, prompt strin
 	return nil
 }
 
-func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string, cause WaitCause) error {
+// requiresPlan declares that this launch executes a pre-written plan, so the
+// stage must not start on a ticket that has none (SC-2596). It is true for every
+// route that carries out a plan (the forward drag into implementation, the
+// rework and build retries, an implementation-stage option relaunch) and false
+// for the self-contained fix pipelines (autofix, security-fix), which produce
+// their plan within the run.
+func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string, cause WaitCause, requiresPlan bool) error {
 	// Launch gate: a daemon whose host fails a launch-critical doctor check
 	// (docker, agent-skills, claude-auth) cannot serve this stage. Refuse before
 	// the claim so NO [human:claim] is posted — the work is left unclaimed for a
@@ -465,6 +476,16 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	// no other daemon can serve this stage either, so a silent skip would be a
 	// card that never starts for a reason nobody can see.
 	if err := d.refuseIfBlocked(ctx, pmKey, stage); err != nil {
+		return err
+	}
+	// Plan gate: the implementation stage carries out a plan, so it must not
+	// start on a ticket that has none. Checked HERE, at the one chokepoint every
+	// launch route funnels through, rather than on the drag gesture alone — the
+	// gap that let a non-drag route launch six doomed runs (SC-2596). Like the
+	// dependency gate it refuses before the claim, so nothing is claimed; unlike
+	// it, the refusal records a [human:needs-planning] marker so the card surfaces
+	// the determination back in Planning instead of leaving it invisible.
+	if refused, err := d.refuseIfUnplanned(ctx, pmKey, stage, requiresPlan); refused || err != nil {
 		return err
 	}
 	// Claim before start: with several daemons on one board, arbitrate who
@@ -495,6 +516,53 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 		return errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
 	}
 	return nil
+}
+
+// needsPlanningReason is the human-readable line the [human:needs-planning]
+// marker carries, so the refused card reads as an instruction, not an error.
+const needsPlanningReason = "implementation cannot start: this ticket has no plan. Run planning first, then move it to implementation."
+
+// refuseIfUnplanned refuses an implementation launch on a ticket that carries no
+// plan and reports whether it did. The implementation stage exists to carry out
+// a plan; without one it can only claim the ticket, run preparation, and discover
+// there is nothing to execute — the doomed-launch loop this guards (SC-2596).
+//
+// It applies only to plan-executing implementation launches: requiresPlan is
+// false for the self-contained fix pipelines, which produce their plan within
+// the run, and the gate is a no-op for every other stage.
+//
+// On refusal it records a [human:needs-planning] marker — the refuse-and-surface
+// twin of refuseIfBlocked — but only when that is not already the ticket's
+// determination, so a reconcile re-drive does not spam the thread. A comment-read
+// failure is deliberately NOT treated as an absence: a tracker blip must not
+// refuse a launch, so the run proceeds and the agent's own plan check (which
+// distinguishes a genuine absence from an unreachable tracker) remains the
+// backstop.
+func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string, stage BoardStage, requiresPlan bool) (refused bool, err error) {
+	if !requiresPlan || stage != BoardImplementation {
+		return false, nil
+	}
+	comments, err := d.Commenter.ListComments(ctx, pmKey)
+	if err != nil {
+		d.Logger.Warn().Err(err).Str("pm", pmKey).
+			Msg("board stage: cannot read comments to check for a plan, starting anyway")
+		return false, nil
+	}
+	if hasPlanEvidence(comments) {
+		return false, nil
+	}
+	if _, already := newestNeedsPlanning(comments); already {
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board stage: implementation refused — ticket has no plan (already surfaced)")
+		return true, nil
+	}
+	body := NeedsPlanningHeader + "\n" + needsPlanningReason
+	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID)); err != nil {
+		return true, errors.WrapWithDetails(err, "posting needs-planning marker", "pm", pmKey)
+	}
+	d.Logger.Info().Str("pm", pmKey).
+		Msg("board stage: implementation refused — ticket has no plan; surfaced as needing planning")
+	return true, nil
 }
 
 // startDeploy launches the deploy pipeline in the background. A package var so
