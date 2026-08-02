@@ -55,6 +55,7 @@ type Server struct {
 	ConnectedPIDs    *ConnectedTracker                     // tracks client PIDs that have pinged; nil disables tracking
 	HookEvents       *HookEventStore                       // in-memory hook event buffer; nil disables hook event tracking
 	NetworkEvents    *NetworkEventStore                    // in-memory ambient network activity buffer; nil disables
+	ModelOutcomes    *ModelOutcomeSink                     // content-free model-call outcome buffer from the proxy boundary; nil disables
 	IssueFetcher     func() ([]TrackerIssuesResult, error) // injected; fetches issues from configured trackers
 	LiteIssueFetcher func() ([]TrackerIssuesResult, error) // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
 	// BoardViewFetcher returns the composed board: the project-wide picture with
@@ -472,6 +473,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"hook-event":          func() { s.handleHookEvent(conn, args[1:]) },
 		"hook-snapshot":       func() { s.handleHookSnapshot(conn) },
 		"network-events":      func() { s.handleNetworkEvents(conn) },
+		"model-outcomes":      func() { s.handleModelOutcomes(conn) },
 		"tracker-diagnose":    func() { s.handleTrackerDiagnose(conn, projectDir) },
 		"tracker-issues":      func() { s.handleTrackerIssues(conn) },
 		"board-view":          func() { s.handleBoardView(conn) },
@@ -568,6 +570,31 @@ func (s *Server) handleNetworkEvents(conn net.Conn) {
 	if s.NetworkEvents != nil {
 		events := s.NetworkEvents.Snapshot()
 		data, err := json.Marshal(events)
+		if err != nil {
+			s.writeError(conn, err.Error(), 1)
+			return
+		}
+		out = string(data) + "\n"
+	} else {
+		out = "[]\n"
+	}
+	resp := Response{Stdout: out}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleModelOutcomes returns the content-free model-call outcomes the proxy
+// boundary has recorded as JSON. Empty array when the sink is unset, matching
+// the network-events convention so a missing daemon feature reads as an empty
+// result to the client rather than an error.
+func (s *Server) handleModelOutcomes(conn net.Conn) {
+	var out string
+	if s.ModelOutcomes != nil {
+		outcomes := s.ModelOutcomes.Outcomes()
+		if outcomes == nil {
+			outcomes = []proxy.ModelCallOutcome{}
+		}
+		data, err := json.Marshal(outcomes)
 		if err != nil {
 			s.writeError(conn, err.Error(), 1)
 			return

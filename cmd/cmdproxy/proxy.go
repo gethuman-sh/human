@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/proxy"
 )
 
 // BuildProxyCmd creates the "proxy" command tree.
@@ -25,7 +28,88 @@ func BuildProxyCmd() *cobra.Command {
 
 	cmd.AddCommand(buildProxyTrustCmd())
 	cmd.AddCommand(buildProxyCACertCmd())
+	cmd.AddCommand(buildProxyModelOutcomesCmd())
 	return cmd
+}
+
+// buildProxyModelOutcomesCmd creates the "proxy model-outcomes" command, the
+// read surface over the content-free model-call outcomes the proxy boundary
+// records: what each call cost in time, its outcome class, and the ticket+stage
+// that made it (SC-2555). Runs on the host, forwarded via the daemon.
+func buildProxyModelOutcomesCmd() *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "model-outcomes",
+		Short: "Show recorded model-call outcomes (class, timing, ticket/stage)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runProxyModelOutcomes(cmd, asJSON)
+		},
+	}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the raw outcome records as JSON")
+	return cmd
+}
+
+func runProxyModelOutcomes(cmd *cobra.Command, asJSON bool) error {
+	addr, token, err := resolveDaemonEndpoint()
+	if err != nil {
+		return err
+	}
+	outcomes, err := daemon.GetModelOutcomes(addr, token)
+	if err != nil {
+		return errors.WrapWithDetails(err, "fetching model outcomes from daemon")
+	}
+	return writeModelOutcomes(cmd.OutOrStdout(), outcomes, asJSON)
+}
+
+// writeModelOutcomes renders outcomes as JSON when asked, otherwise as a compact
+// human-readable table. Kept separate from the command so it is unit-testable
+// without a daemon.
+func writeModelOutcomes(w io.Writer, outcomes []proxy.ModelCallOutcome, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(outcomes)
+	}
+	if len(outcomes) == 0 {
+		_, _ = fmt.Fprintln(w, "No model-call outcomes recorded.")
+		return nil
+	}
+	for _, o := range outcomes {
+		ticket := o.Ticket
+		if ticket == "" {
+			ticket = "(unattributed)"
+		}
+		stage := o.Stage
+		if stage == "" {
+			stage = "-"
+		}
+		_, _ = fmt.Fprintf(w, "%-8s %-14s %-16s status=%-3d %s %s\n",
+			o.Class, o.Duration.Round(time.Millisecond), ticket+"/"+stage, o.StatusCode, o.Host,
+			o.StartedAt.Format(time.RFC3339))
+	}
+	return nil
+}
+
+// resolveDaemonEndpoint resolves the daemon address and token from the
+// environment, falling back to daemon.json — the same resolution the CA-cert
+// fetch uses.
+func resolveDaemonEndpoint() (addr, token string, err error) {
+	addr = os.Getenv("HUMAN_DAEMON_ADDR")
+	token = os.Getenv("HUMAN_DAEMON_TOKEN")
+	if addr == "" {
+		info, infoErr := readDaemonInfo()
+		if infoErr != nil {
+			return "", "", errors.WrapWithDetails(infoErr, "daemon not reachable")
+		}
+		addr = info.Addr
+		if token == "" {
+			token = info.Token
+		}
+	}
+	if addr == "" {
+		return "", "", errors.WithDetails("daemon address not configured")
+	}
+	return addr, token, nil
 }
 
 func buildProxyTrustCmd() *cobra.Command {

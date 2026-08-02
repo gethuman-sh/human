@@ -17,6 +17,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/settings"
 	"github.com/gethuman-sh/human/internal/stats"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -320,6 +321,21 @@ func GetNetworkEvents(addr, token string) ([]NetworkEvent, error) {
 		return nil, errors.WrapWithDetails(err, "invalid network events JSON")
 	}
 	return events, nil
+}
+
+// GetModelOutcomes fetches the content-free model-call outcomes the proxy
+// boundary has recorded from the daemon. Returns a nil slice (not a nil error)
+// when the daemon replies with an empty list.
+func GetModelOutcomes(addr, token string) ([]proxy.ModelCallOutcome, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"model-outcomes"})
+	if err != nil {
+		return nil, err
+	}
+	var outcomes []proxy.ModelCallOutcome
+	if err := json.Unmarshal(out, &outcomes); err != nil {
+		return nil, errors.WrapWithDetails(err, "invalid model outcomes JSON")
+	}
+	return outcomes, nil
 }
 
 // GetTrackerDiagnose fetches tracker credential status from the daemon.

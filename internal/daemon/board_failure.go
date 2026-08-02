@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/internal/marker"
+	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -35,6 +36,15 @@ type FailureDiagnosis struct {
 // ("" when it carried none). nil disables diagnosis (generic fallback).
 type BoardFailureDiagnoser func(agentName, hookErrorType string) FailureDiagnosis
 
+// LatestOutcomeClass reports the most recent model-call outcome class recorded
+// at the network boundary for a (ticket, stage), and whether any was recorded.
+// It is the read seam ModelOutcomeSink.LatestClass provides, injected as a
+// function field (mirroring diagnose) so the failure path can name why a run
+// failed from the live boundary without the daemon package threading its sink
+// type through the proxy. A nil value disables the enrichment, leaving the
+// failure marker byte-for-byte as it was before (SC-2555 step 5b).
+type LatestOutcomeClass func(ticket, stage string) (string, bool)
+
 // genericStageFailure is the diagnosis-free failure line, kept for nil or
 // empty-handed diagnosers so the marker never posts headerless.
 const genericStageFailure = "agent exited without completing the stage"
@@ -59,7 +69,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // resolved marker). It is the success signal that authorizes reclaiming the
 // run's private worktree — every other exit KEEPS the worktree so uncommitted
 // work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -89,7 +99,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, evt.EventName, commenterFor, chainReview, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger)
+				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, evt.EventName, commenterFor, chainReview, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, latestClass, daemonID, logger)
 			}
 		}
 	}
@@ -106,7 +116,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // is used to derive cleanExit, which in turn guards against misreading a
 // clean finish that merely raced its own review-complete propagation as a
 // mid-review crash (SC-2133).
-func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
 	pmKey, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
@@ -153,7 +163,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 	// carries the same diagnosed reason line a *-failed marker would, so the badge
 	// still reads the cause via failureReason.
 	if header := outageHeaderFor(stage); header != "" && retry.recordedOutage(pmKey, stage) {
-		body := header + "\n" + failureMarkerBody(diagnose, agentName, errorType)
+		body := header + "\n" + appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
 		if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 			logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post outage marker")
 		}
@@ -177,7 +187,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 			return
 		}
 	}
-	body := failedHeaderFor(stage) + "\n" + failureMarkerBody(diagnose, agentName, errorType)
+	body := failedHeaderFor(stage) + "\n" + appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
 	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
 		// Without the failed marker the card does not derive to a failed state,
@@ -563,6 +573,32 @@ func silenceReapReason(idle string) string {
 	return "the daemon observed " + idle + " with no sign of life — no tool activity and no transcript " +
 		"output — past the idle budget, and stopped the stage. This is a machine-chosen stop, not a stage " +
 		"failure, so it is not charged against the retry budget. The stage was relaunched automatically."
+}
+
+// appendModelOutcomeNote enriches a failure marker body with a one-line note
+// naming the run's latest model-call outcome class when the boundary recorded a
+// failing one — an auth lapse, a rate-limit, an overload, a spend-limit, a
+// dropped connection. It is strictly additive: with no lookup wired, no recorded
+// outcome for the run, or a healthy last call (ClassOK), it returns the body
+// unchanged so today's marker is preserved byte-for-byte (SC-2555 step 5b). The
+// note lands in the detail block, never on the headline line the card badge
+// reads (failureReason), so the badge's meaning is unchanged too.
+func appendModelOutcomeNote(body string, latest LatestOutcomeClass, ticket, stage string) string {
+	if latest == nil {
+		return body
+	}
+	class, ok := latest(ticket, stage)
+	if !ok || class == "" || class == proxy.ClassOK {
+		return body
+	}
+	return body + "\n\n" + modelOutcomeReason(class)
+}
+
+// modelOutcomeReason renders a boundary outcome class as the human line the
+// failure marker's detail pane carries, so a reader learns why a run failed
+// from the ticket alone rather than from agent logs.
+func modelOutcomeReason(class string) string {
+	return "last model-API call at the network boundary was recorded as \"" + class + "\"."
 }
 
 // failureMarkerBody composes the failed marker's body: a one-line headline
