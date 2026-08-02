@@ -2529,6 +2529,56 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 	return true, nil
 }
 
+// PublishResolvedBranch carries a deploy-fixer's conflict resolution from the
+// local branch ref to origin. The fixer runs in a board container, which holds
+// no push credentials by design — the daemon publishes on its behalf, the same
+// division of labour the pr-fixer already relies on. Without this the resolution
+// is unreachable: branchTip below reads the branch from origin, so the deploy
+// would rebase the unresolved origin tip again and hit the identical conflict,
+// discarding the finished work sitting on the local ref (SC-2845).
+//
+// It publishes ONLY a ref that is genuinely a resolution — present locally,
+// different from the origin tip, and already containing the base tip (the
+// property the fixer was dispatched to establish). Anything else is left
+// untouched for EnsureMergeable's own freshness rebase to handle, so a fixer
+// that reported done without moving the branch cannot make the deploy publish
+// something unexamined. The publish itself goes through pushBranch, inheriting
+// the never-publish-behind-origin guard and the lease against a concurrent push.
+func (p forgeDeployer) PublishResolvedBranch(ctx context.Context, dir, branch string) (bool, error) {
+	if !gitrepo.BranchExistsLocal(ctx, dir, branch) {
+		return false, nil
+	}
+	base := gitrepo.DefaultBranch(ctx, dir)
+	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
+		return false, err
+	}
+	local, err := gitrepo.RevParse(ctx, dir, branch)
+	if err != nil {
+		return false, err
+	}
+	// Not yet current with the base: whatever the fixer did, it is not the
+	// resolution the deploy is waiting for.
+	if !gitrepo.IsAncestor(ctx, dir, "origin/"+base, local) {
+		return false, nil
+	}
+	if gitrepo.BranchExistsRemote(ctx, dir, branch) {
+		if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
+			return false, err
+		}
+		remote, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+		if err != nil {
+			return false, err
+		}
+		if local == remote {
+			return false, nil // already published — nothing to carry
+		}
+	}
+	if err := p.pushBranch(ctx, dir, branch); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // branchTip resolves the commit the freshness rebase starts from, preferring
 // the origin ref: the deploy serves the PR (which lives on origin), and the
 // local ref may lag a prior deploy's rebase — the ephemeral-worktree rebase
