@@ -114,6 +114,41 @@ func TestGetNetworkEvents_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid network events JSON")
 }
 
+func TestGetModelOutcomes_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		assert.Equal(t, []string{"model-outcomes"}, req.Args)
+		data := `[{"ticket":"SC-2555","stage":"implementation","host":"api.anthropic.com","status_code":200,"class":"ok","started_at":"2024-01-01T00:00:00Z","duration":1000000}]` + "\n"
+		return Response{Stdout: data}
+	})
+
+	outcomes, err := GetModelOutcomes(addr, "tok")
+	require.NoError(t, err)
+	require.Len(t, outcomes, 1)
+	assert.Equal(t, "SC-2555", outcomes[0].Ticket)
+	assert.Equal(t, "ok", outcomes[0].Class)
+	assert.Equal(t, 200, outcomes[0].StatusCode)
+}
+
+func TestGetModelOutcomes_Empty(t *testing.T) {
+	addr := startMockDaemon(t, func(_ Request) Response {
+		return Response{Stdout: "[]\n"}
+	})
+
+	outcomes, err := GetModelOutcomes(addr, "tok")
+	require.NoError(t, err)
+	assert.Empty(t, outcomes)
+}
+
+func TestGetModelOutcomes_InvalidJSON(t *testing.T) {
+	addr := startMockDaemon(t, func(_ Request) Response {
+		return Response{Stdout: "not json\n"}
+	})
+
+	_, err := GetModelOutcomes(addr, "tok")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid model outcomes JSON")
+}
+
 func TestRunRemote_ConnectionRefused(t *testing.T) {
 	exitCode, err := RunRemote("127.0.0.1:1", "tok", []string{"echo"}, "dev")
 	require.Error(t, err)
