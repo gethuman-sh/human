@@ -367,6 +367,23 @@ func (a *App) FixSecurity(pmKey, pmTitle string) error {
 	}))
 }
 
+// FindRelatedWork asks the daemon to launch the filing-time related-work triage
+// (/human-relate) on one bug — the Bugs pane's on-demand card action for a bug
+// that carries no completed record yet (a sweep-filed bug, or one whose run died
+// halfway). Like FixBug it goes through the daemon so the agent runs
+// containerized with the daemon's credentials; the daemon tears down any prior
+// relate agent for the key, so a re-click is safe (SC-2405).
+func (a *App) FindRelatedWork(pmKey, pmTitle string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.Relate(info.Addr, info.Token, daemon.RelateRequest{
+		PMKey:   pmKey,
+		PMTitle: pmTitle,
+	}))
+}
+
 // ChooseOption records the user's pick from a card's open decision block and
 // relaunches the block's stage with the choice — the click on a choice the
 // reviewer offered is the consent, exactly like a drag is for a transition.

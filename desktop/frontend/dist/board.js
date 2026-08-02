@@ -284,6 +284,24 @@ function showCardMenu(card, x, y) {
         });
         menu.appendChild(retryItem);
     }
+    // A freshly filed bug's related-work triage runs automatically, but a
+    // sweep-filed bug (or one whose run died halfway) carries no completed record —
+    // offer the triage on demand. Suppressed once a completed record exists.
+    // Relaunching runs an agent, so it is Docker-gated like its siblings (SC-2405).
+    if (card.bug && !card.hasRelatedRecord) {
+        const relateItem = document.createElement("button");
+        relateItem.type = "button";
+        relateItem.className = "context-menu-item";
+        relateItem.textContent = "Find related work";
+        relateItem.disabled = !current.dockerAvailable;
+        if (relateItem.disabled)
+            relateItem.title = "Docker required";
+        relateItem.addEventListener("click", () => {
+            menu.remove();
+            void findRelatedWork(card.key, card.title);
+        });
+        menu.appendChild(relateItem);
+    }
     // A failed planning run leaves the card in Engineering with no pipeline gesture
     // to try again — it cannot be dropped onto the column it already sits in
     // (mirrors the Retry-fix rationale above). Relaunch runs an agent: same Docker
@@ -757,6 +775,14 @@ async function fixBug(key, title) {
         pendingMoves = dropPendingMove(pendingMoves, key);
         showError(errMessage(err));
     }, reconcile);
+}
+// findRelatedWork launches the on-demand related-work triage for one bug — the
+// Bugs pane's card action for a bug carrying no completed record. No optimistic
+// move: the run is advisory and never changes the card's stage, so there is
+// nothing to shield or revert; the daemon is authoritative and the record lands
+// on the card on a later reconcile.
+async function findRelatedWork(key, title) {
+    await runGuardedAction(() => go().FindRelatedWork(key, title), (err) => showError(errMessage(err)), reconcile);
 }
 // fixSecurity launches the security-fix pipeline on one security ticket — the
 // Security half's counterpart to fixBug, same optimistic move into the Fix
