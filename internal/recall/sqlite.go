@@ -94,15 +94,22 @@ const entriesCreate = `
 		UNIQUE (key, source, project)
 	)`
 
+// entryFilesCreate is shared between ensureSchema and migrateEntryFilesProject
+// (which rebuilds entry_files under the same definition once a legacy table
+// lacks the project column).
+const entryFilesCreate = `
+	CREATE TABLE IF NOT EXISTS entry_files (
+		key     TEXT NOT NULL,
+		source  TEXT NOT NULL,
+		project TEXT NOT NULL DEFAULT '',
+		path    TEXT NOT NULL,
+		PRIMARY KEY (key, source, project, path)
+	)`
+
 func (s *SQLiteStore) ensureSchema() error {
 	const schema = entriesCreate + `;
 
-		CREATE TABLE IF NOT EXISTS entry_files (
-			key    TEXT NOT NULL,
-			source TEXT NOT NULL,
-			path   TEXT NOT NULL,
-			PRIMARY KEY (key, source, path)
-		);
+		` + entryFilesCreate + `;
 
 		CREATE INDEX IF NOT EXISTS idx_entry_files_path ON entry_files (path);
 
@@ -118,7 +125,153 @@ func (s *SQLiteStore) ensureSchema() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return errors.WrapWithDetails(err, "create index schema")
 	}
-	return s.migrateProjectUnique()
+	if err := s.migrateProjectUnique(); err != nil {
+		return err
+	}
+	if err := s.migrateEntryFilesProject(); err != nil {
+		return err
+	}
+	return s.reconcileProjectOrphans()
+}
+
+// hasColumn reports whether table already carries col, using PRAGMA
+// table_info — the guard that makes the project-column migrations idempotent
+// and a no-op once a database already has the column (mirrors
+// internal/agentstate/sqlite.go).
+func (s *SQLiteStore) hasColumn(table, col string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, errors.WrapWithDetails(err, "read table info", "table", table)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return false, errors.WrapWithDetails(err, "scan table info", "table", table)
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// migrateEntryFilesProject upgrades a database whose entry_files table
+// predates project scoping. Without a project column, entry_files' primary
+// key was (key, source, path) alone, so UpsertEntry's per-entry "clear this
+// entry's file set" delete matched every project's rows for the same
+// key+source — a second project's upsert silently wiped the first's file set
+// (SC-2597). It rebuilds the table under entryFilesCreate, defaulting
+// existing rows to project=” (the same default new writes use), and is a
+// no-op once the column exists.
+func (s *SQLiteStore) migrateEntryFilesProject() error {
+	has, err := s.hasColumn("entry_files", "project")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return errors.WrapWithDetails(err, "begin entry_files project migration")
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmts := []string{
+		"ALTER TABLE entry_files RENAME TO entry_files_legacy",
+		entryFilesCreate,
+		"INSERT INTO entry_files (key, source, project, path) SELECT key, source, '', path FROM entry_files_legacy",
+		"DROP TABLE entry_files_legacy",
+		"CREATE INDEX IF NOT EXISTS idx_entry_files_path ON entry_files (path)",
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return errors.WrapWithDetails(err, "migrate entry_files to project-scoped key", "stmt", stmt)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.WrapWithDetails(err, "commit entry_files project migration")
+	}
+	return nil
+}
+
+// reconcileProjectOrphans collapses a stale project=” twin into the current
+// row when both exist for the same (key, source): databases already reopened
+// by the buggy c2dc887 binary (which widened the dedup identity to
+// UNIQUE(key, source, project) but copied legacy rows verbatim, and let
+// upserts against a real project insert a second row rather than adopt the
+// orphan) can hold both a stale empty-project entry and the current
+// real-project one. This is a one-time idempotent sweep in addition to
+// UpsertEntry's upsert-time adoption (which stops new twins from forming);
+// it is what cleans databases the buggy binary already corrupted.
+//
+// It collapses only when project=” coexists with a non-empty project for
+// the same (key, source) — never across two genuinely different non-empty
+// projects, which must stay isolated (SC-2326).
+func (s *SQLiteStore) reconcileProjectOrphans() error {
+	rows, err := s.db.Query(`
+		SELECT o.id FROM entries o
+		WHERE o.project = ''
+		  AND EXISTS (
+		      SELECT 1 FROM entries r
+		      WHERE r.key = o.key AND r.source = o.source AND r.project <> ''
+		  )`)
+	if err != nil {
+		return errors.WrapWithDetails(err, "find orphaned project entries")
+	}
+	var orphanIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return errors.WrapWithDetails(err, "scan orphaned entry id")
+		}
+		orphanIDs = append(orphanIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return errors.WrapWithDetails(err, "iterating orphaned entry rows")
+	}
+	_ = rows.Close()
+
+	if len(orphanIDs) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return errors.WrapWithDetails(err, "begin orphan reconciliation")
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, id := range orphanIDs {
+		if _, err := tx.Exec("DELETE FROM entries_fts WHERE rowid = ?", id); err != nil {
+			return errors.WrapWithDetails(err, "delete orphan FTS entry", "id", id)
+		}
+		if _, err := tx.Exec("DELETE FROM entries WHERE id = ?", id); err != nil {
+			return errors.WrapWithDetails(err, "delete orphan entry", "id", id)
+		}
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM entry_files
+		WHERE project = ''
+		  AND EXISTS (
+		      SELECT 1 FROM entries r
+		      WHERE r.key = entry_files.key AND r.source = entry_files.source AND r.project <> ''
+		  )`); err != nil {
+		return errors.WrapWithDetails(err, "delete orphan entry files")
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.WrapWithDetails(err, "commit orphan reconciliation")
+	}
+	return nil
 }
 
 // migrateProjectUnique upgrades a database created before SC-2326, when
@@ -186,91 +339,172 @@ func (s *SQLiteStore) UpsertEntry(ctx context.Context, entry Entry, description 
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	// Check if entry exists. project is part of the identity (SC-2326): two
-	// projects that share both a source and a key are distinct entries, not
-	// one row upserting over the other.
+	existingID, adoptedOrphan, err := findExistingEntryID(ctx, tx, entry)
+	if err != nil {
+		return err
+	}
+
+	if existingID != nil {
+		if err := updateEntryRow(ctx, tx, *existingID, entry, description); err != nil {
+			return err
+		}
+	} else if err := insertEntryRow(ctx, tx, entry, description); err != nil {
+		return err
+	}
+
+	if err := replaceEntryFiles(ctx, tx, entry, adoptedOrphan); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// findExistingEntryID looks up the row UpsertEntry should write to. project
+// is part of the identity (SC-2326): two projects that share both a source
+// and a key are distinct entries, not one row upserting over the other. When
+// no exact match exists under the real project, it falls back to a
+// project=” row for the same key+source — a legacy row (predating project
+// scoping) or one orphaned by the c2dc887 regression — and reports it via
+// adopted so the caller re-keys it instead of inserting a twin (SC-2597).
+func findExistingEntryID(ctx context.Context, tx *sql.Tx, entry Entry) (id *int64, adopted bool, err error) {
 	var existingID int64
 	err = tx.QueryRowContext(ctx,
 		"SELECT id FROM entries WHERE key = ? AND source = ? AND project = ?",
 		entry.Key, entry.Source, entry.Project,
 	).Scan(&existingID)
 
-	switch err {
-	case nil:
-		// Exists — delete old FTS row, update entries row.
-		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM entries_fts WHERE rowid = ?", existingID,
-		); err != nil {
-			return errors.WrapWithDetails(err, "delete old FTS entry", "key", entry.Key)
+	if err == sql.ErrNoRows && entry.Project != "" {
+		orphanErr := tx.QueryRowContext(ctx,
+			"SELECT id FROM entries WHERE key = ? AND source = ? AND project = ''",
+			entry.Key, entry.Source,
+		).Scan(&existingID)
+		if orphanErr == nil {
+			return &existingID, true, nil
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE entries SET kind=?, project=?, title=?, status=?, assignee=?, url=?, indexed_at=datetime('now')
-			 WHERE id = ?`,
-			entry.Kind, entry.Project, entry.Title, entry.Status, entry.Assignee, entry.URL, existingID,
-		); err != nil {
-			return errors.WrapWithDetails(err, "update entry", "key", entry.Key)
+		if orphanErr == sql.ErrNoRows {
+			return nil, false, nil
 		}
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO entries_fts(rowid, key, title, description) VALUES (?, ?, ?, ?)",
-			existingID, entry.Key, entry.Title, description,
-		); err != nil {
-			return errors.WrapWithDetails(err, "insert FTS entry", "key", entry.Key)
-		}
-	case sql.ErrNoRows:
-		// New entry.
-		res, err := tx.ExecContext(ctx,
-			`INSERT INTO entries (key, source, kind, project, title, status, assignee, url)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			entry.Key, entry.Source, entry.Kind, entry.Project, entry.Title, entry.Status, entry.Assignee, entry.URL,
-		)
-		if err != nil {
-			return errors.WrapWithDetails(err, "insert entry", "key", entry.Key)
-		}
-		newID, err := res.LastInsertId()
-		if err != nil {
-			return errors.WrapWithDetails(err, "getting last insert ID", "key", entry.Key)
-		}
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO entries_fts(rowid, key, title, description) VALUES (?, ?, ?, ?)",
-			newID, entry.Key, entry.Title, description,
-		); err != nil {
-			return errors.WrapWithDetails(err, "insert FTS entry", "key", entry.Key)
-		}
-	default:
-		return errors.WrapWithDetails(err, "check existing entry", "key", entry.Key)
+		return nil, false, errors.WrapWithDetails(orphanErr, "check orphaned entry", "key", entry.Key)
 	}
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, errors.WrapWithDetails(err, "check existing entry", "key", entry.Key)
+	}
+	return &existingID, false, nil
+}
 
-	// Replace this entry's path set wholesale: a re-planned ticket touches a
-	// different set of files, and a stale path would report an overlap that no
-	// longer exists.
+// updateEntryRow rewrites an existing entries row (adopting an orphan
+// re-keys its project to entry.Project) and its FTS index.
+func updateEntryRow(ctx context.Context, tx *sql.Tx, existingID int64, entry Entry, description string) error {
 	if _, err := tx.ExecContext(ctx,
-		"DELETE FROM entry_files WHERE key = ? AND source = ?", entry.Key, entry.Source,
+		"DELETE FROM entries_fts WHERE rowid = ?", existingID,
+	); err != nil {
+		return errors.WrapWithDetails(err, "delete old FTS entry", "key", entry.Key)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE entries SET kind=?, project=?, title=?, status=?, assignee=?, url=?, indexed_at=datetime('now')
+		 WHERE id = ?`,
+		entry.Kind, entry.Project, entry.Title, entry.Status, entry.Assignee, entry.URL, existingID,
+	); err != nil {
+		return errors.WrapWithDetails(err, "update entry", "key", entry.Key)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO entries_fts(rowid, key, title, description) VALUES (?, ?, ?, ?)",
+		existingID, entry.Key, entry.Title, description,
+	); err != nil {
+		return errors.WrapWithDetails(err, "insert FTS entry", "key", entry.Key)
+	}
+	return nil
+}
+
+// insertEntryRow inserts a brand new entries row and its FTS index.
+func insertEntryRow(ctx context.Context, tx *sql.Tx, entry Entry, description string) error {
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO entries (key, source, kind, project, title, status, assignee, url)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.Key, entry.Source, entry.Kind, entry.Project, entry.Title, entry.Status, entry.Assignee, entry.URL,
+	)
+	if err != nil {
+		return errors.WrapWithDetails(err, "insert entry", "key", entry.Key)
+	}
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return errors.WrapWithDetails(err, "getting last insert ID", "key", entry.Key)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO entries_fts(rowid, key, title, description) VALUES (?, ?, ?, ?)",
+		newID, entry.Key, entry.Title, description,
+	); err != nil {
+		return errors.WrapWithDetails(err, "insert FTS entry", "key", entry.Key)
+	}
+	return nil
+}
+
+// replaceEntryFiles replaces this entry's path set wholesale: a re-planned
+// ticket touches a different set of files, and a stale path would report an
+// overlap that no longer exists. Scoped by project (SC-2597): entry_files'
+// primary key lacked project, so a second project's upsert for the same
+// key+source used to delete the first project's file rows too. When this
+// upsert adopted an orphan, its leftover project=” file rows are cleared
+// too — the entries row they described no longer exists under project=”,
+// it was just re-keyed to entry.Project.
+func replaceEntryFiles(ctx context.Context, tx *sql.Tx, entry Entry, adoptedOrphan bool) error {
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM entry_files WHERE key = ? AND source = ? AND project = ?", entry.Key, entry.Source, entry.Project,
 	); err != nil {
 		return errors.WrapWithDetails(err, "clear entry files", "key", entry.Key)
 	}
+	if adoptedOrphan {
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM entry_files WHERE key = ? AND source = ? AND project = ''", entry.Key, entry.Source,
+		); err != nil {
+			return errors.WrapWithDetails(err, "clear adopted orphan's legacy entry files", "key", entry.Key)
+		}
+	}
 	for _, path := range entry.Files {
 		if _, err := tx.ExecContext(ctx,
-			"INSERT OR IGNORE INTO entry_files (key, source, path) VALUES (?, ?, ?)",
-			entry.Key, entry.Source, path,
+			"INSERT OR IGNORE INTO entry_files (key, source, project, path) VALUES (?, ?, ?, ?)",
+			entry.Key, entry.Source, entry.Project, path,
 		); err != nil {
 			return errors.WrapWithDetails(err, "insert entry file", "key", entry.Key, "path", path)
 		}
 	}
-
-	return tx.Commit()
+	return nil
 }
 
-// DeleteEntry removes an entry and its FTS index.
+// DeleteEntry removes an entry and its FTS index. Its semantics are
+// source-wide — "this key is gone from the source entirely" — so it removes
+// every project's row for (key, source), not just whichever one an
+// unqualified lookup happened to find first (SC-2597): a caller pruning a
+// key that no longer exists upstream means it in every project, and leaving
+// a twin behind would recreate the same "two entries, one reader" bug the
+// rest of this fix closes.
 func (s *SQLiteStore) DeleteEntry(ctx context.Context, key, source string) error {
-	var id int64
-	err := s.db.QueryRowContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		"SELECT id FROM entries WHERE key = ? AND source = ?", key, source,
-	).Scan(&id)
-	if err == sql.ErrNoRows {
-		return nil // nothing to delete
-	}
+	)
 	if err != nil {
-		return errors.WrapWithDetails(err, "find entry to delete", "key", key)
+		return errors.WrapWithDetails(err, "find entries to delete", "key", key)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return errors.WrapWithDetails(err, "scan entry id to delete", "key", key)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return errors.WrapWithDetails(err, "iterating entries to delete", "key", key)
+	}
+	_ = rows.Close()
+
+	if len(ids) == 0 {
+		return nil // nothing to delete
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -279,10 +513,12 @@ func (s *SQLiteStore) DeleteEntry(ctx context.Context, key, source string) error
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := tx.ExecContext(ctx, "DELETE FROM entries_fts WHERE rowid = ?", id); err != nil {
-		return errors.WrapWithDetails(err, "delete FTS entry", "key", key)
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM entries_fts WHERE rowid = ?", id); err != nil {
+			return errors.WrapWithDetails(err, "delete FTS entry", "key", key)
+		}
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM entries WHERE id = ?", id); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM entries WHERE key = ? AND source = ?", key, source); err != nil {
 		return errors.WrapWithDetails(err, "delete entry", "key", key)
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -323,7 +559,7 @@ func (s *SQLiteStore) SearchByFile(ctx context.Context, path string, limit int) 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT e.key, e.source, e.kind, e.project, e.title, e.status, e.assignee, e.url, e.indexed_at
 		FROM entry_files f
-		JOIN entries e ON e.key = f.key AND e.source = f.source
+		JOIN entries e ON e.key = f.key AND e.source = f.source AND e.project = f.project
 		WHERE f.path = ?
 		ORDER BY e.indexed_at DESC
 		LIMIT ?
