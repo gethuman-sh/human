@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -44,6 +45,23 @@ type BoardCard struct {
 	Options        []BoardOption `json:"options,omitempty"`
 	OptionsContext string        `json:"options_context,omitempty"`
 	OptionsStage   BoardStage    `json:"options_stage,omitempty"`
+	// StopDecision is the head of the OPERATIVE ticket-review stop verdict
+	// (superseded/escalated/rejected) — the pre-planning gate decided the ticket
+	// must not proceed and nothing has superseded that verdict. Empty for every
+	// other card (undecided, advancing, or re-dispatched), so a card without a
+	// decision renders exactly as before. The frontend maps the head to human
+	// phrasing (STOP_DECISION_LABELS), mirroring RUNNING_LABELS — the daemon
+	// carries the datum, not the copy.
+	StopDecision string `json:"stop_decision,omitempty"`
+	// StopLinkedKey is the other ticket the decision names: the parent that
+	// carries the work (superseded) or the design ticket created to unblock it
+	// (escalated), read from the marker's `linked:` field. Empty for rejected and
+	// for any decision that named none.
+	StopLinkedKey string `json:"stop_linked_key,omitempty"`
+	// StopReasoning is the recorded body of that verdict — the evidence the gate
+	// wrote for why it stopped, so the reason is readable from the card without
+	// opening the tracker.
+	StopReasoning string `json:"stop_reasoning,omitempty"`
 	// StageEnteredAt is the Created time of the newest marker in the card's
 	// current stage — for a plan-done card, when the current plan landed. The
 	// board renders it as an age badge so work rotting in a queue is visible.
@@ -156,8 +174,23 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		card.Error = failureReason(latest.Body)
 	}
 	card.DeployPhase = deployPhaseFor(card, comments)
+	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
 	attachOpenOptions(&card, comments)
 	return card
+}
+
+// ticketReviewStop reads the operative ticket-review STOP verdict off the card's
+// deciding marker. It keys off the SAME `latest` comment DeriveBoardCard already
+// resolved, so supersession is free: once a re-dispatch posts a later
+// planning-started marker, `latest` is that marker, not the verdict, and this
+// returns empty — a re-dispatched card carries no stale stop decision. The head
+// set is the authoritative terminalStopVerdicts, never a re-listed literal.
+func ticketReviewStop(deciding tracker.Comment) (decision, linked, reasoning string) {
+	m, ok := marker.ParseBody(deciding.Body)
+	if !ok || m.Type != TicketReviewMarkerType || !terminalStopVerdicts[TicketReviewMarkerType][m.Head] {
+		return "", "", ""
+	}
+	return m.Head, strings.TrimSpace(m.Fields["linked"]), strings.TrimSpace(m.Body)
 }
 
 // applyStateOverrides layers the two derivation overrides that must run after

@@ -497,7 +497,7 @@ func listStageSettled(ctx context.Context, commenter tracker.Commenter, pmKey st
 // [human:no-fix-needed] marker. ready/reframed are absent for the same reason —
 // they continue into planning.
 var terminalStopVerdicts = map[string]map[string]bool{
-	"ticket-review": {"superseded": true, "escalated": true, "rejected": true},
+	TicketReviewMarkerType: {"superseded": true, "escalated": true, "rejected": true},
 }
 
 // deliberateStopRecorded reports whether the thread's latest verdict of any

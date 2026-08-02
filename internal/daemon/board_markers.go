@@ -81,6 +81,11 @@ const (
 	// happening" reading the board must never give.
 	TicketReviewStartedHeader = "[human:ticket-review-started]"
 	TicketReviewedHeader      = "[human:ticket-review]"
+	// TicketReviewMarkerType is the value marker.ParseBody puts in .Type for a
+	// [human:ticket-review] verdict (the header name without the human: prefix).
+	// It is also the key terminalStopVerdicts registers the stop heads under, so
+	// downstream readers key off this const rather than a bare literal.
+	TicketReviewMarkerType = "ticket-review"
 
 	PlanningStartedHeader       = "[human:planning-started]"
 	PlanReadyHeader             = "[human:plan-ready]"
