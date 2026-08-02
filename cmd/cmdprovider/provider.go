@@ -388,12 +388,54 @@ func RunGetIssue(ctx context.Context, p tracker.Provider, out io.Writer, key str
 	if issue.ParentKey != "" {
 		_, _ = fmt.Fprintf(out, "| Parent   | %s |\n", issue.ParentKey)
 	}
+	writeLinkRows(out, issue.Links)
+	if len(issue.Labels) > 0 {
+		_, _ = fmt.Fprintf(out, "| Labels   | %s |\n", strings.Join(issue.Labels, ", "))
+	}
 
 	if issue.Description != "" {
 		_, _ = fmt.Fprintf(out, "\n## Description\n\n%s", issue.Description)
 	}
 
 	return nil
+}
+
+// writeLinkRows renders an issue's relationships as three separate rows.
+// Blocked-by, blocks and related are kept apart rather than listed together
+// because that is the distinction the link model calls load-bearing: only a
+// directional link can say one piece of work must finish before another starts,
+// and a reader who cannot tell "waits for" from "is waited on" learns nothing
+// actionable from the row. Direction is already resolved at the provider
+// boundary (tracker.IssueLink.Inbound), so this never re-derives it.
+//
+// Rows are emitted only when non-empty, following the Parent row: a backend
+// that does not report links renders nothing, which the model documents as a
+// correct answer rather than a gap. Nothing here fetches — it prints what
+// GetIssue already returned.
+func writeLinkRows(out io.Writer, links []tracker.IssueLink) {
+	var blockedBy, blocks, related []string
+	for _, l := range links {
+		switch {
+		case l.Kind == tracker.LinkBlocks && l.Inbound:
+			blockedBy = append(blockedBy, l.Key)
+		case l.Kind == tracker.LinkBlocks:
+			blocks = append(blocks, l.Key)
+		case l.Kind == tracker.LinkRelated:
+			related = append(related, l.Key)
+		}
+	}
+	for _, row := range []struct {
+		label string
+		keys  []string
+	}{
+		{"Blocked by", blockedBy},
+		{"Blocks", blocks},
+		{"Related", related},
+	} {
+		if len(row.keys) > 0 {
+			_, _ = fmt.Fprintf(out, "| %-8s | %s |\n", row.label, strings.Join(row.keys, ", "))
+		}
+	}
 }
 
 // RunCreateIssue creates a new issue. When parent is non-empty, the issue is

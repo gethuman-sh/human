@@ -243,6 +243,78 @@ func TestRunGetIssue_WithParent(t *testing.T) {
 	assert.Contains(t, buf.String(), "| Parent   | KAN-1 |")
 }
 
+// Relationships are fetched into the issue on every backend that reports them
+// and were then dropped at the last step, so a reader — and every pipeline
+// agent, whose first command is `human get` — could not see that a ticket was
+// blocked or that a sibling covered the same ground.
+func TestRunGetIssue_RendersLinksByDirection(t *testing.T) {
+	p := &mockProvider{
+		getIssueFn: func(_ context.Context, _ string) (*tracker.Issue, error) {
+			return &tracker.Issue{
+				Key:    "KAN-7",
+				Title:  "Linked",
+				Status: "To Do",
+				Links: []tracker.IssueLink{
+					{Key: "KAN-1", Kind: tracker.LinkBlocks, Inbound: true},
+					{Key: "KAN-2", Kind: tracker.LinkBlocks},
+					{Key: "KAN-3", Kind: tracker.LinkRelated},
+					{Key: "KAN-4", Kind: tracker.LinkRelated},
+					{Key: "KAN-5", Kind: tracker.LinkBlocks, Inbound: true},
+				},
+			}, nil
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, RunGetIssue(context.Background(), p, &buf, "KAN-7"))
+
+	out := buf.String()
+	// The three kinds stay apart: only a directional link says one piece of work
+	// must finish first, and a reader who cannot tell "waits for" from "is waited
+	// on" learns nothing actionable.
+	assert.Contains(t, out, "| Blocked by | KAN-1, KAN-5 |")
+	assert.Contains(t, out, "| Blocks   | KAN-2 |")
+	assert.Contains(t, out, "| Related  | KAN-3, KAN-4 |")
+}
+
+// A backend that reports no links renders no link rows at all — the model
+// documents an empty Links as a correct answer, not a gap, so an empty
+// "Related" row would invent a distinction the tracker never made.
+func TestRunGetIssue_NoLinksRendersNoLinkRows(t *testing.T) {
+	p := &mockProvider{
+		getIssueFn: func(_ context.Context, _ string) (*tracker.Issue, error) {
+			return &tracker.Issue{Key: "KAN-8", Title: "Unlinked", Status: "To Do"}, nil
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, RunGetIssue(context.Background(), p, &buf, "KAN-8"))
+
+	out := buf.String()
+	assert.NotContains(t, out, "Blocked by")
+	assert.NotContains(t, out, "| Blocks")
+	assert.NotContains(t, out, "| Related")
+}
+
+// Labels classify a ticket — an idea carries the idea label — so dropping them
+// meant `human get` could not show why a ticket sits where it does.
+func TestRunGetIssue_RendersLabels(t *testing.T) {
+	p := &mockProvider{
+		getIssueFn: func(_ context.Context, _ string) (*tracker.Issue, error) {
+			return &tracker.Issue{
+				Key:    "KAN-9",
+				Title:  "Labelled",
+				Status: "To Do",
+				Labels: []string{"human/idea", "ui"},
+			}, nil
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, RunGetIssue(context.Background(), p, &buf, "KAN-9"))
+	assert.Contains(t, buf.String(), "| Labels   | human/idea, ui |")
+}
+
 func TestRunGetIssue_Error(t *testing.T) {
 	p := &mockProvider{
 		getIssueFn: func(_ context.Context, _ string) (*tracker.Issue, error) {
