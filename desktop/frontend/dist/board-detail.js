@@ -22,6 +22,32 @@ export function buildOptionsSection(context, options) {
     return (`<section class="detail-section detail-options"><h3 class="detail-section-title">Decision needed</h3>` +
         `${ctx}<div class="detail-options-list">${buttons}</div></section>`);
 }
+// Human phrasing for the detail-panel heading of each pre-planning stop verdict,
+// paired with board-queue's STOP_DECISION_LABELS (badge copy). Kept here so the
+// pure builder needs no cross-module import in tests.
+const STOP_DECISION_HEADINGS = {
+    superseded: "Duplicate of another ticket",
+    escalated: "Blocked on a design decision",
+    rejected: "Not a real problem",
+};
+// buildStopDecisionSection renders a pre-planning gate's recorded STOP verdict:
+// the decision in human terms, the ticket it names (as a button the caller wires
+// to open that card), and the recorded reasoning. Empty decision emits nothing so
+// an undecided card's panel is unchanged (SC-2699).
+export function buildStopDecisionSection(decision, linkedKey, reasoning) {
+    if (!decision)
+        return "";
+    const heading = STOP_DECISION_HEADINGS[decision] ?? "Stopped before planning";
+    const linked = linkedKey && linkedKey.trim()
+        ? `<div class="detail-stop-linked">See <button type="button" class="detail-linked-btn" ` +
+            `data-linked-key="${escapeText(linkedKey)}">${escapeText(linkedKey)}</button></div>`
+        : "";
+    const body = reasoning && reasoning.trim()
+        ? `<div class="detail-stop-reasoning">${escapeText(reasoning).replaceAll("\n", "<br>")}</div>`
+        : "";
+    return (`<section class="detail-section detail-stop"><h3 class="detail-section-title">Decision: ${escapeText(heading)}</h3>` +
+        `${linked}${body}</section>`);
+}
 // buildDetailSections returns the HTML for the comment-sourced detail sections,
 // in fixed order: failure reason, review findings, fix summary. Each present,
 // non-blank field becomes a titled <section>; absent or blank fields emit

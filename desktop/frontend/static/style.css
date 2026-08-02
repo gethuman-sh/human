@@ -847,6 +847,15 @@ body {
   color: var(--turn-machine);
 }
 
+/* A pre-planning gate's recorded STOP decision (SC-2699): the ticket was judged
+   not to proceed (duplicate, not-a-problem, blocked on design). A settled
+   outcome, not a demand and not a failure — the neutral machine-working tone,
+   never red or amber, and no spinner, so it distinguishes a decided card from
+   one merely waiting without shouting for attention. */
+.badge.decided {
+  color: var(--turn-machine);
+}
+
 /* A degraded card's marker fetch failed this scan (ticket 1700): the machine
    will retry it, so it belongs in the machine-working register — nothing is
    asked of the user and nothing has failed (SC-1830). */
@@ -1631,6 +1640,35 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* A pre-planning gate's recorded STOP decision in the detail panel (SC-2699):
+   the decision, the ticket it names, and the recorded reasoning. Reuses the
+   options-context spacing/tone; pre-wrap keeps multi-line reasoning legible. */
+.detail-stop-linked {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.detail-stop-reasoning {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.detail-linked-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.detail-linked-btn:hover {
+  text-decoration: underline;
 }
 
 .detail-option-btn {

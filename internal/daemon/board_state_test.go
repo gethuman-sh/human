@@ -545,3 +545,104 @@ func TestDeriveBoardCard_FailedWithOpenOptionsSurfacesAsWaiting(t *testing.T) {
 	assert.Empty(t, card.Error)
 	assert.Len(t, card.Options, 2)
 }
+
+// SC-2699: a pre-planning gate's superseded verdict carries onto the card as a
+// stop decision, with the linked parent key and the recorded reasoning — so a
+// decided card is distinguishable from one merely waiting in Backlog.
+func TestDeriveBoardCard_ticketReviewStop_superseded(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		cmt(TicketReviewStartedHeader, t0),
+		cmt(TicketReviewedHeader+" superseded\nroot: same as ticket\nlinked: SC-100\n\nSame surface as SC-100, which carries the work", t1),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardBacklog, card.Stage)
+	assert.Equal(t, BoardDone, card.State)
+	assert.Equal(t, "superseded", card.StopDecision)
+	assert.Equal(t, "SC-100", card.StopLinkedKey)
+	assert.Contains(t, card.StopReasoning, "carries the work")
+}
+
+// SC-2699: an escalated verdict names the design ticket the gate created to
+// unblock the work; the card carries that key and the evidence.
+func TestDeriveBoardCard_ticketReviewStop_escalated(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		cmt(TicketReviewStartedHeader, t0),
+		cmt(TicketReviewedHeader+" escalated\nroot: same as ticket\nlinked: SC-200\n\nNeeds the auth model decided first", t1),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, "escalated", card.StopDecision)
+	assert.Equal(t, "SC-200", card.StopLinkedKey)
+	assert.Contains(t, card.StopReasoning, "auth model")
+}
+
+// SC-2699: a rejected verdict names no ticket — the linked key is empty, and
+// the card still carries the decision and the evidence that makes it a
+// non-problem.
+func TestDeriveBoardCard_ticketReviewStop_rejectedNoLink(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		cmt(TicketReviewStartedHeader, t0),
+		cmt(TicketReviewedHeader+" rejected\nroot: same as ticket\n\nWorks as designed; not a bug", t1),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, "rejected", card.StopDecision)
+	assert.Empty(t, card.StopLinkedKey)
+	assert.Contains(t, card.StopReasoning, "not a bug")
+}
+
+// SC-2699: a re-dispatch posts a later planning-started marker, which becomes
+// the deciding marker (furthest-stage/latest-wins). The stale stop decision
+// must clear — a re-dispatched card carries no decision, so the judgement is
+// never silently re-paid without the human having seen it first.
+func TestDeriveBoardCard_ticketReviewStop_clearedByReDispatch(t *testing.T) {
+	t1 := time.Unix(2000, 0)
+	t2 := time.Unix(3000, 0)
+	comments := []tracker.Comment{
+		cmt(TicketReviewedHeader+" superseded\nlinked: SC-100\n\nduplicate", t1),
+		cmt(PlanningStartedHeader, t2),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardPlanning, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Empty(t, card.StopDecision, "supersession clears the stale stop decision")
+	assert.Empty(t, card.StopLinkedKey)
+}
+
+// SC-2699: a `ready` verdict is not a stop head — it continues into planning,
+// so no stop fields are set and the card advances as before.
+func TestDeriveBoardCard_ticketReviewReady_noStop(t *testing.T) {
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		cmt(TicketReviewedHeader+" ready\nroot: same as ticket", t1),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Empty(t, card.StopDecision, "ready is not a stop head")
+	assert.Empty(t, card.StopLinkedKey)
+	assert.Empty(t, card.StopReasoning)
+}
+
+// SC-2699: an undecided Backlog card (no markers) carries no stop fields — it
+// renders exactly as it does today.
+func TestDeriveBoardCard_noMarkers_noStop(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardBacklog, card.Stage)
+	assert.Empty(t, card.StopDecision)
+	assert.Empty(t, card.StopLinkedKey)
+	assert.Empty(t, card.StopReasoning)
+}

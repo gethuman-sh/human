@@ -23,6 +23,11 @@ export interface QueueCard {
   // Done-stage sub-phase: "pr-review" while the machine review→fix loop runs,
   // absent for a plain deploy — the running badge reads "PR review…" for it.
   deployPhase?: string;
+  // The pre-planning gate's recorded STOP verdict (superseded/escalated/
+  // rejected) and the ticket it names. Present only on a decided card; drives
+  // the "decided" badge that distinguishes it from a card merely waiting.
+  stopDecision?: string;
+  stopLinkedKey?: string;
 }
 
 export const QUEUES = ["ideas", "product", "engineering", "building", "deploy"] as const;
@@ -140,6 +145,23 @@ export const QUEUED_LABELS: Record<string, string> = {
   verification: "re-review",
 };
 
+// Human phrasing for each pre-planning stop verdict — the card must say WHICH
+// decision was reached in these terms, never the internal head token (SC-2699).
+export const STOP_DECISION_LABELS: Record<string, { text: string; title: string }> = {
+  superseded: {
+    text: "duplicate",
+    title: "The pre-planning gate found this is a symptom of another ticket, which carries the work",
+  },
+  escalated: {
+    text: "needs design decision",
+    title: "The pre-planning gate created a design ticket that must be decided before this can proceed",
+  },
+  rejected: {
+    text: "not a real problem",
+    title: "The pre-planning gate concluded this is not a real problem, with the evidence on the card",
+  },
+};
+
 // badgeInfo classifies a card's live state into a badge descriptor, or null
 // when the card rests and needs none — its queue position IS the statement of
 // completion. A review that found problems is machine-fixing work, not a demand
@@ -161,6 +183,19 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
       text: `? decision needed`,
       title: `The stage offers ${card.options.length} ways forward — open the card to choose`,
     };
+  }
+  // A pre-planning stop decision distinguishes a decided card from one merely
+  // waiting. It is a settled outcome, not a demand — no spinner, no red — and it
+  // outranks the plain state rendering (a decided card is stage=backlog/done,
+  // which otherwise badges as nothing). The linked ticket, when named, rides the
+  // badge text so the key is visible on the card face (SC-2699).
+  if (card.stopDecision) {
+    const label = STOP_DECISION_LABELS[card.stopDecision] ?? {
+      text: card.stopDecision,
+      title: "The pre-planning gate stopped this ticket",
+    };
+    const text = card.stopLinkedKey ? `${label.text} → ${card.stopLinkedKey}` : label.text;
+    return { cls: "decided", text, title: label.title };
   }
   if (card.state === "running") {
     const text =

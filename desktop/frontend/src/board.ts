@@ -67,7 +67,7 @@ import type { DeploySide } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import type { Box, Drawn, Side } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
-import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
+import { buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
@@ -139,6 +139,12 @@ interface Card {
   // pick a direction (rendered in the detail panel; badge "decision needed").
   options?: { id: string; label: string }[];
   optionsContext?: string;
+  // A pre-planning gate's recorded STOP verdict (superseded/escalated/rejected),
+  // the ticket it names, and the recorded reasoning. Rendered as the "decided"
+  // badge and a detail-panel Decision section; absent on every other card.
+  stopDecision?: string;
+  stopLinkedKey?: string;
+  stopReasoning?: string;
 }
 
 interface BoardData {
@@ -2947,17 +2953,31 @@ function renderTicketDetail(): void {
   } else {
     options = buildOptionsSection(detailCard.optionsContext, visibleOptions);
   }
+  const stopDecision = buildStopDecisionSection(
+    detailCard.stopDecision,
+    detailCard.stopLinkedKey,
+    detailCard.stopReasoning,
+  );
   body.innerHTML = `
     <div class="detail-title">${escapeHtml(detailCard.title)}</div>
     <div class="detail-owner">Owner: ${owner}</div>
     ${error}
     ${options}
+    ${stopDecision}
     ${desc}
     ${detailSections}
     ${link}
   `;
   const url = detailCard.url;
   body.querySelector<HTMLButtonElement>(".detail-tracker-btn")?.addEventListener("click", () => openExternal(url));
+  // The linked ticket named by a stop decision opens that card's detail when it
+  // is on the board — the AC's reachability requirement (SC-2699).
+  body.querySelector<HTMLButtonElement>(".detail-linked-btn")?.addEventListener("click", () => {
+    const key = detailCard?.stopLinkedKey;
+    if (!key) return;
+    const linked = current.cards.find((c) => c.key === key);
+    if (linked) openTicketDetail(linked);
+  });
   const optionKey = detailCard.key;
   const optionSig = optionsSignature(visibleOptions);
   body.querySelectorAll<HTMLButtonElement>(".detail-option-btn").forEach((btn) => {

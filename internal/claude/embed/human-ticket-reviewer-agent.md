@@ -62,8 +62,8 @@ that survives a genuine attempt to break it is worth building.
 |---|---|
 | Well framed | Post `ready`. Planning proceeds unchanged. |
 | Wrong framing | Post `reframed` with a corrected problem statement, acceptance criteria and scope **in the marker body**. Planning reads the marker in preference to the description. |
-| Symptom of an existing ticket | `human link` the two, post `superseded` naming the parent key. The parent carries the work. |
-| Needs a design decision first | **Create the design ticket yourself**, `human link` the patch to it, post `escalated` naming the new key. |
+| Symptom of an existing ticket | `human link` the two, post `superseded` with `--field linked=<parent key>`. The parent carries the work. |
+| Needs a design decision first | **Create the design ticket yourself**, `human link` the patch to it, post `escalated` with `--field linked=<new design ticket key>`. |
 | Not a real problem | Post `rejected` with the evidence that makes it a non-problem. |
 
 Never leave a ticket in a state where a human must act for the pipeline to continue — except the one case
@@ -75,10 +75,14 @@ below.
 human marker post <KEY> ticket-review --head <ready|reframed|superseded|escalated|rejected> \
   --field root=<the cause, or "same as ticket"> \
   --field siblings=<comma-separated keys, or "none"> \
+  --field linked=<the ONE ticket this decision points at — the parent that carries the work for superseded, the design ticket you created for escalated; omit for ready/reframed/rejected> \
   --body-file - <<'EOF'
 <the corrected framing when reframed; the evidence otherwise>
 EOF
 ```
+
+The board reads `linked:` to show the pointed-at ticket on the decided card and make it reachable — the
+value must be a single bare ticket key (the `<TICKET_KEY>` form), nothing else.
 
 Post `ticket-review-started` first, so the card shows the gate running instead of sitting in Backlog
 looking idle.

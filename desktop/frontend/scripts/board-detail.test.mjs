@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDetailSections, buildOptionsSection } from "../build/board-detail.js";
+import { buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "../build/board-detail.js";
 
 // SC-365 regression: the board detail panel must render comment-sourced review
 // findings, failure reason, and fix summary. buildDetailSections is the pure
@@ -57,4 +57,36 @@ test("options render as buttons with context and escaped labels", () => {
 test("no options emit nothing", () => {
   assert.equal(buildOptionsSection("context alone", []), "");
   assert.equal(buildOptionsSection(undefined, undefined), "");
+});
+
+// --- Pre-planning stop decision (SC-2699) ---
+
+test("stop decision renders heading, linked key button, and reasoning", () => {
+  const html = buildStopDecisionSection("superseded", "SC-100", "Same surface as SC-100");
+  assert.match(html, /Duplicate of another ticket/);
+  assert.match(html, /data-linked-key="SC-100"/);
+  assert.match(html, /SC-100/);
+  assert.match(html, /Same surface as SC-100/);
+});
+
+test("escalated stop decision uses the design-decision heading", () => {
+  const html = buildStopDecisionSection("escalated", "SC-200", "why");
+  assert.match(html, /Blocked on a design decision/);
+  assert.match(html, /data-linked-key="SC-200"/);
+});
+
+test("rejected stop decision has no linked button", () => {
+  const html = buildStopDecisionSection("rejected", undefined, "not a bug because it works as designed");
+  assert.match(html, /Not a real problem/);
+  assert.doesNotMatch(html, /detail-linked-btn/);
+  assert.match(html, /not a bug because/);
+});
+
+test("empty stop decision emits nothing", () => {
+  assert.equal(buildStopDecisionSection("", undefined, undefined), "");
+});
+
+test("multi-line stop reasoning preserves line breaks", () => {
+  const html = buildStopDecisionSection("rejected", undefined, "line1\nline2");
+  assert.match(html, /line1<br>line2/);
 });
