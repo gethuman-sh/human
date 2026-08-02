@@ -2623,6 +2623,24 @@ func resolveForge(dir string, lookup config.EnvLookup, resolver *vault.Resolver)
 	return creator, repo, nil
 }
 
+// FindOpenWorkForKey resolves the workspace forge and reports the open pull
+// requests and branches referencing key — the authoritative "already underway"
+// signal preflight consults (SC-2648). It shares resolveForge so the CLI check
+// and the deploy path cannot drift in how they pick the forge. Returns the
+// resolved "owner/repo" alongside the work so callers can name the repo.
+func FindOpenWorkForKey(ctx context.Context, dir string, lookup config.EnvLookup, resolver *vault.Resolver, key string) ([]forge.OpenWork, string, error) {
+	creator, repo, err := resolveForge(dir, lookup, resolver)
+	if err != nil {
+		return nil, "", err
+	}
+	finder, ok := creator.(forge.OpenWorkFinder)
+	if !ok {
+		return nil, repo, errors.WithDetails("forge does not support open-work lookup", "repo", repo)
+	}
+	work, err := finder.FindOpenWork(ctx, repo, key)
+	return work, repo, err
+}
+
 // boardPRMerged reports whether the PR at prURL has been merged on the
 // workspace's forge. A forge that cannot read merge status, or a URL with no
 // parseable number, returns (false, err) so the reconcile pass leaves the card

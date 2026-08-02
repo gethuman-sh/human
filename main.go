@@ -45,6 +45,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdstate"
 	"github.com/gethuman-sh/human/cmd/cmdtelegram"
 	"github.com/gethuman-sh/human/cmd/cmdtracker"
+	"github.com/gethuman-sh/human/cmd/cmdunderway"
 	"github.com/gethuman-sh/human/cmd/cmdusage"
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
@@ -286,6 +287,9 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	deployCmd := cmddeploy.BuildDeployCmd(autoDeps)
 	deployCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(deployCmd)
+
+	underwayCmd := cmdunderway.BuildUnderwayCmd()
+	rootCmd.AddCommand(underwayCmd)
 
 	// --- Provider commands (dynamic registration) ---
 	providers := []string{"jira", "github", "gitlab", "linear", "azuredevops", "shortcut", "clickup"}
