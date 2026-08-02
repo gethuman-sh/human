@@ -85,3 +85,10 @@ type pullListItem struct {
 		Ref string `json:"ref"`
 	} `json:"head"`
 }
+
+// branchListItem is one element of the GitHub list-branches response, used to
+// find a branch whose name references a ticket key when no PR is open for it
+// yet (SC-2648).
+type branchListItem struct {
+	Name string `json:"name"`
+}

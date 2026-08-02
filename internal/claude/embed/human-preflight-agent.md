@@ -19,6 +19,10 @@ human get <PM_KEY>
 human <TRACKER> issue comment list <PM_KEY>
 human plan show <PM_KEY>          # the plan, when one is attached
 
+# What is actually open against this ticket right now — the authoritative
+# "already underway" signal (branches + PRs on the forge referencing the key)
+human underway <PM_KEY>
+
 # Other open work heading for the same code
 human search --file <path> --json --limit 10   # tickets whose plans name this exact file
 human search "<terms from the title>" --json --limit 10
@@ -86,9 +90,19 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
 5. **Read everything that could answer a question before you ask it** — the ticket description and comments, the attached plan, `.humanconfig`, `CLAUDE.md`, and the actual code. Most apparent ambiguity is answered by the codebase.
 
-6. **Find out whether this work already exists, and whether other open work is heading for the same code.** The most expensive failure is not a wrong answer, it is doing work someone already did. Two tickets describing one problem have been implemented twice and collided in the same function; the same one-line fix has been written on two machines in parallel.
+6. **Find out whether this work already exists, and whether other open work is heading for the same code.** The most expensive failure is not a wrong answer, it is doing work someone already did. Two tickets describing one problem have been implemented twice and collided in the same function; the same one-line fix has been written on two machines in parallel. The signal that settles this is **what is actually open — branches and pull requests — not what tickets happen to say about each other.** Ticket text cannot carry "a branch or PR is open right now"; the forge can.
 
-   Search the ticket record **several ways**, because this is a keyword index and not a semantic one — one query is not enough, and two tickets about the same problem routinely share no words at all:
+   **6a — Is this ticket already being built? (authoritative).** Run `human underway <PM_KEY>`. If `underway` is true, work is already open against this exact ticket — a pull request or a branch. **Do not build a second copy.** Emit the `DECISION REQUIRED:` fork below, naming the PR URL / branch from the `work` list:
+
+   ```
+   DECISION REQUIRED: <KIND> already open for <PM_KEY> (<url-or-branch>) — stop and let it finish, or supersede it with this run?
+   1: Stop — the open <KIND> is the work; do not build a duplicate
+   2: Supersede — build in this run and replace the open <KIND>
+   ```
+
+   This is not a wording judgement; it is a fact from the forge. If `underway` is false, this ticket is clear — proceed to 6b. If the check itself fails, say the check could not be made rather than treating it as "nothing open."
+
+   **6b — Is other open work heading for the same code? (hint, then confirm).** Use `human search` to *find candidate* related tickets — this is a keyword index and not a semantic one, so search **several ways**; one query is not enough, and two tickets about the same problem routinely share no words at all:
 
    ```bash
    human search "<the subject, not the ticket's wording>" --json --limit 20
@@ -97,15 +111,13 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
    human search "<an error string or symptom involved>" --json --limit 20
    ```
 
-   A hit is not automatically a duplicate — a closed ticket may be the *reason* this one exists. Read what you find. For each open hit, read its **Status** from the search JSON (and check its comments for a `[human:claim]` or `[human:implementation-started]` marker). A hit only orders this work when the other ticket is **actively in progress** — a status denoting work in flight (in progress, in development, in review) or a claim/implementation-started marker — **and** its work would land in the same place; a shipped ticket and a merely adjacent one order nothing. A ticket that is open but **not started** — planned, or sitting in the backlog — is real information but not a collision: **record it, do not escalate.** An empty or unrecognized status with no claim marker resolves to *not* in flight — record it, the safe default.
+   A hit is only a reason to act when the **other ticket has real open work**. For a candidate that looks like the same problem or touches the same file, confirm it against the forge: run `human underway <OTHER_KEY>`. Only if that is `underway` does the ordering fork apply — the two may need merging, this run may need to stop, or one may simply go first. Which goes first is a judgement about intent, and an agent silently reordering someone's backlog is worse than one that asks: use the verdict below and **propose, never create** — the link is written only after a human has chosen it (step 4). **A ticket that merely overlaps in wording, with nothing open against it, is recorded as a hint in `assumptions` and does not stop the run** — record its key, status, and the shared file(s), so the plan is built to accommodate the coming work instead of the run halting to ask about it. A closed ticket may be the *reason* this one exists; read what you find.
+
+   The forge cannot see a run that has started but has not branched yet, so one text signal still counts: a `[human:claim]` or `[human:implementation-started]` marker in the other ticket's comments means a run holds it right now. Treat that exactly as `underway` — it is the same fact, arriving before there is a branch to find. A **status** alone is not that fact and does not order anything.
 
    **If a search fails, you have not searched.** The record reports when it cannot be trusted — empty, or too stale to rely on — as an error rather than as an empty result. Treating that as "nothing found" is the failure this step exists to prevent: say the check could not be made, and do not record that there are no siblings.
 
-   Name what you searched and what you found in the `assumptions` of your verdict below, so the run's record shows the check was made rather than merely claimed.
-
-   If an **in-progress** ticket is clearly the same problem, or is already changing the same code, that is a **fork for a human** — the two may need merging, this run may need to stop, or one may simply go first. Which goes first is a judgement about intent, and an agent silently reordering someone's backlog is worse than one that asks. Use the verdict below, and **propose, never create** — the link is written only after a human has chosen it (step 4). Do not silently proceed and let the collision surface at merge time. This is the case the check exists for: **two live runs** implementing the same problem, or the same one-line fix, at the same time — always in flight, so always still caught.
-
-   Overlap with a ticket that has **not started** is never a fork. Record the overlapping ticket's key, status, and shared file(s) in the `assumptions` of the `PREFLIGHT OK` verdict below, so the plan is built to accommodate the coming work instead of the run halting to ask about it.
+   Name what you consulted — `human underway` for this ticket and for any candidate colliding ticket, and what you searched and found in the text/file index — in the `assumptions` of your verdict below, so the run's record shows the check was made rather than merely claimed.
 
 7. **Decide what you can.** Implementation choices — naming, structure, which existing helper to reuse, how to test — are yours. Decide them as a careful colleague would and record the reasoning; do not spend a human's attention on them.
 
@@ -115,7 +127,7 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
 A question is admissible **only** if all three hold:
 
-- **(a)** You searched the ticket, its comments, the plan, the config, the code, **and the ticket record for work that already exists**, and you can name what you searched.
+- **(a)** You searched the ticket, its comments, the plan, the config, the code, **consulted `human underway` for this ticket and for any candidate colliding ticket, and searched the text/file record for work that already exists**, and you can name what you searched.
 - **(b)** Two readings lead to *materially different work* — not different style, different work.
 - **(c)** Guessing wrong would waste the run, rather than being cheap to revise afterwards.
 
