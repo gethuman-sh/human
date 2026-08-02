@@ -365,6 +365,12 @@ func stagePausedOnOptions(comments []tracker.Comment, stage BoardStage) bool {
 	if !optionStages[optStage] {
 		return true
 	}
+	// A block offering too few answers is malformed for the same reason and takes
+	// the same exit: attachOpenOptions reds the card with an explanation, and a
+	// relaunch here would fight that with a re-run of the stage that posted it.
+	if len(opts) < marker.MinDecisionOptions {
+		return true
+	}
 	return stageRank[optStage] <= stageRank[stage]
 }
 

@@ -53,6 +53,6 @@ EOF
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
 
-<!-- human:include stage-lease -->
+<!-- human:include stage-lease stage=deploy-fix -->
 
 <!-- human:include exit-contract -->

@@ -1,8 +1,11 @@
 package claude
 
 import (
+	"bytes"
 	_ "embed"
 	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/gethuman-sh/human/errors"
 )
@@ -19,7 +22,17 @@ var modelTiersFragment []byte
 // security-triage — hold a prompt-level lease as a uniform second line of
 // defence behind the daemon's cross-daemon claim arbiter. A new board-launched
 // stage inherits the rule rather than a precedent to guess at: add
-// `<!-- human:include stage-lease -->` to its prompt.
+// `<!-- human:include stage-lease stage=<its own stage> -->` to its prompt.
+//
+// The stage is a REQUIRED argument, and the fragment deliberately contains no
+// usable example name. It used to carry `--stage fix` as a worked example and
+// tell each agent to substitute its own; nine prompts copied the example
+// instead. Because a lease is keyed (project, scope, stage), that put the
+// planner, the executor, the PR reviewer and the fixers on ONE lease slot per
+// ticket, where they blocked each other — the PR reviewer holding the lease the
+// fixer needed is what surfaced as a bogus "decision needed" card. Naming the
+// stage at the include site, and rejecting an include that omits it, is what
+// makes the collision unrepresentable rather than merely discouraged.
 //
 //go:embed embed/shared/stage-lease.md
 var stageLeaseFragment []byte
@@ -42,33 +55,84 @@ var sharedFragments = map[string][]byte{
 	"outcome-not-mechanism": outcomeNotMechanismFragment,
 }
 
-// includePattern matches a whole-line include directive:
+// fragmentArgs names the arguments each shared fragment requires. A fragment
+// absent from this map takes none, which keeps every existing include
+// unchanged. An argument named here MUST be supplied at the include site and
+// MUST appear in the fragment as its upper-cased placeholder (`stage` →
+// `<STAGE>`), so a fragment can never ship a value a prompt was supposed to
+// choose for itself.
+var fragmentArgs = map[string][]string{
+	"stage-lease": {"stage"},
+}
+
+// includePattern matches a whole-line include directive, with optional
+// space-separated key=value arguments:
 //
 //	<!-- human:include exit-contract -->
+//	<!-- human:include stage-lease stage=pr-review -->
 //
 // It is an HTML comment so an un-expanded prompt still renders as valid
 // markdown rather than showing markup to the model.
-var includePattern = regexp.MustCompile(`(?m)^[ \t]*<!--[ \t]*human:include[ \t]+([a-z0-9-]+)[ \t]*-->[ \t]*$`)
+var includePattern = regexp.MustCompile(`(?m)^[ \t]*<!--[ \t]*human:include[ \t]+([a-z0-9-]+)((?:[ \t]+[a-z]+=[a-z0-9.-]+)*)[ \t]*-->[ \t]*$`)
+
+// argPattern splits the argument tail of an include directive into key/value
+// pairs.
+var argPattern = regexp.MustCompile(`([a-z]+)=([a-z0-9.-]+)`)
 
 // expandIncludes substitutes every shared fragment referenced by content.
 //
 // An unknown fragment name is an error rather than a silent pass-through: a
 // prompt that ships with a dangling directive would quietly lose a rule the
 // pipeline depends on, and that failure would only surface as an agent
-// behaving oddly much later.
+// behaving oddly much later. A missing or unknown argument is an error for the
+// same reason — an unbound placeholder reaching a model is a rule the agent
+// then has to guess at.
 func expandIncludes(content []byte) ([]byte, error) {
-	var unknown string
+	var failure error
 	expanded := includePattern.ReplaceAllFunc(content, func(match []byte) []byte {
-		name := string(includePattern.FindSubmatch(match)[1])
+		groups := includePattern.FindSubmatch(match)
+		name := string(groups[1])
 		fragment, ok := sharedFragments[name]
 		if !ok {
-			unknown = name
+			failure = errors.WithDetails("unknown shared prompt fragment", "fragment", name)
 			return match
 		}
-		return fragment
+		bound, err := bindFragmentArgs(name, fragment, string(groups[2]))
+		if err != nil {
+			failure = err
+			return match
+		}
+		return bound
 	})
-	if unknown != "" {
-		return nil, errors.WithDetails("unknown shared prompt fragment", "fragment", unknown)
+	if failure != nil {
+		return nil, failure
 	}
 	return expanded, nil
+}
+
+// bindFragmentArgs substitutes an include's key=value arguments into the
+// fragment's placeholders. Every argument the fragment declares must be
+// supplied, and nothing beyond them is accepted: a typo'd argument name is a
+// silent no-op otherwise, which would leave the placeholder in the shipped
+// prompt.
+func bindFragmentArgs(name string, fragment []byte, tail string) ([]byte, error) {
+	supplied := map[string]string{}
+	for _, m := range argPattern.FindAllStringSubmatch(tail, -1) {
+		supplied[m[1]] = m[2]
+	}
+	required := fragmentArgs[name]
+	for key := range supplied {
+		if !slices.Contains(required, key) {
+			return nil, errors.WithDetails("unknown argument for shared prompt fragment", "fragment", name, "argument", key)
+		}
+	}
+	bound := fragment
+	for _, key := range required {
+		value, ok := supplied[key]
+		if !ok {
+			return nil, errors.WithDetails("shared prompt fragment requires an argument", "fragment", name, "argument", key)
+		}
+		bound = bytes.ReplaceAll(bound, []byte("<"+strings.ToUpper(key)+">"), []byte(value))
+	}
+	return bound, nil
 }

@@ -63,7 +63,7 @@ human state get  <WORK_KEY> budget.fix.attempts --default 0
 
 Infrastructure trouble — a dead container, a network blip, a runner that never started — is never a real attempt; it is a `retryable` ending. Say so rather than spending the budget on it.
 
-<!-- human:include stage-lease -->
+<!-- human:include stage-lease stage=fix -->
 
 <!-- human:include exit-contract -->
 
