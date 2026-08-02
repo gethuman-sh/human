@@ -165,23 +165,30 @@ func CalculateUsage(walker DirWalker, root string, now time.Time) (*UsageSummary
 	return summary, nil
 }
 
-// TokenHourBucket is one hour's fresh vs cache-read token split. Fresh folds
-// input, output and cache-creation tokens (all of which are billed work);
-// cache reads are kept apart so the panel can show what the cache saved.
+// TokenHourBucket is one hour's token split into the four separately-priced
+// classes, plus their computed cost. Input, output, cache-create and
+// cache-read are priced very differently (output is the most expensive,
+// cache reads a fraction of fresh input), so they are kept apart rather than
+// blended — a blended count cannot be read as money.
 type TokenHourBucket struct {
-	Bucket    string `json:"bucket"` // "2006-01-02 15:00" in UTC
-	Fresh     int    `json:"fresh"`
-	CacheRead int    `json:"cacheRead"`
+	Bucket      string  `json:"bucket"` // "2006-01-02 15:00" in UTC
+	Input       int     `json:"input"`
+	Output      int     `json:"output"`
+	CacheCreate int     `json:"cacheCreate"`
+	CacheRead   int     `json:"cacheRead"`
+	CostUSD     float64 `json:"costUSD"`
 }
 
-// ModelTokens is one model class's fresh vs cache-read token split over a
-// range. Fresh folds input, output and cache-creation tokens (all billed as
-// work); cache reads are kept apart, mirroring TokenHourBucket. The model name
-// is classifyModel's short display form ("opus 4.8", "haiku 3.5", "fable 5").
+// ModelTokens is one model class's token split over a range, mirroring
+// TokenHourBucket's four classes plus computed cost. The model name is
+// classifyModel's short display form ("opus 4.8", "haiku 3.5", "fable 5").
 type ModelTokens struct {
-	Model     string `json:"model"`
-	Fresh     int    `json:"fresh"`
-	CacheRead int    `json:"cacheRead"`
+	Model       string  `json:"model"`
+	Input       int     `json:"input"`
+	Output      int     `json:"output"`
+	CacheCreate int     `json:"cacheCreate"`
+	CacheRead   int     `json:"cacheRead"`
+	CostUSD     float64 `json:"costUSD"`
 }
 
 // ClaudeProjectsRoot returns ~/.claude/projects on the local host. The path was
@@ -223,9 +230,13 @@ func TokensByHour(walker DirWalker, root string, since, until time.Time) ([]Toke
 			b = &TokenHourBucket{Bucket: key}
 			buckets[key] = b
 		}
+		model := classifyModel(entry.Message.Model)
 		u := entry.Message.Usage
-		b.Fresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
+		b.Input += u.InputTokens
+		b.Output += u.OutputTokens
+		b.CacheCreate += u.CacheCreationInputTokens
 		b.CacheRead += u.CacheReadInputTokens
+		b.CostUSD += CostUSD(model, u.InputTokens, u.OutputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens)
 		return nil
 	})
 	if err != nil {
@@ -241,14 +252,17 @@ func TokensByHour(walker DirWalker, root string, since, until time.Time) ([]Toke
 }
 
 // TokenScan is the product of a single JSONL pass that answers both questions the
-// board's token panel asks: the current 5h window's fresh/cache split (the
+// board's token panel asks: the current 5h window's per-class split and cost (the
 // headline) and the per-hour buckets over the selected range (the panel). It
 // exists so the daemon's hot path reads the tree once instead of twice.
 type TokenScan struct {
-	WindowFresh     int               // Input+Output+CacheCreate in the current 5h window
-	WindowCacheRead int               // CacheRead in the current 5h window
-	PerHour         []TokenHourBucket // per-hour buckets in [since, until], ascending
-	ByModel         []ModelTokens     // per-model fresh/cache totals over [since, until], desc by total
+	WindowInput       int               // fresh input tokens in the current 5h window
+	WindowOutput      int               // output tokens in the current 5h window
+	WindowCacheCreate int               // cache-creation tokens in the current 5h window
+	WindowCacheRead   int               // cache-read tokens in the current 5h window
+	WindowCostUSD     float64           // priced cost of the current 5h window
+	PerHour           []TokenHourBucket // per-hour buckets in [since, until], ascending
+	ByModel           []ModelTokens     // per-model totals over [since, until], desc by cost
 }
 
 // ScanTokens folds CalculateUsage's current-window totals and TokensByHour's
@@ -273,12 +287,16 @@ func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (Tok
 			return nil
 		}
 		u := entry.Message.Usage
+		model := classifyModel(entry.Message.Model)
 
-		// Headline: the current 5h window. Mirrors CalculateUsage's fresh split
-		// (input+output+cache-create billed as work; cache reads kept apart).
+		// Headline: the current 5h window, split into the four separately-priced
+		// classes (not blended) plus their computed cost.
 		if !entry.Timestamp.Before(winStart) && entry.Timestamp.Before(winEnd) {
-			scan.WindowFresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
+			scan.WindowInput += u.InputTokens
+			scan.WindowOutput += u.OutputTokens
+			scan.WindowCacheCreate += u.CacheCreationInputTokens
 			scan.WindowCacheRead += u.CacheReadInputTokens
+			scan.WindowCostUSD += CostUSD(model, u.InputTokens, u.OutputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens)
 		}
 
 		// Panel: per-hour buckets over [since, until]. A fixed-width
@@ -290,17 +308,23 @@ func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (Tok
 				b = &TokenHourBucket{Bucket: key}
 				buckets[key] = b
 			}
-			b.Fresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
+			cost := CostUSD(model, u.InputTokens, u.OutputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens)
+			b.Input += u.InputTokens
+			b.Output += u.OutputTokens
+			b.CacheCreate += u.CacheCreationInputTokens
 			b.CacheRead += u.CacheReadInputTokens
+			b.CostUSD += cost
 
-			model := classifyModel(entry.Message.Model)
 			mt := byModel[model]
 			if mt == nil {
 				mt = &ModelTokens{Model: model}
 				byModel[model] = mt
 			}
-			mt.Fresh += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens
+			mt.Input += u.InputTokens
+			mt.Output += u.OutputTokens
+			mt.CacheCreate += u.CacheCreationInputTokens
 			mt.CacheRead += u.CacheReadInputTokens
+			mt.CostUSD += cost
 		}
 		return nil
 	})
@@ -318,13 +342,11 @@ func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (Tok
 	for _, m := range byModel {
 		scan.ByModel = append(scan.ByModel, *m)
 	}
-	// Sort by total spend desc so the biggest tier reads first; break ties on
-	// model name for deterministic output.
+	// Sort by cost desc so the biggest spend reads first; break ties on model
+	// name for deterministic output.
 	sort.Slice(scan.ByModel, func(i, j int) bool {
-		ti := scan.ByModel[i].Fresh + scan.ByModel[i].CacheRead
-		tj := scan.ByModel[j].Fresh + scan.ByModel[j].CacheRead
-		if ti != tj {
-			return ti > tj
+		if scan.ByModel[i].CostUSD != scan.ByModel[j].CostUSD {
+			return scan.ByModel[i].CostUSD > scan.ByModel[j].CostUSD
 		}
 		return scan.ByModel[i].Model < scan.ByModel[j].Model
 	})

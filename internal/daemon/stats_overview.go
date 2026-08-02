@@ -41,11 +41,15 @@ type StatsHeadline struct {
 	Failure int `json:"failure"`
 }
 
-// TokensHeadline is the current-window token split. Tokens have no
-// success/failure, so the headline shows fresh vs cache-read instead.
+// TokensHeadline is the current 5h window's token spend, split into the four
+// separately-priced classes plus their total cost, so the page reads context
+// (input+cacheCreate+cacheRead) against output — and both as money.
 type TokensHeadline struct {
-	Fresh     int `json:"fresh"`
-	CacheRead int `json:"cacheRead"`
+	Input       int     `json:"input"`
+	Output      int     `json:"output"`
+	CacheCreate int     `json:"cacheCreate"`
+	CacheRead   int     `json:"cacheRead"`
+	CostUSD     float64 `json:"costUSD"`
 }
 
 // AuditDayCount is one day's audit outcome breakdown for the audit panel.
@@ -104,8 +108,11 @@ func (s *Server) buildStatsOverview(ctx context.Context, r StatsRange) (StatsOve
 	// scanTokensCached). The scan is best-effort: any error yields an empty scan
 	// so the panel shows its empty state rather than failing the whole overview.
 	scan := s.scanTokensCached(r, since, now, now)
-	ov.Tokens.Fresh = scan.WindowFresh
+	ov.Tokens.Input = scan.WindowInput
+	ov.Tokens.Output = scan.WindowOutput
+	ov.Tokens.CacheCreate = scan.WindowCacheCreate
 	ov.Tokens.CacheRead = scan.WindowCacheRead
+	ov.Tokens.CostUSD = scan.WindowCostUSD
 	ov.TokensPerHour = scan.PerHour
 	ov.TokensByModel = scan.ByModel
 

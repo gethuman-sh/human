@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rangeCoversHistory, barPercents, initStatsView, showStats } from "../build/statsview.js";
+import {
+  rangeCoversHistory,
+  barPercents,
+  initStatsView,
+  showStats,
+  contextTokens,
+  fmtUSD,
+} from "../build/statsview.js";
 
 // Minimal DOM stub: the view only ever reaches for #stats and sets innerHTML on
 // it, so a one-element document is enough to exercise render() from node.
@@ -78,7 +85,7 @@ test("in-flight guard: overlapping showStats calls do not stack Stats() calls (S
         range: "24h",
         generatedAt: "",
         daemonStartedAt: "",
-        tokens: { fresh: 0, cacheRead: 0 },
+        tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, costUSD: 0 },
         toolCalls: { total: 0, success: 0, failure: 0 },
         audit: { total: 0, success: 0, failure: 0 },
         agentRuns: { total: 0, success: 0, failure: 0 },
@@ -110,12 +117,12 @@ test("showStats renders the Tokens by model panel from tokensByModel (SC-1316)",
         range: "24h",
         generatedAt: "",
         daemonStartedAt: "",
-        tokens: { fresh: 0, cacheRead: 0 },
+        tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, costUSD: 0 },
         toolCalls: { total: 0, success: 0, failure: 0 },
         audit: { total: 0, success: 0, failure: 0 },
         agentRuns: { total: 0, success: 0, failure: 0 },
         tokensPerHour: [],
-        tokensByModel: [{ model: "opus 4.8", fresh: 300, cacheRead: 30 }],
+        tokensByModel: [{ model: "opus 4.8", input: 100, output: 200, cacheCreate: 50, cacheRead: 30, costUSD: 0 }],
         toolsByTool: [],
         auditByDay: [],
         networkDecisions: [],
@@ -126,4 +133,16 @@ test("showStats renders the Tokens by model panel from tokensByModel (SC-1316)",
 
   assert.match(el.innerHTML, /Tokens by model/, "the panel title renders");
   assert.match(el.innerHTML, /opus 4\.8/, "the model row renders");
+});
+
+// SC-2549: context is everything spent establishing/re-reading context
+// (input + cache-create + cache-read) — output is deliberately excluded, since
+// separating the two is the point of the split.
+test("contextTokens sums input + cacheCreate + cacheRead (not output)", () => {
+  assert.equal(contextTokens({ input: 278, cacheCreate: 614446, cacheRead: 7849469 }), 8464193);
+});
+
+test("fmtUSD formats two decimals with a $ prefix", () => {
+  assert.equal(fmtUSD(6.14), "$6.14");
+  assert.equal(fmtUSD(0), "$0.00");
 });

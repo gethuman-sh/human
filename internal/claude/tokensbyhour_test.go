@@ -38,13 +38,24 @@ func TestTokensByHour_buckets(t *testing.T) {
 	if got[0].Bucket != "2026-03-20 10:00" || got[1].Bucket != "2026-03-20 11:00" {
 		t.Fatalf("buckets = %q, %q; want 10:00 then 11:00", got[0].Bucket, got[1].Bucket)
 	}
-	// Hour 10: fresh = (100+50+20)+(10+5+0) = 185; cacheRead = 200+30 = 230.
-	if got[0].Fresh != 185 || got[0].CacheRead != 230 {
-		t.Errorf("hour10 fresh/cache = %d/%d, want 185/230", got[0].Fresh, got[0].CacheRead)
+	// Hour 10: input = 100+10 = 110; output = 50+5 = 55; cacheCreate = 20+0 = 20;
+	// cacheRead = 200+30 = 230.
+	if got[0].Input != 110 || got[0].Output != 55 || got[0].CacheCreate != 20 || got[0].CacheRead != 230 {
+		t.Errorf("hour10 input/output/cacheCreate/cacheRead = %d/%d/%d/%d, want 110/55/20/230",
+			got[0].Input, got[0].Output, got[0].CacheCreate, got[0].CacheRead)
 	}
-	// Hour 11: fresh = 1+2+3 = 6; cacheRead = 4.
-	if got[1].Fresh != 6 || got[1].CacheRead != 4 {
-		t.Errorf("hour11 fresh/cache = %d/%d, want 6/4", got[1].Fresh, got[1].CacheRead)
+	wantCost10 := CostUSD("opus 4.8", 100, 50, 20, 200) + CostUSD("opus 4.8", 10, 5, 0, 30)
+	if got[0].CostUSD != wantCost10 {
+		t.Errorf("hour10 CostUSD = %v, want %v", got[0].CostUSD, wantCost10)
+	}
+	// Hour 11: input = 1; output = 2; cacheCreate = 3; cacheRead = 4.
+	if got[1].Input != 1 || got[1].Output != 2 || got[1].CacheCreate != 3 || got[1].CacheRead != 4 {
+		t.Errorf("hour11 input/output/cacheCreate/cacheRead = %d/%d/%d/%d, want 1/2/3/4",
+			got[1].Input, got[1].Output, got[1].CacheCreate, got[1].CacheRead)
+	}
+	wantCost11 := CostUSD("opus 4.8", 1, 2, 3, 4)
+	if got[1].CostUSD != wantCost11 {
+		t.Errorf("hour11 CostUSD = %v, want %v", got[1].CostUSD, wantCost11)
 	}
 }
 

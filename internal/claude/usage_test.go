@@ -593,6 +593,36 @@ func (c *countingWalker) WalkJSONL(_ string, fn func(line []byte) error) error {
 	return nil
 }
 
+// assertWindowMatchesSummary sums summary's per-model classes and compares
+// them against scan's window totals, one class at a time. Pulled out of
+// TestScanTokens_singlePassMatchesSeparateWalks to keep that test's cyclomatic
+// complexity under the project's gocyclo threshold.
+func assertWindowMatchesSummary(t *testing.T, scan TokenScan, summary *UsageSummary) {
+	t.Helper()
+	var wantInput, wantOutput, wantCacheCreate, wantCacheRead int
+	for _, mu := range summary.Models {
+		if mu == nil {
+			continue
+		}
+		wantInput += mu.InputTokens
+		wantOutput += mu.OutputTokens
+		wantCacheCreate += mu.CacheCreate
+		wantCacheRead += mu.CacheRead
+	}
+	if scan.WindowInput != wantInput {
+		t.Errorf("WindowInput = %d, want %d (matching CalculateUsage)", scan.WindowInput, wantInput)
+	}
+	if scan.WindowOutput != wantOutput {
+		t.Errorf("WindowOutput = %d, want %d (matching CalculateUsage)", scan.WindowOutput, wantOutput)
+	}
+	if scan.WindowCacheCreate != wantCacheCreate {
+		t.Errorf("WindowCacheCreate = %d, want %d (matching CalculateUsage)", scan.WindowCacheCreate, wantCacheCreate)
+	}
+	if scan.WindowCacheRead != wantCacheRead {
+		t.Errorf("WindowCacheRead = %d, want %d (matching CalculateUsage)", scan.WindowCacheRead, wantCacheRead)
+	}
+}
+
 // ScanTokens folds CalculateUsage's current-window totals and TokensByHour's
 // per-hour buckets into a single JSONL pass. This guards that the fold reads the
 // tree exactly once and that its two products still match the two functions it
@@ -622,20 +652,7 @@ func TestScanTokens_singlePassMatchesSeparateWalks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CalculateUsage: %v", err)
 	}
-	var wantFresh, wantCacheRead int
-	for _, mu := range summary.Models {
-		if mu == nil {
-			continue
-		}
-		wantFresh += mu.InputTokens + mu.OutputTokens + mu.CacheCreate
-		wantCacheRead += mu.CacheRead
-	}
-	if scan.WindowFresh != wantFresh {
-		t.Errorf("WindowFresh = %d, want %d (matching CalculateUsage)", scan.WindowFresh, wantFresh)
-	}
-	if scan.WindowCacheRead != wantCacheRead {
-		t.Errorf("WindowCacheRead = %d, want %d (matching CalculateUsage)", scan.WindowCacheRead, wantCacheRead)
-	}
+	assertWindowMatchesSummary(t, scan, summary)
 
 	// Per-hour buckets must match TokensByHour over the same lines: two buckets,
 	// ascending (09:00 then 11:00).
@@ -684,15 +701,54 @@ func TestScanTokens_byModel(t *testing.T) {
 	if len(scan.ByModel) != 2 {
 		t.Fatalf("ByModel has %d entries, want 2: %+v", len(scan.ByModel), scan.ByModel)
 	}
-	// Sorted by total spend desc, so opus (350+30) reads before haiku (15+2).
+	// Sorted by cost desc, so opus reads before haiku.
 	want := []ModelTokens{
-		{Model: "opus 4.8", Fresh: 350, CacheRead: 30},
-		{Model: "haiku 3.5", Fresh: 15, CacheRead: 2},
+		{Model: "opus 4.8", Input: 100, Output: 200, CacheCreate: 50, CacheRead: 30},
+		{Model: "haiku 3.5", Input: 10, Output: 5, CacheCreate: 0, CacheRead: 2},
+	}
+	for i := range want {
+		want[i].CostUSD = CostUSD(want[i].Model, want[i].Input, want[i].Output, want[i].CacheCreate, want[i].CacheRead)
 	}
 	for i := range want {
 		if scan.ByModel[i] != want[i] {
 			t.Errorf("ByModel[%d] = %+v, want %+v", i, scan.ByModel[i], want[i])
 		}
+	}
+}
+
+// TestScanTokens_splitIsIndividuallyRecoverable is the SC-2549 regression guard.
+// A single Opus line carries the ticket's measured class counts; the rollup must
+// expose output and cache-create SEPARATELY, not folded into one "fresh" number.
+// On the pre-fix code TokenScan has only WindowFresh (=719955) and this cannot
+// even compile against WindowOutput/WindowCacheCreate — after the split it passes.
+func TestScanTokens_splitIsIndividuallyRecoverable(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	inWindow := WindowStart(now).Add(time.Hour) // 11:00, in the 5h window and range
+	since := now.Add(-24 * time.Hour)
+
+	// input=278, output=105231, cacheCreate=614446, cacheRead=7849469
+	lines := [][]byte{
+		makeLine(t, "assistant", "claude-opus-4-8", inWindow, 278, 105231, 614446, 7849469),
+	}
+	scan, err := ScanTokens(fakeWalker{lines: lines}, "/fake", since, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scan.WindowOutput != 105231 {
+		t.Errorf("WindowOutput = %d, want 105231", scan.WindowOutput)
+	}
+	if scan.WindowCacheCreate != 614446 {
+		t.Errorf("WindowCacheCreate = %d, want 614446", scan.WindowCacheCreate)
+	}
+	if scan.WindowInput != 278 {
+		t.Errorf("WindowInput = %d, want 278", scan.WindowInput)
+	}
+	if scan.WindowCacheRead != 7849469 {
+		t.Errorf("WindowCacheRead = %d, want 7849469", scan.WindowCacheRead)
+	}
+	// The old blended figure (719955) must no longer be the only recoverable one.
+	if scan.WindowInput+scan.WindowOutput+scan.WindowCacheCreate != 719955 {
+		t.Errorf("blend = %d, want 719955", scan.WindowInput+scan.WindowOutput+scan.WindowCacheCreate)
 	}
 }
 
