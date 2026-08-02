@@ -57,4 +57,24 @@ var ruleFamilies = []ruleFamily{
 			"human-pr-reviewer-agent.md",
 		},
 	},
+	{
+		// The two fix pipelines — bug and vulnerability — run the same shape of
+		// work and dispatch the same stages, so which model tier each stage gets
+		// has to read identically in both. They share that rule today only
+		// because the security skill was made by copying the autofix one, which
+		// is the share-by-copy this registry exists to end: nothing fails if one
+		// drops the include, and a third fix pipeline would start without it.
+		//
+		// Registered as prevention rather than repair. The two have not drifted
+		// (SC-2803) — the single change since the security skill was added
+		// reached both — and no prose is folded together to hold them here.
+		// Where the pipelines legitimately differ they keep their own words;
+		// only the tier rule is one rule.
+		name:    "fix-skill-model-tiers",
+		include: "model-tiers",
+		members: []string{
+			"human-autofix-skill.md",
+			"human-security-fix-skill.md",
+		},
+	},
 }
