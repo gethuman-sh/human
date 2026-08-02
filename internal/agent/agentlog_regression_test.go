@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 )
 
@@ -80,6 +82,69 @@ func TestPreserveExecutionArtifacts_ScopesTranscriptToRun(t *testing.T) {
 	}
 	if strings.Contains(got, "RUN-B-DATA") {
 		t.Fatalf("another run's session leaked into the preserved transcript, got %q", got)
+	}
+}
+
+// makeUsageLine builds one assistant-usage JSONL line in the shape
+// claude.CalculateUsage expects (mirrors claude package's own makeLine test
+// helper, which is unexported and lives in a different package).
+func makeUsageLine(model string, ts time.Time, input, output, cacheCreate, cacheRead int) string {
+	m := map[string]any{
+		"type":      "assistant",
+		"timestamp": ts.Format(time.RFC3339),
+		"message": map[string]any{
+			"model": model,
+			"usage": map[string]int{
+				"input_tokens":                input,
+				"output_tokens":               output,
+				"cache_creation_input_tokens": cacheCreate,
+				"cache_read_input_tokens":     cacheRead,
+			},
+		},
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		panic(err) // test-time only: the map above is always marshalable
+	}
+	return string(b)
+}
+
+// TestPreserveExecutionArtifacts_CostScopedToRun is the SC-2549 per-run scoping
+// guard: it ties SC-2463's transcript scoping to cost computation, proving a
+// run's cost — priced from its own preserved TranscriptDir — counts only that
+// run's own sessions, not another run's history sharing the same container (the
+// ~2x double-count the ticket flags, caught only because two stages happened to
+// return identical totals). On the pre-fix code (whole-projects-root copy) this
+// would recover both runs' tokens; after SC-2463's scoping it recovers only A's.
+func TestPreserveExecutionArtifacts_CostScopedToRun(t *testing.T) {
+	withLogRoot(t)
+
+	exe, err := NewExecution(LaunchRecord{ID: "eA2", Agent: "aA2", StartedAt: time.Now(), Worktree: "/w/run-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := Meta{
+		Name: "aA2", ContainerID: "cid", RemoteUser: "vscode",
+		CreatedAt: time.Now(), ExecutionID: exe.Launch.ID,
+	}
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	docker := &scopedProjectsMock{tree: map[string]string{
+		"/home/vscode/.claude/projects/-w-run-a/a.jsonl": makeUsageLine("claude-opus-4-8", now, 10, 20, 30, 40),
+		"/home/vscode/.claude/projects/-w-run-b/b.jsonl": makeUsageLine("claude-opus-4-8", now, 111, 222, 333, 444),
+	}}
+
+	PreserveExecutionArtifacts(context.Background(), docker, meta, "reaped")
+
+	summary, err := claude.CalculateUsage(claude.OSDirWalker{}, exe.TranscriptDir(), now)
+	if err != nil {
+		t.Fatalf("CalculateUsage: %v", err)
+	}
+	mu := summary.Models["opus 4.8"]
+	if mu == nil {
+		t.Fatal("expected opus 4.8 usage recovered from run A's preserved transcript")
+	}
+	if mu.InputTokens != 10 || mu.OutputTokens != 20 || mu.CacheCreate != 30 || mu.CacheRead != 40 {
+		t.Fatalf("run A cost = %+v, want input=10 output=20 cacheCreate=30 cacheRead=40 (run B's 111/222/333/444 must not leak in)", mu)
 	}
 }
 
