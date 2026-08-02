@@ -77,6 +77,6 @@ EOF
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human. Humans review this PR out of band, on their own cadence; you never wait for them.
 
-<!-- human:include stage-lease -->
+<!-- human:include stage-lease stage=pr-review -->
 
 <!-- human:include exit-contract -->

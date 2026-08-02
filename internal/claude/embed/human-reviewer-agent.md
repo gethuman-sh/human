@@ -141,6 +141,6 @@ EOF
 
 Use `unreviewable` only when the code itself could not be obtained (branch unreachable, no commits reference the key). It is not a synonym for `fail`: a review that examined code and found problems is `fail`.
 
-<!-- human:include stage-lease -->
+<!-- human:include stage-lease stage=review -->
 
 <!-- human:include exit-contract -->
