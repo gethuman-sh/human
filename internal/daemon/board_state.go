@@ -129,6 +129,39 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		}
 	}
 
+	furthest, state, latest, anyMarker = applyStateOverrides(comments, furthest, state, latest, anyMarker)
+
+	if !anyMarker {
+		// No pipeline activity yet: the open ticket waits in Backlog.
+		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
+	}
+
+	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, StageEnteredAt: latest.Created, StageDaemonID: ParseDaemonID(latest.Body)}
+	card.EngineeringKey = firstEngineeringKey(comments)
+	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
+	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
+	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
+	card.PRURL = derivePRURL(comments)
+	// An outage card carries the same one-line reason a failed card does (the
+	// substrate that was unreachable), so the badge can say WHAT is down, not just
+	// that it is — the outage marker's body is composed exactly like a failure's
+	// (SC-2307).
+	if state == BoardFailed || state == BoardOutage {
+		card.Error = failureReason(latest.Body)
+	}
+	card.DeployPhase = deployPhaseFor(card, comments)
+	attachOpenOptions(&card, comments)
+	return card
+}
+
+// applyStateOverrides layers the two derivation overrides that must run after
+// the furthest-stage/latest-marker pass but before the Backlog short-circuit:
+// a queued option-decision and a needs-planning refusal. Split out of
+// DeriveBoardCard so the two independent `if`s cost this helper's complexity
+// budget rather than the parent's (SC-2596 pushed DeriveBoardCard over the
+// gocyclo threshold; extracting keeps the override chain readable in one place
+// without re-flattening it into the main derivation).
+func applyStateOverrides(comments []tracker.Comment, furthest BoardStage, state BoardState, latest tracker.Comment, anyMarker bool) (BoardStage, BoardState, tracker.Comment, bool) {
 	// A recorded decision ([human:option-chosen]) that no started/terminal marker
 	// has yet superseded: the chosen stage is (re)queued while the relaunch's
 	// started marker is pending or its launch was deferred to a healthy daemon.
@@ -154,27 +187,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		furthest, state, latest, anyMarker = BoardPlanning, BoardFailed, np, true
 	}
 
-	if !anyMarker {
-		// No pipeline activity yet: the open ticket waits in Backlog.
-		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
-	}
-
-	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, StageEnteredAt: latest.Created, StageDaemonID: ParseDaemonID(latest.Body)}
-	card.EngineeringKey = firstEngineeringKey(comments)
-	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
-	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
-	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
-	card.PRURL = derivePRURL(comments)
-	// An outage card carries the same one-line reason a failed card does (the
-	// substrate that was unreachable), so the badge can say WHAT is down, not just
-	// that it is — the outage marker's body is composed exactly like a failure's
-	// (SC-2307).
-	if state == BoardFailed || state == BoardOutage {
-		card.Error = failureReason(latest.Body)
-	}
-	card.DeployPhase = deployPhaseFor(card, comments)
-	attachOpenOptions(&card, comments)
-	return card
+	return furthest, state, latest, anyMarker
 }
 
 // pauseOnOpenOptions turns a running OR failed state into a waiting-on-human
