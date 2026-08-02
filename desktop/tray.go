@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"fyne.io/systray"
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/gethuman-sh/human/internal/claude/monitor"
 )
@@ -33,6 +32,14 @@ const trayRefreshInterval = 5 * time.Second
 
 // runTray puts an icon in the system tray whose menu lists what the machine is
 // working on right now.
+//
+// The menu is a readout, with no action in it. It used to offer "Open board",
+// and clicking an entry raised the window — neither works under Wayland, where
+// a client cannot raise itself: focus is granted through an activation token
+// obtained from a user interaction, and a tray click arrives over D-Bus as a
+// dbusmenu event, a protocol with no token to pass. The compositor is entitled
+// to ignore the request and does. A menu item that silently does nothing is
+// worse than no item, so there are none.
 //
 // It answers the question the board answers, without the board being open or in
 // focus — a glance at the panel instead of a window switch. Read-only on
@@ -64,15 +71,9 @@ func (a *App) onTrayReady(ctx context.Context) {
 	slots := make([]*systray.MenuItem, trayMenuSlots)
 	for i := range slots {
 		slots[i] = systray.AddMenuItem("", "")
+		slots[i].Disable()
 		slots[i].Hide()
-		go a.raiseBoardOnClick(ctx, slots[i])
 	}
-
-	// Something to do when nothing is running — otherwise the menu is a report
-	// with no action in the one state it is most likely to be opened in.
-	systray.AddSeparator()
-	open := systray.AddMenuItem("Open board", "Bring the workflow board to the front")
-	go a.raiseBoardOnClick(ctx, open)
 
 	a.refreshTray(ctx, status, slots)
 
@@ -125,18 +126,5 @@ func (a *App) refreshTray(ctx context.Context, status *systray.MenuItem, slots [
 		}
 		slot.SetTitle(entries[i].Label)
 		slot.Show()
-	}
-}
-
-// raiseBoardOnClick brings the board forward when an entry is clicked. The
-// entry names a run; the board is where anything can be done about it.
-func (a *App) raiseBoardOnClick(ctx context.Context, item *systray.MenuItem) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-item.ClickedCh:
-			wailsruntime.WindowShow(ctx)
-		}
 	}
 }
