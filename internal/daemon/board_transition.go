@@ -64,6 +64,15 @@ type Deployer interface {
 	// MarkReadyForReview converts the draft PR opened for the review loop to
 	// ready-for-review, so the adopted PR can merge once the machine review approves.
 	MarkReadyForReview(ctx context.Context, workspaceDir string, number int) error
+	// PublishResolvedBranch publishes a conflict resolution the deploy-fixer left
+	// on the LOCAL branch ref. Board agents hold no push credentials, so the
+	// daemon — which does — is what carries their work to the forge; without this
+	// the resolution is unreachable, because the deploy reads the branch from
+	// origin and would re-run the same conflicting rebase (SC-2845). It reports
+	// whether it published: a local ref that is absent, unchanged, or does not
+	// yet contain the base tip is no resolution, and is left for the deploy's own
+	// freshness rebase to handle.
+	PublishResolvedBranch(ctx context.Context, workspaceDir, branch string) (published bool, err error)
 }
 
 // PRRequest carries everything needed to push a branch and open its PR.
@@ -834,10 +843,10 @@ func unrecordedStepReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Boa
 
 // AdvanceDeployFix is the deploy-fixer's Stop-event driver. On the fixer's exit the
 // failure watcher calls it with the exit the agent recorded in stage.deploy-fix. A
-// `done` exit re-runs the deploy pipeline (the fixer rebased/fixed and pushed, so the
-// branch is ready for a fresh CI gate + merge); any other exit reds the card with a
-// terminal deploy-failed. The deployFixRounds budget already bounds how many times
-// the pipeline re-enters here, so a genuinely unfixable failure terminates.
+// `done` exit publishes the fixer's local resolution and re-runs the deploy pipeline
+// (the branch is then ready for a fresh CI gate + merge); any other exit reds the card
+// with a terminal deploy-failed. The deployFixRounds budget already bounds how many
+// times the pipeline re-enters here, so a genuinely unfixable failure terminates.
 func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey, fixExit string) error {
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
@@ -845,6 +854,18 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey, fixExi
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	if fixExit == ExitDone {
+		// The fixer resolved the conflict in a container that holds no push
+		// credentials, exactly like every other board fixer — so its deliverable is
+		// the local branch, and publishing it is the daemon's job. Publishing before
+		// the deploy runs is what makes the resolution visible at all: the deploy
+		// reads the branch from origin (branchTip prefers the origin ref), so an
+		// unpublished resolution would be silently discarded and the same conflict
+		// re-hit (SC-2845).
+		if _, err := d.Deployer.PublishResolvedBranch(ctx, d.WorkspaceDir, card.Branch); err != nil {
+			return d.deployFailed(pmKey, "", deployReason(
+				"the deploy fixer's resolution could not be published to "+card.Branch+" — check the branch, then re-run Deploy",
+				err))
+		}
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,

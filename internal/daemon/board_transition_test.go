@@ -115,6 +115,22 @@ type fakeDeployer struct {
 	markedReady   int
 	markReadyErr  error
 	markReadyCall int
+	// published records the branches whose deploy-fixer resolution was carried to
+	// origin, and publishErr models a publish the host refused (a source behind
+	// origin) — the fixer's work is local, so an unpublished resolution is
+	// invisible to the deploy that follows.
+	published    []string
+	publishErr   error
+	publishCalls int
+}
+
+func (f *fakeDeployer) PublishResolvedBranch(_ context.Context, _, branch string) (bool, error) {
+	f.publishCalls++
+	if f.publishErr != nil {
+		return false, f.publishErr
+	}
+	f.published = append(f.published, branch)
+	return true, nil
 }
 
 func (f *fakeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResult, error) {
@@ -1446,6 +1462,10 @@ func (f *gateProbeDeployer) BranchMerged(_ context.Context, _, _ string) bool { 
 
 func (f *gateProbeDeployer) MarkReadyForReview(_ context.Context, _ string, _ int) error { return nil }
 
+func (f *gateProbeDeployer) PublishResolvedBranch(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
+
 func TestDeploysQueueOneAtATime(t *testing.T) {
 	// Regression (SC-296): the Deploy button ships every ready fix at once.
 	// Concurrent pipelines race the mainline — the first merge moves the base
@@ -1931,8 +1951,9 @@ func TestDeployBranch_FixerLaunchError_Reds(t *testing.T) {
 	assert.Greater(t, failedIdx, startedIdx, "the deploy-failed marker follows the deploy-fix-started marker")
 }
 
-// On the fixer's `done` exit the deploy re-runs end to end — the fixer rebased,
-// fixed and pushed, so the branch is ready for a fresh CI gate + merge.
+// On the fixer's `done` exit the deploy re-runs end to end — the fixer rebased
+// and fixed on the local branch, the daemon publishes it, and it is ready for a
+// fresh CI gate + merge.
 func TestAdvanceDeployFix_Done_RerunsDeploy(t *testing.T) {
 	syncDeploy(t)
 	c := &fakeCommenter{comments: deployFixReadyComments()}
@@ -1951,6 +1972,65 @@ func TestAdvanceDeployFix_Done_RerunsDeploy(t *testing.T) {
 		assert.False(t, strings.HasPrefix(b, DeployFailedHeader), "a done exit must not red the card: %q", b)
 	}
 	require.NotEmpty(t, deployed, "the re-run deploy posts the deployed marker")
+}
+
+// The fixer resolves the conflict in a container that holds no push credentials,
+// so its deliverable is the LOCAL branch: the daemon must carry it to origin
+// before re-running the deploy. Without this the deploy re-reads the unresolved
+// origin tip and hits the identical conflict, discarding the finished work
+// (SC-2845 — the failure mode that stranded a resolved branch for a human).
+func TestAdvanceDeployFix_Done_PublishesResolutionBeforeDeploy(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
+		checks: []forge.ChecksState{forge.ChecksPassing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone))
+	assert.Equal(t, []string{"feat/x"}, p.published,
+		"the fixer's local resolution must be published to the card's branch")
+	assert.Equal(t, 1, p.publishCalls, "the resolution is published exactly once per done exit")
+}
+
+// A publish the host refuses (the never-publish-behind-origin guard, an
+// unreadable ref) must red the card with the reason and NOT deploy: deploying
+// anyway would merge the unresolved origin tip the fixer was dispatched to fix.
+// It also pins the ordering — publish happens before the deploy, not after.
+func TestAdvanceDeployFix_PublishFails_RedsWithoutDeploying(t *testing.T) {
+	syncDeploy(t)
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	// Wired to deploy cleanly if it were reached — so a regression that deploys
+	// past a failed publish fails on the assertions below, not on a panic.
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
+		checks:     []forge.ChecksState{forge.ChecksPassing},
+		publishErr: errors.New("refusing to publish feat/x: the source is behind origin")}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone)
+	require.Error(t, err, "an unpublishable resolution is a deploy failure")
+	assert.Zero(t, p.call, "a failed publish must not open or re-gate a pull request")
+	assert.Zero(t, p.merged, "a failed publish must never reach the merge")
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed, "the card reds when the resolution cannot be published")
+	assert.Contains(t, failed, "could not be published to feat/x")
+	assert.Contains(t, failed, "behind origin", "the marker carries the host's reason")
+}
+
+// Only a done exit has a resolution to carry: a fixer that stopped for a human
+// left nothing publishable, and publishing on its behalf would ship whatever
+// half-finished state its branch happens to hold.
+func TestAdvanceDeployFix_NonDoneExit_PublishesNothing(t *testing.T) {
+	for _, exit := range []string{ExitNeedsInput, ExitNeedsHumanWork, ""} {
+		c := &fakeCommenter{comments: deployFixReadyComments()}
+		p := &fakeDeployer{}
+		deps := newDeps(c, &fakeLauncher{}, p)
+		require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", exit))
+		assert.Zero(t, p.publishCalls, "exit %q must not publish a branch", exit)
+	}
 }
 
 // A non-done fixer exit reds the card with an actionable, exit-specific reason.
