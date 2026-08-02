@@ -108,6 +108,10 @@ type ContainerInspectResponse struct {
 	State  ContainerState
 	Image  string
 	Config ContainerConfigInfo
+	// IPAddress is the container's bridge IP, used to attribute proxy
+	// connections back to the agent that made them. Empty when the container has
+	// no resolvable network address.
+	IPAddress string
 }
 
 // ContainerState represents the container's runtime state.

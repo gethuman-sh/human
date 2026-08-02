@@ -166,12 +166,31 @@ func (e *engineClient) ContainerInspect(ctx context.Context, containerID string)
 		configInfo.Labels = ctr.Config.Labels
 	}
 	return ContainerInspectResponse{
-		ID:     ctr.ID,
-		Name:   ctr.Name,
-		State:  state,
-		Image:  ctr.Image,
-		Config: configInfo,
+		ID:        ctr.ID,
+		Name:      ctr.Name,
+		State:     state,
+		Image:     ctr.Image,
+		Config:    configInfo,
+		IPAddress: firstContainerIP(ctr.NetworkSettings),
 	}, nil
+}
+
+// firstContainerIP returns the first non-empty IP across the container's
+// attached networks, or "" when none is resolvable. Agent containers attach to
+// a single bridge network, so the first valid address is the one the proxy sees.
+func firstContainerIP(ns *container.NetworkSettings) string {
+	if ns == nil {
+		return ""
+	}
+	for _, ep := range ns.Networks {
+		if ep == nil {
+			continue
+		}
+		if ip := ep.IPAddress; ip.IsValid() {
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 func (e *engineClient) ContainerList(ctx context.Context, opts ContainerListOptions) ([]ContainerSummary, error) {
