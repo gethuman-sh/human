@@ -12,22 +12,40 @@ import (
 
 // stubGit points the gitrepo package vars at in-memory fakes and restores them.
 // isRepo controls IsRepo; adds records every worktree path created so the test
-// can assert distinctness.
+// can assert distinctness. Fetch defaults to succeeding so existing tests never
+// shell out to real git.
 func stubGit(t *testing.T, isRepo bool) *[]string {
 	t.Helper()
 	var added []string
-	prevIsRepo, prevAdd, prevRemove, prevDefault := gitrepo.IsRepo, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove, gitrepo.DefaultBranch
+	prevIsRepo, prevAdd, prevRemove, prevDefault, prevFetch := gitrepo.IsRepo, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove, gitrepo.DefaultBranch, gitrepo.Fetch
 	gitrepo.IsRepo = func(_ context.Context, _ string) bool { return isRepo }
 	gitrepo.DefaultBranch = func(_ context.Context, _ string) string { return "main" }
+	gitrepo.Fetch = func(_ context.Context, _, _ string) error { return nil }
 	gitrepo.WorktreeAdd = func(_ context.Context, _, worktreePath, _ string) error {
 		added = append(added, worktreePath)
 		return nil
 	}
 	gitrepo.WorktreeRemove = func(_ context.Context, _, _ string) error { return nil }
 	t.Cleanup(func() {
-		gitrepo.IsRepo, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove, gitrepo.DefaultBranch = prevIsRepo, prevAdd, prevRemove, prevDefault
+		gitrepo.IsRepo, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove, gitrepo.DefaultBranch, gitrepo.Fetch = prevIsRepo, prevAdd, prevRemove, prevDefault, prevFetch
 	})
 	return &added
+}
+
+// stubWorktreeAddCapturingBase stubs gitrepo.WorktreeAdd to record the base ref
+// it was called with — the load-bearing value SC-2742's regression tests
+// assert on — and materializes the worktree dir so provisioning has a
+// destination.
+func stubWorktreeAddCapturingBase(t *testing.T) *[]string {
+	t.Helper()
+	var bases []string
+	prev := gitrepo.WorktreeAdd
+	gitrepo.WorktreeAdd = func(_ context.Context, _, worktreePath, base string) error {
+		bases = append(bases, base)
+		return os.MkdirAll(worktreePath, 0o750)
+	}
+	t.Cleanup(func() { gitrepo.WorktreeAdd = prev })
+	return &bases
 }
 
 // Regression for SC-411: two agents launched in ONE project must resolve to
@@ -83,6 +101,46 @@ func TestMountSourceForRun_AddErrorPropagates(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("mount source = %q, want empty on error", got)
+	}
+}
+
+// Regression for SC-2742: a run must start from the CURRENT PUBLISHED state of
+// the project, not the local checkout as a human last left it. Before the fix,
+// mountSourceForRun roots the worktree at the local "main" with no fetch; this
+// asserts it fetches origin first and roots the worktree at "origin/main".
+func TestMountSourceForRun_RootsAtOriginAfterFetch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubGit(t, true)
+	bases := stubWorktreeAddCapturingBase(t)
+
+	m := &Manager{}
+	if _, err := m.mountSourceForRun(context.Background(), "/proj", "agent-a"); err != nil {
+		t.Fatalf("mountSourceForRun: %v", err)
+	}
+	if len(*bases) != 1 || (*bases)[0] != "origin/main" {
+		t.Fatalf("WorktreeAdd base = %v, want [origin/main] (run must root at the published tip, not the stale local ref)", *bases)
+	}
+}
+
+// Regression for SC-2742: when origin is unreachable, the run must still
+// start — from the local copy — rather than failing the launch. A network
+// problem must not look like a broken ticket.
+func TestMountSourceForRun_FetchFailureFallsBackToLocal(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubGit(t, true)
+	bases := stubWorktreeAddCapturingBase(t)
+	gitrepo.Fetch = func(_ context.Context, _, _ string) error { return context.DeadlineExceeded }
+
+	m := &Manager{}
+	got, err := m.mountSourceForRun(context.Background(), "/proj", "agent-a")
+	if err != nil {
+		t.Fatalf("mountSourceForRun must still start the run when origin is unreachable, got err: %v", err)
+	}
+	if got == "" {
+		t.Fatal("mountSourceForRun returned empty worktree path on fetch failure, want the local fallback worktree")
+	}
+	if len(*bases) != 1 || (*bases)[0] != "main" {
+		t.Fatalf("WorktreeAdd base = %v, want [main] (fetch failure must fall back to the local ref)", *bases)
 	}
 }
 
