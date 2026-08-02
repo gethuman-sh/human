@@ -173,10 +173,19 @@ func TestBuildStatsOverview_tokenScanCachedWithinTTL(t *testing.T) {
 
 	var calls int32
 	scan := claude.TokenScan{
-		WindowFresh:     4200,
-		WindowCacheRead: 1300,
-		PerHour:         []claude.TokenHourBucket{{Bucket: "2026-03-20 11:00", Fresh: 4200, CacheRead: 1300}},
-		ByModel:         []claude.ModelTokens{{Model: "opus 4.8", Fresh: 300, CacheRead: 30}},
+		WindowInput:       200,
+		WindowOutput:      3000,
+		WindowCacheCreate: 1000,
+		WindowCacheRead:   1300,
+		WindowCostUSD:     claude.CostUSD("opus 4.8", 200, 3000, 1000, 1300),
+		PerHour: []claude.TokenHourBucket{{
+			Bucket: "2026-03-20 11:00", Input: 200, Output: 3000, CacheCreate: 1000, CacheRead: 1300,
+			CostUSD: claude.CostUSD("opus 4.8", 200, 3000, 1000, 1300),
+		}},
+		ByModel: []claude.ModelTokens{{
+			Model: "opus 4.8", Input: 100, Output: 170, CacheCreate: 30, CacheRead: 30,
+			CostUSD: claude.CostUSD("opus 4.8", 100, 170, 30, 30),
+		}},
 	}
 	srv := &Server{
 		Logger:          zerolog.Nop(),
@@ -195,8 +204,10 @@ func TestBuildStatsOverview_tokenScanCachedWithinTTL(t *testing.T) {
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "same range within TTL scans once")
 	for _, ov := range []StatsOverview{ov1, ov2} {
-		assert.Equal(t, 4200, ov.Tokens.Fresh)
+		assert.Equal(t, 3000, ov.Tokens.Output)
+		assert.Equal(t, 1000, ov.Tokens.CacheCreate)
 		assert.Equal(t, 1300, ov.Tokens.CacheRead)
+		assert.Equal(t, scan.WindowCostUSD, ov.Tokens.CostUSD)
 		assert.Equal(t, scan.PerHour, ov.TokensPerHour)
 		assert.Equal(t, scan.ByModel, ov.TokensByModel)
 	}
