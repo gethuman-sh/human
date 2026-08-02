@@ -605,7 +605,7 @@ func TestNewSQLiteStore_MigratesRecallUnique(t *testing.T) {
 }
 
 // A database created before project scoping existed (or reopened by the
-// buggy c2dc887 binary) can hold an orphaned project='' row for a key that
+// buggy c2dc887 binary) can hold an orphaned project=” row for a key that
 // has since been indexed under its real project. The first upsert against
 // the real project must adopt that orphan in place rather than insert a
 // second row — one ticket, one entry, reporting the current status (SC-2597).
@@ -661,7 +661,7 @@ func TestUpsertEntry_AdoptsLegacyEmptyProjectRow(t *testing.T) {
 }
 
 // A database already corrupted by the buggy c2dc887 binary can hold both the
-// stale project='' twin and the current real-project row for the same key.
+// stale project=” twin and the current real-project row for the same key.
 // Reopening the store must reconcile them so only the current row survives —
 // reconciliation is not limited to upsert time, because a database opened
 // once already holds the twin (SC-2597).

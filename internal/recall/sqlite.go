@@ -167,7 +167,7 @@ func (s *SQLiteStore) hasColumn(table, col string) (bool, error) {
 // entry's file set" delete matched every project's rows for the same
 // key+source — a second project's upsert silently wiped the first's file set
 // (SC-2597). It rebuilds the table under entryFilesCreate, defaulting
-// existing rows to project='' (the same default new writes use), and is a
+// existing rows to project=” (the same default new writes use), and is a
 // no-op once the column exists.
 func (s *SQLiteStore) migrateEntryFilesProject() error {
 	has, err := s.hasColumn("entry_files", "project")
@@ -202,7 +202,7 @@ func (s *SQLiteStore) migrateEntryFilesProject() error {
 	return nil
 }
 
-// reconcileProjectOrphans collapses a stale project='' twin into the current
+// reconcileProjectOrphans collapses a stale project=” twin into the current
 // row when both exist for the same (key, source): databases already reopened
 // by the buggy c2dc887 binary (which widened the dedup identity to
 // UNIQUE(key, source, project) but copied legacy rows verbatim, and let
@@ -212,7 +212,7 @@ func (s *SQLiteStore) migrateEntryFilesProject() error {
 // UpsertEntry's upsert-time adoption (which stops new twins from forming);
 // it is what cleans databases the buggy binary already corrupted.
 //
-// It collapses only when project='' coexists with a non-empty project for
+// It collapses only when project=” coexists with a non-empty project for
 // the same (key, source) — never across two genuinely different non-empty
 // projects, which must stay isolated (SC-2326).
 func (s *SQLiteStore) reconcileProjectOrphans() error {
@@ -363,7 +363,7 @@ func (s *SQLiteStore) UpsertEntry(ctx context.Context, entry Entry, description 
 // is part of the identity (SC-2326): two projects that share both a source
 // and a key are distinct entries, not one row upserting over the other. When
 // no exact match exists under the real project, it falls back to a
-// project='' row for the same key+source — a legacy row (predating project
+// project=” row for the same key+source — a legacy row (predating project
 // scoping) or one orphaned by the c2dc887 regression — and reports it via
 // adopted so the caller re-keys it instead of inserting a twin (SC-2597).
 func findExistingEntryID(ctx context.Context, tx *sql.Tx, entry Entry) (id *int64, adopted bool, err error) {
@@ -447,8 +447,8 @@ func insertEntryRow(ctx context.Context, tx *sql.Tx, entry Entry, description st
 // overlap that no longer exists. Scoped by project (SC-2597): entry_files'
 // primary key lacked project, so a second project's upsert for the same
 // key+source used to delete the first project's file rows too. When this
-// upsert adopted an orphan, its leftover project='' file rows are cleared
-// too — the entries row they described no longer exists under project='',
+// upsert adopted an orphan, its leftover project=” file rows are cleared
+// too — the entries row they described no longer exists under project=”,
 // it was just re-keyed to entry.Project.
 func replaceEntryFiles(ctx context.Context, tx *sql.Tx, entry Entry, adoptedOrphan bool) error {
 	if _, err := tx.ExecContext(ctx,
