@@ -111,23 +111,32 @@ The desktop artifact must never be published through a goreleaser `builds:` entr
 
 ## Creating tickets — ideation chat
 
-The Backlog column header shows a '+' button. Clicking it opens a chat-style
-panel docked to the right side of the board. (The idea space has its own
-lighter '+': it quick-captures a title-only ticket labeled `human/idea` into
-its leftmost sub-column, no
-chat involved; dragging that idea card onto Backlog opens this same panel in
-**evolve mode**, whose terminal action rewrites the idea ticket in place —
-title and description replaced, idea label removed, key preserved — instead of
-creating a new ticket.) Typing a seed idea starts a
-daemon-side ideation agent: the daemon runs headless `claude -p` turns on the
-daemon host (`--resume`d per reply, so multi-turn context comes from Claude
-Code's own session store), asking one challenge question per turn until it is
+The Backlog column header shows a '+' button, the post-project-import
+"Create first ticket" prompt, and the left rail's "new ticket" action all
+open the same chat-style panel docked to the right side of the board. (The
+idea space has its own lighter '+': it quick-captures a title-only ticket
+labeled `human/idea` into its leftmost sub-column, no chat involved; dragging
+that idea card onto Backlog opens this same panel in **evolve mode**, whose
+terminal action rewrites the idea ticket in place — title and description
+replaced, idea label removed, key preserved — instead of creating a new
+ticket.) Every fresh session opened from any of these entry points follows
+the same idea-first path (SC-2858): the seed text first quick-captures a
+title-only idea ticket (exactly what the idea space's own '+' does), then the
+same conversation continues against that ticket in evolve mode — so a ticket
+that started as a chat carries the idea marker exactly as long as one started
+by dragging an idea card, and there is no UI path left that creates a
+finished ticket outright. Typing a seed idea starts a daemon-side ideation
+agent: the daemon runs headless `claude -p` turns on the daemon host
+(`--resume`d per reply, so multi-turn context comes from Claude Code's own
+session store), asking one challenge question per turn until it is
 confident, then emits a structured `[human:ideation-ticket]` block that the
-daemon parses and uses to create the PM ticket via the tracker `Creator`
-abstraction, on the single PM-role tracker (resolved by role, the same way the
-board's `Cards()` resolves `firstPMResult`). The new card then appears in the
-Backlog column through the existing subscribe/refetch loop — no bespoke
-refresh path is added for ideation.
+daemon parses and uses to rewrite the captured idea ticket in place via the
+tracker `Editor` abstraction (evolve mode), removing the idea label. The
+underlying direct-create path (`creator.CreateIssue`, no idea stage) still
+exists in the daemon engine and is used by non-UI callers such as the
+command-line tool — the desktop UI simply never reaches it anymore. The
+updated card then appears in the Backlog column through the existing
+subscribe/refetch loop — no bespoke refresh path is added for ideation.
 
 The panel talks to three dedicated daemon routes — `ideation-start`,
 `ideation-reply`, `ideation-status` — each taking a single JSON argument and
