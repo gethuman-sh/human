@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -77,6 +79,11 @@ func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
 			raw = BoardStage(strings.TrimSpace(strings.TrimPrefix(line, "stage:")))
 		case strings.HasPrefix(line, "context:"):
 			context = strings.TrimSpace(strings.TrimPrefix(line, "context:"))
+		case strings.HasPrefix(line, DaemonLinePrefix):
+			// Provenance, not a choice. Every marker body carries this stamp, and
+			// `daemon: <id>` matches the id:label shape below exactly — so without
+			// this case the board offered the daemon id as a selectable answer,
+			// and counted it toward the number of answers a block appears to have.
 		default:
 			id, label, ok := strings.Cut(line, ":")
 			if !ok || strings.TrimSpace(id) == "" || strings.ContainsAny(id, " \t") {
@@ -314,6 +321,17 @@ func attachOpenOptions(card *BoardCard, comments []tracker.Comment) {
 	}
 	stage, context, opts := parseOptionsBlock(block.Body)
 	if len(opts) == 0 {
+		return
+	}
+	// A block offering fewer answers than a choice needs is malformed in the same
+	// way as one naming an unresumable stage, and gets the same treatment: say
+	// what is wrong on the card rather than presenting a dead end as a decision.
+	// Posting is now rejected for this (marker.MinDecisionOptions), so this is
+	// the recovery path for blocks already on a ticket.
+	if len(opts) < marker.MinDecisionOptions {
+		card.State = BoardFailed
+		card.Error = "decision block offers only " + strconv.Itoa(len(opts)) + " answer; a decision needs at least " +
+			strconv.Itoa(marker.MinDecisionOptions) + " — the stage should have handled this itself"
 		return
 	}
 	if !optionStages[stage] {

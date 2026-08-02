@@ -454,7 +454,7 @@ func escalatedLoopThenRebuilt() []tracker.Comment {
 	return []tracker.Comment{
 		cmt("[human:pr-review-started]\nnumber: 257\nbranch: autofix/x", time.Unix(1, 0)),
 		cmt("[human:pr-fix-started]", time.Unix(2, 0)),
-		cmt("[human:options]\nstage: implementation\ncontext: the fixer needs a decision\n1: Rebuild the branch", time.Unix(3, 0)),
+		cmt("[human:options]\nstage: implementation\ncontext: the fixer needs a decision\n1: Rebuild the branch\n2: Keep the branch and narrow the fix", time.Unix(3, 0)),
 		cmt("[human:option-chosen] 1: Rebuild the branch", time.Unix(4, 0)),
 		cmt("[human:implementation-started]", time.Unix(5, 0)),
 		cmt("[human:ready-for-review]\nbranch: autofix/x\ncommits: abc1234", time.Unix(6, 0)),
@@ -519,7 +519,7 @@ func escalatedLoopAwaitingDecision() []tracker.Comment {
 	return []tracker.Comment{
 		cmt("[human:pr-review-started]\nnumber: 257\nbranch: autofix/x", time.Unix(1, 0)),
 		cmt("[human:pr-fix-started]", time.Unix(2, 0)),
-		cmt("[human:options]\nstage: implementation\ncontext: the fixer needs a decision\n1: Rebuild the branch", time.Unix(3, 0)),
+		cmt("[human:options]\nstage: implementation\ncontext: the fixer needs a decision\n1: Rebuild the branch\n2: Keep the branch and narrow the fix", time.Unix(3, 0)),
 	}
 }
 
