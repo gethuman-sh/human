@@ -263,7 +263,7 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 			"pm", req.PMKey, "verdict", card.Verdict)
 	}
 
-	return d.launchForwardStage(ctx, req, card)
+	return d.launchForwardStage(ctx, req, card, comments)
 }
 
 // dispatchNonForwardMove handles the sanctioned moves that are not a single
@@ -273,8 +273,76 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 // as a non-advance, so they are resolved here first. handled reports whether the
 // request matched one of them — when false, ApplyTransition falls through to the
 // forward-only path — and err carries that dispatch's own result.
+// bugVerdictHeader marks a ticket the bug pipeline triaged. Its runs plan for
+// themselves, so the absence of a plan on such a ticket is by design.
+const bugVerdictHeader = "[human:bug-verdict]"
+
+// planAlreadyOwned reports whether dispatching the executor is sensible: either
+// a plan exists, or this ticket belongs to a pipeline that plans for itself.
+//
+// The second half is not a courtesy — it is what keeps this guard from breaking
+// the bug pipeline. Autofix triages, plans and fixes in one run and never posts
+// a plan, so "no plan" on a bug is the normal state, and treating it as an
+// error would send every reworked bug back to planning it does not need. The
+// existing rework tests caught exactly that.
+func planAlreadyOwned(comments []tracker.Comment) bool {
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), bugVerdictHeader) {
+			return true
+		}
+	}
+	return hasPlan(comments)
+}
+
+// hasPlan reports whether a plan exists for this ticket — the thing the
+// executor is dispatched to carry out.
+//
+// Either marker is sufficient and both are needed as signals. The plan comment
+// is the plan itself in single-tracker topology; plan-ready is what advances
+// the card and is present in both topologies, including the split one where the
+// plan lives in an engineering ticket's description and never appears as a
+// comment here. Requiring the comment alone would refuse every split-topology
+// ticket.
+func hasPlan(comments []tracker.Comment) bool {
+	if _, ok := latestPlanComment(comments); ok {
+		return true
+	}
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), PlanReadyHeader) {
+			return true
+		}
+	}
+	return false
+}
+
+// planFirst launches planning instead of the executor, for a ticket that has no
+// plan to execute.
+//
+// The executor exists to carry out a plan. Dispatched without one it claims the
+// ticket, prepares, can interrupt a person with a decision, and only then
+// discovers there is nothing to do — and every later launch repeats that
+// exactly (SC-2596). Planning is what the ticket needs and what a person would
+// ask for, so the machine does it rather than reporting a problem and waiting.
+//
+// Deliberately NOT placed in startAgentStage. The bug and security pipelines
+// launch this same stage with no plan on purpose — they triage, plan and fix in
+// one run — so a guard on the stage would refuse every autofix. What
+// presupposes a plan is the executor prompt, so the guard sits with it.
+func (d BoardTransitionDeps) planFirst(ctx context.Context, pmKey string, cause WaitCause) error {
+	d.Logger.Info().Str("pm", pmKey).
+		Msg("board: implementation asked for with no plan on the ticket; planning first")
+	return d.startAgentStage(ctx, pmKey, BoardPlanning, PlanningStartedHeader, planPrompt(pmKey), cause)
+}
+
 func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard) (handled bool, err error) {
 	switch {
+	// Rework and the build retry are deliberately NOT gated on a plan existing.
+	// A card only reaches either by having completed implementation once, which
+	// means a plan existed or the bug pipeline owned it — history already
+	// guarantees what a check would look for. Checking anyway would risk
+	// refusing a nearly finished ticket whose plan-ready has aged out of a
+	// capped comment fetch, and sending it back to planning (SC-2596).
+	//
 	// Rework loop: a build whose review failed may be rebuilt. This is the ONE
 	// sanctioned backward move — the executor is re-dispatched with the review
 	// findings, and the resulting handoff chains into a fresh review.
@@ -326,12 +394,15 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 // launchForwardStage dispatches an already-sanctioned forward transition to
 // its stage launcher. Split from ApplyTransition so the gate chain and the
 // dispatch read (and count) as separate concerns.
-func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) error {
+func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) error {
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
 			planPrompt(req.PMKey), req.Cause)
 	case BoardImplementation:
+		if !planAlreadyOwned(comments) {
+			return d.planFirst(ctx, req.PMKey, req.Cause)
+		}
 		return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 			executePrompt(dispatchKey(req.PMKey, card), ""), req.Cause)
 	case BoardVerification:

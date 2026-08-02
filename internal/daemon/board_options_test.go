@@ -112,6 +112,10 @@ func TestDeriveBoardCard_StageStartConsumesOptions(t *testing.T) {
 func TestApplyOptionPostsChoiceAndRelaunches(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
 	c := &fakeCommenter{comments: []tracker.Comment{
+		// A ticket that legitimately reached implementation carries a plan (or,
+		// for a bug, a triage verdict). Without one the executor has nothing to
+		// carry out and the board plans first instead (SC-2596).
+		cmt(PlanCommentHeader+"\nstep one", base.Add(-time.Minute)),
 		cmt(ImplementationStartedHeader, base),
 		cmt(ReviewCompleteHeader+"\nverdict: fail", base.Add(1*time.Minute)),
 		cmt(optionsBody, base.Add(2*time.Minute)),

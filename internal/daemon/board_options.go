@@ -247,6 +247,16 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 		return errors.WrapWithDetails(err, "recording option choice", "pm", req.PMKey)
 	}
 
+	// This is the route the reported failure came in by: a decision answered on
+	// an unplanned ticket relaunches implementation, which then discovers there
+	// is nothing to execute — and does so again on every subsequent answer
+	// (SC-2596). Planning is what the ticket needs, so it goes there instead.
+	// The choice stays recorded above either way: it was made, and the run that
+	// eventually executes must still see it.
+	if stage == BoardImplementation && !planAlreadyOwned(comments) {
+		return d.planFirst(ctx, req.PMKey, WaitCause(""))
+	}
+
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	prompt := stagePrompt(stage, req.PMKey, card) +
 		" — a decision was made on this ticket: pursue the direction in the latest " +
