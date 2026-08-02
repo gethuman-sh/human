@@ -283,6 +283,28 @@ func TestDeriveBoardCard_HasPlan(t *testing.T) {
 	})
 }
 
+func TestDeriveBoardCard_HasRelatedRecord(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+
+	t.Run("completed record sets the flag without shifting stage", func(t *testing.T) {
+		// A [human:related] verdict is advisory content, not a stage signal — the
+		// card with no other markers stays in Backlog (SC-2405).
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:related] none", t0)}, tracker.CategoryUnstarted, false)
+		assert.True(t, card.HasRelatedRecord)
+		assert.Equal(t, BoardBacklog, card.Stage)
+	})
+
+	t.Run("incomplete record leaves the flag unset", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:related] incomplete\ndied halfway", t0)}, tracker.CategoryUnstarted, false)
+		assert.False(t, card.HasRelatedRecord)
+	})
+
+	t.Run("no related marker leaves the flag unset", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{cmt("[human:related-started]", t0)}, tracker.CategoryUnstarted, false)
+		assert.False(t, card.HasRelatedRecord)
+	})
+}
+
 func TestDeriveBoardCard_Ideas(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 

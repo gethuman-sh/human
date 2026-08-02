@@ -1,6 +1,10 @@
 package daemon
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/gethuman-sh/human/internal/tracker"
+)
 
 // BoardStage is one of the five pipeline columns (plus a synthetic "hidden"
 // stage for closed PM tickets that never entered the pipeline). The drag-board
@@ -166,6 +170,37 @@ const PlanCommentHeader = "[human:plan]"
 // stays green (deployed) while still carrying a visible "close this manually"
 // flag. Best-effort close means recorded-and-surfaced, never red, never silent.
 const CloseFailedHeader = "[human:close-failed]"
+
+// RelatedStartedHeader / RelatedHeader bracket the filing-time related-work
+// triage (SC-2405). Both are deliberately kept OUT of orderedMarkerSpecs, like
+// PlanCommentHeader: the run is advisory and must never move the card between
+// pipeline columns — the only thing that gates the card is a real dependency
+// link, which refuseIfBlocked already enforces. RelatedHeader carries a head
+// token: "found" (related work linked), "none" (searched, nothing found), or
+// "incomplete" (the run could not finish). found/none are terminal-complete;
+// incomplete is a visible record that still invites a manual re-run.
+const RelatedStartedHeader = "[human:related-started]"
+const RelatedHeader = "[human:related]"
+
+// hasCompletedRelatedRecord reports whether the ticket already carries a
+// COMPLETED related-work record (head "found" or "none"). An "incomplete"
+// record does not count, so a died-halfway run can be re-run from the card menu.
+// The closing bracket on RelatedHeader keeps "[human:related]" from matching a
+// "[human:related-started]" body, exactly as it keeps plan from matching
+// plan-ready.
+func hasCompletedRelatedRecord(comments []tracker.Comment) bool {
+	for _, c := range comments {
+		trimmed := strings.TrimSpace(c.Body)
+		if !strings.HasPrefix(trimmed, RelatedHeader) {
+			continue
+		}
+		head := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(trimmed, "\n", 2)[0], RelatedHeader))
+		if head == "found" || head == "none" {
+			return true
+		}
+	}
+	return false
+}
 
 // HandoffCheckUnreadableHeader flags that a board handoff's branch- or
 // commit-presence check could not be PERFORMED on this machine (an unresolvable
