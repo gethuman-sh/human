@@ -3101,7 +3101,16 @@ async function sendIdeationReply(text: string): Promise<void> {
 
   try {
     if (isFresh) {
-      ideation = await go().StartIdeation(text, ideationMode ?? "chat", restart, "", []);
+      // SC-2858: every fresh session — however the panel was opened (Product
+      // "+", post-import "Create first ticket", rail nav "new ticket") — must
+      // start from a captured idea, never a ticket created outright. The
+      // seed text becomes the idea's title, then the same conversation
+      // continues in evolve mode against that freshly captured ticket,
+      // mirroring the Ideas-column promotion path (promoteIdea) rather than
+      // duplicating it. The idea marker stays on the ticket until the
+      // conversation's terminal action (evolveTicket) removes it.
+      const ideaKey = await go().CreateIdea(text);
+      ideation = await go().StartIdeation(text, ideationMode ?? "chat", restart, ideaKey, []);
     } else {
       ideation = await go().ReplyIdeation(ideation.sessionId!, text);
     }
