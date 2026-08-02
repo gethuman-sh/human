@@ -21,6 +21,7 @@ var (
 	_ forge.MergedReader         = (*Client)(nil)
 	_ forge.BranchDeleter        = (*Client)(nil)
 	_ forge.PullRequestFinder    = (*Client)(nil)
+	_ forge.OpenWorkFinder       = (*Client)(nil)
 	_ forge.ReadyForReviewMarker = (*Client)(nil)
 )
 
@@ -182,6 +183,120 @@ func (c *Client) FindOpenPullRequest(ctx context.Context, repoName, head string)
 		}
 	}
 	return nil, nil
+}
+
+// FindOpenWork implements forge.OpenWorkFinder. It lists the repo's OPEN pull
+// requests and its branches, and reports every one whose title, head ref, or
+// branch name references key (case-insensitive substring). A branch already
+// carried as a reported PR's head is not reported a second time. This is the
+// live "already underway" signal preflight consults before starting a run so it
+// never duplicates open work (SC-2648).
+func (c *Client) FindOpenWork(ctx context.Context, repoName, key string) ([]forge.OpenWork, error) {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return nil, err
+	}
+	needle := strings.ToLower(strings.TrimSpace(key))
+	var out []forge.OpenWork
+	prHeads := map[string]bool{}
+
+	pulls, err := c.listAllOpenPulls(ctx, owner, repo, repoName)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range pulls {
+		if referencesKey(needle, p.Title) || referencesKey(needle, p.Head.Ref) {
+			out = append(out, forge.OpenWork{
+				Kind: "pull-request", Ref: p.Head.Ref, Title: p.Title,
+				Number: p.Number, URL: p.HTMLURL,
+			})
+			prHeads[p.Head.Ref] = true
+		}
+	}
+
+	branches, err := c.listAllBranches(ctx, owner, repo, repoName)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range branches {
+		if referencesKey(needle, b.Name) && !prHeads[b.Name] {
+			out = append(out, forge.OpenWork{Kind: "branch", Ref: b.Name})
+		}
+	}
+	return out, nil
+}
+
+// referencesKey reports whether text contains needle (already lowercased) as a
+// case-insensitive substring. An empty needle never matches.
+func referencesKey(needle, text string) bool {
+	return needle != "" && strings.Contains(strings.ToLower(text), needle)
+}
+
+// listAllOpenPulls returns every open pull request, following pagination.
+func (c *Client) listAllOpenPulls(ctx context.Context, owner, repo, repoName string) ([]pullListItem, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls", url.PathEscape(owner), url.PathEscape(repo))
+	query := url.Values{}
+	query.Set("state", "open")
+	query.Set("per_page", "100")
+	var all []pullListItem
+	raw := query.Encode()
+	for raw != "" {
+		resp, err := c.api.Do(ctx, http.MethodGet, path, raw, nil)
+		if err != nil {
+			return nil, err
+		}
+		next := nextPageQuery(resp)
+		var page []pullListItem
+		if err := apiclient.DecodeJSON(resp, &page, "repo", repoName); err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		raw = next
+	}
+	return all, nil
+}
+
+// listAllBranches returns every branch, following pagination.
+func (c *Client) listAllBranches(ctx context.Context, owner, repo, repoName string) ([]branchListItem, error) {
+	path := fmt.Sprintf("/repos/%s/%s/branches", url.PathEscape(owner), url.PathEscape(repo))
+	query := url.Values{}
+	query.Set("per_page", "100")
+	var all []branchListItem
+	raw := query.Encode()
+	for raw != "" {
+		resp, err := c.api.Do(ctx, http.MethodGet, path, raw, nil)
+		if err != nil {
+			return nil, err
+		}
+		next := nextPageQuery(resp)
+		var page []branchListItem
+		if err := apiclient.DecodeJSON(resp, &page, "repo", repoName); err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		raw = next
+	}
+	return all, nil
+}
+
+// nextPageQuery extracts the raw query string of the GitHub Link header's
+// rel="next" URL, or "" when there is no next page. Read the header BEFORE
+// DecodeJSON consumes the response body.
+func nextPageQuery(resp *http.Response) string {
+	for _, part := range strings.Split(resp.Header.Get("Link"), ",") {
+		segs := strings.Split(strings.TrimSpace(part), ";")
+		if len(segs) < 2 {
+			continue
+		}
+		if strings.TrimSpace(segs[1]) != `rel="next"` {
+			continue
+		}
+		rawURL := strings.Trim(strings.TrimSpace(segs[0]), "<>")
+		if u, err := url.Parse(rawURL); err == nil {
+			return u.RawQuery
+		}
+	}
+	return ""
 }
 
 // PullRequestChecks implements forge.ChecksReader. GitHub reports CI through

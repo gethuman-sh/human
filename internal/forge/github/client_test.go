@@ -369,3 +369,104 @@ func TestPullRequestMerged_verdicts(t *testing.T) {
 		})
 	}
 }
+
+func TestFindOpenWork_openPRNamingKey_isFound(t *testing.T) {
+	// The bug's false negative: a human's PR whose TITLE names the ticket key,
+	// on a branch whose name does NOT match the pipeline convention. Text/recall
+	// never saw it; the forge finder must.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/octocat/hello-world/pulls":
+			assert.Equal(t, "open", r.URL.Query().Get("state"))
+			_, _ = fmt.Fprint(w, `[{"number":57,"title":"[SC-2648] fix dragged card","html_url":"https://github.com/octocat/hello-world/pull/57","state":"open","head":{"ref":"stephan/card-fix"}}]`)
+		case "/repos/octocat/hello-world/branches":
+			_, _ = fmt.Fprint(w, `[]`)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	work, err := client.FindOpenWork(context.Background(), "octocat/hello-world", "SC-2648")
+	require.NoError(t, err)
+	require.Len(t, work, 1)
+	assert.Equal(t, "pull-request", work[0].Kind)
+	assert.Equal(t, 57, work[0].Number)
+	assert.Equal(t, "https://github.com/octocat/hello-world/pull/57", work[0].URL)
+	assert.Equal(t, "[SC-2648] fix dragged card", work[0].Title)
+}
+
+func TestFindOpenWork_branchNamingKey_isFound(t *testing.T) {
+	// A pushed branch with no PR yet (the implementation/review window) is still
+	// "underway".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/octocat/hello-world/pulls":
+			_, _ = fmt.Fprint(w, `[]`)
+		case "/repos/octocat/hello-world/branches":
+			_, _ = fmt.Fprint(w, `[{"name":"autofix/sc-2648"},{"name":"main"}]`)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	work, err := client.FindOpenWork(context.Background(), "octocat/hello-world", "SC-2648")
+	require.NoError(t, err)
+	require.Len(t, work, 1)
+	assert.Equal(t, "branch", work[0].Kind)
+	assert.Equal(t, "autofix/sc-2648", work[0].Ref)
+}
+
+func TestFindOpenWork_nothingOpen_returnsEmpty(t *testing.T) {
+	// The bug's false positive: a stale ticket overlaps in wording but has NO
+	// open PR or branch. The forge finder reports nothing, so preflight must not
+	// block. Encodes "merely overlapping wording does not stop anything".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/octocat/hello-world/pulls":
+			_, _ = fmt.Fprint(w, `[{"number":9,"title":"[SC-1111] unrelated","html_url":"https://github.com/octocat/hello-world/pull/9","state":"open","head":{"ref":"autofix/sc-1111"}}]`)
+		case "/repos/octocat/hello-world/branches":
+			_, _ = fmt.Fprint(w, `[{"name":"main"},{"name":"autofix/sc-1111"}]`)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	work, err := client.FindOpenWork(context.Background(), "octocat/hello-world", "SC-2648")
+	require.NoError(t, err)
+	assert.Empty(t, work)
+}
+
+func TestFindOpenWork_branchWithPR_notDoubleReported(t *testing.T) {
+	// A branch that is already the head of a matched PR must be reported once (as
+	// the PR), not also as a bare branch.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/octocat/hello-world/pulls":
+			_, _ = fmt.Fprint(w, `[{"number":57,"title":"[SC-2648] fix","html_url":"https://github.com/octocat/hello-world/pull/57","state":"open","head":{"ref":"autofix/sc-2648"}}]`)
+		case "/repos/octocat/hello-world/branches":
+			_, _ = fmt.Fprint(w, `[{"name":"autofix/sc-2648"}]`)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "ghp_test")
+	work, err := client.FindOpenWork(context.Background(), "octocat/hello-world", "SC-2648")
+	require.NoError(t, err)
+	require.Len(t, work, 1)
+	assert.Equal(t, "pull-request", work[0].Kind)
+}
+
+func TestFindOpenWork_invalidRepo(t *testing.T) {
+	client := New("https://api.github.com", "ghp_test")
+	_, err := client.FindOpenWork(context.Background(), "no-slash", "SC-2648")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "owner/repo")
+}

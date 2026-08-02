@@ -43,6 +43,28 @@ type PullRequestFinder interface {
 	FindOpenPullRequest(ctx context.Context, repo, head string) (*PullRequest, error)
 }
 
+// OpenWork is one piece of work already open against a ticket key: an open pull
+// request, or a pushed branch with no PR yet. It is the authoritative "someone
+// is already building this" signal that ticket text cannot carry (SC-2648).
+type OpenWork struct {
+	Kind   string // "pull-request" or "branch"
+	Ref    string // head/branch name
+	Title  string // PR title; "" for a bare branch
+	Number int    // PR number; 0 for a bare branch
+	URL    string // PR URL; "" for a bare branch
+}
+
+// OpenWorkFinder reports the pull requests and branches already open against a
+// ticket key — consulted by preflight before a run starts so it never builds a
+// second copy of work someone already has open (SC-2648). Implementations match
+// the key case-insensitively in a PR title, a PR head ref, or a branch name;
+// the pipeline names branches autofix/<key> and PR titles [<KEY>]. A branch that
+// is already the head of a reported PR is reported once (as the PR). Returns an
+// empty slice (not an error) when nothing is open.
+type OpenWorkFinder interface {
+	FindOpenWork(ctx context.Context, repo, key string) ([]OpenWork, error)
+}
+
 // AdoptOrCreatePullRequest makes opening a pull request idempotent w.r.t. the
 // head branch: when the forge can find an existing open PR for spec.Head it is
 // adopted (returned as-is) rather than re-created, so a deploy retry after a
