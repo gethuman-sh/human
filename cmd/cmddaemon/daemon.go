@@ -418,11 +418,12 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		BoardFixer:         boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
 		BoardSecurityFixer: securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
 		BoardOptioner:      boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate),
-		BugCreator:         bugCreatorFunc(projectRegistry, vaultResolver),
+		BugCreator:         bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID)),
 		SecurityCreator:    securityCreatorFunc(projectRegistry, vaultResolver),
 		CloseTicketer:      closeTicketerFunc(projectRegistry, vaultResolver, liveBoardAgents, (&dockerAgentCleaner{}).DeleteAgent, logger),
 		FeaturesGenerator:  featuresGeneratorFunc(projectRegistry),
 		FindbugsRunner:     findbugsRunnerFunc(projectRegistry),
+		RelateLauncher:     relateLauncherFunc(projectRegistry, daemonID),
 		SecurityRunner:     securityRunnerFunc(projectRegistry),
 		MockupsCreator:     mockupsCreatorFunc(projectRegistry),
 		VariationsCreator:  variationsCreatorFunc(projectRegistry),
@@ -3012,7 +3013,7 @@ func securityFixerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, da
 // ticket on the role-resolved PM tracker. The provider maps the bug type onto
 // its native defect marker (issue/story type where one exists, the bug label
 // otherwise), so the Bugs pane recognises the card on every backend.
-func bugCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.BugCreateRequest) (daemon.BugCreateResponse, error) {
+func bugCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, relate func(daemon.RelateRequest) error) func(daemon.BugCreateRequest) (daemon.BugCreateResponse, error) {
 	return func(req daemon.BugCreateRequest) (daemon.BugCreateResponse, error) {
 		if err := daemon.ValidateBugCreate(req); err != nil {
 			return daemon.BugCreateResponse{}, err
@@ -3035,6 +3036,18 @@ func bugCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(
 		})
 		if err != nil {
 			return daemon.BugCreateResponse{}, errors.WrapWithDetails(err, "creating bug ticket", "project", project)
+		}
+		// Filing returns immediately; the related-work record lands shortly after.
+		// Fire-and-forget on a background context so a slow container start never
+		// delays the caller. Only the interactive filing paths (the board Bugs pane
+		// and `human bug create`) reach this closure — the findbugs/security sweeps
+		// file with the raw provider create command and are excluded by
+		// construction, satisfying "no automatic runs for sweep-filed bugs"
+		// (SC-2405). A nil launcher (relate disabled) simply skips the triage.
+		if relate != nil {
+			go func(key, title string) {
+				_ = relate(daemon.RelateRequest{PMKey: key, PMTitle: title})
+			}(created.Key, req.Title)
 		}
 		return daemon.BugCreateResponse{Key: created.Key, URL: created.URL}, nil
 	}
@@ -3073,6 +3086,31 @@ func securityCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) 
 			return daemon.SecurityCreateResponse{}, errors.WrapWithDetails(err, "creating security ticket", "project", project)
 		}
 		return daemon.SecurityCreateResponse{Key: created.Key, URL: created.URL}, nil
+	}
+}
+
+// relateLauncherFunc builds the daemon's RelateLauncher closure: it launches
+// the /human-relate triage for one bug in the registered project's
+// devcontainer, exactly like a board on-demand agent. It tears down any prior
+// relate agent for the same key first so a re-run (or a manual run after an
+// incomplete one) is idempotent — Manager.Start refuses to start over a live
+// agent of the same name. The daemonID is stamped so a peer daemon spares the
+// launch it did not start, like every other board-launched agent (SC-2405).
+func relateLauncherFunc(reg *daemon.ProjectRegistry, daemonID string) func(daemon.RelateRequest) error {
+	return func(req daemon.RelateRequest) error {
+		if err := daemon.ValidateRelate(req); err != nil {
+			return err
+		}
+		entry, err := reg.SoleEntry()
+		if err != nil {
+			return err
+		}
+		name := "relate-" + req.PMKey
+		if docker, err := devcontainer.NewDockerClient(); err == nil {
+			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), name)
+			_ = docker.Close()
+		}
+		return dockerAgentLauncher{daemonID: daemonID}.Launch(context.Background(), name, "/human-relate "+req.PMKey, entry.Dir, entry.Dir)
 	}
 }
 

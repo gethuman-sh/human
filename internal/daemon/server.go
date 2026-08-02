@@ -108,6 +108,11 @@ type Server struct {
 	// that files surviving findings as bug tickets) in the registered project's
 	// devcontainer. nil disables the findbugs-start route.
 	FindbugsRunner func() error
+	// RelateLauncher launches the filing-time related-work triage (/human-relate)
+	// for one bug in the project devcontainer. nil disables both the relate route
+	// (the Bugs pane's on-demand "Find related work" action) and the auto-launch
+	// that fires after a bug is filed (SC-2405).
+	RelateLauncher func(req RelateRequest) error
 	// SecurityRunner launches the human-security sweep (multi-agent vulnerability
 	// scan that files surviving findings as security tickets) in the registered
 	// project's devcontainer — the Security pane's counterpart to FindbugsRunner.
@@ -498,6 +503,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"security-create":    func() { s.withBlockingOp(func() { s.handleSecurityCreate(conn, args[1:]) }) },
 		"features-generate":  func() { s.withBlockingOp(func() { s.handleFeaturesGenerate(conn) }) },
 		"findbugs-start":     func() { s.withBlockingOp(func() { s.handleFindbugsStart(conn) }) },
+		"relate":             func() { s.withBlockingOp(func() { s.handleRelate(conn, args[1:]) }) },
 		"findsecurity-start": func() { s.withBlockingOp(func() { s.handleFindsecurityStart(conn) }) },
 		"create-mocks":       func() { s.withBlockingOp(func() { s.handleCreateMocks(conn, args[1:]) }) },
 		"create-variations":  func() { s.withBlockingOp(func() { s.handleCreateVariations(conn, args[1:]) }) },
