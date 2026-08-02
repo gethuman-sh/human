@@ -766,7 +766,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
-		liveChainReview, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.daemonID, logger)
+		liveChainReview, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.modelSink.LatestClass, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
