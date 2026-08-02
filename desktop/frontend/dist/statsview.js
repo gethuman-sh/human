@@ -122,6 +122,18 @@ function rangeSpanMs(r) {
         return 30 * day;
     return day;
 }
+// contextTokens is everything spent establishing and re-reading context —
+// fresh input plus cache writes plus cache reads — as opposed to producing
+// output. Separating this from output is the point of the split: it is what
+// lets the page show that most of the spend is context, not answers.
+export function contextTokens(r) {
+    return r.input + r.cacheCreate + r.cacheRead;
+}
+// fmtUSD formats a cost as a dollar figure so token counts can be read as
+// money without the reader knowing the rate card.
+export function fmtUSD(n) {
+    return "$" + n.toFixed(2);
+}
 // barPercents normalizes values to 0..100 against the max, so a set of bars
 // reads as relative magnitude. An all-zero (or empty) input yields all zeros
 // rather than dividing by zero.
@@ -189,9 +201,8 @@ function headlineCard(label, big, sub) {
 }
 function renderHeadlines() {
     const s = latest;
-    const tokensTotal = s.tokens.fresh + s.tokens.cacheRead;
     const cards = [
-        headlineCard("Tokens (5h window)", fmtNum(tokensTotal), `${fmtNum(s.tokens.fresh)} fresh · ${fmtNum(s.tokens.cacheRead)} cache`),
+        headlineCard("Tokens (5h window)", fmtUSD(s.tokens.costUSD), `${fmtNum(s.tokens.output)} output · ${fmtNum(contextTokens(s.tokens))} context`),
         headlineCard("Tool calls", fmtNum(s.toolCalls.total), `${fmtNum(s.toolCalls.success)} ok · ${fmtNum(s.toolCalls.failure)} err`),
         headlineCard("Audit outcomes", fmtNum(s.audit.total), `${fmtNum(s.audit.success)} approved · ${fmtNum(s.audit.failure)} denied/failed`),
         headlineCard("Agent runs", fmtNum(s.agentRuns.total), `${fmtNum(s.agentRuns.success)} ok · ${fmtNum(s.agentRuns.failure)} failed`),
@@ -217,55 +228,56 @@ function panelShell(title, badge, body) {
 function emptyBody() {
     return `<div class="stats-empty">No data yet</div>`;
 }
-// Tokens-per-hour: two bars per hour (fresh, cache-read) normalized against the
-// overall max so the two series stay comparable across the row.
+// Tokens-per-hour: two bars per hour (output, context) normalized against the
+// overall max so the two series stay comparable across the row. Context folds
+// input + cache-create + cache-read — everything that isn't producing output.
 function panelTokens() {
     const rows = latest.tokensPerHour;
     if (rows.length === 0)
         return panelShell("Tokens per hour", "", emptyBody());
-    const all = rows.flatMap((r) => [r.fresh, r.cacheRead]);
+    const all = rows.flatMap((r) => [r.output, contextTokens(r)]);
     const pcts = barPercents(all);
     const body = rows
         .map((r, i) => {
-        const fp = pcts[i * 2];
+        const op = pcts[i * 2];
         const cp = pcts[i * 2 + 1];
         const hour = r.bucket.slice(11); // "HH:00"
         return (`<div class="stats-hour-row">` +
             `<span class="stats-hour-label">${escapeHtml(hour)}</span>` +
             `<span class="stats-hour-bars">` +
-            `<span class="token-bar"><span class="token-bar-fill fresh" style="width:${fp}%"></span></span>` +
+            `<span class="token-bar"><span class="token-bar-fill fresh" style="width:${op}%"></span></span>` +
             `<span class="token-bar"><span class="token-bar-fill cache" style="width:${cp}%"></span></span>` +
             `</span>` +
-            `<span class="stats-hour-val">${escapeHtml(fmtNum(r.fresh))}/${escapeHtml(fmtNum(r.cacheRead))}</span>` +
+            `<span class="stats-hour-val">${escapeHtml(fmtNum(r.output))}/${escapeHtml(fmtNum(contextTokens(r)))} · ${escapeHtml(fmtUSD(r.costUSD))}</span>` +
             `</div>`);
     })
         .join("");
-    return panelShell("Tokens per hour", "fresh / cache", body);
+    return panelShell("Tokens per hour", "output / context", body);
 }
-// Tokens-by-model: one row per model with two bars (fresh, cache-read)
+// Tokens-by-model: one row per model with two bars (output, context)
 // normalized against the overall max, so the tier split (opus/sonnet/haiku)
 // reads at a glance over the selected range.
 function panelTokensByModel() {
     const rows = latest.tokensByModel;
     if (rows.length === 0)
         return panelShell("Tokens by model", "", emptyBody());
-    const all = rows.flatMap((r) => [r.fresh, r.cacheRead]);
+    const all = rows.flatMap((r) => [r.output, contextTokens(r)]);
     const pcts = barPercents(all);
     const body = rows
         .map((r, i) => {
-        const fp = pcts[i * 2];
+        const op = pcts[i * 2];
         const cp = pcts[i * 2 + 1];
         return (`<div class="stats-hour-row">` +
             `<span class="stats-hour-label">${escapeHtml(r.model)}</span>` +
             `<span class="stats-hour-bars">` +
-            `<span class="token-bar"><span class="token-bar-fill fresh" style="width:${fp}%"></span></span>` +
+            `<span class="token-bar"><span class="token-bar-fill fresh" style="width:${op}%"></span></span>` +
             `<span class="token-bar"><span class="token-bar-fill cache" style="width:${cp}%"></span></span>` +
             `</span>` +
-            `<span class="stats-hour-val">${escapeHtml(fmtNum(r.fresh))}/${escapeHtml(fmtNum(r.cacheRead))}</span>` +
+            `<span class="stats-hour-val">${escapeHtml(fmtNum(r.output))}/${escapeHtml(fmtNum(contextTokens(r)))} · ${escapeHtml(fmtUSD(r.costUSD))}</span>` +
             `</div>`);
     })
         .join("");
-    return panelShell("Tokens by model", "fresh / cache", body);
+    return panelShell("Tokens by model", "output / context", body);
 }
 function panelTools() {
     const rows = latest.toolsByTool;
