@@ -18,7 +18,7 @@ import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./stat
 import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
-import { buildDetailSections, buildOptionsSection } from "./board-detail.js";
+import { buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
@@ -2489,17 +2489,29 @@ function renderTicketDetail() {
     else {
         options = buildOptionsSection(detailCard.optionsContext, visibleOptions);
     }
+    const stopDecision = buildStopDecisionSection(detailCard.stopDecision, detailCard.stopLinkedKey, detailCard.stopReasoning);
     body.innerHTML = `
     <div class="detail-title">${escapeHtml(detailCard.title)}</div>
     <div class="detail-owner">Owner: ${owner}</div>
     ${error}
     ${options}
+    ${stopDecision}
     ${desc}
     ${detailSections}
     ${link}
   `;
     const url = detailCard.url;
     body.querySelector(".detail-tracker-btn")?.addEventListener("click", () => openExternal(url));
+    // The linked ticket named by a stop decision opens that card's detail when it
+    // is on the board — the AC's reachability requirement (SC-2699).
+    body.querySelector(".detail-linked-btn")?.addEventListener("click", () => {
+        const key = detailCard?.stopLinkedKey;
+        if (!key)
+            return;
+        const linked = current.cards.find((c) => c.key === key);
+        if (linked)
+            openTicketDetail(linked);
+    });
     const optionKey = detailCard.key;
     const optionSig = optionsSignature(visibleOptions);
     body.querySelectorAll(".detail-option-btn").forEach((btn) => {

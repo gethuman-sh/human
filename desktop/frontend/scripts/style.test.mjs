@@ -185,6 +185,17 @@ test("resolved (terminal-success) badge is green, not muted (SC-1830)", () => {
   assert.doesNotMatch(resolved, /var\(--muted\)/, "the muted-gray mistone must not be reintroduced");
 });
 
+// SC-2699: a pre-planning stop decision is a settled, informational outcome —
+// never the amber "your turn" register and never a red failure. It shares the
+// neutral machine-working tone, so a decided card reads as decided, not as a
+// demand or a crash.
+test("decided badge uses the neutral machine-working colour, not amber or red (SC-2699)", () => {
+  const decided = ruleBody(".badge.decided");
+  assert.match(decided, /color:\s*var\(--turn-machine\)/, ".badge.decided must use the neutral machine-working token");
+  assert.doesNotMatch(decided, /var\(--turn-person\)/, "a settled decision must not wear the needs-a-person amber");
+  assert.doesNotMatch(decided, /var\(--turn-error\)/, "a settled decision must not wear the failure red");
+});
+
 // SC-1830: the four "whose turn" semantic tokens must exist and alias the
 // existing palette (gray=machine, amber=person, red=error, green=done).
 test("whose-turn colour tokens are defined (SC-1830)", () => {

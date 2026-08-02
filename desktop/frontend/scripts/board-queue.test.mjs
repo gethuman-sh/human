@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable } from "../build/board-queue.js";
+import { queueOf, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,6 +101,46 @@ test("badgeInfo preserves prior classifications", () => {
     "a resting reviewed card needs no badge — its queue position states completion",
   );
   assert.equal(badgeInfo({ stage: "done", state: "done" }).cls, "done");
+});
+
+// SC-2699: a pre-planning stop decision gives a Backlog/done card a distinct
+// "decided" badge that names the decision in human terms and shows the linked
+// key — distinguishing it from a card merely waiting its turn.
+test("decided badge names the decision and linked key for superseded (SC-2699)", () => {
+  const info = badgeInfo({ stage: "backlog", state: "done", stopDecision: "superseded", stopLinkedKey: "SC-100" });
+  assert.notEqual(info, null);
+  assert.equal(info.cls, "decided");
+  assert.match(info.text, /duplicate/);
+  assert.match(info.text, /SC-100/);
+  assert.notEqual(info.spinner, true, "a settled decision carries no spinner");
+});
+
+test("decided badge for escalated names the design ticket (SC-2699)", () => {
+  const info = badgeInfo({ stage: "backlog", state: "done", stopDecision: "escalated", stopLinkedKey: "SC-200" });
+  assert.equal(info.cls, "decided");
+  assert.match(info.text, /needs design decision/);
+  assert.match(info.text, /SC-200/);
+});
+
+test("decided badge for rejected has no linked key (SC-2699)", () => {
+  const info = badgeInfo({ stage: "backlog", state: "done", stopDecision: "rejected" });
+  assert.equal(info.cls, "decided");
+  assert.equal(info.text, "not a real problem");
+});
+
+test("an undecided backlog/done card is unchanged — no badge (SC-2699)", () => {
+  assert.equal(badgeInfo({ stage: "backlog", state: "done" }), null);
+});
+
+test("a decided card never paints failed (SC-2699)", () => {
+  const info = badgeInfo({ stage: "backlog", state: "failed", stopDecision: "superseded", error: "stale" });
+  assert.equal(info.cls, "decided", "the stop decision outranks any stale failure");
+});
+
+test("STOP_DECISION_LABELS covers the three stop heads (SC-2699)", () => {
+  assert.equal(STOP_DECISION_LABELS.superseded.text, "duplicate");
+  assert.equal(STOP_DECISION_LABELS.escalated.text, "needs design decision");
+  assert.equal(STOP_DECISION_LABELS.rejected.text, "not a real problem");
 });
 
 // SC-1830 regression: a failed review verdict is machine work (the daemon
