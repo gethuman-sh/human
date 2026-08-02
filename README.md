@@ -270,6 +270,22 @@ Enable in `devcontainer.json` using the [treehouse](https://github.com/gethuman-
 
 See the [treehouse README](https://github.com/gethuman-sh/treehouse#https-proxy) for full setup instructions.
 
+### Logs and rotation
+
+The daemon writes four append-mode logs under `~/.human/`:
+
+- `daemon.log` — the daemon's own diagnostics
+- `chrome-bridge.log` — the Chrome MCP bridge
+- `audit.log` — every tracker call, as JSON lines
+- `destructive.log` — destructive tracker operations (deletes, edits, transitions), as JSON lines
+
+The running daemon rotates these in place so they never grow without bound and rotation never disturbs the process holding them open. A rotated generation is named with a numeric suffix **after** the full filename — `daemon.log.1`, `daemon.log.2`, … — where **`.1` is the most recent** rotation and higher numbers are older. Generations are left uncompressed so they stay directly greppable.
+
+The two log kinds are retained differently on purpose:
+
+- **Diagnostic logs** (`daemon.log`, `chrome-bridge.log`) are size-capped, and their oldest generations are discarded once a handful have accumulated. Old diagnostics are not worth keeping forever.
+- **Accountability trails** (`audit.log`, `destructive.log`) rotate only so an old trail stays readable — **no generation is ever discarded by the unattended daemon.** The durable record also lives in the audit database (SQLite, with a rolling retention window), but the on-disk trail is the local, offline copy and the daemon will not be the thing that deletes it. Prune these yourself if you decide you no longer need old generations.
+
 ## Claude Code skills
 
 Install the Claude Code skills and agents into your project:
