@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"runtime"
 	"time"
 
 	"fyne.io/systray"
@@ -49,7 +50,19 @@ const trayRefreshInterval = 5 * time.Second
 // Best-effort by construction. A desktop with no system tray, or a panel that
 // refuses the icon, must cost the board nothing: systray.Run simply never
 // reports ready and the app carries on.
+//
+// Skipped entirely on macOS: systray.Run calls [NSApp run] to start its own
+// Cocoa event loop, but Wails already owns and runs [NSApp run] on the real
+// OS main thread, and Wails invokes OnStartup (hence runTray) on a freshly
+// spawned goroutine that never lands on that thread. Calling into AppKit off
+// the main thread there traps the whole process before the board window ever
+// appears — this is a known Wails v2 limitation (systray support is v3-only,
+// see https://github.com/wailsapp/wails/discussions/4514), not something a
+// threading fix in this package can safely work around. SC-2865.
 func (a *App) runTray(ctx context.Context) {
+	if runtime.GOOS == "darwin" {
+		return
+	}
 	systray.Run(func() { a.onTrayReady(ctx) }, func() {})
 }
 
