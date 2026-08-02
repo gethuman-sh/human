@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	stderrors "errors"
+	"strings"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
@@ -58,7 +59,7 @@ func (s *SQLiteStore) Lease(ctx context.Context, req LeaseRequest) (LeaseResult,
 	result := LeaseResult{Granted: true, Lease: granted}
 	if displaced, ok := displacedBy(existing, found, req.Meta.Agent); ok {
 		result.Displaced = &displaced
-		keys, err := inheritedKeys(ctx, tx, normProject, normScope, displaced.Agent)
+		keys, err := inheritedKeys(ctx, tx, normProject, normScope, displaced.Agent, req.Stage)
 		if err != nil {
 			return LeaseResult{}, err
 		}
@@ -127,6 +128,19 @@ func displacedBy(existing Lease, found bool, agent string) (Lease, bool) {
 		return Lease{}, false
 	}
 	return existing, true
+}
+
+// belongsToOtherStage reports whether a state key is filed under a stage other
+// than the one being leased. Only the `stage.<name>` namespace is read as a
+// claim of ownership; `stage.triage.exit` belongs to `triage`, so the
+// comparison is on the segment after the prefix, not the whole remainder.
+func belongsToOtherStage(name, stage string) bool {
+	rest, ok := strings.CutPrefix(name, "stage.")
+	if !ok {
+		return false
+	}
+	owner, _, _ := strings.Cut(rest, ".")
+	return owner != stage
 }
 
 // Release marks a stage lease as handed back. When agent is non-empty the
@@ -225,8 +239,20 @@ func writeLease(ctx context.Context, tx *sql.Tx, project string, c Lease) error 
 }
 
 // inheritedKeys lists the state a displaced agent left behind in the scope —
-// the successor's inheritance.
-func inheritedKeys(ctx context.Context, tx *sql.Tx, project, scope, agent string) ([]string, error) {
+// the successor's inheritance — minus anything filed under a DIFFERENT stage.
+//
+// The successor is told to read these as "what it had already worked out", so a
+// key belonging to another step is not merely noise: it is another role's work
+// presented as the reader's own. That was reachable while several steps shared
+// one lease name (a PR reviewer displacing a planner), and stale rows from that
+// era outlive the naming fix, so the filter stays as the durable guard.
+//
+// Only `stage.<other>` records are excluded, because that prefix is the one
+// unambiguous statement of ownership a key makes. Keys carrying no stage
+// namespace at all — `capabilities`, `decisions` — are shared working memory
+// and are deliberately still inherited; dropping them would trade this defect
+// for a silent loss of the state the mechanism exists to preserve.
+func inheritedKeys(ctx context.Context, tx *sql.Tx, project, scope, agent, stage string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT name FROM agent_state WHERE project = ? AND scope = ? AND agent = ? ORDER BY name`, project, scope, agent)
 	if err != nil {
@@ -239,6 +265,9 @@ func inheritedKeys(ctx context.Context, tx *sql.Tx, project, scope, agent string
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			return nil, errors.WrapWithDetails(err, "scan inherited key")
+		}
+		if belongsToOtherStage(name, stage) {
+			continue
 		}
 		names = append(names, name)
 	}
