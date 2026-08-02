@@ -604,6 +604,172 @@ func TestNewSQLiteStore_MigratesRecallUnique(t *testing.T) {
 	assert.ElementsMatch(t, []string{"Legacy row", "Beta row"}, titles)
 }
 
+// A database created before project scoping existed (or reopened by the
+// buggy c2dc887 binary) can hold an orphaned project='' row for a key that
+// has since been indexed under its real project. The first upsert against
+// the real project must adopt that orphan in place rather than insert a
+// second row — one ticket, one entry, reporting the current status (SC-2597).
+func TestUpsertEntry_AdoptsLegacyEmptyProjectRow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+	ctx := context.Background()
+
+	legacy, err := NewSQLiteStore(path)
+	require.NoError(t, err)
+	// Force the pre-SC-2326 shape directly, bypassing ensureSchema's
+	// migration, so the seeded row lands under project='' the way a legacy
+	// database would.
+	_, err = legacy.db.Exec(`DROP TABLE entries`)
+	require.NoError(t, err)
+	_, err = legacy.db.Exec(`
+		CREATE TABLE entries (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			key        TEXT NOT NULL,
+			source     TEXT NOT NULL,
+			kind       TEXT NOT NULL,
+			project    TEXT NOT NULL DEFAULT '',
+			title      TEXT NOT NULL DEFAULT '',
+			status     TEXT NOT NULL DEFAULT '',
+			assignee   TEXT NOT NULL DEFAULT '',
+			url        TEXT NOT NULL DEFAULT '',
+			indexed_at DATETIME NOT NULL DEFAULT (datetime('now')),
+			UNIQUE (key, source)
+		)`)
+	require.NoError(t, err)
+	require.NoError(t, legacy.UpsertEntry(ctx,
+		Entry{Key: "SC-1", Source: "work", Kind: "shortcut", Project: "", Title: "Old title", Status: "done"}, "d"))
+	require.NoError(t, legacy.Close())
+
+	reopened, err := NewSQLiteStore(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	// The real project's upsert must adopt the '' orphan instead of forming a
+	// twin.
+	require.NoError(t, reopened.UpsertEntry(ctx,
+		Entry{Key: "SC-1", Source: "work", Kind: "shortcut", Project: "realproj", Title: "New title", Status: "in progress"}, "d2"))
+
+	stats, err := reopened.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.TotalEntries, "the upsert must adopt the orphan row instead of creating a twin")
+
+	results, err := reopened.Search(ctx, "SC-1", 10)
+	require.NoError(t, err)
+	require.Len(t, results, 1, "one ticket must produce one search entry")
+	assert.Equal(t, "in progress", results[0].Status, "the surviving entry must report the current status")
+	assert.Equal(t, "realproj", results[0].Project)
+}
+
+// A database already corrupted by the buggy c2dc887 binary can hold both the
+// stale project='' twin and the current real-project row for the same key.
+// Reopening the store must reconcile them so only the current row survives —
+// reconciliation is not limited to upsert time, because a database opened
+// once already holds the twin (SC-2597).
+func TestNewSQLiteStore_ReconcilesExistingEmptyProjectTwin(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+	ctx := context.Background()
+
+	store, err := NewSQLiteStore(path)
+	require.NoError(t, err)
+
+	// Seed the corrupted twin shape directly (bypassing UpsertEntry, which
+	// — once fixed — would never let this pair form).
+	res1, err := store.db.Exec(
+		`INSERT INTO entries (key, source, kind, project, title, status) VALUES (?, ?, ?, ?, ?, ?)`,
+		"SC-1", "work", "shortcut", "", "Stale title", "done")
+	require.NoError(t, err)
+	id1, err := res1.LastInsertId()
+	require.NoError(t, err)
+	_, err = store.db.Exec(
+		`INSERT INTO entries_fts(rowid, key, title, description) VALUES (?, ?, ?, ?)`,
+		id1, "SC-1", "Stale title", "stale desc")
+	require.NoError(t, err)
+
+	res2, err := store.db.Exec(
+		`INSERT INTO entries (key, source, kind, project, title, status) VALUES (?, ?, ?, ?, ?, ?)`,
+		"SC-1", "work", "shortcut", "realproj", "Current title", "in progress")
+	require.NoError(t, err)
+	id2, err := res2.LastInsertId()
+	require.NoError(t, err)
+	_, err = store.db.Exec(
+		`INSERT INTO entries_fts(rowid, key, title, description) VALUES (?, ?, ?, ?)`,
+		id2, "SC-1", "Current title", "current desc")
+	require.NoError(t, err)
+
+	require.NoError(t, store.Close())
+
+	reopened, err := NewSQLiteStore(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	stats, err := reopened.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.TotalEntries, "reopening must reconcile the existing twin down to one entry")
+
+	results, err := reopened.Search(ctx, "SC-1", 10)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "Current title", results[0].Title)
+	assert.Equal(t, "realproj", results[0].Project)
+}
+
+// DeleteEntry's semantics are "this key is gone from the source entirely" —
+// it must remove every project's row for (key, source), not just whichever
+// one its unqualified lookup happened to find first (SC-2597).
+func TestDeleteEntry_RemovesAllProjectRows(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// A survivor under a different key keeps the index non-empty so Search
+	// after delete exercises "gone" rather than "index refuses to answer".
+	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "OTHER-1", Source: "work", Kind: "shortcut", Title: "other"}, "keep"))
+	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "SC-1", Source: "work", Kind: "shortcut", Project: "alpha", Title: "Alpha"}, "d"))
+	require.NoError(t, s.UpsertEntry(ctx, Entry{Key: "SC-1", Source: "work", Kind: "shortcut", Project: "beta", Title: "Beta"}, "d"))
+
+	stats, err := s.Stats(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 3, stats.TotalEntries)
+
+	require.NoError(t, s.DeleteEntry(ctx, "SC-1", "work"))
+
+	stats, err = s.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.TotalEntries, "delete must remove every project's row for the key+source, not just one")
+
+	results, err := s.Search(ctx, "SC-1", 10)
+	require.NoError(t, err)
+	assert.Empty(t, results, "no project's row for the deleted key should remain searchable")
+}
+
+// entry_files' primary key did not include project, so two projects sharing
+// a key+source clobbered each other's file set: the second upsert's DELETE
+// FROM entry_files WHERE key=? AND source=? wiped the first project's rows
+// too. Each project's file set must survive the other's upsert (SC-2597).
+func TestUpsertEntry_EntryFilesAreProjectScoped(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.UpsertEntry(ctx, Entry{
+		Key: "SC-1", Source: "work", Kind: "shortcut", Project: "alpha", Title: "Alpha",
+		Files: []string{"path/alpha.go"},
+	}, "d"))
+	require.NoError(t, s.UpsertEntry(ctx, Entry{
+		Key: "SC-1", Source: "work", Kind: "shortcut", Project: "beta", Title: "Beta",
+		Files: []string{"path/beta.go"},
+	}, "d"))
+
+	alphaHits, err := s.SearchByFile(ctx, "path/alpha.go", 20)
+	require.NoError(t, err)
+	require.Len(t, alphaHits, 1, "alpha's file set must survive beta's upsert")
+	assert.Equal(t, "alpha", alphaHits[0].Project)
+
+	betaHits, err := s.SearchByFile(ctx, "path/beta.go", 20)
+	require.NoError(t, err)
+	require.Len(t, betaHits, 1)
+	assert.Equal(t, "beta", betaHits[0].Project)
+}
+
 func TestAllKeys_emptySource(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
