@@ -113,6 +113,10 @@ interface Card {
   // Security ticket (security label or type): rendered in the Security half of
   // the Bugs pane. Disjoint from bug — the classification tokens never overlap.
   security?: boolean;
+  // A completed filing-time related-work record is present ([human:related]
+  // found/none). Suppresses the on-demand "Find related work" menu item; an
+  // incomplete record does not set it, so a died-halfway run stays re-runnable.
+  hasRelatedRecord?: boolean;
   // Ticket the user parked off the board (right-click → Hide). Local view
   // preference; filtered out unless revealed via the header's Unhide toggle.
   hidden?: boolean;
@@ -312,6 +316,7 @@ interface AppBindings {
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   FixBug(pmKey: string, pmTitle: string): Promise<void>;
   FixSecurity(pmKey: string, pmTitle: string): Promise<void>;
+  FindRelatedWork(pmKey: string, pmTitle: string): Promise<void>;
   ChooseOption(pmKey: string, optionID: string): Promise<void>;
   CloseTicket(pmKey: string): Promise<void>;
   SetIdeaColumn(pmKey: string, col: number): Promise<void>;
@@ -645,6 +650,24 @@ function showCardMenu(card: Card, x: number, y: number): void {
       void (card.security ? fixSecurity : fixBug)(card.key, card.title);
     });
     menu.appendChild(retryItem);
+  }
+
+  // A freshly filed bug's related-work triage runs automatically, but a
+  // sweep-filed bug (or one whose run died halfway) carries no completed record —
+  // offer the triage on demand. Suppressed once a completed record exists.
+  // Relaunching runs an agent, so it is Docker-gated like its siblings (SC-2405).
+  if (card.bug && !card.hasRelatedRecord) {
+    const relateItem = document.createElement("button");
+    relateItem.type = "button";
+    relateItem.className = "context-menu-item";
+    relateItem.textContent = "Find related work";
+    relateItem.disabled = !current.dockerAvailable;
+    if (relateItem.disabled) relateItem.title = "Docker required";
+    relateItem.addEventListener("click", () => {
+      menu.remove();
+      void findRelatedWork(card.key, card.title);
+    });
+    menu.appendChild(relateItem);
   }
 
   // A failed planning run leaves the card in Engineering with no pipeline gesture
@@ -1154,6 +1177,19 @@ async function fixBug(key: string, title: string): Promise<void> {
       pendingMoves = dropPendingMove(pendingMoves, key);
       showError(errMessage(err));
     },
+    reconcile,
+  );
+}
+
+// findRelatedWork launches the on-demand related-work triage for one bug — the
+// Bugs pane's card action for a bug carrying no completed record. No optimistic
+// move: the run is advisory and never changes the card's stage, so there is
+// nothing to shield or revert; the daemon is authoritative and the record lands
+// on the card on a later reconcile.
+async function findRelatedWork(key: string, title: string): Promise<void> {
+  await runGuardedAction(
+    () => go().FindRelatedWork(key, title),
+    (err) => showError(errMessage(err)),
     reconcile,
   );
 }

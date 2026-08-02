@@ -623,6 +623,18 @@ func BugCreate(addr, token string, req BugCreateRequest) (BugCreateResponse, err
 	return resp, nil
 }
 
+// Relate launches the filing-time related-work triage on one bug — the Bugs
+// pane's on-demand "Find related work" card action (SC-2405). It returns once
+// the agent is launched, not when the triage finishes.
+func Relate(addr, token string, req RelateRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling relate request")
+	}
+	_, err = RunRemoteCapture(addr, token, []string{"relate", string(data)})
+	return err
+}
+
 // SecurityCreate files a security ticket on the PM tracker — the Security
 // section's `+` dialog (title plus free-text description).
 func SecurityCreate(addr, token string, req SecurityCreateRequest) (SecurityCreateResponse, error) {

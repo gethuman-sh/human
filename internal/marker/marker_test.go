@@ -95,6 +95,18 @@ func TestValidate_headEnum(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "bug-verify", Head: "NOT DONE"}))
 }
 
+func TestValidate_relatedHeadEnum(t *testing.T) {
+	// The related record's head names which of the three required statements it
+	// is; a head outside the enum would be a verdict no reader knows (SC-2405).
+	assert.Error(t, Validate(Marker{Type: "related"}), "a verdict head is required")
+	assert.Error(t, Validate(Marker{Type: "related", Head: "maybe"}), "outside the enum")
+	for _, head := range []string{"found", "none", "incomplete"} {
+		assert.NoError(t, Validate(Marker{Type: "related", Head: head}), head)
+	}
+	// related-started brackets the run's start and carries no head.
+	assert.NoError(t, Validate(Marker{Type: "related-started"}))
+}
+
 func TestValidate_ticketReviewVerdictEnum(t *testing.T) {
 	// The gate ACTS on every outcome, so the head names what it did. A verdict
 	// outside the enum would be a state no later stage knows how to read.

@@ -26,6 +26,11 @@ type BoardCard struct {
 	// here instead of on a separate engineering ticket (single-tracker
 	// topology).
 	HasPlan bool `json:"has_plan,omitempty"`
+	// HasRelatedRecord reports a COMPLETED filing-time related-work record
+	// ([human:related] found/none) on the ticket. The frontend uses it to
+	// suppress the on-demand "Find related work" card menu item — an incomplete
+	// record does not set it, so a died-halfway run stays re-runnable (SC-2405).
+	HasRelatedRecord bool `json:"has_related_record,omitempty"`
 	// Verdict is the `verdict:` line of the latest [human:review-complete]
 	// comment (pass / pass with notes / fail). A failing verdict keeps the
 	// card out of Ready to Deploy and blocks the deploy transition; an absent
@@ -110,6 +115,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	}
 
 	_, hasPlan := latestPlanComment(comments)
+	hasRelated := hasCompletedRelatedRecord(comments)
 
 	var state BoardState
 	var latest tracker.Comment
@@ -133,10 +139,10 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 
 	if !anyMarker {
 		// No pipeline activity yet: the open ticket waits in Backlog.
-		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan}
+		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan, HasRelatedRecord: hasRelated}
 	}
 
-	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, StageEnteredAt: latest.Created, StageDaemonID: ParseDaemonID(latest.Body)}
+	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, HasRelatedRecord: hasRelated, StageEnteredAt: latest.Created, StageDaemonID: ParseDaemonID(latest.Body)}
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")

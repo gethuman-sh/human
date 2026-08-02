@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 func TestClassifyMarker(t *testing.T) {
@@ -37,6 +40,10 @@ func TestClassifyMarker(t *testing.T) {
 		{"review-outage", "[human:review-outage]\ntracker unreachable", BoardVerification, BoardOutage, true},
 		{"deploy-outage", "[human:deploy-outage]\ntracker unreachable", BoardDoneStage, BoardOutage, true},
 		{"quoted header mid-body is not a marker", "discussion: [human:planning-started]", "", "", false},
+		// The related-work triage markers are advisory and deliberately kept out of
+		// orderedMarkerSpecs, so they must never classify as a board stage (SC-2405).
+		{"related found is not a board marker", "[human:related] found\n- duplicate of SC-9", "", "", false},
+		{"related-started is not a board marker", "[human:related-started]", "", "", false},
 		{"non-marker", "just a normal comment", "", "", false},
 		{"empty", "", "", "", false},
 	}
@@ -46,6 +53,33 @@ func TestClassifyMarker(t *testing.T) {
 			assert.Equal(t, tt.wantOK, ok)
 			assert.Equal(t, tt.wantStage, stage)
 			assert.Equal(t, tt.wantState, state)
+		})
+	}
+}
+
+func TestHasCompletedRelatedRecord(t *testing.T) {
+	now := time.Unix(1000, 0)
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		// found and none are the two completed terminals: the search ran to a
+		// verdict, so the menu action is suppressed.
+		{"found is complete", "[human:related] found\n- duplicate of SC-9", true},
+		{"none is complete", "[human:related] none", true},
+		// incomplete is a visible record that the run died halfway — it must NOT
+		// suppress the re-run, so it does not count as a completed record.
+		{"incomplete is not complete", "[human:related] incomplete\ncould not search", false},
+		// The started marker shares a prefix up to the closing bracket; it must
+		// never be mistaken for a completed record.
+		{"related-started is not a record", "[human:related-started]", false},
+		{"no related marker", "just a comment", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasCompletedRelatedRecord([]tracker.Comment{{Body: tt.body, Created: now}})
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

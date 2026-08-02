@@ -54,6 +54,21 @@ func TestCompose_LeavesViewerOwnedFieldsZero(t *testing.T) {
 	assert.Empty(t, view.ColumnOrder, "hand-sorted order is a viewer preference")
 }
 
+// The completed-record flag rides from the derived card onto the wire card so
+// the Bugs pane can suppress the on-demand "Find related work" action (SC-2405).
+func TestCompose_HasRelatedRecordCopied(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "with record"}, {Key: "SC-2", Title: "without record"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardBacklog, HasRelatedRecord: true},
+			"SC-2": {Stage: daemon.BoardBacklog},
+		},
+	)}, true)
+
+	assert.True(t, cardByKey(t, view, "SC-1").HasRelatedRecord)
+	assert.False(t, cardByKey(t, view, "SC-2").HasRelatedRecord)
+}
+
 // Hidden cards must still be composed: the frontend filters them, so dropping
 // them here would make "reveal hidden" impossible without a refetch.
 func TestCompose_ReturnsCardsTheViewerMayHide(t *testing.T) {

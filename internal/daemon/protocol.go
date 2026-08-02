@@ -203,6 +203,10 @@ type BoardViewCard struct {
 	// the Bugs pane. A ticket is never both a bug and security — the tokens are
 	// disjoint — so the two flags are mutually exclusive.
 	Security bool `json:"security,omitempty"`
+	// HasRelatedRecord reports a completed filing-time related-work record
+	// ([human:related] found/none). The Bugs pane suppresses the on-demand
+	// "Find related work" menu item when true (SC-2405).
+	HasRelatedRecord bool `json:"hasRelatedRecord,omitempty"`
 	// Hidden marks a ticket the user parked off the board (right-click →
 	// Hide). Locally persisted view preference, never tracker state; the
 	// frontend filters hidden cards out unless the user reveals them.

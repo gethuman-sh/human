@@ -114,6 +114,14 @@ var specs = map[string]spec{
 	// daemon (IssueDetailResult.FixSummaryHTML), so it is a first-class marker
 	// rather than one of the open-ended types — declare it as such.
 	"fix-summary": {},
+	// The filing-time related-work triage (SC-2405). related-started brackets the
+	// run's start; related carries the terminal verdict, its head naming which of
+	// the three required statements it is — "found" (related work linked), "none"
+	// (searched, nothing found), or "incomplete" (the run could not finish). The
+	// enum is validated at post time so a malformed head never reaches the daemon's
+	// hasCompletedRelatedRecord, which classifies found/none as a completed record.
+	"related-started": {},
+	"related":         {needsHead: true, headEnum: []string{"found", "none", "incomplete"}},
 }
 
 // KnownTypes lists the marker types with a validation contract, sorted.
