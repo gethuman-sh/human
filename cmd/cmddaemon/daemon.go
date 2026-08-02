@@ -39,6 +39,7 @@ import (
 	"github.com/gethuman-sh/human/internal/dispatch"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/gitrepo"
+	"github.com/gethuman-sh/human/internal/logrotate"
 	"github.com/gethuman-sh/human/internal/messaging/slack"
 	"github.com/gethuman-sh/human/internal/messaging/telegram"
 	"github.com/gethuman-sh/human/internal/mockups"
@@ -50,6 +51,55 @@ import (
 )
 
 const daemonChildEnv = "_HUMAN_DAEMON_CHILD"
+
+// Log rotation keeps the append-mode files under ~/.human bounded while the
+// daemon runs unattended (SC-2611). Diagnostic logs are size-capped and their
+// oldest generations are discarded; the audit and destructive accountability
+// trails rotate only for readability and never lose a generation to the daemon.
+const (
+	// diagnosticLogMaxBytes rotates a diagnostic log once it reaches 20 MB,
+	// small enough to stay quick to grep while diagnosing a problem.
+	diagnosticLogMaxBytes = 20 * 1024 * 1024
+	// diagnosticLogGenerations bounds retained diagnostic history: with the size
+	// cap this holds at most ~120 MB per log (1 live + 5 rotated) on disk.
+	diagnosticLogGenerations = 5
+	// accountabilityLogMaxBytes rotates audit.log/destructive.log at the same
+	// size purely so an old trail stays readable; see accountability policy below.
+	accountabilityLogMaxBytes = 20 * 1024 * 1024
+)
+
+// rotateDaemonLogs bounds the diagnostic logs and rotates the accountability
+// trails for readability. Every failure is logged and none is fatal: an
+// unrotated log costs disk, a daemon that exits over it costs the whole pipeline.
+func rotateDaemonLogs(logger zerolog.Logger) {
+	diagnostic := logrotate.Policy{
+		MaxSizeBytes:   diagnosticLogMaxBytes,
+		MaxGenerations: diagnosticLogGenerations,
+	}
+	// MaxGenerations 0 means never discard: the durable record lives in SQLite +
+	// S3, but the on-disk trail is the local, offline copy and the unattended
+	// daemon must not be the thing that deletes it (SC-2611 decision: option 2).
+	accountability := logrotate.Policy{
+		MaxSizeBytes:   accountabilityLogMaxBytes,
+		MaxGenerations: 0,
+	}
+	targets := []struct {
+		path   string
+		policy logrotate.Policy
+	}{
+		{daemon.LogPath(), diagnostic},
+		{ChromeBridgeLogPath(), diagnostic},
+		{cmdutil.AuditLogPath(), accountability},
+		{cmdutil.DestructiveLogPath(), accountability},
+	}
+	for _, t := range targets {
+		if rotated, err := logrotate.Rotate(t.path, t.policy); err != nil {
+			logger.Warn().Err(err).Str("path", t.path).Msg("log rotation failed")
+		} else if rotated {
+			logger.Info().Str("path", t.path).Msg("rotated log file")
+		}
+	}
+}
 
 // BuildDaemonCmd creates the "daemon" command tree.
 func BuildDaemonCmd(cmdFactory func() *cobra.Command, version string) *cobra.Command {
@@ -163,6 +213,7 @@ func runMaintenanceTick(ctx context.Context, logger zerolog.Logger, confirmStore
 	if _, pruneErr := agent.PruneExecutions(); pruneErr != nil {
 		logger.Warn().Err(pruneErr).Msg("periodic agent execution log prune failed")
 	}
+	rotateDaemonLogs(logger)
 }
 
 // pruneAgentState drops agent working state past its retention window. Every
