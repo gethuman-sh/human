@@ -52,7 +52,7 @@ func TestHandleBoardAgentExit_stampsFailedMarker(t *testing.T) {
 	commenterFor := func() (tracker.Commenter, error) { return signing, nil }
 
 	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "",
-		commenterFor, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, nil, "d1", zerolog.Nop())
+		commenterFor, nil, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, nil, "d1", zerolog.Nop())
 
 	require.Len(t, c.added, 1)
 	assert.Contains(t, c.added[0], ImplementationFailedHeader)

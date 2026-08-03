@@ -61,6 +61,22 @@ func TestDeriveBoardCard_prReviewLoop(t *testing.T) {
 	})
 }
 
+// SC-3156 (criterion 5): a card reddened by a [human:review-failed] recovers when
+// the review goes on to finish — a strictly-newer [human:review-complete] is the
+// latest verification marker and supersedes the failure (supersededByNewerMarker
+// + latest-wins), so the card leaves red without any bespoke recovery machinery.
+func TestDeriveBoardCard_ReviewCompleteSupersedesReviewFailed(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x\ncommits: abc123", time.Unix(1, 0)),
+		cmt(ReviewStartedHeader, time.Unix(2, 0)),
+		cmt(ReviewFailedHeader+"\nagent died", time.Unix(3, 0)),
+		cmt(ReviewCompleteHeader+"\nverdict: pass", time.Unix(4, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.NotEqual(t, BoardFailed, card.State, "a later review-complete must clear the review-failed red")
+	assert.Equal(t, "pass", card.Verdict, "the recovered card carries the review verdict")
+}
+
 func TestDeriveBoardCard(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	t1 := time.Unix(2000, 0)
