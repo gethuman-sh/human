@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -420,7 +421,7 @@ func TestDeriveBoardCard_stageEnteredAt(t *testing.T) {
 // peer daemon's live card from its own (SC-1450).
 func TestDeriveBoardCard_stampsStageDaemonID(t *testing.T) {
 	card := DeriveBoardCard([]tracker.Comment{
-		cmt(StampDaemon(ImplementationStartedHeader, "d1"), time.Unix(1000, 0)),
+		cmt(marker.Sign(ImplementationStartedHeader, "d1", ""), time.Unix(1000, 0)),
 	}, tracker.CategoryUnstarted, false)
 
 	assert.Equal(t, "d1", card.StageDaemonID)

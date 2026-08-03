@@ -255,7 +255,7 @@ func (r StageRetry) note(ctx context.Context, pmKey string, stage BoardStage, at
 	}
 	body := "Automatic retry " + strconv.Itoa(attempt) + "/" + strconv.Itoa(r.max()) + " of the " +
 		string(stage) + " stage — " + reason + "."
-	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Msg("board retry: cannot post the retry note")
 	}
 }

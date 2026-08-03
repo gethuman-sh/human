@@ -11,10 +11,12 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/dispatch"
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/gitrepo"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/messaging/slack"
 	"github.com/gethuman-sh/human/internal/messaging/telegram"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -100,6 +102,7 @@ func ResolveProvider(cmd *cobra.Command, kind string, deps Deps) (tracker.Provid
 	}
 
 	p, dpCleanup := applyDestructiveWrapper(ctx, p, instance.Name, instance.Kind, deps, os.Stderr)
+	p = signMarkerWrites(ctx, p)
 	return p, func() { dpCleanup(); auditCleanup() }, nil
 }
 
@@ -298,7 +301,20 @@ func wrapInstance(cmd *cobra.Command, instance *tracker.Instance, key string, de
 	}
 
 	p, dpCleanup := applyDestructiveWrapper(ctx, p, instance.Name, instance.Kind, deps, errW)
+	p = signMarkerWrites(ctx, p)
 	return &AutoResult{Provider: p, Kind: instance.Kind, Key: key, Cleanup: func() { dpCleanup(); auditCleanup() }}, nil
+}
+
+// signMarkerWrites wraps p as the OUTERMOST decorator so every [human:*] marker
+// an agent or CLI posts carries provenance: the machine is HUMAN_DAEMON_ID (the
+// daemon that dispatched this process, delivered per SC-660), the build is the
+// binary's BuildRevision. Wrapping outermost means the signed body is what the
+// audit and destructive logs record — what was actually posted. Free-form
+// (non-marker) comments pass through untouched: marker.Sign only signs a body
+// that parses as a [human:*] marker.
+func signMarkerWrites(ctx context.Context, p tracker.Provider) tracker.Provider {
+	machine := env.Lookup(ctx, "HUMAN_DAEMON_ID")
+	return marker.NewSigningProvider(p, machine, daemon.BuildRevision())
 }
 
 // matchInstanceByKindAndURL finds a configured instance matching the tracker kind

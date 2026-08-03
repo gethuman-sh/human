@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -23,7 +24,7 @@ func TestReconcileStuckRunning_NeverTakesOverAForeignOwnedStage(t *testing.T) {
 	foreign := []ReconcileCard{{
 		Key: "SC-1",
 		Comments: []tracker.Comment{cmt(
-			StampDaemon(ImplementationStartedHeader, "peerAAAA"),
+			marker.Sign(ImplementationStartedHeader, "peerAAAA", ""),
 			// Aged well past any historical grace: elapsed time must not matter.
 			now.Add(-72*time.Hour))},
 	}}
@@ -45,7 +46,7 @@ func TestReconcileStuckRunning_RedsOwnCardAtLocalGrace(t *testing.T) {
 	own := []ReconcileCard{{
 		Key: "SC-1",
 		Comments: []tracker.Comment{cmt(
-			StampDaemon(ImplementationStartedHeader, "thisBBBB"),
+			marker.Sign(ImplementationStartedHeader, "thisBBBB", ""),
 			now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }

@@ -137,9 +137,10 @@ type BoardTransitionDeps struct {
 	CloseTicket  func(pmKey string) error
 	WorkspaceDir string
 	ConfigDir    string
-	// DaemonID stamps this daemon's identity on every marker it posts. Empty
-	// leaves markers un-stamped (StampDaemon no-ops), so an un-provisioned
-	// daemon still functions.
+	// DaemonID stamps this daemon's identity on every marker it posts, as the
+	// machine: field the signing commenter injects at the write choke point.
+	// Empty leaves markers un-signed (the signer's empty-machine no-op), so an
+	// un-provisioned daemon still functions.
 	DaemonID string
 	// Logger records best-effort post-merge failures (e.g. a failed automated
 	// close). The zero value is a safe no-op writer, so an un-wired path stays
@@ -534,13 +535,13 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	if waitComments, err := d.Commenter.ListComments(ctx, pmKey); err == nil {
 		recordStageWait(ctx, d.Commenter, pmKey, stage, waitComments, cause, d.DaemonID, d.Logger)
 	}
-	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(startedHeader, d.DaemonID)); err != nil {
+	if _, err := d.Commenter.AddComment(ctx, pmKey, startedHeader); err != nil {
 		return errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
 	}
 	name := agentNameFor(pmKey, stage)
 	if err := d.launchAgent(ctx, name, prompt); err != nil {
 		failBody := failedHeaderFor(stage) + "\n" + errors.CauseChain(err)
-		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(failBody, d.DaemonID))
+		_, _ = d.Commenter.AddComment(ctx, pmKey, failBody)
 		return errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
 	}
 	return nil
@@ -585,7 +586,7 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 		return true, nil
 	}
 	body := NeedsPlanningHeader + "\n" + needsPlanningReason
-	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID)); err != nil {
+	if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
 		return true, errors.WrapWithDetails(err, "posting needs-planning marker", "pm", pmKey)
 	}
 	d.Logger.Info().Str("pm", pmKey).
@@ -609,7 +610,7 @@ var startDeploy = func(d BoardTransitionDeps, req BoardTransitionRequest, card B
 func (d BoardTransitionDeps) runDoneStage(_ context.Context, req BoardTransitionRequest, card BoardCard) error {
 	if card.Branch == "" {
 		body := DeployFailedHeader + "\nno branch recorded on ready-for-review handoff"
-		_, _ = d.Commenter.AddComment(context.Background(), req.PMKey, StampDaemon(body, d.DaemonID))
+		_, _ = d.Commenter.AddComment(context.Background(), req.PMKey, body)
 		return errors.WithDetails("no branch recorded for deploy", "pm", req.PMKey)
 	}
 	startPRReview(d, req, card)
@@ -631,7 +632,7 @@ var startPRReview = func(d BoardTransitionDeps, req BoardTransitionRequest, card
 func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey string, card BoardCard) error {
 	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, card.Branch) {
 		_, _ = d.Commenter.AddComment(ctx, pmKey,
-			StampDaemon(DeployedHeader+"\nalready merged into the base branch; no new PR opened", d.DaemonID))
+			DeployedHeader+"\nalready merged into the base branch; no new PR opened")
 		d.closeTicketBestEffort(pmKey)
 		return nil
 	}
@@ -650,7 +651,7 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 			"could not push "+card.Branch+" and open its draft pull request — check the branch and forge access, then re-run Deploy", err))
 	}
 	if _, err := d.Commenter.AddComment(ctx, pmKey,
-		StampDaemon(prReviewStartedBody(res.URL, res.Number, card.Branch), d.DaemonID)); err != nil {
+		prReviewStartedBody(res.URL, res.Number, card.Branch)); err != nil {
 		return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
 	}
 	return d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage, prReviewDispatch(pmKey, res.Number, card.Branch))
@@ -704,7 +705,7 @@ func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string
 	name := agentNameFor(pmKey, stage)
 	if err := d.launchAgent(ctx, name, prompt); err != nil {
 		body := PRReviewFailedHeader + "\ncould not launch the PR " + string(stage) + " agent — " + errors.CauseChain(err)
-		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID))
+		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
 		return errors.WrapWithDetails(err, "launching PR loop agent", "pm", pmKey, "stage", string(stage))
 	}
 	return nil
@@ -737,12 +738,12 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), card.Branch
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
-		if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(prReviewStartedBody(url, number, branch), d.DaemonID)); err != nil {
+		if _, err := d.Commenter.AddComment(ctx, pmKey, prReviewStartedBody(url, number, branch)); err != nil {
 			return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
 		}
 		return d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage, prReviewDispatch(pmKey, number, branch))
 	case PRActionFix:
-		if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(PRFixStartedHeader, d.DaemonID)); err != nil {
+		if _, err := d.Commenter.AddComment(ctx, pmKey, PRFixStartedHeader); err != nil {
 			return errors.WrapWithDetails(err, "posting pr-fix-started marker", "pm", pmKey)
 		}
 		return d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage, prFixDispatch(pmKey, number, branch))
@@ -788,11 +789,11 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 		for _, o := range opts {
 			b.WriteString(o.ID + ": " + o.Label + "\n")
 		}
-		_, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(b.String(), d.DaemonID))
+		_, err := d.Commenter.AddComment(ctx, pmKey, b.String())
 		return err
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
-		StampDaemon(PRReviewFailedHeader+"\n"+prEscalationReason(stage, outcome, d.Diagnose), d.DaemonID))
+		PRReviewFailedHeader+"\n"+prEscalationReason(stage, outcome, d.Diagnose))
 	return nil
 }
 
@@ -888,7 +889,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey, fixExi
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
-		StampDaemon(DeployFailedHeader+"\n"+deployFixEscalationReason(fixExit), d.DaemonID))
+		DeployFailedHeader+"\n"+deployFixEscalationReason(fixExit))
 	return nil
 }
 
@@ -942,7 +943,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// Implementation already carry (SC-911).
 	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
 		_, _ = d.Commenter.AddComment(ctx, pmKey,
-			StampDaemon(DeployedHeader+"\nalready merged into the base branch; no new PR opened", d.DaemonID))
+			DeployedHeader+"\nalready merged into the base branch; no new PR opened")
 		d.closeTicketBestEffort(pmKey)
 		return nil
 	}
@@ -1029,7 +1030,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// board's Fix column (the frontend only drops a card once the ticket leaves
 	// the tracker's open list), so the operator must see it and close by hand.
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, branch)
-	_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(DeployedHeader+"\npr: "+res.URL, d.DaemonID))
+	_, _ = d.Commenter.AddComment(ctx, pmKey, DeployedHeader+"\npr: "+res.URL)
 	d.closeTicketBestEffort(pmKey)
 	return nil
 }
@@ -1235,7 +1236,7 @@ func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
 	defer cancel()
 	body := CloseFailedHeader + "\ndeployed, but the automated close of " + pmKey +
 		" failed: " + errors.CauseChain(err) + "\nclose this ticket manually to clear the card."
-	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
 }
 
 // waitForChecks blocks until the PR's CI verdict is conclusive. Passing
@@ -1274,7 +1275,7 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
 	if prURL != "" {
 		body += "\npr: " + prURL
 	}
-	_, _ = d.Commenter.AddComment(postCtx, pmKey, StampDaemon(body, d.DaemonID))
+	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
 	return errors.WithDetails("deploy failed: "+reason, "pm", pmKey, "pr", prURL)
 }
 
@@ -1302,7 +1303,7 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 		"\npr: " + res.URL +
 		"\nnumber: " + strconv.Itoa(res.Number) +
 		"\nbranch: " + branch
-	if _, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID)); err != nil {
+	if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
 		return errors.WrapWithDetails(err, "posting deploy-fix-started marker", "pm", pmKey)
 	}
 	return d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
@@ -1315,7 +1316,7 @@ func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, pr
 	name := agentNameFor(pmKey, deployFixAgentStage)
 	if err := d.launchAgent(ctx, name, prompt); err != nil {
 		body := DeployFailedHeader + "\ncould not launch the deploy fixer — " + errors.CauseChain(err)
-		_, _ = d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID))
+		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
 		return errors.WrapWithDetails(err, "launching deploy fixer", "pm", pmKey)
 	}
 	return nil

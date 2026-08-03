@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -73,11 +74,11 @@ func TestWorkGate_NilParticipationParticipatesEverywhere(t *testing.T) {
 func TestWorkGate_ForTakeoverExcludesForeignOwnedStage(t *testing.T) {
 	foreign := ReconcileCard{
 		Key:      "SC-1",
-		Comments: []tracker.Comment{cmt(StampDaemon(ImplementationStartedHeader, "peerAAAA"), time.Unix(1, 0))},
+		Comments: []tracker.Comment{cmt(marker.Sign(ImplementationStartedHeader, "peerAAAA", ""), time.Unix(1, 0))},
 	}
 	own := ReconcileCard{
 		Key:      "SC-2",
-		Comments: []tracker.Comment{cmt(StampDaemon(ImplementationStartedHeader, "thisBBBB"), time.Unix(1, 0))},
+		Comments: []tracker.Comment{cmt(marker.Sign(ImplementationStartedHeader, "thisBBBB", ""), time.Unix(1, 0))},
 	}
 	unstamped := ReconcileCard{
 		Key:      "SC-3",
@@ -97,7 +98,7 @@ func TestWorkGate_ForReviewIgnoresStageOwnershipOnceHandedOff(t *testing.T) {
 	foreignHandoff := ReconcileCard{
 		Key: "SC-1",
 		Comments: []tracker.Comment{
-			cmt(StampDaemon("[human:ready-for-review]\nbranch: reachable/x", "peerAAAA"), time.Unix(1, 0)),
+			cmt(marker.Sign("[human:ready-for-review]\nbranch: reachable/x", "peerAAAA", ""), time.Unix(1, 0)),
 		},
 	}
 	gate := WorkGate{reachable: alwaysReachable, daemonID: "thisBBBB"}

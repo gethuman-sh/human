@@ -41,6 +41,7 @@ import (
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/logrotate"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/messaging/slack"
 	"github.com/gethuman-sh/human/internal/messaging/telegram"
 	"github.com/gethuman-sh/human/internal/mockups"
@@ -802,7 +803,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		},
 	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
-		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver),
+		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		liveChainReview, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.modelSink.LatestClass, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
@@ -813,12 +814,12 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		return boardPRMerged(probeCtx, ds.srv.Projects, ds.vaultResolver, prURL)
 	}
 	postDeployed := func(postCtx context.Context, pmKey, prURL string) error {
-		commenter, err := boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver)()
+		commenter, err := boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID)()
 		if err != nil {
 			return err
 		}
 		_, err = commenter.AddComment(postCtx, pmKey,
-			daemon.StampDaemon(daemon.DeployedHeader+"\npr: "+prURL, ds.daemonID))
+			daemon.DeployedHeader+"\npr: "+prURL)
 		return err
 	}
 	// A live container is not a working agent. The hook stream is the progress
@@ -907,11 +908,11 @@ func liveBoardAgents() ([]string, error) {
 // (SC-660 rule 1) so the poster is attributable.
 func postFailedMarkerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string) func(context.Context, string, string) error {
 	return func(postCtx context.Context, pmKey, body string) error {
-		commenter, err := boardPMCommenterFunc(reg, resolver)()
+		commenter, err := boardPMCommenterFunc(reg, resolver, daemonID)()
 		if err != nil {
 			return err
 		}
-		_, err = commenter.AddComment(postCtx, pmKey, daemon.StampDaemon(body, daemonID))
+		_, err = commenter.AddComment(postCtx, pmKey, body)
 		return err
 	}
 }
@@ -3099,6 +3100,10 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 			Msg("board transition: no PM getter; relaunch will use the marker heuristic")
 		getter = nil
 	}
+	// Sign every internal board post at this single choke point: the daemon id is
+	// the machine, BuildRevision the build, so d.Commenter carries provenance
+	// without any per-writer stamping call.
+	commenter = marker.NewSigningCommenter(commenter, daemonID, daemon.BuildRevision())
 	return daemon.BoardTransitionDeps{
 		Commenter: commenter,
 		Getter:    getter,
@@ -3758,14 +3763,22 @@ func restoreIdeationSession(engine *daemon.IdeationEngine, store daemon.Ideation
 	}
 }
 
-// boardPMCommenterFunc resolves the PM commenter for the board failure watcher.
-func boardPMCommenterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() (tracker.Commenter, error) {
+// boardPMCommenterFunc resolves the PM commenter for the board failure watcher,
+// signed so every marker it posts carries the daemon id as its machine: field
+// and BuildRevision as its build: field — the same choke-point signing the
+// board-transition engine gets, so the failure/outage/deploy posters inherit
+// provenance without a per-writer stamp.
+func boardPMCommenterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string) func() (tracker.Commenter, error) {
 	return func() (tracker.Commenter, error) {
 		entry, err := reg.SoleEntry()
 		if err != nil {
 			return nil, err
 		}
-		return resolvePMCommenter(entry.Dir, entry.EnvLookup(), resolver)
+		commenter, err := resolvePMCommenter(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			return nil, err
+		}
+		return marker.NewSigningCommenter(commenter, daemonID, daemon.BuildRevision()), nil
 	}
 }
 

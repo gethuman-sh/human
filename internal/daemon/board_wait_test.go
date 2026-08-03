@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -138,7 +139,7 @@ func TestRecordStageWait_suppressedWhenNoAnchor(t *testing.T) {
 func TestReconcileStuckRunning_annotatesWaitCause(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	staleStart := now.Add(-StuckRunningGrace - time.Minute)
-	waitBody := StampDaemon(composeStageWait(BoardVerification, staleStart.Add(-time.Hour), staleStart, WaitCausePollBoundary), "")
+	waitBody := marker.Sign(composeStageWait(BoardVerification, staleStart.Add(-time.Hour), staleStart, WaitCausePollBoundary), "", "")
 	cards := []ReconcileCard{{
 		Key: "SC-1",
 		Comments: []tracker.Comment{
