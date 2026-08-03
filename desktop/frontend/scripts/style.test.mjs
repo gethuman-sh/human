@@ -196,6 +196,12 @@ test("decided badge uses the neutral machine-working colour, not amber or red (S
   assert.doesNotMatch(decided, /var\(--turn-error\)/, "a settled decision must not wear the failure red");
 });
 
+test("partial badge uses the machine register, not the needs-a-person amber (SC-2910)", () => {
+  const partial = ruleBody(".badge.partial");
+  assert.match(partial, /color:\s*var\(--turn-machine\)/, ".badge.partial must use the neutral machine-working token");
+  assert.doesNotMatch(partial, /var\(--turn-person\)/, "a shipped-partial trace records scope, it asks nothing of a person");
+});
+
 // SC-1830: the four "whose turn" semantic tokens must exist and alias the
 // existing palette (gray=machine, amber=person, red=error, green=done).
 test("whose-turn colour tokens are defined (SC-1830)", () => {

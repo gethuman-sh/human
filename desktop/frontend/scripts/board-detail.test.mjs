@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildCostSection, buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "../build/board-detail.js";
+import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "../build/board-detail.js";
 
 // SC-365 regression: the board detail panel must render comment-sourced review
 // findings, failure reason, and fix summary. buildDetailSections is the pure
@@ -89,6 +89,26 @@ test("empty stop decision emits nothing", () => {
 test("multi-line stop reasoning preserves line breaks", () => {
   const html = buildStopDecisionSection("rejected", undefined, "line1\nline2");
   assert.match(html, /line1<br>line2/);
+});
+
+// --- Shipped-partial trace (SC-2910) ---
+
+test("shipped-partial section renders with follow-on button", () => {
+  const html = buildShippedPartialSection(true, "SC-3001");
+  assert.match(html, /detail-partial/);
+  assert.match(html, /Shipped partial/);
+  assert.match(html, /data-linked-key="SC-3001"/);
+  assert.match(html, /detail-linked-btn/);
+});
+
+test("shipped-partial section empty when not partial", () => {
+  assert.equal(buildShippedPartialSection(false, undefined), "");
+});
+
+test("shipped-partial section without follow-on has no linked button", () => {
+  const html = buildShippedPartialSection(true, undefined);
+  assert.notEqual(html, "");
+  assert.doesNotMatch(html, /detail-linked-btn/);
 });
 
 // --- Per-ticket cost & time (SC-2847) ---

@@ -48,6 +48,22 @@ export function buildStopDecisionSection(decision, linkedKey, reasoning) {
     return (`<section class="detail-section detail-stop"><h3 class="detail-section-title">Decision: ${escapeText(heading)}</h3>` +
         `${linked}${body}</section>`);
 }
+// buildShippedPartialSection renders the durable shipped-partial trace: a heading
+// stating the card shipped less than its ticket asked, and the follow-on ticket
+// it deferred the rest to (as a button the caller wires to open that card, reusing
+// the detail-linked-btn / data-linked-key convention). Empty when the card carries
+// no such trace, so an ordinary card's panel is unchanged (SC-2910).
+export function buildShippedPartialSection(shippedPartial, followOnKey) {
+    if (!shippedPartial)
+        return "";
+    const linked = followOnKey && followOnKey.trim()
+        ? `<div class="detail-partial-followon">The deferred work now lives on ` +
+            `<button type="button" class="detail-linked-btn" data-linked-key="${escapeText(followOnKey)}">${escapeText(followOnKey)}</button>.</div>`
+        : "";
+    return (`<section class="detail-section detail-partial"><h3 class="detail-section-title">Shipped partial</h3>` +
+        `<div class="detail-partial-note">This ticket shipped with one or more acceptance criteria deliberately deferred.</div>` +
+        `${linked}</section>`);
+}
 // buildDetailSections returns the HTML for the comment-sourced detail sections,
 // in fixed order: failure reason, review findings, fix summary. Each present,
 // non-blank field becomes a titled <section>; absent or blank fields emit

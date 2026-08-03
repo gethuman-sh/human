@@ -869,6 +869,14 @@ body {
   color: var(--turn-machine);
 }
 
+/* A shipped-partial trace (SC-2910): the card shipped less than its ticket
+   asked, with the rest on a follow-on. Informational, so it wears the muted
+   machine register — nothing is asked of the user; it merely records what the
+   scope was. */
+.badge.partial {
+  color: var(--turn-machine);
+}
+
 /* A degraded card's marker fetch failed this scan (ticket 1700): the machine
    will retry it, so it belongs in the machine-working register — nothing is
    asked of the user and nothing has failed (SC-1830). */
