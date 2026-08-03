@@ -185,8 +185,9 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate
 	// each tick (the backoff) until the substrate returns (SC-2307). It rides the
 	// same forTakeover gate — an outage relaunch takes over the stage on this
 	// machine exactly as a stuck-running reclaim does.
-	if n := reconcileOutage(ctx, gate.forTakeover(cards), liveAgents, retry, daemonID, logger); n > 0 {
-		logger.Info().Int("redriven", n).Msg("board reconcile: re-drove stages waiting on the substrate")
+	if redriven, handedOver := reconcileOutage(ctx, gate.forTakeover(cards), liveAgents, postFailed, retry, daemonID, time.Now(), logger); redriven > 0 || handedOver > 0 {
+		logger.Info().Int("redriven", redriven).Int("handed_over", handedOver).
+			Msg("board reconcile: re-drove stages waiting on the substrate")
 	}
 	if n := reconcileStuckRunning(ctx, gate.forTakeover(cards), liveAgents, postFailed, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
@@ -283,27 +284,36 @@ func reconcilePRLoops(ctx context.Context, drivable DrivableCards, liveAgents Li
 // reconcile tick re-drives it (retry.tryRelaunch classifies the recorded outage
 // and relaunches WITHOUT charging DefaultStageRetries) until the substrate
 // returns and the relaunched agent posts a *-started marker that supersedes the
-// outage. Unbounded by design — an outage costs time and nothing else (SC-2307).
+// outage. Free in attempts by design — an outage costs time and nothing else
+// (SC-2307).
+//
+// Not free in time, though: a wait past OutageWaitBound is handed to a person
+// instead of relaunched, because an outage that never ends looks exactly like
+// one that will return until you measure how long it has lasted, and nobody was
+// ever told the difference (SC-2851). The handover reds the card and still
+// charges nothing.
 //
 // A live agent for the stage means the relaunch already happened this cycle, so
 // the card is left alone rather than racing a second launch onto the same stage
 // — the same alive-guard reconcilePRLoops and reconcileStuckRunning use. nil
 // deps or an unwired retry disable the pass (the package's "nil disables"
-// convention).
-func reconcileOutage(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, retry StageRetry, daemonID string, logger zerolog.Logger) int {
+// convention); an unwired postFailed disables only the handover, leaving the
+// indefinite wait rather than stranding the card with neither.
+//
+// Returns how many cards were re-driven and how many were handed to a human.
+func reconcileOutage(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, daemonID string, now time.Time, logger zerolog.Logger) (redriven, handedOver int) {
 	if liveAgents == nil || !retry.enabled() {
-		return 0
+		return 0, 0
 	}
 	names, err := liveAgents()
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list live agents for outage re-drive")
-		return 0
+		return 0, 0
 	}
 	alive := make(map[string]struct{}, len(names))
 	for _, n := range names {
 		alive[n] = struct{}{}
 	}
-	redriven := 0
 	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
 		if derived.State != BoardOutage {
@@ -313,11 +323,17 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, liveAgents Liv
 		if _, ok := alive[agentNameFor(card.Key, derived.Stage)]; ok {
 			continue
 		}
+		if since, ok := outageRunSince(card.Comments, derived.Stage); ok && postFailed != nil && now.Sub(since) > OutageWaitBound {
+			if handOverOutage(ctx, card.Key, derived, postFailed, now.Sub(since), since, daemonID, logger) {
+				handedOver++
+			}
+			continue
+		}
 		if retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger) {
 			redriven++
 		}
 	}
-	return redriven
+	return redriven, handedOver
 }
 
 // stuckRunningCandidate reports whether a card is eligible for the stuck-running

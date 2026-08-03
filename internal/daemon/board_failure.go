@@ -156,17 +156,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 	if handleCleanStageEnding(ctx, pmKey, stage, agentName, errorType, cleanExit, comments, commenter, chainReview, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger) {
 		return
 	}
-	// A stage that reported the substrate was down (ExitOutage) is not a failure:
-	// post a distinct *-outage marker so the card reads "machine down", not red,
-	// and do NOT relaunch here — the durable reconcile pass relaunches it each
-	// interval (the backoff) with the retry budget untouched (SC-2307). The body
-	// carries the same diagnosed reason line a *-failed marker would, so the badge
-	// still reads the cause via failureReason.
-	if header := outageHeaderFor(stage); header != "" && retry.recordedOutage(pmKey, stage) {
-		body := header + "\n" + appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
-		if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
-			logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post outage marker")
-		}
+	if handleOutageExit(ctx, pmKey, stage, agentName, errorType, comments, commenter, diagnose, retry, latestClass, daemonID, logger) {
 		return
 	}
 	// A silence reap (the zombie sweep reaping an agent that went quiet — no

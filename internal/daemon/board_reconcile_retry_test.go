@@ -126,11 +126,16 @@ func TestReconcileOutage_RelaunchesWhenAgentDead(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
 	}
 
-	n := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), retry, "d1", zerolog.Nop())
+	var posted []struct{ Key, Body string }
+
+	n, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
+		capturingPoster(&posted), retry, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 1, n, "the outage card is re-driven")
 	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
 	require.Zero(t, attempts, "an outage re-drive never charges the retry budget")
+	require.Zero(t, handedOver, "a minute-old outage is nowhere near the wait bound")
+	require.Empty(t, posted, "and a card still inside the bound is not reddened")
 }
 
 // A live stage agent means the relaunch already happened this cycle — the pass
@@ -153,7 +158,7 @@ func TestReconcileOutage_SkipsWhenAgentAlive(t *testing.T) {
 	}
 	alive := liveAgents(agentNameFor("SC-1", BoardImplementation))
 
-	n := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), alive, retry, "d1", zerolog.Nop())
+	n, _ := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), alive, nil, retry, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 0, n, "a live agent means the relaunch already happened")
 	require.Empty(t, relaunched)
@@ -175,7 +180,7 @@ func TestReconcileOutage_IgnoresNonOutageCards(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
 	}
 
-	n := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), retry, "d1", zerolog.Nop())
+	n, _ := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), nil, retry, "d1", now, zerolog.Nop())
 
 	require.Equal(t, 0, n)
 	require.Empty(t, relaunched)
