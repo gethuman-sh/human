@@ -91,6 +91,23 @@ func TestCompose_carriesStopDecision(t *testing.T) {
 	assert.Equal(t, "Same surface as SC-100, which carries the work", c.StopReasoning)
 }
 
+// A paused (outage) card's stated resume instant rides from the derived card
+// onto the wire card so the frontend can render it in the reader's own
+// timezone (SC-3024). A card with no stated resume time forwards an empty
+// ResumeAt, unchanged from before this field existed.
+func TestCompose_copiesResumeAt(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "paused"}, {Key: "SC-2", Title: "no stated time"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardImplementation, State: daemon.BoardOutage, ResumeAt: "2026-08-03T08:50:00Z"},
+			"SC-2": {Stage: daemon.BoardImplementation, State: daemon.BoardOutage},
+		},
+	)}, true)
+
+	assert.Equal(t, "2026-08-03T08:50:00Z", cardByKey(t, view, "SC-1").ResumeAt)
+	assert.Equal(t, "", cardByKey(t, view, "SC-2").ResumeAt)
+}
+
 // The shipped-partial trace rides from the derived card onto the wire card so
 // the desktop can render the "partial scope" badge and detail section (SC-2910).
 func TestCompose_copiesShippedPartial(t *testing.T) {

@@ -174,8 +174,24 @@ export function badgeInfo(card) {
             spinner: true,
         };
     }
+    // A paused (outage) card is the do-nothing register: a substrate the run
+    // depends on is unavailable, the work stays written and safe on the ticket,
+    // and it resumes on its own — never the amber "your turn" register and
+    // never the spinner (nothing is actively running while paused). This is the
+    // one case that renders EVERY unavailable-substrate card, not only a model
+    // usage limit (SC-3024).
+    if (card.state === "outage") {
+        const resumes = formatResume(card.resumeAt);
+        const substrate = card.error || "a substrate it depends on is unavailable";
+        return {
+            cls: "paused",
+            text: resumes ? `paused — ${substrate}, resumes ${resumes}` : `paused — ${substrate}`,
+            title: "Paused — the work is safe and continues automatically. Nothing to do.",
+            spinner: false,
+        };
+    }
     if (card.state === "failed")
-        return { cls: "failed", text: "✕", title: "Stage failed" };
+        return { cls: "failed", text: "✕", title: card.error || "Stage failed" };
     if (card.state === "resolved") {
         if (card.stage === "planning") {
             // The planner verified the ticket's work is already merged, so there is
@@ -224,16 +240,30 @@ export function badgeInfo(card) {
     }
     return null;
 }
-// cardError derives the red `.card-error` subtitle from the SAME classifier the
-// badge uses, so the two render paths can never disagree: a card only shows its
-// failure text when badgeInfo classifies it as an actual stage failure. A card
-// parked on an open decision (which outranks a stale *-failed marker in
-// badgeInfo) therefore paints the amber decision badge and NO red line — SC-1290
-// fixed the badge but left renderCard rendering on raw `card.error` (SC-1301).
+// formatResume renders a paused card's stated resume instant in the reader's
+// own local timezone as "HH:MM", or "" when absent/unparseable — the badge
+// then falls back to plain "paused — <substrate>" wording with no time.
+export function formatResume(iso) {
+    if (!iso)
+        return "";
+    const t = Date.parse(iso);
+    if (Number.isNaN(t))
+        return "";
+    return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+// cardError derives the red/amber `.card-error` subtitle from the SAME
+// classifier the badge uses, so the two render paths can never disagree: a
+// card only shows its explanation when badgeInfo classifies it as an actual
+// failure OR a paused substrate — a card parked on an open decision (which
+// outranks a stale *-failed marker in badgeInfo) therefore paints the amber
+// decision badge and NO explanation line (SC-1301). The paused register is
+// included so its explanation is never suppressed for being drawn in a state
+// the original suppression rule (bare "failed") did not anticipate (SC-3024).
 export function cardError(card) {
     if (!card.error)
         return "";
-    return badgeInfo(card)?.cls === "failed" ? card.error : "";
+    const cls = badgeInfo(card)?.cls;
+    return cls === "failed" || cls === "paused" ? card.error : "";
 }
 // planReady reports a planning card whose plan is complete — the only planning
 // state permitted to advance forward into Code. A running or failed planning

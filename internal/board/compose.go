@@ -58,6 +58,7 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			Branch:                 card.Branch,
 			PRURL:                  card.PRURL,
 			Error:                  card.Error,
+			ResumeAt:               card.ResumeAt,
 			Verdict:                card.Verdict,
 			ShippedPartial:         card.ShippedPartial,
 			ShippedPartialFollowOn: card.ShippedPartialFollowOn,
@@ -118,8 +119,9 @@ func markBlocked(cards []daemon.BoardViewCard, blockedBy map[string][]string) {
 //
 // An OUTAGE card (State == "outage", SC-2307) needs no special case here: unlike
 // a DEGRADED card it has a genuine derived stage, so it flows through the normal
-// path and its state is forwarded verbatim (State: string(card.State) below) for
-// the frontend to render as "machine down".
+// path and its state (plus Error and ResumeAt below) is forwarded verbatim for
+// the frontend to render as its "paused" register (SC-3024) — the do-nothing
+// state naming the unavailable substrate and, when stated, its resume time.
 func composedStage(issue tracker.Issue, card daemon.BoardCard) (daemon.BoardStage, bool) {
 	if card.Degraded {
 		stage := card.Stage
