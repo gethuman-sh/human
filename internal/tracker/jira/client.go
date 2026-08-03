@@ -424,6 +424,14 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 	if opts.Description != nil {
 		fields["description"] = adf.FromMarkdown(*opts.Description)
 	}
+	// Jira names the kind natively, exactly as create does. Whether a given
+	// project permits a particular move is Jira's own rule (issue types outside
+	// the project's scheme, or across a parent/subtask boundary, are refused) —
+	// its refusal reaches the caller unchanged rather than being pre-guessed
+	// here, so a retype never reports a success Jira did not perform (SC-3051).
+	if opts.Type != nil {
+		fields["issuetype"] = nameOnly{Name: *opts.Type}
+	}
 
 	body := map[string]any{"fields": fields}
 	// Labels go through the update section's atomic add/remove operations
