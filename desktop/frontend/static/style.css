@@ -609,6 +609,19 @@ body {
   filter: brightness(1.1);
 }
 
+/* The busy-close dialog (SC-3015) has three choices instead of the usual two,
+   so "Wait and close" needs a third, non-destructive style sitting between
+   the neutral Cancel and the destructive "Stop anyway" (which keeps the
+   shared .modal-confirm red). */
+.modal-secondary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.modal-secondary:hover {
+  filter: brightness(1.1);
+}
+
 /* File-a-bug dialog: a .modal variant with a title input and a description
    textarea. Creating is constructive, so the confirm uses the accent color,
    not the destructive red of close-ticket confirmation. */

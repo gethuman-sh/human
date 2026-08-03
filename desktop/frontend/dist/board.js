@@ -18,7 +18,7 @@ import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./stat
 import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
-import { buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "./board-detail.js";
+import { buildCostSection, buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
@@ -1565,7 +1565,7 @@ async function createMocks(card) {
 // confirmDialog renders a small modal overlay and resolves true/false on the
 // user's choice. Overlay-click and Escape count as cancel. Built with the same
 // imperative-DOM approach as the rest of the app (no framework).
-function confirmDialog(title, body, confirmLabel) {
+function confirmDialog(title, body, confirmLabel, cancelLabel = "Cancel") {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.className = "modal-overlay";
@@ -1575,7 +1575,7 @@ function confirmDialog(title, body, confirmLabel) {
       <div class="modal-title">${escapeHtml(title)}</div>
       <div class="modal-body">${escapeHtml(body)}</div>
       <div class="modal-actions">
-        <button class="modal-cancel" type="button">Cancel</button>
+        <button class="modal-cancel" type="button">${escapeHtml(cancelLabel)}</button>
         <button class="modal-confirm" type="button">${escapeHtml(confirmLabel)}</button>
       </div>
     `;
@@ -1598,6 +1598,48 @@ function confirmDialog(title, body, confirmLabel) {
         modal.querySelector(".modal-confirm").addEventListener("click", () => cleanup(true));
         document.addEventListener("keydown", onKey);
         modal.querySelector(".modal-confirm").focus();
+    });
+}
+// busyCloseDialog is confirmDialog's three-way counterpart for the app-level
+// close flow: unlike a plain confirm, closing while the daemon is busy has a
+// genuine third option (wait it out) that is neither "cancel" nor "destroy
+// the work now" (SC-3015). Overlay-click and Escape both count as "cancel" —
+// the safest default when work is in flight.
+function busyCloseDialog() {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.className = "modal-overlay";
+        const modal = document.createElement("div");
+        modal.className = "modal";
+        modal.innerHTML = `
+      <div class="modal-title">human is still working</div>
+      <div class="modal-body">An agent is actively running, or a stage is still leased. Closing now would leave that work unsupervised — choose what to do.</div>
+      <div class="modal-actions">
+        <button class="modal-cancel" type="button">Cancel</button>
+        <button class="modal-secondary" type="button">Wait and close</button>
+        <button class="modal-confirm" type="button">Stop anyway</button>
+      </div>
+    `;
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        const cleanup = (result) => {
+            document.removeEventListener("keydown", onKey);
+            overlay.remove();
+            resolve(result);
+        };
+        const onKey = (e) => {
+            if (e.key === "Escape")
+                cleanup("cancel");
+        };
+        overlay.addEventListener("click", (e) => {
+            if (e.target === overlay)
+                cleanup("cancel");
+        });
+        modal.querySelector(".modal-cancel").addEventListener("click", () => cleanup("cancel"));
+        modal.querySelector(".modal-secondary").addEventListener("click", () => cleanup("wait"));
+        modal.querySelector(".modal-confirm").addEventListener("click", () => cleanup("stop"));
+        document.addEventListener("keydown", onKey);
+        modal.querySelector(".modal-cancel").focus();
     });
 }
 // captureColumnScroll records each column's current scrollTop keyed by stage, so
@@ -2118,6 +2160,24 @@ async function bootstrapProject() {
     }
     showAppShell(result.project);
     startBoardPolling();
+    if (result.orphan) {
+        void offerOrphanCleanup(result.orphanProject);
+    }
+}
+// offerOrphanCleanup runs once at launch when ProjectBootstrap detects a
+// daemon left running by a crashed/force-quit prior session (no attached
+// app) rather than one a user intentionally runs standalone (SC-3015).
+// Fire-and-forget: the board is already usable behind it, matching the rest
+// of the app's non-blocking dialog pattern.
+async function offerOrphanCleanup(project) {
+    const label = project ? `"${project}"'s` : "This project's";
+    const stop = await confirmDialog("Clean up a leftover daemon?", `${label} daemon is still running from a previous session that never closed cleanly (a crash, force-quit, or shutdown), and nobody is attached to it right now.`, "Stop it", "Leave it running");
+    try {
+        await go().ResolveOrphan(stop);
+    }
+    catch (err) {
+        showError(errMessage(err));
+    }
 }
 function errMessage(err) {
     if (err instanceof Error)
@@ -2364,6 +2424,10 @@ let detailHTML = null;
 // comment-sourced sections (failure reason, review findings, fix summary),
 // pre-built by buildDetailSections. Empty until fetchTicketDetail lands them.
 let detailSections = "";
+// detailCost holds the open ticket's durable cost/time rollup, fetched
+// independently of the description so a cost-endpoint failure never blanks the
+// rest of the panel. Null renders the plain "no spend recorded" empty state.
+let detailCost = null;
 // toggleTicketDetail is the card-click entry point: a second click on the
 // ticket that is already open closes the panel instead of re-opening it.
 function toggleTicketDetail(card) {
@@ -2381,6 +2445,7 @@ function openTicketDetail(card) {
     detailError = null;
     detailHTML = null;
     detailSections = "";
+    detailCost = null;
     renderTicketDetail();
     document.getElementById("detail-panel")?.classList.remove("hidden");
     void fetchTicketDetail(card);
@@ -2409,6 +2474,17 @@ async function fetchTicketDetail(card) {
             assignee: detail.assignee || detailCard.assignee,
             description: detail.description || detailCard.description,
         };
+        // The durable cost/time rollup is fetched independently: a cost-endpoint
+        // failure must never blank the description panel it sits beside.
+        try {
+            const cost = await go().TicketCost(card.key);
+            if (detailCard && detailCard.key === card.key) {
+                detailCost = cost;
+            }
+        }
+        catch {
+            detailCost = null;
+        }
         renderTicketDetail();
     }
     catch (err) {
@@ -2422,6 +2498,7 @@ function closeTicketDetail() {
     detailCard = null;
     detailHTML = null;
     detailSections = "";
+    detailCost = null;
     document.getElementById("detail-panel")?.classList.add("hidden");
 }
 // refreshTicketDetail re-renders the open panel from the freshest card with
@@ -2498,6 +2575,7 @@ function renderTicketDetail() {
     ${stopDecision}
     ${desc}
     ${detailSections}
+    ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now())}
     ${link}
   `;
     const url = detailCard.url;
@@ -3300,6 +3378,21 @@ function init() {
     if (window.runtime?.EventsOn) {
         window.runtime.EventsOn("board:changed", () => {
             void reconcile();
+        });
+        // Fired from closeflow.go's runCloseFlow when the daemon is busy — the
+        // window close is already held open (OnBeforeClose returned true); this
+        // dialog's choice is the only thing that can let it proceed (SC-3015).
+        window.runtime.EventsOn("app:close-busy", () => {
+            void (async () => {
+                const choice = await busyCloseDialog();
+                try {
+                    await go().ResolveClose(choice);
+                }
+                catch {
+                    // Best-effort: a failed round-trip must not strand the app — the
+                    // user can simply try the window's close button again.
+                }
+            })();
         });
     }
     void bootstrapProject();

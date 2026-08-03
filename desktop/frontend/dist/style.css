@@ -609,6 +609,19 @@ body {
   filter: brightness(1.1);
 }
 
+/* The busy-close dialog (SC-3015) has three choices instead of the usual two,
+   so "Wait and close" needs a third, non-destructive style sitting between
+   the neutral Cancel and the destructive "Stop anyway" (which keeps the
+   shared .modal-confirm red). */
+.modal-secondary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.modal-secondary:hover {
+  filter: brightness(1.1);
+}
+
 /* File-a-bug dialog: a .modal variant with a title input and a description
    textarea. Creating is constructive, so the confirm uses the accent color,
    not the destructive red of close-ticket confirmation. */
@@ -1669,6 +1682,42 @@ body {
 
 .detail-linked-btn:hover {
   text-decoration: underline;
+}
+
+/* Per-ticket cost & time (SC-2847): the whole-life total leads, the
+   answers/context split and the live current-stage clock read as muted
+   supporting lines, and each stage is a two-column row (label | cost · time). */
+.detail-cost-total {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.detail-cost-split,
+.detail-cost-current {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.detail-cost-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.detail-cost-stage {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.detail-cost-empty {
+  font-size: 13px;
+  color: var(--muted);
 }
 
 .detail-option-btn {
