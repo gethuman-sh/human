@@ -187,6 +187,21 @@ const CloseFailedHeader = "[human:close-failed]"
 const RelatedStartedHeader = "[human:related-started]"
 const RelatedHeader = "[human:related]"
 
+// ShippedPartialHeader marks the durable shipped-partial trace (SC-2910): the
+// PM ticket shipped with one or more acceptance criteria deliberately deferred
+// to a follow-on ticket. Like RelatedHeader and CloseFailedHeader it is
+// deliberately kept OUT of orderedMarkerSpecs — it records a partial-delivery
+// decision and decorates the card, it does NOT move the card between pipeline
+// columns (the real stage markers still own the card's stage). The closing
+// bracket keeps "[human:shipped-partial]" from prefix-matching any other header.
+const ShippedPartialHeader = "[human:shipped-partial]"
+
+// ShippedPartialMarkerType is the value marker.ParseBody puts in .Type for a
+// [human:shipped-partial] comment (the header name without the human: prefix),
+// so DeriveBoardCard reads the marker via marker.Latest keyed on this const
+// rather than a bare literal.
+const ShippedPartialMarkerType = "shipped-partial"
+
 // hasCompletedRelatedRecord reports whether the ticket already carries a
 // COMPLETED related-work record (head "found" or "none"). An "incomplete"
 // record does not count, so a died-halfway run can be re-run from the card menu.

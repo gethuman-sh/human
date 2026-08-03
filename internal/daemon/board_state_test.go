@@ -305,6 +305,49 @@ func TestDeriveBoardCard_HasRelatedRecord(t *testing.T) {
 	})
 }
 
+func TestDeriveBoardCard_shippedPartial(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	t2 := time.Unix(3000, 0)
+
+	t.Run("marker sets the fields", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt("[human:deployed]\npr: http://x", t0),
+			cmt("[human:shipped-partial]\nfollow-on: SC-3001\ndeferred: CSV export\n  cost webhook", t1),
+		}, tracker.CategoryUnstarted, false)
+		assert.True(t, card.ShippedPartial)
+		assert.Equal(t, "SC-3001", card.ShippedPartialFollowOn)
+	})
+
+	t.Run("absent marker leaves the fields zero", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt("[human:deployed]\npr: http://x", t0),
+		}, tracker.CategoryUnstarted, false)
+		assert.False(t, card.ShippedPartial)
+		assert.Empty(t, card.ShippedPartialFollowOn)
+	})
+
+	t.Run("latest wins", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt("[human:plan-ready]", t0),
+			cmt("[human:shipped-partial]\nfollow-on: SC-3001\ndeferred: A", t1),
+			cmt("[human:shipped-partial]\nfollow-on: SC-3002\ndeferred: B", t2),
+		}, tracker.CategoryUnstarted, false)
+		assert.Equal(t, "SC-3002", card.ShippedPartialFollowOn)
+	})
+
+	t.Run("does not move the card", func(t *testing.T) {
+		// The trace decorates the card; the real stage marker (plan-ready) still
+		// owns the stage — the shipped-partial marker never shifts it.
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt("[human:plan-ready]\nengineering: HUM-9", t0),
+			cmt("[human:shipped-partial]\nfollow-on: SC-3001\ndeferred: A", t1),
+		}, tracker.CategoryUnstarted, false)
+		assert.Equal(t, BoardPlanning, card.Stage)
+		assert.True(t, card.ShippedPartial)
+	})
+}
+
 func TestDeriveBoardCard_Ideas(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 

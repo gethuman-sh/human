@@ -38,6 +38,17 @@ type BoardCard struct {
 	// transition; an absent verdict counts as pass so threads reviewed before
 	// verdicts existed keep flowing.
 	Verdict string `json:"verdict,omitempty"`
+	// ShippedPartial reports a [human:shipped-partial] marker on the ticket: the
+	// planner's sanctioned ship-narrow-plus-follow-on fork left one or more
+	// acceptance criteria to a follow-on ticket, so this card shipped less than
+	// the ticket asked (SC-2910). Derived from the marker the way Verdict is
+	// derived from [human:review-complete]; absent on every card with no such
+	// marker, so an ordinary card renders exactly as before.
+	ShippedPartial bool `json:"shipped_partial,omitempty"`
+	// ShippedPartialFollowOn is the `follow-on` field of that marker — the real
+	// ticket key that now carries the deferred criteria, so the card can name and
+	// link it. Empty when ShippedPartial is false.
+	ShippedPartialFollowOn string `json:"shipped_partial_follow_on,omitempty"`
 	// Options is the latest unconsumed [human:options] block: a stage ended
 	// in a decision and the card is waiting for a human to pick a direction.
 	// Consumed (cleared) by an option-chosen comment or any later
@@ -171,6 +182,10 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
 	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
 	card.PRURL = derivePRURL(comments)
+	if followOn, ok := deriveShippedPartial(comments); ok {
+		card.ShippedPartial = true
+		card.ShippedPartialFollowOn = followOn
+	}
 	// An outage card carries the same one-line reason a failed card does (the
 	// substrate that was unreachable), so the badge can say WHAT is down, not just
 	// that it is — the outage marker's body is composed exactly like a failure's
@@ -300,6 +315,19 @@ func derivePRURL(comments []tracker.Comment) string {
 		return url
 	}
 	return latestPrefixedLine(comments, DeployFailedHeader, "pr:")
+}
+
+// deriveShippedPartial reads the newest [human:shipped-partial] marker off the
+// ticket, mirroring how Verdict is read from [human:review-complete]: latest
+// wins, so re-planning a deferral supersedes an older trace. ok is false when no
+// such marker exists. followOn is the marker's `follow-on` field — the ticket
+// that now carries the deferred criteria.
+func deriveShippedPartial(comments []tracker.Comment) (followOn string, ok bool) {
+	m, found := marker.Latest(comments, ShippedPartialMarkerType)
+	if !found {
+		return "", false
+	}
+	return strings.TrimSpace(m.Fields["follow-on"]), true
 }
 
 // failureReason extracts the human-readable reason from a *-failed marker: the

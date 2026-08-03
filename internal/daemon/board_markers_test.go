@@ -44,6 +44,9 @@ func TestClassifyMarker(t *testing.T) {
 		// orderedMarkerSpecs, so they must never classify as a board stage (SC-2405).
 		{"related found is not a board marker", "[human:related] found\n- duplicate of SC-9", "", "", false},
 		{"related-started is not a board marker", "[human:related-started]", "", "", false},
+		// The shipped-partial trace decorates the card, it never moves it — like
+		// the related markers it is kept out of orderedMarkerSpecs (SC-2910).
+		{"shipped-partial is not a board marker", "[human:shipped-partial]\nfollow-on: SC-1\ndeferred: A", "", "", false},
 		{"non-marker", "just a normal comment", "", "", false},
 		{"empty", "", "", "", false},
 	}
