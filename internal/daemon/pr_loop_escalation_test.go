@@ -38,7 +38,7 @@ func TestPREscalation_unrecordedVerdictSaysWhatWasMissing(t *testing.T) {
 	body := escalationBody(t, PRLoopOutcome{ReviewRecorded: false}, nil)
 
 	assert.Contains(t, body, "PR reviewer")
-	assert.Contains(t, body, "without recording a verdict")
+	assert.Contains(t, body, "stopped before recording a verdict")
 	assert.NotContains(t, body, "could not classify",
 		"nothing was found, so nothing failed to be classified")
 }
@@ -53,9 +53,13 @@ func TestPREscalation_unclassifiableVerdictIsNotReportedAsMissing(t *testing.T) 
 		"an outcome WAS recorded — reporting it as absent misdirects the reader")
 }
 
-// When the dead run can be diagnosed from its artifacts, the real cause replaces
-// the generic line — the same treatment an ordinary stage failure gets.
-func TestPREscalation_unrecordedVerdictCarriesTheDiagnosis(t *testing.T) {
+// SC-3024: the PR-loop escalation's returned line is always house-style
+// situation+next-action — never the raw post-mortem headline/detail a
+// diagnoser produced. A raw diagnosis (container/OOM/exit-code vocabulary) is
+// never THE message a card-facing marker shows; the ordinary stage-failure
+// evidence path is where a diagnosis like this belongs, not the PR-loop
+// handover.
+func TestPREscalation_unrecordedStepReasonIsHouseStyleNotRawDiagnosis(t *testing.T) {
 	diagnose := func(agentName, errorType string) FailureDiagnosis {
 		assert.Equal(t, "board-SC-1-prreview", agentName)
 		assert.Equal(t, "oom", errorType)
@@ -68,8 +72,10 @@ func TestPREscalation_unrecordedVerdictCarriesTheDiagnosis(t *testing.T) {
 		ErrorType:      "oom",
 	}, diagnose)
 
-	assert.Contains(t, body, "the container ran out of memory")
-	assert.Contains(t, body, "killed at 4.0GiB")
+	assert.NotContains(t, body, "the container ran out of memory", "a raw diagnosis headline is never THE message")
+	assert.NotContains(t, body, "killed at 4.0GiB", "a raw diagnosis detail is never THE message")
+	assert.Contains(t, body, "PR reviewer")
+	assert.Contains(t, body, "re-run Deploy", "the escalation names the next action")
 }
 
 // The durable reconcile re-drive has no exiting agent to attribute, so it must
@@ -82,7 +88,7 @@ func TestPREscalation_reDriveWithoutAnAgentStillExplainsItself(t *testing.T) {
 
 	body := escalationBody(t, PRLoopOutcome{ReviewRecorded: false}, diagnose)
 
-	assert.Contains(t, body, "without recording a verdict")
+	assert.Contains(t, body, "stopped before recording a verdict")
 }
 
 // An empty-handed diagnoser must not blank the marker: the fallback line still
@@ -95,7 +101,7 @@ func TestPREscalation_emptyDiagnosisFallsBackToTheMissingOutcome(t *testing.T) {
 		Agent:          "board-SC-1-prreview",
 	}, diagnose)
 
-	assert.Contains(t, body, "without recording a verdict")
+	assert.Contains(t, body, "stopped before recording a verdict")
 }
 
 // Recorded verdicts the daemon DOES understand keep their existing, more

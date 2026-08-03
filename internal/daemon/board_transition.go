@@ -956,13 +956,14 @@ func staleStepReason(stage PRLoopStage) string {
 	return "the loop could not confirm " + what + " was fully written before acting on it — check the PR and its review, then re-run Deploy"
 }
 
-// unrecordedStepReason explains a loop step that left no outcome behind.
-func unrecordedStepReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose BoardFailureDiagnoser) string {
-	if outcome.Agent != "" && diagnose != nil {
-		if body := failureMarkerBody(diagnose, outcome.Agent, outcome.ErrorType); body != genericStageFailure {
-			return body
-		}
-	}
+// unrecordedStepReason explains a loop step that left no outcome behind. The
+// RETURNED escalation line is always the house-style situation+next-action —
+// never a diagnoser's raw post-mortem headline/detail (SC-3024): a diagnosis
+// carries machine vocabulary (container/OOM/exit-code) a card-facing marker
+// must never print as THE message. The diagnosis still reaches the ticket via
+// the ordinary stage-failure evidence path when that path runs; this
+// escalation only names what is missing and the one gesture that recovers it.
+func unrecordedStepReason(stage PRLoopStage, _ PRLoopOutcome, _ BoardFailureDiagnoser) string {
 	step, report := "review→fix loop step", "an outcome"
 	switch stage {
 	case PRStageReview:
@@ -970,8 +971,8 @@ func unrecordedStepReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Boa
 	case PRStageFix:
 		step, report = "PR fixer", "an exit"
 	}
-	return "the " + step + " finished without recording " + report +
-		" — its run may have died before reporting; check its log and the PR, then re-run Deploy"
+	return "the " + step + " stopped before recording " + report +
+		" — check the PR and its review, then re-run Deploy"
 }
 
 // AdvanceDeployFix is the deploy-fixer's Stop-event driver. On the fixer's exit the
