@@ -410,6 +410,24 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	// each route would degrade with only its own history.
 	issueFetcher := fetchTrackerIssuesFunc(projectRegistry, vaultResolver, logger)
 
+	// leaseChecker answers the daemon-busy route's "any live stage lease" half
+	// by opening the shared agent-state database fresh per call — this route
+	// only fires when a close is being considered (SC-3015), never on a hot
+	// path, so a held-open connection buys nothing (mirrors pruneAgentState's
+	// per-invocation open/close above).
+	leaseChecker := func(ctx context.Context, project string) (bool, error) {
+		store, err := agentstate.Open(agentstate.DefaultDBPath())
+		if err != nil {
+			return false, err
+		}
+		defer func() { _ = store.Close() }()
+		leases, err := store.LiveLeases(ctx, project)
+		if err != nil {
+			return false, err
+		}
+		return len(leases) > 0, nil
+	}
+
 	srv := &daemon.Server{
 		Addr:               addr,
 		Token:              token,
@@ -453,6 +471,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		MockupChooser:      mockupChooserFunc(projectRegistry),
 		MockupPruner:       mockupPrunerFunc(projectRegistry),
 		Ideation:           ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
+		LeaseChecker:       leaseChecker,
 	}
 
 	// Bring back a chat the previous process was in the middle of, before the
