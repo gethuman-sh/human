@@ -175,14 +175,7 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		return nil, errors.WrapWithDetails(err, "marshalling create request", "project", project)
 	}
 
-	// Azure's native defect marker is the work item type itself: bug-typed
-	// issues must be created as $Bug, not as a tagged $Issue, or they lose
-	// their place in Azure's own bug tracking (queries, boards, rules).
-	witType := "Issue"
-	if tracker.IsBugType(issue.Type) {
-		witType = "Bug"
-	}
-	path := fmt.Sprintf("/%s/%s/_apis/wit/workitems/$%s", url.PathEscape(c.org), url.PathEscape(project), url.PathEscape(witType))
+	path := fmt.Sprintf("/%s/%s/_apis/wit/workitems/$%s", url.PathEscape(c.org), url.PathEscape(project), url.PathEscape(adoWorkItemType(issue.Type)))
 	resp, err := c.doRequest(ctx, http.MethodPost, path, "api-version=7.1", bytes.NewReader(body), "application/json-patch+json")
 	if err != nil {
 		return nil, err
@@ -201,6 +194,19 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 		ParentKey:   issue.ParentKey,
 		Labels:      splitTags(wi.Fields.Tags),
 	}, nil
+}
+
+// adoWorkItemType maps a provider-agnostic issue type onto Azure DevOps' own
+// work item type. Azure's native defect marker is the type itself: a bug must
+// be a Bug, not a tagged Issue, or it loses its place in Azure's bug tracking
+// (queries, boards, rules). Everything else is an Issue, Azure's ordinary work
+// item. Shared by create (which names the type in the URL) and retype (which
+// patches the same value as a field), so the two can never disagree.
+func adoWorkItemType(issueType string) string {
+	if tracker.IsBugType(issueType) {
+		return "Bug"
+	}
+	return "Issue"
 }
 
 // adoCategoryToType maps an Azure DevOps state category to a tracker.Category.
@@ -341,6 +347,15 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 	}
 	if opts.Description != nil {
 		ops = append(ops, patchOp{Op: "replace", Path: "/fields/System.Description", Value: *opts.Description})
+	}
+	// The work item type is chosen in the URL at create time but is an ordinary
+	// field afterwards, so a retype is a patch on System.WorkItemType. The same
+	// bug-token normalisation create uses applies, so "bug" in any spelling
+	// reaches Azure DevOps as its native "Bug". A move Azure DevOps will not
+	// make (across process templates, say) is refused by the API and that
+	// refusal is returned unchanged — never swallowed into a false success.
+	if opts.Type != nil {
+		ops = append(ops, patchOp{Op: "add", Path: "/fields/System.WorkItemType", Value: adoWorkItemType(*opts.Type)})
 	}
 	// System.Tags has no per-tag patch semantics — "add" on a field path
 	// overwrites the whole value — so the live tag set is read and merged

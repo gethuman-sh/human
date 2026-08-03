@@ -598,6 +598,13 @@ func (c *Client) GetCurrentUser(ctx context.Context) (string, error) {
 
 // EditIssue implements tracker.Editor.
 func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
+	// Linear has no issue type: the kind is a label, so a retype is a label
+	// swap and joins the label edits buildEditInput already resolves (SC-3051).
+	opts, err := tracker.RetypeIntoLabels(ctx, c, key, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	issueID, input, err := c.buildEditInput(ctx, key, opts)
 	if err != nil {
 		return nil, err

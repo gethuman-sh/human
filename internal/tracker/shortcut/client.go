@@ -507,6 +507,18 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 	if opts.Description != nil {
 		fields["description"] = *opts.Description
 	}
+	// Shortcut carries the kind natively, so a retype is one field. An
+	// unrecognised type is refused rather than dropped: silently leaving the
+	// story a bug while reporting the edit succeeded is the failure mode a
+	// retype exists to end (SC-3051).
+	if opts.Type != nil {
+		st := normalizeStoryType(*opts.Type)
+		if st == "" {
+			return nil, errors.WithDetails("shortcut cannot express this issue type",
+				"key", key, "type", *opts.Type, "known", "feature, bug, chore")
+		}
+		fields["story_type"] = st
+	}
 	// Shortcut's story update replaces the full label set, so the current
 	// labels must be fetched and merged before writing. Labels stay out of
 	// the body entirely when the edit doesn't touch them, keeping

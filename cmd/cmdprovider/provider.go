@@ -157,18 +157,20 @@ func buildPRCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 }
 
 func buildIssueEditCmd(kind string, deps cmdutil.Deps) *cobra.Command {
-	var title, description string
+	var title, description, issueType string
 	var addLabels, removeLabels []string
 
 	cmd := &cobra.Command{
-		Use:     "edit KEY",
-		Short:   "Edit an issue's title, description, and/or labels",
-		Example: `  human jira issue edit KAN-1 --title "New title" --remove-label human/idea`,
-		Args:    cobra.ExactArgs(1),
+		Use:   "edit KEY",
+		Short: "Edit an issue's title, description, type, and/or labels",
+		Example: `  human jira issue edit KAN-1 --title "New title" --remove-label human/idea
+  human shortcut issue edit SC-1 --type Bug     # retype product work as a defect
+  human shortcut issue edit SC-1 --type Feature # and back again`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !cmd.Flags().Changed("title") && !cmd.Flags().Changed("description") &&
-				len(addLabels) == 0 && len(removeLabels) == 0 {
-				return errors.WithDetails("at least one of --title, --description, --add-label, or --remove-label is required")
+				!cmd.Flags().Changed("type") && len(addLabels) == 0 && len(removeLabels) == 0 {
+				return errors.WithDetails("at least one of --title, --description, --type, --add-label, or --remove-label is required")
 			}
 			p, cleanup, err := cmdutil.ResolveProvider(cmd, kind, deps)
 			if err != nil {
@@ -183,12 +185,16 @@ func buildIssueEditCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 			if cmd.Flags().Changed("description") {
 				opts.Description = &description
 			}
+			if cmd.Flags().Changed("type") {
+				opts.Type = &issueType
+			}
 
 			return RunEditIssue(cmd.Context(), p, cmd.OutOrStdout(), args[0], opts)
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "New issue title")
 	cmd.Flags().StringVar(&description, "description", "", "New issue description (markdown)")
+	cmd.Flags().StringVar(&issueType, "type", "", "New issue type (e.g. Task, Bug) — retypes the issue; Bug maps to every tracker's native defect marker")
 	cmd.Flags().StringArrayVar(&addLabels, "add-label", nil, "Label to add (repeatable)")
 	cmd.Flags().StringArrayVar(&removeLabels, "remove-label", nil, "Label to remove (repeatable; absent labels are ignored)")
 	return cmd
@@ -385,6 +391,14 @@ func RunGetIssue(ctx context.Context, p tracker.Provider, out io.Writer, key str
 	_, _ = fmt.Fprintf(out, "| Priority | %s |\n", displayOrNone(issue.Priority))
 	_, _ = fmt.Fprintf(out, "| Assignee | %s |\n", displayOrNone(issue.Assignee))
 	_, _ = fmt.Fprintf(out, "| Reporter | %s |\n", displayOrNone(issue.Reporter))
+	// The kind decides which pipeline picks the ticket up, so it has to be
+	// readable: a mistyped ticket used to be discoverable only when the wrong
+	// pipeline started work on it (SC-3051). Omitted when the tracker reports
+	// none rather than printed as "None", so trackers that carry no type add no
+	// empty row.
+	if issue.Type != "" {
+		_, _ = fmt.Fprintf(out, "| Type     | %s |\n", issue.Type)
+	}
 	if issue.ParentKey != "" {
 		_, _ = fmt.Fprintf(out, "| Parent   | %s |\n", issue.ParentKey)
 	}

@@ -309,6 +309,13 @@ func (c *Client) GetCurrentUser(ctx context.Context) (string, error) {
 // PUT; labels use ClickUp's dedicated per-tag endpoints, so a labels-only
 // edit skips the field update entirely.
 func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
+	// ClickUp has no task type: the kind is a tag, so a retype is a tag swap
+	// and joins the tag changes below (SC-3051).
+	opts, err := tracker.RetypeIntoLabels(ctx, c, key, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	fields := make(map[string]string)
 	if opts.Title != nil {
 		fields["name"] = *opts.Title
