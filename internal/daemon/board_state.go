@@ -23,6 +23,12 @@ type BoardCard struct {
 	Commits string `json:"commits,omitempty"`
 	PRURL   string `json:"pr_url,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// ResumeAt is the RFC3339 instant a paused (outage) card's standing marker
+	// names as when the substrate is stated to clear (a "resume:" line — see
+	// pausedOutageBody), when one was parsed out of the diagnosis. Empty when
+	// the outage carries no stated recovery time, in which case the wait falls
+	// back to the reconcile pass's own backoff exactly as before (SC-3024).
+	ResumeAt string `json:"resume_at,omitempty"`
 	// HasPlan reports a [human:plan] comment on the ticket — the plan lives
 	// here instead of on a separate engineering ticket (single-tracker
 	// topology).
@@ -186,17 +192,28 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		card.ShippedPartial = true
 		card.ShippedPartialFollowOn = followOn
 	}
-	// An outage card carries the same one-line reason a failed card does (the
-	// substrate that was unreachable), so the badge can say WHAT is down, not just
-	// that it is — the outage marker's body is composed exactly like a failure's
-	// (SC-2307).
-	if state == BoardFailed || state == BoardOutage {
-		card.Error = failureReason(latest.Body)
-	}
+	attachFailureAndResume(&card, state, latest)
 	card.DeployPhase = deployPhaseFor(card, comments)
 	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
 	attachOpenOptions(&card, comments)
 	return card
+}
+
+// attachFailureAndResume sets the one-line reason and (for a paused outage)
+// the stated resume instant, mirroring how a failed card's reason is derived.
+// An outage card carries the same one-line reason a failed card does (the
+// substrate that was unreachable), so the badge can say WHAT is down, not just
+// that it is — the outage marker's body is composed exactly like a failure's
+// (SC-2307). Split out of DeriveBoardCard purely to keep that function's
+// cyclomatic complexity under the project's gate; ResumeAt is SC-3024.
+func attachFailureAndResume(card *BoardCard, state BoardState, latest tracker.Comment) {
+	if state != BoardFailed && state != BoardOutage {
+		return
+	}
+	card.Error = failureReason(latest.Body)
+	if state == BoardOutage {
+		card.ResumeAt = parseResumeLine(latest.Body)
+	}
 }
 
 // ticketReviewStop reads the operative ticket-review STOP verdict off the card's
@@ -341,6 +358,15 @@ func failureReason(body string) string {
 		}
 	}
 	return firstLine(trimmed)
+}
+
+// parseResumeLine returns the value of a marker body's "resume:" line (the
+// RFC3339 instant pausedOutageBody wrote when a stated recovery time was
+// parsed), or "" when the marker carries no such line — the ordinary
+// recorded-outage case with no stated time, where the wait falls back to the
+// reconcile pass's own backoff.
+func parseResumeLine(body string) string {
+	return parsePrefixedLine(body, "resume:")
 }
 
 // failureBody returns everything after a *-failed marker's header line — the

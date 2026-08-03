@@ -164,6 +164,72 @@ func TestReconcileOutage_SkipsWhenAgentAlive(t *testing.T) {
 	require.Empty(t, relaunched)
 }
 
+// SC-3024: a card that reads BoardOutage purely from its standing *-outage
+// marker — with NOTHING recorded in the retry policy's Outcome (the live exit
+// never got a chance to record one, e.g. the SC-2856 refusal) — must still be
+// re-driven through the uncharged path. Before this fix reconcileOutage went
+// through retry.tryRelaunch, which reads Outcome("",false) and classifies that
+// as relaunchBounded — charging the very budget an outage must never spend.
+func TestReconcileOutage_SignalBasedOutageRedriveDoesNotCharge(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, now.Add(-time.Hour)),
+			cmt(ImplementationOutageHeader+"\npaused — model usage limit", now.Add(-time.Minute)),
+		},
+	}}
+	var relaunched []BoardStage
+	attempts := 0
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false }, // nothing recorded
+		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
+		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+	}
+
+	n, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
+		nil, retry, "d1", now, zerolog.Nop())
+
+	require.Equal(t, 1, n, "a signal-based outage card is still re-driven")
+	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
+	require.Zero(t, handedOver)
+	require.Zero(t, attempts, "the derived-outage re-drive must never consult the retry budget")
+}
+
+// SC-3024: when the standing outage marker carries a stated resume: time, the
+// reconcile pass must wait until that instant rather than relaunching every
+// tick — and relaunch as soon as the wait is over.
+func TestReconcileOutage_WaitsUntilResumeTime(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	resume := now.Add(time.Hour)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(ImplementationStartedHeader, now.Add(-time.Hour)),
+			cmt(ImplementationOutageHeader+"\npaused — model usage limit\nresume: "+resume.UTC().Format(time.RFC3339), now.Add(-time.Minute)),
+		},
+	}}
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
+		Relaunch: func(_ string, s BoardStage) error { return nil },
+	}
+
+	relaunchedAt := func(at time.Time) []BoardStage {
+		var relaunched []BoardStage
+		r := retry
+		r.Relaunch = func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil }
+		reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), nil, r, "d1", at, zerolog.Nop())
+		return relaunched
+	}
+
+	require.Empty(t, relaunchedAt(now), "still inside the stated wait — must not relaunch yet")
+	require.Equal(t, []BoardStage{BoardImplementation}, relaunchedAt(resume.Add(time.Minute)),
+		"past the stated resume time — relaunch")
+}
+
 // A non-outage card (a plain running stage) is not the outage pass's concern —
 // it is left for the stuck-running pass.
 func TestReconcileOutage_IgnoresNonOutageCards(t *testing.T) {
