@@ -51,7 +51,7 @@ func TestHandleBoardAgentExit_OutageIsStatedOnce(t *testing.T) {
 
 	for range 3 {
 		handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor,
-			nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+			nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
 	}
 
 	require.Len(t, c.added, 1, "the card says the substrate is down once, not once per attempt")
