@@ -3090,8 +3090,18 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 	if err != nil {
 		return daemon.BoardTransitionDeps{}, err
 	}
+	// The Getter lets a recovery relaunch classify the ticket as a self-planning
+	// fix pipeline; best-effort, since a tracker without fetch support simply
+	// leaves classification to the marker heuristic (SC-2986).
+	getter, gErr := resolvePMGetter(entry.Dir, lookup, resolver)
+	if gErr != nil {
+		logger.Debug().Err(gErr).Str("pm", pmKey).
+			Msg("board transition: no PM getter; relaunch will use the marker heuristic")
+		getter = nil
+	}
 	return daemon.BoardTransitionDeps{
 		Commenter: commenter,
+		Getter:    getter,
 		Launcher:  dockerAgentLauncher{daemonID: daemonID, agentIPs: agentIPs},
 		Deployer:  forgeDeployer{resolver: resolver, lookup: lookup},
 		CloseTicket: func(pmKey string) error {

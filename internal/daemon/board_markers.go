@@ -222,6 +222,29 @@ func hasCompletedRelatedRecord(comments []tracker.Comment) bool {
 	return false
 }
 
+// BugVerdictHeader marks the triage verdict comment both the autofix and the
+// security-fix pipelines post ([human:bug-verdict] confirmed|not-a-bug|
+// undetermined). It is the ticket's permanent root-cause record, NOT a stage
+// transition, so — like PlanCommentHeader — it is deliberately kept OUT of
+// orderedMarkerSpecs and ClassifyMarker never classifies it. Its presence is
+// the resumable-run signal a recovery relaunch reads: a recorded cause with no
+// [human:plan] means a self-planning fix pipeline was interrupted mid-run, a
+// place to resume from rather than a ticket to refuse (SC-2986).
+const BugVerdictHeader = "[human:bug-verdict]"
+
+// hasBugVerdict reports whether the ticket carries a triage verdict comment —
+// the marker heuristic a recovery relaunch falls back on when no ticket-kind
+// Getter is wired. The closing bracket keeps it from matching an unrelated
+// prefix, exactly as it does for plan vs plan-ready.
+func hasBugVerdict(comments []tracker.Comment) bool {
+	for _, c := range comments {
+		if strings.HasPrefix(strings.TrimSpace(c.Body), BugVerdictHeader) {
+			return true
+		}
+	}
+	return false
+}
+
 // HandoffCheckUnreadableHeader flags that a board handoff's branch- or
 // commit-presence check could not be PERFORMED on this machine (an unresolvable
 // project dir, a git error, or a probe that ran past its timeout) — as opposed
