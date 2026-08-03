@@ -156,7 +156,15 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 	if handleCleanStageEnding(ctx, pmKey, stage, agentName, errorType, cleanExit, comments, commenter, chainReview, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger) {
 		return
 	}
-	if handleOutageExit(ctx, pmKey, stage, agentName, errorType, comments, commenter, diagnose, retry, latestClass, daemonID, logger) {
+	// A refusal that kills the agent before it records an exit (the SC-2856
+	// incident: a session-limit refusal) is classified from the hook errorType
+	// and the model-boundary class BEFORE the outage gate below, so it is
+	// recognised even when retry.recordedOutage sees nothing.
+	kind, reason := classifyUnavailability(errorType, latestClass, pmKey, string(stage))
+	if handleOutageExit(ctx, pmKey, stage, agentName, errorType, comments, commenter, diagnose, retry, kind, reason, daemonID, logger) {
+		return
+	}
+	if handleNeedsPersonExit(ctx, pmKey, stage, agentName, kind, reason, commenter, logger) {
 		return
 	}
 	// A silence reap (the zombie sweep reaping an agent that went quiet — no
@@ -282,6 +290,27 @@ func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType
 		return
 	}
 	chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
+}
+
+// handleNeedsPersonExit deals with a wall that does not self-heal (a revoked
+// credential, exhausted billing): it still needs a person, but must never
+// charge the retry budget or auto-relaunch — the next attempt would hit the
+// exact same wall. Reports whether it handled the exit. Split out of
+// handleBoardAgentExit so this branch's complexity costs its own function
+// rather than the dispatcher's (SC-3024).
+func handleNeedsPersonExit(ctx context.Context, pmKey string, stage BoardStage, agentName string, kind endingKind, reason string, commenter tracker.Commenter, logger zerolog.Logger) bool {
+	if kind != endingNeedsPerson {
+		return false
+	}
+	header := failedHeaderFor(stage)
+	if header == "" {
+		return false
+	}
+	body := header + "\n" + needsPersonReason(reason)
+	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post needs-person marker")
+	}
+	return true
 }
 
 // handoffSearchNote composes the "what was searched for" line the review-failed
@@ -589,6 +618,23 @@ func appendModelOutcomeNote(body string, latest LatestOutcomeClass, ticket, stag
 // from the ticket alone rather than from agent logs.
 func modelOutcomeReason(class string) string {
 	return "last model-API call at the network boundary was recorded as \"" + class + "\"."
+}
+
+// needsPersonReason composes the deploy-style situation+next-action line for a
+// wall that does not self-heal: the card reads what is wrong and the one
+// gesture that resolves it, never an exit code or a guessed-at cause. reason
+// is the substrate phrase classifyUnavailability names (e.g. "model API
+// authentication was refused"); a spend/credit reason gets its own next
+// action, everything else defaults to re-authenticating.
+func needsPersonReason(reason string) string {
+	action := "re-authenticate the model API on the daemon host, then re-run this stage."
+	if strings.Contains(strings.ToLower(reason), "billing") || strings.Contains(strings.ToLower(reason), "credit") {
+		action = "restore the model API billing/credit, then re-run this stage."
+	}
+	if reason == "" {
+		reason = "the model API refused the run"
+	}
+	return "paused for a person — " + reason + "; " + action
 }
 
 // failureMarkerBody composes the failed marker's body: a one-line headline
