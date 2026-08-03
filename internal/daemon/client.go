@@ -17,6 +17,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/settings"
 	"github.com/gethuman-sh/human/internal/stats"
@@ -756,6 +757,19 @@ func GetStatsOverview(addr, token, rng string) (*StatsOverview, error) {
 		return nil, errors.WrapWithDetails(err, "invalid stats overview JSON")
 	}
 	return &ov, nil
+}
+
+// GetTicketCost fetches the durable per-ticket cost/time rollup from the daemon.
+func GetTicketCost(addr, token, key string) (costledger.TicketCost, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"ticket-cost", key})
+	if err != nil {
+		return costledger.TicketCost{}, err
+	}
+	var r costledger.TicketCost
+	if err := json.Unmarshal(out, &r); err != nil {
+		return costledger.TicketCost{}, errors.WrapWithDetails(err, "decoding ticket cost", "key", key)
+	}
+	return r, nil
 }
 
 // SendConfirmDecision sends a confirmation decision for a pending destructive operation.

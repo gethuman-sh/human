@@ -34,6 +34,7 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/codenav"
 	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/dispatch"
@@ -164,6 +165,7 @@ type daemonState struct {
 	agentIPs      *daemon.AgentIPRegistry
 	vaultResolver *vault.Resolver
 	statsStore    *stats.StatsStore
+	costStore     *costledger.Store
 	statsWriter   *stats.Writer
 	auditStore    *audit.Store
 	auditWriter   *audit.Writer
@@ -179,7 +181,7 @@ type daemonState struct {
 // runMaintenanceLoop periodically cleans up stale pending confirmations and
 // prunes the stats, audit, agent-execution-log, and agent-state stores past
 // their retention windows. It runs until ctx is cancelled.
-func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore *daemon.PendingConfirmStore, statsStore *stats.StatsStore, auditStore *audit.Store) {
+func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore *daemon.PendingConfirmStore, statsStore *stats.StatsStore, auditStore *audit.Store, costStore *costledger.Store) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	// Agent state has a multi-day retention, so it gets its own slow ticker
@@ -192,7 +194,7 @@ func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			runMaintenanceTick(ctx, logger, confirmStore, statsStore, auditStore)
+			runMaintenanceTick(ctx, logger, confirmStore, statsStore, auditStore, costStore)
 		case <-stateTicker.C:
 			pruneAgentState(ctx, logger)
 		}
@@ -200,11 +202,16 @@ func runMaintenanceLoop(ctx context.Context, logger zerolog.Logger, confirmStore
 }
 
 // runMaintenanceTick is one pass of the fast maintenance sweep.
-func runMaintenanceTick(ctx context.Context, logger zerolog.Logger, confirmStore *daemon.PendingConfirmStore, statsStore *stats.StatsStore, auditStore *audit.Store) {
+func runMaintenanceTick(ctx context.Context, logger zerolog.Logger, confirmStore *daemon.PendingConfirmStore, statsStore *stats.StatsStore, auditStore *audit.Store, costStore *costledger.Store) {
 	confirmStore.Cleanup(daemon.ConfirmRetention)
 	if statsStore != nil {
 		if _, pruneErr := statsStore.Prune(ctx); pruneErr != nil {
 			logger.Warn().Err(pruneErr).Msg("periodic stats prune failed")
+		}
+	}
+	if costStore != nil {
+		if _, pruneErr := costStore.Prune(ctx); pruneErr != nil {
+			logger.Warn().Err(pruneErr).Msg("periodic cost ledger prune failed")
 		}
 	}
 	if auditStore != nil {
@@ -321,6 +328,12 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	// request path, and the IP registry attributes each proxy connection to the
 	// board agent (ticket+stage) that owns it (SC-2555).
 	modelSink := daemon.NewModelOutcomeSink(ctx)
+
+	// The durable per-ticket cost/time ledger (SC-2847). resolveProject is shared
+	// verbatim by the sink (write) and the server (read) so a read filters by the
+	// SAME project the write used — resolved per ticket, never a board-wide
+	// default (AD5).
+	costStore, resolveProject := initCostLedger(projectRegistry, modelSink, logger)
 	agentIPs := daemon.NewAgentIPRegistry()
 	confirmStore := daemon.NewPendingConfirmStore()
 	// Approvals are durable: a restarted daemon re-offers undecided prompts
@@ -371,7 +384,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 
 	auditStore, auditWriter := initAuditStore(ctx, logger)
 
-	go runMaintenanceLoop(ctx, logger, confirmStore, statsStore, auditStore)
+	go runMaintenanceLoop(ctx, logger, confirmStore, statsStore, auditStore, costStore)
 
 	// Keep the shared code-navigation index fresh so every agent, worktree, and
 	// the developer's CLI query one daemon-owned index instead of each rebuilding
@@ -408,6 +421,8 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		HookEvents:         hookStore,
 		NetworkEvents:      networkStore,
 		ModelOutcomes:      modelSink,
+		CostLedger:         costStore,
+		CostLedgerProject:  resolveProject,
 		IssueFetcher:       issueFetcher,
 		LiteIssueFetcher:   fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
 		BoardViewFetcher:   boardViewFunc(issueFetcher, doctor, projectRegistry, boardcache.NewStore(boardcache.DefaultPath()), logger),
@@ -455,6 +470,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		agentIPs:      agentIPs,
 		vaultResolver: vaultResolver,
 		statsStore:    statsStore,
+		costStore:     costStore,
 		statsWriter:   statsWriter,
 		auditStore:    auditStore,
 		auditWriter:   auditWriter,
@@ -576,6 +592,8 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	if ds.statsStore != nil {
 		defer func() { _ = ds.statsStore.Close() }()
 	}
+	// Store.Close is nil-safe, so no guard is needed (unlike statsStore above).
+	defer func() { _ = ds.costStore.Close() }()
 	if ds.auditWriter != nil {
 		defer ds.auditWriter.Close()
 	}
@@ -1805,6 +1823,27 @@ func boardViewFunc(fetch func() ([]daemon.TrackerIssuesResult, error), doctor *d
 		rememberBoardView(cache, project, view, logger)
 		return view, nil
 	}
+}
+
+// initCostLedger opens the durable per-ticket cost/time ledger and wires it into
+// the sink, returning the store (nil on a failed open — accounting degrades to
+// memory-only rather than aborting startup) and the per-ticket project resolver
+// shared with the server's read path (SC-2847 AD5).
+func initCostLedger(projectRegistry *daemon.ProjectRegistry, modelSink *daemon.ModelOutcomeSink, logger zerolog.Logger) (*costledger.Store, func(string) string) {
+	resolveProject := func(ticket string) string {
+		entry, err := projectRegistry.EntryForKey(ticket)
+		if err != nil {
+			return ""
+		}
+		return entry.Dir
+	}
+	costStore, err := costledger.NewStore(costledger.DefaultDBPath())
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to open cost ledger, per-ticket cost/time disabled")
+		return nil, resolveProject
+	}
+	modelSink.WithLedger(costStore, resolveProject, logger)
+	return costStore, resolveProject
 }
 
 // boardProjectKey names the project a board snapshot belongs to, keyed the same

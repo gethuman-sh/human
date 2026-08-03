@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "../build/board-detail.js";
+import { buildCostSection, buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "../build/board-detail.js";
 
 // SC-365 regression: the board detail panel must render comment-sourced review
 // findings, failure reason, and fix summary. buildDetailSections is the pure
@@ -89,4 +89,70 @@ test("empty stop decision emits nothing", () => {
 test("multi-line stop reasoning preserves line breaks", () => {
   const html = buildStopDecisionSection("rejected", undefined, "line1\nline2");
   assert.match(html, /line1<br>line2/);
+});
+
+// --- Per-ticket cost & time (SC-2847) ---
+
+test("no spend says so plainly, never $0.00 (SC-2847 criterion 5)", () => {
+  const html = buildCostSection(null, undefined, undefined, Date.now());
+  assert.match(html, /No spend recorded/);
+  assert.doesNotMatch(html, /\$0\.00/);
+});
+
+test("empty hasSpend=false rollup also renders the plain empty state", () => {
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: false, totalCostUSD: 0, contextCostUSD: 0, answersCostUSD: 0, totalDurationMs: 0, stages: [] },
+    "implementation",
+    undefined,
+    Date.now(),
+  );
+  assert.match(html, /No spend recorded/);
+});
+
+test("populated rollup shows total, split, per-stage rows, and live current-stage clock", () => {
+  const now = Date.now();
+  const enteredAt = new Date(now - 90_000).toISOString(); // 90s ago
+  const html = buildCostSection(
+    {
+      ticket: "SC-1",
+      hasSpend: true,
+      totalCostUSD: 1.23,
+      contextCostUSD: 0.8,
+      answersCostUSD: 0.43,
+      totalDurationMs: 5000,
+      stages: [
+        { stage: "implementation", costUSD: 1.0, contextCostUSD: 0.7, answersCostUSD: 0.3, durationMs: 3000 },
+        { stage: "planning", costUSD: 0.23, contextCostUSD: 0.1, answersCostUSD: 0.13, durationMs: 2000 },
+      ],
+    },
+    "implementation",
+    enteredAt,
+    now,
+  );
+  assert.match(html, /\$1\.23/); // total in dollars (>= $1 => two decimals)
+  assert.match(html, /answers/);
+  assert.match(html, /context/);
+  assert.match(html, /implementation/);
+  assert.match(html, /planning/);
+  assert.match(html, /Current stage \(implementation\): 1m 30s running/);
+});
+
+test("sub-dollar figures keep four decimals so a few cents never rounds to $0.00", () => {
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: true, totalCostUSD: 0.0123, contextCostUSD: 0.01, answersCostUSD: 0.0023, totalDurationMs: 1000, stages: [] },
+    "planning",
+    undefined,
+    Date.now(),
+  );
+  assert.match(html, /\$0\.0123/);
+});
+
+test("no stageEnteredAt omits the live current-stage clock", () => {
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: true, totalCostUSD: 1.0, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
+    "planning",
+    undefined,
+    Date.now(),
+  );
+  assert.doesNotMatch(html, /Current stage/);
 });

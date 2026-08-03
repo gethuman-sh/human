@@ -26,6 +26,7 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/board"
 	"github.com/gethuman-sh/human/internal/boardprefs"
+	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/ideaspace"
 	"github.com/gethuman-sh/human/internal/pipeline"
@@ -162,6 +163,22 @@ func (a *App) GetIssueDetail(trackerKind, trackerName, key string) (IssueDetail,
 		FailureReasonHTML:  issue.FailureReasonHTML,
 		FixSummaryHTML:     issue.FixSummaryHTML,
 	}, nil
+}
+
+// TicketCost fetches the durable per-ticket cost/time rollup for the detail
+// panel. Reached from the frontend through the hand-written AppBindings
+// interface (this repo uses no generated Wails bindings), so the Go signature
+// here and the TS declaration in board.ts must agree on shape by hand.
+func (a *App) TicketCost(key string) (costledger.TicketCost, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return costledger.TicketCost{}, err
+	}
+	r, err := daemon.GetTicketCost(info.Addr, info.Token, key)
+	if err != nil {
+		return costledger.TicketCost{}, daemonCause(err)
+	}
+	return r, nil
 }
 
 // SetIdeaColumn persists the idea-space placement for one ticket. Purely

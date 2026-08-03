@@ -2,14 +2,82 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/proxy"
 )
+
+// fakeLedger records the calls persisted through the sink's write seam.
+type fakeLedger struct {
+	mu    sync.Mutex
+	calls []costledger.CallRecord
+}
+
+func (f *fakeLedger) InsertCall(_ context.Context, r costledger.CallRecord) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, r)
+	return nil
+}
+
+func (f *fakeLedger) recorded() []costledger.CallRecord {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]costledger.CallRecord(nil), f.calls...)
+}
+
+func TestSink_PersistsAttributed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	led := &fakeLedger{}
+	s := NewModelOutcomeSink(ctx).WithLedger(led, func(ticket string) string { return "proj-" + ticket }, zerolog.Nop())
+
+	s.Record(proxy.ModelCallOutcome{
+		Ticket: "SC-1", Stage: "implementation", Model: "claude-opus-4-8",
+		InputTokens: 100, OutputTokens: 200, CacheCreateTokens: 50, CacheReadTokens: 900,
+		Duration: 1500 * time.Millisecond, Class: proxy.ClassOK, StatusCode: 200,
+	})
+
+	require.Eventually(t, func() bool { return len(led.recorded()) == 1 }, time.Second, 10*time.Millisecond)
+	got := led.recorded()[0]
+	assert.Equal(t, "proj-SC-1", got.Project, "the resolver's project is stamped on the row")
+	assert.Equal(t, "SC-1", got.Ticket)
+	assert.Equal(t, "implementation", got.Stage)
+	assert.Equal(t, "claude-opus-4-8", got.Model)
+	assert.Equal(t, 100, got.InputTokens)
+	assert.Equal(t, 200, got.OutputTokens)
+	assert.Equal(t, 50, got.CacheCreateTokens)
+	assert.Equal(t, 900, got.CacheReadTokens)
+	assert.Equal(t, int64(1500), got.DurationMs)
+}
+
+func TestSink_UnattributedNotPersisted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	led := &fakeLedger{}
+	s := NewModelOutcomeSink(ctx).WithLedger(led, nil, zerolog.Nop())
+
+	s.Record(proxy.ModelCallOutcome{Ticket: "", Stage: "", Class: proxy.ClassNetwork})
+
+	// The outcome still lands in-memory for LatestClass under the zero key.
+	require.Eventually(t, func() bool {
+		c, ok := s.LatestClass("", "")
+		return ok && c == proxy.ClassNetwork
+	}, time.Second, 10*time.Millisecond)
+	assert.Empty(t, led.recorded(), "an unattributed outcome is not persisted — it cannot be tied to a ticket")
+}
+
+func TestSink_WithLedgerNilSafe(t *testing.T) {
+	var s *ModelOutcomeSink
+	assert.NotPanics(t, func() { s.WithLedger(&fakeLedger{}, nil, zerolog.Nop()) })
+}
 
 func TestModelOutcomeSink_RecordAndQuery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
