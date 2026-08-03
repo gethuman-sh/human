@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/appsession"
 	"github.com/gethuman-sh/human/internal/board"
 	"github.com/gethuman-sh/human/internal/boardprefs"
 	"github.com/gethuman-sh/human/internal/costledger"
@@ -61,6 +63,18 @@ type App struct {
 	// cache holds the last-known full board snapshot, keyed by project, so a
 	// cold open paints instantly from it before the live fetch lands
 	// (stale-while-revalidate). Local UI acceleration only — never tracker state.
+	// session tracks which daemon process (by PID) this app currently manages,
+	// so a future launch can tell a crash-orphaned daemon apart from one a user
+	// intentionally left running standalone (SC-3015). Local-only, same
+	// rationale as ideas/recents/prefs above.
+	session *appsession.Store
+	// closeInFlight guards against a second window-close click stacking a
+	// second busy-check/dialog while one is already deciding (SC-3015).
+	closeInFlight atomic.Bool
+	// readyToQuit tells the re-entrant OnBeforeClose invocation (Wails' own
+	// runtime.Quit calls it a second time) to permit the close this time,
+	// instead of preventing it again — see closeflow.go.
+	readyToQuit atomic.Bool
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
@@ -70,6 +84,7 @@ func NewApp() *App {
 		ideas:   ideaspace.NewStore(ideaspace.DefaultPath()),
 		recents: recentprojects.NewStore(recentprojects.DefaultPath()),
 		prefs:   boardprefs.NewStore(boardprefs.DefaultPath()),
+		session: appsession.NewStore(appsession.DefaultPath()),
 	}
 }
 
@@ -309,10 +324,46 @@ func formatStageTime(t time.Time) string {
 func (a *App) DaemonStatus() bool {
 	info, err := daemon.ReadInfo()
 	if err == nil && info.IsReachable() {
+		// Best-effort: keep the app-session marker fresh (internal/appsession)
+		// so a crash between polls is still detectable as an orphan at the
+		// next launch, and a daemon handover (new PID, same logical daemon)
+		// is re-marked within one poll interval (SC-3015).
+		_ = a.session.Mark(os.Getpid(), info.PID)
 		return true
 	}
 	_, alive := daemon.ReadAlivePid()
 	return alive
+}
+
+// DaemonBusy reports whether stopping the daemon right now would end
+// in-flight agent work: either a live Claude Code instance (host or
+// container) with status "working" — the same discovery Instances() already
+// runs in-process — or the daemon reporting at least one project stage still
+// holding a live (non-expired) lease. The close flow (closeflow.go) uses this
+// to choose between a silent stop and the three-way confirmation dialog
+// (SC-3015).
+func (a *App) DaemonBusy() (bool, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil || !info.IsReachable() {
+		// Nothing reachable to protect, and StopIfRunning no-ops on an
+		// already-dead daemon — treat as idle rather than erroring the close.
+		return false, nil
+	}
+	if instances, instErr := a.Instances(); instErr == nil {
+		for _, ag := range instances.Agents {
+			if ag.Status == "working" {
+				return true, nil
+			}
+		}
+	}
+	status, err := daemon.GetDaemonBusy(info.Addr, info.Token)
+	if err != nil {
+		// A daemon predating this route, or a transient RPC hiccup, must never
+		// block every close forever: fall back to "not busy by this signal" —
+		// the instance check above already ran and stands on its own.
+		return false, nil
+	}
+	return status.Busy, nil
 }
 
 // Doctor returns the daemon's substrate health checks for the rail LED. An
