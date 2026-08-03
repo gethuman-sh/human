@@ -261,9 +261,11 @@ Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for se
 The reviewer writes `.human/reviews/<work-key>.md` and records its outcome in state. **Read the verdict from state, never from the file's prose:**
 
 ```bash
-human state get <WORK_KEY> stage.review --field verdict   # pass | pass with notes | fail | unreviewable
+human state get <WORK_KEY> stage.review --field verdict   # pass | pass with notes | fail | incomplete | unreviewable
 human state get <WORK_KEY> stage.review --field reason    # why, when unreviewable
 ```
+
+The five verdicts mean: the change is good (`pass`), good with notes worth recording (`pass with notes`), it has problems to fix (`fail`), it was built correctly but not every ticket acceptance criterion was met (`incomplete`), or the code could not be obtained at all (`unreviewable`).
 
 Post the outcome on the security ticket with the reviewer's **full findings** inlined under a `## Findings` section (the board detail panel shows it without opening the local `.human/reviews/<work-key>.md`):
 
@@ -295,7 +297,7 @@ REVIEW_EOF
 
   Run this once per review verdict, not once per attempt.
 - **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the fixer and do NOT post `[human:review-complete] verdict: fail`. Instead post `[human:review-failed]` naming the unreachable ref — `human marker post <SEC_KEY> review-failed --field reason="<reachability reason>"` — then STOP (report per Step 9). No PR is merged.
-- **fail** — feed the reviewer's findings back: re-dispatch the **human-bug-fixer** (Step 5) with the findings appended, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). This loops under the retry budget (`budget.review.attempts`). When the budget is spent, STOP honestly as `needs-human-work`: the handoff stays standing and NO pull request is merged.
+- **fail** or **incomplete** — feed the reviewer's findings back: re-dispatch the **human-bug-fixer** (Step 5) with the findings appended, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). An `incomplete` verdict means a ticket acceptance criterion was not built; route it identically to `fail` — re-dispatch the fixer with the unmet criterion appended, re-verify, and re-review under the same `budget.review.attempts`. This loops under the retry budget (`budget.review.attempts`). When the budget is spent, STOP honestly as `needs-human-work`: the handoff stays standing and NO pull request is merged.
 
 ## Step 8 — Phase 6: Deploy — end with a merged PR
 

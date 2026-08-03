@@ -33,10 +33,10 @@ type BoardCard struct {
 	// record does not set it, so a died-halfway run stays re-runnable (SC-2405).
 	HasRelatedRecord bool `json:"has_related_record,omitempty"`
 	// Verdict is the `verdict:` line of the latest [human:review-complete]
-	// comment (pass / pass with notes / fail). A failing verdict keeps the
-	// card out of Ready to Deploy and blocks the deploy transition; an absent
-	// verdict counts as pass so threads reviewed before verdicts existed keep
-	// flowing.
+	// comment (pass / pass with notes / fail / incomplete). A fail or incomplete
+	// verdict keeps the card out of Ready to Deploy and blocks the deploy
+	// transition; an absent verdict counts as pass so threads reviewed before
+	// verdicts existed keep flowing.
 	Verdict string `json:"verdict,omitempty"`
 	// Options is the latest unconsumed [human:options] block: a stage ended
 	// in a decision and the card is waiting for a human to pick a direction.
@@ -87,9 +87,14 @@ type BoardCard struct {
 }
 
 // VerdictFailed reports whether a review verdict blocks the card from moving
-// forward. Only an explicit failing verdict blocks — absence is not failure.
+// forward. A "fail" (the code was examined and found wanting) blocks, and so
+// does an "incomplete" — built correctly, but not everything the ticket asked
+// for: one or more acceptance criteria unmet. Both keep the card out of Ready
+// to Deploy and drive the rework loop; absence is not failure, so pre-verdict
+// threads keep flowing (SC-2848).
 func VerdictFailed(verdict string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(verdict)), "fail")
+	v := strings.ToLower(strings.TrimSpace(verdict))
+	return strings.HasPrefix(v, "fail") || strings.HasPrefix(v, "incomplete")
 }
 
 // DeriveBoardCard computes a PM ticket's board placement from its comment

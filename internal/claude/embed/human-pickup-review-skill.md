@@ -36,10 +36,13 @@ Your job: read that handoff, run the `human-reviewer` agent against each review 
    ```
    Each run writes `.human/reviews/<review_key_lowercased>.md`. Review ONLY the keys named in this handoff, and post markers ONLY on `<PM_KEY>` — never on any ticket the handoff does not name.
 
-4. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the outcome (`pass`, `pass with notes`, `fail`, or `unreviewable: <reason>`). If ANY reviewed key's Summary starts with `unreviewable`, the reviewer could not obtain that code — skip the pass/notes/fail roll-up entirely and go to the unreviewable branch of step 5. Otherwise roll them up into an overall verdict:
-   - all pass → `pass`
-   - any pass-with-notes, no fails → `pass with notes`
+4. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the outcome (`pass`, `pass with notes`, `fail`, `incomplete`, or `unreviewable: <reason>`). If ANY reviewed key's Summary starts with `unreviewable`, the reviewer could not obtain that code — skip the roll-up entirely and go to the unreviewable branch of step 5. Otherwise roll them up into an overall verdict:
    - any fail → `fail`
+   - else any incomplete → `incomplete` (a ticket acceptance criterion is unmet — blocks deploy and loops the work back to be built, exactly like a fail)
+   - else any pass-with-notes → `pass with notes`
+   - else → `pass`
+
+   A `fail` or `incomplete` overall verdict blocks the deploy and the board re-runs the build against the review findings — no follow-up action is needed here beyond posting the `[human:review-complete]` comment.
 
 5. **Post the follow-up comment on the PM ticket.**
 

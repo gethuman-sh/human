@@ -283,11 +283,11 @@ Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for ti
 The reviewer writes `.human/reviews/<work-key>.md` and records its outcome in state. **Read the verdict from state, never from the file's prose:**
 
 ```bash
-human state get <WORK_KEY> stage.review --field verdict   # pass | pass with notes | fail | unreviewable
+human state get <WORK_KEY> stage.review --field verdict   # pass | pass with notes | fail | incomplete | unreviewable
 human state get <WORK_KEY> stage.review --field reason    # why, when unreviewable
 ```
 
-The four verdicts mean: the change is good (`pass`), good with notes worth recording (`pass with notes`), it has problems to fix (`fail`), or the code could not be obtained at all — the branch is unreachable or no commits reference the key (`unreviewable`). Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The `[human:review-complete]` comment below is only for reviews that examined code; an `unreviewable` outcome is handled by the 7.3 gate instead. The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
+The five verdicts mean: the change is good (`pass`), good with notes worth recording (`pass with notes`), it has problems to fix (`fail`), it was built correctly but not every ticket acceptance criterion was met (`incomplete`), or the code could not be obtained at all — the branch is unreachable or no commits reference the key (`unreviewable`). Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The `[human:review-complete]` comment below is only for reviews that examined code; an `unreviewable` outcome is handled by the 7.3 gate instead. The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
 
 ```bash
 human marker post <BUG_KEY> review-complete \
@@ -318,7 +318,7 @@ REVIEW_EOF
 
   Run this once per review verdict, not once per attempt: a second opinion on the same unchanged code twice is noise.
 - **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the **human-bug-fixer** and do NOT post `[human:review-complete] verdict: fail` (that would badge the card "review found problems" and point a rework run at phantom findings). Instead post `[human:review-failed]` on the bug ticket naming the unreachable ref — `human marker post <BUG_KEY> review-failed --field reason="<reachability reason>"` — then STOP (report per Step 9). No PR is merged. The card shows an honest, retryable stage failure. The board-context 7.1 stop is unchanged.
-- **fail** — feed the reviewer's findings back: re-dispatch the **human-bug-fixer** (Step 5) with the review findings appended to the prompt, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). This loops under the retry budget (`budget.review.attempts`) — a review that fails for a *different* reason each round is progress, while the same finding surviving twice is not. When the budget is spent, STOP honestly as `needs-human-work`: the `[human:ready-for-review]` handoff stays standing for a human, and NO pull request is merged.
+- **fail** or **incomplete** — feed the reviewer's findings back: re-dispatch the **human-bug-fixer** (Step 5) with the review findings appended to the prompt, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). An `incomplete` verdict means a ticket acceptance criterion was not built; route it identically to `fail` — re-dispatch the fixer with the unmet criterion appended, re-verify, and re-review under the same `budget.review.attempts`. This loops under the retry budget (`budget.review.attempts`) — a review that fails for a *different* reason each round is progress, while the same finding surviving twice is not. When the budget is spent, STOP honestly as `needs-human-work`: the `[human:ready-for-review]` handoff stays standing for a human, and NO pull request is merged.
 
 ## Step 8 — Phase 6: Deploy — end with a merged PR
 

@@ -61,6 +61,19 @@ A plan runs in a headless container with no human present. Two hard rules govern
 
 3. **Honor a decision already made.** If the ticket already carries a `[human:option-chosen]` comment, that fork is settled: plan concretely for it and never re-surface it as another `DECISION REQUIRED:`.
 
+4. **Never narrow the ticket silently.** Dropping, deferring, or narrowing an
+   acceptance criterion the ticket asks for is NOT a permissible Architecture
+   Decision or "Trade-off". The ticket — not the plan — is the scope of record.
+   If you cannot deliver every acceptance criterion in one plan, you have exactly
+   two moves: (a) emit the `DECISION REQUIRED:` terminal offering the human the
+   choice ("ship the narrow slice now + follow-on ticket for the rest" vs.
+   "full scope in one pass") — an explicit exception to "reserve DECISION
+   REQUIRED for taste/ambiguity", because requirement-dropping is always a human
+   call; or (b) if the ticket over-asks or a criterion is wrong, say so plainly
+   in the plan and note that the ticket must be amended so ticket and plan agree.
+   Recording a reduced scope only under "Architecture Decisions / Trade-off" is
+   forbidden.
+
 Prefer deciding over asking: emit `DECISION REQUIRED:` only for a real taste/ambiguity fork, never for a choice you can resolve yourself.
 
 ## Plan output format
@@ -88,7 +101,7 @@ For each non-trivial choice:
 - **Chosen**: <which option and why>
 - **Trade-off**: <what we give up>
 
-Resolve every decision you can here and record the choice — a board plan must arrive with all such decisions made. Never defer a decision into an implementation step. A decision you genuinely cannot make (a product/UX taste call or an ambiguity the codebase cannot settle) is NOT written into the plan at all: stop and emit the `DECISION REQUIRED:` terminal verdict (see "Autonomy contract") so the human chooses up front, before any implementation is dispatched.
+Resolve every decision you can here and record the choice — a board plan must arrive with all such decisions made. Never defer a decision into an implementation step. A decision you genuinely cannot make (a product/UX taste call or an ambiguity the codebase cannot settle) is NOT written into the plan at all: stop and emit the `DECISION REQUIRED:` terminal verdict (see "Autonomy contract") so the human chooses up front, before any implementation is dispatched. Scope itself is never such a decision: a choice to build fewer acceptance criteria than the ticket asks for is not recorded here — it triggers the `DECISION REQUIRED:` terminal or a ticket amendment (Autonomy contract rule 4).
 
 ## Existing Patterns (Verified)
 
@@ -142,7 +155,7 @@ For each new or modified behavior:
 - Do not plan changes to code you haven't read.
 - Always include the PM ticket key at the top of the plan so the executor can reference the ticket trail in every git commit message: `human commits prefix <PM_KEY> [<ENG_KEY>]` prints the canonical subject prefix — with both keys in split topology (e.g. `[<PM_KEY>] [<ENG_KEY>] Add validation`; the two tickets may live on different trackers, e.g. Shortcut PM + Linear engineering), with the one evolving ticket's key in single-tracker topology (e.g. `[<PM_KEY>] Add validation`).
 - **Search Before Building**: Before designing anything new, search three layers: (1) the current codebase for existing solutions or patterns, (2) the project's history and tickets for prior attempts and decisions, (3) standard approaches in the language/framework ecosystem. Only propose new code when existing code cannot be extended.
-- **User Sovereignty for genuine forks only**: For a trade-off the codebase or ticket can settle, decide it and record the rationale in "Architecture Decisions" — a board plan must arrive decided. Reserve deferral for a real product/UX taste call or an ambiguous requirement, and express that as the up-front `DECISION REQUIRED:` terminal (per the Autonomy contract) so the human chooses BEFORE implementation — never as a sign-off gate baked into a step.
+- **User Sovereignty for genuine forks only**: For a trade-off the codebase or ticket can settle, decide it and record the rationale in "Architecture Decisions" — a board plan must arrive decided. Reserve deferral for a real product/UX taste call or an ambiguous requirement, and express that as the up-front `DECISION REQUIRED:` terminal (per the Autonomy contract) so the human chooses BEFORE implementation — never as a sign-off gate baked into a step. Reducing what the ticket asks for is always a genuine fork — surface it up front, never decide it yourself.
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Either return a complete, gate-free plan or, for a genuine human fork, the `DECISION REQUIRED:` terminal verdict. Then finish.
 
