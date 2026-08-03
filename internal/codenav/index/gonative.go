@@ -255,7 +255,7 @@ func buildCallGraph(scan RepoScan, pkgs []*packages.Package, defined map[string]
 
 // collectDecl emits a Symbol for each top-level declaration.
 func collectDecl(pkg *packages.Package, root string, decl ast.Decl, sink Sink, defined map[string]bool) {
-	emit := func(name *ast.Ident, node ast.Node, kind string) {
+	emit := func(name *ast.Ident, node ast.Node, kind, doc string) {
 		obj := pkg.TypesInfo.Defs[name]
 		if obj == nil {
 			return
@@ -277,6 +277,7 @@ func collectDecl(pkg *packages.Package, root string, decl ast.Decl, sink Sink, d
 			Kind:      kind,
 			File:      rel,
 			Signature: signatureOf(obj),
+			Doc:       doc,
 			StartLine: start.Line, StartCol: start.Column,
 			EndLine: end.Line, EndCol: end.Column,
 		})
@@ -288,23 +289,38 @@ func collectDecl(pkg *packages.Package, root string, decl ast.Decl, sink Sink, d
 		if d.Recv != nil {
 			kind = "method"
 		}
-		emit(d.Name, d, kind)
+		emit(d.Name, d, kind, docText(d.Doc))
 	case *ast.GenDecl:
 		for _, spec := range d.Specs {
 			switch s := spec.(type) {
 			case *ast.TypeSpec:
-				emit(s.Name, s, "type")
+				emit(s.Name, s, "type", specDoc(s.Doc, d.Doc))
 			case *ast.ValueSpec:
 				kind := "var"
 				if d.Tok == token.CONST {
 					kind = "const"
 				}
 				for _, n := range s.Names {
-					emit(n, s, kind)
+					emit(n, s, kind, specDoc(s.Doc, d.Doc))
 				}
 			}
 		}
 	}
+}
+
+// docText returns the cleaned intent text of a doc comment group (markers and
+// directives stripped), or "" when there is none. CommentGroup.Text is nil-safe.
+func docText(cg *ast.CommentGroup) string {
+	return strings.TrimSpace(cg.Text())
+}
+
+// specDoc prefers a spec's own doc comment, falling back to the enclosing
+// GenDecl's — a single-spec `type X ...` attaches its comment to the GenDecl.
+func specDoc(spec, gen *ast.CommentGroup) string {
+	if d := docText(spec); d != "" {
+		return d
+	}
+	return docText(gen)
 }
 
 // enclosingQName returns the qname of fn, or of its nearest named ancestor if

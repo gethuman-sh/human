@@ -338,7 +338,11 @@ func buildOutlineCmd() *cobra.Command {
 				if sig == "" {
 					sig = s.Name
 				}
-				_, _ = fmt.Fprintf(tw, "L%s\t%s\t%s\n", lines, s.Kind, sig)
+				doc := strings.Join(strings.Fields(s.Doc), " ") // fold multi-line intent to one line
+				if doc == "" {
+					doc = "-"
+				}
+				_, _ = fmt.Fprintf(tw, "L%s\t%s\t%s\t%s\n", lines, s.Kind, sig, doc)
 			}
 			return tw.Flush()
 		},
@@ -468,6 +472,13 @@ func buildDefCmd() *cobra.Command {
 			}
 			for _, h := range hits {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s  (%s) [%s]\n  %s\n", h.QName, h.Kind, h.Fidelity, symLoc(h.File, h.Line, h.EndLine))
+				if h.Doc != "" {
+					for _, line := range strings.Split(h.Doc, "\n") {
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", line)
+					}
+				} else {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  (no description recorded)")
+				}
 				if h.Signature != "" {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", h.Signature)
 				}

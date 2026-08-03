@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,4 +76,44 @@ func keys(m map[string]Symbol) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func writeDocumentedPolyglot(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]string{
+		"py/app.py":  "# handler entry point\ndef handler():\n    return 1\n",
+		"web/app.ts": "// route dispatch entry\nfunction route() {}\n",
+	}
+	for name, body := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestTreeSitterIndex_capturesDoc(t *testing.T) {
+	dir := writeDocumentedPolyglot(t)
+	sink := newCollectSink()
+	if err := (TreeSitter{}).Index(context.Background(), RepoScan{Project: "poly", Root: dir}, sink); err != nil {
+		t.Fatal(err)
+	}
+	for qn, want := range map[string]string{
+		"py/app.py:handler": "handler entry point",
+		"web/app.ts:route":  "route dispatch entry",
+	} {
+		sym, ok := sink.symbols[qn]
+		if !ok {
+			t.Errorf("missing symbol %q", qn)
+			continue
+		}
+		if !strings.Contains(sym.Doc, want) {
+			t.Errorf("Symbol.Doc for %s = %q, want it to contain %q", qn, sym.Doc, want)
+		}
+	}
 }

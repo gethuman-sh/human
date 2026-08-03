@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -93,5 +94,20 @@ func TestGoNativeIndex(t *testing.T) {
 	}
 	if len(sink.files) == 0 {
 		t.Error("expected at least one FileRec")
+	}
+}
+
+func TestGoNativeIndex_capturesDoc(t *testing.T) {
+	dir := writeFixture(t)
+	sink := newCollectSink()
+	if err := (GoNative{}).Index(context.Background(), RepoScan{Project: "fix", Root: dir}, sink); err != nil {
+		t.Fatal(err)
+	}
+	sym, ok := sink.symbols["example.com/fix.B"]
+	if !ok {
+		t.Fatal("missing symbol example.com/fix.B")
+	}
+	if !strings.Contains(sym.Doc, "B calls C") {
+		t.Errorf("Symbol.Doc = %q, want it to contain the intent comment %q", sym.Doc, "B calls C")
 	}
 }

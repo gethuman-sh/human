@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gethuman-sh/human/internal/codenav/index"
@@ -114,6 +115,35 @@ func TestQueries_definitionsAndReferences(t *testing.T) {
 	}
 	if len(rng) == 0 {
 		t.Error("SymbolsInRange returned nothing for lines 1-5")
+	}
+}
+
+func TestQueries_docSurfaced(t *testing.T) {
+	db, repo := indexFixture(t)
+
+	defs, err := Def(db, "B", false) // compact path, no body
+	if err != nil {
+		t.Fatalf("Def: %v", err)
+	}
+	if len(defs) == 0 {
+		t.Fatal("Def(B) returned no hits")
+	}
+	if !strings.Contains(defs[0].Doc, "B calls C") {
+		t.Errorf("Def(B).Doc = %q, want it to contain %q", defs[0].Doc, "B calls C")
+	}
+
+	out, err := Outline(db, "main.go", repo)
+	if err != nil {
+		t.Fatalf("Outline: %v", err)
+	}
+	var found bool
+	for _, s := range out {
+		if s.Name == "C" && strings.Contains(s.Doc, "C does nothing") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Outline(main.go) did not surface C's doc comment")
 	}
 }
 
