@@ -219,7 +219,7 @@ func TestStageContract_VerdictVocabulariesMatch(t *testing.T) {
 				{"human-bug-triage-agent.md", []string{"confirmed", "not-a-bug", "undetermined"}},
 				{"human-verdict-skeptic-agent.md", []string{"upheld", "refuted"}},
 				{"human-bug-verify-agent.md", []string{"DONE", "NOT DONE"}},
-				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "unreviewable"}},
+				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "incomplete", "unreviewable"}},
 			},
 		},
 		{
@@ -233,7 +233,7 @@ func TestStageContract_VerdictVocabulariesMatch(t *testing.T) {
 				{"human-security-triage-agent.md", []string{"confirmed", "not-a-bug", "undetermined"}},
 				{"human-verdict-skeptic-agent.md", []string{"upheld", "refuted"}},
 				{"human-security-verify-agent.md", []string{"DONE", "NOT DONE"}},
-				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "unreviewable"}},
+				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "incomplete", "unreviewable"}},
 			},
 		},
 	}

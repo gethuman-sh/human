@@ -38,13 +38,19 @@ human commits prefix <PM_KEY> [<ENG_KEY>]
 1. **Fetch** the ticket using `human get <key>` (the CLI auto-detects the owning tracker from the key shape, regardless of how many trackers are configured — do not guess a tracker or infer it from the git remote). The implementation plan is either the ticket description (split topology: separate engineering ticket) or a `[human:plan]` comment on the ticket — read it back with `human plan show <key>`. Use it for plan task completion checks.
 2. **Load readiness** from `.human/ready/<key>.md` if it exists — use it to cross-check that gaps identified during readiness were addressed
 3. **Run tests** — detect and run the project's test suite (e.g. `make test`, `npm test`, `go test ./...`, `pytest`). If no test runner is found, note it in the report.
-4. **Check** each acceptance criterion against the actual implementation using Grep, Glob, and Read
+4. **Audit against the TICKET, not the plan.** Take the acceptance criteria from
+   the original ticket (`human get <key>`), and check EACH against the actual
+   implementation using Grep/Glob/Read. The plan is only for plan-task
+   completion (step 1); it is NOT the scope of record. A criterion the plan
+   narrowed, deferred, or omitted is still a criterion the ticket asks for — if
+   the code does not satisfy it, that row is FAIL and the verdict is NOT DONE.
+   Never mark such a criterion N/A or wave it through as a plan-sanctioned note.
 5. **Evaluate** the Definition of Done checklist (see below)
 6. **Write** the result to `.human/done/<key>.md` where `<key>` is the ticket key lowercased (e.g. `KAN-1` → `kan-1.md`). Create the directory first with `mkdir -p .human/done`.
 
 ## Definition of Done checklist
 
-- [ ] All acceptance criteria addressed in code
+- [ ] All acceptance criteria **from the ticket** addressed in code (a plan-deferred criterion the ticket still asks for is NOT addressed)
 - [ ] Tests pass — OR every remaining failure is proven unrelated-and-pre-existing on a clean baseline worktree and flagged, never change-caused
 - [ ] No unrelated changes (scope check)
 - [ ] Edge cases from the ticket handled
@@ -64,6 +70,7 @@ human commits prefix <PM_KEY> [<ENG_KEY>]
   ```
   A failure that is in this ticket's scope OR green on the clean baseline is change-caused and **blocks** (NOT DONE). A failure that is BOTH outside scope AND already red on the clean baseline is proven unrelated-and-pre-existing: record it as a **non-blocking flag** and keep the verdict DONE. Never fail a proven-complete ticket on an unrelated, pre-existing, environmental flake — and never wave through a change-caused failure as "unrelated".
 - **User Sovereignty**: Recommend, do not decide. When a criterion is borderline (e.g. partially met, met differently than specified), present the evidence for both interpretations and let the user make the final call. Never silently round a borderline case up or down.
+- 'Done' means everything the ticket asks for is built, or the ticket no longer asks for it. A knowingly-unmet ticket criterion is a NOT DONE failure, never a non-blocking note — that escape valve is only for proven-unrelated pre-existing test flakes.
 
 ## Output format
 

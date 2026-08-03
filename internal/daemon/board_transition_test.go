@@ -1230,6 +1230,21 @@ func TestApplyTransitionDeployBlockedByFailedVerdict(t *testing.T) {
 	assert.Zero(t, p.call)
 }
 
+func TestApplyTransitionDeployBlockedByIncompleteVerdict(t *testing.T) {
+	// Regression (SC-2848): a review recording an unmet acceptance criterion as
+	// the "incomplete" verdict must NOT reach Ready-to-Deploy — partial delivery
+	// cannot merge. Mirrors the failing-verdict block.
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]\nverdict: incomplete", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+	assert.Zero(t, p.call)
+}
+
 func TestApplyTransitionDeployAllowedWithPassWithNotes(t *testing.T) {
 	syncPRReview(t)
 	c := &fakeCommenter{comments: []tracker.Comment{
@@ -1258,6 +1273,11 @@ func TestApplyTransitionDeployAllowedWithPassWithNotes(t *testing.T) {
 func TestVerdictFailed(t *testing.T) {
 	assert.True(t, VerdictFailed("fail"))
 	assert.True(t, VerdictFailed("  FAILED — see findings"))
+	// "incomplete" — built correctly, but not everything the ticket asked for —
+	// blocks the merge exactly like a fail so partial delivery cannot ride
+	// "pass with notes" through to deploy (SC-2848).
+	assert.True(t, VerdictFailed("incomplete"))
+	assert.True(t, VerdictFailed("  Incomplete — criterion 5 (per-ticket view) unmet"))
 	assert.False(t, VerdictFailed("pass"))
 	assert.False(t, VerdictFailed("pass with notes"))
 	// Absence of a verdict is not failure — pre-verdict threads keep flowing.

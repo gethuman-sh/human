@@ -90,7 +90,15 @@ Write the review in this structure:
 <one-line outcome, exactly one of:
  - `pass`
  - `pass with notes`
- - `fail` — ONLY when the code was examined and found wanting
+ - `fail` — ONLY when the code was examined and found wanting: a genuine defect
+   in what WAS built (wrong behaviour, a bug), as opposed to a ticket requirement
+   simply absent — an absent requirement is `incomplete`, not `fail`.
+ - `incomplete` — the code is correct as far as it goes, but one or more
+   acceptance criteria FROM THE TICKET are not met by the reviewed commits
+   (a criterion the plan narrowed or deferred is still a criterion). Use this,
+   NOT `pass with notes`, whenever any Acceptance Criteria row is FAIL or any
+   "Missing criteria" bullet names a ticket criterion. It blocks the merge and
+   loops the work back to be built — partial delivery is a failure, not a note.
  - `unreviewable: <reachability reason>` — the code could NOT be obtained
    (handoff branch missing, or zero commits referencing the key reachable);
    nothing was reviewed. The calling skill translates this into a
@@ -100,6 +108,14 @@ Write the review in this structure:
 <list of commit hashes (short form) and their subject lines, in chronological order. These are the commits whose messages reference <TICKET_KEY>. The diff under review is the union of these commits, NOT the full branch.>
 
 ## Acceptance Criteria
+
+**Judge every criterion against the ORIGINAL ticket, not the plan.** The plan is
+a derived artifact; the ticket is the scope of record. Fetch the ticket's own
+acceptance criteria (`human get <TICKET_KEY>`) and evaluate each against the
+reviewed commits. A criterion the plan dropped, narrowed, or marked "follow-on"
+is still a criterion the ticket asks for: if the diff does not satisfy it, that
+row is FAIL and the overall Summary is `incomplete`. Never mark such a row N/A
+or downgrade it to a note because the plan sanctioned the omission.
 
 | # | Criterion | Status | Evidence |
 |---|-----------|--------|----------|
@@ -132,14 +148,14 @@ Before returning, record the review outcome as data — the orchestrator must ne
 ```bash
 human state set <WORK_KEY> stage.review --json --body-file - <<'EOF'
 {"exit":"done",
- "verdict":"<pass|pass with notes|fail|unreviewable>",
+ "verdict":"<pass|pass with notes|fail|incomplete|unreviewable>",
  "reason":"<why the code could not be obtained, for unreviewable — empty otherwise>",
  "findings":"<the substance of what you found, or 'no issues'>",
  "summary":"<one line>"}
 EOF
 ```
 
-Use `unreviewable` only when the code itself could not be obtained (branch unreachable, no commits reference the key). It is not a synonym for `fail`: a review that examined code and found problems is `fail`.
+Use `unreviewable` only when the code itself could not be obtained (branch unreachable, no commits reference the key). It is not a synonym for `fail`: a review that examined code and found problems is `fail`. `incomplete` is not a synonym for `fail` either: `fail` is a defect in what was built, `incomplete` is a ticket criterion that was not built at all.
 
 <!-- human:include stage-lease stage=review -->
 
