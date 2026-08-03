@@ -436,6 +436,12 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 	if err != nil {
 		return nil, err
 	}
+	// GitHub has no issue type: the kind is a label, so a retype is a label
+	// swap and joins the label edits below (SC-3051).
+	opts, err = tracker.RetypeIntoLabels(ctx, c, key, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	var patched *tracker.Issue
 	if opts.Title != nil || opts.Description != nil {
