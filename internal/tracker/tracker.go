@@ -38,7 +38,16 @@ var azureDevOpsRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*/\d+$`)
 // DetectCandidateKinds returns all tracker kinds whose key format matches the
 // given key. The order is deterministic: azuredevops is checked before
 // github/gitlab repo format since "Word/N" is a subset of "owner/repo".
-func DetectCandidateKinds(key string) []string {
+//
+// configuredKinds is an optional hint of which tracker kinds are actually
+// configured in the workspace. With no hint, a bare numeric key stays a
+// permissive shortcut candidate (pure format detection, used by callers that
+// only compare shapes). When the caller supplies configuredKinds — the
+// internal routing callers do — a bare numeric key is offered as a shortcut
+// candidate only if a Shortcut tracker is actually configured, so a numeric
+// key on a non-Shortcut workspace (e.g. ClickUp) is not force-routed to
+// Shortcut (SC-2855).
+func DetectCandidateKinds(key string, configuredKinds ...string) []string {
 	if key == "" {
 		return nil
 	}
@@ -60,10 +69,38 @@ func DetectCandidateKinds(key string) []string {
 		kinds = append(kinds, "github", "gitlab")
 	}
 
-	if numericRe.MatchString(key) || shortcutDisplayRe.MatchString(key) {
+	if shortcutDisplayRe.MatchString(key) {
+		// SC-nnn is Shortcut's explicit display form; always a shortcut candidate.
+		kinds = append(kinds, "shortcut")
+	} else if numericRe.MatchString(key) && numericOffersShortcut(configuredKinds) {
 		kinds = append(kinds, "shortcut")
 	}
 
+	return kinds
+}
+
+// numericOffersShortcut reports whether a bare numeric key should be offered
+// as a Shortcut candidate. With no configured-kind hint (the format-only
+// callers) it stays permissive to preserve pure shape detection; when the
+// caller supplies the configured kinds, a numeric key is a Shortcut candidate
+// only if a Shortcut tracker is actually configured, so a numeric key on a
+// non-Shortcut workspace is not force-routed to Shortcut (SC-2855).
+func numericOffersShortcut(configuredKinds []string) bool {
+	if len(configuredKinds) == 0 {
+		return true
+	}
+	return slices.Contains(configuredKinds, "shortcut")
+}
+
+// instanceKinds returns the distinct kinds of the configured tracker
+// instances, for gating format detection on what is actually configured.
+func instanceKinds(instances []Instance) []string {
+	kinds := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		if inst.IsTracker() {
+			kinds = append(kinds, inst.Kind)
+		}
+	}
 	return kinds
 }
 
@@ -103,21 +140,48 @@ func ExtractProject(key string) string {
 // configured per workspace) for the same reason shortcutDisplayRe is.
 const shortcutCommitPrefix = "SC-"
 
-// CanonicalCommitKey normalizes a ticket key to the canonical form used in
-// commit references. Callers in the fix pipeline pass bare keys internally; a
-// purely numeric key is a Shortcut story ID whose canonical commit form carries
-// the "SC-" display prefix, so an agent that commits with the returned key
-// stays attributable via `human commits for` and passes the commit-msg hook.
-// Every other key format already carries its own project prefix (or is a repo
-// path) and is returned unchanged after trimming surrounding whitespace and
-// brackets.
-func CanonicalCommitKey(key string) string {
+// trimKeyBrackets strips surrounding whitespace and one layer of [ ] from a
+// key, the form the board/pipeline sometimes passes internally.
+func trimKeyBrackets(key string) string {
 	trimmed := strings.TrimSpace(key)
-	trimmed = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
-	if numericRe.MatchString(trimmed) {
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
+}
+
+// CanonicalCommitKey normalizes a ticket key to the canonical form used in
+// commit references. kind is the owning tracker's kind. A bare numeric key is
+// a Shortcut story ID ONLY on a Shortcut tracker, so the "SC-" display prefix
+// is applied only when kind == "shortcut"; a numeric key on any other tracker
+// (or when the owning tracker is unknown, kind == "") is returned unchanged
+// rather than guessed into Shortcut's prefix, which silently broke
+// key->commit lookups on numeric-keyed non-Shortcut trackers like ClickUp
+// (SC-2855). Every other key format already carries its own prefix and is
+// returned unchanged.
+func CanonicalCommitKey(key, kind string) string {
+	trimmed := trimKeyBrackets(key)
+	if kind == "shortcut" && numericRe.MatchString(trimmed) {
 		return shortcutCommitPrefix + trimmed
 	}
 	return trimmed
+}
+
+// CommitKind resolves the owning tracker kind used to canonicalize key into
+// its commit reference, from the configured instances alone (no network
+// probe, so it stays cheap and offline-safe on the commit path). Only a bare
+// numeric key is ambiguous: it is attributed to Shortcut when a Shortcut
+// tracker is configured, otherwise the kind is left unknown ("") so a
+// numeric key from another tracker (e.g. ClickUp) is never guessed into
+// Shortcut's "SC-" prefix (SC-2855). Any key that already carries its own
+// format prefix is irrelevant to canonicalization, so "" is returned.
+func CommitKind(key string, instances []Instance) string {
+	if !numericRe.MatchString(trimKeyBrackets(key)) {
+		return ""
+	}
+	for _, inst := range instances {
+		if inst.Kind == "shortcut" && inst.IsTracker() {
+			return "shortcut"
+		}
+	}
+	return ""
 }
 
 // FindResult holds the outcome of FindTracker.
@@ -135,7 +199,7 @@ type FindResult struct {
 //  3. If one kind remains → return it (no API call)
 //  4. If ambiguous → probe each instance with GetIssue until one succeeds
 func FindTracker(ctx context.Context, key string, instances []Instance) (*FindResult, error) {
-	candidates := DetectCandidateKinds(key)
+	candidates := DetectCandidateKinds(key, instanceKinds(instances)...)
 	if len(candidates) == 0 {
 		return nil, errors.WithDetails("unrecognized key format", "key", key)
 	}
@@ -877,7 +941,7 @@ func resolveAutoDetect(instances []Instance, keyHint string) (*Instance, error) 
 	// the shape's candidate kinds with what is actually configured rather than
 	// committing to a single guessed kind — otherwise a gitlab-only config
 	// rejects a perfectly resolvable GitLab key.
-	if candidates := DetectCandidateKinds(keyHint); len(candidates) > 0 {
+	if candidates := DetectCandidateKinds(keyHint, instanceKinds(instances)...); len(candidates) > 0 {
 		candidateSet := make(map[string]bool, len(candidates))
 		for _, k := range candidates {
 			candidateSet[k] = true

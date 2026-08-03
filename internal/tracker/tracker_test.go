@@ -143,6 +143,20 @@ func TestResolve_autoDetectNone(t *testing.T) {
 	assert.Contains(t, err.Error(), "no tracker configured")
 }
 
+// A bare numeric key on a ClickUp-only workspace must resolve to the sole
+// configured ClickUp tracker rather than erroring "no tracker of detected
+// kind configured" — the numeric shape must not be force-routed to a
+// not-configured Shortcut (SC-2855).
+func TestResolveAutoDetect_numericClickupOnly(t *testing.T) {
+	instances := []Instance{
+		{Name: "work", Kind: "clickup", Provider: stubProvider{}},
+	}
+
+	inst, err := Resolve("", instances, "123")
+	require.NoError(t, err)
+	assert.Equal(t, "work", inst.Name)
+}
+
 // --- DetectKind tests ---
 
 func TestDetectKind_githubIssue(t *testing.T) {
@@ -300,6 +314,16 @@ func TestDetectCandidateKinds(t *testing.T) {
 	}
 }
 
+// TestDetectCandidateKinds_numericGatedByConfig covers the configuredKinds
+// hint used by the internal routing callers: a bare numeric key is only
+// offered as a shortcut candidate when Shortcut is actually configured
+// (SC-2855), while the Shortcut display form is never gated.
+func TestDetectCandidateKinds_numericGatedByConfig(t *testing.T) {
+	assert.Nil(t, DetectCandidateKinds("123", "clickup"))
+	assert.Equal(t, []string{"shortcut"}, DetectCandidateKinds("123", "shortcut"))
+	assert.Contains(t, DetectCandidateKinds("SC-1", "clickup"), "shortcut")
+}
+
 // --- ExtractProject tests ---
 
 func TestExtractProject(t *testing.T) {
@@ -331,23 +355,61 @@ func TestCanonicalCommitKey(t *testing.T) {
 	tests := []struct {
 		name string
 		key  string
+		kind string
 		want string
 	}{
 		// A bare Shortcut story ID must resolve to the tool's canonical "SC-nnn"
 		// display form so agent commits match the commit->ticket trail and the
-		// commit-msg hook accepts them.
-		{name: "bare numeric gains SC prefix", key: "1117", want: "SC-1117"},
-		{name: "surrounding whitespace trimmed", key: " 1134 ", want: "SC-1134"},
+		// commit-msg hook accepts them. This applies only when the key's owning
+		// tracker is actually Shortcut.
+		{name: "shortcut numeric gains SC prefix", key: "1117", kind: "shortcut", want: "SC-1117"},
+		{name: "shortcut numeric with whitespace", key: " 1134 ", kind: "shortcut", want: "SC-1134"},
+		// A bare numeric key on a non-Shortcut tracker (e.g. ClickUp) must NOT be
+		// guessed into Shortcut's "SC-" prefix, or key->commit lookups silently
+		// break on that tracker (SC-2855).
+		{name: "non-shortcut numeric unchanged (clickup)", key: "90210", kind: "clickup", want: "90210"},
+		// When the owning tracker cannot be determined, leaving the key untouched
+		// is better than guessing (SC-2855).
+		{name: "unknown-kind numeric unchanged", key: "90210", kind: "", want: "90210"},
 		// Keys already carrying their own project prefix pass through unchanged.
-		{name: "shortcut display key unchanged", key: "SC-1117", want: "SC-1117"},
-		{name: "jira key unchanged", key: "KAN-42", want: "KAN-42"},
-		{name: "engineering key unchanged", key: "HUM-59", want: "HUM-59"},
-		{name: "github issue unchanged", key: "octocat/repo#42", want: "octocat/repo#42"},
+		{name: "shortcut display key unchanged", key: "SC-1117", kind: "shortcut", want: "SC-1117"},
+		{name: "jira key unchanged", key: "KAN-42", kind: "jira", want: "KAN-42"},
+		{name: "engineering key unchanged", key: "HUM-59", kind: "", want: "HUM-59"},
+		{name: "github issue unchanged", key: "octocat/repo#42", kind: "github", want: "octocat/repo#42"},
+		{name: "numeric in brackets shortcut", key: "[1117]", kind: "shortcut", want: "SC-1117"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, CanonicalCommitKey(tt.key))
+			assert.Equal(t, tt.want, CanonicalCommitKey(tt.key, tt.kind))
+		})
+	}
+}
+
+func TestCommitKind(t *testing.T) {
+	shortcutInst := Instance{Name: "work", Kind: "shortcut"}
+	clickupInst := Instance{Name: "work", Kind: "clickup"}
+	forgeOnlyShortcut := Instance{Name: "forge", Kind: "shortcut", Role: RoleForge}
+
+	tests := []struct {
+		name      string
+		key       string
+		instances []Instance
+		want      string
+	}{
+		{name: "shortcut configured", key: "90210", instances: []Instance{shortcutInst}, want: "shortcut"},
+		{name: "clickup only", key: "90210", instances: []Instance{clickupInst}, want: ""},
+		{name: "no instances", key: "90210", instances: nil, want: ""},
+		{name: "shortcut numeric", key: "1117", instances: []Instance{shortcutInst}, want: "shortcut"},
+		{name: "non-numeric key never attributed", key: "KAN-42", instances: []Instance{shortcutInst}, want: ""},
+		// A forge-only entry (Role: RoleForge) does not count as a configured
+		// Shortcut tracker for canonicalization purposes.
+		{name: "forge-only shortcut ignored", key: "90210", instances: []Instance{forgeOnlyShortcut}, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, CommitKind(tt.key, tt.instances))
 		})
 	}
 }

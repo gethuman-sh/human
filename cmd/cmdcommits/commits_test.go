@@ -80,37 +80,59 @@ func TestRunCommitsFor_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+// withCommitKindFor stubs the commitKindFor seam so tests do not depend on
+// real config/vault resolution.
+func withCommitKindFor(t *testing.T, kind string) {
+	t.Helper()
+	prev := commitKindFor
+	commitKindFor = func(context.Context, string) string { return kind }
+	t.Cleanup(func() { commitKindFor = prev })
+}
+
 func TestRunCommitPrefix_SingleKey(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, RunCommitPrefix(&buf, []string{"SC-79"}))
+	require.NoError(t, RunCommitPrefix(context.Background(), &buf, []string{"SC-79"}))
 	assert.Equal(t, "[SC-79]\n", buf.String())
 }
 
 func TestRunCommitPrefix_SplitTopologyKeys(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, RunCommitPrefix(&buf, []string{"SC-79", "HUM-59"}))
+	require.NoError(t, RunCommitPrefix(context.Background(), &buf, []string{"SC-79", "HUM-59"}))
 	assert.Equal(t, "[SC-79] [HUM-59]\n", buf.String())
 }
 
 func TestRunCommitPrefix_AlreadyBracketed(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, RunCommitPrefix(&buf, []string{"[SC-79]", " HUM-59 "}))
+	require.NoError(t, RunCommitPrefix(context.Background(), &buf, []string{"[SC-79]", " HUM-59 "}))
 	assert.Equal(t, "[SC-79] [HUM-59]\n", buf.String())
 }
 
 func TestRunCommitPrefix_BareNumericKeyCanonicalized(t *testing.T) {
 	// The board/pipeline passes bare numeric keys internally; the prefix must
 	// resolve them to the canonical "SC-nnn" form so agent commits stay
-	// attributable and hook-compliant (SC-1134).
+	// attributable and hook-compliant (SC-1134) — but only on a Shortcut
+	// workspace.
+	withCommitKindFor(t, "shortcut")
 	var buf bytes.Buffer
-	require.NoError(t, RunCommitPrefix(&buf, []string{"1117"}))
+	require.NoError(t, RunCommitPrefix(context.Background(), &buf, []string{"1117"}))
 	assert.Equal(t, "[SC-1117]\n", buf.String())
 }
 
 func TestRunCommitPrefix_BareNumericInBrackets(t *testing.T) {
+	withCommitKindFor(t, "shortcut")
 	var buf bytes.Buffer
-	require.NoError(t, RunCommitPrefix(&buf, []string{"[1117]"}))
+	require.NoError(t, RunCommitPrefix(context.Background(), &buf, []string{"[1117]"}))
 	assert.Equal(t, "[SC-1117]\n", buf.String())
+}
+
+// TestRunCommitPrefix_BareNumericNonShortcutUntouched is the regression test
+// for SC-2855: a bare numeric key on a non-Shortcut workspace (e.g. ClickUp)
+// must not be guessed into Shortcut's "SC-" prefix.
+func TestRunCommitPrefix_BareNumericNonShortcutUntouched(t *testing.T) {
+	withCommitKindFor(t, "clickup")
+	var buf bytes.Buffer
+	require.NoError(t, RunCommitPrefix(context.Background(), &buf, []string{"90210"}))
+	assert.Equal(t, "[90210]\n", buf.String())
 }
 
 func TestBuildCommitsCmd_Subcommands(t *testing.T) {
