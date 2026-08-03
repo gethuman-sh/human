@@ -151,6 +151,73 @@ func TestEmitOutcome_PanicInSinkSwallowed(t *testing.T) {
 	})
 }
 
+// streamingUsageBody is a realistic Anthropic Messages API SSE stream: the
+// message_start event carries the final input/cache-create/cache-read counts and
+// an initial output_tokens near 1, and the final message_delta carries the
+// CUMULATIVE output_tokens at the top level. Intermediate content events carry no
+// usage. This is the shape usageFromResponse's first-positive/max strategy exists
+// for (SC-2847 AD1).
+const streamingUsageBody = "event: message_start\n" +
+	`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":900,"output_tokens":1}}}` + "\n\n" +
+	"event: content_block_delta\n" +
+	`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"secret answer prose that must never be read"}}` + "\n\n" +
+	"event: message_delta\n" +
+	`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":200}}` + "\n\n" +
+	"event: message_stop\n" +
+	`data: {"type":"message_stop"}` + "\n\n"
+
+func TestUsageFromResponse_streaming(t *testing.T) {
+	model, in, out, cc, cr := usageFromResponse([]byte(streamingUsageBody))
+	assert.Equal(t, "claude-opus-4-8", model)
+	assert.Equal(t, 100, in, "input taken from message_start")
+	assert.Equal(t, 200, out, "output taken as the cumulative message_delta max, not the near-1 message_start")
+	assert.Equal(t, 50, cc)
+	assert.Equal(t, 900, cr)
+}
+
+func TestUsageFromResponse_nonStreaming(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}`)
+	model, in, out, cc, cr := usageFromResponse(body)
+	assert.Equal(t, "claude-opus-4-8", model)
+	assert.Equal(t, 10, in)
+	assert.Equal(t, 20, out)
+	assert.Equal(t, 0, cc)
+	assert.Equal(t, 0, cr)
+}
+
+func TestUsageFromResponse_empty(t *testing.T) {
+	model, in, out, cc, cr := usageFromResponse(nil)
+	assert.Equal(t, "", model)
+	assert.Equal(t, 0, in+out+cc+cr)
+
+	model, in, out, cc, cr = usageFromResponse([]byte("data: [DONE]\n\n"))
+	assert.Equal(t, "", model)
+	assert.Equal(t, 0, in+out+cc+cr, "a stream with no usage event yields zero, never a partial read")
+}
+
+func TestEmitOutcome_recordsTokens(t *testing.T) {
+	var got ModelCallOutcome
+	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), []byte(streamingUsageBody))
+	assert.Equal(t, "claude-opus-4-8", got.Model)
+	assert.Equal(t, 100, got.InputTokens)
+	assert.Equal(t, 200, got.OutputTokens)
+	assert.Equal(t, 50, got.CacheCreateTokens)
+	assert.Equal(t, 900, got.CacheReadTokens)
+	assert.Equal(t, ClassOK, got.Class)
+}
+
+func TestEmitOutcome_failureNoTokens(t *testing.T) {
+	var got ModelCallOutcome
+	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 0, errors.New("dial refused"), time.Now(), nil)
+	assert.Equal(t, "", got.Model)
+	assert.Equal(t, 0, got.InputTokens+got.OutputTokens+got.CacheCreateTokens+got.CacheReadTokens,
+		"a call that never produced a response has no cost")
+	assert.Equal(t, ClassNetwork, got.Class)
+	assert.GreaterOrEqual(t, got.Duration, time.Duration(0))
+}
+
 // TestIntercept_RecordsOKOutcome proves a 200 model call yields one content-free
 // "ok" outcome recorded after the client write.
 func TestIntercept_RecordsOKOutcome(t *testing.T) {
@@ -185,6 +252,41 @@ func TestIntercept_RecordsOKOutcome(t *testing.T) {
 	assert.Equal(t, "implementation", o.Stage)
 	assert.False(t, o.StartedAt.IsZero())
 	assert.GreaterOrEqual(t, o.Duration, time.Duration(0))
+}
+
+// TestIntercept_RecordsStreamedTokens proves a streamed (SSE) 200 model call is
+// recorded with the four token counts and model id read off the real streamed
+// body end-to-end (SC-2847 AD1), not just via the unit test of usageFromResponse.
+func TestIntercept_RecordsStreamedTokens(t *testing.T) {
+	env := newInterceptTestEnv(t)
+	hostname := "api.anthropic.com"
+	upstreamLn := startUpstreamTLS(t, env, hostname, handleSSEResponse)
+
+	rec := &recordingSink{}
+	li := &LoggingInterceptor{
+		Domains:       []string{hostname},
+		LeafCache:     env.LeafCache,
+		Logger:        zerolog.Nop(),
+		LogDir:        env.LogDir,
+		RecordOutcome: rec.record,
+		Attribute:     func(string) (string, string, bool) { return "SC-2847", "implementation", true },
+		Dialer: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return tls.Dial("tcp", upstreamLn.Addr().String(), &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // test only
+			})
+		},
+	}
+	withLogMode(t, LogModeOff)
+
+	doOneRequest(t, env, li, hostname, `{"model":"claude-opus-4-8","stream":true}`)
+
+	o := rec.wait(t, 1)[0]
+	assert.Equal(t, ClassOK, o.Class)
+	assert.Equal(t, "claude-opus-4-8", o.Model)
+	assert.Equal(t, 100, o.InputTokens)
+	assert.Equal(t, 200, o.OutputTokens, "cumulative streamed output, not the near-1 message_start value")
+	assert.Equal(t, 50, o.CacheCreateTokens)
+	assert.Equal(t, 900, o.CacheReadTokens)
 }
 
 // TestIntercept_DialFailRecordsNetwork proves a connection that never completes

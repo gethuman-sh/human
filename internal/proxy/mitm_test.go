@@ -350,4 +350,29 @@ func handleEchoHTTPS(conn net.Conn) {
 	_ = resp.Write(conn)
 }
 
-// handleSSEResponse reads a request and writes back an SSE response.
+// handleSSEResponse reads a request and writes back a streaming (SSE) response
+// carrying Anthropic Messages API usage events, so an intercept test can prove
+// the four token counts are read off a real streamed body end-to-end (SC-2847).
+func handleSSEResponse(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+
+	req, err := http.ReadRequest(bufio.NewReader(conn))
+	if err != nil {
+		return
+	}
+	_, _ = io.ReadAll(req.Body)
+	_ = req.Body.Close()
+
+	body := []byte(streamingUsageBody)
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        http.Header{"Content-Type": {"text/event-stream"}},
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Close:         true,
+	}
+	_ = resp.Write(conn)
+}
