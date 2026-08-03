@@ -43,6 +43,13 @@ type ProjectBootstrapResult struct {
 	Status  string `json:"status"`
 	Project string `json:"project,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// Orphan is true when the reachable daemon's own PID matches a
+	// still-on-disk session marker whose recording app process is no longer
+	// alive — left running by a crash, force-quit, or OS shutdown that never
+	// reached the close flow (SC-3015). OrphanProject names the project for
+	// the cleanup prompt's copy.
+	Orphan        bool   `json:"orphan,omitempty"`
+	OrphanProject string `json:"orphanProject,omitempty"`
 }
 
 // ProjectBootstrap resolves the launch-time screen. It is the only method
@@ -55,7 +62,8 @@ func (a *App) ProjectBootstrap() ProjectBootstrapResult {
 		if len(info.Projects) > 0 {
 			name = info.Projects[0].Name
 		}
-		return ProjectBootstrapResult{Status: "ready", Project: name}
+		orphaned, orphanProject := a.checkOrphan(info)
+		return ProjectBootstrapResult{Status: "ready", Project: name, Orphan: orphaned, OrphanProject: orphanProject}
 	}
 
 	entries := a.recents.List()
@@ -121,5 +129,9 @@ func (a *App) SwitchProject() error {
 	if err != nil {
 		return err
 	}
-	return daemon.StopIfRunning(daemon.DefaultRunner, cliPath)
+	err = daemon.StopIfRunning(daemon.DefaultRunner, cliPath)
+	// Best-effort: a cleanly stopped daemon must never later be reported as
+	// orphaned at the next launch (SC-3015).
+	_ = a.session.Clear()
+	return err
 }

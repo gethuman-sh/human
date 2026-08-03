@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,6 +108,48 @@ func TestLease_ProjectsDoNotBlockOrInherit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.Equal(t, "b", leases[0].Agent)
+}
+
+// LiveLeases must see every scope of a project, exclude a released lease,
+// exclude an expired one, and never cross into another project — exactly the
+// signal the desktop close flow relies on before stopping a busy daemon
+// (SC-3015).
+func TestLiveLeases_ReturnsOnlyLiveAcrossScopesWithinOneProject(t *testing.T) {
+	s, clock := newTestStore(t)
+	ctx := context.Background()
+
+	// Live: proj/SC-1/fix.
+	_, err := s.Lease(ctx, LeaseRequest{Project: "proj", Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "a"}, TTL: 15 * time.Minute})
+	require.NoError(t, err)
+
+	// Released: proj/SC-2/plan — must not count as live.
+	_, err = s.Lease(ctx, LeaseRequest{Project: "proj", Scope: "SC-2", Stage: "plan", Meta: Meta{Agent: "b"}, TTL: 15 * time.Minute})
+	require.NoError(t, err)
+	released, err := s.Release(ctx, "proj", "SC-2", "plan", "b")
+	require.NoError(t, err)
+	require.True(t, released)
+
+	// Expired: proj/SC-3/triage — heartbeated past its own TTL.
+	_, err = s.Lease(ctx, LeaseRequest{Project: "proj", Scope: "SC-3", Stage: "triage", Meta: Meta{Agent: "c"}, TTL: time.Minute})
+	require.NoError(t, err)
+	*clock = clock.Add(2 * time.Minute)
+
+	// Different project — must never surface here even though it's live.
+	_, err = s.Lease(ctx, LeaseRequest{Project: "other", Scope: "SC-1", Stage: "fix", Meta: Meta{Agent: "d"}, TTL: 15 * time.Minute})
+	require.NoError(t, err)
+
+	live, err := s.LiveLeases(ctx, "proj")
+	require.NoError(t, err)
+	require.Len(t, live, 1)
+	assert.Equal(t, "SC-1", live[0].Scope)
+	assert.Equal(t, "fix", live[0].Stage)
+}
+
+func TestLiveLeases_NoLeasesReturnsEmptyNotNilError(t *testing.T) {
+	s, _ := newTestStore(t)
+	live, err := s.LiveLeases(context.Background(), "proj")
+	require.NoError(t, err)
+	require.Empty(t, live)
 }
 
 // A pre-project database (created before SC-2326) must migrate its rows to the

@@ -312,6 +312,10 @@ interface ProjectBootstrapResult {
   status: "ready" | "auto" | "overview";
   project?: string;
   error?: string;
+  // orphan/orphanProject: see App.checkOrphan (desktop/orphan.go, SC-3015) —
+  // true when a prior app session's daemon is still running unsupervised.
+  orphan?: boolean;
+  orphanProject?: string;
 }
 
 interface AppBindings {
@@ -367,6 +371,8 @@ interface AppBindings {
   OpenProject(dir: string): Promise<RecentProject>;
   SwitchProject(): Promise<void>;
   Stats(range: string): Promise<StatsOverview>;
+  ResolveClose(choice: string): Promise<void>;
+  ResolveOrphan(stop: boolean): Promise<void>;
 }
 
 // This file is a module (see the trailing `export {}`) so the global
@@ -2012,7 +2018,12 @@ async function createMocks(card: Card): Promise<void> {
 // confirmDialog renders a small modal overlay and resolves true/false on the
 // user's choice. Overlay-click and Escape count as cancel. Built with the same
 // imperative-DOM approach as the rest of the app (no framework).
-function confirmDialog(title: string, body: string, confirmLabel: string): Promise<boolean> {
+function confirmDialog(
+  title: string,
+  body: string,
+  confirmLabel: string,
+  cancelLabel = "Cancel",
+): Promise<boolean> {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
@@ -2023,7 +2034,7 @@ function confirmDialog(title: string, body: string, confirmLabel: string): Promi
       <div class="modal-title">${escapeHtml(title)}</div>
       <div class="modal-body">${escapeHtml(body)}</div>
       <div class="modal-actions">
-        <button class="modal-cancel" type="button">Cancel</button>
+        <button class="modal-cancel" type="button">${escapeHtml(cancelLabel)}</button>
         <button class="modal-confirm" type="button">${escapeHtml(confirmLabel)}</button>
       </div>
     `;
@@ -2046,6 +2057,50 @@ function confirmDialog(title: string, body: string, confirmLabel: string): Promi
     modal.querySelector(".modal-confirm")!.addEventListener("click", () => cleanup(true));
     document.addEventListener("keydown", onKey);
     (modal.querySelector(".modal-confirm") as HTMLButtonElement).focus();
+  });
+}
+
+// busyCloseDialog is confirmDialog's three-way counterpart for the app-level
+// close flow: unlike a plain confirm, closing while the daemon is busy has a
+// genuine third option (wait it out) that is neither "cancel" nor "destroy
+// the work now" (SC-3015). Overlay-click and Escape both count as "cancel" —
+// the safest default when work is in flight.
+function busyCloseDialog(): Promise<"cancel" | "stop" | "wait"> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <div class="modal-title">human is still working</div>
+      <div class="modal-body">An agent is actively running, or a stage is still leased. Closing now would leave that work unsupervised — choose what to do.</div>
+      <div class="modal-actions">
+        <button class="modal-cancel" type="button">Cancel</button>
+        <button class="modal-secondary" type="button">Wait and close</button>
+        <button class="modal-confirm" type="button">Stop anyway</button>
+      </div>
+    `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const cleanup = (result: "cancel" | "stop" | "wait"): void => {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve(result);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") cleanup("cancel");
+    };
+
+    overlay.addEventListener("click", (e: MouseEvent) => {
+      if (e.target === overlay) cleanup("cancel");
+    });
+    modal.querySelector(".modal-cancel")!.addEventListener("click", () => cleanup("cancel"));
+    modal.querySelector(".modal-secondary")!.addEventListener("click", () => cleanup("wait"));
+    modal.querySelector(".modal-confirm")!.addEventListener("click", () => cleanup("stop"));
+    document.addEventListener("keydown", onKey);
+    (modal.querySelector(".modal-cancel") as HTMLButtonElement).focus();
   });
 }
 
@@ -2576,6 +2631,29 @@ async function bootstrapProject(): Promise<void> {
   }
   showAppShell(result.project);
   startBoardPolling();
+  if (result.orphan) {
+    void offerOrphanCleanup(result.orphanProject);
+  }
+}
+
+// offerOrphanCleanup runs once at launch when ProjectBootstrap detects a
+// daemon left running by a crashed/force-quit prior session (no attached
+// app) rather than one a user intentionally runs standalone (SC-3015).
+// Fire-and-forget: the board is already usable behind it, matching the rest
+// of the app's non-blocking dialog pattern.
+async function offerOrphanCleanup(project?: string): Promise<void> {
+  const label = project ? `"${project}"'s` : "This project's";
+  const stop = await confirmDialog(
+    "Clean up a leftover daemon?",
+    `${label} daemon is still running from a previous session that never closed cleanly (a crash, force-quit, or shutdown), and nobody is attached to it right now.`,
+    "Stop it",
+    "Leave it running",
+  );
+  try {
+    await go().ResolveOrphan(stop);
+  } catch (err) {
+    showError(errMessage(err));
+  }
 }
 
 function errMessage(err: unknown): string {
@@ -3807,6 +3885,20 @@ function init(): void {
   if (window.runtime?.EventsOn) {
     window.runtime.EventsOn("board:changed", () => {
       void reconcile();
+    });
+    // Fired from closeflow.go's runCloseFlow when the daemon is busy — the
+    // window close is already held open (OnBeforeClose returned true); this
+    // dialog's choice is the only thing that can let it proceed (SC-3015).
+    window.runtime.EventsOn("app:close-busy", () => {
+      void (async () => {
+        const choice = await busyCloseDialog();
+        try {
+          await go().ResolveClose(choice);
+        } catch {
+          // Best-effort: a failed round-trip must not strand the app — the
+          // user can simply try the window's close button again.
+        }
+      })();
     });
   }
   void bootstrapProject();

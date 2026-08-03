@@ -144,6 +144,13 @@ type Server struct {
 	// Ideation owns the board's single agent-driven ideation session. nil
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
+	// LeaseChecker answers whether the given project currently has any live
+	// (non-expired) stage lease — the daemon-busy route's authoritative half
+	// (the desktop close flow's other half, "is any Claude Code instance
+	// working", is discovered client-side; the daemon cannot see it without an
+	// import cycle). nil disables the route: busy always reports false, never
+	// blocking a close (SC-3015).
+	LeaseChecker func(ctx context.Context, project string) (bool, error)
 
 	// TokenScanner performs the one expensive JSONL walk the stats view needs
 	// (current-window token split + per-hour buckets). Injectable so tests can
@@ -493,6 +500,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"tracker-issue":       func() { s.handleTrackerIssue(conn, args[1:]) },
 		"pending-confirms":    func() { s.handlePendingConfirms(conn) },
 		"doctor":              func() { s.handleDoctor(conn, args[1:]) },
+		"daemon-busy":         func() { s.handleDaemonBusy(conn) },
 		"confirm-op":          func() { s.handleConfirmOp(conn, args[1:], clientPID) },
 		"confirm-status":      func() { s.handleConfirmStatus(conn, args[1:]) },
 		"tool-stats":          func() { s.handleToolStats(conn) },

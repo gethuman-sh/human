@@ -65,3 +65,40 @@ export function buildDetailSections(d) {
     add("Fix summary", d.fixSummaryHTML, "detail-fixsummary");
     return sections.join("");
 }
+// fmtUSD/fmtDuration are local so board-detail has no dependency on statsview.
+// Sub-dollar figures get four decimals so a few cents never rounds to "$0.00".
+function fmtUSD(n) {
+    return "$" + n.toFixed(n < 1 ? 4 : 2);
+}
+function fmtDuration(ms) {
+    const s = Math.round(ms / 1000);
+    if (s < 60)
+        return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60)
+        return `${m}m ${s % 60}s`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+}
+// buildCostSection renders the ticket's whole-life cost (with the answers/context
+// split) and elapsed time (per-stage plus the live current-stage clock). A ticket
+// with no recorded spend says so plainly rather than showing $0.00 (SC-2847
+// criterion 5). currentStage/stageEnteredAt come from the open card; nowMs is
+// injected for tests.
+export function buildCostSection(c, currentStage, stageEnteredAt, nowMs) {
+    if (!c || !c.hasSpend) {
+        return `<section class="detail-section detail-cost"><h3 class="detail-section-title">Cost &amp; time</h3>` +
+            `<div class="detail-cost-empty">No spend recorded for this ticket yet.</div></section>`;
+    }
+    const curElapsed = stageEnteredAt
+        ? `<div class="detail-cost-current">Current stage (${escapeText(currentStage ?? "")}): ` +
+            `${escapeText(fmtDuration(Math.max(0, nowMs - Date.parse(stageEnteredAt))))} running</div>`
+        : "";
+    const stageRows = c.stages.map((s) => `<div class="detail-cost-stage"><span>${escapeText(s.stage || "—")}</span>` +
+        `<span>${escapeText(fmtUSD(s.costUSD))} · ${escapeText(fmtDuration(s.durationMs))}</span></div>`).join("");
+    return `<section class="detail-section detail-cost"><h3 class="detail-section-title">Cost &amp; time</h3>` +
+        `<div class="detail-cost-total">${escapeText(fmtUSD(c.totalCostUSD))} · ${escapeText(fmtDuration(c.totalDurationMs))}</div>` +
+        `<div class="detail-cost-split">answers ${escapeText(fmtUSD(c.answersCostUSD))} · context ${escapeText(fmtUSD(c.contextCostUSD))}</div>` +
+        curElapsed +
+        `<div class="detail-cost-stages">${stageRows}</div></section>`;
+}

@@ -38,6 +38,9 @@ func main() {
 			Middleware: mockupMiddleware,
 		},
 		OnStartup: app.startup,
+		// See closeflow.go: never blocks, decides idle/busy on a background
+		// goroutine (SC-3015 / SC-2865 guard).
+		OnBeforeClose: app.beforeClose,
 		Bind: []interface{}{
 			app,
 		},

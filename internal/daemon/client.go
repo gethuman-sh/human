@@ -714,6 +714,21 @@ func GetPendingConfirms(addr, token string) ([]PendingConfirm, error) {
 	return results, nil
 }
 
+// GetDaemonBusy asks the daemon whether any project stage currently holds a
+// live lease — the daemon-side half of the desktop close flow's busy check
+// (SC-3015); the "working instance" half is discovered client-side.
+func GetDaemonBusy(addr, token string) (DaemonBusyStatus, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"daemon-busy"})
+	if err != nil {
+		return DaemonBusyStatus{}, err
+	}
+	var status DaemonBusyStatus
+	if err := json.Unmarshal(out, &status); err != nil {
+		return DaemonBusyStatus{}, errors.WrapWithDetails(err, "invalid daemon-busy JSON")
+	}
+	return status, nil
+}
+
 // GetDoctor fetches the daemon's substrate health checks. refresh forces a
 // live run instead of the poller cache.
 func GetDoctor(addr, token string, refresh bool) (DoctorData, error) {

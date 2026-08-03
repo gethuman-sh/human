@@ -203,6 +203,42 @@ func (s *SQLiteStore) Leases(ctx context.Context, project, scope string) ([]Leas
 	return leases, nil
 }
 
+// LiveLeases returns every currently-live (not released, not expired) stage
+// lease across EVERY scope of a project — the whole-project counterpart to
+// Leases, which is scoped to one ticket. It answers "would stopping this
+// project's daemon end in-flight agent work" (SC-3015's desktop close flow),
+// a question the per-ticket Leases route cannot answer without already
+// knowing every scope in advance.
+func (s *SQLiteStore) LiveLeases(ctx context.Context, project string) ([]Lease, error) {
+	normProject := NormalizeProject(project)
+	const q = `
+		SELECT scope, stage, agent, run_id, ttl_seconds, leased_at, heartbeat_at, released_at
+		FROM agent_leases WHERE project = ? AND released_at IS NULL
+		ORDER BY heartbeat_at DESC
+	`
+	rows, err := s.db.QueryContext(ctx, q, normProject)
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "list live leases", "project", normProject)
+	}
+	defer func() { _ = rows.Close() }()
+
+	now := s.now().UTC()
+	live := []Lease{}
+	for rows.Next() {
+		c, err := scanLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		if isLive(c, now) {
+			live = append(live, c)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.WrapWithDetails(err, "read live leases", "project", normProject)
+	}
+	return live, nil
+}
+
 func readLease(ctx context.Context, tx *sql.Tx, project, scope, stage string) (Lease, bool, error) {
 	const q = `
 		SELECT scope, stage, agent, run_id, ttl_seconds, leased_at, heartbeat_at, released_at
