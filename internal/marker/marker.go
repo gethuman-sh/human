@@ -122,6 +122,15 @@ var specs = map[string]spec{
 	// hasCompletedRelatedRecord, which classifies found/none as a completed record.
 	"related-started": {},
 	"related":         {needsHead: true, headEnum: []string{"found", "none", "incomplete"}},
+	// The durable "shipped-partial" trace (SC-2910, the deferred deliverable of
+	// SC-2848). Posted on the PM ticket when a deliberately-deferred acceptance
+	// criterion is sanctioned (the planner's ship-narrow-plus-follow-on fork):
+	// `follow-on` names the real ticket that now carries the deferred work,
+	// `deferred` lists the criteria left out (one per line). It records a
+	// decision, so both fields are required — a trace missing either is not a
+	// trace. Not a stage transition (see ShippedPartialHeader): it decorates the
+	// card, never moves it.
+	"shipped-partial": {required: []string{"follow-on", "deferred"}},
 }
 
 // KnownTypes lists the marker types with a validation contract, sorted.
