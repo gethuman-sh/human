@@ -223,6 +223,249 @@ func GetOverview(db *sql.DB, repo string, hubLimit int) (*Overview, error) {
 	return ov, rows.Err()
 }
 
+// Noun is one domain concept in the product account: a type the product is
+// about, paired with its shape (compact signature), its meaning (the SC-2856
+// intent recorded above its declaration), and where it is defined.
+type Noun struct {
+	QName   string `json:"qname"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`              // "type" today; retained for forward-compat
+	Shape   string `json:"shape,omitempty"`   // compact one-line signature
+	Meaning string `json:"meaning,omitempty"` // SC-2856 intent, folded to one line
+	File    string `json:"file"`
+	Line    int    `json:"line"`
+	// Invariants is the SC-2860 seam: the rules that constrain this noun, shown
+	// alongside it. Empty until SC-2860 lands; the account is complete without it.
+	Invariants []string `json:"invariants,omitempty"`
+}
+
+// Account is the compact, code-generated domain account of a product: the nouns
+// it is about, regenerated from the current index so it cannot disagree with the
+// code. Note is set (and Nouns empty) when an account cannot be produced, so a
+// caller never mistakes an empty list for a silent failure.
+type Account struct {
+	Repo  string `json:"repo,omitempty"`
+	Nouns []Noun `json:"nouns"`
+	Note  string `json:"note,omitempty"`
+}
+
+// infraSegments are directory names that mark a package as plumbing/infra; a
+// type defined under any of them is excluded from the account. "internal" is
+// deliberately absent — repos routinely root all code under internal/.
+var infraSegments = map[string]bool{
+	"util": true, "utils": true, "helper": true, "helpers": true,
+	"errors": true, "log": true, "logs": true, "logging": true, "logger": true,
+	"config": true, "configs": true, "testutil": true, "testutils": true,
+	"mock": true, "mocks": true, "fixture": true, "fixtures": true,
+	"testdata": true, "vendor": true, "node_modules": true,
+}
+
+// inInfraPackage reports whether any directory segment of a repo-relative path
+// is an infra/util package (the final path element, the filename, is ignored).
+func inInfraPackage(path string) bool {
+	segs := strings.Split(path, "/")
+	for _, s := range segs[:max(0, len(segs)-1)] {
+		if infraSegments[strings.ToLower(s)] {
+			return true
+		}
+	}
+	return false
+}
+
+// foldOneLine collapses runs of whitespace to single spaces and caps the result
+// at n runes with an ellipsis, so shape and meaning each stay one readable line.
+// A non-positive n is treated as "no cap" so the helper can never slice out of
+// range on a degenerate width.
+func foldOneLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); n > 1 && len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
+}
+
+// wholeWordIn reports whether name appears as a whole identifier token in hay
+// (bounded by non-identifier characters), used to spot a type used in a route
+// handler's signature without a full parse.
+func wholeWordIn(hay, name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := strings.Index(hay, name); i >= 0; i = strings.Index(hay[i+1:], name) + (i + 1) {
+		before := i == 0 || !isIdentByte(hay[i-1])
+		end := i + len(name)
+		after := end >= len(hay) || !isIdentByte(hay[end])
+		if before && after {
+			return true
+		}
+		if strings.Index(hay[i+1:], name) < 0 {
+			break
+		}
+	}
+	return false
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' ||
+		(b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// GetAccount computes the domain account: the type-kind symbols that are the
+// product's nouns, ranked so recorded intent (SC-2856) — never call frequency —
+// drives what surfaces, infra/util packages excluded. limit <= 0 uses 24.
+func GetAccount(db *sql.DB, repo string, limit int) (*Account, error) {
+	if limit <= 0 {
+		limit = 24
+	}
+	acct := &Account{Repo: repo}
+
+	// Route-handler signatures: a type named in one is a request/response noun.
+	handlerSigs, err := routeHandlerSignatures(db, repo)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt := `
+		SELECT s.qname, s.name, COALESCE(s.signature,''), COALESCE(s.doc,''),
+		       f.path, s.start_line,
+		       (SELECT COUNT(*) FROM reference r WHERE r.symbol_id = s.id) AS refs
+		FROM symbol s
+		JOIN file f    ON f.id = s.file_id
+		JOIN project p ON p.id = s.project_id
+		WHERE s.kind = 'type'`
+	var args []any
+	if repo != "" {
+		stmt += " AND p.name = ?"
+		args = append(args, repo)
+	}
+	rows, err := db.Query(stmt, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	type scored struct {
+		n     Noun
+		score int
+		refs  int
+	}
+	var cands []scored
+	sawType := false
+	for rows.Next() {
+		var qname, name, sig, doc, path string
+		var line, refs int
+		if err := rows.Scan(&qname, &name, &sig, &doc, &path, &line, &refs); err != nil {
+			return nil, err
+		}
+		sawType = true
+		if inInfraPackage(path) {
+			continue
+		}
+		score := refs
+		if score > 8 {
+			score = 8
+		}
+		if doc != "" {
+			score += 5
+		}
+		if strings.HasPrefix(strings.TrimSpace(sig), "struct{") {
+			score += 3
+		}
+		if wholeWordIn(handlerSigs, name) {
+			score += 4
+		}
+		if score == 0 {
+			continue // pure plumbing alias — no intent, no shape, unused
+		}
+		cands = append(cands, scored{
+			n: Noun{
+				QName: qname, Name: name, Kind: "type",
+				Shape:   foldOneLine(sig, 100),
+				Meaning: foldOneLine(doc, 160),
+				File:    path, Line: line,
+			},
+			score: score, refs: refs,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].score != cands[j].score {
+			return cands[i].score > cands[j].score
+		}
+		if cands[i].refs != cands[j].refs {
+			return cands[i].refs > cands[j].refs
+		}
+		return cands[i].n.QName < cands[j].n.QName
+	})
+	if len(cands) > limit {
+		cands = cands[:limit]
+	}
+	for _, c := range cands {
+		acct.Nouns = append(acct.Nouns, c.n)
+	}
+
+	if len(acct.Nouns) == 0 {
+		acct.Note = accountEmptyNote(db, repo, sawType)
+	}
+	return acct, nil
+}
+
+// routeHandlerSignatures returns every detected route handler's signature joined
+// into one string, for cheap whole-word membership tests.
+func routeHandlerSignatures(db *sql.DB, repo string) (string, error) {
+	stmt := `
+		SELECT COALESCE(s.signature,'')
+		FROM route r
+		JOIN project p  ON p.id = r.project_id
+		JOIN symbol s   ON s.id = r.handler_id`
+	var args []any
+	if repo != "" {
+		stmt += " WHERE p.name = ?"
+		args = append(args, repo)
+	}
+	rows, err := db.Query(stmt, args...)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rows.Close() }()
+	var b strings.Builder
+	for rows.Next() {
+		var sig string
+		if err := rows.Scan(&sig); err != nil {
+			return "", err
+		}
+		b.WriteString(sig)
+		b.WriteByte('\n')
+	}
+	return b.String(), rows.Err()
+}
+
+// accountEmptyNote states plainly why no account could be produced, rather than
+// returning a bare empty list.
+func accountEmptyNote(db *sql.DB, repo string, sawType bool) string {
+	if sawType {
+		return "no domain account: the index holds types, but all are plumbing/infra " +
+			"or unused (no recorded intent, no entity shape). Add doc comments to the " +
+			"product's core types (see SC-2856) so they surface."
+	}
+	var total int
+	q := `SELECT COUNT(*) FROM symbol s JOIN project p ON p.id = s.project_id`
+	var args []any
+	if repo != "" {
+		q += " WHERE p.name = ?"
+		args = append(args, repo)
+	}
+	_ = db.QueryRow(q, args...).Scan(&total)
+	if total == 0 {
+		return "nothing indexed (run: human codenav index <path>)"
+	}
+	return "no domain account: the index found no type declarations for this " +
+		"project. The indexer may read this language only structurally."
+}
+
 // RouteHit is a detected web route, optionally bound to a handler symbol.
 type RouteHit struct {
 	Method    string `json:"method"`
