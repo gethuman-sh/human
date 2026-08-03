@@ -160,6 +160,13 @@ type BoardTransitionDeps struct {
 	// the result — the gate never has to guess what "open" means. nil disables
 	// the gate (the package's "nil disables" convention).
 	BlockedBy func(ctx context.Context, pmKey string) ([]string, error)
+	// Getter fetches the PM ticket so a recovery relaunch of the implementation
+	// stage can tell a self-planning fix pipeline (bug/security — which produces
+	// its own plan within the run) from a plan-executing build, and re-dispatch
+	// the right path. nil disables kind classification: the relaunch then falls
+	// back to the [human:bug-verdict] marker heuristic and finally to the plain
+	// build retry (SC-2986).
+	Getter tracker.Getter
 }
 
 // sanitizeRe drops characters that are invalid in an agent name (alphanumeric,
@@ -247,7 +254,7 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	// stage retries — are dispatched before the forward-only rule, which would
 	// otherwise reject each as a non-advance. Extracted so ApplyTransition reads
 	// as guards → sanctioned-non-forward → forward, one concern per block.
-	if handled, err := d.dispatchNonForwardMove(ctx, req, card); handled {
+	if handled, err := d.dispatchNonForwardMove(ctx, req, card, comments); handled {
 		return err
 	}
 
@@ -282,7 +289,7 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 // as a non-advance, so they are resolved here first. handled reports whether the
 // request matched one of them — when false, ApplyTransition falls through to the
 // forward-only path — and err carries that dispatch's own result.
-func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard) (handled bool, err error) {
+func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (handled bool, err error) {
 	switch {
 	// Rework loop: a build whose review failed may be rebuilt. This is the ONE
 	// sanctioned backward move — the executor is re-dispatched with the review
@@ -305,9 +312,21 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// Build retry: the same sanctioned in-place relaunch for a failed
 	// implementation run — without it a failed build is a dead end, since the
 	// rework re-drop requires a failed REVIEW verdict and Retry fix is
-	// bug-pane-only (SC-591). The plan is intact on the ticket; a fresh
-	// executor picks it up.
+	// bug-pane-only (SC-591).
+	//
+	// A self-planning fix relaunch: an autofix/security-fix run interrupted
+	// mid-run (its implementation stage failed or hit an outage) must resume as
+	// the fix pipeline, which produces its own plan — NOT the plan-executing
+	// build retry, whose plan gate would refuse the run and ask a human to run
+	// planning the pipeline runs itself (SC-2986). A plan-executing build has an
+	// intact plan on the ticket; a fresh executor picks it up.
 	case isBuildRetry(req.To, card):
+		switch d.classifyFixPipeline(ctx, req.PMKey, comments) {
+		case fixBug:
+			return true, d.ApplyFix(ctx, BoardFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+		case fixSecurity:
+			return true, d.ApplySecurityFix(ctx, SecurityFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+		}
 		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 			executePrompt(dispatchKey(req.PMKey, card), ""), WaitCauseRetry, true)
 
@@ -1433,6 +1452,45 @@ func isBuildRetry(to BoardStage, card BoardCard) bool {
 	return to == BoardImplementation &&
 		card.Stage == BoardImplementation &&
 		(card.State == BoardFailed || card.State == BoardOutage)
+}
+
+// fixPipeline names which self-planning fix pipeline owns a ticket, if any.
+type fixPipeline int
+
+const (
+	fixNone     fixPipeline = iota // an ordinary plan-executing build
+	fixBug                         // autofix (/human-autofix)
+	fixSecurity                    // security-fix (/human-security-fix)
+)
+
+// classifyFixPipeline reports which self-planning fix pipeline should own a
+// recovery relaunch of the implementation stage. The ticket kind is
+// authoritative and covers every interruption point (including one before
+// triage posted its verdict): IsSecurity → security-fix, else IsBug → autofix.
+// With no Getter (or a fetch blip), it falls back to the marker heuristic — a
+// recorded [human:bug-verdict] with no [human:plan] is a bug pipeline
+// interrupted mid-run — so a tracker read failure never drops the run back onto
+// the plan gate it exists to bypass (SC-2986).
+func (d BoardTransitionDeps) classifyFixPipeline(ctx context.Context, pmKey string, comments []tracker.Comment) fixPipeline {
+	if d.Getter != nil {
+		if issue, err := d.Getter.GetIssue(ctx, pmKey); err == nil && issue != nil {
+			switch {
+			case issue.IsSecurity():
+				return fixSecurity
+			case issue.IsBug():
+				return fixBug
+			default:
+				return fixNone
+			}
+		} else if err != nil {
+			d.Logger.Warn().Err(err).Str("pm", pmKey).
+				Msg("board relaunch: cannot fetch ticket to classify fix pipeline; falling back to markers")
+		}
+	}
+	if hasBugVerdict(comments) && !hasPlanEvidence(comments) {
+		return fixBug
+	}
+	return fixNone
 }
 
 // isDeployRetry reports the deploy-stage twin of isBuildRetry: relaunching the

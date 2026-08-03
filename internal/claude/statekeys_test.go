@@ -31,6 +31,11 @@ var writeOnlyStateKeys = map[string]string{
 	// the reader. The stage-contract test covers the ones a prompt DOES read
 	// back; these are the stages whose only reader is the board.
 	"stage.planning": "read by the daemon's stage-retry policy, not by a prompt",
+	// The fix pipelines run AS the board implementation stage, whose exit the
+	// daemon reads from stage.implementation (stageExitClass) — a recovery
+	// relaunch's outcome, so it must be recorded even though no prompt reads it
+	// back (SC-2986).
+	"stage.implementation": "read by the daemon's stage-retry policy (the board implementation stage), not by a prompt",
 	// The gate's verdict travels to the next stage on the [human:ticket-review]
 	// MARKER, not here: the marker is durable, tracker-side and survives a
 	// different daemon picking the ticket up, which daemon-local state does not.

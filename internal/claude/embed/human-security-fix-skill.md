@@ -40,6 +40,23 @@ An infrastructure failure — a dead container, a network blip, a runner that ne
 
 Exhausting the budget is an honest `needs-human-work` ending, not a silent stop: post the terminal marker the step calls for and report what the three attempts each tried and why each failed.
 
+## Recording the board stage outcome
+
+In board context this run **is** the implementation stage, and the daemon reads that stage's exit from agent state key `stage.implementation` (the board stage name it looks up — distinct from the per-phase `stage.triage`/`stage.verify`/`stage.review` records this skill already writes). A run that stops without writing it hands the daemon nothing but the generic "agent finished without posting the stage handoff" diagnosis, and the retry loop charges on blind.
+
+So: **a board-context run must never exit without writing `stage.implementation`.** At every point where the run STOPS in board context — the budget-spent stop (Step 6), a `DECISION REQUIRED` options post (Step 1a), an unreviewable or twice-failed review (Step 7.3), and the clean no-fix-needed terminal (Step 3a) — record the outcome in the stage's own terms *before* returning, alongside the marker that stop already posts:
+
+```bash
+human state set <SEC_KEY> stage.implementation --json --body-file - <<'EOF'
+{"exit":"needs-human-work",
+ "summary":"one line in the stage's own terms — e.g. verify budget spent after 3 real attempts; vulnerability still reachable: <…>",
+ "evidence":"the marker just posted (e.g. [human:implementation-failed]) and the state keys that back it",
+ "next":"what a human must decide or do"}
+EOF
+```
+
+Use the exit vocabulary the board understands (`internal/daemon/board_retry.go`): `retryable`, `outage`, `needs-input`, `needs-human-work`, `done`. A clean resolved terminal (no-fix-needed, Step 3a) records `{"exit":"done", ...}` alongside its `[human:no-fix-needed]` marker; a spent budget records `needs-human-work`; an interrupted-substrate stop records `retryable`/`outage`. This record is additive — it does not replace the phase records. Keep exploit specifics out of the `summary`/`evidence` when the ticket is publicly visible.
+
 <!-- human:include exit-contract -->
 
 <!-- human:include model-tiers -->
@@ -76,7 +93,7 @@ human state get <SEC_KEY> stage.preflight --field question    # the fork, when r
     --field 2="<second option>"
   ```
 
-  The board renders this as "Decision needed" and the card waits without being mistaken for a crash. When the human picks, the daemon records `[human:option-chosen]` and relaunches this run with the choice in hand; preflight then mirrors it into `decisions` and returns `ready: yes`. Do **not** invent a `needs-input` marker — this loop already exists.
+  The board renders this as "Decision needed" and the card waits without being mistaken for a crash. When the human picks, the daemon records `[human:option-chosen]` and relaunches this run with the choice in hand; preflight then mirrors it into `decisions` and returns `ready: yes`. Do **not** invent a `needs-input` marker — this loop already exists. In board context, alongside the options post, record the stage outcome (`stage.implementation`, exit `needs-input`, per "Recording the board stage outcome") so the daemon reads the awaited decision rather than the generic diagnose line.
 
 The capability set is the single source of truth for the rest of the run — do not infer permissions from flags or env vars:
 
@@ -87,6 +104,19 @@ The capability set is the single source of truth for the rest of the run — do 
 **The rule is one line: attempt nothing the capability set forbids, and treat a missing capability as a boundary, never as a failure.**
 
 Set `<BOARD_CONTEXT>` to the set's `board_context`. (`--board` in `$ARGUMENTS` is the daemon's explicit signal and still forces it true.) In board context the container holds no push/PR credentials and the daemon's Deploy stage owns push → PR → CI → merge on the host: the run stops before deploy, having run the review inline.
+
+### Step 1b — Resume from the furthest recorded step
+
+This run may be a **recovery relaunch** of one that was interrupted mid-pipeline — a container that died, a daemon that restarted. A resumed run picks up where the account on the ticket stops; it does not start over, and a step that is already recorded is not paid for again. Read the ticket's markers once, then resume from the furthest recorded step:
+
+```bash
+human plan show <SEC_KEY>        # non-empty -> a [human:plan] comment exists; the plan is done
+# a [human:bug-verdict] comment present -> triage is done
+```
+
+- **A `[human:bug-verdict]` comment already exists → skip Step 2 (triage).** The cause is recorded. Read the verdict, severity and root cause from `stage.triage` state (`human state get <SEC_KEY> stage.triage --field verdict`); if that state record is missing but the marker is present, read them from the marker body (`human marker show <SEC_KEY> bug-verdict`). Go straight to the verdict gate (Step 3). Do **not** re-run triage.
+- **A `[human:plan]` comment already exists → skip Step 4 (plan).** The plan is recorded; proceed to Step 5 (fix) using it. Re-planning is only for a genuinely absent plan.
+- **A missing later step is this run's own work, never a blocker.** This pipeline writes its own plan: **never** post `[human:needs-planning]` and **never** ask a human to run planning. If the plan is absent and triage confirmed the vulnerability, produce the plan yourself (Step 4) and continue.
 
 ## Step 2 — Phase 1: Triage & threat-model (verdict)
 
@@ -146,7 +176,7 @@ human state get <SEC_KEY> stage.challenge --field challenge   # upheld | refuted
 
   Then **continue to Step 4 as a confirmed vulnerability**, using the skeptic's exploit as the reproduction. The challenge runs ONCE — a refuted verdict never loops back through triage.
 
-The `[human:no-fix-needed]` marker is **mandatory in board context**: the pipeline runs under the board implementation-stage agent name, whose failure watcher treats any exit with no `[human:ready-for-review]` handoff as a crash and would loop forever re-triaging. This terminal marker signals the clean, resolved stop.
+The `[human:no-fix-needed]` marker is **mandatory in board context**: the pipeline runs under the board implementation-stage agent name, whose failure watcher treats any exit with no `[human:ready-for-review]` handoff as a crash and would loop forever re-triaging. This terminal marker signals the clean, resolved stop. Alongside it, record the stage outcome (`stage.implementation`, exit `done`, per "Recording the board stage outcome") so the daemon reads a resolved terminal rather than the generic diagnose line.
 
 ## Step 4 — Phase 2: Plan (topology decides where it lives)
 
@@ -227,7 +257,7 @@ human marker post <SEC_KEY> implementation-failed --body-file - <<'EOF'
 EOF
 ```
 
-The first body line becomes the badge headline. This is mandatory in board context. Then STOP and report honestly without posting the handoff.
+The first body line becomes the badge headline. This is mandatory in board context. Then record the stage outcome (`stage.implementation`, exit `needs-human-work`, per "Recording the board stage outcome") so the daemon reads the spent budget instead of the generic diagnose line, and STOP and report honestly without posting the handoff.
 
 ## Step 7 — Phase 5: Hand off and security review
 
@@ -296,7 +326,7 @@ REVIEW_EOF
   - **refuted** — treat it exactly like a failing review: feed its evidence back to the fixer under the review budget (the `fail` branch below). Do not merge on a refuted pass.
 
   Run this once per review verdict, not once per attempt.
-- **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the fixer and do NOT post `[human:review-complete] verdict: fail`. Instead post `[human:review-failed]` naming the unreachable ref — `human marker post <SEC_KEY> review-failed --field reason="<reachability reason>"` — then STOP (report per Step 9). No PR is merged.
+- **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the fixer and do NOT post `[human:review-complete] verdict: fail`. Instead post `[human:review-failed]` naming the unreachable ref — `human marker post <SEC_KEY> review-failed --field reason="<reachability reason>"` — then record the stage outcome (`stage.implementation`, exit `retryable`, per "Recording the board stage outcome") and STOP (report per Step 9). No PR is merged.
 - **fail** or **incomplete** — feed the reviewer's findings back: re-dispatch the **human-bug-fixer** (Step 5) with the findings appended, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). An `incomplete` verdict means a ticket acceptance criterion was not built; route it identically to `fail` — re-dispatch the fixer with the unmet criterion appended, re-verify, and re-review under the same `budget.review.attempts`. This loops under the retry budget (`budget.review.attempts`). When the budget is spent, STOP honestly as `needs-human-work`: the handoff stays standing and NO pull request is merged.
 
 ## Step 8 — Phase 6: Deploy — end with a merged PR
