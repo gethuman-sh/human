@@ -115,6 +115,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 - [AI Developer Agents](internal/agent/README.md) — run Claude Code in isolated containers
 - [Claude Code Integration](internal/claude/README.md) — skills, agents, and live monitoring
 - [Activity Statistics](internal/stats/README.md) — rolling record of agent tool usage
+- [Cost Ledger](internal/costledger/README.md) — durable per-ticket cost (dollars) and time, whole-life, for the board detail panel
 
 **User interfaces**
 
