@@ -551,6 +551,75 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 // marker carries, so the refused card reads as an instruction, not an error.
 const needsPlanningReason = "implementation cannot start: this ticket has no plan. Run planning first, then move it to implementation."
 
+// PlanRedriveBound caps how many times a refused implementation launch may
+// drive the card back into planning before giving up and escalating to a
+// person (SC-2990). The bound is anchored in the ticket thread itself — via
+// countPlanRefusals, which counts the ordinary [human:needs-planning] markers
+// already posted — rather than in daemon state, mirroring the SC-2851 outage
+// bound: the thread is the one record that survives a daemon restart, a
+// handover to a peer daemon, and the state db being wiped. A package var so
+// tests can shorten it.
+var PlanRedriveBound = 3
+
+// planStuckMarker is the stable sentinel that distinguishes a plan-stuck
+// escalation body from an ordinary needs-planning refusal. Both share the
+// [human:needs-planning] header — the one marker DeriveBoardCard already
+// promotes over phantom implementation markers (newestNeedsPlanning) — so
+// reusing it gets correct card rendering for the escalation with zero
+// derivation changes; the sentinel is how the guard tells the two apart.
+const planStuckMarker = "this ticket could not be planned automatically"
+
+// isPlanStuck reports whether a [human:needs-planning] marker's body is the
+// plan-stuck escalation rather than an ordinary refusal.
+func isPlanStuck(body string) bool {
+	return strings.Contains(body, planStuckMarker)
+}
+
+// countPlanRefusals counts the ordinary (non-stuck) [human:needs-planning]
+// markers on the thread — one per automated drive back into planning — the
+// value PlanRedriveBound is checked against.
+func countPlanRefusals(comments []tracker.Comment) int {
+	n := 0
+	for _, c := range comments {
+		trimmed := strings.TrimSpace(c.Body)
+		if strings.HasPrefix(trimmed, NeedsPlanningHeader) && !isPlanStuck(trimmed) {
+			n++
+		}
+	}
+	return n
+}
+
+// oldestNeedsPlanning returns the earliest [human:needs-planning] marker on
+// the thread (ordinary or stuck) — the stuck-since anchor the escalation body
+// names, so a person reads "stuck since X", not merely a bare attempt count.
+func oldestNeedsPlanning(comments []tracker.Comment) (tracker.Comment, bool) {
+	var oldest tracker.Comment
+	found := false
+	for _, c := range comments {
+		if !strings.HasPrefix(strings.TrimSpace(c.Body), NeedsPlanningHeader) {
+			continue
+		}
+		if !found || commentNewer(oldest, c) {
+			oldest = c
+			found = true
+		}
+	}
+	return oldest, found
+}
+
+// planStuckReason renders the plan-stuck escalation body: what was tried and
+// since when, so the person reading it knows this is not a fresh refusal but
+// a ping-pong the bound has already stopped.
+func planStuckReason(drives int, since tracker.Comment) string {
+	stuckSince := "an unknown time"
+	if !since.Created.IsZero() {
+		stuckSince = since.Created.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf(
+		"%s — tried %d time(s), stuck since %s. A person needs to plan this ticket by hand.",
+		planStuckMarker, drives, stuckSince)
+}
+
 // refuseIfUnplanned refuses an implementation launch on a ticket that carries no
 // plan and reports whether it did. The implementation stage exists to carry out
 // a plan; without one it can only claim the ticket, run preparation, and discover
@@ -560,13 +629,22 @@ const needsPlanningReason = "implementation cannot start: this ticket has no pla
 // false for the self-contained fix pipelines, which produce their plan within
 // the run, and the gate is a no-op for every other stage.
 //
-// On refusal it records a [human:needs-planning] marker — the refuse-and-surface
-// twin of refuseIfBlocked — but only when that is not already the ticket's
-// determination, so a reconcile re-drive does not spam the thread. A comment-read
-// failure is deliberately NOT treated as an absence: a tracker blip must not
-// refuse a launch, so the run proceeds and the agent's own plan check (which
-// distinguishes a genuine absence from an unreachable tracker) remains the
-// backstop.
+// Past the refusal itself (unchanged — implementation still never starts on a
+// ticket with no plan) the card is bounded, thread-anchored driven back into
+// planning rather than left to park silently, until either a plan lands or the
+// ping-pong bound (PlanRedriveBound) is spent, at which point a standing
+// plan-stuck [human:needs-planning] escalation reaches a person exactly once
+// (SC-2990). The dedup guard is keyed on the newest PLANNING-STAGE marker
+// (latestStateInStage), not the newest marker overall — newestNeedsPlanning is
+// deliberately NOT reused here: it still serves DeriveBoardCard's
+// furthest-stage promotion, whose "newest overall" semantics are load-bearing
+// there, but as this gate's dedup key it let a later *-failed marker on
+// another stage defeat the guard and re-post the refusal once per attempt.
+//
+// A comment-read failure is deliberately NOT treated as an absence: a tracker
+// blip must not refuse a launch, so the run proceeds and the agent's own plan
+// check (which distinguishes a genuine absence from an unreachable tracker)
+// remains the backstop.
 func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string, stage BoardStage, requiresPlan bool) (refused bool, err error) {
 	if !requiresPlan || stage != BoardImplementation {
 		return false, nil
@@ -580,17 +658,52 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	if hasPlanEvidence(comments) {
 		return false, nil
 	}
-	if _, already := newestNeedsPlanning(comments); already {
+	planState, planMarker := latestStateInStage(comments, BoardPlanning)
+	newestIsRefusal := strings.HasPrefix(strings.TrimSpace(planMarker.Body), NeedsPlanningHeader)
+
+	// A plan-stuck escalation already stands: it was said once, to a person,
+	// and driving planning again would only repeat the failure that exhausted
+	// the bound — say nothing further.
+	if newestIsRefusal && isPlanStuck(planMarker.Body) {
 		d.Logger.Info().Str("pm", pmKey).
-			Msg("board stage: implementation refused — ticket has no plan (already surfaced)")
+			Msg("board stage: implementation refused — plan-stuck escalation already standing")
 		return true, nil
 	}
-	body := NeedsPlanningHeader + "\n" + needsPlanningReason
-	if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
-		return true, errors.WrapWithDetails(err, "posting needs-planning marker", "pm", pmKey)
+	// Planning is already running from an earlier drive: withhold implementation
+	// without re-posting the refusal or launching a second planner.
+	if planState == BoardRunning {
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board stage: implementation refused — planning is already running")
+		return true, nil
+	}
+	// The ping-pong bound is spent: another drive would only repeat the same
+	// failure. Escalate to a person instead, naming what was tried and since
+	// when, rather than looping forever between planning and implementation.
+	if drives := countPlanRefusals(comments); drives >= PlanRedriveBound {
+		since, _ := oldestNeedsPlanning(comments)
+		body := NeedsPlanningHeader + "\n" + planStuckReason(drives, since)
+		if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
+			return true, errors.WrapWithDetails(err, "posting plan-stuck escalation marker", "pm", pmKey)
+		}
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board stage: implementation refused — plan re-drive bound exhausted; escalated to a person")
+		return true, nil
+	}
+	// Ordinary refusal: surface it only when it is not already the ticket's
+	// current planning-stage determination, so a reconcile re-drive does not
+	// spam the thread — then drive the card into planning so a person never
+	// has to notice the refusal by hand.
+	if !newestIsRefusal {
+		body := NeedsPlanningHeader + "\n" + needsPlanningReason
+		if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
+			return true, errors.WrapWithDetails(err, "posting needs-planning marker", "pm", pmKey)
+		}
 	}
 	d.Logger.Info().Str("pm", pmKey).
-		Msg("board stage: implementation refused — ticket has no plan; surfaced as needing planning")
+		Msg("board stage: implementation refused — ticket has no plan; driving it into planning")
+	if err := d.startAgentStage(ctx, pmKey, BoardPlanning, PlanningStartedHeader, planPrompt(pmKey), WaitCauseRetry, false); err != nil {
+		return true, err
+	}
 	return true, nil
 }
 

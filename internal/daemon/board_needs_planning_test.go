@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,7 +78,8 @@ func TestDeriveBoardCard_NeedsPlanningSupersededByLaterPlanning(t *testing.T) {
 
 // The build-retry route (a re-drive of an implementation card) reaches
 // startAgentStage without a drag gesture — exactly the class of route the
-// gesture gate never covered. With no plan it must refuse and surface, not launch.
+// gesture gate never covered. With no plan it must refuse — and, since the
+// SC-2990 fix, drive the card into planning rather than parking it silently.
 func TestBuildRetryRefusedWithoutPlan(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{
 		cmt("[human:implementation-failed]\nagent died", time.Unix(1, 0)),
@@ -86,9 +88,11 @@ func TestBuildRetryRefusedWithoutPlan(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardImplementation})
 	require.NoError(t, err)
-	assert.Zero(t, l.calls, "no agent is launched for an unplanned ticket")
-	require.Len(t, c.added, 1)
+	assert.Equal(t, 1, l.calls, "the refusal drives the card into planning")
+	assert.Contains(t, l.prompt, "/human-plan SC-1")
+	require.Len(t, c.added, 2)
 	assert.Contains(t, c.added[0], NeedsPlanningHeader)
+	assert.Contains(t, c.added[1], PlanningStartedHeader)
 	assert.NotContains(t, c.added, ImplementationStartedHeader)
 }
 
@@ -148,8 +152,10 @@ func TestSecurityFixLaunchesWithoutPlan(t *testing.T) {
 }
 
 // A reconcile re-drive that re-hits the guard must not spam the thread with a
-// second needs-planning marker once the determination is already surfaced.
-func TestNeedsPlanningNotRepostedWhenAlreadySurfaced(t *testing.T) {
+// second needs-planning marker once the determination is already surfaced —
+// but an un-acted, not-yet-driven refusal is still driven into planning: the
+// card must not park silently just because it already said why (SC-2990).
+func TestNeedsPlanningNotRepostedButDrivenWhenAlreadySurfaced(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{
 		cmt("[human:implementation-failed]\nagent died", time.Unix(1, 0)),
 		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(2, 0)),
@@ -159,8 +165,42 @@ func TestNeedsPlanningNotRepostedWhenAlreadySurfaced(t *testing.T) {
 	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
-	assert.Empty(t, c.added, "the refusal is already on the card; do not re-post it")
-	assert.Zero(t, l.calls)
+	for _, a := range c.added {
+		assert.NotContains(t, a, NeedsPlanningHeader, "the refusal is already on the card; do not re-post it")
+	}
+	assert.Equal(t, 1, l.calls, "an un-driven refusal must still be driven into planning")
+	assert.Contains(t, l.prompt, "/human-plan SC-1")
+}
+
+// A tracker blip while re-reading comments after posting the initial refusal
+// must not stop the drive into planning from being attempted at all — covered
+// implicitly by the direct refuseIfUnplanned call above, which uses the same
+// fakeCommenter for both the refusal read and the drive.
+
+// TestNeedsPlanningNotRepostedWhenLaterFailureLands is the regression test for
+// defect B: the old guard keyed its dedup on the newest marker OVERALL
+// (newestNeedsPlanning), so a later *-failed marker on another stage defeated
+// it and the refusal was re-posted once per attempt. The fix keys the dedup on
+// the newest PLANNING-STAGE marker instead (latestStateInStage(comments,
+// BoardPlanning)), which a later implementation-stage marker cannot displace.
+func TestNeedsPlanningNotRepostedWhenLaterFailureLands(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(2, 0)),
+		cmt("[human:implementation-failed]\nagent died", time.Unix(3, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	require.NoError(t, err)
+	assert.True(t, refused)
+	needsPlanningPosts := 0
+	for _, a := range c.added {
+		if strings.HasPrefix(strings.TrimSpace(a), NeedsPlanningHeader) {
+			needsPlanningPosts++
+		}
+	}
+	assert.Zero(t, needsPlanningPosts,
+		"a later *-failed marker on another stage must not defeat the needs-planning dedup guard")
 }
 
 // A comment-read failure is not an absence of plan: a tracker blip must not
@@ -201,4 +241,96 @@ func TestRefuseUnplannedReportsPostError(t *testing.T) {
 	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.Error(t, err)
 	assert.True(t, refused)
+}
+
+// A fresh refusal on a ticket with no planning-stage history at all must be
+// surfaced AND driven into planning — a person must never have to notice the
+// refusal and trigger planning by hand (SC-2990).
+func TestUnplannedDrivenIntoPlanning(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:implementation-failed]\nagent died", time.Unix(1, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	require.NoError(t, err)
+	assert.True(t, refused)
+	require.Len(t, c.added, 2)
+	assert.Contains(t, c.added[0], NeedsPlanningHeader)
+	assert.Contains(t, c.added[1], PlanningStartedHeader)
+	assert.Equal(t, 1, l.calls)
+	assert.Contains(t, l.prompt, "/human-plan SC-1")
+}
+
+// While a driven planning run is still going, a re-hit of the guard must stay
+// completely quiet: no second refusal, no second planner launched.
+func TestUnplannedQuietWhilePlanningRuns(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(1, 0)),
+		cmt(PlanningStartedHeader, time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	require.NoError(t, err)
+	assert.True(t, refused)
+	assert.Empty(t, c.added)
+	assert.Zero(t, l.calls)
+}
+
+// Once the ping-pong bound (drive → plan → fail, repeated) is spent, the next
+// refusal must escalate to a person exactly once instead of driving another
+// doomed planning attempt — the bound that keeps the ticket from ping-ponging
+// between planning and implementation forever.
+func TestUnplannedEscalatesAfterBound(t *testing.T) {
+	origBound := PlanRedriveBound
+	PlanRedriveBound = 2
+	t.Cleanup(func() { PlanRedriveBound = origBound })
+
+	c := &fakeCommenter{comments: []tracker.Comment{
+		// Cycle 1: refuse, drive, planning fails.
+		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(1, 0)),
+		cmt(PlanningStartedHeader, time.Unix(2, 0)),
+		cmt(PlanningFailedHeader+"\nno-op", time.Unix(3, 0)),
+		// Cycle 2: refuse, drive, planning fails.
+		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(4, 0)),
+		cmt(PlanningStartedHeader, time.Unix(5, 0)),
+		cmt(PlanningFailedHeader+"\nno-op", time.Unix(6, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	require.NoError(t, err)
+	assert.True(t, refused)
+	require.Len(t, c.added, 1)
+	assert.Contains(t, c.added[0], NeedsPlanningHeader)
+	assert.Contains(t, c.added[0], planStuckMarker)
+	assert.Contains(t, c.added[0], "2 time(s)")
+	assert.Zero(t, l.calls, "a bound-exhausted escalation drives nothing")
+}
+
+// The plan-stuck escalation is said once: a re-hit of the guard while it is
+// already the newest planning-stage marker must add nothing and launch
+// nothing.
+func TestUnplannedEscalationSaidOnce(t *testing.T) {
+	origBound := PlanRedriveBound
+	PlanRedriveBound = 2
+	t.Cleanup(func() { PlanRedriveBound = origBound })
+
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(1, 0)),
+		cmt(PlanningStartedHeader, time.Unix(2, 0)),
+		cmt(PlanningFailedHeader+"\nno-op", time.Unix(3, 0)),
+		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(4, 0)),
+		cmt(PlanningStartedHeader, time.Unix(5, 0)),
+		cmt(PlanningFailedHeader+"\nno-op", time.Unix(6, 0)),
+		cmt(NeedsPlanningHeader+"\n"+planStuckReason(2, cmt(NeedsPlanningHeader, time.Unix(1, 0))), time.Unix(7, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	require.NoError(t, err)
+	assert.True(t, refused)
+	assert.Empty(t, c.added)
+	assert.Zero(t, l.calls)
 }
