@@ -37,6 +37,7 @@ type SymbolHit struct {
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`
 	Signature string `json:"signature,omitempty"`
+	Doc       string `json:"doc,omitempty"`
 	File      string `json:"file"`
 	Line      int    `json:"line"`
 	EndLine   int    `json:"end_line,omitempty"`
@@ -69,14 +70,15 @@ type RefHit struct {
 type symRow struct {
 	id                 int64
 	qname, name, kind  string
-	sig, file, root    string
+	sig, doc           string
+	file, root         string
 	startLine, endLine int
 	fidelity           string
 }
 
 func resolveSymbols(db *sql.DB, ident string) ([]symRow, error) {
 	const base = `
-		SELECT s.id, s.qname, s.name, s.kind, COALESCE(s.signature,''),
+		SELECT s.id, s.qname, s.name, s.kind, COALESCE(s.signature,''), COALESCE(s.doc,''),
 		       f.path, p.root_path, s.start_line, s.end_line, COALESCE(f.fidelity,'')
 		FROM symbol s
 		JOIN file f    ON f.id = s.file_id
@@ -103,7 +105,7 @@ func scanSymRows(rows *sql.Rows) ([]symRow, error) {
 	var out []symRow
 	for rows.Next() {
 		var r symRow
-		if err := rows.Scan(&r.id, &r.qname, &r.name, &r.kind, &r.sig,
+		if err := rows.Scan(&r.id, &r.qname, &r.name, &r.kind, &r.sig, &r.doc,
 			&r.file, &r.root, &r.startLine, &r.endLine, &r.fidelity); err != nil {
 			return nil, err
 		}
@@ -116,7 +118,7 @@ func scanSymRows(rows *sql.Rows) ([]symRow, error) {
 // optionally filtered by repo and kind. limit <= 0 means no limit.
 func ListSymbols(db *sql.DB, repo, kind string, limit int) ([]SymbolHit, error) {
 	stmt := `
-		SELECT s.qname, s.name, s.kind, COALESCE(s.signature,''), f.path, s.start_line, s.end_line, COALESCE(f.fidelity,'')
+		SELECT s.qname, s.name, s.kind, COALESCE(s.signature,''), COALESCE(s.doc,''), f.path, s.start_line, s.end_line, COALESCE(f.fidelity,'')
 		FROM symbol s
 		JOIN file f    ON f.id = s.file_id
 		JOIN project p ON p.id = s.project_id
@@ -143,7 +145,7 @@ func ListSymbols(db *sql.DB, repo, kind string, limit int) ([]SymbolHit, error) 
 	var out []SymbolHit
 	for rows.Next() {
 		var h SymbolHit
-		if err := rows.Scan(&h.QName, &h.Name, &h.Kind, &h.Signature, &h.File, &h.Line, &h.EndLine, &h.Fidelity); err != nil {
+		if err := rows.Scan(&h.QName, &h.Name, &h.Kind, &h.Signature, &h.Doc, &h.File, &h.Line, &h.EndLine, &h.Fidelity); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -266,7 +268,7 @@ func ListRoutes(db *sql.DB, repo string) ([]RouteHit, error) {
 // to map git-diff hunks back to the symbols they touch.
 func SymbolsInRange(db *sql.DB, repo, file string, lo, hi int) ([]SymbolHit, error) {
 	rows, err := db.Query(`
-		SELECT s.qname, s.name, s.kind, COALESCE(s.signature,''), f.path, s.start_line, s.end_line, COALESCE(f.fidelity,'')
+		SELECT s.qname, s.name, s.kind, COALESCE(s.signature,''), COALESCE(s.doc,''), f.path, s.start_line, s.end_line, COALESCE(f.fidelity,'')
 		FROM symbol s
 		JOIN file f    ON f.id = s.file_id
 		JOIN project p ON p.id = s.project_id
@@ -279,7 +281,7 @@ func SymbolsInRange(db *sql.DB, repo, file string, lo, hi int) ([]SymbolHit, err
 	var out []SymbolHit
 	for rows.Next() {
 		var h SymbolHit
-		if err := rows.Scan(&h.QName, &h.Name, &h.Kind, &h.Signature, &h.File, &h.Line, &h.EndLine, &h.Fidelity); err != nil {
+		if err := rows.Scan(&h.QName, &h.Name, &h.Kind, &h.Signature, &h.Doc, &h.File, &h.Line, &h.EndLine, &h.Fidelity); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -292,7 +294,7 @@ func SymbolsInRange(db *sql.DB, repo, file string, lo, hi int) ([]SymbolHit, err
 // file may be a repo-relative path or a bare basename (matched as a suffix).
 func Outline(db *sql.DB, file, repo string) ([]SymbolHit, error) {
 	stmt := `
-		SELECT s.qname, s.name, s.kind, COALESCE(s.signature,''), f.path, s.start_line, s.end_line, COALESCE(f.fidelity,'')
+		SELECT s.qname, s.name, s.kind, COALESCE(s.signature,''), COALESCE(s.doc,''), f.path, s.start_line, s.end_line, COALESCE(f.fidelity,'')
 		FROM symbol s
 		JOIN file f    ON f.id = s.file_id
 		JOIN project p ON p.id = s.project_id
@@ -311,7 +313,7 @@ func Outline(db *sql.DB, file, repo string) ([]SymbolHit, error) {
 	var out []SymbolHit
 	for rows.Next() {
 		var h SymbolHit
-		if err := rows.Scan(&h.QName, &h.Name, &h.Kind, &h.Signature, &h.File, &h.Line, &h.EndLine, &h.Fidelity); err != nil {
+		if err := rows.Scan(&h.QName, &h.Name, &h.Kind, &h.Signature, &h.Doc, &h.File, &h.Line, &h.EndLine, &h.Fidelity); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -366,7 +368,7 @@ func Def(db *sql.DB, ident string, includeBody bool) ([]SymbolHit, error) {
 	out := make([]SymbolHit, 0, len(rows))
 	for _, r := range rows {
 		h := SymbolHit{
-			QName: r.qname, Name: r.name, Kind: r.kind, Signature: r.sig,
+			QName: r.qname, Name: r.name, Kind: r.kind, Signature: r.sig, Doc: r.doc,
 			File: r.file, Line: r.startLine, EndLine: r.endLine, Fidelity: r.fidelity,
 		}
 		if includeBody {

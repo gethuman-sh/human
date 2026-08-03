@@ -210,6 +210,7 @@ func scanTSFilePath(root, path string, sink Sink, nameToQNames map[string][]stri
 			_ = sink.Symbol(Symbol{
 				QName: qn, Name: def.name, Kind: def.kind, File: rel,
 				Signature: def.signature,
+				Doc:       docAbove(src, tag.Range.StartByte),
 				StartLine: def.line, StartCol: def.col,
 				EndLine: int(tag.Range.EndPoint.Row) + 1, EndCol: int(tag.Range.EndPoint.Column) + 1,
 			})
@@ -262,6 +263,60 @@ func tsKind(tagKind string) string {
 	default:
 		return k
 	}
+}
+
+// docAbove returns the intent comment written immediately above a definition:
+// the contiguous block of comment lines directly preceding startByte, with
+// comment markers stripped. A blank line or any non-comment line ends the block.
+// Language-agnostic (handles // , # and /* */ styles) so every indexed language
+// carries its description, not only Go.
+func docAbove(src []byte, startByte uint32) string {
+	if int(startByte) > len(src) {
+		return ""
+	}
+	// Rewind to the first byte of the line the definition starts on.
+	ls := int(startByte)
+	for ls > 0 && src[ls-1] != '\n' {
+		ls--
+	}
+	var lines []string
+	for ls > 0 {
+		end := ls - 1 // the '\n' ending the previous line
+		start := end
+		for start > 0 && src[start-1] != '\n' {
+			start--
+		}
+		line := strings.TrimSpace(string(src[start:end]))
+		if line == "" {
+			break // a gap means the comment is not attached to the definition
+		}
+		text, ok := commentText(line)
+		if !ok {
+			break
+		}
+		lines = append([]string{text}, lines...)
+		ls = start
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// commentText strips the leading comment marker from a single trimmed line and
+// reports whether the line is a comment at all. Covers the curated languages:
+// // (JS/TS/Java/Rust), # (Python) and /* */ / * continuations (block comments).
+func commentText(line string) (string, bool) {
+	switch {
+	case strings.HasPrefix(line, "//"):
+		return strings.TrimSpace(strings.TrimPrefix(line, "//")), true
+	case strings.HasPrefix(line, "#"):
+		return strings.TrimSpace(strings.TrimPrefix(line, "#")), true
+	case strings.HasPrefix(line, "/*"):
+		t := strings.TrimSuffix(strings.TrimPrefix(line, "/*"), "*/")
+		return strings.TrimSpace(t), true
+	case strings.HasPrefix(line, "*"):
+		t := strings.TrimSuffix(strings.TrimPrefix(line, "*"), "*/")
+		return strings.TrimSpace(t), true
+	}
+	return "", false
 }
 
 // firstLine returns the trimmed first line of a byte span, as a pseudo-signature.
