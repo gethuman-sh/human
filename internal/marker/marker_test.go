@@ -118,6 +118,28 @@ func TestValidate_ticketReviewVerdictEnum(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "ticket-review-started"}))
 }
 
+func TestValidate_shippedPartial(t *testing.T) {
+	// A shipped-partial trace records a decision; both fields are required so a
+	// trace missing either — the follow-on it points to or the criteria it defers
+	// — is never postable (SC-2910).
+	ok := Marker{Type: "shipped-partial", Fields: map[string]string{"follow-on": "SC-3001", "deferred": "CSV export"}}
+	assert.NoError(t, Validate(ok))
+
+	missingFollowOn := Marker{Type: "shipped-partial", Fields: map[string]string{"deferred": "CSV export"}}
+	err := Validate(missingFollowOn)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing a required field")
+
+	missingDeferred := Marker{Type: "shipped-partial", Fields: map[string]string{"follow-on": "SC-3001"}}
+	err = Validate(missingDeferred)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing a required field")
+}
+
+func TestKnownTypes_includesShippedPartial(t *testing.T) {
+	assert.Contains(t, KnownTypes(), "shipped-partial")
+}
+
 func TestValidate_unknownTypeAllowed(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "future-stage"}))
 	assert.Error(t, Validate(Marker{Type: "Not A Type"}))

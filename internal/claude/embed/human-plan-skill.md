@@ -78,6 +78,28 @@ human marker post <PM_KEY> options \
 
 - STOP. Skip Phases 4-6 entirely. The board renders the options and waits; when the human picks, the daemon relaunches `/human-plan <PM_KEY>` with the choice injected as a `[human:option-chosen]` comment, and the planner then produces a fully autonomous, gate-free plan for that direction. In board context this is mandatory: posting the options block (not a plan-ready) is what lets planning pause cleanly instead of dispatching implementation into a decision no one is present to make.
 
+## Phase 3c: Honor a sanctioned deferral (ship narrow + follow-on)
+
+If the ticket carries a `[human:option-chosen]` comment whose chosen direction is
+"ship the narrow slice now + follow-on ticket for the rest" (the Autonomy-contract
+rule-4 fork), the deferral is sanctioned. BEFORE attaching the narrow plan, spawn
+the durable trace so the deferred criteria leave a real, linked ticket and the PM
+card is marked shipped-partial. Run exactly once, naming every
+acceptance criterion you are deferring:
+
+```bash
+human plan defer <PM_KEY> \
+  --title "<short title for the follow-on ticket>" \
+  --deferred "<first deferred acceptance criterion, verbatim>" \
+  --deferred "<second deferred acceptance criterion, verbatim>"
+```
+
+This creates the follow-on ticket (linked related to <PM_KEY>), and posts the
+`[human:shipped-partial]` marker naming the deferred criteria and the follow-on
+key. Then continue to Phases 4-6 and attach the NARROW plan (the slice being
+shipped now) as usual. Do NOT list the deferred criteria as work in the narrow
+plan — they now live on the follow-on ticket.
+
 ## Phase 4: Confidence check
 
 After finalizing the plan, review it yourself end-to-end:

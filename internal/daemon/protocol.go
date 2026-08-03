@@ -156,6 +156,13 @@ type BoardViewCard struct {
 	// Verdict is the latest review's verdict line; a failing verdict pins the
 	// card in the Code lane with a warning instead of letting it advance.
 	Verdict string `json:"verdict,omitempty"`
+	// ShippedPartial / ShippedPartialFollowOn surface the durable shipped-partial
+	// trace on the card (SC-2910): the ticket shipped with acceptance criteria
+	// deferred to the named follow-on ticket. The frontend renders a "partial
+	// scope → <key>" badge and a detail-panel section; both empty/false on every
+	// card without the marker. Populated by the explicit field copy in compose.go.
+	ShippedPartial         bool   `json:"shippedPartial,omitempty"`
+	ShippedPartialFollowOn string `json:"shippedPartialFollowOn,omitempty"`
 	// StageEnteredAt is when the newest marker of the card's current stage
 	// landed (RFC3339); the board's age badge renders how long the card has
 	// been sitting. Empty when the card has no derived stage yet.

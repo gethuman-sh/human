@@ -67,7 +67,7 @@ import type { DeploySide } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import type { Box, Drawn, Side } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
-import { buildCostSection, buildDetailSections, buildOptionsSection, buildStopDecisionSection, type TicketCost } from "./board-detail.js";
+import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection, type TicketCost } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
@@ -145,6 +145,12 @@ interface Card {
   stopDecision?: string;
   stopLinkedKey?: string;
   stopReasoning?: string;
+  // The ticket shipped with acceptance criteria deliberately deferred to a
+  // follow-on ticket (SC-2910): shippedPartial marks it, shippedPartialFollowOn
+  // names the follow-on key. Rendered as a "partial scope → <key>" card badge and
+  // a detail-panel section; absent on every card without the trace.
+  shippedPartial?: boolean;
+  shippedPartialFollowOn?: string;
 }
 
 interface BoardData {
@@ -561,6 +567,19 @@ function renderCard(card: Card): HTMLElement {
     const keys = card.blockers.join(", ");
     meta.push(
       `<span class="badge blocked" title="${escapeAttr(`Waiting for ${keys} to finish. Remove the link to start this now.`)}">waits for ${escapeHtml(keys)}</span>`,
+    );
+  }
+  // A shipped-partial trace: the card shipped less than its ticket asked, with
+  // the rest carried by the named follow-on. Informational (machine register, no
+  // spinner, not "your turn") and additive to the stage badge, since it is true
+  // at every stage from planning through done (SC-2910).
+  if (card.shippedPartial) {
+    const follow = card.shippedPartialFollowOn ?? "";
+    const text = follow ? `partial scope → ${follow}` : "partial scope";
+    meta.push(
+      `<span class="badge partial" title="${escapeAttr(
+        `This ticket shipped with acceptance criteria deferred${follow ? ` to ${follow}` : ""} — open the card for the deferred list.`,
+      )}">${escapeHtml(text)}</span>`,
     );
   }
   if (card.engineeringKey) meta.push(`<span>${escapeHtml(card.engineeringKey)}</span>`);
@@ -3054,12 +3073,14 @@ function renderTicketDetail(): void {
     detailCard.stopLinkedKey,
     detailCard.stopReasoning,
   );
+  const shippedPartial = buildShippedPartialSection(detailCard.shippedPartial, detailCard.shippedPartialFollowOn);
   body.innerHTML = `
     <div class="detail-title">${escapeHtml(detailCard.title)}</div>
     <div class="detail-owner">Owner: ${owner}</div>
     ${error}
     ${options}
     ${stopDecision}
+    ${shippedPartial}
     ${desc}
     ${detailSections}
     ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now())}
@@ -3070,7 +3091,7 @@ function renderTicketDetail(): void {
   // The linked ticket named by a stop decision opens that card's detail when it
   // is on the board — the AC's reachability requirement (SC-2699).
   body.querySelector<HTMLButtonElement>(".detail-linked-btn")?.addEventListener("click", () => {
-    const key = detailCard?.stopLinkedKey;
+    const key = detailCard?.stopLinkedKey ?? detailCard?.shippedPartialFollowOn;
     if (!key) return;
     const linked = current.cards.find((c) => c.key === key);
     if (linked) openTicketDetail(linked);

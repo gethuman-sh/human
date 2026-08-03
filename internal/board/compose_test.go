@@ -91,6 +91,26 @@ func TestCompose_carriesStopDecision(t *testing.T) {
 	assert.Equal(t, "Same surface as SC-100, which carries the work", c.StopReasoning)
 }
 
+// The shipped-partial trace rides from the derived card onto the wire card so
+// the desktop can render the "partial scope" badge and detail section (SC-2910).
+func TestCompose_copiesShippedPartial(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "partial"}, {Key: "SC-2", Title: "whole"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardDoneStage, ShippedPartial: true, ShippedPartialFollowOn: "SC-3001"},
+			"SC-2": {Stage: daemon.BoardDoneStage},
+		},
+	)}, true)
+
+	partial := cardByKey(t, view, "SC-1")
+	assert.True(t, partial.ShippedPartial)
+	assert.Equal(t, "SC-3001", partial.ShippedPartialFollowOn)
+
+	whole := cardByKey(t, view, "SC-2")
+	assert.False(t, whole.ShippedPartial)
+	assert.Empty(t, whole.ShippedPartialFollowOn)
+}
+
 // Hidden cards must still be composed: the frontend filters them, so dropping
 // them here would make "reveal hidden" impossible without a refetch.
 func TestCompose_ReturnsCardsTheViewerMayHide(t *testing.T) {
