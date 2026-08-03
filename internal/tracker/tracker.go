@@ -398,6 +398,68 @@ func CreateLabels(i *Issue) []string {
 	return labels
 }
 
+// RetypeLabels returns the label edits that change a ticket's KIND on a
+// provider without a native issue type, where the kind is carried by a label
+// and nothing else: add is the label the new kind needs, remove is every label
+// currently marking a kind the ticket is no longer.
+//
+// It is CreateLabels' counterpart for an existing ticket, and it exists for the
+// same reason: without the translation, retyping on a label-only tracker
+// (Linear, GitHub, GitLab, ClickUp) would silently do nothing.
+//
+// current is the ticket's live label set, which the caller must read first. It
+// is not optional: kinds are recognised by token ("bug", "kind/bug",
+// "type:bug" all count), so removing only the canonical spelling would leave a
+// ticket labelled "kind/bug" still reading as a bug after a retype that
+// reported success — the one outcome a retype must never produce.
+func RetypeLabels(current []string, newType string) (add, remove []string) {
+	wantBug, wantSecurity := isBugToken(newType), isSecurityToken(newType)
+	for _, l := range current {
+		switch {
+		case isBugToken(l) && !wantBug, isSecurityToken(l) && !wantSecurity:
+			remove = append(remove, l)
+		}
+	}
+	if wantBug && !slices.ContainsFunc(current, isBugToken) {
+		add = append(add, BugLabel)
+	}
+	if wantSecurity && !slices.ContainsFunc(current, isSecurityToken) {
+		add = append(add, SecurityLabel)
+	}
+	return add, remove
+}
+
+// RetypeIntoLabels turns a requested kind change into ordinary label edits, for
+// a provider whose kind IS a label (Linear, GitHub, GitLab, ClickUp). It reads
+// the ticket's live labels through g — the retype cannot be computed without
+// them — and hands back opts with the work folded into AddLabels/RemoveLabels
+// and Type cleared, so the provider's existing label-merge path carries it and
+// cannot forget it halfway.
+//
+// Returns opts untouched when no retype was asked for, so every provider can
+// call it unconditionally at the top of EditIssue and pay one extra read only
+// when a kind actually changes.
+func RetypeIntoLabels(ctx context.Context, g Getter, key string, opts EditOptions) (EditOptions, error) {
+	if opts.Type == nil {
+		return opts, nil
+	}
+	issue, err := g.GetIssue(ctx, key)
+	if err != nil {
+		return opts, errors.WrapWithDetails(err, "reading current labels to retype the issue", "key", key)
+	}
+	return applyRetypeLabels(opts, issue.Labels), nil
+}
+
+// applyRetypeLabels is RetypeIntoLabels' pure half: the fold itself, given
+// labels already read.
+func applyRetypeLabels(opts EditOptions, current []string) EditOptions {
+	add, remove := RetypeLabels(current, *opts.Type)
+	opts.AddLabels = append(slices.Clone(opts.AddLabels), add...)
+	opts.RemoveLabels = append(slices.Clone(opts.RemoveLabels), remove...)
+	opts.Type = nil
+	return opts
+}
+
 // SecurityLabel marks a security/vulnerability ticket on providers without a
 // native security type, matching the classification IsSecurity accepts.
 const SecurityLabel = "security"
@@ -752,6 +814,16 @@ type CurrentUserGetter interface {
 type EditOptions struct {
 	Title       *string
 	Description *string
+	// Type retypes the issue: "Bug" and "Security" name the two kinds the
+	// pipeline routes on, anything else is ordinary product work. nil leaves
+	// the kind alone, so an edit that does not mention it can never change it.
+	//
+	// A kind is chosen at create time and, until this existed, could never be
+	// corrected — the only remedies were the tracker's own web UI or refiling
+	// the ticket and losing its key, history and comments (SC-3051). Every
+	// provider expresses it in its own vocabulary: a native type field where
+	// one exists, a label swap where the kind is a label (RetypeLabels).
+	Type *string
 	// AddLabels are labels to add to the issue. Providers whose label model
 	// requires pre-existing label entities create them on the fly.
 	AddLabels []string
@@ -760,7 +832,7 @@ type EditOptions struct {
 	RemoveLabels []string
 }
 
-// Editor updates an existing issue's title, description, and/or labels.
+// Editor updates an existing issue's title, description, kind, and/or labels.
 type Editor interface {
 	EditIssue(ctx context.Context, key string, opts EditOptions) (*Issue, error)
 }
