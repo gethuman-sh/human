@@ -1204,7 +1204,7 @@ func TestHandleBoardAgentExit_SilenceReapDoesNotChargeRetry(t *testing.T) {
 	retry := StageRetry{
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", ReapSilenceErrorType+":18m0s", "StopFailure",
@@ -1233,7 +1233,7 @@ func TestHandleBoardAgentExit_GenuineStopFailureStillCharges(t *testing.T) {
 	retry := StageRetry{
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
-		Relaunch: func(string, BoardStage) error { return nil },
+		Relaunch: func(string, BoardStage) (bool, error) { return true, nil },
 	}
 
 	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "StopFailure",

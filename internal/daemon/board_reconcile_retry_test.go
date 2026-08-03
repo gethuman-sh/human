@@ -29,7 +29,7 @@ func TestReconcileStuckRunning_RelaunchesAfterReddening(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false }, // died silently, no record
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
@@ -64,7 +64,7 @@ func TestReconcileStuckRunning_OpenSameStageOptionsIsCleanPause(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
@@ -95,7 +95,7 @@ func TestReconcileStuckRunning_OpenOptionsForEarlierStageIsCleanPause(t *testing
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
@@ -123,7 +123,7 @@ func TestReconcileOutage_RelaunchesWhenAgentDead(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	var posted []struct{ Key, Body string }
@@ -154,7 +154,7 @@ func TestReconcileOutage_SkipsWhenAgentAlive(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 	alive := liveAgents(agentNameFor("SC-1", BoardImplementation))
 
@@ -185,7 +185,7 @@ func TestReconcileOutage_SignalBasedOutageRedriveDoesNotCharge(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false }, // nothing recorded
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	n, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
@@ -214,13 +214,13 @@ func TestReconcileOutage_WaitsUntilResumeTime(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
-		Relaunch: func(_ string, s BoardStage) error { return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { return true, nil },
 	}
 
 	relaunchedAt := func(at time.Time) []BoardStage {
 		var relaunched []BoardStage
 		r := retry
-		r.Relaunch = func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil }
+		r.Relaunch = func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil }
 		reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), nil, r, "d1", at, zerolog.Nop())
 		return relaunched
 	}
@@ -243,7 +243,7 @@ func TestReconcileOutage_IgnoresNonOutageCards(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	n, _ := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), nil, retry, "d1", now, zerolog.Nop())
@@ -266,7 +266,7 @@ func TestReconcileStuckRunning_RelaunchRespectsTheBudget(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 3, nil }, // already past the cap
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),

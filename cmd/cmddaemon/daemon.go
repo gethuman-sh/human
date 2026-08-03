@@ -727,6 +727,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchRefusalChecks())
 	}
 	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ds.agentIPs)
+	boardRetryTransition := boardRetryTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ds.agentIPs)
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by
 	// the live hook path (RunBoardFailureWatch) and the durable restart-recovery
@@ -796,10 +797,15 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		Reset: func(pmKey string, stage daemon.BoardStage) {
 			clearStageRetries(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage)
 		},
-		Relaunch: func(pmKey string, stage daemon.BoardStage) error {
+		Relaunch: func(pmKey string, stage daemon.BoardStage) (bool, error) {
 			// From is unused by the in-place retry rules; the card's own derived
-			// stage plus its failed state is what selects the retry path.
-			return boardTransition(daemon.BoardTransitionRequest{PMKey: pmKey, From: stage, To: stage})
+			// stage plus its failed state is what selects the retry path. The
+			// launched bool is what tells a real relaunch from a refusal that
+			// started nothing, so a refusal is never charged an attempt (SC-2989).
+			return boardRetryTransition(daemon.BoardTransitionRequest{PMKey: pmKey, From: stage, To: stage})
+		},
+		Uncount: func(pmKey string, stage daemon.BoardStage) {
+			decStageRetries(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage)
 		},
 	}
 	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
@@ -3135,6 +3141,19 @@ func boardTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver
 			return err
 		}
 		return deps.ApplyTransition(context.Background(), req)
+	}
+}
+
+// boardRetryTransitionerFunc is boardTransitionerFunc's retry twin: it reports
+// whether the relaunch actually LAUNCHED, so the retry accounting never charges an
+// attempt for a refusal that started nothing (SC-2989).
+func boardRetryTransitionerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger, launchGate func(context.Context) []daemon.DoctorCheck, agentIPs *daemon.AgentIPRegistry) func(daemon.BoardTransitionRequest) (bool, error) {
+	return func(req daemon.BoardTransitionRequest) (bool, error) {
+		deps, err := boardTransitionDepsFor(reg, req.PMKey, resolver, daemonID, logger, launchGate, agentIPs)
+		if err != nil {
+			return false, err
+		}
+		return deps.ApplyRetryTransition(context.Background(), req)
 	}
 }
 

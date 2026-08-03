@@ -101,9 +101,9 @@ func TestReconcileStuckRunning_UnreachableBranchIsNeverRelaunched(t *testing.T) 
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
-		Relaunch: func(string, BoardStage) error {
+		Relaunch: func(string, BoardStage) (bool, error) {
 			t.Fatal("a stage whose branch is unreachable here must never be relaunched here")
-			return nil
+			return true, nil
 		},
 	}
 

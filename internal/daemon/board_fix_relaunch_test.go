@@ -86,6 +86,43 @@ func TestFixRelaunchFallbackBugVerdictNoGetter(t *testing.T) {
 	}
 }
 
+// A bug relaunched through the build-retry path records its pipeline identity
+// durably on the ticket, so a later recovery relaunch restarts the fix pipeline
+// even if the ticket-kind fetch blips (SC-2989).
+func TestApplyFixRecordsPipelineMarker(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:bug-verdict] confirmed", time.Unix(1, 0)),
+		cmt("[human:implementation-failed]\nagent died", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	deps.Getter = &fakeGetter{issue: &tracker.Issue{Type: "Bug"}}
+
+	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{
+		PMKey: "SC-1", From: BoardImplementation, To: BoardImplementation})
+	require.NoError(t, err)
+
+	found := false
+	for _, a := range c.added {
+		if a == PipelineStartedHeader+"\nkind: fix" {
+			found = true
+		}
+	}
+	assert.True(t, found, "the fix relaunch records [human:pipeline] kind: fix")
+}
+
+// The durable marker is authoritative: a fix run that died during triage (before
+// posting its verdict) with the ticket-kind Getter unavailable is still classified
+// as a bug pipeline from the recorded marker alone — the residual fixNone window is
+// closed (SC-2989).
+func TestClassifyFixPipeline_recordedMarkerWins(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(PipelineStartedHeader+"\nkind: fix", time.Unix(1, 0)),
+	}
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, &fakeDeployer{}) // Getter nil
+	assert.Equal(t, fixBug, deps.classifyFixPipeline(context.Background(), "SC-1", comments))
+}
+
 // A non-fix (feature) ticket relaunched in implementation is UNCHANGED: no
 // verdict, a plan present -> the plan-executing build retry still runs, and a
 // bug-verdict never appears so classification returns "none".

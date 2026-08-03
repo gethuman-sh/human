@@ -76,7 +76,7 @@ func TestReconcileOutage_HandsAnUnendingWaitToAPerson(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 	var posted []struct{ Key, Body string }
 
@@ -112,7 +112,7 @@ func TestReconcileOutage_HandoverIsIdempotent(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
-		Relaunch: func(string, BoardStage) error { return nil },
+		Relaunch: func(string, BoardStage) (bool, error) { return true, nil },
 	}
 	var posted []struct{ Key, Body string }
 
@@ -137,7 +137,7 @@ func TestReconcileOutage_WithoutAPosterKeepsWaiting(t *testing.T) {
 		Max:      2,
 		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
-		Relaunch: func(_ string, s BoardStage) error { relaunched = append(relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
 	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),

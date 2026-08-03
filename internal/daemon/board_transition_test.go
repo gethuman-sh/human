@@ -1307,8 +1307,11 @@ func TestApplyFixLaunchesAutofix(t *testing.T) {
 	// The implementation-stage agent name keeps the failure watcher and the
 	// build→review chain working on bug fixes unchanged.
 	assert.Equal(t, "board-SC-9-implementation", l.name)
-	require.Len(t, c.added, 1)
+	// The started marker, then the durable pipeline-identity marker a recovery
+	// relaunch reads to restart the FIX pipeline (SC-2989).
+	require.Len(t, c.added, 2)
 	assert.Equal(t, ImplementationStartedHeader, c.added[0])
+	assert.Equal(t, PipelineStartedHeader+"\nkind: fix", c.added[1])
 }
 
 func TestApplyFixLaunchPromptCarriesBoardMarker(t *testing.T) {
@@ -1408,8 +1411,11 @@ func TestApplySecurityFixLaunchesSecurityFix(t *testing.T) {
 	assert.Equal(t, 1, l.calls)
 	assert.Equal(t, "/human-security-fix SC-9 --board", l.prompt)
 	assert.Equal(t, "board-SC-9-implementation", l.name)
-	require.Len(t, c.added, 1)
+	// The started marker, then the durable pipeline-identity marker (kind: security)
+	// a recovery relaunch reads to restart the security-fix pipeline (SC-2989).
+	require.Len(t, c.added, 2)
 	assert.Equal(t, ImplementationStartedHeader, c.added[0])
+	assert.Equal(t, PipelineStartedHeader+"\nkind: security", c.added[1])
 }
 
 func TestApplySecurityFixCarriesBoardMarker(t *testing.T) {

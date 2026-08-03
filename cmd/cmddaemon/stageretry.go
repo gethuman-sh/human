@@ -115,3 +115,14 @@ func clearStageRetries(ctx context.Context, project, pmKey string, stage daemon.
 		return err
 	})
 }
+
+// decStageRetries rolls one automatic-retry charge back — used when a bounded
+// relaunch turned out to be a refusal that started nothing, so the budget a real
+// crash needs is not spent on a non-event (SC-2989).
+func decStageRetries(ctx context.Context, project, pmKey string, stage daemon.BoardStage) {
+	_ = withStateStore(func(store agentstate.Store) error {
+		_, err := store.Incr(ctx, project, pmKey, retryCounterName(stage), -1,
+			agentstate.Meta{Agent: "daemon-board-retry"})
+		return err
+	})
+}

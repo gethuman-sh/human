@@ -217,17 +217,34 @@ func parseAgentName(name string) (pmKey string, stage BoardStage, ok bool) {
 // forward move is allowed (forward-only, single-step, gated on the prior
 // stage's completion). All errors carry details for the client.
 func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTransitionRequest) error {
+	_, err := d.applyTransition(ctx, req)
+	return err
+}
+
+// ApplyRetryTransition is the automatic-retry entry: it additionally reports
+// whether a launch actually happened, so the retry accounting never charges an
+// attempt for a refusal that started nothing (SC-2989).
+func (d BoardTransitionDeps) ApplyRetryTransition(ctx context.Context, req BoardTransitionRequest) (launched bool, err error) {
+	return d.applyTransition(ctx, req)
+}
+
+// applyTransition is the shared body behind both public entries. It reports
+// whether a launch actually happened alongside the error so the retry path can
+// tell a genuine relaunch from a refusal that started nothing (SC-2989); the
+// error-only ApplyTransition wrapper discards launched for every drag/gesture/
+// chain caller that only cares whether the move was accepted.
+func (d BoardTransitionDeps) applyTransition(ctx context.Context, req BoardTransitionRequest) (launched bool, err error) {
 	// Ideas never move via board transitions: promotion out of the Ideas
 	// column is a label swap performed by the ideation engine's evolve mode,
 	// which the desktop opens instead of calling this route.
 	if req.From == BoardIdeas || req.To == BoardIdeas {
-		return errors.WithDetails("ideas transitions are handled via ideation",
+		return false, errors.WithDetails("ideas transitions are handled via ideation",
 			"pm", req.PMKey, "from", string(req.From), "to", string(req.To))
 	}
 
 	comments, err := d.Commenter.ListComments(ctx, req.PMKey)
 	if err != nil {
-		return errors.WrapWithDetails(err, "loading PM comments for transition", "pm", req.PMKey)
+		return false, errors.WrapWithDetails(err, "loading PM comments for transition", "pm", req.PMKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 
@@ -235,7 +252,7 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	// sitting in the target stage, which the forward-only rule below would
 	// otherwise reject as a non-advance.
 	if isDuplicateDrop(req.To, card) {
-		return nil
+		return false, nil
 	}
 
 	// A card paused on an open [human:options] decision has exactly one valid
@@ -246,37 +263,37 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 	// the drop as a silent duplicate). The returned error is what the board surfaces
 	// as its refusal banner: a refused move must say why, never appear to do nothing.
 	if awaitingDecision(card) {
-		return errors.WithDetails(
+		return false, errors.WithDetails(
 			"this card is waiting on a decision — choose an option before moving it",
 			"pm", req.PMKey, "stage", string(card.Stage), "to", string(req.To))
 	}
 
 	// Sanctioned non-forward moves — the rework backward step and the in-place
 	// stage retries — are dispatched before the forward-only rule, which would
-	// otherwise reject each as a non-advance. Extracted so ApplyTransition reads
+	// otherwise reject each as a non-advance. Extracted so applyTransition reads
 	// as guards → sanctioned-non-forward → forward, one concern per block.
-	if handled, err := d.dispatchNonForwardMove(ctx, req, card, comments); handled {
-		return err
+	if handled, launched, err := d.dispatchNonForwardMove(ctx, req, card, comments); handled {
+		return launched, err
 	}
 
 	// Forward-only, single-next-stage: the target must be exactly one rank
 	// above the current derived stage.
 	if stageRank[req.To] != stageRank[card.Stage]+1 {
-		return errors.WithDetails("transition is not the single next stage",
+		return false, errors.WithDetails("transition is not the single next stage",
 			"pm", req.PMKey, "current", string(card.Stage), "to", string(req.To))
 	}
 
 	// Gating: every boundary except Backlog→Planning requires the prior stage
 	// to have completed (done-marker present).
 	if card.Stage != BoardBacklog && card.State != BoardDone {
-		return errors.WithDetails("prior stage not complete",
+		return false, errors.WithDetails("prior stage not complete",
 			"pm", req.PMKey, "stage", string(card.Stage), "state", string(card.State))
 	}
 
 	// A failing review verdict blocks the deploy: the card must be rebuilt
 	// (rework loop) and re-reviewed before it can ship.
 	if req.To == BoardDoneStage && VerdictFailed(card.Verdict) {
-		return errors.WithDetails("review verdict blocks deploy",
+		return false, errors.WithDetails("review verdict blocks deploy",
 			"pm", req.PMKey, "verdict", card.Verdict)
 	}
 
@@ -290,16 +307,31 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 // as a non-advance, so they are resolved here first. handled reports whether the
 // request matched one of them — when false, ApplyTransition falls through to the
 // forward-only path — and err carries that dispatch's own result.
-func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (handled bool, err error) {
+func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (handled bool, launched bool, err error) {
 	switch {
 	// Rework loop: a build whose review failed may be rebuilt. This is the ONE
 	// sanctioned backward move — the executor is re-dispatched with the review
 	// findings, and the resulting handoff chains into a fresh review.
+	//
+	// A fix-built card carries no [human:plan]: the self-planning fix pipeline
+	// derives its plan within the run. Routing its rework through the plan
+	// executor would refuse it at the plan gate for having no plan — the exact
+	// SC-2986 hole, here on the rework path — so it is classified first and
+	// re-dispatched to its own fix pipeline, which re-derives the plan (SC-2989).
 	case isReworkTransition(req.To, card):
-		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+		switch d.classifyFixPipeline(ctx, req.PMKey, comments) {
+		case fixBug:
+			err := d.ApplyFix(ctx, BoardFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+			return true, err == nil, err
+		case fixSecurity:
+			err := d.ApplySecurityFix(ctx, SecurityFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+			return true, err == nil, err
+		}
+		launched, err := d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 			executePrompt(dispatchKey(req.PMKey, card),
 				" — a review found problems; address the findings in the latest [human:review-complete] comment on the ticket first"),
 			WaitCauseChain, true)
+		return true, launched, err
 
 	// Planning retry: a failed planning run is relaunched in place. The retry
 	// gesture targets planning while the card already derives to planning, so
@@ -307,8 +339,9 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// (SC-355). A RUNNING planning card never reaches this path — the idempotency
 	// guard already returned for it.
 	case isPlanningRetry(req.To, card):
-		return true, d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
+		launched, err := d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
 			planPrompt(req.PMKey), WaitCauseRetry, false)
+		return true, launched, err
 
 	// Build retry: the same sanctioned in-place relaunch for a failed
 	// implementation run — without it a failed build is a dead end, since the
@@ -324,12 +357,15 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	case isBuildRetry(req.To, card):
 		switch d.classifyFixPipeline(ctx, req.PMKey, comments) {
 		case fixBug:
-			return true, d.ApplyFix(ctx, BoardFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+			err := d.ApplyFix(ctx, BoardFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+			return true, err == nil, err
 		case fixSecurity:
-			return true, d.ApplySecurityFix(ctx, SecurityFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+			err := d.ApplySecurityFix(ctx, SecurityFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+			return true, err == nil, err
 		}
-		return true, d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+		launched, err := d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 			executePrompt(dispatchKey(req.PMKey, card), ""), WaitCauseRetry, true)
+		return true, launched, err
 
 	// Review retry: a stage-failed review is otherwise a dead end. The rework
 	// re-drop keys on a DONE verification with a failing verdict, and a
@@ -338,8 +374,9 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// commits) could never be retried. Relaunch the review in place, re-bound to
 	// the same handoff (SC-695). A RUNNING review is caught by the idempotency guard.
 	case isReviewRetry(req.To, card):
-		return true, d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
+		launched, err := d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
 			reviewPrompt(dispatchKey(req.PMKey, card), card), WaitCauseRetry, false)
+		return true, launched, err
 
 	// Deploy retry: a card sitting on a failed deploy, re-dropped on Deploy, must
 	// re-run the deploy pipeline — the freshness stage rebases the already-reviewed
@@ -347,15 +384,16 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// the same-stage move and a conflicted deploy is a dead end that can only be
 	// escaped by re-implementing already-reviewed work (735).
 	case isDeployRetry(req.To, card):
-		return true, d.runDoneStage(ctx, req, card)
+		err := d.runDoneStage(ctx, req, card)
+		return true, err == nil, err
 	}
-	return false, nil
+	return false, false, nil
 }
 
 // launchForwardStage dispatches an already-sanctioned forward transition to
 // its stage launcher. Split from ApplyTransition so the gate chain and the
 // dispatch read (and count) as separate concerns.
-func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) error {
+func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) (launched bool, err error) {
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
@@ -367,9 +405,10 @@ func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTr
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
 			reviewPrompt(dispatchKey(req.PMKey, card), card), req.Cause, false)
 	case BoardDoneStage:
-		return d.runDoneStage(ctx, req, card)
+		err := d.runDoneStage(ctx, req, card)
+		return err == nil, err
 	default:
-		return errors.WithDetails("unsupported transition target", "to", string(req.To))
+		return false, errors.WithDetails("unsupported transition target", "to", string(req.To))
 	}
 }
 
@@ -417,8 +456,15 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 	// The autofix pipeline triages, plans and fixes in one run, so it legitimately
 	// launches the implementation stage with no pre-written plan: requiresPlan is
 	// false (SC-2596).
-	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+	launched, err := d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 		"/human-autofix "+req.PMKey+" --board", WaitCause(""), false)
+	if launched {
+		// Record which pipeline this run is, durably on the ticket, so a later
+		// recovery relaunch restarts the FIX pipeline even if the ticket-kind
+		// fetch blips and no verdict has been posted yet (SC-2989).
+		_, _ = d.Commenter.AddComment(ctx, req.PMKey, PipelineStartedHeader+"\nkind: fix")
+	}
+	return err
 }
 
 // SecurityFixRequest is the wire request for launching the security-fix pipeline
@@ -450,8 +496,15 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 	}
 	// Like autofix, the security-fix pipeline produces its own plan within the
 	// run, so requiresPlan is false (SC-2596).
-	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+	launched, err := d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
 		"/human-security-fix "+req.PMKey+" --board", WaitCause(""), false)
+	if launched {
+		// Durable pipeline identity, mirroring ApplyFix: a recovery relaunch reads
+		// this first and restarts the security-fix pipeline rather than refusing the
+		// run for having no plan (SC-2989).
+		_, _ = d.Commenter.AddComment(ctx, req.PMKey, PipelineStartedHeader+"\nkind: security")
+	}
+	return err
 }
 
 // startAgentStage posts the stage's started marker, then launches the agent. On
@@ -484,7 +537,7 @@ func (d BoardTransitionDeps) launchAgent(ctx context.Context, name, prompt strin
 // rework and build retries, an implementation-stage option relaunch) and false
 // for the self-contained fix pipelines (autofix, security-fix), which produce
 // their plan within the run.
-func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string, cause WaitCause, requiresPlan bool) error {
+func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string, cause WaitCause, requiresPlan bool) (launched bool, err error) {
 	// Launch gate: a daemon whose host fails a launch-critical doctor check
 	// (docker, agent-skills, claude-auth) cannot serve this stage. Refuse before
 	// the claim so NO [human:claim] is posted — the work is left unclaimed for a
@@ -495,7 +548,7 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 			d.Logger.Warn().
 				Str("pm", pmKey).Str("stage", string(stage)).Str("check", blockers[0].ID).
 				Msg("board stage launch skipped: launch-critical doctor check failing; leaving work for a healthy daemon")
-			return nil
+			return false, nil
 		}
 	}
 	// Dependency gate: work someone deliberately sequenced behind another
@@ -505,7 +558,7 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	// no other daemon can serve this stage either, so a silent skip would be a
 	// card that never starts for a reason nobody can see.
 	if err := d.refuseIfBlocked(ctx, pmKey, stage); err != nil {
-		return err
+		return false, err
 	}
 	// Plan gate: the implementation stage carries out a plan, so it must not
 	// start on a ticket that has none. Checked HERE, at the one chokepoint every
@@ -515,7 +568,7 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	// it, the refusal records a [human:needs-planning] marker so the card surfaces
 	// the determination back in Planning instead of leaving it invisible.
 	if refused, err := d.refuseIfUnplanned(ctx, pmKey, stage, requiresPlan); refused || err != nil {
-		return err
+		return false, err
 	}
 	// Claim before start: with several daemons on one board, arbitrate who
 	// launches this stage so the work is picked up exactly once (SC-660 rule 2).
@@ -523,10 +576,10 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	// the launch to the winning daemon.
 	won, err := d.winClaim(ctx, pmKey, stage)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !won {
-		return nil
+		return false, nil
 	}
 	// Record the inter-stage wait before the started marker lands: this is the
 	// last instant the previous stage's done marker is the newest done-state
@@ -536,15 +589,15 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 		recordStageWait(ctx, d.Commenter, pmKey, stage, waitComments, cause, d.DaemonID, d.Logger)
 	}
 	if _, err := d.Commenter.AddComment(ctx, pmKey, startedHeader); err != nil {
-		return errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
+		return false, errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
 	}
 	name := agentNameFor(pmKey, stage)
 	if err := d.launchAgent(ctx, name, prompt); err != nil {
 		failBody := failedHeaderFor(stage) + "\n" + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, failBody)
-		return errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
+		return false, errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
 	}
-	return nil
+	return true, nil
 }
 
 // needsPlanningReason is the human-readable line the [human:needs-planning]
@@ -701,7 +754,7 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	}
 	d.Logger.Info().Str("pm", pmKey).
 		Msg("board stage: implementation refused — ticket has no plan; driving it into planning")
-	if err := d.startAgentStage(ctx, pmKey, BoardPlanning, PlanningStartedHeader, planPrompt(pmKey), WaitCauseRetry, false); err != nil {
+	if _, err := d.startAgentStage(ctx, pmKey, BoardPlanning, PlanningStartedHeader, planPrompt(pmKey), WaitCauseRetry, false); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -1587,6 +1640,13 @@ const (
 // interrupted mid-run — so a tracker read failure never drops the run back onto
 // the plan gate it exists to bypass (SC-2986).
 func (d BoardTransitionDeps) classifyFixPipeline(ctx context.Context, pmKey string, comments []tracker.Comment) fixPipeline {
+	// A run that recorded its own pipeline identity at start is authoritative and
+	// survives a machine restart or a Getter blip. Absence falls through to the
+	// ticket-kind Getter and the marker heuristic — so a run in flight from before
+	// this landed keeps today's behaviour (SC-2989).
+	if p := recordedPipeline(comments); p != fixNone {
+		return p
+	}
 	if d.Getter != nil {
 		if issue, err := d.Getter.GetIssue(ctx, pmKey); err == nil && issue != nil {
 			switch {
