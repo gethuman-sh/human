@@ -182,6 +182,7 @@ func TestRunGetIssue_Success(t *testing.T) {
 				Priority:    "High",
 				Assignee:    "alice",
 				Reporter:    "bob",
+				Type:        "Bug",
 				Description: "This is the description.",
 			}, nil
 		},
@@ -197,6 +198,9 @@ func TestRunGetIssue_Success(t *testing.T) {
 	assert.Contains(t, out, "| Priority | High |")
 	assert.Contains(t, out, "| Assignee | alice |")
 	assert.Contains(t, out, "| Reporter | bob |")
+	// The kind decides which pipeline picks the ticket up, so reading a ticket
+	// has to show it — a mistyped ticket used to be invisible (SC-3051).
+	assert.Contains(t, out, "| Type     | Bug |")
 	assert.Contains(t, out, "## Description")
 	assert.Contains(t, out, "This is the description.")
 }
@@ -1099,6 +1103,50 @@ func TestCmd_IssueEdit_Success(t *testing.T) {
 	assert.Contains(t, buf.String(), "KAN-1")
 }
 
+// Retyping is what makes a mistyped ticket recoverable at all, so --type has to
+// reach the provider on its own — with no other flag alongside it (SC-3051).
+func TestCmd_IssueEdit_TypeAlone(t *testing.T) {
+	var got tracker.EditOptions
+	mp := &mockProvider{
+		editIssueFn: func(_ context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
+			assert.Equal(t, "KAN-1", key)
+			got = opts
+			return &tracker.Issue{Key: "KAN-1", Title: "T", Type: "Bug"}, nil
+		},
+	}
+	root, _ := newTestRoot(mp)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"jira", "issue", "edit", "KAN-1", "--type", "Bug"})
+	require.NoError(t, root.Execute())
+
+	require.NotNil(t, got.Type)
+	assert.Equal(t, "Bug", *got.Type)
+	assert.Nil(t, got.Title, "a retype must not carry a title the user never gave")
+	assert.Nil(t, got.Description)
+}
+
+// An edit that does not mention the kind must never change it: nil is the
+// difference between "leave it alone" and "make it the empty type".
+func TestCmd_IssueEdit_TypeUnsetLeavesTheKindAlone(t *testing.T) {
+	var got tracker.EditOptions
+	mp := &mockProvider{
+		editIssueFn: func(_ context.Context, _ string, opts tracker.EditOptions) (*tracker.Issue, error) {
+			got = opts
+			return &tracker.Issue{Key: "KAN-1", Title: "New title"}, nil
+		},
+	}
+	root, _ := newTestRoot(mp)
+
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"jira", "issue", "edit", "KAN-1", "--title", "New title"})
+	require.NoError(t, root.Execute())
+
+	assert.Nil(t, got.Type)
+}
+
 func TestCmd_IssueEdit_NoFlags(t *testing.T) {
 	mp := &mockProvider{}
 	root, _ := newTestRoot(mp)
@@ -1107,7 +1155,7 @@ func TestCmd_IssueEdit_NoFlags(t *testing.T) {
 	root.SetArgs([]string{"jira", "issue", "edit", "KAN-1"})
 	err := root.Execute()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one of --title, --description, --add-label, or --remove-label is required")
+	assert.Contains(t, err.Error(), "at least one of --title, --description, --type, --add-label, or --remove-label is required")
 }
 
 func TestCmd_IssueDelete_Success(t *testing.T) {
