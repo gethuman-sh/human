@@ -26,6 +26,7 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/cliflags"
 	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/stats"
@@ -48,16 +49,26 @@ type Server struct {
 	// DaemonStartedAt is when this server was constructed, in UTC. The board's
 	// stats view compares it against the selected range to show a "history still
 	// filling" note when the daemon has not been up long enough to have data.
-	DaemonStartedAt  time.Time
-	CmdFactory       func() *cobra.Command
-	Opener           BrowserOpener // used for OAuth relay; defaults to browser.DefaultOpener
-	Logger           zerolog.Logger
-	ConnectedPIDs    *ConnectedTracker                     // tracks client PIDs that have pinged; nil disables tracking
-	HookEvents       *HookEventStore                       // in-memory hook event buffer; nil disables hook event tracking
-	NetworkEvents    *NetworkEventStore                    // in-memory ambient network activity buffer; nil disables
-	ModelOutcomes    *ModelOutcomeSink                     // content-free model-call outcome buffer from the proxy boundary; nil disables
-	IssueFetcher     func() ([]TrackerIssuesResult, error) // injected; fetches issues from configured trackers
-	LiteIssueFetcher func() ([]TrackerIssuesResult, error) // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
+	DaemonStartedAt time.Time
+	CmdFactory      func() *cobra.Command
+	Opener          BrowserOpener // used for OAuth relay; defaults to browser.DefaultOpener
+	Logger          zerolog.Logger
+	ConnectedPIDs   *ConnectedTracker  // tracks client PIDs that have pinged; nil disables tracking
+	HookEvents      *HookEventStore    // in-memory hook event buffer; nil disables hook event tracking
+	NetworkEvents   *NetworkEventStore // in-memory ambient network activity buffer; nil disables
+	ModelOutcomes   *ModelOutcomeSink  // content-free model-call outcome buffer from the proxy boundary; nil disables
+	// CostLedger answers per-ticket cost/time rollups for the board detail
+	// panel; nil makes the ticket-cost route return an empty (no-spend) result.
+	CostLedger *costledger.Store
+	// CostLedgerProject resolves the project a ticket key belongs to, mirroring
+	// the write-side resolver in cmd/cmddaemon/daemon.go so a read filters by the
+	// SAME project the ledger wrote under for that specific ticket — not a
+	// board-wide default. Do not substitute boardProjectKey(reg): it returns the
+	// first registered project unconditionally and takes no ticket argument, so it
+	// cannot tell which project a given ticket belongs to (SC-2847 AD5).
+	CostLedgerProject func(ticket string) string
+	IssueFetcher      func() ([]TrackerIssuesResult, error) // injected; fetches issues from configured trackers
+	LiteIssueFetcher  func() ([]TrackerIssuesResult, error) // injected; fetches issue titles only (skips the per-ticket comment scan) so the board can render titles before stages resolve
 	// BoardViewFetcher returns the composed board: the project-wide picture with
 	// every viewer's personal overlay left off. Injected because the composer
 	// (internal/board) imports this package — calling it directly would cycle.
@@ -474,6 +485,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"hook-snapshot":       func() { s.handleHookSnapshot(conn) },
 		"network-events":      func() { s.handleNetworkEvents(conn) },
 		"model-outcomes":      func() { s.handleModelOutcomes(conn) },
+		"ticket-cost":         func() { s.handleTicketCost(conn, args[1:]) },
 		"tracker-diagnose":    func() { s.handleTrackerDiagnose(conn, projectDir) },
 		"tracker-issues":      func() { s.handleTrackerIssues(conn) },
 		"board-view":          func() { s.handleBoardView(conn) },
@@ -606,6 +618,40 @@ func (s *Server) handleModelOutcomes(conn net.Conn) {
 	resp := Response{Stdout: out}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
+}
+
+// handleTicketCost returns the durable per-ticket cost/time rollup for the
+// board detail panel. Empty (HasSpend=false) when there is no ledger or no
+// recorded spend, so a missing feature and a genuinely-unspent ticket both read
+// as "no spend" rather than an error. The project is resolved per ticket via
+// CostLedgerProject so a read filters by the same project the write used.
+func (s *Server) handleTicketCost(conn net.Conn, args []string) {
+	key := ""
+	if len(args) > 0 {
+		key = strings.TrimSpace(args[0])
+	}
+	rollup := costledger.TicketCost{Ticket: key}
+	if s.CostLedger != nil && key != "" {
+		project := ""
+		if s.CostLedgerProject != nil {
+			project = s.CostLedgerProject(key)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		r, err := s.CostLedger.TicketCost(ctx, project, key)
+		if err != nil {
+			s.writeError(conn, err.Error(), 1)
+			return
+		}
+		rollup = r
+	}
+	data, err := json.Marshal(rollup)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	resp := Response{Stdout: string(data) + "\n"}
+	_ = json.NewEncoder(conn).Encode(resp)
 }
 
 // handleTrackerDiagnose returns tracker credential status from the daemon's env.

@@ -5,8 +5,18 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/rs/zerolog"
+
+	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/proxy"
 )
+
+// costLedger is the durable write seam the sink persists attributed outcomes
+// through; internal/costledger.Store satisfies it. Kept as an interface so this
+// package needs no concrete ledger at test time.
+type costLedger interface {
+	InsertCall(ctx context.Context, r costledger.CallRecord) error
+}
 
 // modelOutcomeChanCap bounds the buffered hand-off channel between the request
 // path and the drain goroutine. A full channel drops the measurement rather
@@ -41,6 +51,25 @@ type ModelOutcomeSink struct {
 	mu          sync.Mutex
 	byKey       map[outcomeKey][]proxy.ModelCallOutcome
 	latestClass map[outcomeKey]string
+
+	// ledger persists attributed outcomes durably per ticket; nil keeps the sink
+	// memory-only. resolveProject maps a ticket key to its project identity so two
+	// projects' colliding keys never merge.
+	ledger         costLedger
+	resolveProject func(ticket string) string
+	logger         zerolog.Logger
+}
+
+// WithLedger attaches durable per-ticket persistence. resolveProject may be nil
+// (project then defaults to ""). Safe on a nil sink.
+func (s *ModelOutcomeSink) WithLedger(ledger costLedger, resolveProject func(ticket string) string, logger zerolog.Logger) *ModelOutcomeSink {
+	if s == nil {
+		return s
+	}
+	s.ledger = ledger
+	s.resolveProject = resolveProject
+	s.logger = logger
+	return s
 }
 
 // NewModelOutcomeSink creates a sink and starts its drain goroutine, which runs
@@ -85,7 +114,6 @@ func (s *ModelOutcomeSink) run(ctx context.Context) {
 func (s *ModelOutcomeSink) store(o proxy.ModelCallOutcome) {
 	k := outcomeKey{ticket: o.Ticket, stage: o.Stage}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	hist := append(s.byKey[k], o)
 	if len(hist) > maxOutcomesPerKey {
 		// Drop the oldest so the newest calls — the ones a reader wants — survive.
@@ -93,6 +121,33 @@ func (s *ModelOutcomeSink) store(o proxy.ModelCallOutcome) {
 	}
 	s.byKey[k] = hist
 	s.latestClass[k] = o.Class
+	s.mu.Unlock()
+
+	// Persist attributed outcomes durably (SC-2847). An unattributed outcome
+	// (empty ticket) stays in-memory for LatestClass but is not persisted — it
+	// cannot be tied to a ticket. The DB write is deliberately outside the sink
+	// lock so it never blocks a concurrent read of the in-memory maps.
+	if s.ledger != nil && o.Ticket != "" {
+		project := ""
+		if s.resolveProject != nil {
+			project = s.resolveProject(o.Ticket)
+		}
+		rec := costledger.CallRecord{
+			Project:           project,
+			Ticket:            o.Ticket,
+			Stage:             o.Stage,
+			Model:             o.Model,
+			InputTokens:       o.InputTokens,
+			OutputTokens:      o.OutputTokens,
+			CacheCreateTokens: o.CacheCreateTokens,
+			CacheReadTokens:   o.CacheReadTokens,
+			DurationMs:        o.Duration.Milliseconds(),
+			StartedAt:         o.StartedAt,
+		}
+		if err := s.ledger.InsertCall(context.Background(), rec); err != nil {
+			s.logger.Warn().Err(err).Str("ticket", o.Ticket).Msg("cost ledger insert failed")
+		}
+	}
 }
 
 // Dropped returns how many outcomes were dropped because the channel was full.

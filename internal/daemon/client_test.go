@@ -149,6 +149,34 @@ func TestGetModelOutcomes_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid model outcomes JSON")
 }
 
+func TestGetTicketCost_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		assert.Equal(t, []string{"ticket-cost", "SC-1"}, req.Args)
+		data := `{"ticket":"SC-1","hasSpend":true,"totalCostUSD":0.5,"contextCostUSD":0.3,"answersCostUSD":0.2,"totalDurationMs":3000,` +
+			`"stages":[{"stage":"planning","costUSD":0.5,"contextCostUSD":0.3,"answersCostUSD":0.2,"durationMs":3000}]}` + "\n"
+		return Response{Stdout: data}
+	})
+
+	rollup, err := GetTicketCost(addr, "tok", "SC-1")
+	require.NoError(t, err)
+	assert.True(t, rollup.HasSpend)
+	assert.Equal(t, "SC-1", rollup.Ticket)
+	assert.InDelta(t, 0.5, rollup.TotalCostUSD, 1e-9)
+	assert.Equal(t, int64(3000), rollup.TotalDurationMs)
+	require.Len(t, rollup.Stages, 1)
+	assert.Equal(t, "planning", rollup.Stages[0].Stage)
+}
+
+func TestGetTicketCost_InvalidJSON(t *testing.T) {
+	addr := startMockDaemon(t, func(_ Request) Response {
+		return Response{Stdout: "not json\n"}
+	})
+
+	_, err := GetTicketCost(addr, "tok", "SC-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decoding ticket cost")
+}
+
 func TestRunRemote_ConnectionRefused(t *testing.T) {
 	exitCode, err := RunRemote("127.0.0.1:1", "tok", []string{"echo"}, "dev")
 	require.Error(t, err)
