@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { queueOf, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
+import { DAEMON_FORWARDED_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -445,4 +446,59 @@ test("defects deploy control names bugs and vulnerabilities", () => {
   assert.equal(view.count, 0);
   assert.ok(view.disabled);
   assert.match(view.tooltip, /bugs or vulnerabilities/);
+});
+
+// SC-3024: an outage card is the do-nothing "paused" register — a substrate
+// the run depends on is unavailable, the work is safe, and it resumes itself.
+// It must draw a visible badge (never the blank `null` a missing case falls
+// through to) and never the spinner (nothing is actively running).
+test("outage card renders a visible paused badge (SC-3024)", () => {
+  const info = badgeInfo({
+    stage: "implementation",
+    state: "outage",
+    error: "paused — model usage limit",
+    resumeAt: "2026-08-03T08:50:00Z",
+  });
+  assert.notEqual(info, null, "an outage card must draw a badge, not render blank");
+  assert.equal(info.cls, "paused");
+  assert.match(info.text, /paused/);
+  assert.notEqual(info.spinner, true, "nothing is actively running while paused");
+});
+
+// cardError's suppression rule only anticipated "failed"; an outage card's
+// explanation must not be silently dropped just because it is drawn in a
+// state the rule did not name.
+test("outage explanation is not suppressed (SC-3024)", () => {
+  const card = { stage: "implementation", state: "outage", error: "paused — model usage limit" };
+  assert.equal(cardError(card), "paused — model usage limit");
+});
+
+// The two-way drift lock (board_states_contract_test.go is the Go half):
+// every state the daemon forwards must classify to a real badge here, so a
+// state added on one side without teaching the other fails a test instead of
+// rendering blank on the board.
+function representativeCardFor(state) {
+  switch (state) {
+    case "running":
+      return { stage: "implementation", state: "running" };
+    case "queued":
+      return { stage: "planning", state: "queued" };
+    case "done":
+      return { stage: "done", state: "done" };
+    case "failed":
+      return { stage: "implementation", state: "failed" };
+    case "resolved":
+      return { stage: "implementation", state: "resolved" };
+    case "outage":
+      return { stage: "implementation", state: "outage", error: "paused — model usage limit" };
+    default:
+      throw new Error(`representativeCardFor: no fixture for state ${state}`);
+  }
+}
+
+test("badgeInfo covers every daemon-forwarded state (SC-3024 contract)", () => {
+  for (const state of DAEMON_FORWARDED_STATES) {
+    const info = badgeInfo(representativeCardFor(state));
+    assert.notEqual(info, null, `badgeInfo must classify a "${state}" card, not return null`);
+  }
 });

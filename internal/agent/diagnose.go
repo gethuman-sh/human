@@ -169,54 +169,65 @@ func lastErrorLine(lines []string) string {
 // the cause — but a recorded clean exit (code 0) is direct evidence of a
 // normal self-termination and overrides the reap, known exit codes beat the
 // error-line heuristic.
+//
+// Every branch returns a STATUS, never a stack trace (SC-3024): no exit codes,
+// signal names, container/OOM/reaping/segfault vocabulary, and never a raw log
+// line as the headline. That evidence still reaches the reader — detailFor
+// carries the exit code and the log tail in the Detail block below — it is
+// just never mistaken for the one-line badge/tooltip text a card shows.
 func headlineFor(hookErrorType string, reaped bool, exitCode int, haveExit bool, errLine string) string {
 	if h := hookHeadline(hookErrorType); h != "" {
 		return h
 	}
 	cleanExit := haveExit && exitCode == 0
 	if reaped && !cleanExit {
-		return "agent process died and was reaped (crashed or killed; daemon restart or container death)"
+		return "the run stopped before finishing this stage — check the evidence below, then Retry"
 	}
 	if haveExit {
 		return exitHeadline(exitCode, errLine)
 	}
-	if errLine != "" {
-		return errLine
-	}
+	// A raw/panic log line is never the headline — it stays in the Detail
+	// evidence (fenceSafeTail) instead of standing in for a diagnosis.
 	return genericFailureHeadline
 }
 
-// hookHeadline maps the hook event's error type; "" means no hook signal.
+// hookHeadline maps the hook event's error type to a status, not a stack
+// trace; "" means no hook signal. rate_limit/overloaded are unavailability —
+// they are classified upstream by the daemon's classifyUnavailability (which
+// routes them to the paused/outage register before this is ever reached for
+// the ordinary failure path), so this only names that the daemon is on it;
+// this branch is reached when that classification did not already handle the
+// exit (e.g. resumeTimeFromDiagnosis's scan, or a nil latestClass with no
+// hook-level routing upstream). Any other errorType gets the same neutral
+// status the exit-based branches use.
 func hookHeadline(errorType string) string {
-	switch {
-	case errorType == "rate_limit":
-		return "Claude hit a rate limit and stopped"
-	case errorType != "":
-		return "Claude stopped with error: " + errorType
+	t := strings.ToLower(strings.TrimSpace(errorType))
+	switch t {
+	case "":
+		return ""
+	case "rate_limit", "rate-limit", "overloaded", "overloaded_error":
+		return "the run stopped at the model API — the daemon is handling it"
+	default:
+		return "the run stopped at the model boundary; check the evidence below, then Retry"
 	}
-	return ""
 }
 
-// exitHeadline maps a known exit code to its meaning, falling back to the
-// error-line heuristic for ordinary nonzero exits.
+// exitHeadline maps an exit code to a status, never the code itself: the
+// per-code branches (124/137/139/other) that used to name timeouts, OOM kills
+// and segfaults are collapsed into one neutral "stopped before finishing"
+// status — the exit code is guessed-at cause vocabulary the reader cannot act
+// on directly, and it still reaches the Detail block via detailFor. A clean
+// exit-0 is the one case worth splitting: with no error line it is a bare
+// missing handoff; with one, the run logged something before finishing
+// without handing off.
 func exitHeadline(code int, errLine string) string {
-	switch code {
-	case 0:
+	if code == 0 {
 		if errLine != "" {
-			return "agent finished without posting the stage handoff: " + errLine
+			return "the run finished without handing off the stage — check the evidence below, then re-run this stage."
 		}
 		return "agent finished without posting the stage handoff"
-	case 124:
-		return "agent process timed out (exit 124)"
-	case 137:
-		return "agent container process was killed (exit 137 — OOM or docker kill)"
-	case 139:
-		return "agent process crashed (segfault, exit 139)"
 	}
-	if errLine != "" {
-		return fmt.Sprintf("claude exited with code %d: %s", code, errLine)
-	}
-	return fmt.Sprintf("claude exited with code %d before completing the stage", code)
+	return "the run stopped before finishing this stage — check the evidence below, then Retry"
 }
 
 // detailFor composes the markdown detail block: run identity, duration, exit

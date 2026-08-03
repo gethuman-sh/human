@@ -41,13 +41,19 @@ func newRunFixture(t *testing.T, agentName, output string, outcome *OutcomeRecor
 	return exe
 }
 
+// SC-3024: the hook's own errorType still beats artifact inference, but the
+// headline is now a status ("the daemon is handling it"), never Claude/API
+// vocabulary — rate_limit is unavailability, classified upstream by the
+// daemon's classifyUnavailability before this ordinary path is reached for
+// most calls; this is what a bare invocation (e.g. resumeTimeFromDiagnosis's
+// scan) still reads.
 func TestDiagnoseFailure_HookRateLimitBeatsArtifacts(t *testing.T) {
 	withLogRoot(t)
 	withInstantDiagnosis(t)
 	newRunFixture(t, "board-SC-1-planning", "some output\n"+execExitTrailerPrefix+"137\n",
 		&OutcomeRecord{Reason: "reaped", EndedAt: time.Now()})
 	d := DiagnoseFailure("board-SC-1-planning", "rate_limit")
-	if d.Headline != "Claude hit a rate limit and stopped" {
+	if d.Headline != "the run stopped at the model API — the daemon is handling it" {
 		t.Fatalf("headline = %q", d.Headline)
 	}
 }
@@ -57,19 +63,25 @@ func TestDiagnoseFailure_OtherHookErrorType(t *testing.T) {
 	withInstantDiagnosis(t)
 	newRunFixture(t, "board-SC-1-planning", "", nil)
 	d := DiagnoseFailure("board-SC-1-planning", "max_tokens")
-	if d.Headline != "Claude stopped with error: max_tokens" {
+	if d.Headline != "the run stopped at the model boundary; check the evidence below, then Retry" {
 		t.Fatalf("headline = %q", d.Headline)
 	}
 }
 
+// SC-3024: a reaped run's headline is a neutral status — never "reaped"
+// vocabulary — but the detail evidence (agent/duration) is unchanged.
 func TestDiagnoseFailure_Reaped(t *testing.T) {
 	withLogRoot(t)
 	withInstantDiagnosis(t)
 	newRunFixture(t, "board-SC-2-implementation", "working...\n",
 		&OutcomeRecord{Reason: "reaped", DurationMs: 252_000, EndedAt: time.Now()})
 	d := DiagnoseFailure("board-SC-2-implementation", "")
-	if !strings.Contains(d.Headline, "reaped") {
-		t.Fatalf("headline = %q", d.Headline)
+	want := "the run stopped before finishing this stage — check the evidence below, then Retry"
+	if d.Headline != want {
+		t.Fatalf("headline = %q, want %q", d.Headline, want)
+	}
+	if strings.Contains(d.Headline, "reaped") {
+		t.Fatalf("headline must never say 'reaped': %q", d.Headline)
 	}
 	if !strings.Contains(d.Detail, "agent: board-SC-2-implementation") {
 		t.Fatalf("detail missing agent line: %q", d.Detail)
@@ -89,11 +101,18 @@ func TestHeadlineFor_ReapedButCleanExit(t *testing.T) {
 	}
 }
 
-// A reap still beats a nonzero (killed) exit code — the reaped process's code is
-// the killer's, not the cause.
+// A reap still beats a nonzero (killed) exit code — the reaped process's code
+// is the killer's, not the cause — but the headline says so as a status, never
+// "reaped"/crashed/killed vocabulary (SC-3024): it reads identically to the
+// ordinary nonzero-exit status, since the exit code itself is not the cause
+// either and lives in the Detail evidence instead.
 func TestHeadlineFor_ReapedNonzeroExitStaysReaped(t *testing.T) {
-	if got := headlineFor("", true, 137, true, ""); !strings.Contains(got, "reaped") {
-		t.Fatalf("headline = %q, want it to contain %q", got, "reaped")
+	want := "the run stopped before finishing this stage — check the evidence below, then Retry"
+	if got := headlineFor("", true, 137, true, ""); got != want {
+		t.Fatalf("headline = %q, want %q", got, want)
+	}
+	if strings.Contains(headlineFor("", true, 137, true, ""), "reaped") {
+		t.Fatalf("headline must never say 'reaped'")
 	}
 }
 
@@ -113,19 +132,29 @@ func TestDiagnoseFailure_ReapedWithCleanExitTrailer(t *testing.T) {
 	}
 }
 
+// SC-3024: the exit code is Detail evidence only — the headline is a neutral
+// status with no "exit 137"/"killed"/OOM/docker vocabulary (a guessed-at cause
+// the reader cannot act on directly).
 func TestDiagnoseFailure_Exit137(t *testing.T) {
 	withLogRoot(t)
 	withInstantDiagnosis(t)
 	newRunFixture(t, "board-SC-3-review", "reviewing\n\n"+execExitTrailerPrefix+"137\n", nil)
 	d := DiagnoseFailure("board-SC-3-review", "")
-	if !strings.Contains(d.Headline, "exit 137") || !strings.Contains(d.Headline, "killed") {
-		t.Fatalf("headline = %q", d.Headline)
+	want := "the run stopped before finishing this stage — check the evidence below, then Retry"
+	if d.Headline != want {
+		t.Fatalf("headline = %q, want %q", d.Headline, want)
+	}
+	if strings.Contains(d.Headline, "137") || strings.Contains(d.Headline, "killed") {
+		t.Fatalf("headline must not carry the exit code or guessed-at cause: %q", d.Headline)
 	}
 	if !strings.Contains(d.Detail, "exit code: 137") {
 		t.Fatalf("detail missing exit code: %q", d.Detail)
 	}
 }
 
+// SC-3024: the API error line is Detail-only evidence (the fenced last-output
+// block); the headline is the same neutral nonzero-exit status regardless of
+// the exit code or what was logged.
 func TestDiagnoseFailure_ExitOneWithAPIErrorLine(t *testing.T) {
 	withLogRoot(t)
 	withInstantDiagnosis(t)
@@ -134,23 +163,31 @@ func TestDiagnoseFailure_ExitOneWithAPIErrorLine(t *testing.T) {
 		execExitTrailerPrefix + "1\n"
 	newRunFixture(t, "board-SC-4-implementation", out, nil)
 	d := DiagnoseFailure("board-SC-4-implementation", "")
-	want := "claude exited with code 1: API Error: 529"
-	if !strings.HasPrefix(d.Headline, want) {
-		t.Fatalf("headline = %q, want prefix %q", d.Headline, want)
+	want := "the run stopped before finishing this stage — check the evidence below, then Retry"
+	if d.Headline != want {
+		t.Fatalf("headline = %q, want %q", d.Headline, want)
 	}
 	if !strings.Contains(d.Detail, "last output:\n~~~\n") || !strings.Contains(d.Detail, "overloaded_error") {
 		t.Fatalf("detail missing fenced tail: %q", d.Detail)
 	}
 }
 
+// SC-3024: a clean exit-0 with something logged is still split out from the
+// bare missing-handoff case, but the headline no longer echoes the raw log
+// line — it names the situation and the recovery gesture; the line itself is
+// Detail-only evidence.
 func TestDiagnoseFailure_ExitZeroWithErrorLine(t *testing.T) {
 	withLogRoot(t)
 	withInstantDiagnosis(t)
 	out := "Error: no plan comment found on ticket\n" + execExitTrailerPrefix + "0\n"
 	newRunFixture(t, "board-SC-5-planning", out, nil)
 	d := DiagnoseFailure("board-SC-5-planning", "")
-	if !strings.HasPrefix(d.Headline, "agent finished without posting the stage handoff: Error: no plan comment") {
-		t.Fatalf("headline = %q", d.Headline)
+	want := "the run finished without handing off the stage — check the evidence below, then re-run this stage."
+	if d.Headline != want {
+		t.Fatalf("headline = %q, want %q", d.Headline, want)
+	}
+	if !strings.Contains(d.Detail, "no plan comment found on ticket") {
+		t.Fatalf("detail must still carry the logged line as evidence: %q", d.Detail)
 	}
 }
 
@@ -213,7 +250,13 @@ func extractFence(t *testing.T, detail string) string {
 	return strings.Trim(parts[1], "\n")
 }
 
-func TestDiagnoseFailure_HeadlineTruncated(t *testing.T) {
+// SC-3024: DiagnoseFailure no longer builds its headline out of a raw log
+// line or an exit code (both are now Detail-only evidence), so end-to-end
+// there is no longer a scenario that produces a headline anywhere near the
+// cap — every headlineFor branch returns one of a handful of fixed, short
+// status sentences. The cap itself (DiagnoseFailure still runs every headline
+// through truncateRunes, defensively) is exercised directly here instead.
+func TestDiagnoseFailure_HeadlineNeverExceedsCapEvenWithAHugeLogLine(t *testing.T) {
 	withLogRoot(t)
 	withInstantDiagnosis(t)
 	long := "Error: " + strings.Repeat("x", 5000)
@@ -222,8 +265,19 @@ func TestDiagnoseFailure_HeadlineTruncated(t *testing.T) {
 	if l := len([]rune(d.Headline)); l > diagnoseMaxHeadline {
 		t.Fatalf("headline length %d exceeds cap", l)
 	}
-	if !strings.HasSuffix(d.Headline, "…") {
-		t.Fatalf("truncated headline missing ellipsis: %q", d.Headline)
+	if strings.Contains(d.Headline, "xxxx") {
+		t.Fatalf("a raw log line must never become the headline: %q", d.Headline)
+	}
+}
+
+func TestTruncateRunes_CapsAndMarksTheCutWithAnEllipsis(t *testing.T) {
+	long := strings.Repeat("x", diagnoseMaxHeadline+50)
+	got := truncateRunes(long, diagnoseMaxHeadline)
+	if l := len([]rune(got)); l != diagnoseMaxHeadline {
+		t.Fatalf("truncated length = %d, want %d", l, diagnoseMaxHeadline)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("truncated string missing ellipsis: %q", got)
 	}
 }
 

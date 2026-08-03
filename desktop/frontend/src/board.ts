@@ -98,6 +98,11 @@ interface Card {
   trackerKind?: string;
   error?: string;
   verdict?: string;
+  // RFC3339 instant a paused (outage) card's standing marker stated as when
+  // the substrate clears, when one was parsed out of the diagnosis (SC-3024).
+  // Absent when no time was stated — the badge then reads "paused" with no
+  // time and the reconcile pass falls back to its own backoff.
+  resumeAt?: string;
   // RFC3339 time the newest marker of the card's current stage landed; feeds
   // the Engineering-backlog age badge.
   stageEnteredAt?: string;
@@ -2976,6 +2981,7 @@ async function fetchTicketDetail(card: Card): Promise<void> {
       reviewFindingsHTML: detail.reviewFindingsHTML,
       failureReasonHTML: detail.failureReasonHTML,
       fixSummaryHTML: detail.fixSummaryHTML,
+      paused: card.state === "outage",
     });
     detailCard = {
       ...detailCard,

@@ -329,11 +329,37 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, liveAgents Liv
 			}
 			continue
 		}
-		if retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger) {
+		// The card already derived to BoardOutage from its standing *-outage
+		// marker, so relaunch through the uncharged path directly rather than
+		// retry.tryRelaunch: that path classifies from retry.Outcome, which reads
+		// ("", false) for a card whose outage was recognised from a signal alone
+		// (the SC-2856 refusal, never recorded via the retry policy) — and
+		// misclassifies an unrecorded outcome as relaunchBounded, charging the
+		// very budget an outage must never spend (SC-3024).
+		if resume, ok := parseResume(derived); ok && now.Before(resume) {
+			// Still inside the stated wait — do not relaunch this tick.
+			continue
+		}
+		if retry.relaunchOutage(card.Key, derived.Stage, logger) {
 			redriven++
 		}
 	}
 	return redriven, handedOver
+}
+
+// parseResume parses a derived card's ResumeAt (an RFC3339 instant a paused
+// outage's standing marker stated, when one was parsed out of the diagnosis).
+// ok is false for an absent or unparseable value, in which case the caller
+// falls back to its existing per-tick backoff exactly as before.
+func parseResume(derived BoardCard) (time.Time, bool) {
+	if derived.ResumeAt == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, derived.ResumeAt)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // stuckRunningCandidate reports whether a card is eligible for the stuck-running

@@ -153,6 +153,10 @@ type BoardViewCard struct {
 	Branch         string `json:"branch,omitempty"`
 	PRURL          string `json:"prURL,omitempty"`
 	Error          string `json:"error,omitempty"`
+	// ResumeAt is the absolute RFC3339 instant a paused (outage) card resumes,
+	// when the refusal stated one. The frontend formats it in the reader's own
+	// timezone. Empty when unknown — the card then reads "paused" with no time.
+	ResumeAt string `json:"resumeAt,omitempty"`
 	// Verdict is the latest review's verdict line; a failing verdict pins the
 	// card in the Code lane with a warning instead of letting it advance.
 	Verdict string `json:"verdict,omitempty"`

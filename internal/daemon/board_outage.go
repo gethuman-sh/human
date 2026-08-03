@@ -108,21 +108,27 @@ func handOverOutage(ctx context.Context, pmKey string, derived BoardCard, postFa
 }
 
 // handleOutageExit deals with a stage exit that reported the substrate was
-// down, and reports whether it handled it. An outage is not a failure: it posts
-// a distinct *-outage marker so the card reads "machine down" rather than red,
-// and does NOT relaunch here — the durable reconcile pass owns the backoff, with
-// the retry budget untouched (SC-2307). The body carries the same diagnosed
-// reason line a *-failed marker would, so the badge still reads the cause via
-// failureReason.
+// down — whether recorded via the retry policy's ExitOutage (SC-2307) or
+// recognised here from the hook errorType / model-boundary class alone (the
+// SC-2856 incident: a refusal that kills the agent before it records an exit)
+// — and reports whether it handled it. An outage is not a failure: it posts a
+// distinct *-outage marker so the card reads "paused" rather than red, and
+// does NOT relaunch here — the durable reconcile pass owns the backoff, with
+// the retry budget untouched.
+//
+// kind/reason are classifyUnavailability's verdict: kind == endingPaused
+// routes here even when nothing was recorded; reason is the substrate phrase
+// for the card face (falls back to "the substrate it depends on" when empty —
+// the plain recorded-outage case with no signal reason).
 //
 // Split out of handleBoardAgentExit so the say-once guard costs this function's
 // complexity budget rather than that one's.
-func handleOutageExit(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, comments []tracker.Comment, commenter tracker.Commenter, diagnose BoardFailureDiagnoser, retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) bool {
+func handleOutageExit(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, comments []tracker.Comment, commenter tracker.Commenter, diagnose BoardFailureDiagnoser, retry StageRetry, kind endingKind, reason string, daemonID string, logger zerolog.Logger) bool {
 	header := outageHeaderFor(stage)
-	if header == "" || !retry.recordedOutage(pmKey, stage) {
+	if header == "" || (!retry.recordedOutage(pmKey, stage) && kind != endingPaused) {
 		return false
 	}
-	body := header + "\n" + appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
+	body := header + "\n" + pausedOutageBody(diagnose, agentName, errorType, reason)
 	// Say it once and leave it standing: every relaunch that re-hits the same
 	// outage lands here, so re-posting an identical marker would spam the ticket
 	// for as long as the substrate stays down (SC-2851). The standing marker also
@@ -137,6 +143,37 @@ func handleOutageExit(ctx context.Context, pmKey string, stage BoardStage, agent
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post outage marker")
 	}
 	return true
+}
+
+// pausedOutageBody composes the house-style paused statement: the substrate
+// reason, an optional machine-readable resume: line (when the diagnosis names
+// a stated recovery time), and the do-nothing reassurance. reason defaults to
+// "the substrate it depends on" when empty — the recorded-outage case with no
+// classified signal reason.
+func pausedOutageBody(diagnose BoardFailureDiagnoser, agentName, errorType, reason string) string {
+	what := strings.TrimSpace(reason)
+	if what == "" {
+		what = "the substrate it depends on"
+	}
+	var b strings.Builder
+	b.WriteString("paused — " + what)
+	if resume, ok := resumeTimeFromDiagnosis(diagnose, agentName, errorType); ok {
+		b.WriteString("\nresume: " + resume.Format(time.RFC3339))
+	}
+	b.WriteString("\nThe work is written and safe on the ticket. It continues automatically when " +
+		what + " clears. Nothing to do.")
+	return b.String()
+}
+
+// resumeTimeFromDiagnosis runs the diagnoser (when wired) and scans its
+// headline+detail for a stated recovery time. ok is false when there is no
+// diagnoser, no diagnosis, or no time could be parsed out of it.
+func resumeTimeFromDiagnosis(diagnose BoardFailureDiagnoser, agentName, errorType string) (time.Time, bool) {
+	if diagnose == nil {
+		return time.Time{}, false
+	}
+	d := diagnose(agentName, errorType)
+	return parseResumeTime(d.Headline+"\n"+d.Detail, time.Now(), time.UTC)
 }
 
 // outageAlreadyStated reports whether the card's newest marker for the stage

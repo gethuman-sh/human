@@ -950,8 +950,11 @@ func TestHandleBoardAgentExit_NilDiagnoserFallsBackToGeneric(t *testing.T) {
 }
 
 // SC-2555 step 5b: a recorded failing model-call class is appended to the failed
-// marker's detail so the card can state WHY a run failed (an auth lapse here),
-// while the headline the badge reads (failureReason) stays exactly the diagnoser's.
+// marker's detail so the card can state WHY a run failed (an unclassified "other"
+// class here — SC-3024 now routes auth/rate-limit/overload/network/spend-limit to
+// their own uncharged paused/needs-person paths before this enrichment is ever
+// reached), while the headline the badge reads (failureReason) stays exactly the
+// diagnoser's.
 func TestHandleBoardAgentExit_AppendsModelOutcomeClass(t *testing.T) {
 	withInstantBoardExitRecheck(t)
 	c := &syncCommenter{
@@ -964,7 +967,7 @@ func TestHandleBoardAgentExit_AppendsModelOutcomeClass(t *testing.T) {
 	latest := func(ticket, stage string) (string, bool) {
 		assert.Equal(t, "SC-1", ticket)
 		assert.Equal(t, string(BoardImplementation), stage)
-		return proxy.ClassAuth, true
+		return proxy.ClassOther, true
 	}
 
 	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor, nil, nil, nil, alwaysReachable, nil, diag, nil, StageRetry{}, latest, "", zerolog.Nop())
@@ -973,7 +976,7 @@ func TestHandleBoardAgentExit_AppendsModelOutcomeClass(t *testing.T) {
 	defer c.mu.Unlock()
 	require.Len(t, c.added, 1)
 	body := c.added[0]
-	assert.Contains(t, body, "\"auth\"", "the marker must name the recorded outcome class")
+	assert.Contains(t, body, "\"other\"", "the marker must name the recorded outcome class")
 	assert.Contains(t, body, "detail block", "the diagnoser detail is preserved")
 	// The badge's one-line error is unchanged — the note lives only in the detail.
 	assert.Equal(t, "claude exited with code 1", failureReason(body))
@@ -1056,9 +1059,14 @@ func TestRunBoardFailureWatch_PassesErrorTypeToDiagnoser(t *testing.T) {
 		}
 		select {
 		case body := <-c.addCh:
-			assert.Contains(t, body, "rate limit")
+			// SC-3024: a rate_limit hook errorType is now recognised as an
+			// unavailability signal BEFORE the generic diagnose+failed path, so
+			// it posts the paused *-outage marker instead of a red *-failed one
+			// carrying the diagnoser's headline verbatim.
+			assert.Contains(t, body, "paused")
+			assert.Contains(t, body, "model usage limit")
 		case <-time.After(2 * time.Second):
-			t.Fatal("expected the diagnosed failed marker")
+			t.Fatal("expected the paused outage marker")
 		}
 	})
 }

@@ -884,6 +884,14 @@ body {
   color: var(--turn-machine);
 }
 
+/* A substrate the run depends on is unavailable (a model usage limit, a
+   dropped connection): the do-nothing register (SC-3024). The work is safe
+   and resumes on its own — never red (nothing failed), never amber (nothing
+   is asked of the user), and no spinner (nothing is actively running). */
+.badge.paused {
+  color: var(--turn-machine);
+}
+
 /* Room for an arrow, taken from the card rather than from the layout: a margin
    inside the grid cell leaves every track boundary where it was, so the row
    stays a row. Only the edge an arrow actually attaches to gives up space, and

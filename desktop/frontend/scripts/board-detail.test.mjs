@@ -38,6 +38,20 @@ test("only present field renders, others omitted", () => {
   assert.doesNotMatch(html, /What the review found/);
 });
 
+// SC-3024: a paused (outage) card's evidence section must say "Why it's
+// paused" — never "Why it failed", which reads as a stack trace for a
+// substrate that is merely unavailable and will resume on its own.
+test("paused card titles its evidence section 'Why it's paused' (SC-3024)", () => {
+  const html = buildDetailSections({ failureReasonHTML: "<p>model usage limit</p>", paused: true });
+  assert.match(html, /Why it's paused/);
+  assert.doesNotMatch(html, /Why it failed/);
+});
+
+test("a non-paused failure keeps 'Why it failed' (SC-3024)", () => {
+  const html = buildDetailSections({ failureReasonHTML: "<p>boom</p>", paused: false });
+  assert.match(html, /Why it failed/);
+});
+
 // --- Decision options (ticket 372/534) ---
 
 test("options render as buttons with context and escaped labels", () => {
