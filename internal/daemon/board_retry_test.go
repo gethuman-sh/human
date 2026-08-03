@@ -131,10 +131,10 @@ func TestTryRelaunch_OutageDoesNotChargeBudget(t *testing.T) {
 
 	require.Len(t, rec.relaunched, 3, "every outage attempt relaunches")
 	require.Zero(t, rec.attempts, "an outage must never read or charge the attempt budget")
-	require.Len(t, rec.comments, 3, "each outage relaunch posts its uncharged-note")
-	require.Contains(t, rec.comments[0], "not charged against the retry budget")
-	_, _, classified := ClassifyMarker(rec.comments[0])
-	require.False(t, classified, "the outage note must not be a stage marker: %q", rec.comments[0])
+	// Say it once: the standing *-outage marker is the statement that the machine
+	// is waiting. A note per relaunch is how a weekend-long outage buried the
+	// ticket under hundreds of identical comments (SC-2851).
+	require.Empty(t, rec.comments, "a relaunch on a fixed cycle is not news each time it happens")
 }
 
 // An outage relaunch with no commenter (the reconcile path) still relaunches and

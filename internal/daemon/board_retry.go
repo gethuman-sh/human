@@ -158,7 +158,7 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 			Msg("board retry: stage exit is not retryable, leaving the card for a human")
 		return false
 	case relaunchOutage:
-		return r.relaunchOutage(ctx, pmKey, stage, commenter, daemonID, logger)
+		return r.relaunchOutage(pmKey, stage, logger)
 	}
 
 	// relaunchBounded: the charged, capped path for a flake, a dead container, or
@@ -191,17 +191,16 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 
 // relaunchOutage re-drives a stage that reported the substrate was down. The
 // retry budget is deliberately untouched: an outage costs time and nothing
-// else, so it retries indefinitely with the reconcile interval as its backoff
-// until the substrate returns (SC-2307). Reads and bumps no counter — that is
-// the whole point, an outage is never allowed to exhaust the budget a real
-// failure needs.
-func (r StageRetry) relaunchOutage(ctx context.Context, pmKey string, stage BoardStage, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) bool {
-	if commenter != nil {
-		body := StampDaemon("[human:retry] waiting on the substrate to return — this attempt is not charged against the retry budget (SC-2307).", daemonID)
-		if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
-			logger.Warn().Err(err).Str("pm", pmKey).Msg("board retry: cannot post outage note")
-		}
-	}
+// else, so it retries on the reconcile interval as its backoff until the
+// substrate returns or the wait outlives OutageWaitBound (SC-2307/SC-2851).
+// Reads and bumps no counter — that is the whole point, an outage is never
+// allowed to exhaust the budget a real failure needs.
+//
+// It posts nothing. A relaunch on a fixed cycle is not news each time it
+// happens: the standing *-outage marker is the one statement that the machine
+// is waiting, and it stays current on its own (SC-2851 — this path used to
+// leave one note per attempt, which is how a weekend produced hundreds).
+func (r StageRetry) relaunchOutage(pmKey string, stage BoardStage, logger zerolog.Logger) bool {
 	if err := r.Relaunch(pmKey, stage); err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
 			Msg("board retry: outage relaunch failed, leaving the outage marker in place")
