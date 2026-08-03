@@ -246,6 +246,44 @@ func hasBugVerdict(comments []tracker.Comment) bool {
 	return false
 }
 
+// PipelineStartedHeader records which self-planning fix pipeline a run belongs to,
+// written by the run at the moment it starts its implementation stage
+// ([human:pipeline]\nkind: fix | security). Like BugVerdictHeader it is content,
+// not a stage transition — deliberately kept OUT of orderedMarkerSpecs so
+// ClassifyMarker never classifies it and it never moves the card. It is the
+// durable pipeline-identity a recovery relaunch reads FIRST, so a fix run
+// restarted after a crash is restarted as a fix and never refused for having no
+// plan (SC-2989). A plan executor writes none: its identity is the absence of
+// this marker plus the ticket kind.
+const PipelineStartedHeader = "[human:pipeline]"
+
+// recordedPipeline reports the pipeline identity a run wrote at start, or fixNone
+// when the ticket carries no [human:pipeline] marker (a plan executor, or a run
+// that predates this record). The last marker wins. The closing bracket keeps the
+// header from prefix-matching an unrelated body, exactly as for plan vs plan-ready.
+func recordedPipeline(comments []tracker.Comment) fixPipeline {
+	kind := ""
+	for _, c := range comments {
+		trimmed := strings.TrimSpace(c.Body)
+		if !strings.HasPrefix(trimmed, PipelineStartedHeader) {
+			continue
+		}
+		for _, line := range strings.Split(trimmed, "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "kind:"); ok {
+				kind = strings.TrimSpace(v)
+			}
+		}
+	}
+	switch kind {
+	case "fix":
+		return fixBug
+	case "security":
+		return fixSecurity
+	default:
+		return fixNone
+	}
+}
+
 // HandoffCheckUnreadableHeader flags that a board handoff's branch- or
 // commit-presence check could not be PERFORMED on this machine (an unresolvable
 // project dir, a git error, or a probe that ran past its timeout) — as opposed

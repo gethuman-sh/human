@@ -19,7 +19,7 @@ func retryPolicyFor(outcome string, recorded bool, relaunched *[]BoardStage, res
 		Outcome:  func(string, BoardStage) (string, bool) { return outcome, recorded },
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
 		Reset:    func(_ string, s BoardStage) { *resets = append(*resets, s) },
-		Relaunch: func(_ string, s BoardStage) error { *relaunched = append(*relaunched, s); return nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { *relaunched = append(*relaunched, s); return true, nil },
 	}
 }
 

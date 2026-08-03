@@ -19,6 +19,8 @@ type retryRecorder struct {
 	attemptErr error
 	resets     []BoardStage
 	relaunchEr error
+	refused    bool // Relaunch reports launched=false, err=nil — a gate refusal
+	uncounts   int  // times the charged attempt was rolled back
 }
 
 func (r *retryRecorder) ListComments(context.Context, string) ([]tracker.Comment, error) {
@@ -36,13 +38,17 @@ func (r *retryRecorder) policy(outcome string, recorded bool) StageRetry {
 		Outcome:  func(string, BoardStage) (string, bool) { return outcome, recorded },
 		Attempts: func(string, BoardStage) (int, error) { r.attempts++; return r.attempts, r.attemptErr },
 		Reset:    func(_ string, s BoardStage) { r.resets = append(r.resets, s) },
-		Relaunch: func(_ string, s BoardStage) error {
+		Relaunch: func(_ string, s BoardStage) (bool, error) {
 			if r.relaunchEr != nil {
-				return r.relaunchEr
+				return false, r.relaunchEr
+			}
+			if r.refused {
+				return false, nil
 			}
 			r.relaunched = append(r.relaunched, s)
-			return nil
+			return true, nil
 		},
+		Uncount: func(_ string, _ BoardStage) { r.uncounts++; r.attempts-- },
 	}
 }
 
@@ -77,6 +83,22 @@ func TestTryRelaunch_RetryableStageIsRelaunchedAndNoted(t *testing.T) {
 	require.Len(t, rec.comments, 1)
 	require.Contains(t, rec.comments[0], "Automatic retry 1/2")
 	require.Contains(t, rec.comments[0], "implementation")
+}
+
+// A relaunch the transition engine REFUSES (the plan gate: nothing started) is
+// not a launch — it must cost no attempt and post no "Automatic retry" note
+// (SC-2989). Before the fix the attempt was charged and a false note posted.
+func TestTryRelaunch_RefusedRelaunchSpendsNoAttempt(t *testing.T) {
+	rec := &retryRecorder{refused: true}
+	policy := rec.policy(ExitRetryable, true)
+
+	ok := policy.tryRelaunch(context.Background(), "SC-1", BoardImplementation, rec, "d", zerolog.Nop())
+
+	require.False(t, ok, "a refused relaunch is not handled")
+	require.Empty(t, rec.relaunched, "nothing was launched")
+	require.Empty(t, rec.comments, "a refused relaunch posts no Automatic-retry note")
+	require.Zero(t, rec.attempts, "the charged attempt is rolled back to zero")
+	require.Equal(t, 1, rec.uncounts, "the attempt is rolled back exactly once")
 }
 
 // The note must never be classified as a stage marker, or the board would move

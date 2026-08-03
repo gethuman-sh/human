@@ -76,8 +76,14 @@ type StageRetry struct {
 	// so a later, unrelated failure gets a full budget instead of inheriting a
 	// spent one.
 	Reset func(pmKey string, stage BoardStage)
-	// Relaunch issues the in-place retry transition for the stage.
-	Relaunch func(pmKey string, stage BoardStage) error
+	// Relaunch issues the in-place retry transition and reports whether a launch
+	// ACTUALLY happened — false when the transition was refused (e.g. the plan gate
+	// started nothing), which must never be charged as an attempt (SC-2989).
+	Relaunch func(pmKey string, stage BoardStage) (launched bool, err error)
+	// Uncount rolls back one charged attempt when a bounded relaunch turned out to
+	// be a refusal (nothing launched). Optional/nil-safe: an unset Uncount leaves
+	// the counter as-is, matching the previous behaviour.
+	Uncount func(pmKey string, stage BoardStage)
 	// Max bounds automatic relaunches; zero means DefaultStageRetries.
 	Max int
 }
@@ -139,6 +145,14 @@ func (r StageRetry) reset(pmKey string, stage BoardStage) {
 	}
 }
 
+// uncount rolls back a charged attempt on a refused relaunch. Nil-safe so an
+// unconfigured policy is unchanged.
+func (r StageRetry) uncount(pmKey string, stage BoardStage) {
+	if r.Uncount != nil {
+		r.Uncount(pmKey, stage)
+	}
+}
+
 // tryRelaunch decides and, when warranted, relaunches the stage. It reports
 // whether the caller may consider the failure handled — false means the normal
 // failed-marker path must run and the card should red as before.
@@ -177,13 +191,24 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 		return false
 	}
 
-	r.note(ctx, pmKey, stage, attempt, outcome, recorded, commenter, daemonID, logger)
-
-	if err := r.Relaunch(pmKey, stage); err != nil {
+	launched, err := r.Relaunch(pmKey, stage)
+	if err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
 			Msg("board retry: relaunch failed, leaving the card as failed")
 		return false
 	}
+	if !launched {
+		// The relaunch was refused — the plan gate (or another launch guard) started
+		// nothing. A refusal is not a launch: roll the charged attempt back so it
+		// spends none of the budget a genuine crash is entitled to, post no
+		// "Automatic retry" note, and report unhandled. The refusal has already
+		// routed the card itself (SC-2989).
+		r.uncount(pmKey, stage)
+		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Int("attempt", attempt).
+			Msg("board retry: relaunch refused (nothing started); attempt not charged")
+		return false
+	}
+	r.note(ctx, pmKey, stage, attempt, outcome, recorded, commenter, daemonID, logger)
 	logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Int("attempt", attempt).
 		Msg("board retry: stage relaunched automatically")
 	return true
@@ -201,9 +226,18 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 // is waiting, and it stays current on its own (SC-2851 — this path used to
 // leave one note per attempt, which is how a weekend produced hundreds).
 func (r StageRetry) relaunchOutage(pmKey string, stage BoardStage, logger zerolog.Logger) bool {
-	if err := r.Relaunch(pmKey, stage); err != nil {
+	launched, err := r.Relaunch(pmKey, stage)
+	if err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
 			Msg("board retry: outage relaunch failed, leaving the outage marker in place")
+		return false
+	}
+	if !launched {
+		// The relaunch was refused — nothing started, so this is not a re-drive to
+		// report. Leave the standing *-outage marker in place for the next reconcile
+		// tick rather than logging a launch that never happened (SC-2989).
+		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+			Msg("board retry: outage relaunch refused (nothing started); leaving the outage marker in place")
 		return false
 	}
 	logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
@@ -220,9 +254,18 @@ func (r StageRetry) relaunchOutage(pmKey string, stage BoardStage, logger zerolo
 // the harm SC-2447 reports. The caller has already posted the marker
 // explaining what was observed and why, so this only relaunches.
 func (r StageRetry) relaunchSilenceReap(pmKey string, stage BoardStage, logger zerolog.Logger) bool {
-	if err := r.Relaunch(pmKey, stage); err != nil {
+	launched, err := r.Relaunch(pmKey, stage)
+	if err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
 			Msg("board retry: silence-reap relaunch failed, leaving the card as failed")
+		return false
+	}
+	if !launched {
+		// A refused relaunch started nothing — report unhandled and leave the card
+		// as the refusal routed it, rather than logging a re-drive that never
+		// happened (SC-2989).
+		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+			Msg("board retry: silence-reap relaunch refused (nothing started); leaving the card as failed")
 		return false
 	}
 	logger.Info().Str("pm", pmKey).Str("stage", string(stage)).

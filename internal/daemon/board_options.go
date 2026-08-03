@@ -263,7 +263,8 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 	// not a pipeline wait, so it is suppressed (empty cause, SC-2462). Resuming an
 	// implementation-stage decision still executes a plan, so it is plan-gated
 	// like any other implementation launch (SC-2596).
-	return d.startAgentStage(ctx, req.PMKey, stage, startedHeaderFor(stage), prompt, WaitCause(""), stage == BoardImplementation)
+	_, err = d.startAgentStage(ctx, req.PMKey, stage, startedHeaderFor(stage), prompt, WaitCause(""), stage == BoardImplementation)
+	return err
 }
 
 func findOption(opts []BoardOption, id string) (BoardOption, bool) {
