@@ -9,13 +9,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
+	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/tracker"
+	"github.com/gethuman-sh/human/internal/vault"
 )
 
 // BuildCommitsCmd creates the "commits" command with for and prefix subcommands.
@@ -41,7 +44,7 @@ func BuildCommitsCmd() *cobra.Command {
 		Short: "Print the commit-message prefix for a ticket (PM key first, engineering key second in split topology)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return RunCommitPrefix(cmd.OutOrStdout(), args)
+			return RunCommitPrefix(cmd.Context(), cmd.OutOrStdout(), args)
 		},
 	}
 
@@ -134,16 +137,32 @@ func RunCommitsFor(ctx context.Context, out io.Writer, dir, key string, table bo
 	return enc.Encode(commits)
 }
 
+// commitKindFor resolves the owning tracker kind for a key from the
+// configured instances, so a bare numeric key is prefixed "SC-" only on a
+// Shortcut workspace (SC-2855). A package var so tests inject the workspace's
+// trackers without real config; the default loads them tolerantly (a missing
+// token for one tracker must not blank the prefix for another). When nothing
+// loads, the key is left untouched rather than guessed.
+var commitKindFor = func(_ context.Context, key string) string {
+	vcfg, err := vault.ReadConfig(".")
+	if err != nil {
+		vcfg = nil
+	}
+	instances, _ := cmdutil.LoadAllInstancesTolerant(".", os.LookupEnv, vault.NewResolverFromConfig(vcfg))
+	return tracker.CommitKind(key, instances)
+}
+
 // RunCommitPrefix prints the canonical commit-message prefix for the given
 // keys: each key bracketed, PM before engineering, ready to prepend to a
 // subject line. Keys already carrying brackets pass through unchanged.
-func RunCommitPrefix(out io.Writer, keys []string) error {
+func RunCommitPrefix(ctx context.Context, out io.Writer, keys []string) error {
 	parts := make([]string, len(keys))
 	for i, key := range keys {
 		// Canonicalize before bracketing so a bare numeric key (the form the
 		// board passes internally) resolves to the tracker-attributable
-		// reference rather than an orphaned "[1117]" (SC-1134).
-		parts[i] = "[" + tracker.CanonicalCommitKey(key) + "]"
+		// reference rather than an orphaned "[1117]" (SC-1134), but only when
+		// the key's owning tracker is actually Shortcut (SC-2855).
+		parts[i] = "[" + tracker.CanonicalCommitKey(key, commitKindFor(ctx, key)) + "]"
 	}
 	_, err := fmt.Fprintln(out, strings.Join(parts, " "))
 	return err

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
+	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
@@ -37,6 +38,19 @@ var findOpenWork = func(ctx context.Context, key string) ([]forge.OpenWork, stri
 	return cmddaemon.FindOpenWorkForKey(ctx, ".", os.LookupEnv, vault.NewResolverFromConfig(vcfg), key)
 }
 
+// commitKindFor resolves the owning tracker kind for a key from the
+// configured instances, so a bare numeric key is canonicalized with the
+// "SC-" prefix only on a Shortcut workspace (SC-2855). A package var so tests
+// inject the workspace's trackers without real config.
+var commitKindFor = func(_ context.Context, key string) string {
+	vcfg, err := vault.ReadConfig(".")
+	if err != nil {
+		vcfg = nil
+	}
+	instances, _ := cmdutil.LoadAllInstancesTolerant(".", os.LookupEnv, vault.NewResolverFromConfig(vcfg))
+	return tracker.CommitKind(key, instances)
+}
+
 // BuildUnderwayCmd creates the top-level "underway" command.
 func BuildUnderwayCmd() *cobra.Command {
 	return &cobra.Command{
@@ -55,7 +69,7 @@ stops and names it rather than building a second copy.`,
 
 // RunUnderway resolves the workspace forge and prints the open work for key.
 func RunUnderway(ctx context.Context, out io.Writer, key string) error {
-	canonical := tracker.CanonicalCommitKey(key)
+	canonical := tracker.CanonicalCommitKey(key, commitKindFor(ctx, key))
 	work, repo, err := findOpenWork(ctx, canonical)
 	if err != nil {
 		return err
