@@ -169,7 +169,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 	if idle, ok := silenceReapIdle(errorType); ok && retry.enabled() {
 		if header := failedHeaderFor(stage); header != "" {
 			body := header + "\n" + silenceReapReason(idle)
-			if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+			if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 				logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap marker")
 				return
 			}
@@ -178,7 +178,7 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 		}
 	}
 	body := failedHeaderFor(stage) + "\n" + appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
-	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
 		// Without the failed marker the card does not derive to a failed state,
 		// which is precisely what every in-place retry transition requires — so
@@ -275,7 +275,7 @@ func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType
 		if vState == BoardRunning && !cleanExit {
 			body := ReviewFailedHeader + "\n" + failureMarkerBody(diagnose, agentName, errorType) +
 				"\n\n" + handoffSearchNote(BoardVerification, ReviewCompleteHeader)
-			if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+			if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 				logger.Warn().Err(err).Str("pm", pmKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
 			}
 		}
@@ -408,7 +408,7 @@ func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker
 		// the loud failure the ticket wants: red the card, do not review nothing.
 		body := ImplementationFailedHeader +
 			"\nhandoff names commits absent from branch " + branch + " on this machine — re-run the fix"
-		if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+		if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 			logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post phantom-commit failure")
 		}
 		return
@@ -432,7 +432,7 @@ func postHandoffCheckUnreadable(ctx context.Context, pmKey, branch, detail strin
 	body := HandoffCheckUnreadableHeader +
 		"\ncould not verify the handoff for branch " + branch + " on this machine — " + detail +
 		"\nleaving the card for a daemon that can complete the check; it will be retried."
-	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post handoff-check-unreadable diagnostic")
 	}
 }

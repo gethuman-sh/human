@@ -110,7 +110,7 @@ func recordStageWait(ctx context.Context, commenter tracker.Commenter, pmKey str
 	if now.Sub(eligibleAt) < StageWaitThreshold {
 		return false // promptly chained: stay silent
 	}
-	body := StampDaemon(composeStageWait(stage, eligibleAt, now, cause), daemonID)
+	body := composeStageWait(stage, eligibleAt, now, cause)
 	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
 			Msg("board stage-wait: could not post wait record")

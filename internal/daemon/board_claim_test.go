@@ -9,13 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // claimComment builds a stamped claim comment with an explicit server id and
 // creation time, mirroring what a daemon posts and a backend echoes.
 func claimComment(id string, stage BoardStage, daemonID string, at time.Time) tracker.Comment {
-	body := StampDaemon(ClaimHeader+"\n"+ClaimStagePrefix+" "+string(stage), daemonID)
+	body := marker.Sign(ClaimHeader+"\n"+ClaimStagePrefix+" "+string(stage), daemonID, "")
 	return tracker.Comment{ID: id, Body: body, Created: at}
 }
 
@@ -273,7 +274,7 @@ func TestStartAgentStage_launchGateSkipsClaimAndLaunch(t *testing.T) {
 // ClassifyMarker must ignore a claim marker: it is content, not a stage
 // transition, so it never moves a card (must stay out of orderedMarkerSpecs).
 func TestClaimMarker_notClassified(t *testing.T) {
-	_, _, ok := ClassifyMarker(StampDaemon(ClaimHeader+"\nstage: implementation", "d1"))
+	_, _, ok := ClassifyMarker(marker.Sign(ClaimHeader+"\nstage: implementation", "d1", ""))
 	assert.False(t, ok)
 }
 

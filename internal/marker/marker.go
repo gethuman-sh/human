@@ -50,10 +50,14 @@ type spec struct {
 const MinDecisionOptions = 2
 
 // reservedOptionKeys are the option-block lines that are metadata rather than
-// answers. `daemon` is the provenance stamp every marker body carries, and it
-// has the same `id: label` shape as a real answer — counting it is how a
+// answers. `daemon` is the legacy provenance stamp; `machine` and `build` are the
+// structured provenance fields every signed marker body now carries. All three
+// share the `id: label` shape of a real answer — counting them is how a
 // one-answer block passed for a two-answer one.
-var reservedOptionKeys = map[string]bool{"stage": true, "context": true, "daemon": true}
+var reservedOptionKeys = map[string]bool{
+	"stage": true, "context": true, "daemon": true,
+	MachineField: true, BuildField: true,
+}
 
 // validateOptions counts the answers a decision block actually offers. They
 // arrive as numbered fields when posted and as body lines when read back, so

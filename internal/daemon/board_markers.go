@@ -3,6 +3,7 @@ package daemon
 import (
 	"strings"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -310,29 +311,42 @@ var stageRank = map[BoardStage]int{
 	BoardDoneStage:      5,
 }
 
-// DaemonLinePrefix is the marker-body line carrying the posting daemon's id.
-// It is appended AFTER the marker's content lines and is invisible to
-// ClassifyMarker (which matches only the leading header), mirroring the
-// existing pr:/branch:/commits: line convention.
+// DaemonLinePrefix is the LEGACY marker-body line that carried the posting
+// daemon's id as a trailing line. Provenance is now a structured `machine:`
+// field in the marker's field block (marker.Sign), but markers posted before
+// that change still live on tickets, so this prefix is kept as a READ constant
+// for the back-compat path in ParseDaemonID. Nothing writes it any more.
 const DaemonLinePrefix = "daemon:"
 
-// StampDaemon appends a "daemon: <id>" line to a marker body. An empty id
-// returns the body unchanged, so an un-provisioned daemon still posts a valid
-// marker.
-func StampDaemon(body, daemonID string) string {
-	if strings.TrimSpace(daemonID) == "" {
-		return body
-	}
-	return strings.TrimRight(body, "\n") + "\n" + DaemonLinePrefix + " " + daemonID
-}
-
-// ParseDaemonID returns the daemon id stamped on a marker body, or "" when the
-// body carries no daemon: line (older markers, or agent posts before rule 1).
+// ParseDaemonID returns the id of the machine that posted a marker, or "" when
+// the body carries no provenance (a human comment, or an agent post from before
+// signing existed — claimWon already tolerates "").
+//
+// New markers carry provenance as the structured `machine:` field; legacy
+// markers already on live tickets carry it as a trailing `daemon:` line. Reading
+// the field first and falling back to the line keeps claim arbitration correct
+// across the format change with no ticket migration.
 func ParseDaemonID(body string) string {
+	if m, ok := marker.ParseBody(body); ok {
+		if id := strings.TrimSpace(m.Fields[marker.MachineField]); id != "" {
+			return id
+		}
+	}
 	for line := range strings.SplitSeq(strings.TrimSpace(body), "\n") {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), DaemonLinePrefix); ok {
 			return strings.TrimSpace(rest)
 		}
+	}
+	return ""
+}
+
+// ParseBuild returns the build string a signed marker was posted from, or "" for
+// a marker that carries no build field (a legacy marker, or one posted by an
+// unstamped binary). It answers "which build wrote this record" the same way
+// ParseDaemonID answers "which machine".
+func ParseBuild(body string) string {
+	if m, ok := marker.ParseBody(body); ok {
+		return strings.TrimSpace(m.Fields[marker.BuildField])
 	}
 	return ""
 }

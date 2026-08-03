@@ -77,12 +77,12 @@ type BoardCard struct {
 	// current stage — for a plan-done card, when the current plan landed. The
 	// board renders it as an age badge so work rotting in a queue is visible.
 	StageEnteredAt time.Time `json:"stage_entered_at,omitzero"`
-	// StageDaemonID is the posting daemon stamped on that same deciding marker
-	// (StampDaemon / ParseDaemonID). It tells the durable stuck-running reconcile
-	// pass which daemon owns a running stage, so a peer daemon spares a live
-	// foreign-owned card instead of reddening work it simply cannot see locally
-	// (SC-1450). Empty for an unstamped marker, preserving single-daemon
-	// behaviour.
+	// StageDaemonID is the posting daemon signed onto that same deciding marker
+	// (the machine: field, read via ParseDaemonID). It tells the durable
+	// stuck-running reconcile pass which daemon owns a running stage, so a peer
+	// daemon spares a live foreign-owned card instead of reddening work it simply
+	// cannot see locally (SC-1450). Empty for an unsigned marker, preserving
+	// single-daemon behaviour.
 	StageDaemonID string `json:"stage_daemon_id,omitempty"`
 	// DeployPhase names the done-stage sub-phase for a running card: "pr-review"
 	// while the machine review→fix loop is mid-flight, empty for a plain deploy.

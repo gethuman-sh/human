@@ -37,6 +37,40 @@ func TestValidateDoesNotCountDaemonStampAsAnAnswer(t *testing.T) {
 	require.Error(t, Validate(m), "stage, context and daemon are metadata, not answers")
 }
 
+// The machine/build signature fields have the same id: label shape as an
+// answer; like the daemon stamp they are metadata and must not be counted, so a
+// signed one-answer block still fails the floor.
+func TestValidateDoesNotCountSignatureAsAnAnswer(t *testing.T) {
+	m := Marker{
+		Type: "options",
+		Fields: map[string]string{
+			"stage":      "implementation",
+			"1":          "Rebuild the branch",
+			MachineField: "alice-macbook",
+			BuildField:   "abc123+dirty",
+		},
+	}
+
+	require.Error(t, Validate(m), "machine and build are provenance metadata, not answers")
+}
+
+// A two-answer block signed with machine/build still validates: the signature is
+// ignored and the two real answers clear the floor.
+func TestValidateAcceptsSignedTwoAnswerDecision(t *testing.T) {
+	m := Marker{
+		Type: "options",
+		Fields: map[string]string{
+			"stage":      "implementation",
+			"1":          "Narrow the fix",
+			"2":          "Fix the class",
+			MachineField: "alice-macbook",
+			BuildField:   "abc123+dirty",
+		},
+	}
+
+	require.NoError(t, Validate(m))
+}
+
 func TestValidateAcceptsTwoAnswerDecision(t *testing.T) {
 	m := Marker{
 		Type: "options",

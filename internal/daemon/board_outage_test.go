@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -91,7 +92,6 @@ func TestReconcileOutage_HandsAnUnendingWaitToAPerson(t *testing.T) {
 	require.Contains(t, posted[0].Body, ImplementationFailedHeader, "the card must red so a person sees it")
 	require.Contains(t, posted[0].Body, "1Password is not reachable", "it names what could not be reached")
 	require.Contains(t, posted[0].Body, "7h0m0s", "and for how long it has been waiting")
-	require.Contains(t, posted[0].Body, "daemon: d1")
 
 	// The badge reads the marker's first body line: it must say a person is needed.
 	require.Contains(t, failureReason(posted[0].Body), "needs a person")
@@ -197,11 +197,12 @@ func TestOutageRunSince_IgnoresOtherStages(t *testing.T) {
 func TestOutageAlreadyStated(t *testing.T) {
 	now := time.Unix(10_000_000, 0)
 	body := ImplementationOutageHeader + "\nno vault"
-	comments := []tracker.Comment{cmt(StampDaemon(body, "d1"), now.Add(-time.Hour))}
+	comments := []tracker.Comment{cmt(marker.Sign(body, "d1", "rev1"), now.Add(-time.Hour))}
 
 	require.True(t, outageAlreadyStated(comments, BoardImplementation, body),
-		"the same statement, even stamped by another daemon, is a repeat")
-	require.True(t, outageAlreadyStated(comments, BoardImplementation, StampDaemon(body, "d2")))
+		"the same statement, even signed by another machine, is a repeat")
+	require.True(t, outageAlreadyStated(comments, BoardImplementation, marker.Sign(body, "d2", "rev2")),
+		"two machines on different builds saying the same thing dedup")
 	require.False(t, outageAlreadyStated(comments, BoardImplementation, ImplementationOutageHeader+"\nno tracker"),
 		"a different substrate is different news and must be posted")
 	require.False(t, outageAlreadyStated(comments, BoardVerification, ReviewOutageHeader+"\nno vault"),

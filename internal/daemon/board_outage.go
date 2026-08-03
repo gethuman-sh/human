@@ -7,6 +7,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -96,7 +97,7 @@ func handOverOutage(ctx context.Context, pmKey string, derived BoardCard, postFa
 	if body == "" {
 		return false
 	}
-	if err := postFailed(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+	if err := postFailed(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).
 			Msg("board reconcile: cannot hand an unending outage to a person, leaving the card waiting")
 		return false
@@ -132,7 +133,7 @@ func handleOutageExit(ctx context.Context, pmKey string, stage BoardStage, agent
 			Msg("board failure: the card already says the substrate is down, not repeating it")
 		return true
 	}
-	if _, err := commenter.AddComment(ctx, pmKey, StampDaemon(body, daemonID)); err != nil {
+	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post outage marker")
 	}
 	return true
@@ -154,15 +155,21 @@ func outageAlreadyStated(comments []tracker.Comment, stage BoardStage, body stri
 	if state != BoardOutage {
 		return false
 	}
-	return withoutDaemonLine(latest.Body) == withoutDaemonLine(body)
+	return withoutSignature(latest.Body) == withoutSignature(body)
 }
 
-// withoutDaemonLine strips the posting daemon's stamp so two markers saying the
-// same thing compare equal even when different daemons posted them.
-func withoutDaemonLine(body string) string {
+// withoutSignature strips a marker's provenance — the structured machine:/build:
+// fields and the legacy trailing daemon: line — so two markers saying the same
+// thing compare equal even when posted by different machines on different builds.
+// Without this the "state it once" dedup breaks the moment two daemons on
+// different builds hit the same outage, and the ticket refills with near-dupes.
+func withoutSignature(body string) string {
 	var kept []string
 	for line := range strings.SplitSeq(strings.TrimSpace(body), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), DaemonLinePrefix) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, DaemonLinePrefix) ||
+			strings.HasPrefix(trimmed, marker.MachineField+":") ||
+			strings.HasPrefix(trimmed, marker.BuildField+":") {
 			continue
 		}
 		kept = append(kept, strings.TrimRight(line, " \t"))

@@ -45,13 +45,15 @@ var claimNow = time.Now
 // Claim arbitration is keyed on the daemon identity (rule 1). An un-provisioned
 // daemon (empty DaemonID) has no identity to contend with, so it skips the claim
 // entirely and launches directly — single-daemon behavior, unchanged, mirroring
-// StampDaemon's empty-id no-op.
+// the signing decorator's empty-machine no-op. The claim body is signed at the
+// commenter choke point, so the daemon id round-trips as the marker's machine:
+// field for claimWon to read back.
 func (d BoardTransitionDeps) winClaim(ctx context.Context, pmKey string, stage BoardStage) (bool, error) {
 	if strings.TrimSpace(d.DaemonID) == "" {
 		return true, nil
 	}
 	body := ClaimHeader + "\n" + ClaimStagePrefix + " " + string(stage)
-	posted, err := d.Commenter.AddComment(ctx, pmKey, StampDaemon(body, d.DaemonID))
+	posted, err := d.Commenter.AddComment(ctx, pmKey, body)
 	if err != nil {
 		return false, errors.WrapWithDetails(err, "posting stage claim", "pm", pmKey, "stage", string(stage))
 	}

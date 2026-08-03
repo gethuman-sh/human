@@ -250,7 +250,7 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 	}
 
 	if _, err := d.Commenter.AddComment(ctx, req.PMKey,
-		StampDaemon(OptionChosenHeader+" "+chosen.ID+": "+chosen.Label, d.DaemonID)); err != nil {
+		OptionChosenHeader+" "+chosen.ID+": "+chosen.Label); err != nil {
 		return errors.WrapWithDetails(err, "recording option choice", "pm", req.PMKey)
 	}
 
