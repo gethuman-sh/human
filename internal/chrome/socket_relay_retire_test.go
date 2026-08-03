@@ -20,6 +20,21 @@ func sockPathFor(dir string) string {
 	return filepath.Join(dir, fmtPid())
 }
 
+// shortSocketDir is like t.TempDir(), but without the test name baked into
+// the path: t.TempDir() embeds t.Name() so a long test name (combined with a
+// long $TMPDIR, as on some macOS setups) can push the "<pid>.sock" path this
+// package builds past the ~104-byte sun_path limit for Unix domain sockets,
+// making net.Listen fail silently in the relay goroutine.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "sr")
+	if err != nil {
+		t.Fatalf("creating short socket dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func fmtPid() string {
 	return itoa(os.Getpid()) + ".sock"
 }
@@ -40,7 +55,7 @@ func itoa(i int) string {
 // discoverable the moment it retires: a client globbing the socket directory
 // during a self-restart must not be able to attach to the dying process.
 func TestRelayRetireRemovesSocket(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -78,7 +93,7 @@ func TestRelayRetireRemovesSocket(t *testing.T) {
 }
 
 func TestRelayRetireIsIdempotent(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,7 +111,7 @@ func TestRelayRetireIsIdempotent(t *testing.T) {
 // TestRelayRetireBeforeListen covers the race where a handover retires the
 // relay before it finished binding: it must not leave an orphan socket behind.
 func TestRelayRetireBeforeListen(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 	relay.Retire() // retired before ListenAndServe ever runs
 
@@ -118,7 +133,7 @@ func TestRelayRetireBeforeListen(t *testing.T) {
 // TestRelayActiveConnsTracksQueue proves a queued Chrome connection counts as
 // in-flight, so a handover drain waits for it instead of cutting it off.
 func TestRelayActiveConnsTracksQueue(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 	relay := NewSocketRelay(dir, zerolog.Nop())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
