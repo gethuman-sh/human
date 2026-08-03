@@ -1671,6 +1671,42 @@ body {
   text-decoration: underline;
 }
 
+/* Per-ticket cost & time (SC-2847): the whole-life total leads, the
+   answers/context split and the live current-stage clock read as muted
+   supporting lines, and each stage is a two-column row (label | cost · time). */
+.detail-cost-total {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.detail-cost-split,
+.detail-cost-current {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.detail-cost-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.detail-cost-stage {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.detail-cost-empty {
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .detail-option-btn {
   display: flex;
   align-items: baseline;

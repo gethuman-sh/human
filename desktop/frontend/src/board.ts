@@ -67,7 +67,7 @@ import type { DeploySide } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import type { Box, Drawn, Side } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
-import { buildDetailSections, buildOptionsSection, buildStopDecisionSection } from "./board-detail.js";
+import { buildCostSection, buildDetailSections, buildOptionsSection, buildStopDecisionSection, type TicketCost } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
@@ -318,6 +318,7 @@ interface AppBindings {
   Cards(): Promise<BoardData>;
   Doctor(): Promise<DoctorData>;
   GetIssueDetail(trackerKind: string, trackerName: string, key: string): Promise<IssueDetailData>;
+  TicketCost(key: string): Promise<TicketCost>;
   CardsQuick(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
   FixBug(pmKey: string, pmTitle: string): Promise<void>;
@@ -2833,6 +2834,11 @@ let detailHTML: string | null = null;
 // pre-built by buildDetailSections. Empty until fetchTicketDetail lands them.
 let detailSections = "";
 
+// detailCost holds the open ticket's durable cost/time rollup, fetched
+// independently of the description so a cost-endpoint failure never blanks the
+// rest of the panel. Null renders the plain "no spend recorded" empty state.
+let detailCost: TicketCost | null = null;
+
 // toggleTicketDetail is the card-click entry point: a second click on the
 // ticket that is already open closes the panel instead of re-opening it.
 function toggleTicketDetail(card: Card): void {
@@ -2851,6 +2857,7 @@ function openTicketDetail(card: Card): void {
   detailError = null;
   detailHTML = null;
   detailSections = "";
+  detailCost = null;
   renderTicketDetail();
   document.getElementById("detail-panel")?.classList.remove("hidden");
   void fetchTicketDetail(card);
@@ -2879,6 +2886,16 @@ async function fetchTicketDetail(card: Card): Promise<void> {
       assignee: detail.assignee || detailCard.assignee,
       description: detail.description || detailCard.description,
     };
+    // The durable cost/time rollup is fetched independently: a cost-endpoint
+    // failure must never blank the description panel it sits beside.
+    try {
+      const cost = await go().TicketCost(card.key);
+      if (detailCard && detailCard.key === card.key) {
+        detailCost = cost;
+      }
+    } catch {
+      detailCost = null;
+    }
     renderTicketDetail();
   } catch (err) {
     if (!detailCard || detailCard.key !== card.key) return;
@@ -2891,6 +2908,7 @@ function closeTicketDetail(): void {
   detailCard = null;
   detailHTML = null;
   detailSections = "";
+  detailCost = null;
   document.getElementById("detail-panel")?.classList.add("hidden");
 }
 
@@ -2966,6 +2984,7 @@ function renderTicketDetail(): void {
     ${stopDecision}
     ${desc}
     ${detailSections}
+    ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now())}
     ${link}
   `;
   const url = detailCard.url;
