@@ -2476,6 +2476,7 @@ async function fetchTicketDetail(card) {
             reviewFindingsHTML: detail.reviewFindingsHTML,
             failureReasonHTML: detail.failureReasonHTML,
             fixSummaryHTML: detail.fixSummaryHTML,
+            paused: card.state === "outage",
         });
         detailCard = {
             ...detailCard,

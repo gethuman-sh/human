@@ -76,7 +76,7 @@ export function buildDetailSections(d) {
             sections.push(`<section class="detail-section ${cls}"><h3 class="detail-section-title">${title}</h3><div class="detail-section-body rendered">${html}</div></section>`);
         }
     };
-    add("Why it failed", d.failureReasonHTML, "detail-failure");
+    add(d.paused ? "Why it's paused" : "Why it failed", d.failureReasonHTML, "detail-failure");
     add("What the review found", d.reviewFindingsHTML, "detail-review");
     add("Fix summary", d.fixSummaryHTML, "detail-fixsummary");
     return sections.join("");

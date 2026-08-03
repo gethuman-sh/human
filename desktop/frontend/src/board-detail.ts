@@ -8,6 +8,11 @@ export interface DetailSections {
   reviewFindingsHTML?: string;
   failureReasonHTML?: string;
   fixSummaryHTML?: string;
+  // paused (SC-3024) is set by the caller from card.state === "outage": the
+  // evidence section then titles itself "Why it's paused" rather than "Why it
+  // failed" — the stop was the machine being unavailable, not the work being
+  // wrong, and the heading must say so rather than reading as a stack trace.
+  paused?: boolean;
 }
 
 export interface DetailOption {
@@ -111,7 +116,7 @@ export function buildDetailSections(d: DetailSections): string {
       );
     }
   };
-  add("Why it failed", d.failureReasonHTML, "detail-failure");
+  add(d.paused ? "Why it's paused" : "Why it failed", d.failureReasonHTML, "detail-failure");
   add("What the review found", d.reviewFindingsHTML, "detail-review");
   add("Fix summary", d.fixSummaryHTML, "detail-fixsummary");
   return sections.join("");
