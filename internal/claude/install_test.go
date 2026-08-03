@@ -507,8 +507,15 @@ func TestInstall_PersonalMode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Created")
 
-	// Verify files are written under the home directory, not ".claude"
+	// Verify files are written under the home directory, not ".claude".
+	// The bot git-identity settings.json is the intentional exception: it is
+	// always the project file (relative), even under --personal, because the
+	// identity is per-project (SC-2854).
+	projectGitIdentity := filepath.Join(".claude", "settings.json")
 	for path := range fw.files {
+		if path == projectGitIdentity {
+			continue
+		}
 		assert.Contains(t, path, ".claude")
 		assert.True(t, filepath.IsAbs(path), "personal mode should use absolute home path, got: %s", path)
 	}

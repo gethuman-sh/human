@@ -371,5 +371,15 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		return err
 	}
 
+	// Attribute the agent's host-run commits to the bot via the project
+	// settings env, so authorship alone separates agent work from developer
+	// work on the developer's own machine — the seam the container exec and
+	// deployer rebase do not cover (SC-2854). Always the project file, even
+	// under --personal, since the identity is per-project.
+	_, _ = fmt.Fprintln(w, "\nSetting agent commit identity...")
+	if err := InstallGitIdentity(w, fw); err != nil {
+		return err
+	}
+
 	return nil
 }

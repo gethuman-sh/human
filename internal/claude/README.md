@@ -10,3 +10,5 @@
 - Show live status: working, idle, blocked, or errored
 - See the current tool, subagents, and task list
 - Report token usage for the current window
+
+`Install` also writes the bot git identity (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`, resolved from `botidentity` and the project `.humanconfig` `bot:` section) into the project `.claude/settings.json` `env` block, so host-run agent commits attribute to the bot while a developer's own terminal commits keep their identity; the session-tracking hooks continue to go to the global `~/.claude/settings.json`.

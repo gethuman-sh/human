@@ -457,6 +457,7 @@ func buildInstallCmd() *cobra.Command {
 					return err
 				}
 				fmt.Println("Done. Skill: /human-plan <ticket-key>")
+				fmt.Println("Agent commits in this project are attributed to the bot identity from .humanconfig (bot:); re-run this after changing that section.")
 			default:
 				return errors.WithDetails("unsupported agent", "agent", agent)
 			}
