@@ -75,6 +75,73 @@ func TestReconcileStuckRunning_OpenSameStageOptionsIsCleanPause(t *testing.T) {
 	require.Empty(t, relaunched, "nothing to relaunch — the card is not dead, it is waiting on a human")
 }
 
+// SC-3295: the ticket-review gate runs UNDER planning but files its verdict as
+// a backlog-stage [human:ticket-review] marker, so a card that reached a
+// terminal verdict still derives planning/running. The live exit path has
+// honoured that verdict as a clean ending since SC-2302; this pass did not, so
+// whenever the live watcher missed the exit the card was redded as a hang and
+// relaunched to reach the same verdict again — SC-3149, twelve times in one
+// night. No failed marker, no relaunch.
+func TestReconcileStuckRunning_RecordedStopVerdictIsNotAHang(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	started := now.Add(-StuckRunningGrace - time.Minute)
+	for _, verdict := range []string{"superseded", "escalated", "rejected"} {
+		t.Run(verdict, func(t *testing.T) {
+			cards := []ReconcileCard{{
+				Key: "SC-1",
+				Comments: []tracker.Comment{
+					cmt(PlanningStartedHeader, started),
+					cmt("[human:ticket-review] "+verdict+"\nlinked: SC-2", started.Add(time.Second)),
+				},
+			}}
+			var posted []struct{ Key, Body string }
+			var relaunched []BoardStage
+			retry := StageRetry{
+				Max:      2,
+				Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+				Attempts: func(string, BoardStage) (int, error) { return 0, nil },
+				Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+			}
+
+			n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
+				capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+
+			require.Equal(t, 0, n, "a recorded stop verdict is a deliberate ending, not a hang")
+			require.Empty(t, posted, "no failed marker for work a gate stopped on purpose")
+			require.Empty(t, relaunched, "relaunching only reaches the same verdict again")
+		})
+	}
+}
+
+// The guard must not swallow a genuine hang: a card whose gate said the ticket
+// is fine (ready/reframed) is still ordinary in-flight work, and a stage of it
+// that dies silently must still be redded and relaunched.
+func TestReconcileStuckRunning_ContinueVerdictStillReds(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	started := now.Add(-StuckRunningGrace - time.Minute)
+	cards := []ReconcileCard{{
+		Key: "SC-1",
+		Comments: []tracker.Comment{
+			cmt(PlanningStartedHeader, started),
+			cmt("[human:ticket-review] ready", started.Add(time.Second)),
+		},
+	}}
+	var posted []struct{ Key, Body string }
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
+		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+
+	require.Equal(t, 1, n, "a ready verdict means the work continues, so a dead stage is still a hang")
+	require.Equal(t, []BoardStage{BoardPlanning}, relaunched)
+}
+
 // 1957: a question raised late in a card's life deliberately names an
 // EARLIER rework stage — answering it means going back and redoing that
 // work. That is still a deliberate human pause, not a hang: reconcile must

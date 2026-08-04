@@ -547,6 +547,18 @@ func stuckCardIsOursToRed(derived BoardCard, card ReconcileCard) bool {
 	if cardPausedOnOpenOptions(derived) {
 		return false
 	}
+	// A gate that recorded a deliberate stop verdict (superseded/escalated/
+	// rejected) ended the work on purpose — the durable twin of the live path's
+	// deliberateStopRecorded guard, which handleBoardAgentExit and stageSettled
+	// have honoured since SC-2302 while this pass did not. That asymmetry is what
+	// let the class recur: whenever the live watcher misses the exit (a daemon
+	// restart, a dropped hook, a machine powered off) the card falls through to
+	// here, is redded as a hang, and is relaunched to reach the same verdict
+	// again — SC-3149 twelve times in one night. Read the same way on both paths,
+	// so the two can never disagree about what an ending is.
+	if deliberateStopRecorded(card.Comments) {
+		return false
+	}
 	return true
 }
 
