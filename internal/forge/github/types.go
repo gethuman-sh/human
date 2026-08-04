@@ -18,9 +18,14 @@ type pullCreateResponse struct {
 }
 
 type pullGetResponse struct {
-	Head struct {
+	Number int `json:"number"`
+	Head   struct {
+		Ref string `json:"ref"`
 		SHA string `json:"sha"`
 	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
 	// Mergeable is GitHub's end-state merge verdict. It is null while GitHub
 	// computes it asynchronously; a nil pointer is treated as not-yet-mergeable.
 	Mergeable *bool `json:"mergeable"`
@@ -54,6 +59,7 @@ type checkRun struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	StartedAt  string `json:"started_at"`
+	DetailsURL string `json:"details_url"`
 }
 
 type checkRunsResponse struct {
@@ -61,8 +67,17 @@ type checkRunsResponse struct {
 }
 
 type combinedStatusResponse struct {
-	State      string `json:"state"`
-	TotalCount int    `json:"total_count"`
+	State      string       `json:"state"`
+	TotalCount int          `json:"total_count"`
+	Statuses   []statusItem `json:"statuses"`
+}
+
+// statusItem is one legacy commit-status context (per-check detail the rollup
+// State collapses), used to build CheckResult entries in ReadPullRequest.
+type statusItem struct {
+	Context   string `json:"context"`
+	State     string `json:"state"`
+	TargetURL string `json:"target_url"`
 }
 
 type mergeRequest struct {

@@ -164,6 +164,7 @@ human bug create "Login button does nothing on Safari"       # file a bug auto-s
 human security create "Auth token leaks in error logs"       # file a security ticket on the configured PM group (needs the daemon)
 
 human pr create --head fix-login --title "Fix login" --body "Closes #42"  # open a PR; forge + repo derived from the git origin remote
+human github pr state --number 42      # read a PR's state and check results as JSON (headRef/baseRef/headSHA/mergeable/checks)
 
 human search "retry logic"             # cross-tracker search
 human notion search "quarterly report" # Notion

@@ -449,6 +449,58 @@ func TestRunCreatePullRequest_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "pr failed")
 }
 
+// --- RunReadPullRequest tests ---
+
+type fakeReader struct {
+	readFn func(ctx context.Context, repo string, number int) (*forge.PullRequestState, error)
+}
+
+func (f *fakeReader) ReadPullRequest(ctx context.Context, repo string, number int) (*forge.PullRequestState, error) {
+	return f.readFn(ctx, repo, number)
+}
+
+func TestRunReadPullRequest_json(t *testing.T) {
+	r := &fakeReader{
+		readFn: func(_ context.Context, repo string, number int) (*forge.PullRequestState, error) {
+			assert.Equal(t, "octocat/hello-world", repo)
+			assert.Equal(t, 7, number)
+			return &forge.PullRequestState{
+				Number: 7, HeadRef: "feat", BaseRef: "main", HeadSHA: "abc123", Mergeable: true,
+				Checks: []forge.CheckResult{
+					{Name: "build", Conclusion: forge.ChecksPassing, DetailsURL: "https://ci/build"},
+				},
+			}, nil
+		},
+	}
+
+	var buf bytes.Buffer
+	err := RunReadPullRequest(context.Background(), r, &buf, "octocat/hello-world", 7)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, `"number": 7`)
+	assert.Contains(t, out, `"headRef": "feat"`)
+	assert.Contains(t, out, `"baseRef": "main"`)
+	assert.Contains(t, out, `"headSHA": "abc123"`)
+	assert.Contains(t, out, `"mergeable": true`)
+	assert.Contains(t, out, `"checks"`)
+	assert.Contains(t, out, `"build"`)
+	assert.Contains(t, out, `"https://ci/build"`)
+}
+
+func TestRunReadPullRequest_readError(t *testing.T) {
+	r := &fakeReader{
+		readFn: func(_ context.Context, _ string, _ int) (*forge.PullRequestState, error) {
+			return nil, errors.WithDetails("read failed")
+		},
+	}
+
+	var buf bytes.Buffer
+	err := RunReadPullRequest(context.Background(), r, &buf, "octocat/hello-world", 7)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read failed")
+}
+
 // --- RunEditIssue tests ---
 
 func TestRunEditIssue_Success(t *testing.T) {

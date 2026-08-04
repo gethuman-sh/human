@@ -21,6 +21,7 @@ var (
 	_ forge.MergedReader         = (*Client)(nil)
 	_ forge.BranchDeleter        = (*Client)(nil)
 	_ forge.PullRequestFinder    = (*Client)(nil)
+	_ forge.PullRequestReader    = (*Client)(nil)
 	_ forge.OpenWorkFinder       = (*Client)(nil)
 	_ forge.ReadyForReviewMarker = (*Client)(nil)
 )
@@ -386,14 +387,10 @@ func (c *Client) PullRequestChecks(ctx context.Context, repoName string, number 
 func combineChecks(runs checkRunsResponse, combined combinedStatusResponse) forge.ChecksState {
 	state := forge.ChecksPassing
 	for _, run := range latestRunPerName(runs.CheckRuns) {
-		switch run.Conclusion {
-		case "failure", "timed_out", "action_required":
+		switch runVerdict(run) {
+		case forge.ChecksFailing:
 			return forge.ChecksFailing
-		case "cancelled":
-			state = forge.ChecksPending
-			continue
-		}
-		if run.Status != "completed" {
+		case forge.ChecksPending:
 			state = forge.ChecksPending
 		}
 	}
@@ -408,6 +405,114 @@ func combineChecks(runs checkRunsResponse, combined combinedStatusResponse) forg
 		}
 	}
 	return state
+}
+
+// runVerdict folds one check run into the forge's three-state vocabulary, the
+// single mapping combineChecks and the per-check reader both use so an aggregate
+// verdict and a per-check list can never disagree. Cancelled is non-conclusive
+// (SC-2602): a superseded build is called off, not failed.
+func runVerdict(run checkRun) forge.ChecksState {
+	switch run.Conclusion {
+	case "failure", "timed_out", "action_required":
+		return forge.ChecksFailing
+	case "cancelled":
+		return forge.ChecksPending
+	}
+	if run.Status != "completed" {
+		return forge.ChecksPending
+	}
+	return forge.ChecksPassing
+}
+
+// statusVerdict folds one legacy commit-status state into the same vocabulary.
+func statusVerdict(state string) forge.ChecksState {
+	switch state {
+	case "failure", "error":
+		return forge.ChecksFailing
+	case "pending":
+		return forge.ChecksPending
+	}
+	return forge.ChecksPassing
+}
+
+// ReadPullRequest implements forge.PullRequestReader: one pull GET for identity
+// and mergeability, then the two CI systems for per-check results — the full
+// read surface the deploy gate's ChecksReader collapses into a single word.
+func (c *Client) ReadPullRequest(ctx context.Context, repoName string, number int) (*forge.PullRequestState, error) {
+	owner, repo, err := splitProject(repoName)
+	if err != nil {
+		return nil, err
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
+	resp, err := c.api.Do(ctx, http.MethodGet, path, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var pull pullGetResponse
+	if err := apiclient.DecodeJSON(resp, &pull, "number", number); err != nil {
+		return nil, err
+	}
+	if pull.Head.SHA == "" {
+		return nil, errors.WithDetails("pull request has no head SHA", "number", number)
+	}
+	checks, err := c.checkResults(ctx, owner, repo, repoName, pull.Head.SHA)
+	if err != nil {
+		return nil, err
+	}
+	return &forge.PullRequestState{
+		Number:    number,
+		HeadRef:   pull.Head.Ref,
+		BaseRef:   pull.Base.Ref,
+		HeadSHA:   pull.Head.SHA,
+		Mergeable: pull.Mergeable != nil && *pull.Mergeable,
+		Checks:    checks,
+	}, nil
+}
+
+// checkResults reads both CI systems for a head SHA and returns one entry per
+// check — check runs deduped to the latest attempt per name (SC-2602), then each
+// legacy commit-status context. The two systems are not deduped against each
+// other: a context reported by both a check run and a legacy commit status
+// would appear twice. Rare on GitHub Actions repos (which use check runs, not
+// statuses), so not worth the extra bookkeeping today.
+func (c *Client) checkResults(ctx context.Context, owner, repo, repoName, sha string) ([]forge.CheckResult, error) {
+	runsPath := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	resp, err := c.api.Do(ctx, http.MethodGet, runsPath, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var runs checkRunsResponse
+	if err := apiclient.DecodeJSON(resp, &runs, "repo", repoName); err != nil {
+		return nil, err
+	}
+	statusPath := fmt.Sprintf("/repos/%s/%s/commits/%s/status",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	resp, err = c.api.Do(ctx, http.MethodGet, statusPath, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var combined combinedStatusResponse
+	if err := apiclient.DecodeJSON(resp, &combined, "repo", repoName); err != nil {
+		return nil, err
+	}
+
+	var results []forge.CheckResult
+	for _, run := range latestRunPerName(runs.CheckRuns) {
+		results = append(results, forge.CheckResult{
+			Name:       run.Name,
+			Conclusion: runVerdict(run),
+			DetailsURL: run.DetailsURL,
+		})
+	}
+	for _, s := range combined.Statuses {
+		results = append(results, forge.CheckResult{
+			Name:       s.Context,
+			Conclusion: statusVerdict(s.State),
+			DetailsURL: s.TargetURL,
+		})
+	}
+	return results, nil
 }
 
 // latestRunPerName keeps only the most recent attempt of each named check, so a

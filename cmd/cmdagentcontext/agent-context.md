@@ -35,4 +35,5 @@ If a codenav query says the repo is not indexed, the daemon is still building th
 
 ## Ship
 - `human pr create --head <branch> --title "…" --body "…"` — open a PR (forge and repo derived from the git origin remote)
+- `human github pr state --number <N>` — read a pull request's state and check results as JSON (headRef/baseRef/headSHA/mergeable/checks); use this instead of `gh pr view`/`gh pr checks`
 - `human deploy <KEY>` — the whole deploy gate: PR, CI wait, rebase if stale, merge, markers, ticket close; a branch already merged into the base is a clean success

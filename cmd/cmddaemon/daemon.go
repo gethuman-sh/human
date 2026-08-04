@@ -2741,6 +2741,18 @@ func (p forgeDeployer) PullRequestChecks(ctx context.Context, workspaceDir strin
 	return checker.PullRequestChecks(ctx, repo, number)
 }
 
+func (p forgeDeployer) ReadPullRequest(ctx context.Context, workspaceDir string, number int) (*forge.PullRequestState, error) {
+	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
+	if err != nil {
+		return nil, err
+	}
+	reader, ok := creator.(forge.PullRequestReader)
+	if !ok {
+		return nil, errors.WithDetails("forge does not support reading pull request state", "repo", repo)
+	}
+	return reader.ReadPullRequest(ctx, repo, number)
+}
+
 func (p forgeDeployer) PullRequestMergeable(ctx context.Context, workspaceDir string, number int) (bool, error) {
 	creator, repo, err := resolveForge(workspaceDir, p.lookup, p.resolver)
 	if err != nil {

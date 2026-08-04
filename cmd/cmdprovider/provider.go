@@ -52,6 +52,7 @@ func BuildProviderCommands(kind string, deps cmdutil.Deps) []*cobra.Command {
 			Short: "Pull request operations",
 		}
 		prCmd.AddCommand(buildPRCreateCmd(kind, deps))
+		prCmd.AddCommand(buildPRStateCmd(kind, deps))
 		cmds = append(cmds, prCmd)
 	}
 
@@ -154,6 +155,54 @@ func buildPRCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 	_ = cmd.MarkFlagRequired("title")
 	cmd.Flags().StringVar(&body, "body", "", "Pull request description in markdown")
 	return cmd
+}
+
+func buildPRStateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
+	var repo string
+	var number int
+
+	cmd := &cobra.Command{
+		Use:     "state",
+		Short:   "Read a pull request's state and check results (JSON)",
+		Example: `  human github pr state --number=42`,
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			f, err := cmdutil.ResolveForge(cmd, kind, deps)
+			if err != nil {
+				return err
+			}
+			reader, ok := f.(forge.PullRequestReader)
+			if !ok {
+				return errors.WithDetails("forge does not support reading pull request state", "kind", kind)
+			}
+			if repo == "" {
+				repo, err = cmdutil.OriginRepo(cmd)
+				if err != nil {
+					return err
+				}
+			}
+			return RunReadPullRequest(cmd.Context(), reader, cmd.OutOrStdout(), repo, number)
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "Repository (GitHub: owner/repo); defaults to the git origin remote")
+	cmd.Flags().IntVar(&number, "number", 0, "Pull request number")
+	_ = cmd.MarkFlagRequired("number")
+	return cmd
+}
+
+// RunReadPullRequest reads a pull request's state and per-check results and
+// prints them as JSON — the read surface an agent uses instead of a second tool.
+func RunReadPullRequest(ctx context.Context, r forge.PullRequestReader, out io.Writer, repo string, number int) error {
+	state, err := r.ReadPullRequest(ctx, repo, number)
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return errors.WithDetails("read returned no pull request", "repo", repo, "number", number)
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(state)
 }
 
 func buildIssueEditCmd(kind string, deps cmdutil.Deps) *cobra.Command {

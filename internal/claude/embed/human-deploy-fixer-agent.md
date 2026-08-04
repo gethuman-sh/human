@@ -17,19 +17,22 @@ Recover the failed deploy of PR <PR_NUMBER_OR_URL> for ticket <WORK_KEY> --branc
 
 The PR, work key, and branch are your fixed binding. Push only to `--branch`; commit only against `<WORK_KEY>`.
 
-## Access — always use `gh`
+## Access — read through `human`, not `gh`
+
+Read the PR's state and check results through human — no second tool, no second credential:
 
 ```bash
-gh pr view <PR> --json number,headRefName,baseRefName,mergeable,mergeStateStatus
-gh pr checks <PR>
-gh run view <run-id> --log-failed
+human github pr state --number=<PR>   # JSON: number, head/base ref, head SHA, mergeable, per-check {name, conclusion, details URL}
+human marker show <WORK_KEY> deploy-fix-started   # the failing-check names that tripped this recovery
 ```
+
+The `deploy-fix-started` marker's headline already names the checks that failed; `pr state` gives you the base ref for the rebase and each failing check's details URL (its log). You do not need `gh` on this path.
 
 ## Process
 
-1. **Bind & check out.** `gh pr view <PR>` must succeed with `headRefName == --branch`. Fetch and check out: `git fetch origin && git checkout <branch>` (board runs start detached at the default branch — the PR code is on this branch, not HEAD).
-2. **Rebase onto the base.** Rebase onto the PR's base branch: `git rebase origin/<baseRefName>`. Resolve every conflict with the smallest correct merge — keep BOTH sides' intent; a conflict is two changes to reconcile, not one to drop. `git rebase --continue` to completion. An already-current branch makes this a no-op.
-3. **Make CI green.** Reproduce the failing checks locally against the project's fast tier, scoped to the packages this change touches (the deploy CI gate runs the full suite). Fix the failures: a drifted API/signature, a broken call site, a stale test. If a fix changes behavior, pin it with a test.
+1. **Bind & check out.** `human github pr state --number=<PR>` must report `headRef == --branch`. Fetch and check out: `git fetch origin && git checkout <branch>` (board runs start detached at the default branch — the PR code is on this branch, not HEAD).
+2. **Rebase onto the base.** Rebase onto the PR's base branch (the `baseRef` from `human github pr state`): `git rebase origin/<baseRef>`. Resolve every conflict with the smallest correct merge — keep BOTH sides' intent; a conflict is two changes to reconcile, not one to drop. `git rebase --continue` to completion. An already-current branch makes this a no-op.
+3. **Make CI green.** The failing checks are named on the `deploy-fix-started` marker (and in `pr state`); reproduce them locally against the project's fast tier, scoped to the packages this change touches (the deploy CI gate runs the full suite). Fix the failures: a drifted API/signature, a broken call site, a stale test. If a fix changes behavior, pin it with a test.
 <!-- human:include build-gate -->
 4. **Commit & land the branch.** Commit referencing the key (`human commits prefix <WORK_KEY>` for the subject prefix), then make sure the rebased result is **on the local branch ref**, not on a detached HEAD: `git rev-parse --abbrev-ref HEAD` must print `<branch>`, and `git rev-parse <branch>` must be your rebased tip. That ref is your deliverable.
 
