@@ -193,6 +193,20 @@ func checkDevcontainerPrereqs() []string {
 	return hints
 }
 
+// proxyAddrPrelude prepares HUMAN_PROXY_ADDR for the container's redirect
+// script. The daemon hands containers it starts an address already resolved to
+// an IP, so this leaves it untouched and nothing reads /etc/hosts at all. It
+// only falls back to resolving the hostname on the standalone `devcontainer up`
+// path, where nothing injects a resolved address and iptables would otherwise
+// be handed a name it flatly refuses (nf_tables rejects a hostname in
+// --to-destination). NR==1 is load-bearing in that fallback: a host mapped
+// twice makes getent print two lines, and the address would carry a newline.
+func proxyAddrPrelude() string {
+	return fmt.Sprintf(
+		`case "$HUMAN_PROXY_ADDR" in ''|*[!0-9.:]*) HUMAN_PROXY_ADDR="$(getent hosts %s | awk 'NR==1{print $1}'):%d";; esac; export HUMAN_PROXY_ADDR; `,
+		daemon.DockerHost, daemon.DefaultProxyPort)
+}
+
 func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresent bool) devcontainerConfig {
 	featureOpts := map[string]any{}
 	if proxy {
@@ -227,12 +241,6 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 		},
 	}
 
-	// The proxy address is read out of /etc/hosts at start-up, and NR==1 is
-	// load-bearing: a host mapped twice (the manager injects the same
-	// --add-host these runArgs carry) makes getent print two lines, and the
-	// resulting HUMAN_PROXY_ADDR holds a newline. human-proxy-setup then hands
-	// that to iptables, dies under set -e, and takes the whole && chain with it
-	// — no redirect, no CA trust, no agent install, and nothing said so.
 	switch {
 	case proxy && intercept:
 		cfg.CapAdd = []string{"NET_ADMIN"}
@@ -246,13 +254,13 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 			// Node's PEM parse then fails on every run.
 			cfg.Mounts = []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"}
 			cfg.RemoteEnv["NODE_EXTRA_CA_CERTS"] = "/home/vscode/.human/ca.crt"
-			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk 'NR==1{print $1}'):19287 && sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
+			cfg.PostStartCommand = proxyAddrPrelude() + "sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
 		} else {
-			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk 'NR==1{print $1}'):19287 && sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
+			cfg.PostStartCommand = proxyAddrPrelude() + "sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
 		}
 	case proxy:
 		cfg.CapAdd = []string{"NET_ADMIN"}
-		cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk 'NR==1{print $1}'):19287 && sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
+		cfg.PostStartCommand = proxyAddrPrelude() + "sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
 	default:
 		cfg.PostStartCommand = "human install --agent claude && human chrome-bridge"
 	}
