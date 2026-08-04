@@ -89,6 +89,14 @@ CGO_LDFLAGS="-framework UniformTypeIdentifiers" \
 
 Equivalent dev-loop command: `wails dev` (or `make desktop-dev`, if defined).
 
+## Exiting the app
+
+The app has two exit paths, and they answer to different people.
+
+**Closing the window** goes through the confirmation flow (`desktop/closeflow.go`): an idle daemon is stopped silently, a busy one raises the three-way dialog (Cancel / Stop anyway / Wait and close), and the app clears its session marker so a cleanly stopped daemon is never later reported orphaned.
+
+**Ctrl-C (or SIGTERM) in the terminal** ends the process immediately and leaves the daemon running (`desktop/signalexit.go`). It performs no busy check, shows no dialog, and never stops the daemon: whoever starts the app from a console manages their own daemon. A dialog inside the window is no answer to a question asked from a shell — and Wails' own signal handler replaces Go's default terminate and routes signals into `OnBeforeClose`, so without this the app could not be ended from the terminal it was started in at all.
+
 ## Desktop-ticket verification template
 
 Any ticket that touches `desktop/` must state its verification this way:
@@ -98,6 +106,8 @@ Any ticket that touches `desktop/` must state its verification this way:
 > Additionally, for any change touching project lifecycle: quit the daemon (`human daemon stop`), relaunch the app, and confirm the Projects Overview screen appears (or the last project auto-loads if its directory still exists); pick a project and confirm the board loads; click **Switch Project** and confirm it stops the daemon and returns to the Projects Overview.
 >
 > For SC-3015 (close/orphan behavior): with the daemon idle, close the window and confirm the daemon process actually exits (`human daemon status`) with no dialog; start an agent run (or hold a stage lease) and close the window, confirming the three-way dialog appears, and that Cancel/Stop anyway/Wait and close each behave as described; force-quit the app (not the normal close) while its daemon is still running, then relaunch and confirm the orphan-cleanup prompt appears and both its choices (stop it / leave it running) behave correctly; separately, start a daemon manually via `human daemon start` with no app attached, launch the app, and confirm NO orphan prompt appears for it.
+>
+> For SC-3292 (console exit): launch from a terminal (`make desktop-dev`, or run the built binary directly), press Ctrl-C, and confirm the process ends at once — with an agent run in flight as well as idle, with no dialog either time — and that `human daemon status` shows the daemon still running afterwards. Relaunch and confirm NO orphan prompt appears for that daemon.
 
 ## Regression guard
 
