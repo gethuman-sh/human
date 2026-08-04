@@ -26,24 +26,60 @@ var ideaLabels = []string{"human/idea", "idea"}
 // pipeline dead. Taking ownership has to stay cheap enough for a stage to do it
 // every time without asking anyone.
 func BuildAutoAssignCmd(deps cmdutil.Deps) *cobra.Command {
-	return &cobra.Command{
-		Use:     "assign KEY_OR_URL",
-		Short:   "Take ownership of an issue as the current user (no status change)",
-		Example: `  human assign SC-3345`,
-		Args:    cobra.ExactArgs(1),
+	var toReporter, onlyIfUnowned bool
+
+	cmd := &cobra.Command{
+		Use:   "assign KEY_OR_URL",
+		Short: "Take ownership of an issue as the current user (no status change)",
+		Example: `  human assign SC-3345
+  human assign SC-128 --to-reporter
+  human assign SC-128 --to-reporter --only-if-unowned`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := cmdutil.ResolveAutoProvider(cmd.Context(), cmd, args[0], true, deps)
 			if err != nil {
 				return err
 			}
 			defer result.Cleanup()
-			if err := tracker.AssignToCurrentUser(cmd.Context(), result.Provider, result.Key); err != nil {
+			out := cmd.OutOrStdout()
+
+			if !toReporter {
+				if err := tracker.AssignToCurrentUser(cmd.Context(), result.Provider, result.Key); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(out, "Assigned %s to you\n", result.Key)
+				return nil
+			}
+
+			if onlyIfUnowned {
+				assigned, err := tracker.AssignToReporterIfUnowned(cmd.Context(), result.Provider, result.Key)
+				if err != nil {
+					return err
+				}
+				if !assigned {
+					_, _ = fmt.Fprintf(out, "%s already has an owner — left alone\n", result.Key)
+					return nil
+				}
+				_, _ = fmt.Fprintf(out, "Assigned %s to its reporter\n", result.Key)
+				return nil
+			}
+
+			assigner, ok := result.Provider.(tracker.ReporterAssigner)
+			if !ok {
+				return tracker.ErrOwnershipUnsupported
+			}
+			if err := assigner.AssignToReporter(cmd.Context(), result.Key); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Assigned %s to you\n", result.Key)
+			_, _ = fmt.Fprintf(out, "Assigned %s to its reporter\n", result.Key)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&toReporter, "to-reporter", false,
+		"Assign to whoever reported the issue instead of the current user")
+	cmd.Flags().BoolVar(&onlyIfUnowned, "only-if-unowned", false,
+		"With --to-reporter, leave an issue that already has an owner untouched")
+	return cmd
 }
 
 // BuildAutoDoneCmd creates the top-level "done" command: transition an issue

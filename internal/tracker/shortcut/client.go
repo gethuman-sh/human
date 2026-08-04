@@ -481,6 +481,31 @@ func (c *Client) AssignIssue(ctx context.Context, key string, userID string) err
 	return nil
 }
 
+// AssignToReporter implements tracker.ReporterAssigner: it makes the story's
+// requester its owner.
+//
+// The join happens here because it can only happen here. A caller sees
+// Issue.Reporter as a display name, and AssignIssue needs a member ID; the
+// story carries both, so reading requested_by_id straight off it avoids a
+// name lookup that would be ambiguous even if one existed.
+//
+// A story with no requester (imported or API-created without one) is left
+// alone rather than assigned to nobody, which would clear an existing owner.
+func (c *Client) AssignToReporter(ctx context.Context, key string) error {
+	id, err := parseStoryID(key)
+	if err != nil {
+		return err
+	}
+	story, err := c.fetchStory(ctx, id)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(story.RequestedByID) == "" {
+		return errors.WithDetails("story has no requester to assign as owner", "key", key)
+	}
+	return c.AssignIssue(ctx, key, story.RequestedByID)
+}
+
 // GetCurrentUser implements tracker.CurrentUserGetter. The endpoint is
 // /api/v3/member ("Get Current Member Info"); /api/v3/member-info does not
 // exist and answers 404, which is what silently withheld the board's viewer

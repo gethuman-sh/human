@@ -809,6 +809,17 @@ type CurrentUserGetter interface {
 	GetCurrentUser(ctx context.Context) (string, error)
 }
 
+// ReporterAssigner makes an issue's own reporter its owner.
+//
+// It is a provider capability rather than a caller-side compose of "read the
+// reporter, then assign them" because that compose is impossible from outside:
+// Issue.Reporter is a display NAME while AssignIssue takes a user ID, and
+// nothing maps one to the other. A backend holds both on the issue it just
+// fetched, so only the backend can join them.
+type ReporterAssigner interface {
+	AssignToReporter(ctx context.Context, key string) error
+}
+
 // CurrentUserNamer resolves the authenticated user's DISPLAY NAME — the same
 // string space as Issue.Assignee and Issue.Reporter, so the board can decide
 // "is this card mine?" by string equality against the owner. This is distinct

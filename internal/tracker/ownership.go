@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	stderrors "errors"
+	"strings"
 
 	"github.com/gethuman-sh/human/errors"
 )
@@ -63,6 +64,32 @@ func AssignToCurrentUserBestEffort(ctx context.Context, p any, key string) (ok b
 		if stderrors.Is(err, ErrOwnershipUnsupported) {
 			return false, nil
 		}
+		return false, err
+	}
+	return true, nil
+}
+
+// AssignToReporterIfUnowned makes an issue's reporter its owner, but only when
+// nobody owns it yet.
+//
+// The guard is the point: this repairs tickets that predate ownership being set
+// at creation, and a repair that overwrites a deliberate assignment is not a
+// repair. Reports (false, nil) when the issue already has an owner or the
+// provider cannot express ownership — neither is a failure.
+func AssignToReporterIfUnowned(ctx context.Context, p any, key string) (assigned bool, err error) {
+	assigner, canAssign := p.(ReporterAssigner)
+	getter, canRead := p.(Getter)
+	if !canAssign || !canRead {
+		return false, ErrOwnershipUnsupported
+	}
+	issue, err := getter.GetIssue(ctx, key)
+	if err != nil {
+		return false, errors.WrapWithDetails(err, "reading the issue to check whether it is owned", "key", key)
+	}
+	if issue == nil || strings.TrimSpace(issue.Assignee) != "" {
+		return false, nil
+	}
+	if err := assigner.AssignToReporter(ctx, key); err != nil {
 		return false, err
 	}
 	return true, nil
