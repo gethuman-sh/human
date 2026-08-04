@@ -18,8 +18,15 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Both the source and the committed dist/ transpile are checked. dist/ is not
+// a throwaway build artifact here — it is checked in and embedded via
+// `//go:embed all:frontend/dist`, so a dist/ that lagged a fixed src/ would
+// still ship the clobber to users.
 const here = dirname(fileURLToPath(import.meta.url));
-const boardSrc = readFileSync(resolve(here, "..", "src", "board.ts"), "utf8");
+const scanned = [
+  ["src/board.ts", readFileSync(resolve(here, "..", "src", "board.ts"), "utf8")],
+  ["dist/board.js", readFileSync(resolve(here, "..", "dist", "board.js"), "utf8")],
+];
 
 // Blank comments to spaces (preserving offsets and newlines) so prose
 // mentioning reconcile()/showError() can't register as code. `//` is only
@@ -62,7 +69,7 @@ function failureBranches(src) {
 
 const lineOf = (src, idx) => src.slice(0, idx).split("\n").length;
 
-function bannerClobberViolations(rawSrc) {
+function bannerClobberViolations(rawSrc, label = "board.ts") {
   const src = blankComments(rawSrc);
   const violations = [];
 
@@ -72,7 +79,7 @@ function bannerClobberViolations(rawSrc) {
     // The banner is clobbered by a reconcile inside the branch itself…
     if (/reconcile\s*\(/.test(branch.body)) {
       violations.push(
-        `board.ts:${lineOf(rawSrc, branch.open)} — ${branch.kind} calls showError() and reconcile() together`,
+        `${label}:${lineOf(rawSrc, branch.open)} — ${branch.kind} calls showError() and reconcile() together`,
       );
       continue;
     }
@@ -83,23 +90,25 @@ function bannerClobberViolations(rawSrc) {
     if (/(^|[\s;{])return[\s;]/.test(branch.body)) continue;
     if (/^\s*(await\s+|void\s+)?reconcile\s*\(/.test(src.slice(branch.close + 1))) {
       violations.push(
-        `board.ts:${lineOf(rawSrc, branch.open)} — catch falls through to the reconcile() after it`,
+        `${label}:${lineOf(rawSrc, branch.open)} — catch falls through to the reconcile() after it`,
       );
     }
   }
   return violations;
 }
 
-test("SC-637: no board.ts failure branch shows an error and reconciles in the same cycle", () => {
-  const violations = bannerClobberViolations(boardSrc);
-  assert.deepEqual(
-    violations,
-    [],
-    "showError() must not be followed by reconcile() in the same failure cycle — route the " +
-      "action through runGuardedAction and revert any optimistic mutation instead:\n  " +
-      violations.join("\n  "),
-  );
-});
+for (const [label, source] of scanned) {
+  test(`SC-637: no ${label} failure branch shows an error and reconciles in the same cycle`, () => {
+    const violations = bannerClobberViolations(source, label);
+    assert.deepEqual(
+      violations,
+      [],
+      "showError() must not be followed by reconcile() in the same failure cycle — route the " +
+        "action through runGuardedAction and revert any optimistic mutation instead:\n  " +
+        violations.join("\n  "),
+    );
+  });
+}
 
 // Guard the guard: a scanner that silently matches nothing would pass forever.
 test("the scanner detects both clobber shapes", () => {
