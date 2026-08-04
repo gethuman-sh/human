@@ -65,7 +65,14 @@ func TestClassifyRelaunch_ExitClasses(t *testing.T) {
 	// A stage that reached a deliberate conclusion must not be looped on.
 	require.Equal(t, relaunchNone, classifyRelaunch(ExitNeedsHumanWork, true))
 	require.Equal(t, relaunchNone, classifyRelaunch(ExitNeedsInput, true))
-	require.Equal(t, relaunchNone, classifyRelaunch(ExitDone, true))
+
+	// "done" is the contradiction: this classifier only runs on a stage already
+	// judged failed for finishing without its done-marker, so the agent claims
+	// success the board has no evidence of. Markers advance cards, so the stage
+	// is incomplete and gets the same bounded relaunch as any other incomplete
+	// stage — it must NOT be filed alongside needs-human-work, which stranded
+	// planning runs that had a good plan and only missed the marker.
+	require.Equal(t, relaunchBounded, classifyRelaunch(ExitDone, true))
 
 	// An outcome we do not recognise is deliberate output we cannot parse —
 	// retrying it would burn attempts to no purpose.
@@ -235,4 +242,33 @@ func TestTryRelaunch_DisabledWhenUnwired(t *testing.T) {
 func TestStageRetry_MaxDefaultsWhenUnset(t *testing.T) {
 	require.Equal(t, DefaultStageRetries, StageRetry{}.max())
 	require.Equal(t, 5, StageRetry{Max: 5}.max())
+}
+
+// The end-to-end shape of the stranded-planning bug: an agent attaches its plan,
+// records exit "done", and exits 0 without posting the stage's done-marker. The
+// board judges that a failure (no marker), and the recorded "done" must not stop
+// the relaunch that recovers it.
+func TestTryRelaunch_DoneWithoutTheDoneMarkerIsRelaunched(t *testing.T) {
+	rec := &retryRecorder{}
+	policy := rec.policy(ExitDone, true)
+
+	ok := policy.tryRelaunch(context.Background(), "SC-1", BoardPlanning, rec, "daemon-1", zerolog.Nop())
+
+	require.True(t, ok, "the failure is absorbed by a relaunch rather than left red for a human")
+	require.Equal(t, []BoardStage{BoardPlanning}, rec.relaunched)
+}
+
+// The relaunch stays bounded: a stage that keeps claiming done without ever
+// posting its marker reaches a human instead of looping.
+func TestTryRelaunch_DoneWithoutTheDoneMarkerStopsAtTheAttemptCap(t *testing.T) {
+	rec := &retryRecorder{}
+	policy := rec.policy(ExitDone, true)
+	ctx := context.Background()
+
+	require.True(t, policy.tryRelaunch(ctx, "SC-1", BoardPlanning, rec, "d", zerolog.Nop()))
+	require.True(t, policy.tryRelaunch(ctx, "SC-1", BoardPlanning, rec, "d", zerolog.Nop()))
+	require.False(t, policy.tryRelaunch(ctx, "SC-1", BoardPlanning, rec, "d", zerolog.Nop()),
+		"a stage that never posts its marker must reach a human, not loop")
+
+	require.Len(t, rec.relaunched, 2)
 }

@@ -124,6 +124,18 @@ const (
 // a flake, relaunched charged. Anything else is a deliberate exit we do not
 // recognise and is left for a human rather than looped on a sentence we cannot
 // parse.
+//
+// ExitDone is the contradiction case, and it is relaunched rather than left red.
+// This classifier only runs once a stage has already been judged failed for
+// finishing without its done-marker, so a recorded "done" means the agent
+// believes it succeeded while the board holds no evidence that it did. Markers
+// are what advance a card, so as far as the pipeline is concerned the stage did
+// not complete, and a bounded relaunch is the remedy every other incomplete
+// stage gets. Sitting in relaunchNone it was treated identically to
+// needs-human-work — "deliberate, ask a human" — which stranded planning runs
+// that had produced a perfectly good plan and only missed the marker. The
+// attempt cap bounds it, and a stage that really had finished re-posts a
+// latest-wins marker rather than duplicating work.
 func classifyRelaunch(outcome string, recorded bool) relaunchKind {
 	if !recorded {
 		return relaunchBounded
@@ -131,7 +143,7 @@ func classifyRelaunch(outcome string, recorded bool) relaunchKind {
 	switch outcome {
 	case ExitOutage:
 		return relaunchOutage
-	case ExitRetryable:
+	case ExitRetryable, ExitDone:
 		return relaunchBounded
 	default:
 		return relaunchNone
