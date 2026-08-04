@@ -478,12 +478,12 @@ func TestRunReadPullRequest_json(t *testing.T) {
 	require.NoError(t, err)
 
 	out := buf.String()
-	assert.Contains(t, out, `"Number": 7`)
-	assert.Contains(t, out, `"HeadRef": "feat"`)
-	assert.Contains(t, out, `"BaseRef": "main"`)
-	assert.Contains(t, out, `"HeadSHA": "abc123"`)
-	assert.Contains(t, out, `"Mergeable": true`)
-	assert.Contains(t, out, `"Checks"`)
+	assert.Contains(t, out, `"number": 7`)
+	assert.Contains(t, out, `"headRef": "feat"`)
+	assert.Contains(t, out, `"baseRef": "main"`)
+	assert.Contains(t, out, `"headSHA": "abc123"`)
+	assert.Contains(t, out, `"mergeable": true`)
+	assert.Contains(t, out, `"checks"`)
 	assert.Contains(t, out, `"build"`)
 	assert.Contains(t, out, `"https://ci/build"`)
 }

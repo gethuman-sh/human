@@ -129,9 +129,9 @@ type ChecksReader interface {
 // DetailsURL points at the provider's page for the check (its log), the place a
 // recovery agent looks next; it is "" when the provider reports none.
 type CheckResult struct {
-	Name       string
-	Conclusion ChecksState
-	DetailsURL string
+	Name       string      `json:"name"`
+	Conclusion ChecksState `json:"conclusion"`
+	DetailsURL string      `json:"detailsURL"`
 }
 
 // PullRequestState is the read surface over a pull request that answers more
@@ -142,12 +142,12 @@ type CheckResult struct {
 // remain for the gates that consume exactly one word, while everything that
 // needs more reads this rather than reaching around human to the code host.
 type PullRequestState struct {
-	Number    int
-	HeadRef   string
-	BaseRef   string
-	HeadSHA   string
-	Mergeable bool
-	Checks    []CheckResult
+	Number    int           `json:"number"`
+	HeadRef   string        `json:"headRef"`
+	BaseRef   string        `json:"baseRef"`
+	HeadSHA   string        `json:"headSHA"`
+	Mergeable bool          `json:"mergeable"`
+	Checks    []CheckResult `json:"checks"`
 }
 
 // PullRequestReader reads a pull request's full state and per-check results in

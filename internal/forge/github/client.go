@@ -471,7 +471,10 @@ func (c *Client) ReadPullRequest(ctx context.Context, repoName string, number in
 
 // checkResults reads both CI systems for a head SHA and returns one entry per
 // check — check runs deduped to the latest attempt per name (SC-2602), then each
-// legacy commit-status context.
+// legacy commit-status context. The two systems are not deduped against each
+// other: a context reported by both a check run and a legacy commit status
+// would appear twice. Rare on GitHub Actions repos (which use check runs, not
+// statuses), so not worth the extra bookkeeping today.
 func (c *Client) checkResults(ctx context.Context, owner, repo, repoName, sha string) ([]forge.CheckResult, error) {
 	runsPath := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))

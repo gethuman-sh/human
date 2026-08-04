@@ -1493,6 +1493,11 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 // want, best-effort: a read failure yields "" so the headline degrades to its
 // bare reason rather than masking the gate verdict (the SC-1996 rule). It reads
 // on a fresh short-lived context because the timeout caller's ctx is already done.
+// Note: runVerdict (internal/forge/github/client.go) maps a cancelled check run
+// to ChecksPending (SC-2602), so a "still running" headline built from
+// ChecksPending can list a check that was actually cancelled, not still in
+// flight. Accepted trade-off (plan AD2): it never inverts a verdict, only
+// mislabels a rare terminal state as pending.
 func (d BoardTransitionDeps) checkNames(number int, want forge.ChecksState) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
