@@ -350,50 +350,8 @@ func GetAccount(db *sql.DB, repo string, limit int) (*Account, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	type scored struct {
-		n     Noun
-		score int
-		refs  int
-	}
-	var cands []scored
-	sawType := false
-	for rows.Next() {
-		var qname, name, sig, doc, path string
-		var line, refs int
-		if err := rows.Scan(&qname, &name, &sig, &doc, &path, &line, &refs); err != nil {
-			return nil, err
-		}
-		sawType = true
-		if inInfraPackage(path) {
-			continue
-		}
-		score := refs
-		if score > 8 {
-			score = 8
-		}
-		if doc != "" {
-			score += 5
-		}
-		if strings.HasPrefix(strings.TrimSpace(sig), "struct{") {
-			score += 3
-		}
-		if wholeWordIn(handlerSigs, name) {
-			score += 4
-		}
-		if score == 0 {
-			continue // pure plumbing alias — no intent, no shape, unused
-		}
-		cands = append(cands, scored{
-			n: Noun{
-				QName: qname, Name: name, Kind: "type",
-				Shape:   foldOneLine(sig, 100),
-				Meaning: foldOneLine(doc, 160),
-				File:    path, Line: line,
-			},
-			score: score, refs: refs,
-		})
-	}
-	if err := rows.Err(); err != nil {
+	cands, sawType, err := accountCandidates(rows, handlerSigs)
+	if err != nil {
 		return nil, err
 	}
 
@@ -417,6 +375,74 @@ func GetAccount(db *sql.DB, repo string, limit int) (*Account, error) {
 		acct.Note = accountEmptyNote(db, repo, sawType)
 	}
 	return acct, nil
+}
+
+// scoredNoun pairs a candidate noun with the evidence that ranked it, so the
+// sort can fall back to reference count when two nouns score alike.
+type scoredNoun struct {
+	n     Noun
+	score int
+	refs  int
+}
+
+// accountCandidates turns the type-symbol rows into scored candidates, dropping
+// infra packages and score-zero plumbing. It also reports whether the query saw
+// any type at all, which is what tells an empty account "no types indexed" apart
+// from "types indexed, none of them nouns". Extracted from GetAccount so the
+// scan and the ranking each stay readable on their own.
+func accountCandidates(rows *sql.Rows, handlerSigs string) ([]scoredNoun, bool, error) {
+	var cands []scoredNoun
+	sawType := false
+	for rows.Next() {
+		var qname, name, sig, doc, path string
+		var line, refs int
+		if err := rows.Scan(&qname, &name, &sig, &doc, &path, &line, &refs); err != nil {
+			return nil, sawType, err
+		}
+		sawType = true
+		if inInfraPackage(path) {
+			continue
+		}
+		score := nounScore(refs, doc, sig, name, handlerSigs)
+		if score == 0 {
+			continue // pure plumbing alias — no intent, no shape, unused
+		}
+		cands = append(cands, scoredNoun{
+			n: Noun{
+				QName: qname, Name: name, Kind: "type",
+				Shape:   foldOneLine(sig, 100),
+				Meaning: foldOneLine(doc, 160),
+				File:    path, Line: line,
+			},
+			score: score, refs: refs,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, sawType, err
+	}
+	return cands, sawType, nil
+}
+
+// nounScore ranks a type by recorded intent rather than call frequency: a doc
+// comment (the author saying what it is) outweighs everything, a route handler
+// naming it marks it as part of the product's surface, and reference count only
+// breaks ties — capped so one heavily-used helper cannot outrank a documented
+// domain type.
+func nounScore(refs int, doc, sig, name, handlerSigs string) int {
+	score := refs
+	if score > 8 {
+		score = 8
+	}
+	if doc != "" {
+		score += 5
+	}
+	if strings.HasPrefix(strings.TrimSpace(sig), "struct{") {
+		score += 3
+	}
+	if wholeWordIn(handlerSigs, name) {
+		score += 4
+	}
+	return score
 }
 
 // routeHandlerSignatures returns every detected route handler's signature joined
