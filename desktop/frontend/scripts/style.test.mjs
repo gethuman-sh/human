@@ -207,26 +207,35 @@ test("partial badge uses the machine register, not the needs-a-person amber (SC-
 // the card with cursor:not-allowed), .card.not-mine must touch opacity only.
 test("not-mine card is dimmed via opacity only, never locked like a degraded card (SC-3339)", () => {
   const body = ruleBody(".card.not-mine");
-  assert.match(body, /opacity:\s*[\d.]+/, ".card.not-mine must set opacity");
+  assert.match(body, /opacity:\s*(var\(--not-mine-opacity\)|[\d.]+)/, ".card.not-mine must set opacity");
   assert.doesNotMatch(body, /cursor:\s*not-allowed/, "not-mine must not disable the pointer like .degraded does");
   assert.doesNotMatch(body, /pointer-events:\s*none/, "not-mine must not block interaction");
 });
 
-// SC-3339: a card that is both degraded (fetch failure) and not-mine must
-// keep the more restrictive .degraded dimming, so a degraded card never
-// reads as LESS urgent than a healthy not-mine one.
-test("a degraded not-mine card keeps the degraded (more restrictive) opacity, not the lighter not-mine one (SC-3339)", () => {
-  const notMine = ruleBody(".card.not-mine").match(/opacity:\s*([\d.]+)/);
-  const degraded = ruleBody(".card.degraded").match(/opacity:\s*([\d.]+)/);
-  assert.ok(notMine, ".card.not-mine must set opacity");
-  assert.ok(degraded, ".card.degraded must set opacity");
+// SC-3404: the dimming strength is a token so a theme can set it, and the
+// derived rules must follow it rather than repeat a literal that can drift.
+test("not-mine dimming comes from the --not-mine-opacity token (SC-3404)", () => {
+  const root = ruleBody(":root").match(/--not-mine-opacity:\s*([\d.]+)/);
+  assert.ok(root, ":root must define --not-mine-opacity");
+  assert.ok(Number(root[1]) > 0 && Number(root[1]) < 1, "the token must be a usable opacity");
+  assert.match(ruleBody(".card.not-mine"), /var\(--not-mine-opacity\)/, "the rule must read the token");
+});
 
-  const combined = ruleBody(".card.degraded.not-mine").match(/opacity:\s*([\d.]+)/);
-  assert.ok(combined, ".card.degraded.not-mine must set an explicit opacity to break the cascade tie");
-  assert.equal(
-    Number(combined[1]), Number(degraded[1]),
-    ".card.degraded.not-mine must resolve to .degraded's opacity, not .not-mine's lighter one",
-  );
+// SC-3339/SC-3404: a card that is both degraded (fetch failure) and not-mine
+// must never read LESS dim than either signal alone, so neither signal is
+// weakened by the overlap. not-mine is now the stronger of the two, so the
+// combined rule derives from its token rather than matching .degraded's value.
+test("a degraded not-mine card is at least as dim as either signal alone (SC-3339)", () => {
+  const token = Number(ruleBody(":root").match(/--not-mine-opacity:\s*([\d.]+)/)[1]);
+  const degraded = Number(ruleBody(".card.degraded").match(/opacity:\s*([\d.]+)/)[1]);
+  const combined = ruleBody(".card.degraded.not-mine");
+  assert.notEqual(combined, "", ".card.degraded.not-mine must set an explicit opacity to break the cascade tie");
+
+  const factor = combined.match(/calc\(var\(--not-mine-opacity\)\s*\*\s*([\d.]+)\)/);
+  assert.ok(factor, "the overlap must derive from the token, not repeat a literal");
+  const resolved = token * Number(factor[1]);
+  assert.ok(resolved <= token, `overlap ${resolved} must be at least as dim as not-mine ${token}`);
+  assert.ok(resolved <= degraded, `overlap ${resolved} must be at least as dim as degraded ${degraded}`);
 });
 
 // SC-1830: the four "whose turn" semantic tokens must exist and alias the
