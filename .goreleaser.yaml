@@ -4,7 +4,9 @@ version: 2
 # is a plain `go build` which links but fails at startup (Wails requires the
 # `desktop` build tag that only `wails build` injects). The desktop artifact is
 # cgo and cannot be cross-compiled, so it is built per-OS by `make desktop`
-# (wraps `wails build`) on the 3-runner matrix in .github/workflows/desktop.yml.
+# (wraps `wails build`) on the runner matrix in .github/workflows/desktop.yml —
+# which covers Linux and macOS only, so a Windows desktop bundle would need that
+# row restored before it could ship.
 # When it ships, attach the per-OS bundles via release.extra_files. See
 # docs/desktop-app.md.
 

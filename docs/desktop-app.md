@@ -35,8 +35,8 @@ tag for cgo backend selection.
 All three Wails backends are cgo — Linux uses webkit2gtk + gtk3, Windows uses
 the WebView2 runtime, macOS uses the Obj-C/WebKit toolchain. You therefore
 **cannot cross-compile** all OSes from one machine; each target builds on its
-own native runner. CI uses a 3-runner matrix (`.github/workflows/desktop.yml`):
-`ubuntu-24.04`, `macos-14`, `windows-2022`, each installing its native webview
+own native runner. CI uses a 2-runner matrix (`.github/workflows/desktop.yml`):
+`ubuntu-24.04` and `macos-14`, each installing its native webview
 toolchain.
 
 Wails v2 also guards its `main()` entry point with a build-tag check that is
@@ -115,7 +115,7 @@ So a future change that breaks `wails build` is caught automatically rather than
 
 1. A comment in `desktop/main.go` directly above the build-tag-guarded `wails.Run` call, explaining that a plain `go build` fails at startup by design and pointing here.
 2. `make desktop` runs `wails build -tags wailsapp`; `make desktop-dev` runs `wails dev -tags wailsapp`; `make desktop-package` produces a clean distributable bundle.
-3. A CI matrix (`.github/workflows/desktop.yml`) that runs the real `wails build` on all three OSes (`ubuntu-24.04`, `macos-14`, `windows-2022`) so the cgo build path is exercised on every change under `desktop/`. This is a SEPARATE workflow from `ci.yml`; the main lint/test/build jobs deliberately do not install webview headers and rely on the `wailsapp` build tag to keep the cgo path out of `go vet ./...` / `go build .`.
+3. A CI matrix (`.github/workflows/desktop.yml`) that runs the real `wails build` on `ubuntu-24.04` and `macos-14` so the cgo build path is exercised on every change under `desktop/`. Windows is not built: its runner took ~8 minutes and gated every desktop merge, and no Windows desktop bundle ships today — restore the row before one does. This is a SEPARATE workflow from `ci.yml`; the main lint/test/build jobs deliberately do not install webview headers and rely on the `wailsapp` build tag to keep the cgo path out of `go vet ./...` / `go build .`.
 
 ## Release safety
 
