@@ -380,18 +380,11 @@ func failureBody(body string) string {
 		if rest := strings.TrimSpace(m.Body); rest != "" {
 			return rest
 		}
-		// A marker carrying only fields has no diagnosis to give. Show the
-		// header and stop — falling through to the positional read below would
-		// surface the signature, the exact failure this function exists to avoid.
+		// A marker carrying only fields has no diagnosis to give: show the header.
 		return firstLine(trimmed)
 	}
-	// Not a marker at all: keep the original positional read so anything else
-	// still shows something rather than rendering an empty card.
-	if _, after, ok := strings.Cut(trimmed, "\n"); ok {
-		if rest := strings.TrimSpace(after); rest != "" {
-			return rest
-		}
-	}
+	// Not a marker at all: there is no field block to skip and no prose to find,
+	// so the first line is all there is.
 	return firstLine(trimmed)
 }
 
@@ -486,7 +479,10 @@ func latestPlanComment(comments []tracker.Comment) (string, bool) {
 		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
-			body = strings.TrimSpace(strings.TrimPrefix(trimmed, PlanCommentHeader))
+			// ParseBody, not TrimPrefix: a signed plan comment carries machine:/build:
+			// between the header and the plan, and trimming only the header prefixed
+			// every rendered plan with the signature.
+			body = marker.Prose(trimmed)
 		}
 	}
 	return body, haveLatest

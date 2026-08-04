@@ -215,7 +215,9 @@ func hasCompletedRelatedRecord(comments []tracker.Comment) bool {
 		if !strings.HasPrefix(trimmed, RelatedHeader) {
 			continue
 		}
-		head := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(trimmed, "\n", 2)[0], RelatedHeader))
+		// marker.Head rather than slicing line 0: the head token is the marker
+		// grammar's, and only the marker package should know where it sits.
+		head := marker.Head(trimmed)
 		if head == "found" || head == "none" {
 			return true
 		}

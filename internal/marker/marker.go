@@ -311,3 +311,30 @@ func All(comments []tracker.Comment) []Marker {
 	}
 	return markers
 }
+
+// Prose returns a marker comment's free-form body — everything after the header
+// and its field block — or "" when the body is not a marker at all.
+//
+// It is the supported way to read a marker's content from outside this package.
+// Callers used to strip the header with TrimPrefix and take what followed, which
+// was correct only until Sign began splicing machine:/build: in between; after
+// that the "content" started with the signature. Routing every reader through
+// one function is what keeps a future field addition from repeating that.
+func Prose(body string) string {
+	m, ok := ParseBody(body)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(m.Body)
+}
+
+// Head returns a marker's head token — the word following the header on the same
+// line, e.g. "found" in "[human:related] found" — or "" when the body is not a
+// marker.
+func Head(body string) string {
+	m, ok := ParseBody(body)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(m.Head)
+}
