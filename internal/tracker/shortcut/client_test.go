@@ -868,10 +868,15 @@ func TestAssignIssue_error(t *testing.T) {
 	assert.Contains(t, err.Error(), "returned")
 }
 
+// The path is asserted by omission: the fake serves only /api/v3/member, so a
+// call to any other path — notably the /api/v3/member-info that Shortcut
+// answers with a 404 — fails the test. The endpoint name is the whole content
+// of this call, and the previous fake mirrored whatever the client sent, so it
+// agreed with the client instead of with Shortcut.
 func TestGetCurrentUser_happy(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v3/member-info":
+		case "/api/v3/member":
 			assert.Equal(t, http.MethodGet, r.Method)
 			assert.Equal(t, "tok-test", r.Header.Get("Shortcut-Token"))
 
@@ -907,7 +912,7 @@ func TestGetCurrentUser_error(t *testing.T) {
 func TestCurrentUserName_happy(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v3/member-info":
+		case "/api/v3/member":
 			_, _ = fmt.Fprint(w, `{"id":"uuid-me"}`)
 		case "/api/v3/members/uuid-me":
 			_, _ = fmt.Fprint(w, `{"id":"uuid-me","profile":{"display_name":"Stephan Schmidt"}}`)
@@ -940,7 +945,7 @@ func TestCurrentUserName_memberInfoError(t *testing.T) {
 func TestCurrentUserName_nameFallbackToProfileName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v3/member-info":
+		case "/api/v3/member":
 			_, _ = fmt.Fprint(w, `{"id":"uuid-me"}`)
 		case "/api/v3/members/uuid-me":
 			_, _ = fmt.Fprint(w, `{"id":"uuid-me","profile":{"display_name":"","name":"stephan"}}`)

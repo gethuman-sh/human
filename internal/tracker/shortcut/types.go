@@ -89,7 +89,7 @@ type scGroup struct {
 	Name string `json:"name"`
 }
 
-// scMemberInfo is the response from /api/v3/member-info.
+// scMemberInfo is the response from /api/v3/member.
 type scMemberInfo struct {
 	ID string `json:"id"` // UUID
 }
