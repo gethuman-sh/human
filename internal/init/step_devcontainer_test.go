@@ -44,12 +44,13 @@ func TestBuildDevcontainerConfig_CACertMountGating(t *testing.T) {
 	}
 }
 
-// Every generated proxy variant reads the proxy host out of /etc/hosts. A host
-// mapped twice makes getent print two lines, and an unqualified awk turns that
-// into a HUMAN_PROXY_ADDR carrying a newline — human-proxy-setup then feeds it
-// to iptables, dies under set -e, and takes the rest of the && chain (CA trust,
-// agent install, chrome bridge) with it. NR==1 is what keeps a duplicate host
-// entry from silently disarming the container's proxy redirect.
+// The daemon hands containers it starts an address already resolved to an IP,
+// so no generated variant may overwrite it: reading /etc/hosts is the fallback
+// for the standalone `devcontainer up` path only. The fallback itself stays
+// pinned to the first line — a host mapped twice makes getent print two, and
+// the address would carry a newline, which iptables rejects under set -e,
+// taking the rest of the && chain (CA trust, agent install, chrome bridge)
+// with it.
 func TestBuildDevcontainerConfig_ProxyAddrTakesFirstHostsLine(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -71,6 +72,9 @@ func TestBuildDevcontainerConfig_ProxyAddrTakesFirstHostsLine(t *testing.T) {
 			}
 			if !strings.Contains(cmd, "awk 'NR==1{print $1}'") {
 				t.Errorf("postStartCommand must take only the first hosts line: %s", cmd)
+			}
+			if !strings.Contains(cmd, `case "$HUMAN_PROXY_ADDR" in`) {
+				t.Errorf("postStartCommand must leave an already-resolved address alone: %s", cmd)
 			}
 		})
 	}

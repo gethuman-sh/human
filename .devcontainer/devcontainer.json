@@ -21,7 +21,7 @@
     "source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"
   ],
   "name": "human secure container",
-  "postStartCommand": "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk 'NR==1{print $1}'):19287 \u0026\u0026 sudo -E human-proxy-setup \u0026\u0026 sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt \u0026\u0026 sudo update-ca-certificates \u0026\u0026 human install --agent claude \u0026\u0026 human chrome-bridge \u0026\u0026 go install golang.org/x/tools/gopls@latest \u0026\u0026 go install golang.org/x/tools/gopls@latest \u0026\u0026 npm install -g @vtsls/language-server",
+  "postStartCommand": "case \"$HUMAN_PROXY_ADDR\" in ''|*[!0-9.:]*) HUMAN_PROXY_ADDR=\"$(getent hosts host.docker.internal | awk 'NR==1{print $1}'):19287\";; esac; export HUMAN_PROXY_ADDR;  sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge && go install golang.org/x/tools/gopls@latest && go install golang.org/x/tools/gopls@latest && npm install -g @vtsls/language-server",
   "remoteEnv": {
     "BROWSER": "human-browser",
     "HUMAN_CHROME_ADDR": "host.docker.internal:19286",
