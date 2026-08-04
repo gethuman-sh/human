@@ -123,6 +123,18 @@ type fakeDeployer struct {
 	published    []string
 	publishErr   error
 	publishCalls int
+	// prState is the full PR read surface ReadPullRequest returns — the checks
+	// the failure/timeout headlines name the offending entries from; prStateErr
+	// models a read failure that must degrade the headline to its bare reason.
+	prState    *forge.PullRequestState
+	prStateErr error
+}
+
+func (f *fakeDeployer) ReadPullRequest(_ context.Context, _ string, _ int) (*forge.PullRequestState, error) {
+	if f.prStateErr != nil {
+		return nil, f.prStateErr
+	}
+	return f.prState, nil
 }
 
 func (f *fakeDeployer) PublishResolvedBranch(_ context.Context, _, branch string) (bool, error) {
@@ -1473,6 +1485,10 @@ func (f *gateProbeDeployer) PullRequestChecks(_ context.Context, _ string, _ int
 	return forge.ChecksPassing, nil
 }
 
+func (f *gateProbeDeployer) ReadPullRequest(_ context.Context, _ string, _ int) (*forge.PullRequestState, error) {
+	return nil, nil
+}
+
 func (f *gateProbeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (bool, error) {
 	return false, nil
 }
@@ -2145,6 +2161,64 @@ func TestStateUnreadable_And_Headlines(t *testing.T) {
 
 	failing := ciFailureHeadline(errors.New("CI checks failed"))
 	assert.Contains(t, failing, "fix the failing checks")
+}
+
+// A failing gate names the offending checks: waitForChecks reads the PR's
+// per-check state, stamps the failing names as a structured detail, and
+// ciFailureHeadline renders them into the next-step headline the fixer reads.
+func TestWaitForChecks_failingNamesChecks(t *testing.T) {
+	p := &fakeDeployer{
+		checks: []forge.ChecksState{forge.ChecksFailing},
+		prState: &forge.PullRequestState{Checks: []forge.CheckResult{
+			{Name: "build", Conclusion: forge.ChecksFailing},
+			{Name: "unit", Conclusion: forge.ChecksPassing},
+		}},
+	}
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, p)
+	err := deps.waitForChecks(context.Background(), PRResult{Number: 21, URL: "https://example/pr/21"})
+	require.Error(t, err)
+	names, _ := humanerrors.AllDetails(err)[deployFailingChecksDetail].(string)
+	assert.Equal(t, "build", names)
+	assert.Equal(t,
+		"CI checks failed on the pull request (failing: build) — fix the failing checks, then re-run Deploy",
+		ciFailureHeadline(err))
+}
+
+// The names lookup is best-effort: a read failure yields no names, and the
+// headline degrades to today's bare reason rather than masking the gate verdict
+// (the SC-1996 rule).
+func TestWaitForChecks_failingReadErrorDegrades(t *testing.T) {
+	p := &fakeDeployer{
+		checks:     []forge.ChecksState{forge.ChecksFailing},
+		prStateErr: errors.New("read failed"),
+	}
+	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, p)
+	err := deps.waitForChecks(context.Background(), PRResult{Number: 21, URL: "https://example/pr/21"})
+	require.Error(t, err)
+	assert.Equal(t,
+		"CI checks failed on the pull request — fix the failing checks, then re-run Deploy",
+		ciFailureHeadline(err))
+}
+
+// The timeout path names the checks still running when the gate gave up.
+func TestCiFailureHeadline_timeoutNamesRunning(t *testing.T) {
+	err := humanerrors.WithDetails("timed out waiting for CI checks", "pr", "https://example/pr/21",
+		deployRunningChecksDetail, "integration")
+	assert.Equal(t,
+		"CI did not finish within the deploy window (still running: integration) — check the PR's checks, then re-run Deploy",
+		ciFailureHeadline(err))
+}
+
+// A credential/unreadable-state failure keeps its remedy headline untouched — the
+// check-name suffix never attaches to it.
+func TestCiFailureHeadline_unchangedForCredential(t *testing.T) {
+	unreadable := markStateUnreadable(
+		errors.New("resolving 1Password secret via CLI: exit status 1"),
+		"could not read the pull request's check state")
+	headline := ciFailureHeadline(unreadable)
+	assert.Contains(t, headline, "credential")
+	assert.NotContains(t, headline, "failing:")
+	assert.NotContains(t, headline, "still running:")
 }
 
 // A credential/vault read failure at the CI gate must be reported as an

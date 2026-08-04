@@ -40,6 +40,11 @@ type AgentLauncher interface {
 type Deployer interface {
 	PushAndCreatePR(ctx context.Context, req PRRequest) (PRResult, error)
 	PullRequestChecks(ctx context.Context, workspaceDir string, number int) (forge.ChecksState, error)
+	// ReadPullRequest reads the PR's full state and per-check results — the
+	// richer surface the failure/timeout headlines name the offending checks
+	// from. Best-effort on those paths: a read failure degrades the headline to
+	// its bare reason, never inverts the gate verdict.
+	ReadPullRequest(ctx context.Context, workspaceDir string, number int) (*forge.PullRequestState, error)
 	// EnsureMergeable makes the handoff branch current with the base before the
 	// merge is attempted: it verifies the PR is mergeable against current main
 	// and, when it is not, rebases the branch, re-pushes (lease), and re-verifies.
@@ -1247,6 +1252,16 @@ func deployReason(headline string, cause error) string {
 // statusCode (internal/forge/forge.go).
 const deployStateUnreadableDetail = "deployStateUnreadable"
 
+// deployFailingChecksDetail / deployRunningChecksDetail carry the comma-joined
+// names of the checks that failed (or were still running at timeout) as a
+// structured detail on the gate error, so ciFailureHeadline can name them in the
+// next-step headline the fixer reads — read via errors.AllDetails, exactly as
+// deployStateUnreadableDetail is.
+const (
+	deployFailingChecksDetail = "failingChecks"
+	deployRunningChecksDetail = "runningChecks"
+)
+
 // credentialRemedy is the shared next-step for every unreadable-state headline:
 // it names the failure as a credential/vault problem, disowns the two verdicts
 // it must never be mistaken for (a check failure, a conflict), and gives the
@@ -1300,9 +1315,23 @@ func ciFailureHeadline(err error) string {
 		return "could not read the pull request's check state — " + credentialRemedy
 	}
 	if strings.Contains(err.Error(), "timed out") {
-		return "CI did not finish within the deploy window — check the PR's checks, then re-run Deploy"
+		return "CI did not finish within the deploy window" +
+			checkSuffix(err, deployRunningChecksDetail, "still running") +
+			" — check the PR's checks, then re-run Deploy"
 	}
-	return "CI checks failed on the pull request — fix the failing checks, then re-run Deploy"
+	return "CI checks failed on the pull request" +
+		checkSuffix(err, deployFailingChecksDetail, "failing") +
+		" — fix the failing checks, then re-run Deploy"
+}
+
+// checkSuffix renders " (label: a, b)" from a names detail on err, or "" when no
+// names were captured (a best-effort read that came back empty).
+func checkSuffix(err error, detailKey, label string) string {
+	names, _ := errors.AllDetails(err)[detailKey].(string)
+	if names == "" {
+		return ""
+	}
+	return " (" + label + ": " + names + ")"
 }
 
 // ciFailureFixable reports whether a CI gate error is a genuine check FAILURE a
@@ -1448,14 +1477,36 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 		case forge.ChecksPassing:
 			return nil
 		case forge.ChecksFailing:
-			return errors.WithDetails("CI checks failed", "pr", res.URL)
+			return errors.WithDetails("CI checks failed", "pr", res.URL,
+				deployFailingChecksDetail, d.checkNames(res.Number, forge.ChecksFailing))
 		}
 		select {
 		case <-ctx.Done():
-			return errors.WithDetails("timed out waiting for CI checks", "pr", res.URL)
+			return errors.WithDetails("timed out waiting for CI checks", "pr", res.URL,
+				deployRunningChecksDetail, d.checkNames(res.Number, forge.ChecksPending))
 		case <-ticker.C:
 		}
 	}
+}
+
+// checkNames returns the comma-joined names of the PR's checks whose verdict is
+// want, best-effort: a read failure yields "" so the headline degrades to its
+// bare reason rather than masking the gate verdict (the SC-1996 rule). It reads
+// on a fresh short-lived context because the timeout caller's ctx is already done.
+func (d BoardTransitionDeps) checkNames(number int, want forge.ChecksState) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	state, err := d.Deployer.ReadPullRequest(ctx, d.WorkspaceDir, number)
+	if err != nil || state == nil {
+		return ""
+	}
+	var names []string
+	for _, c := range state.Checks {
+		if c.Conclusion == want && c.Name != "" {
+			names = append(names, c.Name)
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // deployFailed posts the failure marker on its own context: the pipeline's
