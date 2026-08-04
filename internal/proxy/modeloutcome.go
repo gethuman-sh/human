@@ -1,7 +1,12 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -137,6 +142,66 @@ type usageEnvelope struct {
 		Usage *tokenUsage `json:"usage"`
 	} `json:"message"`
 	Usage *tokenUsage `json:"usage"` // top-level: non-streaming object AND message_delta
+}
+
+// maxDecodedBody caps how much of a compressed body is expanded for accounting.
+// A response is read for four integers and a model id, all of which arrive in
+// the first events, so this is a decompression-bomb guard rather than a limit
+// anything legitimate approaches.
+const maxDecodedBody = 32 * 1024 * 1024
+
+// decodeBody returns the body as the API meant it to be read, expanding the
+// content coding the client negotiated. The MITM path reads the response with
+// http.ReadResponse and tees the bytes straight through, and ReadResponse
+// decodes only the transfer encoding — Go's Transport is what would undo a
+// content encoding, and this path deliberately has none. So a client that sent
+// `accept-encoding: gzip` (every current Anthropic SDK does) left the captured
+// copy compressed, and the usage scan found no `data:` line and no JSON object
+// in it: 520 attributed calls landed in the ledger with a blank model and four
+// zero counts, priced at $0.00 (SC-3440).
+//
+// Only the accounting copy is expanded. The bytes streamed to the client are
+// untouched, still compressed, still byte-identical — accounting must never
+// alter the call it measures (SC-2555 constraint 1).
+//
+// An unreadable or unsupported encoding returns the body unchanged rather than
+// an error: the scan then finds nothing and records zeros, exactly as before,
+// so a coding we cannot expand costs a measurement and never a call.
+func decodeBody(header http.Header, body []byte) []byte {
+	if len(body) == 0 || header == nil {
+		return body
+	}
+
+	var r io.Reader
+	switch strings.ToLower(strings.TrimSpace(header.Get("Content-Encoding"))) {
+	case "", "identity":
+		return body
+	case "gzip", "x-gzip":
+		zr, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return body
+		}
+		defer func() { _ = zr.Close() }()
+		r = zr
+	case "deflate":
+		fr := flate.NewReader(bytes.NewReader(body))
+		defer func() { _ = fr.Close() }()
+		r = fr
+	default:
+		// br, zstd and anything else: not expanded here. emitOutcome reports the
+		// resulting blind spot, because "this call cost nothing" and "we could
+		// not tell what it cost" are different claims and only one is true.
+		return body
+	}
+
+	// A streamed response captured mid-flight is a truncated compressed stream,
+	// so an unexpected-EOF read still yields every complete event before the
+	// cut. Take what decoded and let the scan work on it.
+	decoded, err := io.ReadAll(io.LimitReader(r, maxDecodedBody))
+	if err != nil && len(decoded) == 0 {
+		return body
+	}
+	return decoded
 }
 
 // usageFromResponse extracts the four token counts and the model id from a
@@ -276,7 +341,7 @@ func (li *LoggingInterceptor) markInflight(remoteAddr, host string, delta int) {
 // (SC-2847). It is nil on every path that has no response line (a transport
 // failure) and is never stored; only fixed metadata fields are read, so the
 // outcome struct stays content-free (SC-2555). No other outcome touches the body.
-func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode int, transportErr error, start time.Time, body []byte) {
+func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode int, transportErr error, start time.Time, header http.Header, body []byte) {
 	if li.RecordOutcome == nil || !li.isModelHost(host) {
 		return
 	}
@@ -288,6 +353,7 @@ func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode in
 			ticket, stage = t, s
 		}
 	}
+	body = decodeBody(header, body)
 	errType := ""
 	if statusCode == 400 {
 		errType = anthropicErrorType(body)
@@ -296,6 +362,17 @@ func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode in
 	var inTok, outTok, cacheCreate, cacheRead int
 	if statusCode >= 200 && statusCode < 300 {
 		model, inTok, outTok, cacheCreate, cacheRead = usageFromResponse(body)
+		// A successful call whose usage would not parse is a hole in the
+		// accounting, and it is invisible downstream: the ledger stores the row
+		// either way, so the ticket simply reads as costing nothing. Say so
+		// once, here, with the coding that defeated the read — the alternative
+		// is a board reporting $0.00 with total confidence (SC-3440).
+		if model == "" && len(body) > 0 {
+			li.Logger.Warn().
+				Str("content_encoding", header.Get("Content-Encoding")).
+				Int("body_bytes", len(body)).
+				Msg("model call recorded without usage: response body did not parse, its cost is unmeasured")
+		}
 	}
 	li.RecordOutcome(ModelCallOutcome{
 		Ticket:            ticket,

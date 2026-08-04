@@ -58,14 +58,14 @@ func TestEmitOutcome_SpendLimitFrom400Body(t *testing.T) {
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
 
 	billing := []byte(`{"type":"error","error":{"type":"billing_error","message":"secret prose that must never be read"}}`)
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), billing)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), nil, billing)
 	assert.Equal(t, ClassSpendLimit, got.Class, "a billing_error 400 is a spend-limit")
 
 	generic := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`)
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), generic)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), nil, generic)
 	assert.Equal(t, ClassOther, got.Class, "a non-billing 400 stays other")
 
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), nil, nil)
 	assert.Equal(t, ClassOther, got.Class, "a 400 with no body is other, never a panic")
 }
 
@@ -96,17 +96,17 @@ func TestModelAPIHost_DefaultAndOverride(t *testing.T) {
 func TestEmitOutcome_NilRecorderNoOp(t *testing.T) {
 	li := &LoggingInterceptor{}
 	// Must not panic with no recorder wired.
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil, nil)
 }
 
 func TestEmitOutcome_GatedOnModelHost(t *testing.T) {
 	var got []ModelCallOutcome
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = append(got, o) }}
 
-	li.emitOutcome("1.2.3.4:5", "example.com", 200, nil, time.Now(), nil)
+	li.emitOutcome("1.2.3.4:5", "example.com", 200, nil, time.Now(), nil, nil)
 	assert.Empty(t, got, "a non-model host is never accounted")
 
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil, nil)
 	require.Len(t, got, 1, "the model host is accounted")
 	assert.Equal(t, ClassOK, got[0].Class)
 	assert.Equal(t, "api.anthropic.com", got[0].Host)
@@ -121,7 +121,7 @@ func TestEmitOutcome_Attribution(t *testing.T) {
 			return "SC-2555", "implementation", true
 		},
 	}
-	li.emitOutcome("10.0.0.7:44003", "api.anthropic.com", 200, nil, time.Now(), nil)
+	li.emitOutcome("10.0.0.7:44003", "api.anthropic.com", 200, nil, time.Now(), nil, nil)
 	assert.Equal(t, "SC-2555", got.Ticket)
 	assert.Equal(t, "implementation", got.Stage)
 }
@@ -133,7 +133,7 @@ func TestEmitOutcome_UnattributedIsStillRecorded(t *testing.T) {
 		RecordOutcome: func(o ModelCallOutcome) { got = o; recorded = true },
 		Attribute:     func(string) (string, string, bool) { return "", "", false },
 	}
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 401, nil, time.Now(), nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 401, nil, time.Now(), nil, nil)
 	require.True(t, recorded, "an unattributed failure is recorded, not dropped")
 	assert.Empty(t, got.Ticket)
 	assert.Empty(t, got.Stage)
@@ -147,7 +147,7 @@ func TestEmitOutcome_PanicInSinkSwallowed(t *testing.T) {
 	}
 	// Constraint 1: a recording fault must never escape to break the call.
 	assert.NotPanics(t, func() {
-		li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil)
+		li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil, nil)
 	})
 }
 
@@ -198,7 +198,7 @@ func TestUsageFromResponse_empty(t *testing.T) {
 func TestEmitOutcome_recordsTokens(t *testing.T) {
 	var got ModelCallOutcome
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), []byte(streamingUsageBody))
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil, []byte(streamingUsageBody))
 	assert.Equal(t, "claude-opus-4-8", got.Model)
 	assert.Equal(t, 100, got.InputTokens)
 	assert.Equal(t, 200, got.OutputTokens)
@@ -210,7 +210,7 @@ func TestEmitOutcome_recordsTokens(t *testing.T) {
 func TestEmitOutcome_failureNoTokens(t *testing.T) {
 	var got ModelCallOutcome
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 0, errors.New("dial refused"), time.Now(), nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 0, errors.New("dial refused"), time.Now(), nil, nil)
 	assert.Equal(t, "", got.Model)
 	assert.Equal(t, 0, got.InputTokens+got.OutputTokens+got.CacheCreateTokens+got.CacheReadTokens,
 		"a call that never produced a response has no cost")
@@ -465,4 +465,69 @@ func doOneRequest(t *testing.T, env *interceptTestEnv, li *LoggingInterceptor, h
 	_, _ = bytes.NewBuffer(nil).ReadFrom(resp.Body)
 	_ = resp.Body.Close()
 	_ = conn.Close()
+}
+
+// TestIntercept_RecordsGzippedStreamedTokens is the wire-accurate version of
+// TestIntercept_RecordsStreamedTokens: identical usage events, gzip-encoded and
+// declared, exactly as an Anthropic SDK receives them. Nothing on the MITM path
+// undoes a content encoding — http.ReadResponse decodes only the transfer
+// encoding — so the captured copy stayed compressed and the usage scan found
+// nothing in it. Every attributed call landed in the cost ledger with a blank
+// model and four zero counts, which the board then priced, with total
+// confidence, at $0.00 (SC-3440).
+func TestIntercept_RecordsGzippedStreamedTokens(t *testing.T) {
+	env := newInterceptTestEnv(t)
+	hostname := "api.anthropic.com"
+	upstreamLn := startUpstreamTLS(t, env, hostname, handleGzippedSSEResponse)
+
+	rec := &recordingSink{}
+	li := &LoggingInterceptor{
+		Domains:       []string{hostname},
+		LeafCache:     env.LeafCache,
+		Logger:        zerolog.Nop(),
+		LogDir:        env.LogDir,
+		RecordOutcome: rec.record,
+		Attribute:     func(string) (string, string, bool) { return "SC-3440", "implementation", true },
+		Dialer: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return tls.Dial("tcp", upstreamLn.Addr().String(), &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // test only
+			})
+		},
+	}
+	withLogMode(t, LogModeOff)
+
+	doOneRequest(t, env, li, hostname, `{"model":"claude-opus-4-8","stream":true}`)
+
+	o := rec.wait(t, 1)[0]
+	assert.Equal(t, ClassOK, o.Class)
+	assert.Equal(t, "claude-opus-4-8", o.Model, "a compressed body must still yield the model")
+	assert.Equal(t, 100, o.InputTokens)
+	assert.Equal(t, 200, o.OutputTokens, "cumulative streamed output, not the near-1 message_start value")
+	assert.Equal(t, 50, o.CacheCreateTokens)
+	assert.Equal(t, 900, o.CacheReadTokens)
+}
+
+// A body the accounting cannot expand must cost a measurement and never a call:
+// the outcome is still recorded, with its class, status and timing intact.
+func TestEmitOutcome_unreadableEncodingStillRecordsTheCall(t *testing.T) {
+	var got ModelCallOutcome
+	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
+	header := http.Header{"Content-Encoding": {"br"}}
+
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), header, []byte("\x1b\x07\x00brotli-ish"))
+
+	assert.Equal(t, ClassOK, got.Class)
+	assert.Equal(t, 200, got.StatusCode)
+	assert.Equal(t, "", got.Model, "an unreadable coding yields no usage rather than a wrong one")
+	assert.Equal(t, 0, got.InputTokens+got.OutputTokens+got.CacheCreateTokens+got.CacheReadTokens)
+}
+
+// A gzip header on a body that is not gzip (a truncated capture, a mislabelled
+// response) must degrade to "no usage", never to a panic on the accounting path.
+func TestDecodeBody_corruptGzipFallsBackToRawBytes(t *testing.T) {
+	header := http.Header{"Content-Encoding": {"gzip"}}
+	raw := []byte("not actually gzip")
+
+	assert.Equal(t, raw, decodeBody(header, raw))
+	assert.Equal(t, raw, decodeBody(nil, raw), "no header is the identity case")
 }
