@@ -68,6 +68,20 @@ amplitudes:
     # key comes from env: export AMPLITUDE_PRODUCT_KEY=your-api-key
     # secret comes from env: export AMPLITUDE_PRODUCT_SECRET=your-secret-key
 
+# Who you are, for the board's "mine vs someone else's" distinction: a card
+# owned by a name listed here renders normally, any other owner renders dimmed.
+# One entry per identity you hold, because the name a tracker puts on a ticket
+# differs per backend — a display name on Shortcut, Jira and Azure DevOps, a
+# login on GitHub and GitLab. Matching ignores case.
+# Declared rather than looked up: an API answer covers one tracker, needs a live
+# call and a credential, and fails in the one direction nobody notices — every
+# ticket looking like yours. With no `me` section the board asks the PM tracker
+# who is authenticated, and dims nothing if that cannot be answered.
+me:
+  names:
+    - Your Name
+    - your-github-login
+
 proxy:
   mode: allowlist
   domains:
