@@ -34,11 +34,13 @@ permissions:
 
 jobs:
   # The frontend's node:test suite. It needs no webview, so it runs once on
-  # Linux instead of per matrix row, and it gates the build below rather than
-  # riding along inside it: `wails build` only compiles the frontend, so until
-  # this job existed nothing in CI ever executed these tests. That gap is not
+  # Linux rather than per matrix row, and as its own job rather than a step
+  # inside the build: `wails build` only compiles the frontend, so until this
+  # job existed nothing in CI ever executed these tests. That gap is not
   # hypothetical — SC-637's banner-clobber guard was reintroduced at a new call
-  # site while its test file sat green and unexecuted.
+  # site while its test file sat green and unexecuted. Deliberately parallel to
+  # (not a gate on) the build: a failure here must surface as its own red check
+  # without also withholding the build artifacts used to investigate it.
   frontend-test:
     runs-on: ubuntu-24.04
     steps:
@@ -57,7 +59,6 @@ jobs:
         working-directory: desktop/frontend
 
   build:
-    needs: frontend-test
     strategy:
       fail-fast: false
       matrix:
