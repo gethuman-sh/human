@@ -67,6 +67,8 @@ The tiers this pipeline uses, unless you have a reason to differ: triage, planne
 
 `$ARGUMENTS` is the security ticket key — the PM ticket — optionally followed by `--board`. Take the first non-flag token as `<SEC_KEY>`. Resolve the ticket with `human get <SEC_KEY>` — the CLI auto-detects the owning tracker from the key shape; `human tracker list` only enumerates trackers and must not be used to guess a key's owner. Call the tracker `<tracker>`.
 
+Then take ownership: `human assign <SEC_KEY>`. Ownership records who is working the ticket; it sets the owner only, never the status, so it cannot block on an approval gate. In board context the daemon already took ownership at launch and this is a harmless no-op. A failure here never stops the run — note it and continue.
+
 ### Step 1a — Preflight (ask once, up front, or not at all)
 
 Before any work, run preflight. It resolves what this run may do, settles what the evidence can settle, and surfaces a decision only a human can make **now** rather than halfway through:

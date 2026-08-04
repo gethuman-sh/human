@@ -4,6 +4,8 @@ description: Fetch an issue tracker ticket and create an implementation plan
 argument-hint: <ticket-key>
 ---
 
+**Take ownership first.** Run `human assign <KEY>` (the ticket key this skill received) so the ticket records who is working it. It only sets ownership — no status change, so it never blocks on an approval gate. A failure here is not fatal: say so and carry on with the work.
+
 # Implementation Plan Pipeline
 
 Create an implementation plan using a 3-phase agent pipeline: draft, verify, finalize. No plan files are created — the plan lands on the tracker: as a separate engineering ticket's description (split topology: distinct PM and engineering trackers) or as a `[human:plan]` comment on the ticket itself (single-tracker topology).

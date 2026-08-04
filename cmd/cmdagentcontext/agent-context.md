@@ -20,6 +20,7 @@ If a codenav query says the repo is not indexed, the daemon is still building th
 - `human <tracker> issue create|edit|status|comment …` — create and update tickets (a separate engineering ticket in split topology; otherwise the one evolving ticket carries idea, plan, and review)
 - `human tracker topology` — which tracker is PM, which is engineering, single vs split; never re-derive this from the tracker list
 - `human done <KEY>` / `human close <KEY>` — finish or close a ticket without knowing the workflow's status names
+- `human assign <KEY>` — take ownership of a ticket as the current identity; sets the owner only, so unlike `issue start` it never trips a status-change gate
 - `human plan show <KEY>` — print the ticket's engineering plan; attach one with `human marker post <KEY> plan --body-file -`
 
 ## Pipeline protocol — use these instead of hand-building comments or git incantations

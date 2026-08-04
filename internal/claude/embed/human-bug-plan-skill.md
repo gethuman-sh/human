@@ -4,6 +4,8 @@ description: Fetch a bug ticket and create a root-cause analysis with fix plan
 argument-hint: <ticket-key>
 ---
 
+**Take ownership first.** Run `human assign <KEY>` (the ticket key this skill received) so the ticket records who is working it. It only sets ownership — no status change, so it never blocks on an approval gate. A failure here is not fatal: say so and carry on with the work.
+
 Delegate to the **human-bug-analyzer** agent using the Task tool:
 
 ```
