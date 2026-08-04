@@ -8,30 +8,24 @@ import (
 
 // Idle budgets after which an agent that is still running is treated as hung.
 //
-// They are deliberately two numbers, not one, because "no event for N minutes"
-// means something different depending on what the agent was doing. Between tool
-// calls a model acts within seconds, so silence is abnormal fast; inside a tool
-// call the agent is legitimately blocked on a command that may run for a long
-// time (a full test suite), and no event can arrive until it returns.
+// They are deliberately two numbers, not one rule with a single input: "no
+// event for N minutes" means something different depending on whether the
+// agent has outstanding work. Waiting on a local tool call and waiting on the
+// model are the same thing from the outside — outstanding work, from two
+// sources — so either one earns the generous bound; genuine idleness, with
+// neither, gets the short one and the short bound is finally telling the
+// truth (SC-3074).
 //
 // A single fixed timeout cannot serve both, which is exactly why the wall-clock
 // grace it replaces was wrong in both directions at once.
-//
-// ThinkingIdleGrace bounds silence of EVERY kind between tool calls — no hook
-// event AND no transcript output — not merely the absence of a hook event.
-// Extended reasoning between tool calls emits no hook event at all (thinking
-// produces none) but streams to the agent's transcript the whole time, so
-// LastProgressAt is what tells a thinking agent apart from a genuinely hung
-// one. This is why the number stays three minutes rather than growing: it was
-// never really "no hook event for 3 minutes", it was "no sign of life of any
-// kind for 3 minutes" — the number was right, the evidence feeding it was
-// incomplete (SC-2447).
 var (
-	// ThinkingIdleGrace bounds silence between tool calls.
-	ThinkingIdleGrace = 3 * time.Minute
-	// ToolIdleGrace bounds one tool call. Generous on purpose: killing a
-	// running suite is far worse than noticing a hang a few minutes later.
-	ToolIdleGrace = 30 * time.Minute
+	// IdleGrace bounds silence when the agent has no outstanding work at all.
+	IdleGrace = 3 * time.Minute
+	// WorkingIdleGrace bounds silence while the agent has outstanding work —
+	// inside a tool call or waiting on a model response. Generous on purpose:
+	// killing a running suite, or a run composing a long answer, is far worse
+	// than noticing a genuine hang a few minutes later.
+	WorkingIdleGrace = 30 * time.Minute
 )
 
 // AgentProgress is the last observed sign of life from one agent.
@@ -43,13 +37,6 @@ type AgentProgress struct {
 	// LastEventAt is when this agent last did anything observable via a hook
 	// event (a tool call starting or finishing, a notification).
 	LastEventAt time.Time
-	// LastProgressAt is when this agent last produced OUTPUT that is not a
-	// hook event — a byte written to its own transcript while reasoning. A
-	// model that thinks for minutes between tool calls emits no hook event
-	// but keeps streaming to its transcript, so this is what tells thinking
-	// apart from a hang (SC-2447). Zero when no transcript output has been
-	// observed yet; that is never treated as more recent than LastEventAt.
-	LastProgressAt time.Time
 	// LastEvent is the hook event name that produced LastEventAt.
 	LastEvent string
 	// Tool is the tool currently executing, when InsideTool is set.
@@ -57,33 +44,40 @@ type AgentProgress struct {
 	// InsideTool reports a PreToolUse with no matching PostToolUse yet: the
 	// agent is waiting on a command, not idle.
 	InsideTool bool
+	// OutstandingModelRequest reports a request sent to the model through the
+	// daemon's own proxy that has not yet completed. This is a positive sign
+	// of life the daemon holds directly — no decryption, no watching bytes,
+	// no cooperation from the agent required — and it is what tells a
+	// thinking agent (which emits no hook event and streams no transcript
+	// output during extended reasoning) apart from a genuinely hung one. It
+	// replaces the disproven transcript-mtime heartbeat (SC-3074).
+	OutstandingModelRequest bool
 	// Blocked reports the agent is waiting on a human (a permission prompt).
 	// That is neither progress nor a hang — it needs an answer, not a retry.
 	Blocked bool
 }
 
+// hasOutstandingWork reports whether the agent has work in flight of either
+// kind — a local tool call or a request to the model — that no event can
+// arrive to signal until it completes. The two are the same thing from the
+// outside: outstanding work, from two sources (SC-3074).
+func (p AgentProgress) hasOutstandingWork() bool {
+	return p.InsideTool || p.OutstandingModelRequest
+}
+
 // IdleBudget is how long this agent may stay silent before it counts as hung.
 func (p AgentProgress) IdleBudget() time.Duration {
-	if p.InsideTool {
-		return ToolIdleGrace
+	if p.hasOutstandingWork() {
+		return WorkingIdleGrace
 	}
-	return ThinkingIdleGrace
+	return IdleGrace
 }
 
 // Stalled reports whether the agent has been silent past its budget, and for
 // how long. A blocked agent is never stalled: it is waiting for a person, and
 // relaunching it would discard the question rather than answer it.
-//
-// Idle is measured from the more recent of the last hook event and the last
-// transcript output: a thinking agent produces the latter continuously with
-// none of the former, and treating hook silence alone as the clock is exactly
-// what misjudged real work as a hang (SC-2447).
 func (p AgentProgress) Stalled(now time.Time) (bool, time.Duration) {
-	last := p.LastEventAt
-	if p.LastProgressAt.After(last) {
-		last = p.LastProgressAt
-	}
-	idle := now.Sub(last)
+	idle := now.Sub(p.LastEventAt)
 	if p.Blocked {
 		return false, idle
 	}
@@ -138,21 +132,4 @@ func trackProgress(progress map[string]AgentProgress, evt hookevents.Event) {
 		p.Blocked = false
 	}
 	progress[evt.AgentName] = p
-}
-
-// recordAgentOutput bumps an existing agent's LastProgressAt to at — the
-// reasoning heartbeat the zombie sweep folds in from the container's
-// transcript mtime so a thinking agent is not misread as hung.
-//
-// It deliberately never creates or resurrects an entry: a Stop/SessionEnd
-// event already dropped a finished agent from the map (trackProgress above),
-// and a transcript write observed after that point must not revive it as a
-// hang candidate — the agent is gone, not silent.
-func recordAgentOutput(progress map[string]AgentProgress, agentName string, at time.Time) {
-	p, ok := progress[agentName]
-	if !ok {
-		return
-	}
-	p.LastProgressAt = at
-	progress[agentName] = p
 }

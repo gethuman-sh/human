@@ -591,18 +591,14 @@ func (d *DockerFinder) buildContainerInstance(ctx context.Context, ctr Container
 	}, true
 }
 
-// TranscriptStatCommand lists every session transcript in a container with its
-// modification time. Claude Code appends assistant/thinking output to the
-// active session's .jsonl as it streams, so the newest mtime this reports is
-// real evidence the agent is producing output — including during extended
-// reasoning between tool calls, which fires no hook event at all (SC-2447).
-// Shared between discovery's own use (fetchContainerData below) and the board
-// zombie sweep's reasoning-heartbeat probe so both read the exact same signal.
-const TranscriptStatCommand = `find /root/.claude/projects /home -maxdepth 6 -name '*.jsonl' -exec stat -c '%Y %n' {} + 2>/dev/null`
+// transcriptStatCommand lists every session transcript in a container with
+// its modification time, so fetchContainerData below can read the newest
+// (currently active) session for code-navigation discovery.
+const transcriptStatCommand = `find /root/.claude/projects /home -maxdepth 6 -name '*.jsonl' -exec stat -c '%Y %n' {} + 2>/dev/null`
 
 func (d *DockerFinder) fetchContainerData(ctx context.Context, containerID string) []byte {
 	// List JSONL files with modification times from the container.
-	_, listReader, err := d.Client.Exec(ctx, containerID, []string{"sh", "-c", TranscriptStatCommand})
+	_, listReader, err := d.Client.Exec(ctx, containerID, []string{"sh", "-c", transcriptStatCommand})
 	if err != nil {
 		return nil
 	}
@@ -657,38 +653,6 @@ func (d *DockerFinder) putCache(containerID string, data []byte) {
 		data:      data,
 		fetchedAt: time.Now(),
 	}
-}
-
-// NewestTranscriptMtime parses TranscriptStatCommand's output and returns the
-// newest modification time observed, and whether any transcript was named at
-// all. ok is false when the container has no transcript yet (a fresh agent
-// that has not written its first line) — callers must treat that as "no new
-// output evidence" and never as a hang, exactly like a read error.
-func NewestTranscriptMtime(statOutput []byte) (time.Time, bool) {
-	var newest int64
-	found := false
-	for line := range bytes.SplitSeq(statOutput, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		parts := bytes.SplitN(line, []byte(" "), 2)
-		if len(parts) != 2 {
-			continue
-		}
-		mtime, err := strconv.ParseInt(string(parts[0]), 10, 64)
-		if err != nil {
-			continue
-		}
-		if !found || mtime > newest {
-			newest = mtime
-			found = true
-		}
-	}
-	if !found {
-		return time.Time{}, false
-	}
-	return time.Unix(newest, 0), true
 }
 
 // sortFilesByMtime parses `stat -c '%Y %n'` output and returns file paths

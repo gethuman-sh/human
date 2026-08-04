@@ -48,6 +48,35 @@ func TestAgentIPRegistry_Unregister(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// AgentFor resolves the raw agent name — the key InflightModelRequests uses —
+// distinct from Attribute's decoded (ticket, stage) pair (SC-3074).
+func TestAgentIPRegistry_AgentFor(t *testing.T) {
+	r := NewAgentIPRegistry()
+	name := agentNameFor("SC-3074", BoardImplementation)
+	r.Register("172.17.0.9", name)
+
+	got, ok := r.AgentFor("172.17.0.9:44120")
+	assert.True(t, ok)
+	assert.Equal(t, name, got)
+
+	// A bare IP without a port still resolves, matching Attribute.
+	got, ok = r.AgentFor("172.17.0.9")
+	assert.True(t, ok)
+	assert.Equal(t, name, got)
+}
+
+func TestAgentIPRegistry_AgentForUnknownIP(t *testing.T) {
+	r := NewAgentIPRegistry()
+	_, ok := r.AgentFor("10.9.9.9:55000")
+	assert.False(t, ok, "an unknown source is unattributed, not an error")
+}
+
+func TestAgentIPRegistry_AgentForNilSafe(t *testing.T) {
+	var r *AgentIPRegistry
+	_, ok := r.AgentFor("1.2.3.4:5")
+	assert.False(t, ok)
+}
+
 func TestAgentIPRegistry_NilAndEmptySafe(t *testing.T) {
 	var r *AgentIPRegistry
 	assert.NotPanics(t, func() {

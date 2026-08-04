@@ -22,15 +22,15 @@ func TestAgentProgress_InsideToolUsesTheLongBudget(t *testing.T) {
 
 	p := progress["board-SC-1-implementation"]
 	require.True(t, p.InsideTool)
-	require.Equal(t, ToolIdleGrace, p.IdleBudget())
+	require.Equal(t, WorkingIdleGrace, p.IdleBudget())
 
 	// Ten minutes into a test suite is normal work, not a hang.
 	stalled, _ := p.Stalled(start.Add(10 * time.Minute))
 	require.False(t, stalled)
 
-	stalled, idle := p.Stalled(start.Add(ToolIdleGrace + time.Minute))
+	stalled, idle := p.Stalled(start.Add(WorkingIdleGrace + time.Minute))
 	require.True(t, stalled, "past the tool budget it is hung")
-	require.Greater(t, idle, ToolIdleGrace)
+	require.Greater(t, idle, WorkingIdleGrace)
 }
 
 // Between tool calls a model acts within seconds, so silence is abnormal fast.
@@ -42,9 +42,9 @@ func TestAgentProgress_ThinkingUsesTheShortBudget(t *testing.T) {
 
 	p := progress["a"]
 	require.False(t, p.InsideTool, "the tool finished")
-	require.Equal(t, ThinkingIdleGrace, p.IdleBudget())
+	require.Equal(t, IdleGrace, p.IdleBudget())
 
-	stalled, _ := p.Stalled(start.Add(time.Minute + ThinkingIdleGrace + time.Second))
+	stalled, _ := p.Stalled(start.Add(time.Minute + IdleGrace + time.Second))
 	require.True(t, stalled)
 }
 
@@ -66,35 +66,32 @@ func TestAgentProgress_LongRunningButActiveIsNeverStalled(t *testing.T) {
 	require.False(t, stalled, "a working agent is never stalled regardless of total runtime")
 }
 
-// SC-2447: a thinking agent emits no hook event at all — the model reasons
-// for minutes between tool calls — but it IS producing output, streamed to
-// its own transcript. That output is real evidence of life the hook-event
-// clock cannot see, so it must defer the hang past the point the hook-only
-// clock would have called it stalled.
-func TestAgentProgress_TranscriptOutputDefersTheHang(t *testing.T) {
+// SC-3074: a run waiting on the model — no hook event, between tool calls, but
+// with a request sent to the model that has not come back — is WORKING, not hung.
+func TestAgentProgress_OutstandingModelRequestIsNeverStalled(t *testing.T) {
 	now := time.Unix(100_000, 0)
 	p := AgentProgress{
-		LastEventAt:    now.Add(-4 * time.Minute),  // past ThinkingIdleGrace on hooks alone
-		LastProgressAt: now.Add(-10 * time.Second), // still streaming to the transcript
+		LastEventAt:             now.Add(-4 * time.Minute),
+		InsideTool:              false,
+		OutstandingModelRequest: true,
 	}
-
+	require.Equal(t, WorkingIdleGrace, p.IdleBudget())
 	stalled, _ := p.Stalled(now)
-	require.False(t, stalled, "fresh transcript output means the agent is thinking, not stuck")
+	require.False(t, stalled, "a run waiting on the model is working, not hung")
 }
 
-// The other half: with NEITHER a hook event NOR transcript output for longer
-// than ThinkingIdleGrace, the agent really has gone silent and must still be
-// caught — the short budget still bounds total silence.
-func TestAgentProgress_NoOutputOfAnyKindIsStalled(t *testing.T) {
+// With NEITHER a hook event NOR outstanding work of any kind for longer than
+// IdleGrace, the agent really has gone silent and must still be caught — the
+// short budget still bounds total silence.
+func TestAgentProgress_NoOutstandingWorkIsStalled(t *testing.T) {
 	now := time.Unix(100_000, 0)
 	p := AgentProgress{
-		LastEventAt:    now.Add(-4 * time.Minute),
-		LastProgressAt: now.Add(-4 * time.Minute),
+		LastEventAt: now.Add(-4 * time.Minute),
 	}
 
 	stalled, idle := p.Stalled(now)
 	require.True(t, stalled, "total silence past the budget is still a hang")
-	require.Greater(t, idle, ThinkingIdleGrace)
+	require.Greater(t, idle, IdleGrace)
 }
 
 // An agent waiting on a permission prompt needs an answer, not a relaunch —

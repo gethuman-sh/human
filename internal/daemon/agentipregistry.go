@@ -69,3 +69,25 @@ func (r *AgentIPRegistry) Attribute(remoteAddr string) (ticket, stage string, ok
 	}
 	return pmKey, string(st), true
 }
+
+// AgentFor resolves a connection's remote address to the raw agent name — the
+// key the in-flight model-request map uses (InflightModelRequests), not the
+// decoded ticket+stage Attribute returns. The port is stripped before lookup,
+// matching Attribute. ok is false when the source IP is unknown; nil-safe so
+// wiring stays optional.
+func (r *AgentIPRegistry) AgentFor(remoteAddr string) (agentName string, ok bool) {
+	if r == nil {
+		return "", false
+	}
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	name, found := r.byIP[host]
+	if !found {
+		return "", false
+	}
+	return name, true
+}

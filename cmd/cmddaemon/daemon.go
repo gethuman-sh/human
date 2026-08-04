@@ -543,11 +543,39 @@ func removeStatsFilesUnlessHandedOver(handedOver *atomic.Bool, statsPath, connec
 	daemon.RemoveConnected(connectedPath)
 }
 
+// inflightMarker resolves a proxy connection's remote address to the agent
+// name via ips (the same registry Attribute uses) and folds a +1/-1 delta
+// into inflight. Pulled out of runDaemonForeground so the wiring's branch
+// costs its own function rather than that one's complexity budget.
+func inflightMarker(inflight *daemon.InflightModelRequests, ips *daemon.AgentIPRegistry) func(remoteAddr string, delta int) {
+	return func(remoteAddr string, delta int) {
+		if name, ok := ips.AgentFor(remoteAddr); ok {
+			inflight.Mark(name, delta)
+		}
+	}
+}
+
+// agentProgressWithInflight wraps a hook-event-store progress probe, folding
+// in the proxy's own outstanding-model-request signal (SC-3074): a request
+// sent to the model and not yet answered is a positive sign of life the hook
+// stream alone cannot see. Pulled out of runDaemonForeground so the wiring's
+// branch costs its own function rather than that one's complexity budget.
+func agentProgressWithInflight(hookEvents *daemon.HookEventStore, inflight *daemon.InflightModelRequests) daemon.AgentProgressProbe {
+	return func(name string) (daemon.AgentProgress, bool) {
+		p, ok := hookEvents.AgentProgress(name)
+		if !ok {
+			return p, false
+		}
+		p.OutstandingModelRequest = inflight.Outstanding(name)
+		return p, true
+	}
+}
+
 // startProxyServer builds the HTTPS proxy on the pre-owned listener, prints its
 // one-line status, and serves it in the background. It returns the server so the
 // stats writer can report on it.
-func startProxyServer(ctx context.Context, proxyAddr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor, ln net.Listener, out io.Writer) (*proxy.Server, error) {
-	proxySrv, proxyStatus, err := buildProxyServer(proxyAddr, interactive, logger, emitter, recorder, attribute)
+func startProxyServer(ctx context.Context, proxyAddr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor, markInflight func(remoteAddr string, delta int), ln net.Listener, out io.Writer) (*proxy.Server, error) {
+	proxySrv, proxyStatus, err := buildProxyServer(proxyAddr, interactive, logger, emitter, recorder, attribute, markInflight)
 	if err != nil {
 		return nil, err
 	}
@@ -633,7 +661,15 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	chromeSvcs := startChromeServices(ctx, chromeAddr, ds.srv.Token, listeners.chrome, logger)
 
-	proxySrv, err := startProxyServer(ctx, proxyAddr, interactive, logger, ds.networkStore, ds.modelSink.Record, ds.agentIPs.Attribute, listeners.proxy, out)
+	// SC-3074: the daemon's own proxy sees every model request open and close,
+	// so an outstanding one is a first-hand sign of life — unlike watching for
+	// transcript output, which a thinking phase never produces. inflight is the
+	// per-agent counter; markInflight resolves the proxy's remote address to
+	// the agent name via the same registry Attribute uses.
+	inflight := daemon.NewInflightModelRequests()
+	markInflight := inflightMarker(inflight, ds.agentIPs)
+
+	proxySrv, err := startProxyServer(ctx, proxyAddr, interactive, logger, ds.networkStore, ds.modelSink.Record, ds.agentIPs.Attribute, markInflight, listeners.proxy, out)
 	if err != nil {
 		return err
 	}
@@ -695,9 +731,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	go daemon.RunAgentCleanup(ctx, ds.srv.HookEvents, &dockerAgentCleaner{}, logger)
 	hookEvents := ds.srv.HookEvents
-	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, func(name string) (daemon.AgentProgress, bool) {
-		return hookEvents.AgentProgress(name)
-	}, hookEvents.RecordAgentOutput, func(agentName string, reason daemon.ReapReason) {
+	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, agentProgressWithInflight(hookEvents, inflight), func(agentName string, reason daemon.ReapReason) {
 		// A reaped agent died without firing hooks, so no exit event exists
 		// for the board failure watcher to act on; synthesizing one converges
 		// the reap path with the hook-driven exit paths — one marker-posting
@@ -831,9 +865,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// A live container is not a working agent. The hook stream is the progress
 	// signal — a crashed AND a hung agent both stop emitting — so the reconcile
 	// pass asks it before deciding a stage is stuck.
-	agentProgress := func(agentName string) (daemon.AgentProgress, bool) {
-		return ds.srv.HookEvents.AgentProgress(agentName)
-	}
+	agentProgress := agentProgressWithInflight(ds.srv.HookEvents, inflight)
 	// A hung agent still holds its container and workspace; it must be stopped
 	// before any relaunch, or two agents work the same stage.
 	stopHungAgent := func(agentName string) error {
@@ -1410,7 +1442,7 @@ func writeDaemonStats(ctx context.Context, proxySrv *proxy.Server, tracker *daem
 // MITM interceptor. Returns a status string for the startup banner.
 // emitter is injected so the proxy can publish ambient network activity to
 // the daemon's in-memory store without circular imports.
-func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor) (*proxy.Server, string, error) {
+func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emitter proxy.NetworkEventEmitter, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor, markInflight func(remoteAddr string, delta int)) (*proxy.Server, string, error) {
 	proxyCfg, _ := proxy.LoadConfig(".")
 
 	var policy proxy.Decider
@@ -1443,7 +1475,7 @@ func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emit
 		}
 	}
 
-	interceptor, interceptStatus := buildInterceptor(proxyCfg, logger, recorder, attribute)
+	interceptor, interceptStatus := buildInterceptor(proxyCfg, logger, recorder, attribute, markInflight)
 	if interceptStatus != "" {
 		status += interceptStatus
 	}
@@ -1461,7 +1493,7 @@ func buildProxyServer(addr string, interactive bool, logger zerolog.Logger, emit
 
 // buildInterceptor creates a MITM logging interceptor if intercept domains
 // are configured. Returns (nil, "") when not configured.
-func buildInterceptor(proxyCfg *proxy.Config, logger zerolog.Logger, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor) (proxy.Interceptor, string) {
+func buildInterceptor(proxyCfg *proxy.Config, logger zerolog.Logger, recorder proxy.ModelOutcomeRecorder, attribute proxy.ConnAttributor, markInflight func(remoteAddr string, delta int)) (proxy.Interceptor, string) {
 	if proxyCfg == nil || len(proxyCfg.Intercept) == 0 {
 		return nil, ""
 	}
@@ -1486,6 +1518,10 @@ func buildInterceptor(proxyCfg *proxy.Config, logger zerolog.Logger, recorder pr
 		// so a proxy without a daemon sink still MITMs and logs unchanged.
 		RecordOutcome: recorder,
 		Attribute:     attribute,
+		// SC-3074: the outstanding-model-request signal the zombie sweep and
+		// board reconcile fold into AgentProgress so a thinking run — no hook
+		// event, no transcript output — still reads as working.
+		InflightModelRequests: markInflight,
 	}
 
 	return interceptor, fmt.Sprintf("MITM intercept: %v\n  CA cert: %s\n  Traffic logs: %s",
@@ -3919,43 +3955,6 @@ func (s *dockerAgentSweeper) IsProcessRunning(ctx context.Context, containerID s
 		return false, err
 	}
 	return inspect.ExitCode == 0, nil
-}
-
-// NewestTranscriptMtime reads the newest session transcript modification time
-// from the container — the real-output evidence a thinking agent produces
-// even between hook events, since Claude Code appends to the active
-// transcript as it streams (SC-2447). Same exec/drain/stall-guard shape as
-// IsProcessRunning: the drain must never park the single zombie-sweep
-// goroutine on a stalled stream.
-func (s *dockerAgentSweeper) NewestTranscriptMtime(ctx context.Context, containerID string) (time.Time, bool, error) {
-	docker, err := devcontainer.NewDockerClient()
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	defer func() { _ = docker.Close() }()
-
-	execID, err := docker.ExecCreate(ctx, containerID, []string{"sh", "-c", claude.TranscriptStatCommand}, devcontainer.ExecOptions{})
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	resp, err := docker.ExecAttach(ctx, execID)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	stop := closeExecOnContextDone(ctx, resp)
-	out, readErr := io.ReadAll(resp.Reader)
-	stop()
-	_ = resp.Close()
-	if readErr != nil {
-		return time.Time{}, false, readErr
-	}
-
-	if _, err := docker.ExecInspect(ctx, execID); err != nil {
-		return time.Time{}, false, err
-	}
-
-	mtime, ok := claude.NewestTranscriptMtime(out)
-	return mtime, ok, nil
 }
 
 // closeExecOnContextDone starts a watchdog that closes the exec attachment when

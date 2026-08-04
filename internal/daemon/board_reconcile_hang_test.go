@@ -49,7 +49,7 @@ func TestReconcileStuckRunning_HungAgentIsStoppedReddenedAndRelaunched(t *testin
 
 	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
 		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
-		progressAt(now.Add(-ThinkingIdleGrace-time.Minute), false, false),
+		progressAt(now.Add(-IdleGrace-time.Minute), false, false),
 		func(name string) error { stopped = append(stopped, name); return nil },
 		"d1", now, zerolog.Nop())
 

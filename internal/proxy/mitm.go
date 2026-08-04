@@ -126,6 +126,14 @@ type LoggingInterceptor struct {
 	// uses DefaultModelAPIHost. Gating here — not on the intercept domain list —
 	// keeps accounting fixed to the model API even as traffic logging widens.
 	ModelAPIHost string
+	// InflightModelRequests receives a +1/-1 delta, keyed by the client's remote
+	// address, bracketing exactly the window between a request being sent
+	// upstream and its response completing. This is the "outstanding model
+	// request" signal (SC-3074): a request sent to the model and not yet
+	// answered is a positive, first-hand sign of life the daemon can hold
+	// directly, unlike watching for output that a thinking phase never
+	// produces. Gated on the model host like RecordOutcome; nil disables it.
+	InflightModelRequests func(remoteAddr string, delta int)
 }
 
 // ShouldIntercept returns true if hostname matches a configured intercept domain.
@@ -245,11 +253,17 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 			li.emitOutcome(remoteAddr, hostname, 0, err, start, nil)
 			return errors.WrapWithDetails(err, "writing to upstream", "hostname", hostname)
 		}
+		// The request is now sent and unanswered: this is the "outstanding model
+		// request" window (SC-3074). Bracketed tightly around the wait for a
+		// response so a request that never made it out (the write-error path
+		// above) never increments, and so it must not decrement either.
+		li.markInflight(remoteAddr, hostname, 1)
 
 		// Read response from upstream. A read failure here is a call that never
 		// produced a response line — the core pre-transcript case.
 		resp, err := http.ReadResponse(upstreamReader, req)
 		if err != nil {
+			li.markInflight(remoteAddr, hostname, -1)
 			li.emitOutcome(remoteAddr, hostname, 0, err, start, nil)
 			return errors.WrapWithDetails(err, "reading upstream response", "hostname", hostname)
 		}
@@ -274,6 +288,9 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 			Body:      respBodyBuf.String(),
 			BodySize:  int64(respBodyBuf.Len()),
 		})
+
+		// The response is now complete: the request is no longer outstanding.
+		li.markInflight(remoteAddr, hostname, -1)
 
 		// Record the outcome AFTER the client write (success and non-2xx alike),
 		// mirroring the existing write-then-log order so accounting can never
