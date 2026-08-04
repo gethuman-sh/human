@@ -43,3 +43,35 @@ func TestBuildDevcontainerConfig_CACertMountGating(t *testing.T) {
 		})
 	}
 }
+
+// Every generated proxy variant reads the proxy host out of /etc/hosts. A host
+// mapped twice makes getent print two lines, and an unqualified awk turns that
+// into a HUMAN_PROXY_ADDR carrying a newline — human-proxy-setup then feeds it
+// to iptables, dies under set -e, and takes the rest of the && chain (CA trust,
+// agent install, chrome bridge) with it. NR==1 is what keeps a duplicate host
+// entry from silently disarming the container's proxy redirect.
+func TestBuildDevcontainerConfig_ProxyAddrTakesFirstHostsLine(t *testing.T) {
+	tests := []struct {
+		name      string
+		proxy     bool
+		intercept bool
+		caPresent bool
+	}{
+		{name: "proxy and intercept with ca", proxy: true, intercept: true, caPresent: true},
+		{name: "proxy and intercept without ca", proxy: true, intercept: true, caPresent: false},
+		{name: "proxy only", proxy: true, intercept: false, caPresent: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := buildDevcontainerConfig(tt.proxy, tt.intercept, nil, tt.caPresent)
+			cmd := cfg.PostStartCommand
+			if !strings.Contains(cmd, "getent hosts host.docker.internal") {
+				t.Fatalf("postStartCommand does not read the proxy host: %s", cmd)
+			}
+			if !strings.Contains(cmd, "awk 'NR==1{print $1}'") {
+				t.Errorf("postStartCommand must take only the first hosts line: %s", cmd)
+			}
+		})
+	}
+}

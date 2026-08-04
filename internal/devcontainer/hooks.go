@@ -155,6 +155,18 @@ func lastLines(s string, maxBytes int) string {
 	return "...\n" + tail
 }
 
+// reportHookFailure announces a failed lifecycle hook on both the logger and
+// the caller's writer. The writer is the load-bearing half: agent launches
+// build a Manager without a Logger, and a zero zerolog.Logger is disabled, so a
+// logger-only warning vanishes — which is how containers ran for months with a
+// dead postStartCommand (no proxy redirect, no CA trust) while the output read
+// as a clean success. out already carries the "Running <hook>..." lines, so the
+// failure lands wherever the caller is already looking.
+func reportHookFailure(logger zerolog.Logger, out io.Writer, what string, err error) {
+	logger.Warn().Err(err).Msgf("%s failed, container is running but may be incomplete", what)
+	_, _ = fmt.Fprintf(out, "WARNING: %s failed, container is running but may be incomplete: %v\n", what, err)
+}
+
 // RunLifecycleHooks executes the devcontainer lifecycle hooks in order inside a container.
 // Sequence: onCreateCommand -> updateContentCommand -> postCreateCommand -> postStartCommand
 func RunLifecycleHooks(ctx context.Context, docker DockerClient, containerID, user string, cfg *DevcontainerConfig, logger zerolog.Logger, out io.Writer) error {

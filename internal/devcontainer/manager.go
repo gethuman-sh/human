@@ -149,7 +149,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	// Features are already baked into the image by EnsureImage.
 	// Run lifecycle hooks only.
 	if err := RunLifecycleHooks(ctx, m.Docker, containerID, remoteUser, cfg, m.Logger, out); err != nil {
-		m.Logger.Warn().Err(err).Msg("lifecycle hooks failed, container is running but may be incomplete")
+		reportHookFailure(m.Logger, out, "lifecycle hooks", err)
 	}
 
 	now := time.Now()
@@ -251,7 +251,7 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 		if cfg.PostStartCommand != nil {
 			_, _ = fmt.Fprintln(out, "Running postStartCommand...")
 			if err := RunHook(ctx, m.Docker, existing.ID, remoteUser, cfg.PostStartCommand, m.Logger); err != nil {
-				m.Logger.Warn().Err(err).Msg("postStartCommand failed")
+				reportHookFailure(m.Logger, out, "postStartCommand", err)
 			}
 		}
 

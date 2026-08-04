@@ -1151,3 +1151,50 @@ func writeCachesConfig(t *testing.T, projectDir, content string) {
 		t.Fatal(err)
 	}
 }
+
+// A project that declares the same --add-host the manager already injects must
+// not end up with the host twice: Docker writes one /etc/hosts line per entry,
+// and a duplicate line makes `getent hosts` print two — which is how the
+// container's proxy redirect silently stopped being installed.
+func TestManager_Up_DoesNotDuplicateInjectedExtraHost(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{
+		"name": "test", "image": "ubuntu:22.04", "remoteUser": "vscode",
+		"runArgs": ["--add-host=host.docker.internal:host-gateway"]
+	}`)
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	var buf bytes.Buffer
+	if _, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(mock.createCalls) != 1 {
+		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
+	}
+	hosts := mock.createCalls[0].ExtraHosts
+	if len(hosts) != 1 || hosts[0] != "host.docker.internal:host-gateway" {
+		t.Errorf("ExtraHosts = %v, want exactly one host.docker.internal entry", hosts)
+	}
+}
+
+// Agent launches build a Manager with no Logger, and a zero zerolog.Logger is
+// disabled — so a failed hook must still be announced on the caller's writer,
+// or a container comes up incomplete (no proxy redirect, no CA trust) while the
+// output reads as a clean success.
+func TestManager_Up_FailedHookIsVisibleWithoutLogger(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{
+		"name": "test", "image": "ubuntu:22.04", "remoteUser": "vscode",
+		"postStartCommand": "human-proxy-setup"
+	}`)
+	mock.execExit = 1
+
+	mgr := &Manager{Docker: docker} // no Logger: the agent-launch condition
+	var buf bytes.Buffer
+	if _, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(buf.String(), "WARNING") || !strings.Contains(buf.String(), "may be incomplete") {
+		t.Errorf("a failed lifecycle hook must be reported on the writer: %s", buf.String())
+	}
+}

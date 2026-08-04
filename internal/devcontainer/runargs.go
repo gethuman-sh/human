@@ -36,11 +36,11 @@ func needsValue(key string) bool {
 func applyRunArg(key, val string, opts *ContainerCreateOptions, logger zerolog.Logger, raw string) {
 	switch key {
 	case "--add-host":
-		opts.ExtraHosts = append(opts.ExtraHosts, val)
+		opts.ExtraHosts = appendUnique(opts.ExtraHosts, val)
 	case "--cap-add":
-		opts.CapAdd = append(opts.CapAdd, val)
+		opts.CapAdd = appendUnique(opts.CapAdd, val)
 	case "--security-opt":
-		opts.SecurityOpt = append(opts.SecurityOpt, val)
+		opts.SecurityOpt = appendUnique(opts.SecurityOpt, val)
 	case "--privileged":
 		opts.Privileged = true
 	case "--network":
@@ -48,4 +48,21 @@ func applyRunArg(key, val string, opts *ContainerCreateOptions, logger zerolog.L
 	default:
 		logger.Warn().Str("flag", raw).Msg("unsupported runArg, skipping")
 	}
+}
+
+// appendUnique adds val unless the list already carries it. These three flags
+// are sets, and runArgs are merged on top of entries the manager injects itself
+// — so the project's own "--add-host=host.docker.internal:host-gateway"
+// duplicates the injected one. Docker writes each entry to /etc/hosts, and the
+// duplicate line then makes `getent hosts host.docker.internal` return two
+// lines: every consumer that substitutes that output into an address gets a
+// value with a newline in it, which is how the container proxy redirect stopped
+// being installed at all.
+func appendUnique(list []string, val string) []string {
+	for _, existing := range list {
+		if existing == val {
+			return list
+		}
+	}
+	return append(list, val)
 }
