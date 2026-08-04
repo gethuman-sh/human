@@ -462,6 +462,21 @@ func (e *IdeationEngine) applyRepairOrError(sessID, reply, repairPrompt, errMsg 
 // createTicket materializes the session's outcome: evolve mode rewrites the
 // existing idea ticket in place, otherwise a new PM ticket is created. Run
 // without holding mu so the network call cannot block Status()/Reply().
+// createOwnedIssue creates an issue and makes its creator the owner, so a ticket
+// ideation produces is never ownerless (SC-3345). Ownership is applied here,
+// outside the session lock, so a slow tracker cannot stall the ideation engine;
+// it is best-effort, so a refused claim still yields the created ticket.
+func createOwnedIssue(creator tracker.Creator, issue *tracker.Issue) (*tracker.Issue, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	created, err := creator.CreateIssue(ctx, issue)
+	if err != nil || created == nil {
+		return created, err
+	}
+	_, _ = tracker.AssignToCurrentUserBestEffort(ctx, creator, created.Key)
+	return created, nil
+}
+
 func (e *IdeationEngine) createTicket(sessID, title, description string) {
 	e.mu.Lock()
 	var evolveKey string
@@ -497,9 +512,7 @@ func (e *IdeationEngine) createTicket(sessID, title, description string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	created, err := creator.CreateIssue(ctx, &tracker.Issue{Project: project, Title: title, Description: description})
+	created, err := createOwnedIssue(creator, &tracker.Issue{Project: project, Title: title, Description: description})
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -623,9 +636,8 @@ func (e *IdeationEngine) CreateIdea(title string) (key, url string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	created, err := creator.CreateIssue(ctx, &tracker.Issue{
+	// An idea is owned by whoever raised it, from the moment it exists.
+	created, err := createOwnedIssue(creator, &tracker.Issue{
 		Project: project,
 		Title:   title,
 		Labels:  []string{tracker.IdeaLabel},

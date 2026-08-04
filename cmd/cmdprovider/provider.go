@@ -470,6 +470,12 @@ func RunCreateIssue(ctx context.Context, p tracker.Provider, out io.Writer, proj
 	if issue == nil {
 		return errors.WithDetails("create returned no issue", "project", project)
 	}
+	// A created ticket is owned by whoever reported it, and the backend stamps
+	// the reporter from this credential — so claiming it here is what makes
+	// "created by me" and "owned by me" the same thing (SC-3345). Best-effort:
+	// the ticket exists either way, and reporting a create as failed because a
+	// follow-up assignment did not land would be the worse lie.
+	_, _ = tracker.AssignToCurrentUserBestEffort(ctx, p, issue.Key)
 	_, _ = fmt.Fprintf(out, "%s\t%s\n", issue.Key, issue.Title)
 	return nil
 }

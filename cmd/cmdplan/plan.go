@@ -90,6 +90,9 @@ func RunPlanDefer(ctx context.Context, p tracker.Provider, out io.Writer, pmKey,
 		return errors.WrapWithDetails(err, "creating follow-on ticket", "pm", pmKey, "project", orig.Project)
 	}
 
+	// The follow-on inherits ownership from whoever deferred the work (SC-3345).
+	_, _ = tracker.AssignToCurrentUserBestEffort(ctx, p, created.Key)
+
 	if err := p.LinkIssues(ctx, pmKey, created.Key, tracker.LinkRelated); err != nil {
 		return errors.WrapWithDetails(err, "linking follow-on ticket to PM ticket", "pm", pmKey, "follow_on", created.Key)
 	}
