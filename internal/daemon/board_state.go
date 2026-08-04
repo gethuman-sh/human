@@ -347,17 +347,12 @@ func deriveShippedPartial(comments []tracker.Comment) (followOn string, ok bool)
 	return strings.TrimSpace(m.Fields["follow-on"]), true
 }
 
-// failureReason extracts the human-readable reason from a *-failed marker: the
-// first non-empty line after the header. Falls back to the header itself for
-// markers posted without a reason, so a failed card never shows empty.
+// failureReason extracts the one-line human-readable reason from a *-failed
+// marker: the first line of its prose body, skipping the signature fields the
+// posting daemon splices in. Falls back to the header for markers posted
+// without a reason, so a failed card never shows empty.
 func failureReason(body string) string {
-	trimmed := strings.TrimSpace(body)
-	if _, after, ok := strings.Cut(trimmed, "\n"); ok {
-		if reason := firstLine(after); reason != "" {
-			return reason
-		}
-	}
-	return firstLine(trimmed)
+	return firstLine(failureBody(body))
 }
 
 // parseResumeLine returns the value of a marker body's "resume:" line (the
@@ -374,13 +369,30 @@ func parseResumeLine(body string) string {
 // more than one line. Falls back to failureReason so a reason-less marker
 // still shows something.
 func failureBody(body string) string {
+	// Parse rather than cut after the header: every marker is signed before it
+	// is posted, and the signature splices `machine:`/`build:` in as the first
+	// lines after the header. A positional cut therefore returns the signature
+	// and buries the diagnosis, which is what made every failed card read
+	// "machine: <id>" instead of saying what went wrong. ParseBody already
+	// separates the field block from the prose, so ask it.
 	trimmed := strings.TrimSpace(body)
+	if m, ok := marker.ParseBody(trimmed); ok {
+		if rest := strings.TrimSpace(m.Body); rest != "" {
+			return rest
+		}
+		// A marker carrying only fields has no diagnosis to give. Show the
+		// header and stop — falling through to the positional read below would
+		// surface the signature, the exact failure this function exists to avoid.
+		return firstLine(trimmed)
+	}
+	// Not a marker at all: keep the original positional read so anything else
+	// still shows something rather than rendering an empty card.
 	if _, after, ok := strings.Cut(trimmed, "\n"); ok {
 		if rest := strings.TrimSpace(after); rest != "" {
 			return rest
 		}
 	}
-	return failureReason(body)
+	return firstLine(trimmed)
 }
 
 // latestStateInStage resolves the stage's state from its newest marker and
