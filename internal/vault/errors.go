@@ -44,6 +44,17 @@ func IsSecretMissing(err error) bool { return stderrors.Is(err, ErrSecretMissing
 // IsStoreUnreachable reports whether err is specifically a store-unreachable failure.
 func IsStoreUnreachable(err error) bool { return stderrors.Is(err, ErrStoreUnreachable) }
 
+// heldOffDetail marks an error served from failure memory rather than from a
+// read that actually happened.
+const heldOffDetail = "held_off"
+
+// IsHeldOff reports whether err was served from failure memory — the store was
+// deliberately not consulted — rather than from a read that failed.
+func IsHeldOff(err error) bool {
+	held, _ := errors.AllDetails(err)[heldOffDetail].(bool)
+	return held
+}
+
 // tagCause wraps a provider failure's human message with a machine-readable
 // cause sentinel. Only the sentinel stays in the Unwrap chain (the provider
 // diagnostic already lives in message + details), so errors.Is(returned, cause)

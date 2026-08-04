@@ -8,6 +8,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
+
+	"github.com/gethuman-sh/human/errors"
 )
 
 // DefaultCacheTTL bounds how long an *untouched* resolved secret is kept in
@@ -29,6 +33,18 @@ const DefaultCacheTTL = 15 * time.Minute
 // hard, day-bounded ceiling; operators tune it via the vault `cache_max_ttl`
 // field.
 const DefaultMaxCacheTTL = 24 * time.Hour
+
+// FailureHoldInitial is how long the store is left alone after a reference's
+// first failed read, and FailureHoldMax caps the doubling. The store is not
+// a fresh question to ask again on the next poll: an interactive store raises
+// an approval request per read, so re-asking at poll rate turns one unanswered
+// dialog into a queue an operator has to clear (SC-3322). The cap is the
+// recovery latency an operator waits after the store answers again, so it is
+// deliberately minutes and not hours.
+const (
+	FailureHoldInitial = 30 * time.Second
+	FailureHoldMax     = 5 * time.Minute
+)
 
 // SecretProvider resolves a secret reference to its plaintext value.
 // Implementations must be safe for concurrent use.
@@ -92,6 +108,11 @@ type Resolver struct {
 	// callers that arrive while it runs wait for its result instead of raising
 	// a second approval prompt for the same secret.
 	inflight map[string]*resolveCall
+	// failures remembers the last failed read per reference so an unreachable
+	// store is not re-asked at poll rate.
+	failures    map[string]failureState
+	holdInitial time.Duration
+	holdMax     time.Duration
 }
 
 // resolveCall is one in-progress resolution, shared by everyone who asked for
@@ -115,6 +136,16 @@ type cachedSecret struct {
 	deadline time.Time
 }
 
+// failureState is what the resolver remembers about a reference whose last read
+// failed: the classified error to serve while the store is left alone, how long
+// it is being left alone, and when it may be consulted again. It holds no
+// plaintext, which is why it applies even when value caching is disabled.
+type failureState struct {
+	err     error
+	hold    time.Duration
+	retryAt time.Time
+}
+
 // NewResolver creates a Resolver with the given providers and the default
 // cache TTL. Providers are tried in order; the first claiming provider that
 // succeeds wins. When a claimant errors, resolution falls through to the next
@@ -123,12 +154,15 @@ type cachedSecret struct {
 // is used, and only when none exists does the last error surface.
 func NewResolver(providers ...SecretProvider) *Resolver {
 	return &Resolver{
-		providers: providers,
-		ttl:       DefaultCacheTTL,
-		maxTTL:    DefaultMaxCacheTTL,
-		now:       time.Now,
-		cache:     make(map[string]cachedSecret),
-		inflight:  make(map[string]*resolveCall),
+		providers:   providers,
+		ttl:         DefaultCacheTTL,
+		maxTTL:      DefaultMaxCacheTTL,
+		now:         time.Now,
+		cache:       make(map[string]cachedSecret),
+		inflight:    make(map[string]*resolveCall),
+		failures:    make(map[string]failureState),
+		holdInitial: FailureHoldInitial,
+		holdMax:     FailureHoldMax,
 	}
 }
 
@@ -142,8 +176,14 @@ func (r *Resolver) Resolve(ref string) (string, error) {
 	if !IsSecretRef(ref) {
 		return ref, nil
 	}
+	// The value cache is consulted FIRST and unconditionally: a still-fresh
+	// secret that already resolved this run must not be failed by a hold
+	// recorded afterwards (SC-2039).
 	if val, ok := r.cached(ref); ok {
 		return val, nil
+	}
+	if err := r.heldFailure(ref); err != nil {
+		return "", err
 	}
 	return r.resolveOnce(ref)
 }
@@ -201,10 +241,28 @@ func (r *Resolver) fromProviders(ref string) (string, error) {
 			continue
 		}
 		r.remember(ref, val)
+		if r.clearFailure(ref) {
+			log.Info().Str("ref", ref).Msg("vault: secret store answered again; resuming normal resolution")
+		}
 		return val, nil
 	}
 
 	if claimed {
+		// The store failed on this call either way (whether or not a stale
+		// value is served below), so record the hold before deciding what to
+		// return — that is what stops the next poll from re-probing the store
+		// the moment a stale value's own TTL runs out.
+		first := r.rememberFailure(ref, lastErr)
+		if first {
+			hold := r.currentHold(ref)
+			log.Warn().Str("error", errors.CauseChain(lastErr)).Fields(errors.AllDetails(lastErr)).
+				Str("ref", ref).Str("hold", hold.String()).
+				Msg("vault: secret store failed; leaving it alone before retrying")
+		} else {
+			log.Debug().Str("ref", ref).Str("hold", r.currentHold(ref).String()).
+				Msg("vault: secret store failed again; extending the hold")
+		}
+
 		// Every claimant failed — a credential lapse. Serve a still-fresh
 		// cached value so work whose secret already resolved this run is not
 		// failed by an unrelated stale read; only when nothing is cached does
@@ -268,6 +326,82 @@ func (r *Resolver) sweepExpiredLocked() {
 			delete(r.cache, k)
 		}
 	}
+}
+
+// heldFailure returns the remembered failure for ref while the store is being
+// left alone, or nil when the hold has passed and a fresh read is allowed.
+//
+// The returned error WRAPS the original classified failure, so
+// errors.Is(err, ErrStoreUnreachable) and its siblings keep holding — a deploy
+// that hits this must still be reported as a secret-store problem and never as
+// a branch, forge or CI failure (SC-2042).
+func (r *Resolver) heldFailure(ref string) error {
+	r.mu.Lock()
+	state, ok := r.failures[ref]
+	r.mu.Unlock()
+	if !ok || !r.now().Before(state.retryAt) {
+		return nil
+	}
+	return errors.WrapWithDetails(state.err,
+		"secret store left alone after a failed read of "+ref+"; not consulted again yet",
+		"ref", ref, heldOffDetail, true, "hold", state.hold.String(), "retry_at", state.retryAt.Format(time.RFC3339))
+}
+
+// rememberFailure records that the store failed for ref and doubles how long it
+// is left alone, up to the cap. Deliberately NOT gated on ttl > 0 the way
+// remember is: failure state holds no plaintext, and an operator who sets
+// cache_ttl: 0 to keep secrets out of memory still must not spawn hundreds of
+// approval requests.
+func (r *Resolver) rememberFailure(ref string, err error) (firstFailure bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failures == nil {
+		r.failures = make(map[string]failureState)
+	}
+	prev, existed := r.failures[ref]
+	hold := r.holdInitialOrDefault()
+	if existed {
+		hold = min(prev.hold*2, r.holdMaxOrDefault())
+	}
+	r.failures[ref] = failureState{err: err, hold: hold, retryAt: r.now().Add(hold)}
+	return !existed
+}
+
+// clearFailure forgets ref's failure after a successful read, so the next
+// outage starts its backoff from the beginning rather than from the cap.
+func (r *Resolver) clearFailure(ref string) (recovered bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, existed := r.failures[ref]
+	delete(r.failures, ref)
+	return existed
+}
+
+// currentHold returns the hold currently on record for ref, for logging. It is
+// only ever called right after rememberFailure has written an entry for ref, so
+// the zero value it falls back to is never actually observed.
+func (r *Resolver) currentHold(ref string) time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.failures[ref].hold
+}
+
+// holdInitialOrDefault and holdMaxOrDefault fall back to the package defaults
+// when a Resolver was constructed without NewResolver (e.g. zero-valued in a
+// test), matching the defensive lazy-init pattern resolveOnce already uses for
+// inflight.
+func (r *Resolver) holdInitialOrDefault() time.Duration {
+	if r.holdInitial <= 0 {
+		return FailureHoldInitial
+	}
+	return r.holdInitial
+}
+
+func (r *Resolver) holdMaxOrDefault() time.Duration {
+	if r.holdMax <= 0 {
+		return FailureHoldMax
+	}
+	return r.holdMax
 }
 
 // cached returns a still-fresh cached value for ref, sliding its idle window
