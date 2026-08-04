@@ -295,7 +295,7 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 			"HUMAN_DAEMON_ADDR="+daemon.DockerHost+":"+fmt.Sprint(daemon.DefaultPort),
 			"HUMAN_DAEMON_TOKEN="+daemonInfo.Token,
 			"HUMAN_CHROME_ADDR="+daemon.DockerHost+":"+fmt.Sprint(daemon.DefaultChromePort),
-			"HUMAN_PROXY_ADDR="+daemon.DockerHost+":"+fmt.Sprint(daemon.DefaultProxyPort),
+			"HUMAN_PROXY_ADDR="+proxyAddrForContainer(ContainerReachableHost(), daemon.DefaultProxyPort),
 			"BROWSER=human-browser",
 		)
 	}

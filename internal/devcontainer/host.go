@@ -2,11 +2,14 @@ package devcontainer
 
 import (
 	"context"
+	"net"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/moby/moby/client"
 
+	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/dockerhost"
 )
 
@@ -43,6 +46,22 @@ func ContainerReachableHost() string {
 		return gw
 	}
 	return LoopbackHost
+}
+
+// proxyAddrForContainer returns the proxy address in the form a container's
+// redirect can actually use. iptables resolves nothing — nf_tables rejects a
+// hostname in --to-destination outright — so the redirect needs a literal IP,
+// and the container was left deriving one out of /etc/hosts. On Linux the
+// daemon binds the proxy on the docker bridge gateway, which is precisely what
+// host.docker.internal maps to inside the container, so hand it over already
+// resolved and nothing in the container has to read /etc/hosts at all. Where
+// the gateway is not knowable host-side (Docker Desktop, Docker down) the
+// hostname stays and the container resolves it itself.
+func proxyAddrForContainer(reachableHost string, port int) string {
+	if reachableHost == "" || reachableHost == LoopbackHost {
+		return net.JoinHostPort(daemon.DockerHost, strconv.Itoa(port))
+	}
+	return net.JoinHostPort(reachableHost, strconv.Itoa(port))
 }
 
 // dockerBridgeGateway returns the gateway IP of Docker's default bridge network,
