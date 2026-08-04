@@ -41,6 +41,7 @@ func TestExecClaudeDetached_injectsBotGitEnv(t *testing.T) {
 	for _, want := range []string{
 		"HUMAN_AGENT_NAME=a",
 		"HUMAN_DAEMON_ID=d1",
+		"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0",
 		"GIT_AUTHOR_NAME=acmebot",
 		"GIT_AUTHOR_EMAIL=bot@acme.dev",
 		"GIT_COMMITTER_NAME=acmebot",

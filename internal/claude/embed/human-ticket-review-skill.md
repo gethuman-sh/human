@@ -11,7 +11,7 @@ Follow these steps in order:
 1. **Review**: Delegate to the **human-ticket-reviewer** agent:
 
 ```
-Task(subagent_type="human-ticket-reviewer", prompt="Review ticket $ARGUMENTS before it enters the pipeline. Judge whether solving it solves the problem — root or symptom, complete, coherent with existing siblings, right altitude. Act on what you find: reframe, supersede, escalate or reject. Record the verdict as a [human:ticket-review] marker.")
+Task(subagent_type="human-ticket-reviewer", prompt="Review ticket $ARGUMENTS before it enters the pipeline. Judge whether solving it solves the problem — root or symptom, complete, coherent with existing siblings, right altitude. Act on what you find: reframe, supersede, escalate or reject. Record the verdict as a [human:ticket-review] marker.", run_in_background=false)
 ```
 
 2. **Report** the verdict and what the agent did. The agent has already acted — it rewrote the framing,

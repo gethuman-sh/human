@@ -70,7 +70,7 @@ Then take ownership: `human assign <BUG_KEY>`. Ownership records who is working 
 Before any work, run preflight. It resolves what this run may do, settles what the evidence can settle, and surfaces a decision only a human can make **now** rather than halfway through:
 
 ```
-Task(subagent_type="human-preflight", prompt="Preflight bug ticket <BUG_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.")
+Task(subagent_type="human-preflight", prompt="Preflight bug ticket <BUG_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.", run_in_background=false)
 ```
 
 Read its outcome from state:
@@ -128,7 +128,7 @@ human plan show <BUG_KEY>        # non-empty -> a [human:plan] comment exists; t
 Delegate to the **human-bug-triage** agent:
 
 ```
-Task(subagent_type="human-bug-triage", model="opus", prompt="Triage bug ticket <BUG_KEY>: reproduce it minimally, trace the full cause chain (symptom → proximate cause → underlying cause) with file:line evidence and the regression window, scan for sibling occurrences of the same defect pattern, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation section a non-engineer can follow.")
+Task(subagent_type="human-bug-triage", model="opus", prompt="Triage bug ticket <BUG_KEY>: reproduce it minimally, trace the full cause chain (symptom → proximate cause → underlying cause) with file:line evidence and the regression window, scan for sibling occurrences of the same defect pattern, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation section a non-engineer can follow.", run_in_background=false)
 ```
 
 It posts a `[human:bug-verdict] <verdict>` comment on the bug ticket — the ticket's permanent root-cause record: a plain-language explanation first, then the reproduction, the cause chain down to the underlying cause (not just the line that crashed), the regression window, and sibling occurrences. **Read the verdict from state, not from the agent's prose:**
@@ -161,7 +161,7 @@ For a confirmed bug the record also carries the root cause and fix outline. If t
 Dispatch the skeptic against the verdict:
 
 ```
-Task(subagent_type="human-verdict-skeptic", model="opus", prompt="Challenge the latest bug-verdict on ticket <BUG_KEY>")
+Task(subagent_type="human-verdict-skeptic", model="opus", prompt="Challenge the latest bug-verdict on ticket <BUG_KEY>", run_in_background=false)
 ```
 
 Read its outcome from state:
@@ -200,7 +200,7 @@ challenge: upheld
 2. Delegate to the **human-planner** agent, seeding it with the triage root cause:
 
 ```
-Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan to fix bug <BUG_KEY>. Decisions already settled for this ticket (do not re-open any of them): <paste the output of `human state get <BUG_KEY> decisions --default '{}'`>. The root-cause analysis from triage:\n<paste the triage root cause + fix outline>\nThe plan's Changes section MUST begin with adding a regression test that fails because of the bug, then fixing the root cause. Return the plan as output; do not write files or create tickets.")
+Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan to fix bug <BUG_KEY>. Decisions already settled for this ticket (do not re-open any of them): <paste the output of `human state get <BUG_KEY> decisions --default '{}'`>. The root-cause analysis from triage:\n<paste the triage root cause + fix outline>\nThe plan's Changes section MUST begin with adding a regression test that fails because of the bug, then fixing the root cause. Return the plan as output; do not write files or create tickets.", run_in_background=false)
 ```
 
 Capture the output as `<PLAN_CONTENT>`. Ensure its header has a `**PM ticket**: <BUG_KEY>` line and, in split topology, an `**Engineering ticket**: TBD` line.
@@ -233,13 +233,13 @@ Verify with `human plan show <BUG_KEY>` — the fixer and verify agents read the
 Delegate to the **human-bug-fixer** agent. When `<BOARD_CONTEXT>` is true the fixer must NOT push — the board container has no push credentials and Deploy owns shipping — so forward the board instruction explicitly in the dispatch prompt (the fixer cannot see `$ARGUMENTS`):
 
 ```
-Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch. BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. Report the local branch name. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.")
+Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch. BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. Report the local branch name. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.", run_in_background=false)
 ```
 
 Otherwise (standalone, `<BOARD_CONTEXT>` false) dispatch the existing push prompt:
 
 ```
-Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch and push it. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.")
+Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM bug <BUG_KEY>) test-first on a feature branch and push it. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite.", run_in_background=false)
 ```
 
 It creates branch `autofix/<work-key>` (the key lowercased), writes a regression test that **fails** because of the bug, implements the root-cause fix, confirms the suite is green, commits with subjects starting with the `human commits prefix <BUG_KEY> [<ENG_KEY>]` prefix (e.g. `[<PM_KEY>] [<ENG_KEY>]` in split topology, `[<PM_KEY>]` otherwise), and returns the branch name. In a standalone run it pushes the branch; in board context it leaves the branch local (the bind-mounted host repo) and returns its name without pushing. If it reports it could not reach a green build/test, STOP and report — do not open a PR.
@@ -249,7 +249,7 @@ It creates branch `autofix/<work-key>` (the key lowercased), writes a regression
 Delegate to the **human-bug-verify** agent:
 
 ```
-Task(subagent_type="human-bug-verify", model="sonnet", prompt="Verify ticket <WORK_KEY> (PM bug <BUG_KEY>): confirm the regression test fails before / passes after the fix, the full suite is green, and the fix addresses the root cause. Post the verdict as a comment on <BUG_KEY>.")
+Task(subagent_type="human-bug-verify", model="sonnet", prompt="Verify ticket <WORK_KEY> (PM bug <BUG_KEY>): confirm the regression test fails before / passes after the fix, the full suite is green, and the fix addresses the root cause. Post the verdict as a comment on <BUG_KEY>.", run_in_background=false)
 ```
 
 This is the pipeline's ONE full-suite pass; the fixer used the fast tier. Ensure the `[human:bug-verify]` comment records the `## Evidence` block (branch/commit/command/result) so the review can trust it without re-running the suite.
@@ -309,7 +309,7 @@ human marker post <BUG_KEY> review-started
 ```
 
 ```
-Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria.")
+Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria.", run_in_background=false)
 ```
 
 The reviewer writes `.human/reviews/<work-key>.md` and records its outcome in state. **Read the verdict from state, never from the file's prose:**
@@ -338,7 +338,7 @@ REVIEW_EOF
 - **pass** or **pass with notes** — a pass is the one review outcome nothing downstream checks, and it is about to be made irreversible by a merge. Before continuing, get one adversarial second opinion:
 
   ```
-  Task(subagent_type="human-second-opinion", model="opus", prompt="The pipeline is about to merge branch autofix/<work-key> for ticket <WORK_KEY> on the strength of a passing review. Lens: did-you-actually-look. Evidence: the ticket, the branch diff against main, and stage.review in agent state. Try to refute that the review examined the change. Do not read the reviewer's reasoning first.")
+  Task(subagent_type="human-second-opinion", model="opus", prompt="The pipeline is about to merge branch autofix/<work-key> for ticket <WORK_KEY> on the strength of a passing review. Lens: did-you-actually-look. Evidence: the ticket, the branch diff against main, and stage.review in agent state. Try to refute that the review examined the change. Do not read the reviewer's reasoning first.", run_in_background=false)
   ```
 
   ```bash

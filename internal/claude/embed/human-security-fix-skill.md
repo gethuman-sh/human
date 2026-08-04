@@ -74,7 +74,7 @@ Then take ownership: `human assign <SEC_KEY>`. Ownership records who is working 
 Before any work, run preflight. It resolves what this run may do, settles what the evidence can settle, and surfaces a decision only a human can make **now** rather than halfway through:
 
 ```
-Task(subagent_type="human-preflight", prompt="Preflight security ticket <SEC_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.")
+Task(subagent_type="human-preflight", prompt="Preflight security ticket <SEC_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.", run_in_background=false)
 ```
 
 Read its outcome from state:
@@ -125,7 +125,7 @@ human plan show <SEC_KEY>        # non-empty -> a [human:plan] comment exists; t
 Delegate to the **human-security-triage** agent:
 
 ```
-Task(subagent_type="human-security-triage", model="opus", prompt="Triage security ticket <SEC_KEY>: confirm whether the reported weakness is a real, exploitable vulnerability by tracing the source→sink data flow with file:line evidence, build the threat model (attacker, vector, asset, impact), rate severity, scan for sibling occurrences of the same weakness, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation a non-engineer can follow. Keep exploit specifics on the tracker.")
+Task(subagent_type="human-security-triage", model="opus", prompt="Triage security ticket <SEC_KEY>: confirm whether the reported weakness is a real, exploitable vulnerability by tracing the source→sink data flow with file:line evidence, build the threat model (attacker, vector, asset, impact), rate severity, scan for sibling occurrences of the same weakness, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation a non-engineer can follow. Keep exploit specifics on the tracker.", run_in_background=false)
 ```
 
 It posts a `[human:bug-verdict] <verdict>` comment on the ticket — the permanent record: a plain-language explanation, the threat model, the severity, the source→sink cause chain, the regression window, and sibling occurrences. **Read the verdict from state, not from the agent's prose:**
@@ -155,7 +155,7 @@ If the recorded analysis stops at a proximate cause (a reachable sink without *w
 Dispatch the skeptic against the verdict, with a security lens:
 
 ```
-Task(subagent_type="human-verdict-skeptic", model="opus", prompt="Challenge the latest bug-verdict on security ticket <SEC_KEY>. Lens: try to reach the sink. Attempt to prove the path IS exploitable — an unsanitized source, an auth check that can be bypassed, a guard that does not cover the payload — before the vulnerability is dismissed.")
+Task(subagent_type="human-verdict-skeptic", model="opus", prompt="Challenge the latest bug-verdict on security ticket <SEC_KEY>. Lens: try to reach the sink. Attempt to prove the path IS exploitable — an unsanitized source, an auth check that can be bypassed, a guard that does not cover the payload — before the vulnerability is dismissed.", run_in_background=false)
 ```
 
 Read its outcome from state:
@@ -188,7 +188,7 @@ The `[human:no-fix-needed]` marker is **mandatory in board context**: the pipeli
 2. Delegate to the **human-planner** agent, seeding it with the triage threat model and root cause:
 
 ```
-Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan to fix security ticket <SEC_KEY>. Decisions already settled (do not re-open): <paste `human state get <SEC_KEY> decisions --default '{}'`>. The threat model and source→sink root cause from triage:\n<paste the triage threat model + root cause + fix outline>\nThe plan's Changes section MUST begin with adding a SECURITY regression test that demonstrates the exploit and fails because of the vulnerability, then closing the root cause at the source (parameterize/encode/guard/tighten the check — not merely suppress the symptom). Address the sibling occurrences from triage or state them out of scope. Return the plan as output; do not write files or create tickets.")
+Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan to fix security ticket <SEC_KEY>. Decisions already settled (do not re-open): <paste `human state get <SEC_KEY> decisions --default '{}'`>. The threat model and source→sink root cause from triage:\n<paste the triage threat model + root cause + fix outline>\nThe plan's Changes section MUST begin with adding a SECURITY regression test that demonstrates the exploit and fails because of the vulnerability, then closing the root cause at the source (parameterize/encode/guard/tighten the check — not merely suppress the symptom). Address the sibling occurrences from triage or state them out of scope. Return the plan as output; do not write files or create tickets.", run_in_background=false)
 ```
 
 Capture the output as `<PLAN_CONTENT>`. Ensure its header has a `**PM ticket**: <SEC_KEY>` line and, in split topology, an `**Engineering ticket**: TBD` line.
@@ -221,13 +221,13 @@ Verify with `human plan show <SEC_KEY>`. Commits reference only `<SEC_KEY>`. Set
 Delegate to the **human-bug-fixer** agent (shared with autofix — it writes the failing regression test and the root-cause fix; the security framing comes from the plan it reads). When `<BOARD_CONTEXT>` is true the fixer must NOT push — forward the board instruction explicitly (the fixer cannot see `$ARGUMENTS`):
 
 ```
-Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM security ticket <SEC_KEY>) test-first on a feature branch, following the plan. The plan's first change is a SECURITY regression test that demonstrates the exploit and must fail before the fix. BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. Report the local branch name. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite. Keep exploit specifics out of commit messages — reference the ticket and describe the hardening.")
+Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM security ticket <SEC_KEY>) test-first on a feature branch, following the plan. The plan's first change is a SECURITY regression test that demonstrates the exploit and must fail before the fix. BOARD CONTEXT: do NOT run git push — leave the branch local; the daemon's Deploy stage ships it. Report the local branch name. Iterate on the fast test+lint tier (not the full `make check`) to go green — the verify gate runs the single full suite. Keep exploit specifics out of commit messages — reference the ticket and describe the hardening.", run_in_background=false)
 ```
 
 Otherwise (standalone, `<BOARD_CONTEXT>` false) dispatch the push variant:
 
 ```
-Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM security ticket <SEC_KEY>) test-first on a feature branch and push it, following the plan (its first change is a security regression test that demonstrates the exploit and fails before the fix). Iterate on the fast test+lint tier to go green — the verify gate runs the single full suite. Keep exploit specifics out of commit messages.")
+Task(subagent_type="human-bug-fixer", model="sonnet", prompt="Fix ticket <WORK_KEY> (PM security ticket <SEC_KEY>) test-first on a feature branch and push it, following the plan (its first change is a security regression test that demonstrates the exploit and fails before the fix). Iterate on the fast test+lint tier to go green — the verify gate runs the single full suite. Keep exploit specifics out of commit messages.", run_in_background=false)
 ```
 
 It creates branch `autofix/<work-key>` (the key lowercased), writes the security regression test, implements the root-cause fix, confirms the suite is green, commits with subjects starting with the `human commits prefix <SEC_KEY> [<ENG_KEY>]` prefix, and returns the branch name. In a standalone run it pushes; in board context it leaves the branch local. If it reports it could not go green, STOP and report — do not open a PR.
@@ -237,7 +237,7 @@ It creates branch `autofix/<work-key>` (the key lowercased), writes the security
 Delegate to the **human-security-verify** agent:
 
 ```
-Task(subagent_type="human-security-verify", model="sonnet", prompt="Verify ticket <WORK_KEY> (PM security ticket <SEC_KEY>): confirm the security regression test demonstrates the exploit and fails before / passes after the fix, the vulnerability from the triage threat model is actually closed (the attack no longer succeeds), the full suite is green, and no new weakness was introduced. Post the verdict as a comment on <SEC_KEY>.")
+Task(subagent_type="human-security-verify", model="sonnet", prompt="Verify ticket <WORK_KEY> (PM security ticket <SEC_KEY>): confirm the security regression test demonstrates the exploit and fails before / passes after the fix, the vulnerability from the triage threat model is actually closed (the attack no longer succeeds), the full suite is green, and no new weakness was introduced. Post the verdict as a comment on <SEC_KEY>.", run_in_background=false)
 ```
 
 This is the pipeline's ONE full-suite pass; the fixer used the fast tier. Ensure the `[human:bug-verify]` comment records the `## Evidence` block and the `## Vulnerability closed` finding so the review can trust it without re-running the suite.
@@ -287,7 +287,7 @@ human marker post <SEC_KEY> review-started
 ```
 
 ```
-Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for security ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria. Security lens: confirm the fix closes the vulnerability at its source (not just the reported payload), covers the sibling occurrences the triage found, and introduces no new weakness (an over-broad allow, a widened permission, a secret written to a log, a check that can still be bypassed). The security regression test must genuinely exercise the exploit.")
+Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for security ticket <WORK_KEY>: check out branch autofix/<work-key> and review its diff against main against the ticket's plan and acceptance criteria. Security lens: confirm the fix closes the vulnerability at its source (not just the reported payload), covers the sibling occurrences the triage found, and introduces no new weakness (an over-broad allow, a widened permission, a secret written to a log, a check that can still be bypassed). The security regression test must genuinely exercise the exploit.", run_in_background=false)
 ```
 
 The reviewer writes `.human/reviews/<work-key>.md` and records its outcome in state. **Read the verdict from state, never from the file's prose:**
@@ -317,7 +317,7 @@ REVIEW_EOF
 - **pass** or **pass with notes** — a pass is about to be made irreversible by a merge. Before continuing, get one adversarial second opinion **through a security lens**:
 
   ```
-  Task(subagent_type="human-second-opinion", model="opus", prompt="The pipeline is about to merge branch autofix/<work-key> for security ticket <WORK_KEY> on the strength of a passing review. Lens: is-the-vulnerability-actually-closed. Evidence: the ticket's threat model, the branch diff against main, and stage.review in agent state. Try to refute that the fix closes the source→sink path — look for a residual bypass, an uncovered sibling, or a new weakness the fix introduced. Do not read the reviewer's reasoning first.")
+  Task(subagent_type="human-second-opinion", model="opus", prompt="The pipeline is about to merge branch autofix/<work-key> for security ticket <WORK_KEY> on the strength of a passing review. Lens: is-the-vulnerability-actually-closed. Evidence: the ticket's threat model, the branch diff against main, and stage.review in agent state. Try to refute that the fix closes the source→sink path — look for a residual bypass, an uncovered sibling, or a new weakness the fix introduced. Do not read the reviewer's reasoning first.", run_in_background=false)
   ```
 
   ```bash
