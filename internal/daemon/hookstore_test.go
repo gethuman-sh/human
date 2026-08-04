@@ -13,35 +13,6 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/logparser"
 )
 
-// SC-2447: RecordAgentOutput is the reasoning heartbeat the zombie sweep
-// folds in from a container's transcript mtime. It must bump LastProgressAt
-// for an agent the store already knows about.
-func TestHookEventStore_RecordAgentOutput_TracksExisting(t *testing.T) {
-	s := NewHookEventStore()
-	s.Append(evt("PreToolUse", "board-SC-1-implementation", "Bash", time.Unix(1000, 0)))
-
-	at := time.Unix(2000, 0)
-	s.RecordAgentOutput("board-SC-1-implementation", at)
-
-	p, ok := s.AgentProgress("board-SC-1-implementation")
-	require.True(t, ok)
-	assert.Equal(t, at, p.LastProgressAt)
-}
-
-// A Stop/SessionEnd already dropped a finished agent from the progress map;
-// a transcript write observed after that point must not revive it as a hang
-// candidate — the agent is gone, not silent.
-func TestHookEventStore_RecordAgentOutput_DoesNotResurrect(t *testing.T) {
-	s := NewHookEventStore()
-	s.Append(evt("PreToolUse", "board-SC-1-implementation", "Bash", time.Unix(1000, 0)))
-	s.Append(evt("Stop", "board-SC-1-implementation", "", time.Unix(1001, 0)))
-
-	s.RecordAgentOutput("board-SC-1-implementation", time.Unix(2000, 0))
-
-	_, ok := s.AgentProgress("board-SC-1-implementation")
-	assert.False(t, ok, "a finished agent must not be resurrected by a late transcript write")
-}
-
 func TestHookEventStore_SubscriberCount(t *testing.T) {
 	store := NewHookEventStore()
 	assert.Equal(t, 0, store.SubscriberCount())

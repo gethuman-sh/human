@@ -254,6 +254,93 @@ func TestIntercept_RecordsOKOutcome(t *testing.T) {
 	assert.GreaterOrEqual(t, o.Duration, time.Duration(0))
 }
 
+// TestMITM_InflightBracketsModelRequest proves the outstanding-model-request
+// signal (SC-3074): a request to the model host fires exactly one +1 then one
+// -1 delta, netting to zero once the response completes, and a non-model host
+// never fires the callback at all — accounting stays fixed to the model API
+// even though MITM interception can cover a wider domain list.
+func TestMITM_InflightBracketsModelRequest(t *testing.T) {
+	env := newInterceptTestEnv(t)
+	hostname := "api.anthropic.com"
+	upstreamLn := startUpstreamTLS(t, env, hostname, handleEchoHTTPS)
+
+	var mu sync.Mutex
+	var deltas []int
+	li := &LoggingInterceptor{
+		Domains:   []string{hostname},
+		LeafCache: env.LeafCache,
+		Logger:    zerolog.Nop(),
+		LogDir:    env.LogDir,
+		InflightModelRequests: func(_ string, delta int) {
+			mu.Lock()
+			deltas = append(deltas, delta)
+			mu.Unlock()
+		},
+		Dialer: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return tls.Dial("tcp", upstreamLn.Addr().String(), &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // test only
+			})
+		},
+	}
+	withLogMode(t, LogModeOff)
+
+	doOneRequest(t, env, li, hostname, `{"model":"test"}`)
+
+	// Give the goroutine driving Intercept a moment to record the final delta
+	// after the client write (emitOutcome's own ordering already waits for the
+	// same completion in doOneRequest, but the -1 fires just before it).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(deltas)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []int{1, -1}, deltas, "exactly one +1 then one -1 per model-host request")
+}
+
+// TestMITM_InflightNeverFiresForNonModelHost proves accounting stays gated on
+// the model host, independent of the (potentially wider) intercept domain
+// list — widening traffic logging must never widen this signal either.
+func TestMITM_InflightNeverFiresForNonModelHost(t *testing.T) {
+	env := newInterceptTestEnv(t)
+	hostname := "example.com"
+	upstreamLn := startUpstreamTLS(t, env, hostname, handleEchoHTTPS)
+
+	var mu sync.Mutex
+	var deltas []int
+	li := &LoggingInterceptor{
+		Domains:   []string{hostname},
+		LeafCache: env.LeafCache,
+		Logger:    zerolog.Nop(),
+		LogDir:    env.LogDir,
+		InflightModelRequests: func(_ string, delta int) {
+			mu.Lock()
+			deltas = append(deltas, delta)
+			mu.Unlock()
+		},
+		Dialer: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return tls.Dial("tcp", upstreamLn.Addr().String(), &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // test only
+			})
+		},
+	}
+	withLogMode(t, LogModeOff)
+
+	doOneRequest(t, env, li, hostname, `{"hello":"world"}`)
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Empty(t, deltas, "a non-model host must never fire the in-flight callback")
+}
+
 // TestIntercept_RecordsStreamedTokens proves a streamed (SSE) 200 model call is
 // recorded with the four token counts and model id read off the real streamed
 // body end-to-end (SC-2847 AD1), not just via the unit test of usageFromResponse.

@@ -123,20 +123,6 @@ func (s *HookEventStore) AgentProgress(agentName string) (AgentProgress, bool) {
 	return p, ok
 }
 
-// RecordAgentOutput folds one observation of transcript output into an
-// existing agent's progress — the reasoning heartbeat the zombie sweep feeds
-// in from a container's transcript mtime, so a thinking agent's silence
-// between hook events is not misread as a hang (SC-2447). Never creates or
-// resurrects an entry: see recordAgentOutput.
-func (s *HookEventStore) RecordAgentOutput(agentName string, at time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.progress == nil {
-		return
-	}
-	recordAgentOutput(s.progress, agentName, at)
-}
-
 // Subscribe returns a channel that receives a signal whenever a new event is
 // appended. The channel has a buffer of 1 so a single pending notification is
 // coalesced. Call Unsubscribe to clean up.

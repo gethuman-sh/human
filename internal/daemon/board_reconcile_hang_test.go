@@ -27,6 +27,23 @@ func progressAt(last time.Time, insideTool, blocked bool) AgentProgressProbe {
 	}
 }
 
+// runningCardWithPriorReaps is runningCard plus n prior (started, silence-reap
+// failed) marker pairs already on the thread, each modelling an earlier
+// relaunch that itself went hung — ending with a final "-started" marker so
+// the card still reads as currently stuck-running. The fixture for the
+// SC-3074 cap tests.
+func runningCardWithPriorReaps(now time.Time, n int) []ReconcileCard {
+	base := now.Add(-StuckRunningGrace - time.Hour)
+	var comments []tracker.Comment
+	for i := 0; i < n; i++ {
+		t := base.Add(time.Duration(i) * 2 * time.Minute)
+		comments = append(comments, cmt("[human:implementation-started]", t))
+		comments = append(comments, cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), t.Add(time.Minute)))
+	}
+	comments = append(comments, cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute)))
+	return []ReconcileCard{{Key: "SC-1", Comments: comments}}
+}
+
 // The defect this fixes: a hung agent keeps its container alive, so the old
 // liveness check skipped it forever and the hang was never detected at all.
 //
@@ -49,7 +66,7 @@ func TestReconcileStuckRunning_HungAgentIsStoppedReddenedAndRelaunched(t *testin
 
 	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
 		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
-		progressAt(now.Add(-ThinkingIdleGrace-time.Minute), false, false),
+		progressAt(now.Add(-IdleGrace-time.Minute), false, false),
 		func(name string) error { stopped = append(stopped, name); return nil },
 		"d1", now, zerolog.Nop())
 
@@ -162,6 +179,60 @@ func TestReconcileStuckRunning_UnknownProgressLeavesLiveWorkAlone(t *testing.T) 
 		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
 		nil, nil, "d1", now, zerolog.Nop())
 	require.Equal(t, 0, n)
+}
+
+// SC-3074: once a stage has already been silence-reaped MaxSilenceReaps times
+// on the durable reconcile path, a further reap must post the give-up marker
+// and stop relaunching — the identical cap the live failure watcher applies.
+func TestReconcileStuckRunning_SilenceReapGivesUpAfterCap(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	var posted []struct{ Key, Body string }
+	var stopped []string
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCardWithPriorReaps(now, MaxSilenceReaps), alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
+		progressAt(now.Add(-IdleGrace-time.Minute), false, false),
+		func(name string) error { stopped = append(stopped, name); return nil },
+		"d1", now, zerolog.Nop())
+
+	require.Equal(t, 1, n, "the card is still reddened with the give-up marker")
+	require.Empty(t, relaunched, "the cap is spent — the stage must not be relaunched again")
+	require.Len(t, posted, 1)
+	require.Contains(t, posted[0].Body, "stopped relaunching after")
+	require.Contains(t, posted[0].Body, "needs a person")
+}
+
+// A second daemon reaching the same cap for the same stage must post nothing
+// more once the give-up marker is already on the thread (SC-3074 dedup).
+func TestReconcileStuckRunning_SilenceReapGiveUpDedup(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	cards := runningCardWithPriorReaps(now, MaxSilenceReaps)
+	cards[0].Comments = append(cards[0].Comments, cmt(ImplementationFailedHeader+"\n"+silenceReapGiveUpReason(BoardImplementation, MaxSilenceReaps+1), now.Add(-time.Minute)))
+	var posted []struct{ Key, Body string }
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable),
+		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
+		progressAt(now.Add(-IdleGrace-time.Minute), false, false),
+		func(string) error { return nil },
+		"d1", now, zerolog.Nop())
+
+	require.Equal(t, 0, n, "already given up — nothing more is posted")
+	require.Empty(t, relaunched)
+	require.Empty(t, posted)
 }
 
 // If the hung agent cannot be stopped, the card must be left as-is rather than

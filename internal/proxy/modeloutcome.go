@@ -252,6 +252,18 @@ func (li *LoggingInterceptor) isModelHost(host string) bool {
 	return strings.EqualFold(strings.TrimSpace(host), li.modelAPIHost())
 }
 
+// markInflight reports one +1/-1 delta for an in-flight model request, gated
+// on the model host and nil-safe like emitOutcome — a fault in accounting
+// must never break the call it is measuring, and only the traffic that
+// matters (the model API) ever feeds the signal (SC-3074).
+func (li *LoggingInterceptor) markInflight(remoteAddr, host string, delta int) {
+	if li.InflightModelRequests == nil || !li.isModelHost(host) {
+		return
+	}
+	defer func() { _ = recover() }()
+	li.InflightModelRequests(remoteAddr, delta)
+}
+
 // emitOutcome builds and records a content-free outcome for one model call.
 // It is the single accounting seam every MITM path funnels through and it holds
 // the load-bearing invariants: it is gated on the model-API host (constraint:

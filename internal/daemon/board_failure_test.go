@@ -1221,6 +1221,85 @@ func TestHandleBoardAgentExit_SilenceReapDoesNotChargeRetry(t *testing.T) {
 	assert.Contains(t, c.added[0], "not charged", "the marker must state the rule applied")
 }
 
+// SC-3074: once a stage has already been silence-reaped MaxSilenceReaps times,
+// a further reap must stop relaunching and post a give-up marker naming the
+// count — not repeat the relaunch forever.
+func TestHandleBoardAgentExit_SilenceReapGivesUpAfterCap(t *testing.T) {
+	comments := []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))}
+	for i := 0; i < MaxSilenceReaps; i++ {
+		comments = append(comments, cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), time.Unix(int64(2+i), 0)))
+	}
+	c := &syncCommenter{comments: comments}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", ReapSilenceErrorType+":18m0s", "StopFailure",
+		commenterFor, nil, nil, nil, nil, alwaysReachable, nil, nil, nil, retry, nil, "", zerolog.Nop())
+
+	assert.Empty(t, relaunched, "the cap is spent — the stage must not be relaunched again")
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	require.Len(t, c.added, 1)
+	assert.True(t, strings.HasPrefix(c.added[0], ImplementationFailedHeader))
+	assert.Contains(t, c.added[0], "stopped relaunching after")
+	assert.Contains(t, c.added[0], "needs a person")
+}
+
+// A second daemon reaching the same cap for the same stage must post nothing
+// more once the give-up marker is already on the thread (SC-3074 dedup).
+func TestHandleBoardAgentExit_SilenceReapGiveUpDedup(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(ImplementationStartedHeader, time.Unix(1, 0)),
+		cmt(ImplementationFailedHeader+"\n"+silenceReapGiveUpReason(BoardImplementation, MaxSilenceReaps+1), time.Unix(2, 0)),
+	}
+	c := &syncCommenter{comments: comments}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", ReapSilenceErrorType+":18m0s", "StopFailure",
+		commenterFor, nil, nil, nil, nil, alwaysReachable, nil, nil, nil, retry, nil, "", zerolog.Nop())
+
+	assert.Empty(t, relaunched, "still must not relaunch")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Empty(t, c.added, "the give-up marker was already posted — nothing more is posted")
+}
+
+// Under the cap the stage keeps relaunching exactly as before, and the
+// charged retry counter is never touched by a silence reap.
+func TestHandleBoardAgentExit_SilenceReapRelaunchesUnderCap(t *testing.T) {
+	comments := []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))}
+	for i := 0; i < MaxSilenceReaps-1; i++ {
+		comments = append(comments, cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), time.Unix(int64(2+i), 0)))
+	}
+	c := &syncCommenter{comments: comments}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var attemptsCalled bool
+	var relaunched []BoardStage
+	retry := StageRetry{
+		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
+	}
+
+	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", ReapSilenceErrorType+":18m0s", "StopFailure",
+		commenterFor, nil, nil, nil, nil, alwaysReachable, nil, nil, nil, retry, nil, "", zerolog.Nop())
+
+	assert.False(t, attemptsCalled, "still uncharged")
+	assert.Equal(t, []BoardStage{BoardImplementation}, relaunched, "under the cap the stage keeps relaunching")
+}
+
 // A genuine StopFailure — no silence sentinel — must still charge the retry
 // budget exactly as before; only a recognized silence-reap sentinel is exempt.
 func TestHandleBoardAgentExit_GenuineStopFailureStillCharges(t *testing.T) {
