@@ -1504,11 +1504,22 @@ func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, pr
 // cases that stay plannable, and stops with the reason recorded in the cases that
 // do not. A ticket already carrying a [human:ticket-review] marker skips the gate
 // so a planning retry does not re-review it.
+//
+// A terminal verdict must ALSO post [human:nothing-to-do], because "stop after
+// recording it" is not a stop the board can see: the [human:ticket-review]
+// marker classifies as a backlog-stage marker, so a card already carrying
+// [human:planning-started] still derives planning/running, and the stuck-running
+// pass reds it and relaunches — re-reaching the same verdict, forever (SC-3149
+// re-planned twelve times overnight on a verdict it got right the first time).
+// [human:nothing-to-do] is the planning stage's terminal resolved marker; naming
+// it here is what turns a correct verdict into a stop.
 func planPrompt(key string) string {
 	return "/human-ticket-review " + key +
 		" — then, if the verdict is ready or reframed, continue with /human-plan " + key +
 		" (a reframed verdict's corrected framing is in the [human:ticket-review] marker; plan against that, not the description)." +
-		" If the verdict is superseded, escalated or rejected, stop after recording it: the marker names the ticket that carries the work." +
+		" If the verdict is superseded, escalated or rejected, there is nothing to plan on this ticket:" +
+		" post the terminal marker — human marker post " + key + " nothing-to-do --field \"evidence=<the verdict, and the key that carries the work>\" —" +
+		" and then stop. Without it the board reads this run as a crash and re-plans the ticket forever." +
 		" Skip the review and go straight to /human-plan " + key + " when the ticket already carries a [human:ticket-review] marker." +
 		" BOARD CONTEXT: there is no user to ask — never end the run with a question; act on what you find and record it."
 }

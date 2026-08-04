@@ -2258,3 +2258,16 @@ func TestPlanPromptGatesPlanningOnTicketReview(t *testing.T) {
 	// The gate acts on its own findings; a board run has nobody to ask.
 	assert.Contains(t, p, "no user to ask")
 }
+
+// A terminal verdict stops the run, and a stop the board cannot see is not a
+// stop: without the terminal marker the card keeps deriving planning/running and
+// the stuck-running pass re-plans it forever (SC-3149, twelve times overnight).
+func TestPlanPromptNamesTheTerminalMarkerForUnplannableVerdicts(t *testing.T) {
+	p := planPrompt("SC-1")
+
+	assert.Contains(t, p, "superseded, escalated or rejected", "all three terminal verdicts must be covered")
+	assert.Contains(t, p, "human marker post SC-1 nothing-to-do",
+		"a terminal verdict must post the marker that resolves the planning stage")
+	assert.Contains(t, p, "re-plans the ticket forever",
+		"the dispatch must say what happens without the marker, so the rule is not dropped as boilerplate")
+}
