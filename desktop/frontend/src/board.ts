@@ -335,6 +335,14 @@ interface ProjectBootstrapResult {
   // true when a prior app session's daemon is still running unsupervised.
   orphan?: boolean;
   orphanProject?: string;
+  // conflict/conflictProject: see App.bootstrapFromCwd (desktop/projects.go,
+  // SC-3346) — true when the working directory the app was launched from
+  // holds a valid project config for a DIFFERENT project than the one the
+  // reachable daemon named by `project` is already serving. Nothing was
+  // switched; conflictProject names the working directory's project so the
+  // launch-time notice can name both.
+  conflict?: boolean;
+  conflictProject?: string;
 }
 
 interface AppBindings {
@@ -2667,6 +2675,9 @@ async function bootstrapProject(): Promise<void> {
   if (result.orphan) {
     void offerOrphanCleanup(result.orphanProject);
   }
+  if (result.conflict) {
+    void offerProjectConflict(result.project, result.conflictProject);
+  }
 }
 
 // offerOrphanCleanup runs once at launch when ProjectBootstrap detects a
@@ -2687,6 +2698,60 @@ async function offerOrphanCleanup(project?: string): Promise<void> {
   } catch (err) {
     showError(errMessage(err));
   }
+}
+
+// noticeDialog is confirmDialog's one-button counterpart: a plain
+// acknowledgement with no choice to make, for launch-time notices where
+// offering a choice would be scope this ticket deliberately defers
+// (SC-3346's conflict signal — see offerProjectConflict below).
+function noticeDialog(title: string, body: string, buttonLabel = "OK"): Promise<void> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = `
+      <div class="modal-title">${escapeHtml(title)}</div>
+      <div class="modal-body">${escapeHtml(body)}</div>
+      <div class="modal-actions">
+        <button class="modal-confirm" type="button">${escapeHtml(buttonLabel)}</button>
+      </div>
+    `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const cleanup = (): void => {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+      resolve();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") cleanup();
+    };
+
+    overlay.addEventListener("click", (e: MouseEvent) => {
+      if (e.target === overlay) cleanup();
+    });
+    modal.querySelector(".modal-confirm")!.addEventListener("click", () => cleanup());
+    document.addEventListener("keydown", onKey);
+    (modal.querySelector(".modal-confirm") as HTMLButtonElement).focus();
+  });
+}
+
+// offerProjectConflict runs once at launch when ProjectBootstrap detects that
+// the working directory the app was launched from holds a different project
+// than the one a reachable daemon is already serving (SC-3346). Fire-and-
+// forget and purely informational: the running project's board is already
+// showing behind it, and nothing was switched — the interactive choice
+// between the two is a follow-up ticket, so this only names them.
+async function offerProjectConflict(runningProject?: string, cwdProject?: string): Promise<void> {
+  const running = runningProject || "the running project";
+  const here = cwdProject || "this directory's project";
+  await noticeDialog(
+    "A different project is already running",
+    `This directory holds "${here}", but "${running}" is the project currently running here. Nothing has changed — use Switch Project if you want to open "${here}" instead.`,
+  );
 }
 
 function errMessage(err: unknown): string {
