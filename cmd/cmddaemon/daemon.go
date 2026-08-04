@@ -2998,6 +2998,24 @@ func resolvePMTransitioner(dir string, lookup config.EnvLookup, resolver *vault.
 	return nil, errors.WithDetails("no PM-role tracker with transition support configured", "dir", dir)
 }
 
+// resolvePMOwner resolves the PM-role tracker as the provider that can record
+// ownership. It returns the provider itself rather than a narrowed interface
+// because claiming needs two capabilities together — resolving the current user
+// and assigning — and tracker.AssignToCurrentUser type-asserts for both.
+func resolvePMOwner(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.Provider, error) {
+	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		if inst.InferRole() != "pm" {
+			continue
+		}
+		return inst.Provider, nil
+	}
+	return nil, errors.WithDetails("no PM-role tracker configured to record ownership", "dir", dir)
+}
+
 // closeTicketerFunc builds the daemon's CloseTicketer closure: it stops any live
 // run claiming the ticket, then resolves the PM transitioner by role per request
 // and moves the ticket to its Done status. "done" is the status CATEGORY, not a
@@ -3158,6 +3176,15 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 			}
 			return transitioner.TransitionIssue(context.Background(), pmKey, "done")
 		},
+		SetTicketOwner: func(pmKey string) error {
+			owner, err := resolvePMOwner(entry.Dir, lookup, resolver)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return tracker.AssignToCurrentUser(ctx, owner, pmKey)
+		},
 		WorkspaceDir: entry.Dir,
 		ConfigDir:    entry.Dir,
 		DaemonID:     daemonID,
@@ -3260,6 +3287,9 @@ func bugCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, relat
 		if err != nil {
 			return daemon.BugCreateResponse{}, errors.WrapWithDetails(err, "creating bug ticket", "project", project)
 		}
+		// A filed bug is owned by whoever filed it (SC-3345), best-effort so a
+		// failed claim never turns a created ticket into a failed filing.
+		_, _ = tracker.AssignToCurrentUserBestEffort(ctx, creator, created.Key)
 		// Filing returns immediately; the related-work record lands shortly after.
 		// Fire-and-forget on a background context so a slow container start never
 		// delays the caller. Only the interactive filing paths (the board Bugs pane
@@ -3308,6 +3338,8 @@ func securityCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) 
 		if err != nil {
 			return daemon.SecurityCreateResponse{}, errors.WrapWithDetails(err, "creating security ticket", "project", project)
 		}
+		// Owned by the reporter, like every other filing path (SC-3345).
+		_, _ = tracker.AssignToCurrentUserBestEffort(ctx, creator, created.Key)
 		return daemon.SecurityCreateResponse{Key: created.Key, URL: created.URL}, nil
 	}
 }

@@ -88,11 +88,20 @@ func (m *mockProvider) TransitionIssue(ctx context.Context, key, status string) 
 	return m.transitionFn(ctx, key, status)
 }
 
+// Assignment and identity are nil-safe because ownership is now an incidental
+// side effect of creating an issue (SC-3345): a test about create semantics
+// should not have to wire collaborators it is not asserting on.
 func (m *mockProvider) AssignIssue(ctx context.Context, key, userID string) error {
+	if m.assignFn == nil {
+		return nil
+	}
 	return m.assignFn(ctx, key, userID)
 }
 
 func (m *mockProvider) GetCurrentUser(ctx context.Context) (string, error) {
+	if m.getCurrentUserFn == nil {
+		return "test-user", nil
+	}
 	return m.getCurrentUserFn(ctx)
 }
 
@@ -350,6 +359,46 @@ func TestRunCreateIssue_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "KAN-10")
 	assert.Contains(t, buf.String(), "New feature")
+}
+
+// A created ticket is owned by the identity that created it, so it never lands
+// on the board ownerless (SC-3345).
+func TestRunCreateIssueAssignsTheNewTicketToItsCreator(t *testing.T) {
+	var assignedKey, assignedUser string
+	p := &mockProvider{
+		createIssueFn: func(_ context.Context, _ *tracker.Issue) (*tracker.Issue, error) {
+			return &tracker.Issue{Key: "KAN-11", Title: "Owned"}, nil
+		},
+		getCurrentUserFn: func(context.Context) (string, error) { return "member-7", nil },
+		assignFn: func(_ context.Context, key, userID string) error {
+			assignedKey, assignedUser = key, userID
+			return nil
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "Owned", "", "", nil))
+
+	assert.Equal(t, "KAN-11", assignedKey)
+	assert.Equal(t, "member-7", assignedUser)
+}
+
+// The ticket exists either way: reporting a create as failed because a
+// follow-up assignment did not land would be the worse lie.
+func TestRunCreateIssueSucceedsWhenAssignmentFails(t *testing.T) {
+	p := &mockProvider{
+		createIssueFn: func(_ context.Context, _ *tracker.Issue) (*tracker.Issue, error) {
+			return &tracker.Issue{Key: "KAN-12", Title: "Still created"}, nil
+		},
+		getCurrentUserFn: func(context.Context) (string, error) {
+			return "", errors.WithDetails("tracker down")
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, RunCreateIssue(context.Background(), p, &buf, "KAN", "Task", "Still created", "", "", nil))
+
+	assert.Contains(t, buf.String(), "KAN-12")
 }
 
 func TestRunCreateIssue_Error(t *testing.T) {

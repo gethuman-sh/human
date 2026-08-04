@@ -16,6 +16,36 @@ import (
 // forms classify (see CLAUDE.md "Tickets"), so promotion removes both.
 var ideaLabels = []string{"human/idea", "idea"}
 
+// BuildAutoAssignCmd creates the top-level "assign" command: take ownership of
+// an issue for the identity running the command.
+//
+// It exists so a run that begins outside the board can record who is working a
+// ticket the way board launches already do (SC-3345). Deliberately ownership
+// ONLY, which is what separates it from `issue start`: that also transitions the
+// status, and a status change is a gated operation that stops an unattended
+// pipeline dead. Taking ownership has to stay cheap enough for a stage to do it
+// every time without asking anyone.
+func BuildAutoAssignCmd(deps cmdutil.Deps) *cobra.Command {
+	return &cobra.Command{
+		Use:     "assign KEY_OR_URL",
+		Short:   "Take ownership of an issue as the current user (no status change)",
+		Example: `  human assign SC-3345`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := cmdutil.ResolveAutoProvider(cmd.Context(), cmd, args[0], true, deps)
+			if err != nil {
+				return err
+			}
+			defer result.Cleanup()
+			if err := tracker.AssignToCurrentUser(cmd.Context(), result.Provider, result.Key); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Assigned %s to you\n", result.Key)
+			return nil
+		},
+	}
+}
+
 // BuildAutoDoneCmd creates the top-level "done" command: transition an issue
 // to its tracker's done-type status without knowing the status name.
 func BuildAutoDoneCmd(deps cmdutil.Deps) *cobra.Command {

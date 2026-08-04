@@ -134,9 +134,13 @@ type BoardTransitionDeps struct {
 	Deployer  Deployer
 	// CloseTicket closes the PM ticket after a successful deploy so shipped
 	// work leaves the board. nil skips the close (the deploy still succeeds).
-	CloseTicket  func(pmKey string) error
-	WorkspaceDir string
-	ConfigDir    string
+	CloseTicket func(pmKey string) error
+	// SetTicketOwner makes this machine the PM ticket's owner when a stage launches,
+	// so the board can show who holds a card (SC-3345). nil skips the claim — an
+	// un-wired daemon still runs every stage, it just records no ownership.
+	SetTicketOwner func(pmKey string) error
+	WorkspaceDir   string
+	ConfigDir      string
 	// DaemonID stamps this daemon's identity on every marker it posts, as the
 	// machine: field the signing commenter injects at the write choke point.
 	// Empty leaves markers un-signed (the signer's empty-machine no-op), so an
@@ -521,14 +525,35 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 // happen (no container, no credentials) still fails loudly. Centralizing the
 // no-op contract here means a new launch path inherits it without rediscovering
 // the rule (SC-2603; the per-call-site guard it replaces was SC-1419).
-func (d BoardTransitionDeps) launchAgent(ctx context.Context, name, prompt string) error {
+// Ownership follows the work: a launch that actually starts an agent claims the
+// ticket for this machine, so "who holds this right now" is answerable from the
+// ticket alone (SC-3345). It rides here rather than in each caller for the same
+// reason the no-op contract does — a new launch path inherits it without
+// rediscovering the rule. A benign single-flight refusal claims nothing: an
+// agent is already on it, so the existing claim is the accurate one.
+func (d BoardTransitionDeps) launchAgent(ctx context.Context, pmKey, name, prompt string) error {
 	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
 		if stderrors.Is(err, ErrAgentAlreadyRunning) {
 			return nil
 		}
 		return err
 	}
+	d.setTicketOwner(pmKey)
 	return nil
+}
+
+// setTicketOwner makes this machine's identity the ticket's owner. Best-effort by
+// contract: ownership is a record of who is working, never a precondition for
+// working, so a tracker that refuses the claim leaves the stage running and the
+// reason in the log rather than failing a launch that already succeeded.
+func (d BoardTransitionDeps) setTicketOwner(pmKey string) {
+	if d.SetTicketOwner == nil || pmKey == "" {
+		return
+	}
+	if err := d.SetTicketOwner(pmKey); err != nil {
+		d.Logger.Debug().Err(err).Str("pm", pmKey).
+			Msg("could not claim ticket ownership for this machine; the stage runs regardless")
+	}
 }
 
 // requiresPlan declares that this launch executes a pre-written plan, so the
@@ -592,7 +617,7 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 		return false, errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
 	}
 	name := agentNameFor(pmKey, stage)
-	if err := d.launchAgent(ctx, name, prompt); err != nil {
+	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
 		failBody := failedHeaderFor(stage) + "\n" + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, failBody)
 		return false, errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
@@ -869,7 +894,7 @@ func deployFixRounds(comments []tracker.Comment) int {
 // failure escalates the card — leaving it spinning would strand the loop.
 func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string, stage BoardStage, prompt string) error {
 	name := agentNameFor(pmKey, stage)
-	if err := d.launchAgent(ctx, name, prompt); err != nil {
+	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
 		body := PRReviewFailedHeader + "\ncould not launch the PR " + string(stage) + " agent — " + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
 		return errors.WrapWithDetails(err, "launching PR loop agent", "pm", pmKey, "stage", string(stage))
@@ -1481,7 +1506,7 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 // reds the card — leaving it spinning would strand the deploy.
 func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) error {
 	name := agentNameFor(pmKey, deployFixAgentStage)
-	if err := d.launchAgent(ctx, name, prompt); err != nil {
+	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
 		body := DeployFailedHeader + "\ncould not launch the deploy fixer — " + errors.CauseChain(err)
 		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
 		return errors.WrapWithDetails(err, "launching deploy fixer", "pm", pmKey)

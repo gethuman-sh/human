@@ -4,6 +4,8 @@ description: Review a ticket before work starts — does solving it solve the pr
 argument-hint: <ticket-key>
 ---
 
+**Take ownership first.** Run `human assign <KEY>` (the ticket key this skill received) so the ticket records who is working it. It only sets ownership — no status change, so it never blocks on an approval gate. A failure here is not fatal: say so and carry on with the work.
+
 Follow these steps in order:
 
 1. **Review**: Delegate to the **human-ticket-reviewer** agent:
