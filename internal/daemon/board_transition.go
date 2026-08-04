@@ -1005,7 +1005,7 @@ func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Board
 		return staleStepReason(stage)
 	case stage == PRStageFix && outcome.FixExit == PRFixDone && outcome.headStalled():
 		return "the PR fixer recorded done but added no commit — the reviewed head is unchanged, so another review would loop; check the fixer's log and the PR, then re-run Deploy"
-	case outcome.FixExit == ExitNeedsInput:
+	case outcome.FixExit == string(ExitNeedsInput):
 		return "the PR fixer needs a human decision — read the PR review comments, decide, then re-run Deploy"
 	case outcome.ReviewVerdict == PRVerdictChanges:
 		return "the machine review did not converge within the round budget — review the PR yourself, then re-run Deploy"
@@ -1059,7 +1059,7 @@ func unrecordedStepReason(stage PRLoopStage, _ PRLoopOutcome, _ BoardFailureDiag
 // (the branch is then ready for a fresh CI gate + merge); any other exit reds the card
 // with a terminal deploy-failed. The deployFixRounds budget already bounds how many
 // times the pipeline re-enters here, so a genuinely unfixable failure terminates.
-func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey, fixExit string) error {
+func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit) error {
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading comments for deploy fix", "pm", pmKey)
@@ -1087,7 +1087,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey, fixExi
 
 // deployFixEscalationReason renders the actionable headline the failed marker shows
 // when the deploy fixer did not converge.
-func deployFixEscalationReason(fixExit string) string {
+func deployFixEscalationReason(fixExit StageExit) string {
 	switch fixExit {
 	case ExitNeedsInput:
 		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy"

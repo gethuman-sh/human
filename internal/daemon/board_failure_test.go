@@ -1202,7 +1202,7 @@ func TestHandleBoardAgentExit_SilenceReapDoesNotChargeRetry(t *testing.T) {
 	var attemptsCalled bool
 	var relaunched []BoardStage
 	retry := StageRetry{
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -1233,7 +1233,7 @@ func TestHandleBoardAgentExit_SilenceReapGivesUpAfterCap(t *testing.T) {
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	var relaunched []BoardStage
 	retry := StageRetry{
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -1262,7 +1262,7 @@ func TestHandleBoardAgentExit_SilenceReapGiveUpDedup(t *testing.T) {
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	var relaunched []BoardStage
 	retry := StageRetry{
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -1288,7 +1288,7 @@ func TestHandleBoardAgentExit_SilenceReapRelaunchesUnderCap(t *testing.T) {
 	var attemptsCalled bool
 	var relaunched []BoardStage
 	retry := StageRetry{
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -1310,7 +1310,7 @@ func TestHandleBoardAgentExit_GenuineStopFailureStillCharges(t *testing.T) {
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
 	var attemptsCalled bool
 	retry := StageRetry{
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
 		Relaunch: func(string, BoardStage) (bool, error) { return true, nil },
 	}

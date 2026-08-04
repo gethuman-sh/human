@@ -14,7 +14,7 @@ import (
 
 // countingPolicy wraps retryPolicyFor's Attempts so a test can assert the
 // retry budget was never even consulted, not just that it stayed at zero.
-func countingPolicy(outcome string, recorded bool, relaunched *[]BoardStage, resets *[]BoardStage, calls *int) StageRetry {
+func countingPolicy(outcome StageExit, recorded bool, relaunched *[]BoardStage, resets *[]BoardStage, calls *int) StageRetry {
 	p := retryPolicyFor(outcome, recorded, relaunched, resets)
 	inner := p.Attempts
 	p.Attempts = func(pmKey string, stage BoardStage) (int, error) {

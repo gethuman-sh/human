@@ -157,7 +157,7 @@ func TestAdvancePRLoop_fixNeedsInput_escalates(t *testing.T) {
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: ExitNeedsInput, FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: string(ExitNeedsInput), FixRecorded: true}))
 
 	// A fixer needs-input is a DECISION: it escalates to a [human:options] block,
 	// not a red failed marker, so each direction is a clickable board choice.
@@ -182,7 +182,7 @@ func TestAdvancePRLoop_fixNeedsInput_withOptions(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 
 	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{
-		FixExit:     ExitNeedsInput,
+		FixExit:     string(ExitNeedsInput),
 		FixRecorded: true,
 		FixOptions:  []BoardOption{{ID: "1", Label: "A"}, {ID: "2", Label: "B"}},
 		FixSummary:  "deferred X",
@@ -209,7 +209,7 @@ func TestAdvancePRLoop_escalateIdempotent(t *testing.T) {
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 
-	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: ExitNeedsInput, FixRecorded: true}))
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: string(ExitNeedsInput), FixRecorded: true}))
 
 	// A durable re-drive over a loop that already escalated must not double-post.
 	assert.Empty(t, c.added, "an already-open options block short-circuits the escalation")

@@ -823,7 +823,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// the per-stage prompt) applies unchanged.
 	stageRetry := daemon.StageRetry{
 		Max: daemon.DefaultStageRetries,
-		Outcome: func(pmKey string, stage daemon.BoardStage) (string, bool) {
+		Outcome: func(pmKey string, stage daemon.BoardStage) (daemon.StageExit, bool) {
 			return stageExitClass(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage, logger)
 		},
 		Attempts: func(pmKey string, stage daemon.BoardStage) (int, error) {

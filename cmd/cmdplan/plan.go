@@ -196,7 +196,10 @@ func ExtractPlan(comments []tracker.Comment) (string, bool) {
 		if !haveLatest || c.Created.After(comments[latestIdx].Created) {
 			latestIdx = i
 			haveLatest = true
-			body = strings.TrimSpace(strings.TrimPrefix(trimmed, PlanCommentHeader))
+			// ParseBody, not TrimPrefix: a signed plan comment carries machine:/build:
+			// between the header and the plan, and trimming only the header prefixed
+			// every rendered plan with the signature.
+			body = marker.Prose(trimmed)
 		}
 	}
 	return body, haveLatest
