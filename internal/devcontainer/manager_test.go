@@ -1151,3 +1151,28 @@ func writeCachesConfig(t *testing.T, projectDir, content string) {
 		t.Fatal(err)
 	}
 }
+
+// A project that declares the same --add-host the manager already injects must
+// not end up with the host twice: Docker writes one /etc/hosts line per entry,
+// and a duplicate line makes `getent hosts` print two — which is how the
+// container's proxy redirect silently stopped being installed.
+func TestManager_Up_DoesNotDuplicateInjectedExtraHost(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{
+		"name": "test", "image": "ubuntu:22.04", "remoteUser": "vscode",
+		"runArgs": ["--add-host=host.docker.internal:host-gateway"]
+	}`)
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	var buf bytes.Buffer
+	if _, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(mock.createCalls) != 1 {
+		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
+	}
+	hosts := mock.createCalls[0].ExtraHosts
+	if len(hosts) != 1 || hosts[0] != "host.docker.internal:host-gateway" {
+		t.Errorf("ExtraHosts = %v, want exactly one host.docker.internal entry", hosts)
+	}
+}
