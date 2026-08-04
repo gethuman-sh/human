@@ -218,6 +218,19 @@ func (pp *PolicyProvider) AssignIssue(ctx context.Context, key string, userID st
 	return pp.inner.AssignIssue(ctx, key, userID)
 }
 
+// AssignToReporter is gated by the same "assign" policy as AssignIssue: it is
+// the same operation, differing only in who it names.
+func (pp *PolicyProvider) AssignToReporter(ctx context.Context, key string) error {
+	if err := pp.checkPolicy("assign", ""); err != nil {
+		return err
+	}
+	assigner, ok := pp.inner.(ReporterAssigner)
+	if !ok {
+		return ErrOwnershipUnsupported
+	}
+	return assigner.AssignToReporter(ctx, key)
+}
+
 func (pp *PolicyProvider) EditIssue(ctx context.Context, key string, opts EditOptions) (*Issue, error) {
 	if err := pp.checkPolicy("edit", ""); err != nil {
 		return nil, err

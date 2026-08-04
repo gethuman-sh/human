@@ -187,6 +187,16 @@ func (d *DestructiveProvider) UnlinkIssues(ctx context.Context, key string, othe
 	return err
 }
 
+func (d *DestructiveProvider) AssignToReporter(ctx context.Context, key string) error {
+	assigner, ok := d.inner.(ReporterAssigner)
+	if !ok {
+		return ErrOwnershipUnsupported
+	}
+	err := assigner.AssignToReporter(ctx, key)
+	d.logEntry(ctx, d.buildEntry("AssignToReporter", key, "user=reporter", err))
+	return err
+}
+
 func (d *DestructiveProvider) AssignIssue(ctx context.Context, key string, userID string) error {
 	// Pair with TransitionIssue logging: RunStartIssue transitions and
 	// assigns in one operation and the audit log should capture both
