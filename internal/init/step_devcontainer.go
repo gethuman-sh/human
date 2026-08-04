@@ -227,6 +227,12 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 		},
 	}
 
+	// The proxy address is read out of /etc/hosts at start-up, and NR==1 is
+	// load-bearing: a host mapped twice (the manager injects the same
+	// --add-host these runArgs carry) makes getent print two lines, and the
+	// resulting HUMAN_PROXY_ADDR holds a newline. human-proxy-setup then hands
+	// that to iptables, dies under set -e, and takes the whole && chain with it
+	// — no redirect, no CA trust, no agent install, and nothing said so.
 	switch {
 	case proxy && intercept:
 		cfg.CapAdd = []string{"NET_ADMIN"}
@@ -240,13 +246,13 @@ func buildDevcontainerConfig(proxy, intercept bool, stacks []StackType, caPresen
 			// Node's PEM parse then fails on every run.
 			cfg.Mounts = []string{"source=${localEnv:HOME}/.human/ca.crt,target=/home/vscode/.human/ca.crt,type=bind,readonly"}
 			cfg.RemoteEnv["NODE_EXTRA_CA_CERTS"] = "/home/vscode/.human/ca.crt"
-			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
+			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk 'NR==1{print $1}'):19287 && sudo -E human-proxy-setup && sudo cp /home/vscode/.human/ca.crt /usr/local/share/ca-certificates/human-proxy.crt && sudo update-ca-certificates && human install --agent claude && human chrome-bridge"
 		} else {
-			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
+			cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk 'NR==1{print $1}'):19287 && sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
 		}
 	case proxy:
 		cfg.CapAdd = []string{"NET_ADMIN"}
-		cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk '{print $1}'):19287 && sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
+		cfg.PostStartCommand = "export HUMAN_PROXY_ADDR=$(getent hosts host.docker.internal | awk 'NR==1{print $1}'):19287 && sudo -E human-proxy-setup && human install --agent claude && human chrome-bridge"
 	default:
 		cfg.PostStartCommand = "human install --agent claude && human chrome-bridge"
 	}
