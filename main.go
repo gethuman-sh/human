@@ -119,6 +119,7 @@ All trackers share the same command structure:
   human <tracker> issue  create — create and return key
   human <tracker> issue  edit   — update title and/or description
   human <tracker> issue  start  — transition + assign to yourself
+  human assign KEY              — take ownership only (no status change)
   human <tracker> issue  delete — delete or close
   human <tracker> issue  statuses — list available statuses
   human <tracker> issue  status   — set issue status
@@ -215,6 +216,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	autoStatusCmd := cmdauto.BuildAutoStatusCmd(autoDeps)
 	autoStatusCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(autoStatusCmd)
+
+	autoAssignCmd := cmdauto.BuildAutoAssignCmd(autoDeps)
+	autoAssignCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(autoAssignCmd)
 
 	autoDoneCmd := cmdauto.BuildAutoDoneCmd(autoDeps)
 	autoDoneCmd.GroupID = "shortcuts"
