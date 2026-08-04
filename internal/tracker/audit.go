@@ -154,6 +154,17 @@ func (a *AuditProvider) AssignIssue(ctx context.Context, key string, userID stri
 	return err
 }
 
+func (a *AuditProvider) AssignToReporter(ctx context.Context, key string) error {
+	assigner, ok := a.inner.(ReporterAssigner)
+	if !ok {
+		return ErrOwnershipUnsupported
+	}
+	start := time.Now()
+	err := assigner.AssignToReporter(ctx, key)
+	a.log("AssignToReporter", key, time.Since(start), err)
+	return err
+}
+
 func (a *AuditProvider) GetCurrentUser(ctx context.Context) (string, error) {
 	start := time.Now()
 	userID, err := a.inner.GetCurrentUser(ctx)

@@ -69,6 +69,17 @@ func (s *SafeProvider) AssignIssue(ctx context.Context, key string, userID strin
 	return s.inner.AssignIssue(ctx, key, userID)
 }
 
+// AssignToReporter forwards the optional ReporterAssigner capability. A wrapper
+// that silently drops it makes the decorated provider look incapable, which is
+// exactly how it read when only the concrete client implemented it.
+func (s *SafeProvider) AssignToReporter(ctx context.Context, key string) error {
+	assigner, ok := s.inner.(ReporterAssigner)
+	if !ok {
+		return ErrOwnershipUnsupported
+	}
+	return assigner.AssignToReporter(ctx, key)
+}
+
 func (s *SafeProvider) GetCurrentUser(ctx context.Context) (string, error) {
 	return s.inner.GetCurrentUser(ctx)
 }
