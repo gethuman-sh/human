@@ -168,22 +168,14 @@ func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName s
 		return
 	}
 	// A silence reap (the zombie sweep reaping an agent that went quiet — no
-	// hook event and no transcript output — past its idle budget) is a
+	// hook event and no outstanding model request — past its idle budget) is a
 	// machine-chosen stop, not a stage failure: the card still reads red (the
 	// stage did not finish), but the retry budget must not be charged for it and
-	// the trail must say plainly what was observed and why (SC-2447). Checked
-	// before the generic failure path so the sentinel never falls through to the
-	// charged branch below.
-	if idle, ok := silenceReapIdle(errorType); ok && retry.enabled() {
-		if header := failedHeaderFor(stage); header != "" {
-			body := header + "\n" + silenceReapReason(idle)
-			if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
-				logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap marker")
-				return
-			}
-			retry.relaunchSilenceReap(pmKey, stage, logger)
-			return
-		}
+	// the trail must say plainly what was observed and why (SC-2447/SC-3074).
+	// Checked before the generic failure path so the sentinel never falls
+	// through to the charged branch below.
+	if handleSilenceReapExit(ctx, pmKey, stage, agentName, errorType, comments, commenter, retry, logger) {
+		return
 	}
 	body := failedHeaderFor(stage) + "\n" + appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
 	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
@@ -326,6 +318,44 @@ func handleNeedsPersonExit(ctx context.Context, pmKey string, stage BoardStage, 
 	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post needs-person marker")
 	}
+	return true
+}
+
+// handleSilenceReapExit deals with a silence-reap exit (errorType carries the
+// ReapSilenceErrorType sentinel): a machine-chosen stop, not a stage failure,
+// so it must never consume the ticket's retry budget. Reports whether it
+// handled the exit, so the caller falls through to the generic charged
+// failure path for anything else. Repeated stops on one stage are bounded and
+// visible: at or over MaxSilenceReaps this posts a give-up marker instead of
+// relaunching, naming the count once — silenceReapGaveUp dedups a second
+// daemon reaching the same cap. Split out of handleBoardAgentExit so this
+// branch's complexity costs its own function rather than the dispatcher's.
+func handleSilenceReapExit(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, comments []tracker.Comment, commenter tracker.Commenter, retry StageRetry, logger zerolog.Logger) bool {
+	idle, ok := silenceReapIdle(errorType)
+	if !ok || !retry.enabled() {
+		return false
+	}
+	header := failedHeaderFor(stage)
+	if header == "" {
+		return false
+	}
+	if silenceReapGaveUp(comments, stage) {
+		return true
+	}
+	stops := silenceReapCount(comments, stage) + 1
+	if stops > MaxSilenceReaps {
+		body := header + "\n" + silenceReapGiveUpReason(stage, stops)
+		if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+			logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap give-up marker")
+		}
+		return true
+	}
+	body := header + "\n" + silenceReapReason(idle)
+	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap marker")
+		return true
+	}
+	retry.relaunchSilenceReap(pmKey, stage, logger)
 	return true
 }
 
@@ -624,15 +654,81 @@ func verificationInFlight(comments []tracker.Comment) bool {
 	return ok && state == BoardRunning
 }
 
+// silenceReapSentinel is the fixed substring every silence-reap marker body
+// carries. Pinned in code so a later reword of silenceReapReason can never
+// silently break silenceReapCount, which counts prior reaps by matching it.
+const silenceReapSentinel = "machine-chosen stop"
+
+// silenceReapGiveUpSentinel is the fixed substring the give-up marker
+// carries, pinned for the same reason and used by silenceReapGaveUp to dedup
+// so two daemons reaching the cap at once do not both post it.
+const silenceReapGiveUpSentinel = "stopped relaunching after"
+
+// MaxSilenceReaps bounds how many times one stage may be silence-reaped and
+// automatically relaunched before the machine stops trying and says plainly
+// that a person is needed. Not charging a silence reap against the retry
+// budget is right (SC-2447) — the work did not fail, a judgement about it
+// did — but hiding a REPEATED misjudgement is not: after this many stops on
+// one stage, repetition itself is the thing that needs a look (SC-3074).
+const MaxSilenceReaps = 3
+
 // silenceReapReason composes the plain, self-explaining line a silence-reap
 // posts in place of the generic diagnosis: what the daemon observed, and
 // exactly what rule it applied — a machine that reaps an agent for silence
 // must not leave a reader guessing between a crash, a kill, and a restart
-// (SC-2447's third and fourth wanted outcomes).
+// (SC-2447's third and fourth wanted outcomes). "no outstanding model
+// request" names the SC-3074 signal directly, replacing the disproven
+// transcript-output heuristic in the sentence.
 func silenceReapReason(idle string) string {
-	return "the daemon observed " + idle + " with no sign of life — no tool activity and no transcript " +
-		"output — past the idle budget, and stopped the stage. This is a machine-chosen stop, not a stage " +
+	return "the daemon observed " + idle + " with no sign of life — no tool activity and no outstanding " +
+		"model request — past the idle budget, and stopped the stage. This is a " + silenceReapSentinel + ", not a stage " +
 		"failure, so it is not charged against the retry budget. The stage was relaunched automatically."
+}
+
+// silenceReapGiveUpReason composes the line posted once a stage has been
+// silence-reaped MaxSilenceReaps times: the machine stops relaunching and
+// says a person is needed, naming how many times it happened so the pattern
+// — not any single stop — is what the reader is asked to look at.
+func silenceReapGiveUpReason(stage BoardStage, stops int) string {
+	return fmt.Sprintf("the daemon %s %d silence reaps on the %s stage and is not relaunching again — this "+
+		"needs a person. Each stop was a %s, not a stage failure, and none were charged against the retry "+
+		"budget; the repetition itself is what needs a look.",
+		silenceReapGiveUpSentinel, stops, stage, silenceReapSentinel)
+}
+
+// silenceReapCount counts prior silence-reap markers already posted under
+// stage's failed header. Counted from the tracker thread itself, not a
+// state-DB counter: state.db is per-host, so only the shared thread can dedup
+// "two machines do not both post it" across every daemon that might reap this
+// stage (SC-3074).
+func silenceReapCount(comments []tracker.Comment, stage BoardStage) int {
+	n := 0
+	for _, c := range comments {
+		s, st, ok := ClassifyMarker(c.Body)
+		if !ok || s != stage || st != BoardFailed {
+			continue
+		}
+		if strings.Contains(c.Body, silenceReapSentinel) {
+			n++
+		}
+	}
+	return n
+}
+
+// silenceReapGaveUp reports whether the give-up marker has already been
+// posted for stage, so a second daemon reaching the cap for the same stage
+// posts nothing more — stated once (SC-3074).
+func silenceReapGaveUp(comments []tracker.Comment, stage BoardStage) bool {
+	for _, c := range comments {
+		s, st, ok := ClassifyMarker(c.Body)
+		if !ok || s != stage || st != BoardFailed {
+			continue
+		}
+		if strings.Contains(c.Body, silenceReapGiveUpSentinel) {
+			return true
+		}
+	}
+	return false
 }
 
 // appendModelOutcomeNote enriches a failure marker body with a one-line note

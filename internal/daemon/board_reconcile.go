@@ -449,67 +449,107 @@ func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgen
 
 	reddened := 0
 	for _, card := range drivable.cards {
-		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
-		if !stuckCardIsOursToRed(derived, card) {
-			continue
+		if reconcileOneStuckCard(ctx, card, alive, postFailed, retry, progress, stopAgent, daemonID, now, logger) {
+			reddened++
 		}
-		header := failedHeaderFor(derived.Stage)
-		if header == "" {
-			continue
+	}
+	return reddened
+}
+
+// reconcileOneStuckCard applies the stuck-running judgement to a single card
+// and reports whether it was reddened. Split out of reconcileStuckRunning so
+// that function's per-card branching costs its own function rather than the
+// loop's complexity budget.
+func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[string]struct{}, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) bool {
+	derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
+	if !stuckCardIsOursToRed(derived, card) {
+		return false
+	}
+	header := failedHeaderFor(derived.Stage)
+	if header == "" {
+		return false
+	}
+	if now.Sub(derived.StageEnteredAt) < StuckRunningGrace {
+		// Young enough to still be genuine in-flight work.
+		return false
+	}
+	agentName := agentNameFor(card.Key, derived.Stage)
+	// silenced marks a stop THIS pass chose because a live agent stopped
+	// making progress — a machine-chosen stop, not a stage failure, so it
+	// must not consume the ticket's retry budget (SC-2447). A vanished
+	// agent (no entry in alive) is a genuine, unexplained death and stays
+	// on the charged path unchanged.
+	var silenced bool
+	var idleReason string
+	if _, ok := alive[agentName]; ok {
+		proceed, s, reason := hungLiveAgent(progress, agentName, now, stopAgent, card.Key, derived.Stage, logger)
+		if !proceed {
+			return false
 		}
-		if now.Sub(derived.StageEnteredAt) < StuckRunningGrace {
-			// Young enough to still be genuine in-flight work.
-			continue
-		}
-		agentName := agentNameFor(card.Key, derived.Stage)
-		// silenced marks a stop THIS pass chose because a live agent stopped
-		// making progress — a machine-chosen stop, not a stage failure, so it
-		// must not consume the ticket's retry budget (SC-2447). A vanished
-		// agent (no entry in alive) is a genuine, unexplained death and stays
-		// on the charged path unchanged.
-		var silenced bool
-		var idleReason string
-		if _, ok := alive[agentName]; ok {
-			proceed, s, reason := hungLiveAgent(progress, agentName, now, stopAgent, card.Key, derived.Stage, logger)
-			if !proceed {
-				continue
-			}
-			silenced, idleReason = s, reason
-		}
-		body := header + "\n" + stuckRunningReason(derived.Stage)
-		if silenced {
-			body = header + "\n" + silenceReapReason(idleReason)
-		}
-		// If this stage was preceded by a recorded inter-stage wait, name that
-		// cause in the red so a stall that followed a long wait is attributable
-		// rather than judged from silence (SC-2462).
-		if cause := latestStageWaitCause(card.Comments); cause != "" {
-			body += "\nafter wait cause: " + cause
-		}
-		if err := postFailed(ctx, card.Key, body); err != nil {
-			logger.Warn().Err(err).Str("pm", card.Key).
-				Msg("board reconcile: cannot red stuck-running card")
-			continue
-		}
-		reddened++
-		if silenced {
+		silenced, idleReason = s, reason
+	}
+	// Repeated silence reaps are bounded and visible, identically to the live
+	// failure watcher's cap (SC-3074): at or over MaxSilenceReaps this stops
+	// relaunching and says a person is needed, naming the count once; skip
+	// is set when the give-up marker is already on the thread, so a second
+	// daemon reaching the same cap posts nothing more.
+	body, givingUp, skip := stuckRunningSilenceBody(header, derived.Stage, card.Comments, silenced, idleReason)
+	if skip {
+		return false
+	}
+	// If this stage was preceded by a recorded inter-stage wait, name that
+	// cause in the red so a stall that followed a long wait is attributable
+	// rather than judged from silence (SC-2462).
+	if cause := latestStageWaitCause(card.Comments); cause != "" {
+		body += "\nafter wait cause: " + cause
+	}
+	if err := postFailed(ctx, card.Key, body); err != nil {
+		logger.Warn().Err(err).Str("pm", card.Key).
+			Msg("board reconcile: cannot red stuck-running card")
+		return false
+	}
+	if silenced {
+		if !givingUp {
 			// A live agent this pass judged hung and stopped itself: uncharged,
 			// like the live failure watcher's silence-reap path (SC-2447) — the
 			// work did not fail, a judgement about the work did.
 			retry.relaunchSilenceReap(card.Key, derived.Stage, logger)
-			continue
 		}
-		// This is the fallback path the live failure watcher misses — an agent
-		// that died with no exit hook (a daemon restart, a dropped event). A
-		// vanished agent IS a real, unexplained death, so it stays on the
-		// charged path: the same bounded relaunch applies, so a silently-dead
-		// stage recovers here too instead of only reddening. The just-posted
-		// failed marker is the trail record, so no separate retry note (nil
-		// commenter); the shared per-stage budget bounds this path and the
-		// watcher's together.
-		retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger)
+		// givingUp: the cap is spent, leave the card as the give-up marker just
+		// routed it, for a person to look at — no further relaunch.
+		return true
 	}
-	return reddened
+	// This is the fallback path the live failure watcher misses — an agent
+	// that died with no exit hook (a daemon restart, a dropped event). A
+	// vanished agent IS a real, unexplained death, so it stays on the
+	// charged path: the same bounded relaunch applies, so a silently-dead
+	// stage recovers here too instead of only reddening. The just-posted
+	// failed marker is the trail record, so no separate retry note (nil
+	// commenter); the shared per-stage budget bounds this path and the
+	// watcher's together.
+	retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, daemonID, logger)
+	return true
+}
+
+// stuckRunningSilenceBody composes the reddening body for a stuck-running
+// card and reports whether the SC-3074 cap means this pass gives up rather
+// than relaunches (givingUp), and whether the card should be skipped
+// entirely because the give-up marker was already posted for this stage
+// (skip — the dedup that keeps two daemons from both posting it). Split out
+// of reconcileStuckRunning so that function's branching stays inside the
+// complexity gate.
+func stuckRunningSilenceBody(header string, stage BoardStage, comments []tracker.Comment, silenced bool, idleReason string) (body string, givingUp, skip bool) {
+	if !silenced {
+		return header + "\n" + stuckRunningReason(stage), false, false
+	}
+	if silenceReapGaveUp(comments, stage) {
+		return "", false, true
+	}
+	stops := silenceReapCount(comments, stage) + 1
+	if stops > MaxSilenceReaps {
+		return header + "\n" + silenceReapGiveUpReason(stage, stops), true, false
+	}
+	return header + "\n" + silenceReapReason(idleReason), false, false
 }
 
 // cardPausedOnOpenOptions reports whether a card carries an open
