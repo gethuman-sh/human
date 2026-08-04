@@ -34,6 +34,7 @@ import (
 	"github.com/gethuman-sh/human/internal/ideaspace"
 	"github.com/gethuman-sh/human/internal/pipeline"
 	"github.com/gethuman-sh/human/internal/recentprojects"
+	"github.com/gethuman-sh/human/internal/vieweridentity"
 )
 
 // App is the Go backend bound into the webview via options.App.Bind. Every
@@ -76,22 +77,24 @@ type App struct {
 	// runtime.Quit calls it a second time) to permit the close this time,
 	// instead of preventing it again — see closeflow.go.
 	readyToQuit atomic.Bool
-	// currentUser is the authenticated PM-tracker user's display name, fetched
-	// from the daemon and reused for the session (identity does not change
-	// while the app runs). Feeds the board's ownership dimming (SC-3339); empty
-	// means "unknown", and no card is dimmed. Only a *successful* fetch is
-	// memoized (currentUserResolved) — a transient failure (locked vault
-	// prompt, credential blip, daemon still on an older protocol) must not
-	// latch the board into "no dimming" for the rest of the process lifetime,
-	// since the desktop app is a long-lived tray process; the next refresh
-	// retries until it succeeds.
+	// currentUser caches the tracker's answer for who is authenticated, the
+	// FALLBACK identity used only when .humanconfig declares no "me" names.
+	// Reused for the session (identity does not change while the app runs).
+	// Only a *successful* fetch is memoized (currentUserResolved) — a transient
+	// failure (locked vault prompt, credential blip, daemon still on an older
+	// protocol) must not latch the board into "no dimming" for the rest of the
+	// process lifetime, since the desktop app is a long-lived tray process; the
+	// next refresh retries until it succeeds.
 	currentUserMu       sync.Mutex
 	currentUser         string
 	currentUserResolved bool
-	// currentUserFetch is the actual IPC call, indirected so viewerName's
+	// currentUserFetch is the actual IPC call, indirected so viewerIdentity's
 	// memoize-only-on-success retry logic can be exercised in a test without a
 	// running daemon. Always daemon.GetCurrentUserName outside tests.
 	currentUserFetch func(addr, token string) (string, error)
+	// viewerConfig reads the declared "me" identity for a project directory,
+	// indirected for the same testing reason. Always vieweridentity.Load.
+	viewerConfig func(dir string) (vieweridentity.Identity, error)
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
@@ -103,6 +106,7 @@ func NewApp() *App {
 		prefs:            boardprefs.NewStore(boardprefs.DefaultPath()),
 		session:          appsession.NewStore(appsession.DefaultPath()),
 		currentUserFetch: daemon.GetCurrentUserName,
+		viewerConfig:     vieweridentity.Load,
 	}
 }
 
@@ -131,7 +135,7 @@ func (a *App) Cards() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerName(info))
+	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info))
 	// The keep sets come from `results` — the same fetch CanPrune judges — not
 	// from the composed view, which is a separate request that can answer with
 	// an empty board while this one is healthy (SC-2400).
@@ -261,29 +265,51 @@ func (a *App) CardsQuick() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerName(info)), nil
+	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info)), nil
 }
 
-// viewerName returns the authenticated PM-tracker user's display name, fetched
-// once and cached for the session. A failure (older daemon, no PM identity,
-// transient credential/timeout error) degrades to an empty name for this call
-// only: the board renders normally, just without the mine/not-mine
-// distinction, and — because only success is memoized — the next call retries
-// instead of latching the failure in for the rest of the app's lifetime.
-func (a *App) viewerName(info daemon.DaemonInfo) string {
+// viewerIdentity returns the names that mean "me" for the board's ownership
+// dimming. The declared identity in .humanconfig wins: it is the only source
+// that covers every tracker (a GitHub login and a Shortcut display name are the
+// same person), needs no credential or live call, and cannot fail in a way that
+// silently makes every ticket look like yours.
+//
+// Only when nothing is declared does it fall back to asking the PM tracker who
+// is authenticated — one provider's opinion, so it can name you on Shortcut and
+// nowhere else, but better than no distinction at all for an unconfigured
+// install. That fallback degrades to an empty identity on any failure (older
+// daemon, no PM identity, credential blip): the board renders normally, just
+// without the mine/not-mine distinction, and because only success is memoized
+// the next call retries instead of latching the failure in for the app's life.
+func (a *App) viewerIdentity(info daemon.DaemonInfo) vieweridentity.Identity {
+	if dir := projectKeyOf(info); dir != "" {
+		if declared, err := a.viewerConfig(dir); err == nil && declared.Known() {
+			return declared
+		}
+	}
+
 	a.currentUserMu.Lock()
 	defer a.currentUserMu.Unlock()
 
 	if a.currentUserResolved {
-		return a.currentUser
+		return identityOf(a.currentUser)
 	}
 	name, err := a.currentUserFetch(info.Addr, info.Token)
 	if err != nil {
-		return ""
+		return vieweridentity.Identity{}
 	}
 	a.currentUser = name
 	a.currentUserResolved = true
-	return a.currentUser
+	return identityOf(a.currentUser)
+}
+
+// identityOf lifts a single tracker-reported name into an Identity, dropping an
+// empty one so "the tracker knows of no name" stays "viewer unknown".
+func identityOf(name string) vieweridentity.Identity {
+	if strings.TrimSpace(name) == "" {
+		return vieweridentity.Identity{}
+	}
+	return vieweridentity.Identity{Names: []string{name}}
 }
 
 // projectKeyOf identifies the project a board snapshot belongs to. v1 serves one
@@ -318,8 +344,8 @@ func (a *App) boardView(info daemon.DaemonInfo) (daemon.BoardView, []daemon.Trac
 // boardFromResults composes the shared board and then applies this viewer's own
 // overlay. The split is the point: Compose produces what is true of the project,
 // applyLocal adds what is true only of the person looking.
-func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, currentUser string) BoardData {
-	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs, currentUser)
+func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity) BoardData {
+	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs, viewer)
 }
 
 // applyLocal fills the fields Compose deliberately leaves blank because they
@@ -328,7 +354,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 //
 // Hidden cards are marked, not dropped — the frontend filters them so a user can
 // reveal them without a refetch, which is why Compose returns them at all.
-func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, currentUser string) BoardData {
+func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity) BoardData {
 	view.ColumnOrder = prefs.Columns
 	for i := range view.Cards {
 		c := &view.Cards[i]
@@ -342,7 +368,7 @@ func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string
 		_, c.Hidden = prefs.Hidden[c.Key]
 	}
 	// Ownership is viewer-local, like Hidden: dim cards owned by someone else.
-	board.MarkOwnership(view.Cards, currentUser)
+	board.MarkOwnership(view.Cards, viewer)
 	return view
 }
 
