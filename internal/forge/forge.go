@@ -123,6 +123,41 @@ type ChecksReader interface {
 	PullRequestChecks(ctx context.Context, repo string, number int) (ChecksState, error)
 }
 
+// CheckResult is one CI check on a pull request head — a check run or a legacy
+// commit status — folded into the forge's own three-state verdict vocabulary so
+// a consumer reads the same pending/passing/failing words the deploy gate uses.
+// DetailsURL points at the provider's page for the check (its log), the place a
+// recovery agent looks next; it is "" when the provider reports none.
+type CheckResult struct {
+	Name       string
+	Conclusion ChecksState
+	DetailsURL string
+}
+
+// PullRequestState is the read surface over a pull request that answers more
+// than "can this merge": the identity a recovery agent needs to rebase (head/
+// base ref, head SHA), the forge's merge verdict, and every check with its name,
+// verdict and log URL. It is the surface the narrow single-answer gates
+// (ChecksReader, MergeReader, MergedReader) were each carved down from; those
+// remain for the gates that consume exactly one word, while everything that
+// needs more reads this rather than reaching around human to the code host.
+type PullRequestState struct {
+	Number    int
+	HeadRef   string
+	BaseRef   string
+	HeadSHA   string
+	Mergeable bool
+	Checks    []CheckResult
+}
+
+// PullRequestReader reads a pull request's full state and per-check results in
+// one call. Distinct from ChecksReader (which collapses every check into one
+// verdict for the deploy gate): this preserves the per-check detail the gate
+// discarded, so an agent or a person can see which check failed and where.
+type PullRequestReader interface {
+	ReadPullRequest(ctx context.Context, repo string, number int) (*PullRequestState, error)
+}
+
 // Merger merges a pull request into its base branch.
 type Merger interface {
 	MergePullRequest(ctx context.Context, repo string, number int) error

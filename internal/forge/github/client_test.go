@@ -498,3 +498,97 @@ func TestFindOpenWork_invalidRepo(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "owner/repo")
 }
+
+// readPRServer serves the three endpoints ReadPullRequest touches: the pull GET
+// (identity + mergeability), the check-runs list, and the combined status.
+func readPRServer(t *testing.T, pull, checkRuns, combined string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/octocat/hello-world/pulls/7":
+			_, _ = fmt.Fprint(w, pull)
+		case "/repos/octocat/hello-world/commits/abc123/check-runs":
+			_, _ = fmt.Fprint(w, checkRuns)
+		case "/repos/octocat/hello-world/commits/abc123/status":
+			_, _ = fmt.Fprint(w, combined)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestReadPullRequest_fullState(t *testing.T) {
+	pull := `{"number":7,"head":{"ref":"feat","sha":"abc123"},"base":{"ref":"main"},"mergeable":true}`
+	checkRuns := `{"check_runs":[` +
+		`{"name":"build","status":"completed","conclusion":"success","started_at":"2026-08-01T10:00:00Z"},` +
+		`{"name":"lint","status":"completed","conclusion":"failure","started_at":"2026-08-01T10:00:00Z","details_url":"https://ci/lint"}` +
+		`]}`
+	combined := `{"state":"failure","total_count":1,"statuses":[{"context":"ci/legacy","state":"failure","target_url":"https://ci/legacy"}]}`
+
+	srv := readPRServer(t, pull, checkRuns, combined)
+	defer srv.Close()
+	client := New(srv.URL, "ghp_test")
+
+	state, err := client.ReadPullRequest(context.Background(), "octocat/hello-world", 7)
+	require.NoError(t, err)
+	assert.Equal(t, 7, state.Number)
+	assert.Equal(t, "feat", state.HeadRef)
+	assert.Equal(t, "main", state.BaseRef)
+	assert.Equal(t, "abc123", state.HeadSHA)
+	assert.True(t, state.Mergeable)
+
+	require.Len(t, state.Checks, 3)
+	assert.Equal(t, forge.CheckResult{Name: "build", Conclusion: forge.ChecksPassing}, state.Checks[0])
+	assert.Equal(t, forge.CheckResult{Name: "lint", Conclusion: forge.ChecksFailing, DetailsURL: "https://ci/lint"}, state.Checks[1])
+	assert.Equal(t, forge.CheckResult{Name: "ci/legacy", Conclusion: forge.ChecksFailing, DetailsURL: "https://ci/legacy"}, state.Checks[2])
+}
+
+func TestReadPullRequest_mergeableNull(t *testing.T) {
+	pull := `{"number":7,"head":{"ref":"feat","sha":"abc123"},"base":{"ref":"main"},"mergeable":null}`
+	srv := readPRServer(t, pull, `{"check_runs":[]}`, `{"state":"success","total_count":0}`)
+	defer srv.Close()
+	client := New(srv.URL, "ghp_test")
+
+	state, err := client.ReadPullRequest(context.Background(), "octocat/hello-world", 7)
+	require.NoError(t, err)
+	assert.False(t, state.Mergeable)
+}
+
+func TestReadPullRequest_dedupsRerun(t *testing.T) {
+	// SC-2602: a cancelled attempt superseded by a passing re-run of the same
+	// name collapses to one entry carrying the latest verdict.
+	pull := `{"number":7,"head":{"ref":"feat","sha":"abc123"},"base":{"ref":"main"},"mergeable":true}`
+	checkRuns := `{"check_runs":[` +
+		`{"name":"build","status":"completed","conclusion":"cancelled","started_at":"2026-08-01T10:00:00Z"},` +
+		`{"name":"build","status":"completed","conclusion":"success","started_at":"2026-08-01T10:05:00Z"}` +
+		`]}`
+	srv := readPRServer(t, pull, checkRuns, `{"state":"success","total_count":0}`)
+	defer srv.Close()
+	client := New(srv.URL, "ghp_test")
+
+	state, err := client.ReadPullRequest(context.Background(), "octocat/hello-world", 7)
+	require.NoError(t, err)
+	require.Len(t, state.Checks, 1)
+	assert.Equal(t, "build", state.Checks[0].Name)
+	assert.Equal(t, forge.ChecksPassing, state.Checks[0].Conclusion)
+}
+
+func TestReadPullRequest_noHeadSHA(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"number":7,"head":{}}`)
+	}))
+	defer srv.Close()
+	client := New(srv.URL, "ghp_test")
+
+	_, err := client.ReadPullRequest(context.Background(), "octocat/hello-world", 7)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no head SHA")
+}
+
+func TestReadPullRequest_invalidRepo(t *testing.T) {
+	client := New("https://api.github.com", "ghp_test")
+	_, err := client.ReadPullRequest(context.Background(), "no-slash", 7)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "owner/repo")
+}
