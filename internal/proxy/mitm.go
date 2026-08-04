@@ -188,7 +188,7 @@ func (li *LoggingInterceptor) Intercept(ctx context.Context, conn net.Conn, host
 	dialStart := time.Now()
 	upstreamConn, err := li.dialUpstream(ctx, hostname)
 	if err != nil {
-		li.emitOutcome(remoteAddr, hostname, 0, err, dialStart, nil)
+		li.emitOutcome(remoteAddr, hostname, 0, err, dialStart, nil, nil)
 		return errors.WrapWithDetails(err, "upstream dial failed", "hostname", hostname)
 	}
 	defer func() { _ = upstreamConn.Close() }()
@@ -218,7 +218,7 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 			}
 			// A genuine read error before any call went out is a pre-output
 			// failure worth recording (content-free, StatusCode 0).
-			li.emitOutcome(remoteAddr, hostname, 0, err, time.Now(), nil)
+			li.emitOutcome(remoteAddr, hostname, 0, err, time.Now(), nil, nil)
 			return errors.WrapWithDetails(err, "reading client request", "hostname", hostname)
 		}
 
@@ -232,7 +232,7 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 			reqBody, err = io.ReadAll(io.LimitReader(req.Body, maxBodyLog))
 			_ = req.Body.Close()
 			if err != nil {
-				li.emitOutcome(remoteAddr, hostname, 0, err, start, nil)
+				li.emitOutcome(remoteAddr, hostname, 0, err, start, nil, nil)
 				return errors.WrapWithDetails(err, "reading request body", "hostname", hostname)
 			}
 		}
@@ -250,7 +250,7 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 		// Forward request to upstream with body.
 		req.Body = io.NopCloser(bytes.NewReader(reqBody))
 		if err := req.Write(upstream); err != nil {
-			li.emitOutcome(remoteAddr, hostname, 0, err, start, nil)
+			li.emitOutcome(remoteAddr, hostname, 0, err, start, nil, nil)
 			return errors.WrapWithDetails(err, "writing to upstream", "hostname", hostname)
 		}
 		// The request is now sent and unanswered: this is the "outstanding model
@@ -264,7 +264,7 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 		resp, err := http.ReadResponse(upstreamReader, req)
 		if err != nil {
 			li.markInflight(remoteAddr, hostname, -1)
-			li.emitOutcome(remoteAddr, hostname, 0, err, start, nil)
+			li.emitOutcome(remoteAddr, hostname, 0, err, start, nil, nil)
 			return errors.WrapWithDetails(err, "reading upstream response", "hostname", hostname)
 		}
 
@@ -295,7 +295,7 @@ func (li *LoggingInterceptor) proxyHTTP(ctx context.Context, client, upstream ne
 		// Record the outcome AFTER the client write (success and non-2xx alike),
 		// mirroring the existing write-then-log order so accounting can never
 		// delay or break the proxied response (SC-2555 constraint 1).
-		li.emitOutcome(remoteAddr, hostname, resp.StatusCode, nil, start, respBodyBuf.Bytes())
+		li.emitOutcome(remoteAddr, hostname, resp.StatusCode, nil, start, resp.Header, respBodyBuf.Bytes())
 
 		if writeErr != nil {
 			return errors.WrapWithDetails(writeErr, "writing to client", "hostname", hostname)

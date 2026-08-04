@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -343,6 +344,44 @@ func handleEchoHTTPS(conn net.Conn) {
 		ProtoMajor:    1,
 		ProtoMinor:    1,
 		Header:        http.Header{"Content-Type": {"application/json"}},
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Close:         true,
+	}
+	_ = resp.Write(conn)
+}
+
+// handleGzippedSSEResponse answers with the SAME streamed usage events as
+// handleSSEResponse, gzip-encoded and declared with Content-Encoding — which is
+// what an Anthropic SDK actually receives, since every one of them sends
+// accept-encoding: gzip. The plaintext handler below agrees with our own parser
+// rather than with the wire, which is how the proxy shipped recording 520
+// attributed calls priced at $0.00 (SC-3440).
+func handleGzippedSSEResponse(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+
+	req, err := http.ReadRequest(bufio.NewReader(conn))
+	if err != nil {
+		return
+	}
+	_, _ = io.ReadAll(req.Body)
+	_ = req.Body.Close()
+
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, _ = zw.Write([]byte(streamingUsageBody))
+	_ = zw.Close()
+	body := buf.Bytes()
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header: http.Header{
+			"Content-Type":     {"text/event-stream"},
+			"Content-Encoding": {"gzip"},
+		},
 		Body:          io.NopCloser(bytes.NewReader(body)),
 		ContentLength: int64(len(body)),
 		Close:         true,
