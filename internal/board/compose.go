@@ -12,11 +12,11 @@ import (
 // notices that explain an empty or partial board.
 //
 // It deliberately produces only what is TRUE OF THE PROJECT — the same board for
-// anyone looking at it. Three per-card fields are left at their zero values
-// because they are true only of the person looking: IdeaColumn, Hidden, and the
-// Mockup* set. The viewer fills those in (desktop applyLocal), which is why this
-// can run on the daemon and be shared, and why hidden cards are still returned
-// here: hiding is a viewer's filter, not a property of the work.
+// anyone looking at it. Several per-card fields are left at their zero values
+// because they are true only of the person looking: IdeaColumn, Hidden, NotMine,
+// and the Mockup* set. The viewer fills those in (desktop applyLocal), which is
+// why this can run on the daemon and be shared, and why hidden cards are still
+// returned here: hiding is a viewer's filter, not a property of the work.
 //
 // dockerAvailable belongs to the machine that launches agents, so the caller
 // supplies it rather than probing — on the daemon that is its own host, which is
@@ -67,6 +67,7 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			Labels:                 issue.Labels,
 			Description:            issue.Description,
 			Assignee:               issue.Assignee,
+			Reporter:               issue.Reporter,
 			Tracker:                pm.TrackerName,
 			TrackerKind:            pm.TrackerKind,
 			Bug:                    issue.IsBug(),

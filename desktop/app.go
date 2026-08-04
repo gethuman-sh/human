@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -75,16 +76,33 @@ type App struct {
 	// runtime.Quit calls it a second time) to permit the close this time,
 	// instead of preventing it again — see closeflow.go.
 	readyToQuit atomic.Bool
+	// currentUser is the authenticated PM-tracker user's display name, fetched
+	// from the daemon and reused for the session (identity does not change
+	// while the app runs). Feeds the board's ownership dimming (SC-3339); empty
+	// means "unknown", and no card is dimmed. Only a *successful* fetch is
+	// memoized (currentUserResolved) — a transient failure (locked vault
+	// prompt, credential blip, daemon still on an older protocol) must not
+	// latch the board into "no dimming" for the rest of the process lifetime,
+	// since the desktop app is a long-lived tray process; the next refresh
+	// retries until it succeeds.
+	currentUserMu       sync.Mutex
+	currentUser         string
+	currentUserResolved bool
+	// currentUserFetch is the actual IPC call, indirected so viewerName's
+	// memoize-only-on-success retry logic can be exercised in a test without a
+	// running daemon. Always daemon.GetCurrentUserName outside tests.
+	currentUserFetch func(addr, token string) (string, error)
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
 // startup, so there is nothing to wire here.
 func NewApp() *App {
 	return &App{
-		ideas:   ideaspace.NewStore(ideaspace.DefaultPath()),
-		recents: recentprojects.NewStore(recentprojects.DefaultPath()),
-		prefs:   boardprefs.NewStore(boardprefs.DefaultPath()),
-		session: appsession.NewStore(appsession.DefaultPath()),
+		ideas:            ideaspace.NewStore(ideaspace.DefaultPath()),
+		recents:          recentprojects.NewStore(recentprojects.DefaultPath()),
+		prefs:            boardprefs.NewStore(boardprefs.DefaultPath()),
+		session:          appsession.NewStore(appsession.DefaultPath()),
+		currentUserFetch: daemon.GetCurrentUserName,
 	}
 }
 
@@ -113,7 +131,7 @@ func (a *App) Cards() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project))
+	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerName(info))
 	// The keep sets come from `results` — the same fetch CanPrune judges — not
 	// from the composed view, which is a separate request that can answer with
 	// an empty board while this one is healthy (SC-2400).
@@ -243,7 +261,29 @@ func (a *App) CardsQuick() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project)), nil
+	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerName(info)), nil
+}
+
+// viewerName returns the authenticated PM-tracker user's display name, fetched
+// once and cached for the session. A failure (older daemon, no PM identity,
+// transient credential/timeout error) degrades to an empty name for this call
+// only: the board renders normally, just without the mine/not-mine
+// distinction, and — because only success is memoized — the next call retries
+// instead of latching the failure in for the rest of the app's lifetime.
+func (a *App) viewerName(info daemon.DaemonInfo) string {
+	a.currentUserMu.Lock()
+	defer a.currentUserMu.Unlock()
+
+	if a.currentUserResolved {
+		return a.currentUser
+	}
+	name, err := a.currentUserFetch(info.Addr, info.Token)
+	if err != nil {
+		return ""
+	}
+	a.currentUser = name
+	a.currentUserResolved = true
+	return a.currentUser
 }
 
 // projectKeyOf identifies the project a board snapshot belongs to. v1 serves one
@@ -278,8 +318,8 @@ func (a *App) boardView(info daemon.DaemonInfo) (daemon.BoardView, []daemon.Trac
 // boardFromResults composes the shared board and then applies this viewer's own
 // overlay. The split is the point: Compose produces what is true of the project,
 // applyLocal adds what is true only of the person looking.
-func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs) BoardData {
-	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs)
+func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, currentUser string) BoardData {
+	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs, currentUser)
 }
 
 // applyLocal fills the fields Compose deliberately leaves blank because they
@@ -288,7 +328,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 //
 // Hidden cards are marked, not dropped — the frontend filters them so a user can
 // reveal them without a refetch, which is why Compose returns them at all.
-func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs) BoardData {
+func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, currentUser string) BoardData {
 	view.ColumnOrder = prefs.Columns
 	for i := range view.Cards {
 		c := &view.Cards[i]
@@ -301,6 +341,8 @@ func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string
 		c.MockupChosenSlug, c.MockupChosenFile = mock.ChosenSlug, mock.ChosenFile
 		_, c.Hidden = prefs.Hidden[c.Key]
 	}
+	// Ownership is viewer-local, like Hidden: dim cards owned by someone else.
+	board.MarkOwnership(view.Cards, currentUser)
 	return view
 }
 

@@ -20,6 +20,7 @@ import (
 )
 
 var _ tracker.Provider = (*Client)(nil)
+var _ tracker.CurrentUserNamer = (*Client)(nil)
 
 // Client is a Shortcut REST API client that implements tracker.Provider.
 type Client struct {
@@ -491,6 +492,19 @@ func (c *Client) GetCurrentUser(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return info.ID, nil
+}
+
+// CurrentUserName implements tracker.CurrentUserNamer: the authenticated user's
+// display name, resolved through the SAME member-name path that fills a story's
+// Assignee/Reporter (resolveMemberName), so the board can match owner == me by
+// string equality. Empty (no error) when the member has no resolvable name,
+// which the board reads as "identity unknown" and dims nothing.
+func (c *Client) CurrentUserName(ctx context.Context) (string, error) {
+	id, err := c.GetCurrentUser(ctx)
+	if err != nil {
+		return "", err
+	}
+	return c.resolveMemberName(ctx, id)
 }
 
 // EditIssue implements tracker.Editor.

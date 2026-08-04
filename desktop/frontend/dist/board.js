@@ -148,6 +148,8 @@ function renderCard(card) {
     el.dataset.stage = card.stage;
     if (card.degraded)
         el.classList.add("degraded");
+    if (card.notMine)
+        el.classList.add("not-mine");
     const meta = [];
     if (card.degraded) {
         // Markers could not be read this refresh — badge it distinctly so a

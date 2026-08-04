@@ -69,6 +69,13 @@ type IssueDetailFetch struct {
 	Extras IssueDetailExtras
 }
 
+// CurrentUserResult carries the authenticated user's display name for the
+// board's ownership dimming. Empty Name means the PM tracker could not (or does
+// not) resolve an identity, and the board dims nothing.
+type CurrentUserResult struct {
+	Name string `json:"name"`
+}
+
 // Request is sent from the client to the daemon (one JSON line per connection).
 type Request struct {
 	Version string `json:"version"`
@@ -189,6 +196,11 @@ type BoardViewCard struct {
 	// Assignee is the ticket owner shown in the detail panel. Display-only:
 	// the board never assigns; empty renders as "Unassigned" in the frontend.
 	Assignee string `json:"assignee,omitempty"`
+	// Reporter is the ticket's filer. The board uses it as the ownership
+	// fallback when Assignee is empty (nearly every ticket, since the pipeline
+	// sets no assignee), so a card can still be attributed to a person. Display
+	// name, same space as Assignee. Populated by the field copy in compose.go.
+	Reporter string `json:"reporter,omitempty"`
 	// Blockers names the tickets this card is waiting for, so a card that will
 	// not start says why on its face rather than looking idle. A blocker and
 	// the card it holds usually sit in different columns, which is why this is
@@ -222,6 +234,13 @@ type BoardViewCard struct {
 	// Hide). Locally persisted view preference, never tracker state; the
 	// frontend filters hidden cards out unless the user reveals them.
 	Hidden bool `json:"hidden,omitempty"`
+	// NotMine marks a card whose owner (Assignee, or Reporter when there is no
+	// assignee) is someone other than the current viewer. A viewer-local flag
+	// like Hidden — filled by the desktop overlay (applyLocal), never by
+	// Compose — so the frontend can render it dimmed-but-readable. False when
+	// the card is the viewer's own, has no owner, or identity is unknown: those
+	// all render at full opacity (dimming is a hint, never applied on a guess).
+	NotMine bool `json:"notMine,omitempty"`
 	// Options carries the card's open decision block: a stage ended in a fork
 	// and a human must pick a direction. OptionsContext is the one-line why.
 	Options        []BoardOption `json:"options,omitempty"`

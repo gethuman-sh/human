@@ -80,17 +80,21 @@ type Server struct {
 	// List endpoints on some trackers (e.g. Shortcut) return slim payloads
 	// without descriptions, so reading a ticket needs a per-key fetch. nil
 	// disables the tracker-issue route.
-	IssueGetter      func(req IssueDetailRequest) (*IssueDetailFetch, error)
-	TrackerDiagnoser func(dir string) []tracker.TrackerStatus // injected; diagnoses tracker status with vault resolution
-	Doctor           *DoctorRunner                            // substrate health checks; nil disables (doctor route reports healthy, launches never block)
-	Projects         *ProjectRegistry                         // multi-project routing; nil means single-project mode
-	PendingConfirms  *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
-	StatsWriter      *stats.Writer                            // async SQLite writer for tool event persistence; nil disables
-	StatsStore       *stats.StatsStore                        // for query-time aggregation; nil disables tool-stats route
-	AuditSink        *audit.Writer                            // records mutating tracker actions for the audit trail; nil disables
-	AuditStore       *audit.Store                             // serves audit-query reads; nil disables audit-query route
-	AgentCleaner     AgentCleaner                             // async agent cleanup; nil disables agent-stop-async route
-	VaultResolver    *vault.Resolver                          // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
+	IssueGetter func(req IssueDetailRequest) (*IssueDetailFetch, error)
+	// CurrentUserFetcher returns the authenticated PM-tracker user's DISPLAY
+	// name for the board's ownership dimming (SC-3339). nil, or an empty return,
+	// disables dimming — the board then renders every card at full opacity.
+	CurrentUserFetcher func() (string, error)
+	TrackerDiagnoser   func(dir string) []tracker.TrackerStatus // injected; diagnoses tracker status with vault resolution
+	Doctor             *DoctorRunner                            // substrate health checks; nil disables (doctor route reports healthy, launches never block)
+	Projects           *ProjectRegistry                         // multi-project routing; nil means single-project mode
+	PendingConfirms    *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
+	StatsWriter        *stats.Writer                            // async SQLite writer for tool event persistence; nil disables
+	StatsStore         *stats.StatsStore                        // for query-time aggregation; nil disables tool-stats route
+	AuditSink          *audit.Writer                            // records mutating tracker actions for the audit trail; nil disables
+	AuditStore         *audit.Store                             // serves audit-query reads; nil disables audit-query route
+	AgentCleaner       AgentCleaner                             // async agent cleanup; nil disables agent-stop-async route
+	VaultResolver      *vault.Resolver                          // session-scoped vault resolver; reused across requests to avoid repeated op.exe calls
 	// BoardTransitioner applies a board-transition request (advancing a card
 	// one pipeline stage). nil disables the board-transition route.
 	BoardTransitioner func(req BoardTransitionRequest) error
@@ -498,6 +502,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"board-view":          func() { s.handleBoardView(conn) },
 		"tracker-issues-lite": func() { s.handleTrackerIssuesLite(conn) },
 		"tracker-issue":       func() { s.handleTrackerIssue(conn, args[1:]) },
+		"current-user":        func() { s.handleCurrentUser(conn) },
 		"pending-confirms":    func() { s.handlePendingConfirms(conn) },
 		"doctor":              func() { s.handleDoctor(conn, args[1:]) },
 		"daemon-busy":         func() { s.handleDaemonBusy(conn) },
@@ -706,6 +711,28 @@ func (s *Server) handleBoardView(conn net.Conn) {
 		return
 	}
 	data, err := json.Marshal(view)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	_ = json.NewEncoder(conn).Encode(Response{Stdout: string(data) + "\n"})
+}
+
+// handleCurrentUser returns the authenticated PM-tracker user's display name so
+// the board can dim cards owned by someone else. A nil fetcher or an empty name
+// is a valid answer meaning "identity unknown" — the client dims nothing rather
+// than treating it as an error.
+func (s *Server) handleCurrentUser(conn net.Conn) {
+	var name string
+	if s.CurrentUserFetcher != nil {
+		n, err := s.CurrentUserFetcher()
+		if err != nil {
+			s.writeError(conn, err.Error(), 1)
+			return
+		}
+		name = n
+	}
+	data, err := json.Marshal(CurrentUserResult{Name: name})
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return

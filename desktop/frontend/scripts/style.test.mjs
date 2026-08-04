@@ -202,6 +202,33 @@ test("partial badge uses the machine register, not the needs-a-person amber (SC-
   assert.doesNotMatch(partial, /var\(--turn-person\)/, "a shipped-partial trace records scope, it asks nothing of a person");
 });
 
+// SC-3339: a not-mine card is dimmed but must stay fully interactive — the
+// dimming is a hint, never a restriction. Unlike .degraded (which also locks
+// the card with cursor:not-allowed), .card.not-mine must touch opacity only.
+test("not-mine card is dimmed via opacity only, never locked like a degraded card (SC-3339)", () => {
+  const body = ruleBody(".card.not-mine");
+  assert.match(body, /opacity:\s*[\d.]+/, ".card.not-mine must set opacity");
+  assert.doesNotMatch(body, /cursor:\s*not-allowed/, "not-mine must not disable the pointer like .degraded does");
+  assert.doesNotMatch(body, /pointer-events:\s*none/, "not-mine must not block interaction");
+});
+
+// SC-3339: a card that is both degraded (fetch failure) and not-mine must
+// keep the more restrictive .degraded dimming, so a degraded card never
+// reads as LESS urgent than a healthy not-mine one.
+test("a degraded not-mine card keeps the degraded (more restrictive) opacity, not the lighter not-mine one (SC-3339)", () => {
+  const notMine = ruleBody(".card.not-mine").match(/opacity:\s*([\d.]+)/);
+  const degraded = ruleBody(".card.degraded").match(/opacity:\s*([\d.]+)/);
+  assert.ok(notMine, ".card.not-mine must set opacity");
+  assert.ok(degraded, ".card.degraded must set opacity");
+
+  const combined = ruleBody(".card.degraded.not-mine").match(/opacity:\s*([\d.]+)/);
+  assert.ok(combined, ".card.degraded.not-mine must set an explicit opacity to break the cascade tie");
+  assert.equal(
+    Number(combined[1]), Number(degraded[1]),
+    ".card.degraded.not-mine must resolve to .degraded's opacity, not .not-mine's lighter one",
+  );
+});
+
 // SC-1830: the four "whose turn" semantic tokens must exist and alias the
 // existing palette (gray=machine, amber=person, red=error, green=done).
 test("whose-turn colour tokens are defined (SC-1830)", () => {

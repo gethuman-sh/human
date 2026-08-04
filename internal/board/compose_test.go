@@ -47,11 +47,24 @@ func TestCompose_LeavesViewerOwnedFieldsZero(t *testing.T) {
 	c := cardByKey(t, view, "SC-1")
 	assert.Zero(t, c.IdeaColumn, "idea column is a viewer preference")
 	assert.False(t, c.Hidden, "hiding is a viewer filter")
+	assert.False(t, c.NotMine, "ownership is viewer-relative, filled by applyLocal not Compose")
 	assert.Empty(t, c.MockupSlug)
 	assert.Empty(t, c.MockupState)
 	assert.Empty(t, c.MockupChosenSlug)
 	assert.Empty(t, c.MockupChosenFile)
 	assert.Empty(t, view.ColumnOrder, "hand-sorted order is a viewer preference")
+}
+
+// Reporter is the enabling gap for ownership dimming: it must ride from the
+// tracker issue onto the wire card so applyLocal can use it as the ownership
+// fallback when there is no assignee (SC-3339).
+func TestCompose_ReporterCopied(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "one", Reporter: "Bob"}},
+		map[string]daemon.BoardCard{"SC-1": {Stage: daemon.BoardBacklog}},
+	)}, true)
+
+	assert.Equal(t, "Bob", cardByKey(t, view, "SC-1").Reporter)
 }
 
 // The completed-record flag rides from the derived card onto the wire card so
