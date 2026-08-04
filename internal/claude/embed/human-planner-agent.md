@@ -109,6 +109,25 @@ List the codebase patterns the implementation must follow. Include file paths an
 describe the pattern concretely (not just "follows the same pattern as X" — show
 what the pattern actually looks like).
 
+## Dependents
+
+Every shared thing this plan changes gets one row, classified by kind, with the
+query you actually ran and what it returned. Classify by kind first — a
+symbol-only list for a change that also touches a vocabulary, a stored format or
+a sibling prompt is the failure this section exists to prevent, and the plan
+verifier fails it.
+
+| Shared thing | Kind | Query run | Result (file:line) |
+|---|---|---|---|
+| `<symbol>` | function/type | `human codenav impact <qname> --depth 2` | `<file:line>`, … |
+| `<the literal value>` | closed set of values | `rg -n '<literal>'` + `rg -n '<literal>' internal/claude/embed/` | `<file:line>`, … |
+| `<the format>` | stored format | `rg -n '<distinctive literal>'` (readers, tests included) | `<file:line>`, … |
+| `<the rule>` | instruction/convention | `rg -n '<distinctive phrase>' internal/claude/embed/` | `<file:line>`, … |
+
+A change with no shared thing at all says so in one line and why (e.g. a new file
+nothing references yet). A kind whose query could not be run or resolved is a row
+reading `unchecked: <kind> — <why>`. An absent section is not an empty one.
+
 ## Changes
 
 For EACH file to create or modify, in execution order:
@@ -126,7 +145,12 @@ exploration — do not paraphrase or summarize.
 - Struct/interface definitions if new or changed
 - Key logic (actual code or detailed pseudocode — not "add validation here")
 - Error handling approach
-- Integration points (which functions call this, which interfaces it satisfies)
+- Dependents this change reaches — every row of the plan's `## Dependents`
+  section whose result points into this file or is read by it, and what this
+  change means for each (it must change here too, or it is correct as it stands
+  and why). Not "which functions call this": a positional reader of a stored
+  format, a switch over a vocabulary and a sibling prompt are dependents with no
+  call edge at all (see the Dependents taxonomy below)
 
 **Step-by-step instructions**:
 1. Specific, unambiguous instruction
@@ -158,6 +182,8 @@ For each new or modified behavior:
 - **User Sovereignty for genuine forks only**: For a trade-off the codebase or ticket can settle, decide it and record the rationale in "Architecture Decisions" — a board plan must arrive decided. Reserve deferral for a real product/UX taste call or an ambiguous requirement, and express that as the up-front `DECISION REQUIRED:` terminal (per the Autonomy contract) so the human chooses BEFORE implementation — never as a sign-off gate baked into a step. Reducing what the ticket asks for is always a genuine fork — surface it up front, never decide it yourself.
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Either return a complete, gate-free plan or, for a genuine human fork, the `DECISION REQUIRED:` terminal verdict. Then finish.
+
+<!-- human:include dependents -->
 
 <!-- human:include stage-lease stage=planning -->
 

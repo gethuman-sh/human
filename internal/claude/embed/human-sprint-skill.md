@@ -114,7 +114,21 @@ Task(subagent_type="plan-verify-docs", prompt="Verify all library, framework, an
 
 ### Step 4c: Finalize and attach the plan
 
-If verification found issues, fix `<PLAN_CONTENT>` accordingly. Then attach the plan according to the topology from Step 3.5:
+If verification found issues, fix `<PLAN_CONTENT>` accordingly.
+
+**The dependents check is a gate, not a note.** The code verification report
+carries a `**Dependents check: <pass|fail>**` line. On **fail**, repair the plan
+yourself — add the missing kinds and rows to its `## Dependents` section (each
+with the query you ran and its `file:line` result), and add to `## Changes`
+whatever the unaccounted dependents require — then re-run **plan-verify-code
+alone** on the repaired plan. Repeat at most **twice**; if it still fails, mark
+each still-failing kind in the plan's `## Dependents` section as
+`unchecked: <kind> — <why>` and say so in the sprint's final report rather than
+attaching a plan that reads as if nothing depended on the change. Because a human
+is present in this pipeline, you may also surface a persistent failure to them —
+but never attach a plan whose `## Dependents` section is absent altogether.
+
+Then attach the plan according to the topology from Step 3.5:
 
 **Split topology** — confirm the plan header contains a `**PM ticket**: <PM_TICKET_KEY>` line so the executor can reference both tickets in commits — add it if missing. Create the engineering ticket with the plan as the description:
 
@@ -217,3 +231,5 @@ Artifacts:
 - Ideation:     .human/ideation/<slug>.md
 - Review:       .human/reviews/<key>.md
 ```
+
+<!-- human:include dependents -->

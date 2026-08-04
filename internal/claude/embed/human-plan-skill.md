@@ -43,12 +43,34 @@ Read both verification reports from the agent outputs.
 If the verification reports found **no issues** (all OK, zero mismatches, zero missing):
 - Proceed directly to attaching the plan (Phase 5).
 
-If the verification reports found **issues** (mismatches, missing references, unaccounted callers, deprecations, or unverifiable claims):
+If the verification reports found **issues** (mismatches, missing references, unaccounted dependents, deprecations, or unverifiable claims):
 - Update `<PLAN_CONTENT>` to fix all verified issues:
   - Correct wrong signatures, types, or file paths
-  - Add handling for unaccounted callers/dependents
+  - Add handling for every unaccounted dependent the code report lists, in the plan's `## Dependents` section AND in the `## Changes` step that must act on it
   - Replace deprecated APIs with their replacements
   - Mark unverifiable claims with "UNVERIFIED — confirm before implementing"
+
+### Phase 3 gate: the dependents check
+
+The code verification report carries a `**Dependents check: <pass|fail>**` line.
+It is a gate, not a note — a plan that enumerates only the callers of a symbol
+passes every other check while the change it describes ships broken.
+
+- **pass** — continue.
+- **fail** — repair the plan yourself: add the missing kinds and rows to its
+  `## Dependents` section (each with the query you ran and its `file:line`
+  result), and add to `## Changes` whatever the unaccounted dependents require.
+  Then re-run **plan-verify-code alone** on the repaired plan (the same Task
+  dispatch as Phase 2; plan-verify-docs does not need to run again).
+
+Repeat that repair-and-re-verify at most **twice**. If the check still fails
+after the second re-verification, do not loop again and do not stop: mark each
+still-failing kind in the plan's `## Dependents` section as
+`unchecked: <kind> — <why>` and carry the same text into the `unchecked` field of
+the `stage.planning` record below. An unchecked kind that is written down is what
+the reviewer audits later; an unchecked kind left silent reads as "no dependents",
+which is the failure this gate exists to catch. Never attach a plan whose
+`## Dependents` section is absent altogether.
 
 ## Phase 3a: Already-implemented terminal (nothing to plan)
 
@@ -208,6 +230,7 @@ human state set <PM_KEY> stage.planning --json --body-file - <<'EOF'
 {"exit":"done",
  "outcome":"<planned|nothing-to-do|decision-required>",
  "summary":"<one line>",
+ "unchecked":"<dependent kinds whose query could not be run or resolved, and why — empty if none>",
  "evidence":"<the marker or ticket that carries the result>"}
 EOF
 ```
@@ -220,6 +243,8 @@ plan is attached and correct, the run exits 0, and the board still reads a crash
 and reddens it. If you have written this and not yet posted the Phase 6 marker,
 **go back and post it now** — that, not this record, is the last act of a
 planning run.
+
+<!-- human:include dependents -->
 
 <!-- human:include exit-contract -->
 

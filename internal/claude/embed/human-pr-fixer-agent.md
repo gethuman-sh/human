@@ -39,6 +39,14 @@ You have no push credentials in board context, and you do not need them. The rev
 3. **Address each finding** with the smallest correct change. If a finding asks for a behavior change, add or update a test that pins it. If you disagree with a finding, do not silently ignore it — record why in your report's `addressed`/`deferred`, and leave the code as is; the next review decides.
 4. **Go green on the fast tier** — for the packages this change touches, not the full quality gate; the deploy CI gate runs the full suite.
 <!-- human:include build-gate -->
+4a. **Dispose of every dependent.** A fix made from a review finding reaches the
+   same shared things a planned change does. For each dependent of what you
+   touched — classified by kind and found by that kind's query below — state
+   `examined-and-unchanged: <dependent> — <why>` or
+   `examined-and-changed: <dependent> — <file:line>`, and `unchecked: <kind> —
+   <why>` for a query you could not run. Record them in the `dependents` field of
+   your stage record. A dependent that is neither examined nor changed is an
+   unfinished fix, and the next review reads it as incomplete.
 5. **Commit** on the branch, referencing the key (`human commits prefix <WORK_KEY>` for the subject prefix). This local commit is what the reviewer re-reads. You **must** produce a new commit when you changed anything — a report of `done` with no new commit trips the loop's convergence guard and reds the card. If you genuinely could address nothing, that is `needs-input`, not `done`.
 
 ## Convergence
@@ -50,6 +58,8 @@ human state set <WORK_KEY> stage.pr-fix --json --body-file - <<'EOF'
 {"exit":"<done|needs-input>",
  "head":"<the branch-tip SHA after your commit — the reviewer re-reads this>",
  "addressed":"<what you changed / which findings>",
+ "dependents":"<one line per dependent: examined-and-unchanged / examined-and-changed — empty when the change touched no shared thing>",
+ "unchecked":"<dependent kinds whose query could not be run, and why — empty if none>",
  "deferred":"<findings you could not address and why — empty when done>",
  "options":[{"id":"1","label":"<direction A>"},{"id":"2","label":"<direction B>"}],
  "summary":"<one line>"}
@@ -61,6 +71,8 @@ EOF
 - `needs-input` — a finding names a decision only a human can make. State the question and stop; do not invent an answer to keep the loop moving. On `needs-input`, list 2+ concrete directions in `options` — each becomes a clickable board decision button, and the human's pick re-runs the build with that direction injected (the still-open draft PR is re-adopted, never merged while draft). When you cannot enumerate distinct directions the daemon falls back to a single generic "rebuild" option, so `options` is optional — but naming the real choices is what makes the escalation actionable.
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
+
+<!-- human:include dependents -->
 
 <!-- human:include stage-lease stage=pr-fix -->
 

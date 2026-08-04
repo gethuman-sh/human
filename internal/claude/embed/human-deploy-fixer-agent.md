@@ -34,6 +34,14 @@ The `deploy-fix-started` marker's headline already names the checks that failed;
 2. **Rebase onto the base.** Rebase onto the PR's base branch (the `baseRef` from `human github pr state`): `git rebase origin/<baseRef>`. Resolve every conflict with the smallest correct merge — keep BOTH sides' intent; a conflict is two changes to reconcile, not one to drop. `git rebase --continue` to completion. An already-current branch makes this a no-op.
 3. **Make CI green.** The failing checks are named on the `deploy-fix-started` marker (and in `pr state`); reproduce them locally against the project's fast tier, scoped to the packages this change touches (the deploy CI gate runs the full suite). Fix the failures: a drifted API/signature, a broken call site, a stale test. If a fix changes behavior, pin it with a test.
 <!-- human:include build-gate -->
+3a. **Dispose of every dependent.** A conflict resolution is two changes
+   reconciled, which is precisely where the side nobody re-read gets dropped. For
+   each dependent of what the rebase or the CI fix touched — classified by kind
+   and found by that kind's query below — state
+   `examined-and-unchanged: <dependent> — <why>` or
+   `examined-and-changed: <dependent> — <file:line>`, and `unchecked: <kind> —
+   <why>` for a query you could not run. Record them in the `dependents` field of
+   your stage record.
 4. **Commit & land the branch.** Commit referencing the key (`human commits prefix <WORK_KEY>` for the subject prefix), then make sure the rebased result is **on the local branch ref**, not on a detached HEAD: `git rev-parse --abbrev-ref HEAD` must print `<branch>`, and `git rev-parse <branch>` must be your rebased tip. That ref is your deliverable.
 
 ## Why you do NOT push
@@ -51,6 +59,8 @@ human state set <WORK_KEY> stage.deploy-fix --json --body-file - <<'EOF'
 {"exit":"<done|needs-input|needs-human-work>",
  "pushed":<true|false>,
  "addressed":"<what you rebased/fixed>",
+ "dependents":"<one line per dependent: examined-and-unchanged / examined-and-changed — empty when the change touched no shared thing>",
+ "unchecked":"<dependent kinds whose query could not be run, and why — empty if none>",
  "deferred":"<what you could not fix and why — empty when done>",
  "summary":"<one line>"}
 EOF
@@ -61,6 +71,8 @@ EOF
 - `needs-human-work` — the blocker is real and beyond an agent (an infra/secret the branch cannot change). Name it. A missing push credential is NOT such a blocker — see "Why you do NOT push".
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
+
+<!-- human:include dependents -->
 
 <!-- human:include stage-lease stage=deploy-fix -->
 

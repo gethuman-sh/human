@@ -66,6 +66,32 @@ Only once all four checks pass do you review. The dispatched key is the post tar
 
    **Coherence work is not scope creep.** A change that also adjusts the siblings it sits among — renaming the one variant it would otherwise contradict, folding a new case into the existing vocabulary instead of adding a parallel one — is doing the ticket properly, not exceeding it. Flag it only when it is *unrelated*, never merely because it reaches beyond the lines the ticket named. A `[human:ticket-review]` marker asking for exactly this work makes it in-scope by definition; read the thread before calling it creep. Treating coherence work as creep is how a codebase accumulates ten variants of one idea, each added by a ticket that was individually correct.
 
+7a. **Audit the plan's Dependents list against the diff.** The plan (ticket
+   description, or `human plan show <KEY>`) carries a `## Dependents` section
+   naming what else depends on each shared thing the change touches. For every
+   row:
+   - the reviewed commits change it → **examined-and-changed**; check the change
+     is actually correct for that dependent;
+   - the commits do not change it → it is only examined if the run says so.
+     Read the implementer's dispositions from the run's summary comment
+     (`human marker show <PM_KEY> fix-summary` — `<PM_KEY>` is the plan header's
+     `**PM ticket**:` line, which is the dispatched key itself in single-tracker
+     topology) and accept an explicit
+     `examined-and-unchanged: <dependent> — <reason>` whose reason holds up when
+     you read that file. A row with neither a change nor a stated disposition is
+     an **unexamined dependent**: list it under Findings and make the Summary
+     `incomplete`.
+   - a row reading `unchecked: <kind> — <why>` names a query the run could not
+     run. Run that kind's cheap fallback yourself — the literal `rg` search from
+     the taxonomy below — and treat anything it turns up as a listed dependent
+     (so it can block); if the fallback also finds nothing to check, record the
+     unchecked kind as a note under Findings and in the `unchecked` field of your
+     stage record, not as an `incomplete`.
+
+   If the plan carries no `## Dependents` section at all and the diff changes a
+   shared thing, that absence is itself an unexamined-dependents finding: run the
+   taxonomy's queries for the kinds the diff triggers and report what you find.
+
 <!-- human:include outcome-not-mechanism -->
 8. **Write** the review to `.human/reviews/<key>.md` where `<key>` is the ticket key lowercased (e.g. `KAN-1` → `kan-1.md`). Create the directory first with `mkdir -p .human/reviews`. Include the list of commit hashes that were reviewed, so the reader can reproduce the diff.
 
@@ -99,6 +125,9 @@ Write the review in this structure:
    NOT `pass with notes`, whenever any Acceptance Criteria row is FAIL or any
    "Missing criteria" bullet names a ticket criterion. It blocks the merge and
    loops the work back to be built — partial delivery is a failure, not a note.
+   A dependent the plan listed that the reviewed commits neither changed nor
+   accounted for is `incomplete` too — an unexamined dependent is an unfinished
+   change, not a finished one (see "Unexamined dependents").
  - `unreviewable: <reachability reason>` — the code could NOT be obtained
    (handoff branch missing, or zero commits referencing the key reachable);
    nothing was reviewed. The calling skill translates this into a
@@ -126,6 +155,10 @@ or downgrade it to a note because the plan sanctioned the omission.
 ### Missing criteria
 - <acceptance criteria not addressed in the ticket's commits>
 
+### Unexamined dependents
+- <a row of the plan's ## Dependents section that the reviewed commits neither changed nor stated a disposition for — name the dependent, its kind, and the query that found it. Any entry here makes the Summary `incomplete`.>
+- <unchecked: kind — the run could not run this kind's query, and your fallback found nothing to check. A note, not a blocker.>
+
 ### Scope creep
 - <changes inside the ticket's commits that go beyond the ticket>
 
@@ -151,11 +184,14 @@ human state set <WORK_KEY> stage.review --json --body-file - <<'EOF'
  "verdict":"<pass|pass with notes|fail|incomplete|unreviewable>",
  "reason":"<why the code could not be obtained, for unreviewable — empty otherwise>",
  "findings":"<the substance of what you found, or 'no issues'>",
+ "unchecked":"<dependent kinds you could not determine, and why — empty if none>",
  "summary":"<one line>"}
 EOF
 ```
 
 Use `unreviewable` only when the code itself could not be obtained (branch unreachable, no commits reference the key). It is not a synonym for `fail`: a review that examined code and found problems is `fail`. `incomplete` is not a synonym for `fail` either: `fail` is a defect in what was built, `incomplete` is a ticket criterion that was not built at all.
+
+<!-- human:include dependents -->
 
 <!-- human:include stage-lease stage=review -->
 
