@@ -8,6 +8,7 @@
 - Reports blast radius of a symbol or a git diff
 - Full-text search over code bodies and symbol names
 - Lists detected web routes and their handlers
+- Prints a product account: the domain nouns (types) with their shape and recorded intent, ranked so plumbing does not dominate
 - Keeps one local index for many repositories
 - Refreshes incrementally — reprocesses only added, modified, and deleted files (Go at package granularity) and leaves unchanged files in place, so staying current is cheap; `--full` forces a complete rebuild. The call graph is exact except for interface-dispatch edges between full rebuilds.
 - Served by the daemon as one shared index for every agent and worktree, kept fresh in the background; falls back to a local index when no daemon runs

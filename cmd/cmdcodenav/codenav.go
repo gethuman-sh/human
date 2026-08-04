@@ -53,6 +53,7 @@ func BuildCodenavCmd() *cobra.Command {
 		buildSymbolsCmd(),
 		buildOutlineCmd(),
 		buildOverviewCmd(),
+		buildAccountCmd(),
 		buildSearchCmd(),
 		buildDefCmd(),
 		buildRefsCmd(),
@@ -393,6 +394,65 @@ func buildOverviewCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "limit to a project")
+	return cmd
+}
+
+func buildAccountCmd() *cobra.Command {
+	var repo string
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "account",
+		Short: "Product account: the domain nouns, their shape, and their meaning",
+		Long: "account is a page-sized, code-generated summary of what a product is " +
+			"made of — its domain nouns (types), each with its shape and the intent " +
+			"recorded above it — ranked so plumbing does not dominate. Regenerated " +
+			"from the current index; nothing is hand-maintained.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			st, err := openStore(cmd)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			acct, err := query.GetAccount(st.DB(), repo, limit)
+			if err != nil {
+				return err
+			}
+			if jsonOut(cmd) {
+				return emitJSON(cmd, acct)
+			}
+			if len(acct.Nouns) == 0 {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), acct.Note)
+				return nil
+			}
+			scope := "(all indexed)"
+			if repo != "" {
+				scope = repo
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "product account: %s\n", scope)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%d domain nouns (from the current index)\n\n", len(acct.Nouns))
+			for _, n := range acct.Nouns {
+				shape := n.Shape
+				if shape == "" {
+					shape = n.Name
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\t%s\n", n.Name, shape)
+				meaning := n.Meaning
+				if meaning == "" {
+					meaning = "(no description recorded)"
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "      %s\n", meaning)
+				// SC-2860 seam: rules constraining this noun, shown alongside it.
+				for _, inv := range n.Invariants {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "      ! %s\n", inv)
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "      %s:%d\n", n.File, n.Line)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "limit to a project")
+	cmd.Flags().IntVar(&limit, "limit", 24, "max domain nouns (page-sized)")
 	return cmd
 }
 
