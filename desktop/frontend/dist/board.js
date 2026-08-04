@@ -801,6 +801,7 @@ async function findRelatedWork(key, title) {
 async function fixSecurity(key, title) {
     const card = current.cards.find((c) => c.key === key);
     const prevStage = card?.stage;
+    const prevState = card?.state;
     if (card) {
         card.stage = "implementation";
         card.state = "running";
@@ -817,16 +818,17 @@ async function fixSecurity(key, title) {
         }
         render();
     }
-    try {
-        await go().FixSecurity(key, title);
-    }
-    catch (err) {
-        // Drop the shield so the next reconcile isn't pinned to a move that never
-        // launched (SC-2521).
+    await runGuardedAction(() => go().FixSecurity(key, title), (err) => {
+        // Revert the optimistic move so a failed launch doesn't leave the card
+        // looking like it's running when it never started (SC-637), and drop the
+        // shield so the next reconcile isn't pinned to the reverted move.
+        if (card && prevStage !== undefined && prevState !== undefined) {
+            card.stage = prevStage;
+            card.state = prevState;
+        }
         pendingMoves = dropPendingMove(pendingMoves, key);
         showError(errMessage(err));
-    }
-    await reconcile();
+    }, reconcile);
 }
 // Bugs filed from the pane but not yet confirmed by a board fetch — the bug
 // grid's counterpart to pendingIdeas, with the same handover rule: the
@@ -1437,16 +1439,25 @@ function reorderWithinQueue(queue, key, dropY) {
         midpoints.push(r.top + r.height / 2);
     }
     const keys = insertKeyAt(resting, midpoints, key, dropY);
+    // Snapshot the whole map rather than this queue's entry alone, so the revert
+    // below restores the exact prior state — including a queue that had no
+    // hand-order at all, which a per-entry undo cannot express.
+    const prevColumnOrder = current.columnOrder ? { ...current.columnOrder } : undefined;
     if (!current.columnOrder)
         current.columnOrder = {};
     current.columnOrder[queue] = keys;
     render();
-    void go()
-        .SetColumnOrder(queue, keys)
-        .catch((err) => {
+    void runGuardedAction(() => go().SetColumnOrder(queue, keys), (err) => {
+        // Undo the optimistic reorder here rather than letting a reconcile do it
+        // — a reconcile would overwrite current.error with the (empty) fetch
+        // error and the failure would flash away unseen (SC-637).
+        current.columnOrder = prevColumnOrder;
+        render();
         showError(errMessage(err));
-        void reconcile();
-    });
+    },
+    // No reconcile on success: the daemon issues no board:changed event for a
+    // local-only column-order write, same as the ideaColumn drop.
+    async () => { });
 }
 // promoteIdea opens the ideation panel in evolve mode, seeded with the idea
 // card's content. An active session must be explicitly replaced — the daemon
@@ -1900,17 +1911,24 @@ function showError(msg) {
     render();
 }
 // toggleCardHidden parks a ticket off the board or restores it. Optimistic
-// like SetIdeaColumn: flip and render immediately, snap back via reconcile
-// only if the write fails.
+// like SetIdeaColumn: flip and render immediately, snapping the flip back
+// locally if the write fails.
 function toggleCardHidden(card) {
-    card.hidden = !card.hidden;
+    const prevHidden = card.hidden;
+    const nextHidden = !card.hidden;
+    card.hidden = nextHidden;
     render();
-    void go()
-        .SetCardHidden(card.key, !!card.hidden)
-        .catch((err) => {
+    void runGuardedAction(() => go().SetCardHidden(card.key, nextHidden), (err) => {
+        // Snap back here rather than via reconcile — a reconcile would overwrite
+        // current.error with the (empty) fetch error and the failure would flash
+        // away unseen (SC-637).
+        card.hidden = prevHidden;
+        render();
         showError(errMessage(err));
-        void reconcile();
-    });
+    },
+    // No reconcile on success: the daemon issues no board:changed event for a
+    // local-only hidden write, same as the ideaColumn drop.
+    async () => { });
 }
 // updateHideToggle keeps the header's Unhide/Hide button in sync: present only
 // while hidden tickets exist (labeled with the count), toggling whether they
@@ -2670,13 +2688,7 @@ function renderTicketDetail() {
                 renderTicketDetail();
                 render();
             };
-            void go()
-                .ChooseOption(optionKey, optionID)
-                .then(() => {
-                confirmChoice();
-                return reconcile();
-            })
-                .catch((err) => {
+            void runGuardedAction(() => go().ChooseOption(optionKey, optionID), (err) => {
                 const msg = errMessage(err);
                 if (msg.includes("no open decision")) {
                     // The guard refusing a double-dispatch is the feature working —
@@ -2684,8 +2696,17 @@ function renderTicketDetail() {
                     confirmChoice();
                     return;
                 }
+                // The dispatch never landed, so give the choices back rather than
+                // leaving a dead panel, and leave the board alone — a reconcile here
+                // would overwrite current.error with the (empty) fetch error and the
+                // failure would flash away unseen (SC-637).
+                body
+                    .querySelectorAll(".detail-option-btn")
+                    .forEach((b) => (b.disabled = false));
                 showError(msg);
-                void reconcile();
+            }, async () => {
+                confirmChoice();
+                await reconcile();
             });
         });
     });
