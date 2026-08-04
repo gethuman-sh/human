@@ -89,7 +89,7 @@ test("in-flight guard: overlapping showStats calls do not stack Stats() calls (S
         toolCalls: { total: 0, success: 0, failure: 0 },
         audit: { total: 0, success: 0, failure: 0 },
         agentRuns: { total: 0, success: 0, failure: 0 },
-        tokensPerHour: [],
+        ticketCosts: [],
         tokensByModel: [],
         toolsByTool: [],
         auditByDay: [],
@@ -121,7 +121,7 @@ test("showStats renders the Tokens by model panel from tokensByModel (SC-1316)",
         toolCalls: { total: 0, success: 0, failure: 0 },
         audit: { total: 0, success: 0, failure: 0 },
         agentRuns: { total: 0, success: 0, failure: 0 },
-        tokensPerHour: [],
+        ticketCosts: [],
         tokensByModel: [{ model: "opus 4.8", input: 100, output: 200, cacheCreate: 50, cacheRead: 30, costUSD: 0 }],
         toolsByTool: [],
         auditByDay: [],
@@ -133,6 +133,71 @@ test("showStats renders the Tokens by model panel from tokensByModel (SC-1316)",
 
   assert.match(el.innerHTML, /Tokens by model/, "the panel title renders");
   assert.match(el.innerHTML, /opus 4\.8/, "the model row renders");
+});
+
+// SC-3497: the stats page shows which WORK spent the range's tokens, ranked by
+// cost — the question the money is attached to. It replaced the per-hour burn,
+// which showed only when tokens were spent, and that panel must be gone rather
+// than merely unlinked.
+test("showStats renders the Cost by ticket panel from ticketCosts (SC-3497)", async () => {
+  const el = installStatsDOM();
+  initStatsView(() => ({
+    Stats: () =>
+      Promise.resolve({
+        range: "24h",
+        generatedAt: "",
+        daemonStartedAt: "",
+        tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, costUSD: 0 },
+        toolCalls: { total: 0, success: 0, failure: 0 },
+        audit: { total: 0, success: 0, failure: 0 },
+        agentRuns: { total: 0, success: 0, failure: 0 },
+        ticketCosts: [
+          { ticket: "SC-637", costUSD: 1.5, contextCostUSD: 1.14, answersCostUSD: 0.36, outputTokens: 14449, contextTokens: 558705, durationMs: 226947 },
+          { ticket: "SC-3321", costUSD: 0.05, contextCostUSD: 0.04, answersCostUSD: 0.01, outputTokens: 158, contextTokens: 18317, durationMs: 4000 },
+        ],
+        tokensByModel: [],
+        toolsByTool: [],
+        auditByDay: [],
+        networkDecisions: [],
+      }),
+  }));
+
+  await showStats();
+
+  assert.match(el.innerHTML, /Cost by ticket/, "the panel title renders");
+  assert.match(el.innerHTML, /SC-637/, "the most expensive ticket renders");
+  assert.match(el.innerHTML, /\$1\.50/, "the ticket's cost renders as money");
+  assert.doesNotMatch(el.innerHTML, /Tokens per hour/, "the per-hour burn panel it replaced must be gone");
+});
+
+// A ticket whose rows carry duration but no priced tokens still lists, at
+// $0.00: hiding it would claim the work never ran (SC-3440 left 520 such rows).
+test("showStats lists an unpriced ticket rather than dropping it (SC-3497)", async () => {
+  const el = installStatsDOM();
+  initStatsView(() => ({
+    Stats: () =>
+      Promise.resolve({
+        range: "24h",
+        generatedAt: "",
+        daemonStartedAt: "",
+        tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, costUSD: 0 },
+        toolCalls: { total: 0, success: 0, failure: 0 },
+        audit: { total: 0, success: 0, failure: 0 },
+        agentRuns: { total: 0, success: 0, failure: 0 },
+        ticketCosts: [
+          { ticket: "SC-BLIND", costUSD: 0, contextCostUSD: 0, answersCostUSD: 0, outputTokens: 0, contextTokens: 0, durationMs: 6387000 },
+        ],
+        tokensByModel: [],
+        toolsByTool: [],
+        auditByDay: [],
+        networkDecisions: [],
+      }),
+  }));
+
+  await showStats();
+
+  assert.match(el.innerHTML, /SC-BLIND/, "an unpriced ticket still appears");
+  assert.match(el.innerHTML, /\$0\.00/, "priced at zero rather than hidden");
 });
 
 // SC-2549: context is everything spent establishing/re-reading context

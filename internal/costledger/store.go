@@ -207,3 +207,86 @@ func (s *Store) Close() error {
 	}
 	return s.db.Close()
 }
+
+// TicketSpend is one ticket's priced spend over a window, ranked for the stats
+// view. It carries the answers/context split as tokens as well as dollars,
+// because the split is the number that says whether a ticket was expensive for
+// a good reason (SC-3497).
+type TicketSpend struct {
+	Ticket         string  `json:"ticket"`
+	CostUSD        float64 `json:"costUSD"`
+	ContextCostUSD float64 `json:"contextCostUSD"`
+	AnswersCostUSD float64 `json:"answersCostUSD"`
+	OutputTokens   int     `json:"outputTokens"`
+	ContextTokens  int     `json:"contextTokens"`
+	DurationMs     int64   `json:"durationMs"`
+}
+
+// TopTicketSpend ranks the tickets that cost the most over a window, most
+// expensive first. Pricing happens here, per (ticket, model), for the same
+// reason TicketCost prices at read time: the rate card can change, and a stored
+// dollar figure would silently keep the old rate.
+//
+// Rows the pricing cannot value — a model the rate card does not know, or the
+// zero-token rows written before the proxy read usage off a compressed body
+// (SC-3440) — still rank, at zero. They are part of the truth about a ticket:
+// it ran, and what it cost is not known.
+func (s *Store) TopTicketSpend(ctx context.Context, project string, since, until time.Time, limit int) ([]TicketSpend, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT ticket, model, SUM(input_tokens), SUM(output_tokens), SUM(cache_create_tokens), SUM(cache_read_tokens), SUM(duration_ms)
+		 FROM ticket_calls
+		 WHERE project = ? AND started_at >= ? AND started_at <= ?
+		 GROUP BY ticket, model`,
+		project, since.UTC().Format("2006-01-02 15:04:05"), until.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "query ticket spend", "project", project)
+	}
+	defer func() { _ = rows.Close() }()
+
+	byTicket := map[string]*TicketSpend{}
+	for rows.Next() {
+		var ticket, model string
+		var in, outTok, cc, cr int
+		var durMs int64
+		if err := rows.Scan(&ticket, &model, &in, &outTok, &cc, &cr, &durMs); err != nil {
+			return nil, errors.WrapWithDetails(err, "scan ticket spend row")
+		}
+		ts, ok := byTicket[ticket]
+		if !ok {
+			ts = &TicketSpend{Ticket: ticket}
+			byTicket[ticket] = ts
+		}
+		ts.CostUSD += claude.CostUSD(model, in, outTok, cc, cr)
+		ts.ContextCostUSD += claude.CostUSD(model, in, 0, cc, cr)
+		ts.AnswersCostUSD += claude.CostUSD(model, 0, outTok, 0, 0)
+		ts.OutputTokens += outTok
+		ts.ContextTokens += in + cc + cr
+		ts.DurationMs += durMs
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.WrapWithDetails(err, "iterate ticket spend rows")
+	}
+
+	out := make([]TicketSpend, 0, len(byTicket))
+	for _, ts := range byTicket {
+		out = append(out, *ts)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CostUSD != out[j].CostUSD {
+			return out[i].CostUSD > out[j].CostUSD
+		}
+		// Cost ties on unpriced rows, so fall back to the work actually done and
+		// then to the key, keeping the order stable rather than map-random.
+		if out[i].DurationMs != out[j].DurationMs {
+			return out[i].DurationMs > out[j].DurationMs
+		}
+		return out[i].Ticket < out[j].Ticket
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}

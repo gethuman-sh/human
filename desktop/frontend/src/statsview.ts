@@ -25,13 +25,14 @@ export interface StatsOverview {
   toolCalls: Headline;
   audit: Headline;
   agentRuns: Headline;
-  tokensPerHour: {
-    bucket: string;
-    input: number;
-    output: number;
-    cacheCreate: number;
-    cacheRead: number;
+  ticketCosts: {
+    ticket: string;
     costUSD: number;
+    contextCostUSD: number;
+    answersCostUSD: number;
+    outputTokens: number;
+    contextTokens: number;
+    durationMs: number;
   }[];
   tokensByModel: {
     model: string;
@@ -270,7 +271,7 @@ function renderHeadlines(): string {
 function renderPanels(): string {
   return (
     `<div class="stats-panels">` +
-    panelTokens() +
+    panelTicketCosts() +
     panelTokensByModel() +
     panelTools() +
     panelAudit() +
@@ -293,32 +294,37 @@ function emptyBody(): string {
   return `<div class="stats-empty">No data yet</div>`;
 }
 
-// Tokens-per-hour: two bars per hour (output, context) normalized against the
-// overall max so the two series stay comparable across the row. Context folds
-// input + cache-create + cache-read — everything that isn't producing output.
-function panelTokens(): string {
-  const rows = latest!.tokensPerHour;
-  if (rows.length === 0) return panelShell("Tokens per hour", "", emptyBody());
-  const all = rows.flatMap((r) => [r.output, contextTokens(r)]);
+// Cost by ticket: one row per ticket over the range, most expensive first, with
+// the same two bars every other token panel uses (answers, context). It
+// replaces the per-hour burn, which showed WHEN tokens were spent — a question
+// nobody acts on — where this one shows WHICH WORK spent them, which is the
+// question the money is actually attached to (SC-3497).
+//
+// A ticket with no priced spend still lists, at $0.00: rows written before the
+// proxy could read usage off a compressed body carry duration only, and hiding
+// them would claim the work never ran.
+function panelTicketCosts(): string {
+  const rows = latest!.ticketCosts;
+  if (rows.length === 0) return panelShell("Cost by ticket", "", emptyBody());
+  const all = rows.flatMap((r) => [r.outputTokens, r.contextTokens]);
   const pcts = barPercents(all);
   const body = rows
     .map((r, i) => {
       const op = pcts[i * 2];
       const cp = pcts[i * 2 + 1];
-      const hour = r.bucket.slice(11); // "HH:00"
       return (
         `<div class="stats-hour-row">` +
-        `<span class="stats-hour-label">${escapeHtml(hour)}</span>` +
+        `<span class="stats-hour-label">${escapeHtml(r.ticket)}</span>` +
         `<span class="stats-hour-bars">` +
         `<span class="token-bar"><span class="token-bar-fill fresh" style="width:${op}%"></span></span>` +
         `<span class="token-bar"><span class="token-bar-fill cache" style="width:${cp}%"></span></span>` +
         `</span>` +
-        `<span class="stats-hour-val">${escapeHtml(fmtNum(r.output))}/${escapeHtml(fmtNum(contextTokens(r)))} · ${escapeHtml(fmtUSD(r.costUSD))}</span>` +
+        `<span class="stats-hour-val">${escapeHtml(fmtUSD(r.costUSD))} · ${escapeHtml(fmtNum(r.outputTokens))}/${escapeHtml(fmtNum(r.contextTokens))}</span>` +
         `</div>`
       );
     })
     .join("");
-  return panelShell("Tokens per hour", "output / context", body);
+  return panelShell("Cost by ticket", "answers / context", body);
 }
 
 // Tokens-by-model: one row per model with two bars (output, context)
