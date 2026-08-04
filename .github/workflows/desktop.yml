@@ -1,9 +1,12 @@
 name: Desktop
 
 # The workflow-board desktop app (Wails v2) is a cgo backend and CANNOT be
-# cross-compiled: Linux uses webkit2gtk+gtk3, Windows uses the WebView2 runtime,
-# macOS uses the Obj-C toolchain. So it is built on a 3-runner matrix, each with
-# its own native toolchain. This is intentionally a SEPARATE workflow from ci.yml
+# cross-compiled: Linux uses webkit2gtk+gtk3, macOS uses the Obj-C toolchain. So
+# it is built on a per-OS matrix, each row with its own native toolchain.
+# Windows is deliberately absent: its row took ~8 minutes against ~1-2 for the
+# others and sat in front of every desktop merge. The windows/amd64 CLI binary
+# still ships from the release build, which cross-compiles without a runner.
+# This is intentionally a SEPARATE workflow from ci.yml
 # — the main lint/test/build jobs run on a plain Linux runner with no webview
 # headers, and the `wailsapp` build tag keeps the cgo path out of `go vet ./...`,
 # `go list ./...` and `go build .` so those jobs stay green without GTK installed.
@@ -44,9 +47,6 @@ jobs:
           - os: macos-14
             platform: darwin/universal
             tags: "wailsapp"
-          - os: windows-2022
-            platform: windows/amd64
-            tags: "wailsapp"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
@@ -67,8 +67,7 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev || \
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
 
-      # Windows ships the WebView2 runtime on supported images; nothing to
-      # install. macOS uses the system Obj-C/WebKit toolchain.
+      # macOS uses the system Obj-C/WebKit toolchain; nothing to install.
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
