@@ -76,6 +76,18 @@ func HasConfigFile(dir string) bool {
 	return false
 }
 
+// Validate reports whether the .humanconfig file directly in dir (or its
+// local/ override) parses cleanly. Returns nil when dir holds no config file
+// at all — there is nothing to validate, matching readConfig's own
+// "missing is not an error" contract — and a wrapped, informative error when
+// a file exists but fails to parse (malformed YAML) or cannot be read (e.g.
+// permission denied). Callers that must distinguish "no file" from "valid
+// file" should pair this with HasConfigFile.
+func Validate(dir string) error {
+	_, err := readConfig(dir)
+	return err
+}
+
 // readConfig creates a viper instance and reads the .humanconfig file from
 // dir (or its local/ subdirectory). Returns (nil, nil) when no config file exists.
 func readConfig(dir string) (*viper.Viper, error) {

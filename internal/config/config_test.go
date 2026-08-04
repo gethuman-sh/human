@@ -147,3 +147,26 @@ func TestUnmarshalSection_missingSectionReturnsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
+
+func TestValidate_missingFileReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+
+	assert.NoError(t, Validate(dir))
+}
+
+func TestValidate_validFileReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("project: infra\n"), 0o644))
+
+	assert.NoError(t, Validate(dir))
+}
+
+func TestValidate_malformedYAMLReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte(":\n  bad: [yaml\n"), 0o644))
+
+	err := Validate(dir)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing config file")
+}
