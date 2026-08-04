@@ -904,6 +904,60 @@ func TestGetCurrentUser_error(t *testing.T) {
 	assert.Contains(t, err.Error(), "returned")
 }
 
+func TestCurrentUserName_happy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/member-info":
+			_, _ = fmt.Fprint(w, `{"id":"uuid-me"}`)
+		case "/api/v3/members/uuid-me":
+			_, _ = fmt.Fprint(w, `{"id":"uuid-me","profile":{"display_name":"Stephan Schmidt"}}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	name, err := client.CurrentUserName(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, "Stephan Schmidt", name)
+}
+
+func TestCurrentUserName_memberInfoError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	_, err := client.CurrentUserName(context.Background())
+
+	require.Error(t, err)
+}
+
+func TestCurrentUserName_nameFallbackToProfileName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/member-info":
+			_, _ = fmt.Fprint(w, `{"id":"uuid-me"}`)
+		case "/api/v3/members/uuid-me":
+			_, _ = fmt.Fprint(w, `{"id":"uuid-me","profile":{"display_name":"","name":"stephan"}}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(srv.URL, "tok-test")
+	name, err := client.CurrentUserName(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, "stephan", name)
+}
+
 func TestEditIssue_happy(t *testing.T) {
 	title := "Updated Title"
 	callCount := 0

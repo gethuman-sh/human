@@ -809,6 +809,17 @@ type CurrentUserGetter interface {
 	GetCurrentUser(ctx context.Context) (string, error)
 }
 
+// CurrentUserNamer resolves the authenticated user's DISPLAY NAME — the same
+// string space as Issue.Assignee and Issue.Reporter, so the board can decide
+// "is this card mine?" by string equality against the owner. This is distinct
+// from CurrentUserGetter, which returns the opaque member ID used to assign a
+// ticket to self: an ID never equals a display name, so owner-vs-me needs this.
+// Optional: a provider that cannot cheaply resolve its own display name simply
+// does not implement it, and the board dims nothing for that tracker.
+type CurrentUserNamer interface {
+	CurrentUserName(ctx context.Context) (string, error)
+}
+
 // EditOptions specifies which fields to update on an issue.
 // Nil pointer fields are left unchanged; non-nil fields are set (even if empty).
 type EditOptions struct {

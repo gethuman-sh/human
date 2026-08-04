@@ -446,6 +446,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		LiteIssueFetcher:   fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
 		BoardViewFetcher:   boardViewFunc(issueFetcher, doctor, projectRegistry, boardcache.NewStore(boardcache.DefaultPath()), logger),
 		IssueGetter:        daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
+		CurrentUserFetcher: currentUserFunc(projectRegistry, vaultResolver),
 		TrackerDiagnoser:   trackerDiagnoserFunc(projectRegistry, vaultResolver),
 		Doctor:             doctor,
 		Projects:           projectRegistry,
@@ -2899,6 +2900,52 @@ func resolvePMGetter(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 		}
 	}
 	return nil, errors.WithDetails("no PM-role tracker with fetch support configured", "dir", dir)
+}
+
+// resolvePMCurrentUser resolves the PM-role tracker.CurrentUserNamer for a
+// workspace. Role-based selection (InferRole()=="pm"), never key prefix —
+// mirrors resolvePMGetter. Optional capability: a PM provider that does not
+// implement it yields (nil, nil), and the caller reads that as "no identity".
+func resolvePMCurrentUser(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.CurrentUserNamer, error) {
+	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		if inst.InferRole() != "pm" {
+			continue
+		}
+		if n, ok := inst.Provider.(tracker.CurrentUserNamer); ok {
+			return n, nil
+		}
+	}
+	return nil, nil
+}
+
+// currentUserFunc builds the daemon's current-user fetcher: the display name of
+// the authenticated PM-tracker user, for the board's ownership dimming
+// (SC-3339). Empty (no error) when no PM tracker resolves an identity, so the
+// board simply dims nothing.
+func currentUserFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() (string, error) {
+	return func() (string, error) {
+		for _, entry := range reg.Entries() {
+			namer, err := resolvePMCurrentUser(entry.Dir, entry.EnvLookup(), resolver)
+			if err != nil {
+				return "", err
+			}
+			if namer == nil {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			name, err := namer.CurrentUserName(ctx)
+			cancel()
+			if err != nil {
+				return "", err
+			}
+			return name, nil
+		}
+		return "", nil
+	}
 }
 
 // closedTicketProbeFunc builds the reconcile pass's ClosedTicketProbe: it fetches

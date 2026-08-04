@@ -757,6 +757,18 @@ body {
   cursor: not-allowed;
 }
 
+/* A ticket owned by someone other than the viewer (SC-3339): visibly secondary
+   but fully readable and fully interactive — dimming is a hint, never a
+   restriction, so this touches ONLY opacity (no cursor / pointer-events change,
+   unlike .degraded). opacity is relative to the card's backdrop, so it reads
+   correctly in the dark theme, the fancy theme, and any light appearance. */
+.card.not-mine {
+  opacity: 0.6;
+}
+.card.not-mine:hover {
+  opacity: 0.9;
+}
+
 /* Floating clone that follows the cursor during a pointer-drag. pointer-events
    must stay none so it never occludes elementFromPoint's drop-target hit-test.
    Positioned by JS at the cursor; translate centres it under the pointer. */

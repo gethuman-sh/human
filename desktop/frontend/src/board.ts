@@ -91,6 +91,9 @@ interface Card {
   labels?: string[];
   description?: string;
   assignee?: string;
+  // The ticket's filer. Ownership fallback when there is no assignee (which is
+  // nearly every ticket): the board attributes the card to the reporter.
+  reporter?: string;
   // Tracker instance name + provider kind the issue was listed from; passed
   // back to GetIssueDetail so the daemon resolves the exact instance (names
   // can repeat across provider sections, keys across kinds).
@@ -133,6 +136,11 @@ interface Card {
   // comment-fetch error). Rendered locked: non-draggable, no launch actions,
   // with an "unreadable" badge — never presented as idle Backlog work (1700).
   degraded?: boolean;
+  // Set when this card's owner (assignee, or reporter when unassigned) is
+  // someone other than the current viewer (SC-3339). Rendered dimmed-but-
+  // readable and fully interactive — a hint, never a restriction. Absent/false
+  // for the viewer's own cards, ownerless cards, or unknown identity.
+  notMine?: boolean;
   mockupSlug?: string;
   mockupState?: string; // "ready" | "creating"
   // The ticket's chosen winner mockup (leaf group slug + option file), set once
@@ -535,6 +543,7 @@ function renderCard(card: Card): HTMLElement {
   el.dataset.key = card.key;
   el.dataset.stage = card.stage;
   if (card.degraded) el.classList.add("degraded");
+  if (card.notMine) el.classList.add("not-mine");
 
   const meta: string[] = [];
   if (card.degraded) {

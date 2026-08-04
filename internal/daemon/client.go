@@ -455,6 +455,23 @@ func GetBoardView(addr, token string) (BoardView, error) {
 	return view, nil
 }
 
+// GetCurrentUserName fetches the authenticated PM-tracker user's display name
+// for the board's ownership dimming (SC-3339). An empty name (or any error,
+// e.g. a daemon predating this route answering command-not-found) means the
+// caller dims nothing — the board still renders, just without the mine/not-mine
+// distinction, exactly as before this existed.
+func GetCurrentUserName(addr, token string) (string, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"current-user"})
+	if err != nil {
+		return "", err
+	}
+	var res CurrentUserResult
+	if err := json.Unmarshal(out, &res); err != nil {
+		return "", errors.WrapWithDetails(err, "invalid current-user JSON")
+	}
+	return res.Name, nil
+}
+
 // BoardTransition asks the daemon to advance a card one pipeline stage. The
 // request is sent as a single JSON arg so multi-word PM titles survive arg
 // splitting on the daemon side.
