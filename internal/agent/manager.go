@@ -219,7 +219,12 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 	claudeArgs = append(claudeArgs, extraArgs...)
 	claudeArgs = append(claudeArgs, "-p", opts.Prompt)
 	cmd := append([]string{"claude"}, claudeArgs...)
-	env := []string{"HUMAN_AGENT_NAME=" + opts.Name, "HUMAN_DAEMON_ID=" + opts.DaemonID}
+	// A headless run's own Task delegation is pinned to the foreground (see the
+	// embedded skill prompts), but this is a backstop against any that isn't: it
+	// removes the CLI's own background-task wait ceiling so a stray backgrounded
+	// subagent is waited for indefinitely rather than silently killed at 10
+	// minutes and misreported as "finished without posting the handoff" (SC-3284).
+	env := []string{"HUMAN_AGENT_NAME=" + opts.Name, "HUMAN_DAEMON_ID=" + opts.DaemonID, "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0"}
 	// Attribute the agent's commits to the bot so authorship alone separates
 	// agent work from developer work (SC-371). A config read failure must never
 	// fail the launch — fall back to the default identity.

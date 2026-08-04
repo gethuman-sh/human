@@ -7,7 +7,7 @@ argument-hint: <dispatched-key> [--branch=…] [--commits=…]
 `$ARGUMENTS` is `<DISPATCHED_KEY> [--branch=…] [--commits=…]`. The first token is the **dispatched key** — the ONE ticket this review is bound to. The optional `--branch=` and `--commits=` flags are the authoritative handoff binding the daemon derived: the exact branch and SHAs under review. Parse them out, then delegate to the **human-reviewer** agent, threading the binding through verbatim so the agent can verify the checked-out code IS this branch and these commits before reviewing:
 
 ```
-Task(subagent_type="human-reviewer", prompt="Review changes for ticket <DISPATCHED_KEY> --branch=<branch> --commits=<commits>")
+Task(subagent_type="human-reviewer", prompt="Review changes for ticket <DISPATCHED_KEY> --branch=<branch> --commits=<commits>", run_in_background=false)
 ```
 
 The dispatched key is fixed for the whole run. Every marker you post below goes on `<DISPATCHED_KEY>` and **no other ticket** — never re-derive a "PM ticket" from the reviewed diff or from whatever HEAD the worktree sits on. That re-derivation is the exact bug this binding closes: a review dispatched for one ticket must never post its verdict on another.

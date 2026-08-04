@@ -19,7 +19,7 @@ Run `human mockups chosen <KEY>` (the PM key this skill received). If it prints 
 Run the planner agent. It returns the plan as its output (no files written):
 
 ```
-Task(subagent_type="human-planner", prompt="Create an implementation plan for ticket $ARGUMENTS. Return the complete plan as your output. Do not write any files.")
+Task(subagent_type="human-planner", prompt="Create an implementation plan for ticket $ARGUMENTS. Return the complete plan as your output. Do not write any files.", run_in_background=false)
 ```
 
 Wait for the planner agent to finish. Capture its output as `<PLAN_CONTENT>`.
@@ -29,9 +29,9 @@ Wait for the planner agent to finish. Capture its output as `<PLAN_CONTENT>`.
 Launch both verification agents **in a single message** so they run in parallel. Pass the plan content inline using markers. Each agent returns its report as output (no files written):
 
 ```
-Task(subagent_type="plan-verify-code", prompt="Verify all code references in the following implementation plan against the actual codebase. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---")
+Task(subagent_type="plan-verify-code", prompt="Verify all code references in the following implementation plan against the actual codebase. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---", run_in_background=false)
 
-Task(subagent_type="plan-verify-docs", prompt="Verify all library, framework, and API assumptions in the following implementation plan against actual documentation and source. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---")
+Task(subagent_type="plan-verify-docs", prompt="Verify all library, framework, and API assumptions in the following implementation plan against actual documentation and source. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---", run_in_background=false)
 ```
 
 Wait for both agents to finish before proceeding.
