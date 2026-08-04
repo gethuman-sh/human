@@ -179,6 +179,26 @@ When a change was implemented from an engineering ticket that traces back to a P
 
 **ALWAYS** When commenting in code, comment on intentention and why, not on what or how.
 
+# Dependents
+
+Before changing a shared thing, enumerate what depends on it — and scope the
+query to the **kind** of thing, not to the call graph. Callers of a Go symbol are
+one kind of dependent; the ones that break in practice have no symbol and no call
+edge:
+
+| Kind | Query |
+|---|---|
+| function/type | `human codenav impact <qname> --depth 2` (never `--diff` — it needs a local index a container does not have) |
+| closed set of values | `rg -n '<literal>'` across the code **and** `rg -n '<literal>' internal/claude/embed/` |
+| stored format | every reader, tests included — and check whether any reads by position rather than by name |
+| instruction/convention | `rg -n '<distinctive phrase>' internal/claude/embed/` — the sibling prompts saying the same thing |
+
+Each dependent gets a disposition — examined-and-unchanged or
+examined-and-changed — and a kind whose query cannot be run is recorded as
+`unchecked`, never left silent. The shipped agents carry this as the shared
+`internal/claude/embed/shared/dependents.md` fragment; do not paraphrase it into
+a prompt, include it.
+
 # Process
 
 Use todo list as much as possible.
