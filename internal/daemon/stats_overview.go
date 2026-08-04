@@ -17,6 +17,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/stats"
 )
 
@@ -69,12 +70,17 @@ type StatsOverview struct {
 	ToolCalls        StatsHeadline            `json:"toolCalls"` // over range
 	Audit            StatsHeadline            `json:"audit"`     // over range
 	AgentRuns        StatsHeadline            `json:"agentRuns"` // over range
-	TokensPerHour    []claude.TokenHourBucket `json:"tokensPerHour"`
+	TicketCosts      []costledger.TicketSpend `json:"ticketCosts"`
 	TokensByModel    []claude.ModelTokens     `json:"tokensByModel"`
 	ToolsByTool      []stats.ToolCount        `json:"toolsByTool"`
 	AuditByDay       []AuditDayCount          `json:"auditByDay"`
 	NetworkDecisions []NetworkEvent           `json:"networkDecisions"` // live, ignores range
 }
+
+// statsTicketLimit bounds the cost-by-ticket panel. Long enough to show where a
+// range's money went, short enough that the panel stays a glance rather than a
+// report.
+const statsTicketLimit = 12
 
 // rangeSince maps a StatsRange to the start of its window relative to now.
 // An unknown range falls back to 24h, matching the route's default.
@@ -113,8 +119,26 @@ func (s *Server) buildStatsOverview(ctx context.Context, r StatsRange) (StatsOve
 	ov.Tokens.CacheCreate = scan.WindowCacheCreate
 	ov.Tokens.CacheRead = scan.WindowCacheRead
 	ov.Tokens.CostUSD = scan.WindowCostUSD
-	ov.TokensPerHour = scan.PerHour
 	ov.TokensByModel = scan.ByModel
+
+	// Cost by ticket replaces the per-hour burn: which hour the tokens were
+	// spent in is not a question anyone acts on, whereas which ticket spent
+	// them is (SC-3497). Best-effort like every other source here — no ledger,
+	// or a read that fails, yields an empty panel rather than failing the whole
+	// overview. Scoped to the project the board serves, the same first-entry
+	// convention boardProjectKey uses, so two projects' colliding keys can
+	// never be summed together.
+	if s.CostLedger != nil {
+		project := ""
+		if s.Projects != nil {
+			if entries := s.Projects.Entries(); len(entries) > 0 {
+				project = entries[0].Dir
+			}
+		}
+		if spend, err := s.CostLedger.TopTicketSpend(ctx, project, since, now, statsTicketLimit); err == nil {
+			ov.TicketCosts = spend
+		}
+	}
 
 	// Tool calls: panel breakdown plus the ok/error headline split.
 	if s.StatsStore != nil {

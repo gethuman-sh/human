@@ -208,7 +208,6 @@ func TestBuildStatsOverview_tokenScanCachedWithinTTL(t *testing.T) {
 		assert.Equal(t, 1000, ov.Tokens.CacheCreate)
 		assert.Equal(t, 1300, ov.Tokens.CacheRead)
 		assert.Equal(t, scan.WindowCostUSD, ov.Tokens.CostUSD)
-		assert.Equal(t, scan.PerHour, ov.TokensPerHour)
 		assert.Equal(t, scan.ByModel, ov.TokensByModel)
 	}
 }
