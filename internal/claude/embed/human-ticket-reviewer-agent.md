@@ -84,6 +84,21 @@ EOF
 The board reads `linked:` to show the pointed-at ticket on the decided card and make it reachable — the
 value must be a single bare ticket key (the `<TICKET_KEY>` form), nothing else.
 
+### A terminal verdict also needs a terminal marker
+
+`superseded`, `escalated` and `rejected` all mean **there is nothing to plan on this ticket**. The
+`[human:ticket-review]` marker records *why*, but it does not end the stage: it classifies as a
+backlog-stage marker, so a card that already carries `[human:planning-started]` still reads as planning
+in progress. Exiting there looks exactly like a crash — no plan, no terminal marker — and the board reds
+the card and relaunches you to reach the same verdict again. Post the planning stage's terminal marker
+alongside the verdict:
+
+```bash
+human marker post <KEY> nothing-to-do --field "evidence=<the verdict, and the key that carries the work>"
+```
+
+Then stop. `ready` and `reframed` never post it — planning continues on those.
+
 Post `ticket-review-started` first, so the card shows the gate running instead of sitting in Backlog
 looking idle.
 
