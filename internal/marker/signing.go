@@ -122,6 +122,22 @@ func (s *SigningProvider) AddComment(ctx context.Context, key, body string) (*tr
 	return s.Provider.AddComment(ctx, key, Sign(body, s.machine, s.build))
 }
 
+// AssignToReporter re-exposes an OPTIONAL capability of the wrapped provider.
+//
+// Embedding tracker.Provider promotes only the methods that interface declares,
+// so a capability callers reach by type assertion — one deliberately kept off
+// Provider so backends without it need not fake it — does not survive the wrap.
+// It is invisible: nothing fails to compile, the assertion simply returns false
+// and the caller concludes the tracker cannot do something it can. Every
+// optional capability added to a provider needs a line here.
+func (s *SigningProvider) AssignToReporter(ctx context.Context, key string) error {
+	assigner, ok := s.Provider.(tracker.ReporterAssigner)
+	if !ok {
+		return tracker.ErrOwnershipUnsupported
+	}
+	return assigner.AssignToReporter(ctx, key)
+}
+
 // SigningCommenter is the Commenter-narrowed twin of SigningProvider, for the
 // daemon's internal board posts which hold only a tracker.Commenter. It signs
 // AddComment bodies with the same Sign helper and delegates ListComments.
