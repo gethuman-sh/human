@@ -177,6 +177,16 @@ human marker post <PM_KEY> plan-ready
 
 `<PM_KEY>` is the original PM ticket key from the plan's `**PM ticket**:` header. This mirrors the `[human:ready-for-review]` handoff that `human-executor` posts after implementation.
 
+**This marker is what finishes a planning run.** Attaching the plan in Phase 5
+does not advance the card and neither does any state record — a plan comment is
+content, not a stage signal. A run that attaches a plan and stops here exits 0,
+looks successful in its own summary, and still reddens the card as a crash.
+Verify it landed before reporting anything:
+
+```bash
+human marker list <PM_KEY> | grep plan-ready
+```
+
 ## Retry budgets, flakes, and how this run may end
 
 The board's planning stage runs this skill, so it must recover like every other stage rather than stopping at the first failure.
@@ -191,22 +201,37 @@ human state get  <PM_KEY> budget.planning.attempts --default 0
 
 Infrastructure trouble — a dead container, a network blip — is never a real attempt; it is a `retryable` ending, and the board relaunches the stage automatically rather than reddening the card.
 
-Record the outcome before finishing, so the board can tell a glitch from a blocker:
+Record the outcome so the board can tell a glitch from a blocker:
 
 ```bash
 human state set <PM_KEY> stage.planning --json --body-file - <<'EOF'
 {"exit":"done",
- "outcome":"<plan-ready|nothing-to-do|decision-required>",
+ "outcome":"<planned|nothing-to-do|decision-required>",
  "summary":"<one line>",
  "evidence":"<the marker or ticket that carries the result>"}
 EOF
 ```
 
+**This state record is NOT the stage handoff, and writing it does not finish the
+run.** The board never reads agent state to advance a card — only the
+`[human:plan-ready]` marker from Phase 6 does that. Writing `exit: done` here
+while that marker is missing is the one combination that strands a card: the
+plan is attached and correct, the run exits 0, and the board still reads a crash
+and reddens it. If you have written this and not yet posted the Phase 6 marker,
+**go back and post it now** — that, not this record, is the last act of a
+planning run.
+
 <!-- human:include exit-contract -->
 
 ## After completion
+
+Before reporting, confirm the run actually ended: a planning run is finished
+only once `[human:plan-ready]` is on the PM ticket (or a terminal marker from
+Phase 3a/3b took its place). If it is not there, post it — do not report a plan
+as ready on the strength of the plan comment alone.
 
 Tell the user:
 - A short summary of the plan (3-5 bullet points: what will change, key files, risks)
 - Whether verification found issues and what was corrected
 - Where the plan landed: the engineering ticket key (split topology) or the `[human:plan]` comment on the ticket (single-tracker topology)
+- That `[human:plan-ready]` is posted, so the card can advance
