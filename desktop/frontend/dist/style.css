@@ -20,6 +20,13 @@
   --turn-done: var(--done);
   --drop-ok: #2f4a2f;
   --drop-reject: #4a2f2f;
+  /* How faint a card that is not yours renders. A token rather than a literal
+     because it is a presentation choice a theme may want to make differently —
+     a lighter appearance needs less of a drop to read as secondary — and
+     because "how strong is this hint" is the kind of value a person eventually
+     wants to set. Everything derived from it (hover, the degraded overlap)
+     follows automatically, so the relationships between them cannot drift. */
+  --not-mine-opacity: 0.35;
 }
 
 * {
@@ -757,24 +764,27 @@ body {
   cursor: not-allowed;
 }
 
-/* A ticket owned by someone other than the viewer (SC-3339): visibly secondary
-   but fully readable and fully interactive — dimming is a hint, never a
-   restriction, so this touches ONLY opacity (no cursor / pointer-events change,
-   unlike .degraded). opacity is relative to the card's backdrop, so it reads
-   correctly in the dark theme, the fancy theme, and any light appearance. */
+/* A ticket that is not the viewer's own (SC-3339, SC-3404): clearly secondary
+   at a glance, still readable, still fully interactive — dimming is a hint,
+   never a restriction, so this touches ONLY opacity (no cursor / pointer-events
+   change, unlike .degraded). At 0.6 the distinction was too weak to survive a
+   glance across a full column, which is the one job it has; hover returns the
+   card to full strength so reading someone else's work costs nothing. opacity
+   is relative to the card's backdrop, so it reads correctly in the dark theme,
+   the fancy theme, and any light appearance. */
 .card.not-mine {
-  opacity: 0.6;
+  opacity: var(--not-mine-opacity);
 }
 .card.not-mine:hover {
-  opacity: 0.9;
+  opacity: 1;
 }
-/* A card that is both degraded (fetch failure) and not-mine must stay at the
-   more restrictive .degraded dimming — otherwise equal-specificity cascade
-   order would let not-mine's lighter 0.6 win and make a degraded card read
-   LESS dim than a healthy one, undermining the ticket-1700 signal. The extra
-   class in the selector raises specificity above either rule alone. */
+/* A card that is both degraded (fetch failure) and not-mine must never read
+   LESS dim than either signal alone, or equal-specificity cascade order would
+   weaken whichever rule lost — undermining the ticket-1700 degraded signal.
+   The extra class raises specificity above either lone rule; the value stays
+   below both. */
 .card.degraded.not-mine {
-  opacity: 0.55;
+  opacity: calc(var(--not-mine-opacity) * 0.85);
 }
 
 /* Floating clone that follows the cursor during a pointer-drag. pointer-events

@@ -45,9 +45,19 @@ func TestMarkOwnership(t *testing.T) {
 			wantNotMine: false,
 		},
 		{
-			name:        "noOwner",
+			// SC-3404: a card nobody owns is not mine either. Leaving it bright
+			// made it indistinguishable from work I filed myself.
+			name:        "noOwnerIsNotMine",
 			card:        daemon.BoardViewCard{Assignee: "", Reporter: ""},
 			viewer:      []string{"Alice"},
+			wantNotMine: true,
+		},
+		{
+			// The one thing an unknown viewer must NOT do is dim the whole
+			// board: with nothing to compare against, no card is claimed.
+			name:        "unknownViewerLeavesUnownedCardAlone",
+			card:        daemon.BoardViewCard{Assignee: "", Reporter: ""},
+			viewer:      nil,
 			wantNotMine: false,
 		},
 		{
