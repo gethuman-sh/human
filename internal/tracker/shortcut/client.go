@@ -481,9 +481,13 @@ func (c *Client) AssignIssue(ctx context.Context, key string, userID string) err
 	return nil
 }
 
-// GetCurrentUser implements tracker.CurrentUserGetter.
+// GetCurrentUser implements tracker.CurrentUserGetter. The endpoint is
+// /api/v3/member ("Get Current Member Info"); /api/v3/member-info does not
+// exist and answers 404, which is what silently withheld the board's viewer
+// identity — and with it every ownership decision that depends on knowing who
+// is looking.
 func (c *Client) GetCurrentUser(ctx context.Context) (string, error) {
-	resp, err := c.doRequest(ctx, http.MethodGet, "/api/v3/member-info", "", nil, "")
+	resp, err := c.doRequest(ctx, http.MethodGet, "/api/v3/member", "", nil, "")
 	if err != nil {
 		return "", err
 	}
