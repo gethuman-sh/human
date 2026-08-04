@@ -77,21 +77,32 @@ type App struct {
 	// instead of preventing it again — see closeflow.go.
 	readyToQuit atomic.Bool
 	// currentUser is the authenticated PM-tracker user's display name, fetched
-	// once from the daemon and reused for the session (identity does not change
+	// from the daemon and reused for the session (identity does not change
 	// while the app runs). Feeds the board's ownership dimming (SC-3339); empty
-	// means "unknown", and no card is dimmed.
-	currentUser     string
-	currentUserOnce sync.Once
+	// means "unknown", and no card is dimmed. Only a *successful* fetch is
+	// memoized (currentUserResolved) — a transient failure (locked vault
+	// prompt, credential blip, daemon still on an older protocol) must not
+	// latch the board into "no dimming" for the rest of the process lifetime,
+	// since the desktop app is a long-lived tray process; the next refresh
+	// retries until it succeeds.
+	currentUserMu       sync.Mutex
+	currentUser         string
+	currentUserResolved bool
+	// currentUserFetch is the actual IPC call, indirected so viewerName's
+	// memoize-only-on-success retry logic can be exercised in a test without a
+	// running daemon. Always daemon.GetCurrentUserName outside tests.
+	currentUserFetch func(addr, token string) (string, error)
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
 // startup, so there is nothing to wire here.
 func NewApp() *App {
 	return &App{
-		ideas:   ideaspace.NewStore(ideaspace.DefaultPath()),
-		recents: recentprojects.NewStore(recentprojects.DefaultPath()),
-		prefs:   boardprefs.NewStore(boardprefs.DefaultPath()),
-		session: appsession.NewStore(appsession.DefaultPath()),
+		ideas:            ideaspace.NewStore(ideaspace.DefaultPath()),
+		recents:          recentprojects.NewStore(recentprojects.DefaultPath()),
+		prefs:            boardprefs.NewStore(boardprefs.DefaultPath()),
+		session:          appsession.NewStore(appsession.DefaultPath()),
+		currentUserFetch: daemon.GetCurrentUserName,
 	}
 }
 
@@ -254,16 +265,24 @@ func (a *App) CardsQuick() (BoardData, error) {
 }
 
 // viewerName returns the authenticated PM-tracker user's display name, fetched
-// once and cached for the session. A failure (older daemon, no PM identity)
-// degrades to an empty name: the board renders normally, just without the
-// mine/not-mine distinction.
+// once and cached for the session. A failure (older daemon, no PM identity,
+// transient credential/timeout error) degrades to an empty name for this call
+// only: the board renders normally, just without the mine/not-mine
+// distinction, and — because only success is memoized — the next call retries
+// instead of latching the failure in for the rest of the app's lifetime.
 func (a *App) viewerName(info daemon.DaemonInfo) string {
-	a.currentUserOnce.Do(func() {
-		name, err := daemon.GetCurrentUserName(info.Addr, info.Token)
-		if err == nil {
-			a.currentUser = name
-		}
-	})
+	a.currentUserMu.Lock()
+	defer a.currentUserMu.Unlock()
+
+	if a.currentUserResolved {
+		return a.currentUser
+	}
+	name, err := a.currentUserFetch(info.Addr, info.Token)
+	if err != nil {
+		return ""
+	}
+	a.currentUser = name
+	a.currentUserResolved = true
 	return a.currentUser
 }
 

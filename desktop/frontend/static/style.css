@@ -768,6 +768,14 @@ body {
 .card.not-mine:hover {
   opacity: 0.9;
 }
+/* A card that is both degraded (fetch failure) and not-mine must stay at the
+   more restrictive .degraded dimming — otherwise equal-specificity cascade
+   order would let not-mine's lighter 0.6 win and make a degraded card read
+   LESS dim than a healthy one, undermining the ticket-1700 signal. The extra
+   class in the selector raises specificity above either rule alone. */
+.card.degraded.not-mine {
+  opacity: 0.55;
+}
 
 /* Floating clone that follows the cursor during a pointer-drag. pointer-events
    must stay none so it never occludes elementFromPoint's drop-target hit-test.
