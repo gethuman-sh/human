@@ -23,6 +23,10 @@ const closeBusyPollInterval = 3 * time.Second
 // (busy check, dialog, waiting) happens on the goroutine spawned below; this
 // function only flips fast, lock-free flags and returns.
 //
+// It answers a window close only. A terminal Ctrl-C/SIGTERM never gets this
+// far — signalexit.go ends the process first — because a dialog inside the
+// window is no answer to a question asked from a console (SC-3292).
+//
 // Wails' own runtime.Quit re-invokes this hook (confirmed in wails v2's
 // platform frontends) — that is how a delayed "actually close now" is
 // expressed: stopAndQuit sets readyToQuit first, then calls runtime.Quit,
