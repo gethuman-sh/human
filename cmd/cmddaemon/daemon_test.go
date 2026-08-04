@@ -9,7 +9,28 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/vault"
 )
+
+// SC-3322: a held-off failure (the vault's backoff already left the store
+// alone) must not be reported again on every refresh, but a first, real
+// failure and an unrelated error must still surface.
+func TestShouldReportLoadFailure(t *testing.T) {
+	heldOff := errors.WithDetails("secret store left alone", "held_off", true)
+	realFailure := errors.WithDetails("secret store failed")
+	unrelated := errors.WithDetails("some other load failure")
+
+	assert.False(t, shouldReportLoadFailure(heldOff), "a held-off failure must not be reported again")
+	assert.True(t, shouldReportLoadFailure(realFailure), "the first, real failure must be reported")
+	assert.True(t, shouldReportLoadFailure(unrelated), "an unrelated load failure must be reported")
+
+	// Guard against the two constructions drifting apart: the vault package's
+	// own predicate must agree.
+	require.True(t, vault.IsHeldOff(heldOff))
+	require.False(t, vault.IsHeldOff(realFailure))
+}
 
 func TestDaemonStartCmd_InteractiveRequiresForeground(t *testing.T) {
 	t.Setenv(daemonChildEnv, "")

@@ -1961,6 +1961,31 @@ func rememberBoardView(cache *boardcache.Store, project string, view daemon.Boar
 	}
 }
 
+// shouldReportLoadFailure reports whether a load failure is news. A held-off
+// secret failure is the vault's backoff working: the store was not consulted at
+// all, and the first real failure already logged the full cause chain. Logging
+// it again on every 30s refresh is the flood this fix is about (SC-3322).
+func shouldReportLoadFailure(err error) bool { return !vault.IsHeldOff(err) }
+
+// logReportableLoadFailures logs every failure that is news, skipping the
+// held-off ones the vault's own backoff already reported once. Every failure
+// still counts as a load failure at the call site regardless of whether it is
+// logged here, so the board keeps reporting itself as degraded either way.
+func logReportableLoadFailures(failures []error, dir string) {
+	for _, failure := range failures {
+		if !shouldReportLoadFailure(failure) {
+			continue
+		}
+		// LogError renders the full cause chain AND the attached details (the
+		// secret reference, op's stderr, the exit code). Only the outermost
+		// message survives to the board banner, so the log is the one place
+		// the whole diagnosis lands — without it a recurring credential blip
+		// leaves nothing to debug after the fact (SC-2005).
+		errors.LogError(failure).Str("dir", dir).
+			Msg("board listing: tracker instances failed to load, continuing without them")
+	}
+}
+
 // listTrackerIssues collects every (instance, project) pair from the registry and
 // fetches their open issues in parallel (Phase 1). It returns the jobs aligned 1:1
 // with the results so a later comment scan can recover each result's provider
@@ -1977,15 +2002,7 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 	var loadFailures []error
 	for _, entry := range reg.Entries() {
 		instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
-		for _, failure := range failures {
-			// LogError renders the full cause chain AND the attached details (the
-			// secret reference, op's stderr, the exit code). Only the outermost
-			// message survives to the board banner, so the log is the one place
-			// the whole diagnosis lands — without it a recurring credential blip
-			// leaves nothing to debug after the fact (SC-2005).
-			errors.LogError(failure).Str("dir", entry.Dir).
-				Msg("board listing: tracker instances failed to load, continuing without them")
-		}
+		logReportableLoadFailures(failures, entry.Dir)
 		loadFailures = append(loadFailures, failures...)
 		for _, inst := range instances {
 			// A forge-only entry owns no projects and no issues; querying it with
