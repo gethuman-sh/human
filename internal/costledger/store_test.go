@@ -2,6 +2,7 @@ package costledger
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testModel is a model the rate card prices, so a test asserting on dollars is
+// asserting on pricing rather than on a zero.
+const testModel = "claude-opus-4-8"
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -169,4 +174,93 @@ func TestDefaultDBPath(t *testing.T) {
 	p := DefaultDBPath()
 	assert.Equal(t, "costledger.db", filepath.Base(p))
 	assert.Contains(t, p, ".human")
+}
+
+// TopTicketSpend ranks by money, not by call count or recency: the panel exists
+// to answer "where did this range's spend go", and the most expensive ticket is
+// the answer even when a chattier one made more calls.
+func TestTopTicketSpend_ranksByCostAndHonoursTheWindow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Cheap but chatty: many calls, few tokens.
+	for i := 0; i < 5; i++ {
+		require.NoError(t, s.InsertCall(ctx, CallRecord{
+			Project: "p", Ticket: "SC-CHATTY", Stage: "implementation", Model: testModel,
+			InputTokens: 10, OutputTokens: 10, DurationMs: 100, StartedAt: now.Add(-time.Hour),
+		}))
+	}
+	// Expensive: one call, a lot of context.
+	require.NoError(t, s.InsertCall(ctx, CallRecord{
+		Project: "p", Ticket: "SC-COSTLY", Stage: "verification", Model: testModel,
+		InputTokens: 5000, OutputTokens: 2000, CacheReadTokens: 900000, DurationMs: 5000,
+		StartedAt: now.Add(-time.Hour),
+	}))
+	// Outside the window: must not appear at all.
+	require.NoError(t, s.InsertCall(ctx, CallRecord{
+		Project: "p", Ticket: "SC-OLD", Stage: "implementation", Model: testModel,
+		InputTokens: 999999, OutputTokens: 999999, DurationMs: 9999,
+		StartedAt: now.Add(-72 * time.Hour),
+	}))
+	// Another project's ticket, same window: never summed in (AD5).
+	require.NoError(t, s.InsertCall(ctx, CallRecord{
+		Project: "other", Ticket: "SC-COSTLY", Stage: "implementation", Model: testModel,
+		InputTokens: 777777, OutputTokens: 777777, DurationMs: 7777, StartedAt: now.Add(-time.Hour),
+	}))
+
+	got, err := s.TopTicketSpend(ctx, "p", now.Add(-24*time.Hour), now, 10)
+	require.NoError(t, err)
+
+	require.Len(t, got, 2, "the stale row and the other project's row are both excluded")
+	assert.Equal(t, "SC-COSTLY", got[0].Ticket, "most expensive first, not most calls")
+	assert.Equal(t, "SC-CHATTY", got[1].Ticket)
+	assert.Greater(t, got[0].CostUSD, got[1].CostUSD)
+	assert.Equal(t, 905000, got[0].ContextTokens, "input + cache-create + cache-read")
+	assert.Equal(t, 2000, got[0].OutputTokens)
+	assert.InDelta(t, got[0].CostUSD, got[0].ContextCostUSD+got[0].AnswersCostUSD, 1e-9,
+		"the split must account for the whole cost")
+}
+
+// A ticket whose rows carry no tokens — every row written before the proxy read
+// usage off a compressed body (SC-3440) — still ranks, at zero. Dropping it
+// would hide that the work ran at all.
+func TestTopTicketSpend_keepsUnpricedTickets(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, s.InsertCall(ctx, CallRecord{
+		Project: "p", Ticket: "SC-BLIND", Stage: "prreview", DurationMs: 6387000, StartedAt: now.Add(-time.Hour),
+	}))
+
+	got, err := s.TopTicketSpend(ctx, "p", now.Add(-24*time.Hour), now, 10)
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "SC-BLIND", got[0].Ticket)
+	assert.Zero(t, got[0].CostUSD)
+	assert.Equal(t, int64(6387000), got[0].DurationMs, "the time it took is still known")
+}
+
+// The limit caps the panel, keeping the most expensive rather than an arbitrary
+// slice of the map.
+func TestTopTicketSpend_limitKeepsTheMostExpensive(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	for i, tokens := range []int{100, 5000, 200, 90000, 300} {
+		require.NoError(t, s.InsertCall(ctx, CallRecord{
+			Project: "p", Ticket: fmt.Sprintf("SC-%d", i), Stage: "implementation", Model: testModel,
+			OutputTokens: tokens, DurationMs: 10, StartedAt: now.Add(-time.Hour),
+		}))
+	}
+
+	got, err := s.TopTicketSpend(ctx, "p", now.Add(-24*time.Hour), now, 2)
+	require.NoError(t, err)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, "SC-3", got[0].Ticket, "90000 output tokens is the most expensive")
+	assert.Equal(t, "SC-1", got[1].Ticket)
 }
