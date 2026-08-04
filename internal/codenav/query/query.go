@@ -291,16 +291,22 @@ func wholeWordIn(hay, name string) bool {
 	if name == "" {
 		return false
 	}
-	for i := strings.Index(hay, name); i >= 0; i = strings.Index(hay[i+1:], name) + (i + 1) {
+	// Scanning from an advancing offset (rather than re-indexing a suffix and
+	// correcting the position) keeps an embedded near-miss from ending the
+	// search: "xBooking yBooking Booking" must still find the standalone one.
+	for off := 0; off <= len(hay)-len(name); {
+		i := strings.Index(hay[off:], name)
+		if i < 0 {
+			break
+		}
+		i += off
 		before := i == 0 || !isIdentByte(hay[i-1])
 		end := i + len(name)
 		after := end >= len(hay) || !isIdentByte(hay[end])
 		if before && after {
 			return true
 		}
-		if strings.Index(hay[i+1:], name) < 0 {
-			break
-		}
+		off = i + 1
 	}
 	return false
 }
