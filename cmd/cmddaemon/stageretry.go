@@ -53,7 +53,7 @@ func withStateStore(fn func(agentstate.Store) error) error {
 // while the record is ABSENT — closing the plainer half of the same
 // read-after-write race: an exit written just before this read landed, but not
 // yet visible to it (SC-2378).
-func stageExitClass(ctx context.Context, project, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (string, bool) {
+func stageExitClass(ctx context.Context, project, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (daemon.StageExit, bool) {
 	exit, found := readStageExitOnce(ctx, project, pmKey, stage, logger)
 	for try := 0; !found && try < prLoopReadRecheckTries-1; try++ {
 		select {
@@ -69,8 +69,8 @@ func stageExitClass(ctx context.Context, project, pmKey string, stage daemon.Boa
 // readStageExitOnce performs a single, non-retrying read of a stage's exit
 // class — extracted so stageExitClass can wrap it in the presence-settle
 // backoff above without duplicating the store/parse logic.
-func readStageExitOnce(ctx context.Context, project, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (string, bool) {
-	var exit string
+func readStageExitOnce(ctx context.Context, project, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (daemon.StageExit, bool) {
+	var exit daemon.StageExit
 	var found bool
 	err := withStateStore(func(store agentstate.Store) error {
 		entry, err := store.Get(ctx, project, pmKey, stageReportName(stage))
@@ -84,7 +84,8 @@ func readStageExitOnce(ctx context.Context, project, pmKey string, stage daemon.
 			// A stage report we cannot parse is not an outcome we can act on.
 			return jsonErr
 		}
-		exit, found = report.Exit, report.Exit != ""
+		// The parse boundary: a bare JSON string becomes the typed vocabulary here.
+		exit, found = daemon.StageExit(report.Exit), report.Exit != ""
 		return nil
 	})
 	if err != nil {

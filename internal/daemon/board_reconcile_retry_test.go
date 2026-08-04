@@ -27,7 +27,7 @@ func TestReconcileStuckRunning_RelaunchesAfterReddening(t *testing.T) {
 	attempts := 0
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false }, // died silently, no record
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false }, // died silently, no record
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -62,7 +62,7 @@ func TestReconcileStuckRunning_OpenSameStageOptionsIsCleanPause(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -98,7 +98,7 @@ func TestReconcileStuckRunning_RecordedStopVerdictIsNotAHang(t *testing.T) {
 			var relaunched []BoardStage
 			retry := StageRetry{
 				Max:      2,
-				Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+				Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 				Attempts: func(string, BoardStage) (int, error) { return 0, nil },
 				Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 			}
@@ -130,7 +130,7 @@ func TestReconcileStuckRunning_ContinueVerdictStillReds(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -160,7 +160,7 @@ func TestReconcileStuckRunning_OpenOptionsForEarlierStageIsCleanPause(t *testing
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -188,7 +188,7 @@ func TestReconcileOutage_RelaunchesWhenAgentDead(t *testing.T) {
 	attempts := 0
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -219,7 +219,7 @@ func TestReconcileOutage_SkipsWhenAgentAlive(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -250,7 +250,7 @@ func TestReconcileOutage_SignalBasedOutageRedriveDoesNotCharge(t *testing.T) {
 	attempts := 0
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false }, // nothing recorded
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false }, // nothing recorded
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -279,7 +279,7 @@ func TestReconcileOutage_WaitsUntilResumeTime(t *testing.T) {
 	}}
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { return true, nil },
 	}
@@ -308,7 +308,7 @@ func TestReconcileOutage_IgnoresNonOutageCards(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -331,7 +331,7 @@ func TestReconcileStuckRunning_RelaunchRespectsTheBudget(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 3, nil }, // already past the cap
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}

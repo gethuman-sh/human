@@ -38,7 +38,7 @@ func TestNextPRLoopAction(t *testing.T) {
 
 		// A completed fix re-reviews the pushed changes; anything else escalates.
 		{"fix done re-reviews", PRStageFix, PRFixDone, 1, 3, PRActionReview},
-		{"fix needs-input escalates", PRStageFix, ExitNeedsInput, 1, 3, PRActionEscalate},
+		{"fix needs-input escalates", PRStageFix, string(ExitNeedsInput), 1, 3, PRActionEscalate},
 		{"unknown fix outcome escalates", PRStageFix, "garbage", 1, 3, PRActionEscalate},
 		{"empty fix outcome escalates", PRStageFix, "", 1, 3, PRActionEscalate},
 
@@ -106,7 +106,7 @@ func TestEvaluatePRLoop(t *testing.T) {
 		{"fix done re-reviews",
 			[]tracker.Comment{rev(t0), fix(t1)}, PRLoopOutcome{FixExit: PRFixDone}, PRActionReview},
 		{"fix needs-input escalates",
-			[]tracker.Comment{rev(t0), fix(t1)}, PRLoopOutcome{FixExit: ExitNeedsInput}, PRActionEscalate},
+			[]tracker.Comment{rev(t0), fix(t1)}, PRLoopOutcome{FixExit: string(ExitNeedsInput)}, PRActionEscalate},
 		// The newest loop marker names the step that just finished, so a fix after
 		// a review is evaluated as a fix (its exit), not the stale review verdict.
 		{"latest marker decides the step",

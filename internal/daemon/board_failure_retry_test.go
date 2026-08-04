@@ -12,11 +12,11 @@ import (
 )
 
 // retryPolicyFor builds a policy that records what it was asked to do.
-func retryPolicyFor(outcome string, recorded bool, relaunched *[]BoardStage, resets *[]BoardStage) StageRetry {
+func retryPolicyFor(outcome StageExit, recorded bool, relaunched *[]BoardStage, resets *[]BoardStage) StageRetry {
 	attempts := 0
 	return StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return outcome, recorded },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return outcome, recorded },
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
 		Reset:    func(_ string, s BoardStage) { *resets = append(*resets, s) },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { *relaunched = append(*relaunched, s); return true, nil },

@@ -59,7 +59,7 @@ func TestReconcileStuckRunning_HungAgentIsStoppedReddenedAndRelaunched(t *testin
 	var attemptsCalled bool
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -91,7 +91,7 @@ func TestReconcileStuckRunning_DeadNoAgentStillCharges(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { attemptsCalled = true; return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -191,7 +191,7 @@ func TestReconcileStuckRunning_SilenceReapGivesUpAfterCap(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -219,7 +219,7 @@ func TestReconcileStuckRunning_SilenceReapGiveUpDedup(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -243,7 +243,7 @@ func TestReconcileStuckRunning_FailedStopDoesNotRelaunch(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return "", false },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
 		Attempts: func(string, BoardStage) (int, error) { return 1, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}

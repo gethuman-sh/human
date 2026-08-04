@@ -1,0 +1,24 @@
+version: "2"
+
+# Until now golangci-lint ran on its defaults with no config file. This keeps
+# that exact set (`default: standard`) and adds one linter, so enabling
+# exhaustiveness cannot silently change what else is enforced.
+linters:
+  default: standard
+  enable:
+    - exhaustive
+
+  settings:
+    exhaustive:
+      # Opt-in, not blanket. A repo-wide exhaustiveness sweep would flag every
+      # switch over BoardStage, BoardState, ChecksState and Category — hundreds
+      # of call sites, most of which genuinely want a default. Instead a switch
+      # that dispatches on a closed vocabulary marks itself `//exhaustive:enforce`
+      # and then MUST list every member: adding a value to that vocabulary breaks
+      # the build at the switches that decide on it, which is exactly the failure
+      # that shipped when ExitDone was added and classifyRelaunch's default
+      # swallowed it (SC-3376).
+      explicit-exhaustive-switch: true
+      # A `default` clause must not count as covering the missing members —
+      # a silent default is the bug being guarded against, not the remedy.
+      default-signifies-exhaustive: false

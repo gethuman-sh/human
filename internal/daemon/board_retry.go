@@ -10,20 +10,28 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
+// StageExit is the closed vocabulary an agent records in its stage report
+// before returning. It is a named type, not a bare string, so a switch that
+// decides on it can be marked `//exhaustive:enforce` and fail the build when a
+// member is added without being handled. That is not hypothetical: ExitDone
+// joined this vocabulary and classifyRelaunch's `default` silently swallowed
+// it, which stranded planning runs that had produced a good plan (SC-3376).
+type StageExit string
+
 // Exit classes an agent records in its stage report before returning. They are
 // the vocabulary of the prompts' exit contract; the board only has to tell
 // "another attempt could plausibly fix this" from "it could not".
 const (
-	ExitRetryable      = "retryable"
-	ExitNeedsInput     = "needs-input"
-	ExitNeedsHumanWork = "needs-human-work"
-	ExitDone           = "done"
+	ExitRetryable      StageExit = "retryable"
+	ExitNeedsInput     StageExit = "needs-input"
+	ExitNeedsHumanWork StageExit = "needs-human-work"
+	ExitDone           StageExit = "done"
 	// ExitOutage records that the substrate a stage needs was unreachable — a
 	// credential store timeout, a tracker it could not reach. The work was not
 	// attempted, so it is relaunched with backoff and NEVER charged against
 	// DefaultStageRetries (SC-2307). Distinct from ExitRetryable, which is a
 	// flake or a dead container that a bounded, immediate relaunch absorbs.
-	ExitOutage = "outage"
+	ExitOutage StageExit = "outage"
 )
 
 // ReapSilenceErrorType is the sentinel prefix the zombie sweep's synthesized
@@ -68,7 +76,7 @@ const DefaultStageRetries = 2
 type StageRetry struct {
 	// Outcome reports the exit class the stage recorded, and whether it
 	// recorded one at all.
-	Outcome func(pmKey string, stage BoardStage) (string, bool)
+	Outcome func(pmKey string, stage BoardStage) (StageExit, bool)
 	// Attempts increments and returns how many times this stage has been
 	// relaunched automatically.
 	Attempts func(pmKey string, stage BoardStage) (int, error)
@@ -136,15 +144,22 @@ const (
 // that had produced a perfectly good plan and only missed the marker. The
 // attempt cap bounds it, and a stage that really had finished re-posts a
 // latest-wins marker rather than duplicating work.
-func classifyRelaunch(outcome string, recorded bool) relaunchKind {
+func classifyRelaunch(outcome StageExit, recorded bool) relaunchKind {
 	if !recorded {
 		return relaunchBounded
 	}
+	// Every member is listed on purpose, and the linter enforces it: adding a
+	// StageExit without deciding here is the exact failure this switch already
+	// shipped once. The `default` stays as a runtime guard for a value read off
+	// the wire that the type system never saw.
+	//exhaustive:enforce
 	switch outcome {
 	case ExitOutage:
 		return relaunchOutage
 	case ExitRetryable, ExitDone:
 		return relaunchBounded
+	case ExitNeedsInput, ExitNeedsHumanWork:
+		return relaunchNone
 	default:
 		return relaunchNone
 	}
@@ -180,7 +195,7 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 	outcome, recorded := r.Outcome(pmKey, stage)
 	switch classifyRelaunch(outcome, recorded) {
 	case relaunchNone:
-		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("exit", outcome).
+		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("exit", string(outcome)).
 			Msg("board retry: stage exit is not retryable, leaving the card for a human")
 		return false
 	case relaunchOutage:
@@ -300,13 +315,13 @@ func (r StageRetry) recordedOutage(pmKey string, stage BoardStage) bool {
 // note records the automatic retry on the ticket so the trail shows why the
 // stage started again. It is a plain comment on purpose — a [human:*] header
 // would be classified as a stage marker and move the card.
-func (r StageRetry) note(ctx context.Context, pmKey string, stage BoardStage, attempt int, outcome string, recorded bool, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) {
+func (r StageRetry) note(ctx context.Context, pmKey string, stage BoardStage, attempt int, outcome StageExit, recorded bool, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) {
 	if commenter == nil {
 		return
 	}
 	reason := "the agent exited without recording an outcome"
 	if recorded {
-		reason = "the stage recorded exit: " + outcome
+		reason = "the stage recorded exit: " + string(outcome)
 	}
 	body := "Automatic retry " + strconv.Itoa(attempt) + "/" + strconv.Itoa(r.max()) + " of the " +
 		string(stage) + " stage — " + reason + "."

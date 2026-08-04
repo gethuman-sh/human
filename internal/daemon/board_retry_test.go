@@ -32,10 +32,10 @@ func (r *retryRecorder) AddComment(_ context.Context, _, body string) (*tracker.
 	return &tracker.Comment{}, nil
 }
 
-func (r *retryRecorder) policy(outcome string, recorded bool) StageRetry {
+func (r *retryRecorder) policy(outcome StageExit, recorded bool) StageRetry {
 	return StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return outcome, recorded },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return outcome, recorded },
 		Attempts: func(string, BoardStage) (int, error) { r.attempts++; return r.attempts, r.attemptErr },
 		Reset:    func(_ string, s BoardStage) { r.resets = append(r.resets, s) },
 		Relaunch: func(_ string, s BoardStage) (bool, error) {

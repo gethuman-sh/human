@@ -74,7 +74,7 @@ func TestReconcileOutage_HandsAnUnendingWaitToAPerson(t *testing.T) {
 	attempts := 0
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { attempts++; return attempts, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
@@ -110,7 +110,7 @@ func TestReconcileOutage_HandoverIsIdempotent(t *testing.T) {
 	}}
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
 		Relaunch: func(string, BoardStage) (bool, error) { return true, nil },
 	}
@@ -135,7 +135,7 @@ func TestReconcileOutage_WithoutAPosterKeepsWaiting(t *testing.T) {
 	var relaunched []BoardStage
 	retry := StageRetry{
 		Max:      2,
-		Outcome:  func(string, BoardStage) (string, bool) { return ExitOutage, true },
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return ExitOutage, true },
 		Attempts: func(string, BoardStage) (int, error) { return 0, nil },
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
