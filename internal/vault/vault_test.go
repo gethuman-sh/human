@@ -281,6 +281,168 @@ func TestResolver_Resolve_rotationIsPickedUpWhenTheEntryAgesOut(t *testing.T) {
 	assert.Equal(t, "rotated", val, "once it ages out the store is asked again")
 }
 
+// SC-3321: the window slides on use. A secret read continuously must not age
+// out on a schedule fixed at fetch time — that is what put a person back in the
+// machine's loop four times an hour, approving a dialog for a credential the
+// pipeline had been using all along.
+func TestResolver_Resolve_hitSlidesIdleWindow(t *testing.T) {
+	now := time.Unix(0, 0)
+	calls := 0
+	fail := false
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			if fail {
+				return "", errors.WithDetails("would raise an approval dialog")
+			}
+			calls++
+			return "token", nil
+		},
+	}
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+	r.maxTTL = time.Hour
+
+	val, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "token", val)
+
+	// A read inside the window pushes the deadline out to t0+40s+1m.
+	now = now.Add(40 * time.Second)
+	val, err = r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "token", val)
+
+	// Past the original t0+1m deadline, but inside the slid one: still served,
+	// and the provider (an approval dialog) is never reached.
+	now = now.Add(50 * time.Second)
+	fail = true
+	val, err = r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "token", val)
+	assert.Equal(t, 1, calls, "a secret in continuous use must not re-consult the store")
+}
+
+// The other half of the contract: idleness, not age, retires an entry. A secret
+// nobody asks for stops being held one window after its last use.
+func TestResolver_Resolve_idleSecretRetiredByLapse(t *testing.T) {
+	now := time.Unix(0, 0)
+	fail := false
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			if fail {
+				return "", errors.WithDetails("session expired")
+			}
+			return "secret", nil
+		},
+	}
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+	r.maxTTL = time.Hour
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+
+	// Nothing reads it for two windows, so nothing slid it.
+	now = now.Add(2 * time.Minute)
+	fail = true
+	_, err = r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session expired")
+}
+
+// SC-2183 reconciliation: sliding must not mean "held forever". However
+// continuously a secret is read, the absolute ceiling set at creation stands.
+func TestResolver_Resolve_cappedByMaxLifetime(t *testing.T) {
+	now := time.Unix(0, 0)
+	current := "first"
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve:    func(string) (string, error) { return current, nil },
+	}
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+	r.maxTTL = 3 * time.Minute
+
+	val, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "first", val)
+
+	current = "rotated"
+	// Read every 50s: each hit slides the idle window, so the entry survives
+	// well past a single window — but never past t0+3m.
+	for _, elapsed := range []time.Duration{50 * time.Second, 100 * time.Second, 150 * time.Second} {
+		now = time.Unix(0, 0).Add(elapsed)
+		val, err = r.Resolve("1pw://vault/item/field")
+		require.NoError(t, err)
+		assert.Equal(t, "first", val, "continuous use keeps the entry alive at %s", elapsed)
+	}
+
+	now = time.Unix(0, 0).Add(200 * time.Second)
+	val, err = r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "rotated", val, "the ceiling stands however continuously the secret is read")
+}
+
+// A cache_max_ttl shorter than cache_ttl has no coherent meaning, so it is
+// clamped up to one idle window rather than retiring entries early — a config
+// that only ever set cache_ttl must not start expiring sooner than it did.
+func TestResolver_Resolve_maxClampedToIdleWindow(t *testing.T) {
+	now := time.Unix(0, 0)
+	fail := false
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			if fail {
+				return "", errors.WithDetails("session expired")
+			}
+			return "secret", nil
+		},
+	}
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = 10 * time.Minute
+	r.maxTTL = time.Minute // misconfigured: shorter than the idle window
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+
+	// Well past the bogus ceiling but inside the idle window: still served.
+	now = now.Add(5 * time.Minute)
+	fail = true
+	val, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "secret", val, "the entry must live at least one idle window")
+
+	// Past the idle window it goes, as always.
+	now = now.Add(11 * time.Minute)
+	_, err = r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+}
+
+// The disable path is untouched by the sliding window: with cache_ttl at zero
+// nothing is stored, whatever the ceiling says.
+func TestResolver_Resolve_zeroTTLStillDisablesCache(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve:    func(string) (string, error) { return "secret", nil },
+	}
+	r := NewResolver(provider)
+	r.ttl = 0
+	r.maxTTL = time.Hour
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	assert.Empty(t, r.cache, "a non-positive cache_ttl must persist no plaintext")
+}
+
 // Disabling the cache restores asking every time, for anyone who wants that.
 func TestResolver_Resolve_disabledCacheAsksEveryTime(t *testing.T) {
 	calls := 0

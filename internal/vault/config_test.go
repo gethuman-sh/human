@@ -87,6 +87,44 @@ func TestConfig_cacheTTLDefaultsWhenUnset(t *testing.T) {
 	assert.Equal(t, DefaultCacheTTL, cfg.cacheTTL())
 }
 
+func TestReadConfig_cacheMaxTTLValid(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "vault:\n  provider: 1password\n  cache_max_ttl: 2h\n")
+
+	cfg, err := ReadConfig(dir)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "2h", cfg.CacheMaxTTL)
+	assert.Equal(t, 2*time.Hour, cfg.maxCacheTTL())
+}
+
+func TestReadConfig_cacheMaxTTLInvalidErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, "vault:\n  provider: 1password\n  cache_max_ttl: notaduration\n")
+
+	cfg, err := ReadConfig(dir)
+	require.Error(t, err)
+	assert.Nil(t, cfg)
+	assert.Contains(t, err.Error(), "cache_max_ttl")
+}
+
+func TestConfig_maxCacheTTLDefaultsWhenUnset(t *testing.T) {
+	cfg := &Config{Provider: "1password"}
+	assert.Equal(t, DefaultMaxCacheTTL, cfg.maxCacheTTL())
+}
+
+func TestNewResolverFromConfig_appliesCacheMaxTTL(t *testing.T) {
+	r := NewResolverFromConfig(&Config{Provider: "1password", CacheMaxTTL: "2h"})
+	require.NotNil(t, r)
+	assert.Equal(t, 2*time.Hour, r.maxTTL)
+}
+
+func TestNewResolverFromConfig_defaultCacheMaxTTL(t *testing.T) {
+	r := NewResolverFromConfig(&Config{Provider: "github"})
+	require.NotNil(t, r)
+	assert.Equal(t, DefaultMaxCacheTTL, r.maxTTL)
+}
+
 func TestNewResolverFromConfig_appliesCacheTTL(t *testing.T) {
 	r := NewResolverFromConfig(&Config{Provider: "1password", CacheTTL: "1m"})
 	require.NotNil(t, r)
