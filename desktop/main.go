@@ -21,6 +21,11 @@ var assets embed.FS
 func main() {
 	app := NewApp()
 
+	// Before wails.Run installs its own signal handler: a terminal Ctrl-C must
+	// end the app outright rather than being answered by the window's close
+	// dialog (SC-3292). See signalexit.go.
+	app.installConsoleExit()
+
 	// REGRESSION GUARD: this app must be built with `wails build` (make desktop)
 	// — NOT `go build ./desktop/`. Wails' main() requires the build tags that
 	// only `wails build`/`wails dev` inject; a plain `go build` links but the app
