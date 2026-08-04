@@ -12,10 +12,16 @@ import (
 type Config struct {
 	Provider string `mapstructure:"provider"`
 	Account  string `mapstructure:"account"`
-	// CacheTTL bounds how long a resolved secret is kept in memory as a lapse
-	// fallback, as a Go duration string (e.g. "15m", "0" to disable). Empty
-	// means DefaultCacheTTL.
+	// CacheTTL is the sliding idle window bounding how long an untouched
+	// resolved secret is kept in memory as a lapse fallback, as a Go duration
+	// string (e.g. "15m", "0" to disable). Every read refreshes it. Empty means
+	// DefaultCacheTTL.
 	CacheTTL string `mapstructure:"cache_ttl"`
+	// CacheMaxTTL is the absolute ceiling on how long a resolved secret stays
+	// in memory regardless of continuous use, as a Go duration string. Empty
+	// means DefaultMaxCacheTTL. It is clamped up to CacheTTL when shorter, so a
+	// config that sets only cache_ttl behaves sensibly (SC-3321 / SC-2183).
+	CacheMaxTTL string `mapstructure:"cache_max_ttl"`
 }
 
 // ReadConfig reads the vault section from .humanconfig in dir.
@@ -38,6 +44,11 @@ func ReadConfig(dir string) (*Config, error) {
 			return nil, errors.WrapWithDetails(err, "parsing vault cache_ttl", "value", cfg.CacheTTL)
 		}
 	}
+	if strings.TrimSpace(cfg.CacheMaxTTL) != "" {
+		if _, err := time.ParseDuration(cfg.CacheMaxTTL); err != nil {
+			return nil, errors.WrapWithDetails(err, "parsing vault cache_max_ttl", "value", cfg.CacheMaxTTL)
+		}
+	}
 	return &cfg, nil
 }
 
@@ -51,6 +62,20 @@ func (c *Config) cacheTTL() time.Duration {
 	d, err := time.ParseDuration(c.CacheTTL)
 	if err != nil {
 		return DefaultCacheTTL
+	}
+	return d
+}
+
+// maxCacheTTL returns the configured absolute cache ceiling, or
+// DefaultMaxCacheTTL when unset. Validated at ReadConfig time, so a parse
+// failure here falls back to the default rather than propagating.
+func (c *Config) maxCacheTTL() time.Duration {
+	if strings.TrimSpace(c.CacheMaxTTL) == "" {
+		return DefaultMaxCacheTTL
+	}
+	d, err := time.ParseDuration(c.CacheMaxTTL)
+	if err != nil {
+		return DefaultMaxCacheTTL
 	}
 	return d
 }
@@ -81,5 +106,6 @@ func NewResolverFromConfig(cfg *Config) *Resolver {
 		return nil
 	}
 	r.ttl = cfg.cacheTTL()
+	r.maxTTL = cfg.maxCacheTTL()
 	return r
 }
