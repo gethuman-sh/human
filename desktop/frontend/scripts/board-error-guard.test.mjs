@@ -48,8 +48,37 @@ function matchBrace(src, open) {
   return -1;
 }
 
-// Every branch that runs only when an action failed: `catch (e) { … }` blocks
-// and `.catch((e) => { … })` handlers.
+// Top-level (depth-1) comma-separated argument spans (as [start, end) index
+// pairs into `src`) of a call whose "(" is at `open`. Brace/bracket/paren
+// nesting inside an argument (e.g. an arrow function's block body) is not a
+// separator, only a comma back at the call's own depth is.
+function callArgs(src, open) {
+  let depth = 0;
+  let start = open + 1;
+  const args = [];
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === "(" || c === "{" || c === "[") depth++;
+    else if (c === ")" || c === "}" || c === "]") {
+      depth--;
+      if (depth === 0 && c === ")") {
+        args.push([start, i]);
+        return { args, close: i };
+      }
+    } else if (c === "," && depth === 1) {
+      args.push([start, i]);
+      start = i + 1;
+    }
+  }
+  return null;
+}
+
+// Every branch that runs only when an action failed: `catch (e) { … }`
+// blocks, `.catch((e) => { … })` handlers, and the onError argument of a
+// runGuardedAction(action, onError, onSuccess) call — the helper only
+// guarantees onSuccess never follows a throw, but onError's own body can
+// still show an error and reconcile together, reintroducing the clobber one
+// level in.
 function failureBranches(src) {
   const found = [];
   for (const [re, kind] of [
@@ -64,6 +93,23 @@ function failureBranches(src) {
       found.push({ kind, open, close, body: src.slice(open + 1, close) });
     }
   }
+
+  const guardRe = /\brunGuardedAction\s*\(/g;
+  let gm;
+  while ((gm = guardRe.exec(src))) {
+    const callOpen = gm.index + gm[0].length - 1;
+    const call = callArgs(src, callOpen);
+    if (!call || call.args.length < 2) continue;
+    const [argStart, argEnd] = call.args[1];
+    const onError = src.slice(argStart, argEnd);
+    const arrow = onError.match(/^\s*(?:async\s+)?\(?[^()]*\)?\s*=>\s*\{/);
+    if (!arrow) continue;
+    const open = argStart + arrow[0].length - 1;
+    const close = matchBrace(src, open);
+    if (close === -1 || close > argEnd) continue;
+    found.push({ kind: "guarded-onerror", open, close, body: src.slice(open + 1, close) });
+  }
+
   return found;
 }
 
@@ -144,4 +190,46 @@ test("the scanner detects both clobber shapes", () => {
   assert.equal(bannerClobberViolations(insideBranch).length, 1, "must catch a reconcile inside the branch");
   assert.equal(bannerClobberViolations(fallsThrough).length, 1, "must catch a fall-through reconcile");
   assert.deepEqual(bannerClobberViolations(guarded), [], "must accept a branch that returns first");
+});
+
+// The helper itself (runGuardedAction) only guarantees onSuccess never runs
+// after a throw — it says nothing about onError's own body, so an onError
+// callback that shows an error and reconciles together reintroduces the same
+// clobber one level in. Guard that shape too, and confirm the ordinary
+// onError body (revert + showError, no reconcile) is still accepted.
+test("the scanner treats a runGuardedAction onError callback as a failure branch", () => {
+  const clobberInOnError = `
+    async function act() {
+      await runGuardedAction(
+        () => go().Thing(),
+        (err) => {
+          showError(errMessage(err));
+          void reconcile();
+        },
+        reconcile,
+      );
+    }`;
+  const guardedOnError = `
+    async function act() {
+      await runGuardedAction(
+        () => go().Thing(),
+        (err) => {
+          card.hidden = prevHidden;
+          render();
+          showError(errMessage(err));
+        },
+        reconcile,
+      );
+    }`;
+
+  assert.equal(
+    bannerClobberViolations(clobberInOnError).length,
+    1,
+    "must catch a reconcile inside a runGuardedAction onError callback",
+  );
+  assert.deepEqual(
+    bannerClobberViolations(guardedOnError),
+    [],
+    "must accept an onError callback that reverts and shows an error without reconciling",
+  );
 });

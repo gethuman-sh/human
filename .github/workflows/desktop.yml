@@ -52,8 +52,16 @@ jobs:
           cache-dependency-path: desktop/frontend/package-lock.json
       - run: npm ci
         working-directory: desktop/frontend
-      # tsc emits to build/, which the behavioural tests import from.
+      # tsc emits to build/, which the behavioural tests import from. This also
+      # regenerates dist/ from bundle.mjs, so by the time the tests below read
+      # dist/board.js it is always freshly built from the current src/ — the
+      # dist half of board-error-guard.test.mjs would otherwise be tautological
+      # in CI, unable to catch a dist/ that lagged a fixed src/ the way it can
+      # locally. Diff dist/ against what's committed first so a stale dist/ is
+      # its own failure, distinct from the guard test.
       - run: npm run build
+        working-directory: desktop/frontend
+      - run: git diff --exit-code -- dist
         working-directory: desktop/frontend
       - run: npm test
         working-directory: desktop/frontend
