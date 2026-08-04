@@ -10,13 +10,25 @@ import (
 	"time"
 )
 
-// DefaultCacheTTL bounds how long a successfully resolved secret is kept in
-// memory as a lapse fallback. It covers a typical board run (secrets read at
-// push time must still resolve at deploy time, in a separate daemon request)
-// without letting plaintext linger indefinitely. Operators tighten or disable
-// it via the vault `cache_ttl` config field (a zero or negative TTL disables
-// caching entirely, restoring the strict no-persistence behaviour).
+// DefaultCacheTTL bounds how long an *untouched* resolved secret is kept in
+// memory as a lapse fallback. It is a sliding idle window: every read refreshes
+// it, so what retires an entry is idleness rather than age (SC-3321). It covers
+// a typical board run (secrets read at push time must still resolve at deploy
+// time, in a separate daemon request) without letting plaintext linger
+// indefinitely. Operators tighten or disable it via the vault `cache_ttl`
+// config field (a zero or negative TTL disables caching entirely, restoring the
+// strict no-persistence behaviour).
 const DefaultCacheTTL = 15 * time.Minute
+
+// DefaultMaxCacheTTL is the absolute ceiling on how long a resolved secret may
+// stay in memory, no matter how continuously it is used. The idle window
+// (cache_ttl) slides forward on every hit so an in-use secret never forces
+// re-approval (SC-3321); this bound is what stops "in continuous use" from
+// meaning "held forever", capping how long sealed plaintext lingers (SC-2183).
+// It comfortably covers a single unattended overnight run while remaining a
+// hard, day-bounded ceiling; operators tune it via the vault `cache_max_ttl`
+// field.
+const DefaultMaxCacheTTL = 24 * time.Hour
 
 // SecretProvider resolves a secret reference to its plaintext value.
 // Implementations must be safe for concurrent use.
@@ -42,8 +54,14 @@ type SecretProvider interface {
 // them, and a missed one fails an unrelated piece of work half a minute later
 // (SC-2173).
 //
+// The window slides: each read pushes the entry's expiry out by another
+// `cache_ttl`, so a secret the pipeline is actively using never forces a fresh
+// approval, while one nobody asks for is retired a window after its last use —
+// idleness, not age, is what retires it. An absolute `cache_max_ttl` ceiling
+// caps that sliding so continuous use never means held forever (SC-3321).
+//
 // The cost is the honest one for any cache: a rotated secret is picked up when
-// the entry ages out rather than instantly. The window is configurable, and a
+// the entry ages out rather than instantly. Both windows are configurable, and a
 // non-positive `cache_ttl` disables caching entirely for anyone who wants the
 // provider consulted every time.
 //
@@ -61,10 +79,15 @@ type SecretProvider interface {
 type Resolver struct {
 	providers []SecretProvider
 
-	ttl   time.Duration
-	now   func() time.Time
-	mu    sync.Mutex
-	cache map[string]cachedSecret
+	// ttl is the sliding idle window: an untouched entry expires after this,
+	// and every cache hit refreshes it (SC-3321).
+	ttl time.Duration
+	// maxTTL is the absolute lifetime ceiling; the sliding window may never
+	// push an entry's expiry past its creation + maxTTL (SC-2183).
+	maxTTL time.Duration
+	now    func() time.Time
+	mu     sync.Mutex
+	cache  map[string]cachedSecret
 	// inflight holds the resolution currently running for a reference, so
 	// callers that arrive while it runs wait for its result instead of raising
 	// a second approval prompt for the same secret.
@@ -84,8 +107,12 @@ type resolveCall struct {
 // that outlives a single call, so it is the copy a core file or a swap page
 // would capture (SC-2183).
 type cachedSecret struct {
-	value     sealed
+	value sealed
+	// expiresAt is the sliding idle deadline, refreshed on each hit.
 	expiresAt time.Time
+	// deadline is the fixed absolute ceiling set at creation; the idle
+	// deadline is never slid past it (SC-2183).
+	deadline time.Time
 }
 
 // NewResolver creates a Resolver with the given providers and the default
@@ -98,6 +125,7 @@ func NewResolver(providers ...SecretProvider) *Resolver {
 	return &Resolver{
 		providers: providers,
 		ttl:       DefaultCacheTTL,
+		maxTTL:    DefaultMaxCacheTTL,
 		now:       time.Now,
 		cache:     make(map[string]cachedSecret),
 		inflight:  make(map[string]*resolveCall),
@@ -193,8 +221,10 @@ func (r *Resolver) fromProviders(ref string) (string, error) {
 	return ref, nil
 }
 
-// remember stores a freshly resolved value as a lapse fallback for the TTL
-// window. A non-positive TTL disables caching so no plaintext persists. It
+// remember stores a freshly resolved value as a lapse fallback, with two
+// deadlines: the sliding idle window that reads refresh, and the fixed absolute
+// ceiling the sliding may never pass.
+// A non-positive TTL disables caching so no plaintext persists. It
 // also sweeps every expired entry from the cache, not just ref's: a secret
 // that resolves once and is never requested again would otherwise never be
 // evicted, since cached() only prunes the single key it is asked to read.
@@ -208,7 +238,25 @@ func (r *Resolver) remember(ref, val string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sweepExpiredLocked()
-	r.cache[ref] = cachedSecret{value: seal(val), expiresAt: r.now().Add(r.ttl)}
+	now := r.now()
+	deadline := now.Add(r.effectiveMaxTTLLocked())
+	expiresAt := now.Add(r.ttl)
+	if expiresAt.After(deadline) {
+		expiresAt = deadline
+	}
+	r.cache[ref] = cachedSecret{value: seal(val), expiresAt: expiresAt, deadline: deadline}
+}
+
+// effectiveMaxTTLLocked is the absolute ceiling clamped so it is never shorter
+// than one idle window: a max below the idle window has no coherent meaning, so
+// a config that sets only cache_ttl (with cache_ttl above the default max)
+// degrades to a single-window lifetime rather than a contradiction.
+// Callers must hold r.mu.
+func (r *Resolver) effectiveMaxTTLLocked() time.Duration {
+	if r.maxTTL < r.ttl {
+		return r.ttl
+	}
+	return r.maxTTL
 }
 
 // sweepExpiredLocked deletes every cache entry whose TTL has passed. Callers
@@ -222,8 +270,9 @@ func (r *Resolver) sweepExpiredLocked() {
 	}
 }
 
-// cached returns a still-fresh cached value for ref. An expired entry is
-// dropped on read so plaintext never outlives its TTL window.
+// cached returns a still-fresh cached value for ref, sliding its idle window
+// forward on the way out. An expired entry is dropped on read so plaintext
+// never outlives its window.
 func (r *Resolver) cached(ref string) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -231,7 +280,12 @@ func (r *Resolver) cached(ref string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if !r.now().Before(entry.expiresAt) {
+	now := r.now()
+	// Idle-expired, or past the absolute ceiling: drop it. The ceiling check is
+	// defensive — expiresAt is always kept <= deadline — but it makes the
+	// max-lifetime guard explicit and holds even if ttl is misconfigured above
+	// maxTTL.
+	if !now.Before(entry.expiresAt) || !now.Before(entry.deadline) {
 		delete(r.cache, ref)
 		return "", false
 	}
@@ -243,6 +297,15 @@ func (r *Resolver) cached(ref string) (string, bool) {
 		delete(r.cache, ref)
 		return "", false
 	}
+	// Slide the idle window forward on use, but never past the absolute
+	// deadline: an in-use secret does not force re-approval (SC-3321) yet still
+	// cannot live forever (SC-2183).
+	slid := now.Add(r.ttl)
+	if slid.After(entry.deadline) {
+		slid = entry.deadline
+	}
+	entry.expiresAt = slid
+	r.cache[ref] = entry
 	return val, true
 }
 
