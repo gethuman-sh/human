@@ -43,6 +43,17 @@ var buildGateFragment []byte
 //go:embed embed/shared/outcome-not-mechanism.md
 var outcomeNotMechanismFragment []byte
 
+// The dependents taxonomy is shared because the failure it guards against is
+// drift between the stage that lists a dependent and the stage that must act on
+// it: the enumerating instruction existed in seven prompts, each phrased its own
+// way, each scoped to Go call-graph symbols, while the dependencies that broke
+// had no symbol at all. One copy of the kind->query table, the disposition
+// vocabulary and the unchecked rule is what makes planner, verifier, implementer
+// and reviewer talk about the same thing.
+//
+//go:embed embed/shared/dependents.md
+var dependentsFragment []byte
+
 // sharedFragments are prompt blocks that must read identically in every skill
 // and agent that carries them. Keeping one copy here and substituting it at
 // install time is what stops twenty prompts from drifting apart, which is how
@@ -53,6 +64,7 @@ var sharedFragments = map[string][]byte{
 	"stage-lease":           stageLeaseFragment,
 	"build-gate":            buildGateFragment,
 	"outcome-not-mechanism": outcomeNotMechanismFragment,
+	"dependents":            dependentsFragment,
 }
 
 // fragmentArgs names the arguments each shared fragment requires. A fragment
