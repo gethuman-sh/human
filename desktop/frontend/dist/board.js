@@ -1439,21 +1439,19 @@ function reorderWithinQueue(queue, key, dropY) {
         midpoints.push(r.top + r.height / 2);
     }
     const keys = insertKeyAt(resting, midpoints, key, dropY);
+    // Snapshot the whole map rather than this queue's entry alone, so the revert
+    // below restores the exact prior state — including a queue that had no
+    // hand-order at all, which a per-entry undo cannot express.
+    const prevColumnOrder = current.columnOrder ? { ...current.columnOrder } : undefined;
     if (!current.columnOrder)
         current.columnOrder = {};
-    const order = current.columnOrder;
-    const hadOrder = queue in order;
-    const prevOrder = order[queue];
-    order[queue] = keys;
+    current.columnOrder[queue] = keys;
     render();
     void runGuardedAction(() => go().SetColumnOrder(queue, keys), (err) => {
         // Undo the optimistic reorder here rather than letting a reconcile do it
         // — a reconcile would overwrite current.error with the (empty) fetch
         // error and the failure would flash away unseen (SC-637).
-        if (hadOrder)
-            order[queue] = prevOrder;
-        else
-            delete order[queue];
+        current.columnOrder = prevColumnOrder;
         render();
         showError(errMessage(err));
     },
