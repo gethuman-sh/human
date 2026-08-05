@@ -151,7 +151,7 @@ const (
 	// newest done-stage marker the badge reads "PR review…", so without this the
 	// card kept claiming a review was in flight for the whole of the CI gate,
 	// rebase and merge.
-	PRReviewPassedHeader = "[human:pr-review-passed]"
+	PRReviewPassedHeader = "[human:pr-review-passed]" // #nosec G101 -- a marker header; "Passed" trips the credential-name heuristic
 
 	// DeployFixStartedHeader marks the deploy stage's automated fixer sub-phase
 	// (SC-1557): a CI failure or rebase conflict at the deploy gate dispatches the
