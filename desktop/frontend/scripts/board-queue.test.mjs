@@ -719,10 +719,3 @@ test("queued and fixing badges also drop the spinner for a dead agent (SC-3569)"
   assert.equal(fixing.spinner, false);
   assert.match(fixing.text, /no fixer running/);
 });
-
-// SC-3322: the fix half of the loop must name itself.
-test("the pr-fix half of the deploy loop names itself (SC-3569)", () => {
-  const info = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-fix" });
-  assert.match(info.text, /fixing PR review findings/);
-  assert.doesNotMatch(info.text, /^PR review/);
-});

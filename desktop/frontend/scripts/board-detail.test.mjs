@@ -350,6 +350,7 @@ test("a dead card's elapsed time is not labelled running (SC-3569)", () => {
     "implementation",
     new Date(now - 50_400_000).toISOString(), // 14h ago
     now,
+    undefined,
     "dead",
   );
   assert.match(html, /14h 0m/, "the number itself is still shown");
@@ -361,7 +362,7 @@ test("an elsewhere card names the other machine rather than claiming local progr
   const now = Date.now();
   const html = buildCostSection(
     { ticket: "SC-1", hasSpend: true, totalCostUSD: 1.0, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
-    "implementation", new Date(now - 60_000).toISOString(), now, "elsewhere",
+    "implementation", new Date(now - 60_000).toISOString(), now, undefined, "elsewhere",
   );
   assert.doesNotMatch(html, /running/);
   assert.match(html, /another machine/);
