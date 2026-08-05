@@ -837,6 +837,15 @@ func TestResolver_Resolve_heldFailureKeepsItsCause(t *testing.T) {
 	assert.True(t, stderrors.Is(heldErr, ErrStoreUnreachable))
 	assert.True(t, IsSecretFailure(heldErr))
 	assert.True(t, IsHeldOff(heldErr))
+
+	// The held error's Error() is the only text that survives a daemon->client
+	// hop (SC-2005): it must still name the original diagnosis, not just the
+	// fact that a hold is in effect, or an operator sees no remedy for the
+	// duration of the outage.
+	assert.Contains(t, heldErr.Error(), "op timed out",
+		"the held error's message must still carry the original diagnosis")
+	assert.Contains(t, heldErr.Error(), "not retried yet",
+		"the held error's message must still name the remedy/hold")
 }
 
 // The hold is per-reference: one held reference must not block resolution of

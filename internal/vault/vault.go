@@ -252,14 +252,13 @@ func (r *Resolver) fromProviders(ref string) (string, error) {
 		// value is served below), so record the hold before deciding what to
 		// return — that is what stops the next poll from re-probing the store
 		// the moment a stale value's own TTL runs out.
-		first := r.rememberFailure(ref, lastErr)
+		first, hold := r.rememberFailure(ref, lastErr)
 		if first {
-			hold := r.currentHold(ref)
 			log.Warn().Str("error", errors.CauseChain(lastErr)).Fields(errors.AllDetails(lastErr)).
 				Str("ref", ref).Str("hold", hold.String()).
 				Msg("vault: secret store failed; leaving it alone before retrying")
 		} else {
-			log.Debug().Str("ref", ref).Str("hold", r.currentHold(ref).String()).
+			log.Debug().Str("ref", ref).Str("hold", hold.String()).
 				Msg("vault: secret store failed again; extending the hold")
 		}
 
@@ -342,8 +341,17 @@ func (r *Resolver) heldFailure(ref string) error {
 	if !ok || !r.now().Before(state.retryAt) {
 		return nil
 	}
+	// The wrap message, not the wrapped cause, is what survives to a user: tozd's
+	// Wrapf makes Error() return the outer message alone, dropping whatever the
+	// cause said (see the invariant opFailure documents, SC-2005). Held-off
+	// resolution is what serves nearly every read during an outage, so a message
+	// naming only "not consulted again yet" leaves the operator with no remedy
+	// text anywhere once the single startup warn has scrolled by. Prefixing the
+	// cause's own Error() keeps the actionable diagnosis (e.g. "op timed out
+	// after 30s ... unresponsive or waiting on an unlock prompt") in the text
+	// that actually reaches a CLI or board banner.
 	return errors.WrapWithDetails(state.err,
-		"secret store left alone after a failed read of "+ref+"; not consulted again yet",
+		state.err.Error()+" - not retried yet; the store is being left alone for "+state.hold.String()+" (retry at "+state.retryAt.Format(time.RFC3339)+")",
 		"ref", ref, heldOffDetail, true, "hold", state.hold.String(), "retry_at", state.retryAt.Format(time.RFC3339))
 }
 
@@ -352,19 +360,23 @@ func (r *Resolver) heldFailure(ref string) error {
 // remember is: failure state holds no plaintext, and an operator who sets
 // cache_ttl: 0 to keep secrets out of memory still must not spawn hundreds of
 // approval requests.
-func (r *Resolver) rememberFailure(ref string, err error) (firstFailure bool) {
+//
+// Returns the hold it just wrote alongside firstFailure so a caller never has
+// to re-take the lock to read it back: a concurrent clearFailure between the
+// write here and a separate currentHold read would otherwise log hold=0s.
+func (r *Resolver) rememberFailure(ref string, err error) (firstFailure bool, hold time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.failures == nil {
 		r.failures = make(map[string]failureState)
 	}
 	prev, existed := r.failures[ref]
-	hold := r.holdInitialOrDefault()
+	hold = r.holdInitialOrDefault()
 	if existed {
 		hold = min(prev.hold*2, r.holdMaxOrDefault())
 	}
 	r.failures[ref] = failureState{err: err, hold: hold, retryAt: r.now().Add(hold)}
-	return !existed
+	return !existed, hold
 }
 
 // clearFailure forgets ref's failure after a successful read, so the next
@@ -375,15 +387,6 @@ func (r *Resolver) clearFailure(ref string) (recovered bool) {
 	_, existed := r.failures[ref]
 	delete(r.failures, ref)
 	return existed
-}
-
-// currentHold returns the hold currently on record for ref, for logging. It is
-// only ever called right after rememberFailure has written an entry for ref, so
-// the zero value it falls back to is never actually observed.
-func (r *Resolver) currentHold(ref string) time.Duration {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.failures[ref].hold
 }
 
 // holdInitialOrDefault and holdMaxOrDefault fall back to the package defaults
