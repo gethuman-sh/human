@@ -136,12 +136,23 @@ func (a *App) Cards() (BoardData, error) {
 		return BoardData{}, err
 	}
 
+	// Instance discovery is a Docker round-trip. Running it beside the board
+	// fetch keeps the reconcile's wall time at max(fetch, discovery) rather than
+	// their sum — the parallel shape monitor.FetchHeavy uses for the same reason.
+	var live board.LiveAgents
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		live = liveBoardAgents(info.DaemonID)
+	}()
 	view, results, err := a.boardView(info)
+	wg.Wait()
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info), a.boardAppearance(info))
+	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info), a.boardAppearance(info), live)
 	// The keep sets come from `results` — the same fetch CanPrune judges — not
 	// from the composed view, which is a separate request that can answer with
 	// an empty board while this one is healthy (SC-2400).
@@ -271,7 +282,10 @@ func (a *App) CardsQuick() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info), a.boardAppearance(info)), nil
+	// The quick path never blocks on a Docker round-trip (that is what makes it
+	// quick), so it leaves liveness unknown; the full Cards() reconcile that
+	// follows fills it in a moment later.
+	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info), a.boardAppearance(info), board.LiveAgents{}), nil
 }
 
 // viewerIdentity returns the names that mean "me" for the board's ownership
@@ -371,17 +385,22 @@ func (a *App) boardView(info daemon.DaemonInfo) (daemon.BoardView, []daemon.Trac
 // boardFromResults composes the shared board and then applies this viewer's own
 // overlay. The split is the point: Compose produces what is true of the project,
 // applyLocal adds what is true only of the person looking.
-func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity, dimPercent int) BoardData {
-	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs, viewer, dimPercent)
+func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity, dimPercent int, live board.LiveAgents) BoardData {
+	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs, viewer, dimPercent, live)
 }
 
 // applyLocal fills the fields Compose deliberately leaves blank because they
 // belong to the viewer, not the project: the idea-space sub-column, the locally
-// generated mockup links, the hand-sorted column order, and the hide flag.
+// generated mockup links, the hand-sorted column order, the hide flag, and
+// whether an agent is actually alive behind each card.
 //
 // Hidden cards are marked, not dropped — the frontend filters them so a user can
 // reveal them without a refetch, which is why Compose returns them at all.
-func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity, dimPercent int) BoardData {
+//
+// live is what this machine could see of running agents; a zero LiveAgents (nil
+// Names) means it could not look, and every card then renders exactly as it did
+// before liveness existed.
+func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity, dimPercent int, live board.LiveAgents) BoardData {
 	view.ColumnOrder = prefs.Columns
 	for i := range view.Cards {
 		c := &view.Cards[i]
@@ -396,6 +415,9 @@ func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string
 	}
 	// Ownership is viewer-local, like Hidden: dim cards owned by someone else.
 	board.MarkOwnership(view.Cards, viewer)
+	// Liveness is viewer-local for the same reason ownership is: only this
+	// machine can see its own containers, and only it knows its own daemon id.
+	board.MarkAgentLiveness(view.Cards, live)
 	// The dimming STRENGTH is viewer-local for the same reason the identity is:
 	// both are declared in this machine's .humanconfig, and neither belongs to
 	// the shared board Compose returns.
