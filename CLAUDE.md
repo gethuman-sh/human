@@ -67,6 +67,18 @@ The `human-executor` agent posts this comment automatically as its final step. A
 
 Do NOT use a custom tracker status for review signalling — that would require every team to reconfigure their tracker. Comments are the universal primitive.
 
+# Pipeline state machine
+
+`docs/pipeline-fsm.json` describes how one item — a ticket — moves through the pipeline: every state, every transition, and for each transition the actor that causes it (user, daemon, or skill), the skill that does the work, the marker that records it, and where in the code or the prompt it is implemented. It describes the system **as it is**.
+
+**Read it before you plan.** Any change to the derivation, the launchers, the reconcile passes, the marker vocabulary, the board rendering, or any agent prompt that posts a marker: read the document first and plan the change against it, naming the states and transitions you add, remove or redefine. Planning a pipeline change without reading it is how the same bug gets reintroduced under a new number.
+
+**Update it in the same commit.** A commit that moves the machine but not its description leaves the two to drift, which is the failure the document exists to prevent.
+
+A prompt saying "after X, post Y" is a definition of a transition, exactly as much as the Go code that reads Y. Both belong in the document, and a transition that exists in one but not the other is the bug.
+
+`docs/reaper.md` is its companion along the other axis: the FSM document follows one ticket, the reaper document follows one container — every condition under which the machine kills an agent (the zombie sweep, the silence reap, the stuck-running and orphan reconcile passes, close-is-cancellation), what it deliberately spares, what the reap costs the ticket's retry budget, and what artifacts it leaves behind. Same rules: read it before changing the sweep, the idle budgets, or any path that stops an agent, and update it in the same commit.
+
 # Daemon
 
 When the human daemon is running, all CLI commands (except `daemon`, `install` and `init`) are automatically forwarded to it. The daemon holds all tracker credentials on the host — **do NOT set tokens manually when the daemon is running**. Just run `human` commands directly.

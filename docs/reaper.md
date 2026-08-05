@@ -1,0 +1,303 @@
+# The reaper — when a container/agent is killed
+
+Every pipeline stage runs as one agent: a devcontainer holding a claude process,
+a private git worktree, and an execution log directory. Something has to end
+that run. This document lists **every condition under which the machine ends an
+agent**, what it spares, what it costs the ticket, and what it leaves behind.
+
+It describes the system **as it is**. Its companion is
+[`pipeline-fsm.json`](pipeline-fsm.json): that document follows one *ticket*
+through its states; this one follows one *container*. They meet at the marker a
+reap produces — a reap is how a stage transition happens when nobody posted a
+marker on the way out.
+
+Read this before changing the zombie sweep, the reconcile passes, the idle
+budgets, or anything that stops an agent. Change the code and this document in
+the same commit.
+
+## The three signals
+
+The machine never asks the agent whether it is alive. It has three signals, and
+every rule below is built from them:
+
+| Signal | Source | What it proves |
+| --- | --- | --- |
+| **Process liveness** | `pgrep -x claude` inside the container, every 5s | The process exists. A *hung* agent looks perfectly healthy here. |
+| **Hook events** | The agent's Claude hooks POST to the daemon (`PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SessionEnd`) | The agent did something observable, and when. |
+| **Outstanding model request** | The daemon's own proxy: a request sent and not yet answered (`internal/daemon/inflight.go`) | The agent is thinking. No cooperation from the agent required. |
+
+The third exists because the first two together still misjudge a thinking agent:
+extended reasoning emits no hook event and streams no output. Transcript mtime
+and streamed-output heartbeats were both tried and disproven; the proxy's own
+in-flight state replaced them (SC-3074).
+
+Progress is tracked per agent in its own map (`internal/daemon/agentprogress.go`),
+not derived from the event ring — the ring evicts under load and is empty after a
+restart, and losing progress that way kills live work.
+
+## Idle budgets
+
+`AgentProgress.Stalled` (`internal/daemon/agentprogress.go`) is the single
+definition of "hung", and it is two numbers, not one:
+
+| Condition | Budget | Constant |
+| --- | --- | --- |
+| No outstanding work at all | **3 minutes** of silence | `IdleGrace` |
+| Inside a tool call **or** a model request in flight | **30 minutes** of silence | `WorkingIdleGrace` |
+| Waiting on a human (`Notification` — a permission prompt) | **never stalls** | `Blocked` |
+
+Waiting on a local tool call and waiting on the model are the same thing from
+the outside — outstanding work, from two sources — so either earns the generous
+bound. Genuine idleness, with neither, gets the short one. A single fixed
+timeout was wrong in both directions at once: it killed running test suites and
+still made real hangs wait.
+
+## Every condition that ends an agent
+
+### 1. Clean finish — the session ended
+
+**Owner:** `RunAgentCleanup` (`internal/daemon/agentcleanup.go`), subscribed to
+the hook event store.
+
+A `Stop`, `SessionEnd`, or `StopFailure` event for an agent triggers a full
+`Delete` (container stopped and removed, meta deleted) one second later — the
+delay lets claude finish exiting. Events are tracked by monotonic sequence, not
+by agent name: board stage agents reuse the same deterministic name on every
+rebuild, and a name-keyed dedupe leaked the re-run's container and worktree
+(SC-201).
+
+This is the normal path. Everything below is the machine deciding for itself.
+
+### 2. Zombie sweep — claude is gone
+
+**Owner:** `RunAgentZombieSweep` (`internal/daemon/agentzombiesweep.go`), every
+5 seconds.
+
+An agent is reaped when its container is running, it is older than the 10-second
+`zombieGracePeriod`, and `pgrep -x claude` reports nothing. This catches claude
+failing to start, crashing without firing hooks, or a killed tmux pane.
+
+**Spared:** an agent started without a prompt (bare `human agent start NAME`)
+never launches claude at all. It is reaped only once claude has been *observed*
+running for it at least once (`seenClaude`) — otherwise a deliberately idle
+agent dies within seconds of coming up (SC-236). That spare is absolute; it
+survives even the escalation below.
+
+### 3. Zombie sweep — the container is unreachable
+
+**Owner:** same loop.
+
+A liveness check can fail transiently (the container removed between list and
+check), which is tolerated by skipping the tick. But a post-suspend Docker/exec
+disruption fails *persistently*, every tick, and left unbounded it skips the reap
+forever while the board card spins at "reviewing…" (SC-263). After
+`zombieMaxProcessCheckFailures` = **3 consecutive failures** (~15s at the 5s
+interval) the agent is presumed unreachable-and-dead and reaped. A single
+successful check clears the streak.
+
+### 4. Zombie sweep — silence reap (board agents only)
+
+**Owner:** same loop, via `hungBoardAgent`.
+
+claude is *still running* but the agent has been silent past its idle budget
+(§ Idle budgets). Process liveness alone reports such an agent as healthy
+forever, so this is the only rule that can ever catch a hang (SC-1600).
+
+It applies **only to board stage agents** — names of the form
+`board-<KEY>-<stage>`. An interactive agent is deliberately excluded: a human
+thinking between turns looks identical to a hang, and reaping it discards live
+work.
+
+The reap carries its reason out as a sentinel: the synthesized `StopFailure`
+event's `ErrorType` is `reaped-silent:<idle>` (`ReapSilenceErrorType`), which
+routes the exit to the **uncharged** relaunch instead of the charged failure path
+(SC-2447). See § What a reap costs.
+
+### 5. Reconcile — stuck-running card, agent alive but stalled
+
+**Owner:** `reconcileStuckRunning` / `hungLiveAgent`
+(`internal/daemon/board_reconcile.go`), every `BoardReconcileInterval` = 2
+minutes ± 50% jitter.
+
+The durable twin of the silence reap, working from the *card* rather than the
+container. All of these must hold:
+
+- the card derives to a running state, with no active PR review→fix loop;
+- it carries no open `[human:options]` block for its own stage or an earlier one
+  (that is a deliberate human pause, not a hang);
+- its stage has a `*-failed` marker header available;
+- it has sat past `StuckRunningGrace` = **15 minutes**;
+- it passed the `forTakeover` ownership gate — this machine participates in the
+  project, no peer daemon owns the stage, and the branch resolves here (SC-2047);
+- and the stage agent, which *is* alive on this machine, reports stalled.
+
+Then the agent is stopped (a full `DeleteAgent` under a 60s timeout) *before*
+anything relaunches — otherwise two agents work the same stage — and the card is
+reddened with the silence-reap wording.
+
+A stop that fails, or a `stopAgent` that is unwired, leaves the card alone. So
+does an agent the progress probe does not know about: killing live work on absent
+evidence is the one failure this must never risk.
+
+### 6. Reconcile — stuck-running card, agent vanished
+
+Same pass, same preconditions, but no agent for `(key, stage)` is alive at all.
+Nothing is reaped here — the container is already gone. This is the fallback for
+a death the live failure watcher missed (a daemon restart, a dropped event), and
+unlike § 5 it is a genuine unexplained death, so it reds the card and relaunches
+on the **charged** path.
+
+### 7. Reconcile — orphaned on a closed ticket
+
+**Owner:** `reconcileOrphanedAgents` (`internal/daemon/board_reconcile_orphan.go`).
+
+A board agent whose PM key matches no open card, and whose ticket a
+`ClosedTicketProbe` **confirms** is done/closed, is stopped. Such a run would
+otherwise keep working invisibly against a closed ticket — holding its container
+and worktree, posting markers, even pushing commits for work the user called off.
+
+It works from the agent side, so a healthy board costs nothing: an agent matching
+an open card is dismissed without a tracker call. Every uncertainty resolves to
+*leave it running* — an unparseable agent name, a probe error, or a ticket merely
+absent from the open list rather than confirmed closed. Absence is not proof; a
+flaky per-ticket fetch looks the same.
+
+### 8. Close is cancellation
+
+**Owner:** `StopAgentsForPMKey` (`internal/daemon/close_cancel.go`), called from
+the close gate before the ticket transitions.
+
+Closing a ticket from the board reads to the user as "stop this", so it stops
+every live board agent claiming that key, across all stages, within a 90-second
+budget. The close is **gated** on it: if the stop cannot be confirmed for every
+agent — or the liveness probe itself failed — the ticket stays open, and thus
+stays reachable by the reconcile net, rather than closing over a run that refused
+to die.
+
+### 9. Pre-launch teardown of a same-named agent
+
+`Manager.Start` refuses to start over a still-running agent, so the launchers for
+the singleton scan agents (`features`, `findbugs`, `findsecurity`, `mockups-<slug>`)
+delete any prior agent of that name first. This makes a retry after a stale or
+crashed run idempotent.
+
+### 10. A person asks
+
+`human agent stop NAME` runs the same `Manager.Stop` choke point as everything
+above.
+
+## What is never reaped
+
+Collected in one place, because the spares are the load-bearing part:
+
+- **An agent blocked on a permission prompt.** It is waiting for a person; a
+  relaunch discards the question instead of answering it.
+- **An interactive (non-board) agent that is silent.** Only a board stage agent's
+  silence is unambiguous.
+- **An idle-by-design agent** (started with no prompt) that has never been seen
+  running claude.
+- **An agent the progress probe does not know about** — a restarted daemon, or an
+  agent that has not emitted its first event. Unknown is never read as hung.
+- **A card with an open `[human:options]` block** for its own or an earlier stage.
+- **A card in an active PR review→fix loop**, whose half-agents legitimately come
+  and go between rounds.
+- **An outage card** (`BoardOutage`): it is waiting on the substrate, not hung. It
+  is relaunched uncharged each tick until `OutageWaitBound` = **6 hours**, after
+  which it is handed to a person — still uncharged.
+- **Anything on a machine that does not own the stage** (`forTakeover` gate).
+- **Everything, when the liveness list or the closed-ticket probe errors.** A probe
+  blip is not evidence.
+
+## What a reap costs the ticket
+
+| Ending | Charged against `DefaultStageRetries` (=2)? | Bound |
+| --- | --- | --- |
+| Silence reap (§ 4, § 5) | **No** — `relaunchSilenceReap`. The work did not fail; a judgement about the work did (SC-2447). | `MaxSilenceReaps` = 3 relaunches; the 4th posts a give-up marker naming the count and stops. |
+| Genuine death — claude gone, container unreachable, agent vanished (§ 2, § 3, § 6) | **Yes** — `tryRelaunch`. | 2 automatic relaunches per stage, then the card reds for a person. |
+| Outage (substrate unreachable) | **No** — `relaunchOutage`. | `OutageWaitBound` = 6h, then handed to a person. |
+| Needs-person walls (revoked credential, exhausted billing) | **No**, and never auto-relaunched — the next attempt hits the same wall. | — |
+
+Repetition is what gets escalated, not any single stop. A silence reap costs
+nothing precisely so that a *repeated* silence reap is legible as its own
+problem, and `MaxSilenceReaps` is what makes that repetition visible instead of
+hidden. Both give-up markers dedup on a pinned sentinel string so two daemons
+reaching the cap at once do not both post.
+
+## What a reap leaves behind
+
+The teardown choke point is `Manager.stopLocked` (`internal/agent/manager.go`):
+
+1. **Transcript and outcome are persisted first**, before the container (and its
+   in-container `~/.claude/projects` transcript) is destroyed — `PreserveExecutionArtifacts`.
+2. **The container is stopped and removed**, and its devcontainer meta deleted.
+3. **The worktree survives unless the run succeeded.** The gate is positive
+   success, not "did not fail": only a run that posted its handoff has its
+   private worktree removed. A reaped run — and a clean exit that never handed
+   off — *keeps* the worktree beside its execution log for forensics and resume,
+   because a no-handoff exit is precisely the case where uncommitted work exists
+   to lose (SC-731). The kept worktree has its HEAD **detached**, so it stops
+   owning `refs/heads/<branch>` and cannot freeze the shared repo's local branch
+   (SC-2322).
+4. **`outcome.json` records the classification** `DiagnoseFailure` keys off, so
+   the failed marker says what actually broke instead of a generic stage line.
+5. **`output.log` always ends with an exit trailer** (`[human] claude exec exited
+   with code …`), written by the tee when the exec stream EOFs — so an
+   in-container run that dies while its warm container stays up still leaves a
+   diagnosable log rather than a 0-byte void (SC-1688). The tee never overwrites
+   an existing `outcome.json`, so it cannot clobber a `reaped` classification.
+6. **Execution directories are pruned after 90 days** (`execRetentionDays`,
+   `PruneExecutions`).
+
+One asymmetry worth knowing when reading artifacts: the zombie sweep marks the
+meta `StatusFailed` before teardown, so its runs record `reason: "reaped"`. The
+reconcile pass's hung-agent stop goes through `dockerAgentCleaner.DeleteAgent`,
+which does not, so a stage stopped by § 5 records `reason: "completed"` even
+though the machine killed it. The card's marker still says silence reap; the
+run's `outcome.json` does not.
+
+## Timings and constants, in one place
+
+| Constant | Value | Where |
+| --- | --- | --- |
+| `zombieSweepInterval` | 5s | `internal/daemon/agentzombiesweep.go` |
+| `zombieGracePeriod` | 10s | same |
+| `zombieMaxProcessCheckFailures` | 3 (~15s) | same |
+| `zombieReapHardDeadline` | 45s | same |
+| delete timeout inside a reap | 30s | same |
+| `IdleGrace` | 3m | `internal/daemon/agentprogress.go` |
+| `WorkingIdleGrace` | 30m | same |
+| `BoardReconcileInterval` | 2m ± 50% jitter | `internal/daemon/board_reconcile.go` |
+| `StuckRunningGrace` | 15m | same |
+| hung-agent stop timeout | 60s | `cmd/cmddaemon/daemon.go` |
+| close-cancel stop budget | 90s | same |
+| `MaxSilenceReaps` | 3 | `internal/daemon/board_failure.go` |
+| `DefaultStageRetries` | 2 | `internal/daemon/board_retry.go` |
+| `OutageWaitBound` | 6h | `internal/daemon/board_outage.go` |
+| `execRetentionDays` | 90 | `internal/agent/agentlog.go` |
+
+## Why a single reap can never stall the sweep
+
+One sweep goroutine reaps every agent, so a stalled `CopyTranscript` inside
+`DeleteAgent` would otherwise stop every later agent from ever being reaped
+(SC-427). Past `zombieReapHardDeadline` = 45s the reap is abandoned to the
+background — the goroutine keeps its own 30s delete budget and finishes into a
+buffered channel — and the loop advances. The agent's cross-tick memory is
+deliberately left in place so the next tick retries it.
+
+The liveness check has the same property: its exec stream is drained to EOF with
+a watchdog that closes the attachment on context cancellation, so a stalled
+stream cannot park the loop either.
+
+## A reap is a transition
+
+A reaped agent by definition died without emitting the exit hook the board
+watcher listens for. The daemon therefore **synthesizes** a `StopFailure` event
+for it (`cmd/cmddaemon/daemon.go`), so the reap path and the hook-driven exit
+paths converge on one marker-posting code path (SC-206) — otherwise the board
+card spins forever.
+
+That synthesized event is why reaping belongs in the state machine and not
+beside it: the marker it produces is a transition in
+[`pipeline-fsm.json`](pipeline-fsm.json) exactly like one an agent posts for
+itself. A change to a reap condition that changes which marker lands is a change
+to the machine, and both documents have to move together.
