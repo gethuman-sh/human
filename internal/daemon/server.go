@@ -158,8 +158,9 @@ type Server struct {
 
 	// TokenScanner performs the one expensive JSONL walk the stats view needs
 	// (current-window token split + per-hour buckets). Injectable so tests can
-	// count and stub it; nil falls back to defaultTokenScan over the real
-	// ~/.claude/projects tree.
+	// count and stub it; nil falls back to defaultTokenScan over every
+	// transcript root on this host — the operator's own ~/.claude/projects tree
+	// plus each registered project's agent-container tree.
 	TokenScanner func(since, until, now time.Time) (claude.TokenScan, error)
 	// tokenMu is held across the walk so concurrent same-range requests serialize
 	// onto one scan instead of each launching its own — the daemon side of the
