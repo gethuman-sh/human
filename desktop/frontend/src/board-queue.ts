@@ -27,9 +27,16 @@ export interface QueueCard {
   // RFC3339 time the newest marker of the card's current stage landed; feeds
   // the Engineering-backlog age badge. Absent for cards with no derived stage.
   stageEnteredAt?: string;
-  // Done-stage sub-phase: "pr-review" while the machine review→fix loop runs,
-  // absent for a plain deploy — the running badge reads "PR review…" for it.
+  // Done-stage sub-phase: "pr-review" while the machine reviewer runs, "pr-fix"
+  // while the fixer runs, absent for a plain deploy.
   deployPhase?: string;
+  // What this viewer's machine could see of the agent behind the card, filled by
+  // the desktop overlay and never by the daemon (SC-3569): "live" = a board agent
+  // is running here; "dead" = the stage is this machine's to run and nothing is
+  // running it; "elsewhere" = another machine's daemon owns the stage, so it
+  // cannot be seen from here. ABSENT means unknown — render exactly as before,
+  // because absence of a signal is never proof.
+  agentLiveness?: string;
   // The pre-planning gate's recorded STOP verdict (superseded/escalated/
   // rejected) and the ticket it names. Present only on a decided card; drives
   // the "decided" badge that distinguishes it from a card merely waiting.
@@ -152,6 +159,14 @@ export const QUEUED_LABELS: Record<string, string> = {
   verification: "re-review",
 };
 
+// Badge text per done-stage sub-phase. The fix half names itself: a card that
+// says "PR review…" while board-<key>-prfix runs the fixer points its reader at
+// the wrong container (SC-3569).
+export const DEPLOY_PHASE_LABELS: Record<string, string> = {
+  "pr-review": "PR review…",
+  "pr-fix": "fixing PR review findings…",
+};
+
 // Human phrasing for each pre-planning stop verdict — the card must say WHICH
 // decision was reached in these terms, never the internal head token (SC-2699).
 export const STOP_DECISION_LABELS: Record<string, { text: string; title: string }> = {
@@ -169,12 +184,36 @@ export const STOP_DECISION_LABELS: Record<string, { text: string; title: string 
   },
 };
 
+// livenessBadge folds the viewer's liveness overlay into a badge that would
+// otherwise assert work is happening.
+//
+// The spinner IS the claim "a process is alive right now", so it survives only
+// for a card an agent was actually found behind. A dead card moves to the
+// needs-a-person register and says plainly that nothing is running; a card
+// another machine owns says that instead — neither a false spinner nor a false
+// death, because this machine genuinely cannot see a peer's containers.
+// Unknown liveness returns the base badge untouched (SC-3569).
+function livenessBadge(base: BadgeInfo, liveness: string | undefined, deadText: string, deadTitle: string): BadgeInfo {
+  if (liveness === "dead") {
+    return { cls: "stalled", text: deadText, title: deadTitle, spinner: false };
+  }
+  if (liveness === "elsewhere") {
+    return {
+      cls: "elsewhere",
+      text: `${base.text} on another machine`,
+      title: "Another machine's daemon owns this stage — its agent cannot be seen from here.",
+      spinner: false,
+    };
+  }
+  return base;
+}
+
 // badgeInfo classifies a card's live state into a badge descriptor, or null
 // when the card rests and needs none — its queue position IS the statement of
 // completion. A review that found problems is machine-fixing work, not a demand
 // on the user: the daemon auto-launches a fixer, so it reads as in-flight
 // (gray + spinner), never the amber "your turn" register (SC-1830).
-export function badgeInfo(card: QueueCard): BadgeInfo | null {
+export function badgeInfo(card: QueueCard, runningLabels: Record<string, string> = RUNNING_LABELS): BadgeInfo | null {
   // An open decision block outranks EVERY other classification, including a
   // stale failed marker: a card parked on a deliberate human fork must never
   // paint red, even if a *-failed marker also landed on it (the daemon's twin
@@ -206,15 +245,15 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
   }
   if (card.state === "running") {
     const text =
-      card.stage === "done" && card.deployPhase === "pr-review"
-        ? "PR review…"
-        : (RUNNING_LABELS[card.stage] ?? "working…");
-    return {
-      cls: "running",
-      text,
-      title: "Agent running",
-      spinner: true,
-    };
+      (card.stage === "done" ? DEPLOY_PHASE_LABELS[card.deployPhase ?? ""] : undefined) ??
+      runningLabels[card.stage] ??
+      "working…";
+    return livenessBadge(
+      { cls: "running", text, title: "Agent running", spinner: true },
+      card.agentLiveness,
+      `${text} — agent not running`,
+      "No agent is running this stage on this machine — the run died or was stopped. Retry it, or drop the card on its stage again.",
+    );
   }
   // A recorded decision has (re)queued the chosen stage but the relaunched
   // agent has not posted its started marker yet — or the launch was deferred to
@@ -222,12 +261,17 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
   // blank card, so the user always sees the choice re-queued the work (SC-1320).
   if (card.state === "queued") {
     const verb = QUEUED_LABELS[card.stage] ?? "work";
-    return {
-      cls: "queued",
-      text: `decision recorded — ${verb} picked up`,
-      title: "A direction was chosen — a fresh agent will pick up the work",
-      spinner: true,
-    };
+    return livenessBadge(
+      {
+        cls: "queued",
+        text: `decision recorded — ${verb} picked up`,
+        title: "A direction was chosen — a fresh agent will pick up the work",
+        spinner: true,
+      },
+      card.agentLiveness,
+      `decision recorded — ${verb} never started`,
+      "A direction was chosen but no agent picked the work up on this machine. Retry the stage.",
+    );
   }
   // A paused (outage) card is the do-nothing register: a substrate the run
   // depends on is unavailable, the work stays written and safe on the ticket,
@@ -265,12 +309,17 @@ export function badgeInfo(card: QueueCard): BadgeInfo | null {
   // happening — never the amber `warning`/`decision` "your turn" register with
   // a ⚠ glyph (SC-1830).
   if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
-    return {
-      cls: "fixing",
-      text: "review found problems — fixing…",
-      title: `Review found problems — a fixer is reworking the code automatically (verdict: ${card.verdict ?? ""})`,
-      spinner: true,
-    };
+    return livenessBadge(
+      {
+        cls: "fixing",
+        text: "review found problems — fixing…",
+        title: `Review found problems — a fixer is reworking the code automatically (verdict: ${card.verdict ?? ""})`,
+        spinner: true,
+      },
+      card.agentLiveness,
+      "review found problems — no fixer running",
+      `Review found problems and no fixer is running on this machine (verdict: ${card.verdict ?? ""}). Drop the card on the build stage to rework it.`,
+    );
   }
   // A passed review with no recorded branch is a BROKEN HANDOFF that genuinely
   // needs a person: nothing can ship, so it keeps the needs-a-human `warning`
