@@ -1,7 +1,7 @@
 {
   "$comment": "The state transitions of one item (a ticket) through the human pipeline, as the code and prompts implement them today. Each transition names the ACTOR that causes it, the SKILL that does the work, the MARKER that records it, and WHERE it is implemented. Topology is name/src/dst only; every other field is annotation.",
   "version": 1,
-  "describes": "commit 16cfe7e2, 2026-08-05",
+  "describes": "commit 2dcdc5a4, 2026-08-07",
   "item": "a ticket, from filing to merged",
   "initial": "filed",
   "actors": {
@@ -161,6 +161,11 @@
       "name": "substrate-down",
       "doc": "A stage reported the thing it needs was unreachable. Not a failure — it spends no retry budget and is relaunched when the substrate returns.",
       "board": "any column, outage"
+    },
+    {
+      "name": "unknown",
+      "doc": "The item's own state is unchanged, but the tracker that carries it failed to load, so nothing can be observed about it. It is the only state not derived from the item's markers — it says the board could not look, not that the item moved. Every item on that tracker enters and leaves it together, and it resolves by itself on the next fetch that reads the source.",
+      "board": "not rendered — the board shows a load-failure banner instead of the columns"
     }
   ],
   "events": [
@@ -353,21 +358,6 @@
       "prompt": "human-autofix-skill.md Step 5"
     },
     {
-      "name": "verify-done",
-      "src": [
-        "verifying"
-      ],
-      "dst": "handed-off",
-      "actor": "skill",
-      "runs": "human-bug-verify",
-      "marker": "[human:bug-verify]",
-      "state_key": "stage.verify verdict=DONE",
-      "prompt": "human-bug-verify-agent.md",
-      "moves_item": true,
-      "classified": false,
-      "doc": "[human:bug-verify] is evidence, not a stage transition: both verdicts keep the item inside the fix run — DONE leads to the handoff, which is the marker that actually moves it, and NOT DONE loops back to fixing while the budget holds."
-    },
-    {
       "name": "verify-not-done",
       "src": [
         "verifying"
@@ -375,13 +365,12 @@
       "dst": "fixing",
       "actor": "skill",
       "runs": "human-bug-verify",
-      "marker": "[human:bug-verify]",
       "state_key": "stage.verify verdict=NOT DONE",
       "prompt": "human-autofix-skill.md Step 6",
       "guard": "under the retry budget; only a failure that reproduced charges an attempt",
       "moves_item": false,
       "classified": false,
-      "doc": "[human:bug-verify] is evidence, not a stage transition: both verdicts keep the item inside the fix run — DONE leads to the handoff, which is the marker that actually moves it, and NOT DONE loops back to fixing while the budget holds."
+      "doc": "The verify gate found the fix wanting and the run loops back inside itself. No marker records it: [human:bug-verify] is evidence, not a transition, so nothing on the ticket distinguishes this from the fix still running. The item genuinely moves; the record does not."
     },
     {
       "name": "fix-budget-spent",
@@ -662,16 +651,110 @@
       "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one."
     },
     {
-      "name": "reopen",
+      "name": "source-unreadable",
       "src": [
+        "filed",
+        "ticket-review",
+        "ticket-reviewed",
+        "planning",
+        "planned",
         "nothing-to-do",
-        "resolved-no-fix"
+        "preflight",
+        "triaging",
+        "challenging",
+        "resolved-no-fix",
+        "fix-planning",
+        "fixing",
+        "verifying",
+        "implementing",
+        "handed-off",
+        "in-review",
+        "reviewed",
+        "deploying",
+        "pr-review",
+        "pr-fix",
+        "ci-gate",
+        "deploy-fixing",
+        "merged",
+        "awaiting-decision",
+        "stopped",
+        "substrate-down"
+      ],
+      "dst": "unknown",
+      "actor": "daemon",
+      "where": "internal/board/gate.go PMRoleNotice; internal/board/compose.go",
+      "doc": "The tracker instance failed to load — an unreachable credential store, a config error. Every item it carries becomes unobservable at once, so this is a property of the fetch rather than of any one ticket. It resolves by itself when the source is reachable again; nothing about the item changed."
+    },
+    {
+      "name": "source-readable-again",
+      "src": [
+        "unknown"
+      ],
+      "dst": "filed",
+      "actor": "daemon",
+      "where": "internal/board/compose.go — the next fetch that resolves a PM-role result",
+      "doc": "The source came back and the item's real state is re-derived from its markers — it returns to whatever they say, not to `filed`. The single dst here is a topological placeholder: this machine has one destination per transition and the true one is computed. Nothing about the item changed while it was unobservable.",
+      "dst_is_derived": true
+    },
+    {
+      "name": "reopen-planning",
+      "src": [
+        "nothing-to-do"
       ],
       "dst": "planning",
       "actor": "user",
+      "runs": "human-planner",
       "marker": "[human:planning-started]",
       "where": "board_transition.go reopenResolved; desktop App.Reopen",
-      "doc": "A person judged a clean terminal wrong and re-runs the stage that resolved it: a nothing-to-do card re-plans, a no-fix-needed card re-runs its own fix pipeline (dst is that stage, planning shown here). It is a separate entry point from every other gesture because the automatic relaunch drives the identical same-stage request — the machine must never re-run its own clean terminal, so only an explicitly human call may. The fresh started marker is strictly newer than the terminal, so the card leaves resolved by the ordinary rules and the trail keeps both the verdict and the decision to overrule it."
+      "doc": "A person judged the nothing-to-do terminal wrong and re-plans. Separate from every retry gesture because the automatic relaunch drives the identical same-stage request — only an explicitly human call may re-run a clean terminal."
+    },
+    {
+      "name": "reopen-fix",
+      "src": [
+        "resolved-no-fix"
+      ],
+      "dst": "preflight",
+      "actor": "user",
+      "runs": "human-autofix",
+      "marker": "[human:implementation-started]",
+      "where": "board_transition.go reopenResolved — classifyFixPipeline routes to ApplyFix/ApplySecurityFix",
+      "doc": "A person judged the no-fix-needed verdict wrong. The card re-enters its OWN self-planning pipeline, so it re-triages from the top rather than being handed to the plan executor, which would refuse it for having no plan."
+    },
+    {
+      "name": "legacy-pr-opened",
+      "src": [
+        "reviewed"
+      ],
+      "dst": "deploying",
+      "actor": "daemon",
+      "marker": "[human:pr-started]",
+      "legacy": true,
+      "where": "board_markers.go orderedMarkerSpecs",
+      "doc": "The PR-opening lifecycle that predates the deploy pipeline. Still classified so threads written before deploy markers existed keep deriving; nothing posts it today."
+    },
+    {
+      "name": "legacy-pr-pushed",
+      "src": [
+        "deploying"
+      ],
+      "dst": "merged",
+      "actor": "daemon",
+      "marker": "[human:pr-pushed]",
+      "legacy": true,
+      "where": "board_markers.go orderedMarkerSpecs",
+      "doc": "Legacy: the PR was opened. It classifies as the done stage's DONE state — the same state the merge produces — so on an old thread an opened PR renders where a shipped one does. Recognized for those threads only."
+    },
+    {
+      "name": "legacy-pr-failed",
+      "src": [
+        "deploying"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:pr-failed]",
+      "legacy": true,
+      "where": "board_markers.go orderedMarkerSpecs",
+      "doc": "Legacy: opening the PR failed. Recognized for pre-deploy-pipeline threads only."
     }
   ],
   "ownership": {
