@@ -60,11 +60,29 @@ still made real hangs wait.
 the hook event store.
 
 A `Stop`, `SessionEnd`, or `StopFailure` event for an agent triggers a full
-`Delete` (container stopped and removed, meta deleted) one second later — the
-delay lets claude finish exiting. Events are tracked by monotonic sequence, not
-by agent name: board stage agents reuse the same deterministic name on every
-rebuild, and a name-keyed dedupe leaked the re-run's container and worktree
-(SC-201).
+`Delete` (container stopped and removed, meta deleted) — but **only once claude
+has actually exited**. The listener waits for that, polling every
+`cleanupExitPoll` = 1s for up to `cleanupExitWait` = 5 minutes.
+
+The wait is the whole point. An exit hook event carries the *container's* agent
+name, so a subagent's ending is indistinguishable from its parent's — and a
+parent that dispatched a subagent goes on working after it. Acting on the event
+alone destroyed live runs: the container was removed one second later, the 10s
+`ContainerStop` grace expired, and claude was SIGKILLed mid-tool-call, which the
+board then read as "the run stopped before finishing this stage" (SC-3785).
+
+So the event is a prompt to check, not a verdict:
+
+- **claude gone** → tear down, as before.
+- **claude still running when the budget runs out** → the event belonged to
+  somebody else. Leave the run alone; its own ending will arrive later, and a run
+  that instead dies silently is the zombie sweep's to catch.
+- **the agent cannot be probed** → treated as ended. Unreachable is not evidence
+  of a live run, and sparing it would strand containers on any docker hiccup.
+
+Events are tracked by monotonic sequence, not by agent name: board stage agents
+reuse the same deterministic name on every rebuild, and a name-keyed dedupe
+leaked the re-run's container and worktree (SC-201).
 
 This is the normal path. Everything below is the machine deciding for itself.
 
@@ -190,6 +208,8 @@ above.
 
 Collected in one place, because the spares are the load-bearing part:
 
+- **A run whose claude is still running when an exit event names it.** The event
+  was a subagent's; the run keeps working (SC-3785).
 - **An agent blocked on a permission prompt.** It is waiting for a person; a
   relaunch discards the question instead of answering it.
 - **An interactive (non-board) agent that is silent.** Only a board stage agent's
@@ -259,6 +279,9 @@ run's `outcome.json` does not.
 
 | Constant | Value | Where |
 | --- | --- | --- |
+| `cleanupExitPoll` | 1s | `internal/daemon/agentcleanup.go` |
+| `cleanupExitWait` | 5m | same |
+| `cleanupProbeTimeout` | 5s | same |
 | `zombieSweepInterval` | 5s | `internal/daemon/agentzombiesweep.go` |
 | `zombieGracePeriod` | 10s | same |
 | `zombieMaxProcessCheckFailures` | 3 (~15s) | same |
