@@ -5,8 +5,10 @@ package main
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/gethuman-sh/human/internal/agent"
+	"github.com/gethuman-sh/human/internal/board"
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/claude/logparser"
 	"github.com/gethuman-sh/human/internal/claude/monitor"
@@ -192,6 +194,50 @@ func modelUsages(summary *claude.UsageSummary) []ModelUsage {
 	}
 	return out
 }
+
+// liveBoardAgents lists the board agents running on THIS machine, for the board's
+// per-card liveness overlay.
+//
+// It asks the engine directly rather than reusing Instances(): claude.CombinedFinder
+// SWALLOWS a finder's error (discovery.go:714 logs and continues, then returns a
+// nil error), so an unreachable or stopped Docker engine makes Instances() return
+// the host processes with no error and no containers — indistinguishable from
+// "nothing is running". Feeding that into a liveness verdict would declare every
+// running card on the board dead the instant the engine hiccuped, which is exactly
+// the false claim this ticket exists to remove. A direct ListContainers gives an
+// explicit error, and an error means UNKNOWN.
+//
+// A zero LiveAgents (nil Names) is therefore returned for every way of not
+// knowing, and the overlay renders those cards exactly as before.
+func liveBoardAgents(daemonID string) board.LiveAgents {
+	unknown := board.LiveAgents{DaemonID: daemonID, Now: time.Now()}
+	dc, err := claude.NewEngineDockerClient()
+	if err != nil {
+		return unknown
+	}
+	defer func() { _ = dc.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), liveAgentProbeTimeout)
+	defer cancel()
+	containers, err := dc.ListContainers(ctx)
+	if err != nil {
+		return unknown
+	}
+	names := make([]string, 0, len(containers))
+	for _, c := range containers {
+		names = append(names, c.Name)
+	}
+	return board.LiveAgents{
+		Names:    board.AgentNamesFromContainers(names),
+		DaemonID: daemonID,
+		Now:      time.Now(),
+	}
+}
+
+// liveAgentProbeTimeout bounds the engine round-trip so a wedged Docker socket
+// delays the board by a moment rather than hanging the refresh. Timing out reads
+// as unknown, never as death.
+const liveAgentProbeTimeout = 3 * time.Second
 
 // statusString maps the internal SessionStatus enum to the lowercase token the
 // frontend switches on for icon and colour.
