@@ -44,7 +44,7 @@ linears:
     role: pm            # required for non-Shortcut PM trackers to render on the board
 ```
 
-When no PM-role tracker resolves, the board shows an explicit "No PM-role tracker configured" notice (naming the trackers it did find) instead of five silently empty columns, so the misconfiguration is visible rather than mistaken for "no work yet". Inference is intentionally left narrow — widening it risks the SC-254/SC-660 split-topology regressions — so the fix for a blank board is to add `role: pm`, not to expect auto-detection.
+When a tracker resolves but none of them carries the pm role — or no tracker is configured at all — the board shows an explicit "No PM-role tracker configured" notice (naming the trackers it did find) instead of five silently empty columns, so the misconfiguration is visible rather than mistaken for "no work yet". A tracker that *failed to load* is a different fault and gets a different message: its failure is reported through the board's error banner (`board.ErrorBanner`), and the role notice stays silent, because telling a user whose secret store was unreachable to add `role: pm` sends them to edit a `.humanconfig` that needs no editing (SC-3554). Inference is intentionally left narrow — widening it risks the SC-254/SC-660 split-topology regressions — so the fix for a blank board is to add `role: pm`, not to expect auto-detection.
 
 # Review handoff
 
