@@ -339,3 +339,40 @@ test("outage and stopped cards do not claim to be running either", () => {
     assert.match(html, /entered 1m 0s ago/, state);
   }
 });
+
+// SC-3569 reproduction 2: buildCostSection labelled `now - stageEnteredAt` as
+// "running" with no liveness condition, so the longer a card had been dead the
+// more impressive its elapsed time.
+test("a dead card's elapsed time is not labelled running (SC-3569)", () => {
+  const now = Date.now();
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: true, totalCostUSD: 1.0, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
+    "implementation",
+    new Date(now - 50_400_000).toISOString(), // 14h ago
+    now,
+    "dead",
+  );
+  assert.match(html, /14h 0m/, "the number itself is still shown");
+  assert.doesNotMatch(html, /running/, "a dead card must not claim work is in progress");
+  assert.match(html, /since last activity/);
+});
+
+test("an elsewhere card names the other machine rather than claiming local progress (SC-3569)", () => {
+  const now = Date.now();
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: true, totalCostUSD: 1.0, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
+    "implementation", new Date(now - 60_000).toISOString(), now, "elsewhere",
+  );
+  assert.doesNotMatch(html, /running/);
+  assert.match(html, /another machine/);
+});
+
+// Unknown liveness keeps today's wording — absence of a signal is not proof.
+test("unknown liveness keeps the existing running label (SC-3569)", () => {
+  const now = Date.now();
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: true, totalCostUSD: 1.0, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
+    "implementation", new Date(now - 90_000).toISOString(), now,
+  );
+  assert.match(html, /Current stage \(implementation\): 1m 30s running/);
+});
