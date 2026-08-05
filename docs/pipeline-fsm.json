@@ -514,7 +514,8 @@
       "dst": "ci-gate",
       "actor": "daemon",
       "where": "board_transition.go AdvancePRLoop",
-      "doc": "The draft is un-drafted and the item goes to the CI gate."
+      "doc": "The reviewer approved. The draft is un-drafted and the item goes to the CI gate. Recorded as a marker like every other outcome of the loop — success used to be the only transition here that left no trace, so a reader could not tell an approved review whose merge is running from a review still in flight. It also retires the loop sub-phase, so the badge stops reading 'PR review…' through the CI gate, rebase and merge.",
+      "marker": "[human:pr-review-passed]"
     },
     {
       "name": "pr-loop-escalates",
@@ -592,7 +593,7 @@
         "stage"
       ],
       "where": "board_state.go pauseOnOpenOptions",
-      "doc": "A stage found a genuine fork and stopped. The item is not working and not dead — it is waiting on a person."
+      "doc": "A stage found a genuine fork and stopped. The item is not working and not dead — it is waiting on a person, and reads as decision-needed rather than running."
     },
     {
       "name": "decision-made",
@@ -603,7 +604,7 @@
       "actor": "user",
       "marker": "[human:option-chosen]",
       "where": "board_state.go optionChosenQueued",
-      "doc": "A human picked an answer. The chosen stage is relaunched with the choice in hand; dst is whichever stage the block named — planning is the common case."
+      "doc": "A human picked an answer; the run relaunches with the choice in hand. dst is the stage the block NAMES, not the stage the item sits in — planning is the common case. A PR-loop escalation deliberately names implementation even though the item is in the deploy stage: the fixer raised a question only a code change can answer, so the choice rebuilds, and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named."
     },
     {
       "name": "substrate-unreachable",

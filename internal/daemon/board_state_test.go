@@ -848,3 +848,26 @@ func TestIsTerminalResolution(t *testing.T) {
 		assert.True(t, isTerminalResolution(NothingToDoHeader+"\nmachine: 4f3add9a\nbuild: abc123\n\nevidence: merged"))
 	})
 }
+
+// Both launches of the PR review→fix loop post a marker, and so does its
+// escalation — success was the only outcome that recorded nothing. A reader, or
+// a daemon that restarted, could not tell an approved review whose merge is
+// running from a review still in flight. The passing marker also retires the
+// loop sub-phase, so the badge stops claiming a review is in progress for the
+// whole of the CI gate, rebase and merge.
+func TestDeriveBoardCard_APassingLoopRetiresTheReviewPhase(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	loop := []tracker.Comment{
+		{Body: DeployStartedHeader, Created: base},
+		{Body: PRReviewStartedHeader, Created: base.Add(time.Minute)},
+	}
+	mid := DeriveBoardCard(loop, tracker.CategoryUnstarted, false)
+	assert.Equal(t, "pr-review", mid.DeployPhase, "while the loop runs the card names the sub-phase")
+
+	passed := append(loop, tracker.Comment{Body: PRReviewPassedHeader, Created: base.Add(2 * time.Minute)})
+	card := DeriveBoardCard(passed, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State, "the merge is still work in progress")
+	assert.Empty(t, card.DeployPhase, "the review is over — the card must stop saying 'PR review…'")
+}

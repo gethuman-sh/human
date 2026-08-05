@@ -142,6 +142,16 @@ const (
 	PRReviewStartedHeader = "[human:pr-review-started]"
 	PRFixStartedHeader    = "[human:pr-fix-started]"
 	PRReviewFailedHeader  = "[human:pr-review-failed]"
+	// PRReviewPassedHeader records the loop CONVERGING: the reviewer approved and
+	// the card proceeds to the CI gate and merge. Every other outcome of the loop
+	// already left a marker — both launches and the escalation — so success was
+	// the one transition the thread did not record, and a reader could not tell
+	// "the review passed, the merge is running" from "the review is still going".
+	// It is also what retires the loop sub-phase: while a *-started marker is the
+	// newest done-stage marker the badge reads "PR review…", so without this the
+	// card kept claiming a review was in flight for the whole of the CI gate,
+	// rebase and merge.
+	PRReviewPassedHeader = "[human:pr-review-passed]"
 
 	// DeployFixStartedHeader marks the deploy stage's automated fixer sub-phase
 	// (SC-1557): a CI failure or rebase conflict at the deploy gate dispatches the
@@ -333,6 +343,7 @@ var orderedMarkerSpecs = []markerSpec{
 	{DeployFailedHeader, BoardDoneStage, BoardFailed},
 	{PRReviewStartedHeader, BoardDoneStage, BoardRunning},
 	{PRFixStartedHeader, BoardDoneStage, BoardRunning},
+	{PRReviewPassedHeader, BoardDoneStage, BoardRunning},
 	{PRReviewFailedHeader, BoardDoneStage, BoardFailed},
 	{DeployFixStartedHeader, BoardDoneStage, BoardRunning},
 	{PlanningOutageHeader, BoardPlanning, BoardOutage},

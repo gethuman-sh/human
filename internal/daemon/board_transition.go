@@ -944,6 +944,19 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		}
 		return d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage, prFixDispatch(pmKey, number, branch))
 	case PRActionMerge:
+		// Record the loop converging BEFORE acting on it. Both launches and the
+		// escalation already post a marker, so without this the one outcome the
+		// thread never recorded was success — and it is the outcome a reader most
+		// needs, because it is what separates "the review passed, the merge is
+		// running" from "the review is still going". Posting it also retires the
+		// loop sub-phase, so the badge stops saying "PR review…" for the whole of
+		// the CI gate, rebase and merge that follow. A failure to post is not
+		// fatal: the merge is the work, and refusing to ship over a missing
+		// comment would trade a lost sentence for lost code.
+		if _, err := d.Commenter.AddComment(ctx, pmKey, PRReviewPassedHeader); err != nil {
+			d.Logger.Warn().Err(err).Str("pm", pmKey).
+				Msg("board PR loop: could not record the passing review; continuing to the merge")
+		}
 		if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, number); err != nil {
 			return d.deployFailed(pmKey, url, deployReason(
 				"the reviewed PR could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
