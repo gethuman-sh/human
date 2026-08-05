@@ -165,3 +165,27 @@ func TestSnapshotTelegramIntLists(t *testing.T) {
 	// Absent list normalizes to an empty list, not nil, for the frontend.
 	assert.Equal(t, []int64{}, valueByPath(t, doc, "telegrams.bot.allowed_chats").Value)
 }
+
+// SC-3409: the ui section is a singleton int group, so it flattens to one leaf
+// the generic settings form can render with no frontend change.
+func TestSnapshot_uiSectionLeaf(t *testing.T) {
+	dir := writeFixture(t, ".humanconfig.yaml", "ui:\n  dim_percent: 20\n")
+	doc, err := Snapshot(dir)
+	require.NoError(t, err)
+
+	v := valueByPath(t, doc, "ui.dim_percent")
+	assert.Equal(t, "appearance", v.Section)
+	assert.Equal(t, "ui", v.Group)
+	assert.Equal(t, TypeInt, v.Type)
+	assert.Equal(t, int64(20), v.Value)
+	// The value is re-read from disk on every board fetch, so nothing restarts.
+	assert.False(t, v.RestartRequired)
+}
+
+// A project that configured nothing still gets the editable row — the schema is
+// a skeleton, not a mirror of what happens to be in the file.
+func TestSnapshot_uiSectionAbsent(t *testing.T) {
+	doc, err := Snapshot(t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), valueByPath(t, doc, "ui.dim_percent").Value)
+}

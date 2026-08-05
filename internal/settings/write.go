@@ -81,6 +81,16 @@ func coerceValue(f *Field, value any) (any, error) {
 		if !ok {
 			return nil, errors.WithDetails("expected integer", "field", f.Key)
 		}
+		// An unbounded field (both zero) keeps its historical behaviour. A
+		// bounded one refuses a value its consumer would fall back away from,
+		// so the save either takes effect or says why — except 0, which the
+		// settings page sends when a row is cleared and which every bounded
+		// consumer reads as "use the default".
+		bounded := f.Min != 0 || f.Max != 0
+		if bounded && n != 0 && (n < int64(f.Min) || n > int64(f.Max)) {
+			return nil, errors.WithDetails("value out of range",
+				"field", f.Key, "value", n, "min", f.Min, "max", f.Max)
+		}
 		return n, nil
 	case TypeStringList:
 		return coerceStringList(f, value)

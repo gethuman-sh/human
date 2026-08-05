@@ -23,14 +23,34 @@ const (
 	TypeEnum       FieldType = "enum"
 )
 
+// The board dimming range, duplicated from internal/appearance rather than
+// imported: this package deliberately describes the config file and imports
+// no feature packages.
+const (
+	appearanceMinDim = 5
+	appearanceMaxDim = 100
+)
+
 // Field describes one editable leaf of a config entry.
 type Field struct {
-	Key             string // YAML/mapstructure key, e.g. "token"
-	Label           string
-	Type            FieldType
-	Enum            []string // valid values for TypeEnum
-	RestartRequired bool     // change only takes effect after a daemon restart
-	Description     string   // drives search/palette matching
+	Key   string // YAML/mapstructure key, e.g. "token"
+	Label string
+	Type  FieldType
+	Enum  []string // valid values for TypeEnum
+	// Min/Max bound a TypeInt field. BOTH zero means unbounded, so every
+	// existing int field keeps accepting whatever it accepted before. A bounded
+	// field rejects an out-of-range save rather than storing a value its
+	// consumer would silently ignore — the settings row surfaces the error
+	// inline (settingsview.ts commitRow -> showRowError).
+	//
+	// Zero itself always passes: clearing an int row in the settings page sends
+	// 0 (settingsview.ts parseInput), and that is the only way to unset an
+	// override, so a bounded field must read 0 as "use the default" rather than
+	// refuse the reset.
+	Min             int
+	Max             int
+	RestartRequired bool   // change only takes effect after a daemon restart
+	Description     string // drives search/palette matching
 }
 
 // Group is one YAML section: a named-instance list (linears, jiras, …), a
@@ -115,6 +135,17 @@ func buildRegistry() []SectionDef {
 					},
 				},
 			},
+		},
+		{
+			Key: "appearance", Label: "Appearance",
+			Groups: []Group{{
+				Section: "ui", Label: "Board appearance",
+				Fields: []Field{{
+					Key: "dim_percent", Label: "Not-mine card dimming", Type: TypeInt,
+					Min: appearanceMinDim, Max: appearanceMaxDim,
+					Description: "How visible a card owned by someone else is, in percent of full opacity (5–100). 100 turns the dimming off. Clear the field to return to the shipped default of 35.",
+				}},
+			}},
 		},
 		{
 			Key: "trackers", Label: "Trackers",
