@@ -91,9 +91,10 @@ type BoardCard struct {
 	// single-daemon behaviour.
 	StageDaemonID string `json:"stage_daemon_id,omitempty"`
 	// DeployPhase names the done-stage sub-phase for a running card: "pr-review"
-	// while the machine review→fix loop is mid-flight, empty for a plain deploy.
-	// It lets the board badge read "PR review…" instead of "deploying…" so the
-	// loop is visible while it runs.
+	// while the machine reviewer runs, "pr-fix" while the fixer runs, empty for
+	// a plain deploy. It lets the board badge read "PR review…"/"fixing PR
+	// review findings…" instead of "deploying…" so the loop is visible while it
+	// runs.
 	DeployPhase string `json:"deploy_phase,omitempty"`
 	// Degraded marks a card whose comment thread could not be read this scan
 	// (a ListComments error/timeout). It is set at the fetch-error site, never
