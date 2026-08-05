@@ -673,5 +673,13 @@
       "where": "board_transition.go reopenResolved; desktop App.Reopen",
       "doc": "A person judged a clean terminal wrong and re-runs the stage that resolved it: a nothing-to-do card re-plans, a no-fix-needed card re-runs its own fix pipeline (dst is that stage, planning shown here). It is a separate entry point from every other gesture because the automatic relaunch drives the identical same-stage request — the machine must never re-run its own clean terminal, so only an explicitly human call may. The fresh started marker is strictly newer than the terminal, so the card leaves resolved by the ordinary rules and the trail keeps both the verdict and the decision to overrule it."
     }
-  ]
+  ],
+  "ownership": {
+    "doc": "Which machine may fire a transition. A stage is stamped with the daemon that posted its deciding marker (BoardCard.StageDaemonID, from the marker's machine: field).",
+    "rules": [
+      "The machine acting on its own initiative — the reconcile takeover pass — refuses a stage another daemon stamped: WorkGate.ownedHereOrUnowned in internal/daemon/board_reconcile_gate.go. An unstamped stage (single-daemon, or a thread written before stamping) is takeable by anyone.",
+      "A human gesture is NOT restricted by ownership. Racing a live foreign run is prevented instead by idempotency: a running card refuses every drop (isDuplicateDrop), whichever machine started it.",
+      "Ownership is carried to the board as stageDaemonId so a reader can tell a stage owned elsewhere from an unowned one. It is the missing input for liveness across machines: no agent running HERE means dead only if this machine owns the stage."
+    ]
+  }
 }

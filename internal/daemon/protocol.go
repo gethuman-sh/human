@@ -167,6 +167,16 @@ type BoardViewCard struct {
 	// Verdict is the latest review's verdict line; a failing verdict pins the
 	// card in the Code lane with a warning instead of letting it advance.
 	Verdict string `json:"verdict,omitempty"`
+	// StageDaemonID is the machine that stamped the card's deciding marker — who
+	// owns the stage. The daemon already guards on it where it acts on its own
+	// (WorkGate.ownedHereOrUnowned refuses to take over a stage a peer stamped),
+	// but the fact never reached the reader, and it is the missing input for the
+	// question a board with several daemons cannot otherwise answer: no agent
+	// running HERE means dead only if this machine owns the stage. Owned
+	// elsewhere, it means "being worked somewhere I cannot see", which is not the
+	// same thing and must not be rendered as if it were. Empty on a single-daemon
+	// install and on threads written before stages were stamped.
+	StageDaemonID string `json:"stageDaemonId,omitempty"`
 	// VerdictFailed is VerdictFailed(Verdict) computed HERE, so the board never
 	// re-derives it. The frontend used to run its own prefix test that matched
 	// only "fail", while the daemon's also matches "incomplete" — a verdict the

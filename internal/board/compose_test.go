@@ -406,3 +406,21 @@ func TestCompose_shipsTheVerdictDecisionNotTheString(t *testing.T) {
 	assert.False(t, cardByKey(t, view, "SC-3").VerdictFailed)
 	assert.False(t, cardByKey(t, view, "SC-4").VerdictFailed, "absence of a verdict is not failure")
 }
+
+// Ownership must reach the reader. The daemon already refuses to take over a
+// stage a peer stamped (WorkGate.ownedHereOrUnowned), but the fact stopped at the
+// daemon — so a board with several machines could not tell "no agent running
+// here" from "dead", which are the same observation and opposite conclusions.
+func TestCompose_CarriesTheOwningMachine(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "owned elsewhere"}, {Key: "SC-2", Title: "unowned"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardImplementation, State: daemon.BoardRunning, StageDaemonID: "andre"},
+			"SC-2": {Stage: daemon.BoardImplementation, State: daemon.BoardRunning},
+		},
+	)}, true)
+
+	assert.Equal(t, "andre", cardByKey(t, view, "SC-1").StageDaemonID)
+	assert.Empty(t, cardByKey(t, view, "SC-2").StageDaemonID,
+		"a single-daemon install stamps nothing, and absence must not read as a machine named \"\"")
+}
