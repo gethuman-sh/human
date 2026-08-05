@@ -1455,7 +1455,7 @@ function reorderWithinQueue(queue, key, dropY) {
         current.columnOrder = prevColumnOrder;
         render();
         showError(errMessage(err));
-    },
+    }, 
     // No reconcile on success: the daemon issues no board:changed event for a
     // local-only column-order write, same as the ideaColumn drop.
     async () => { });
@@ -1931,7 +1931,7 @@ function toggleCardHidden(card) {
         card.hidden = prevHidden;
         render();
         showError(errMessage(err));
-    },
+    }, 
     // No reconcile on success: the daemon issues no board:changed event for a
     // local-only hidden write, same as the ideaColumn drop.
     async () => { });
