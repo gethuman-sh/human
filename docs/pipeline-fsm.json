@@ -9,6 +9,23 @@
     "daemon": "the host process — it launches agents, posts their started markers, and is the only thing with push credentials",
     "skill": "an agent running in a container, following the named prompt"
   },
+  "unclassified_markers": {
+    "doc": "Posted by the pipeline but deliberately not transitions: they record content or decorate the card, and the item's state is unchanged by them.",
+    "markers": [
+      "plan",
+      "bug-verdict",
+      "bug-verify",
+      "pipeline",
+      "close-failed",
+      "related-started",
+      "related",
+      "shipped-partial",
+      "handoff-check-unreadable",
+      "fix-summary",
+      "claim",
+      "stage-wait"
+    ]
+  },
   "states": [
     {
       "name": "filed",

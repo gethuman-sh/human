@@ -246,6 +246,19 @@ func hasCompletedRelatedRecord(comments []tracker.Comment) bool {
 // place to resume from rather than a ticket to refuse (SC-2986).
 const BugVerdictHeader = "[human:bug-verdict]"
 
+// BugVerifyHeader marks the verify stage's done-gate verdict
+// ([human:bug-verify] DONE|NOT DONE). Like BugVerdictHeader it is the run's
+// permanent evidence, NOT a stage transition, and it is deliberately kept out of
+// orderedMarkerSpecs: both verdicts leave the item inside the fix run. DONE
+// leads to the handoff, which is the marker that actually moves the card, and
+// NOT DONE loops back to the fix while the retry budget holds.
+//
+// It had no constant here at all until the pipeline-machine conformance test
+// asked for one — it existed only as a validation spec in internal/marker, which
+// is how it ended up being a marker the prompts post eight times over and the
+// board had never been told about in either direction.
+const BugVerifyHeader = "[human:bug-verify]"
+
 // hasBugVerdict reports whether the ticket carries a triage verdict comment —
 // the marker heuristic a recovery relaunch falls back on when no ticket-kind
 // Getter is wired. The closing bracket keeps it from matching an unrelated
