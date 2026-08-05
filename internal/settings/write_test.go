@@ -244,3 +244,60 @@ func TestSetValuePreservesFilePermissions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
+
+// SC-3409: the bounded int field. An in-range save lands as a real int leaf, so
+// the board reads back what the settings page wrote.
+func TestSetValue_acceptsInRangeInt(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, SetValue(dir, "ui.dim_percent", 20))
+
+	doc, err := Snapshot(dir)
+	require.NoError(t, err)
+	v := valueByPath(t, doc, "ui.dim_percent")
+	assert.Equal(t, int64(20), v.Value)
+	assert.Equal(t, TypeInt, v.Type)
+}
+
+// A value the renderer would fall back away from must be refused at the write
+// boundary, so the settings row shows an error instead of storing a setting
+// that silently does nothing.
+func TestSetValue_rejectsOutOfRangeInt(t *testing.T) {
+	for _, n := range []int{500, -1, 4} {
+		dir := t.TempDir()
+		err := SetValue(dir, "ui.dim_percent", n)
+		require.Error(t, err, "%d must be rejected", n)
+		// CauseChain is what the settings row renders (daemon
+		// config_settings.go, desktop settings.go), so the reason must be
+		// legible there — SetValue's own Error() shows only the outer wrap.
+		assert.Contains(t, errors.CauseChain(err), "out of range")
+
+		doc, snapErr := Snapshot(dir)
+		require.NoError(t, snapErr)
+		assert.Equal(t, int64(0), valueByPath(t, doc, "ui.dim_percent").Value,
+			"a rejected value must not be written")
+	}
+}
+
+// Zero is outside the usable range but is exactly what the settings page sends
+// when a row is cleared. Refusing it would strand a saved override with no way
+// back to the shipped default.
+func TestSetValue_acceptsZeroAsReset(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, SetValue(dir, "ui.dim_percent", 20))
+	require.NoError(t, SetValue(dir, "ui.dim_percent", 0))
+
+	doc, err := Snapshot(dir)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), valueByPath(t, doc, "ui.dim_percent").Value)
+}
+
+// Bounds default to zero, so adding them must not narrow any field that never
+// asked for a range.
+func TestSetValue_unboundedIntUnchanged(t *testing.T) {
+	dir := writeFixture(t, ".humanconfig.yaml", "telegrams:\n  - name: work\n")
+	require.NoError(t, SetValue(dir, "telegrams.work.notify_chat_id", -100200300400))
+
+	doc, err := Snapshot(dir)
+	require.NoError(t, err)
+	assert.Equal(t, int64(-100200300400), valueByPath(t, doc, "telegrams.work.notify_chat_id").Value)
+}

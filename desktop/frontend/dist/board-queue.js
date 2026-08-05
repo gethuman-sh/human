@@ -307,6 +307,7 @@ export function boardStateFromPayload(payload, suppressError = false) {
         notice: payload.notice || "",
         truncation: payload.truncation || "",
         columnOrder: payload.columnOrder,
+        dimPercent: payload.dimPercent,
     };
 }
 // insertKeyAt rebuilds a column's hand-sorted key list after a same-column

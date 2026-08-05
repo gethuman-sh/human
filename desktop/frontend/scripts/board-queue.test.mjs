@@ -502,3 +502,15 @@ test("badgeInfo covers every daemon-forwarded state (SC-3024 contract)", () => {
     assert.notEqual(info, null, `badgeInfo must classify a "${state}" card, not return null`);
   }
 });
+
+// SC-3409: the same bug-631 rule as columnOrder — every board-level field must
+// survive the single payload->state mapper, or the call sites silently drop it.
+test("boardStateFromPayload carries dimPercent through the mapping (SC-3409)", () => {
+  assert.equal(boardStateFromPayload({ dimPercent: 20 }).dimPercent, 20);
+});
+
+// Absent stays absent rather than becoming 0: "nothing declared" has to reach
+// the renderer as a distinct answer so it leaves the stylesheet alone.
+test("boardStateFromPayload leaves dimPercent undefined when the payload omits it (SC-3409)", () => {
+  assert.equal(boardStateFromPayload({}).dimPercent, undefined);
+});

@@ -17,6 +17,7 @@ import {
   toggleTheme,
   trail,
 } from "./fancy.js";
+import { applyNotMineOpacity } from "./appearance.js";
 import { initPermissions, type PermissionRequest } from "./permissions.js";
 import { bugsHeaderHTML, securityHeaderHTML, gardeningHeaderHTML } from "./board-findbugs.js";
 import {
@@ -181,6 +182,10 @@ interface BoardData {
   // Hand-sorted ticket order per queue column (top first); cards absent from
   // their queue's list render after it in fetch order.
   columnOrder?: Record<string, string[]>;
+  // How faint a not-mine card renders, in percent of full opacity, from the
+  // project's .humanconfig "ui" section (SC-3409). Absent means the
+  // stylesheet's :root default applies.
+  dimPercent?: number;
 }
 
 interface IdeationMsg {
@@ -2190,6 +2195,11 @@ function restoreColumnScroll(board: HTMLElement, scroll: Record<string, number>)
 let pendingRender = false;
 
 function render(): void {
+  // Appearance rides the board payload, so every render re-asserts what the
+  // current config says — editing dim_percent and refreshing shows the new
+  // dimming with no rebuild. Set before the drag guard: it is a cheap,
+  // idempotent property write and must not wait for a drag to end.
+  applyNotMineOpacity(document.documentElement, current.dimPercent);
   if (dragging) {
     pendingRender = true;
     return;

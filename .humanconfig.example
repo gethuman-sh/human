@@ -82,6 +82,16 @@ me:
     - Your Name
     - your-github-login
 
+# How the board looks. The other half of the "mine vs someone else's"
+# distinction above: `me` decides which cards are yours, `dim_percent` decides
+# how faint the rest render, as a percent of full opacity (5–100). 100 turns
+# the dimming off entirely. Omit it — or omit the whole section, or set 0 —
+# for the shipped default of 35; a value outside the range falls back to it
+# too, so a typo can never hide a column. Editable from the desktop app's
+# Settings > Appearance.
+ui:
+  dim_percent: 35
+
 proxy:
   mode: allowlist
   domains:

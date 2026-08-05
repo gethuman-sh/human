@@ -290,4 +290,11 @@ type BoardView struct {
 	// first). The frontend sorts each column by it; cards absent from their
 	// queue's list render after it in fetch order.
 	ColumnOrder map[string][]string `json:"columnOrder,omitempty"`
+	// DimPercent is how visible a card owned by someone else renders, in
+	// percent of full opacity, as declared in .humanconfig's "ui" section
+	// (SC-3409). Viewer-local like ColumnOrder: filled by the desktop overlay
+	// (applyLocal), never by Compose. ZERO MEANS UNDECLARED and is omitted from
+	// the wire, so a project that configured nothing ships exactly today's
+	// payload and the frontend leaves the stylesheet's :root fallback alone.
+	DimPercent int `json:"dimPercent,omitempty"`
 }

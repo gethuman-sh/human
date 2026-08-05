@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/appearance"
 	"github.com/gethuman-sh/human/internal/appsession"
 	"github.com/gethuman-sh/human/internal/board"
 	"github.com/gethuman-sh/human/internal/boardprefs"
@@ -95,6 +96,10 @@ type App struct {
 	// viewerConfig reads the declared "me" identity for a project directory,
 	// indirected for the same testing reason. Always vieweridentity.Load.
 	viewerConfig func(dir string) (vieweridentity.Identity, error)
+	// appearanceConfig reads the declared "ui" appearance for a project
+	// directory, indirected for the same testing reason as viewerConfig.
+	// Always appearance.Load.
+	appearanceConfig func(dir string) (appearance.Appearance, error)
 }
 
 // NewApp constructs the backend. Wails injects the lifecycle context via
@@ -107,6 +112,7 @@ func NewApp() *App {
 		session:          appsession.NewStore(appsession.DefaultPath()),
 		currentUserFetch: daemon.GetCurrentUserName,
 		viewerConfig:     vieweridentity.Load,
+		appearanceConfig: appearance.Load,
 	}
 }
 
@@ -135,7 +141,7 @@ func (a *App) Cards() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info))
+	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info), a.boardAppearance(info))
 	// The keep sets come from `results` — the same fetch CanPrune judges — not
 	// from the composed view, which is a separate request that can answer with
 	// an empty board while this one is healthy (SC-2400).
@@ -265,7 +271,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info)), nil
+	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info), a.boardAppearance(info)), nil
 }
 
 // viewerIdentity returns the names that mean "me" for the board's ownership
@@ -301,6 +307,27 @@ func (a *App) viewerIdentity(info daemon.DaemonInfo) vieweridentity.Identity {
 	a.currentUser = name
 	a.currentUserResolved = true
 	return identityOf(a.currentUser)
+}
+
+// boardAppearance resolves how faint a not-mine card should render for this
+// project, as a percent of full opacity. It is deliberately NOT memoized like
+// currentUser: the value is a person's live preference, so editing it in the
+// settings page and refreshing the board must show the change without
+// restarting the app.
+//
+// Zero — no project dir, an unreadable or unparseable config, nothing
+// declared, or a value outside the usable range — means "say nothing", and
+// the frontend then leaves the stylesheet's shipped default in force.
+func (a *App) boardAppearance(info daemon.DaemonInfo) int {
+	dir := projectKeyOf(info)
+	if dir == "" {
+		return 0
+	}
+	ui, err := a.appearanceConfig(dir)
+	if err != nil {
+		return 0
+	}
+	return ui.DimPercent()
 }
 
 // identityOf lifts a single tracker-reported name into an Identity, dropping an
@@ -344,8 +371,8 @@ func (a *App) boardView(info daemon.DaemonInfo) (daemon.BoardView, []daemon.Trac
 // boardFromResults composes the shared board and then applies this viewer's own
 // overlay. The split is the point: Compose produces what is true of the project,
 // applyLocal adds what is true only of the person looking.
-func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity) BoardData {
-	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs, viewer)
+func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity, dimPercent int) BoardData {
+	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs, viewer, dimPercent)
 }
 
 // applyLocal fills the fields Compose deliberately leaves blank because they
@@ -354,7 +381,7 @@ func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool
 //
 // Hidden cards are marked, not dropped — the frontend filters them so a user can
 // reveal them without a refetch, which is why Compose returns them at all.
-func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity) BoardData {
+func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity, dimPercent int) BoardData {
 	view.ColumnOrder = prefs.Columns
 	for i := range view.Cards {
 		c := &view.Cards[i]
@@ -369,6 +396,10 @@ func applyLocal(view daemon.BoardView, ideaCols map[string]int, mocks map[string
 	}
 	// Ownership is viewer-local, like Hidden: dim cards owned by someone else.
 	board.MarkOwnership(view.Cards, viewer)
+	// The dimming STRENGTH is viewer-local for the same reason the identity is:
+	// both are declared in this machine's .humanconfig, and neither belongs to
+	// the shared board Compose returns.
+	view.DimPercent = dimPercent
 	return view
 }
 
