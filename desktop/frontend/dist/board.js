@@ -9,6 +9,7 @@
 // The fancy hooks no-op while the classic theme is active, so they are safe to
 // call unconditionally on the hot paths below.
 import { celebrateDrop, ghostTilt, initFancy, isThemeToggleChord, toggleTheme, trail, } from "./fancy.js";
+import { applyNotMineOpacity } from "./appearance.js";
 import { initPermissions } from "./permissions.js";
 import { bugsHeaderHTML, securityHeaderHTML, gardeningHeaderHTML } from "./board-findbugs.js";
 import { initMockupsView, showMockups, setPendingMockupSlug, setChosenMockup, } from "./mockupsview.js";
@@ -1689,6 +1690,11 @@ function restoreColumnScroll(board, scroll) {
 // requested during a drag are deferred and flushed by endDrag().
 let pendingRender = false;
 function render() {
+    // Appearance rides the board payload, so every render re-asserts what the
+    // current config says — editing dim_percent and refreshing shows the new
+    // dimming with no rebuild. Set before the drag guard: it is a cheap,
+    // idempotent property write and must not wait for a drag to end.
+    applyNotMineOpacity(document.documentElement, current.dimPercent);
     if (dragging) {
         pendingRender = true;
         return;

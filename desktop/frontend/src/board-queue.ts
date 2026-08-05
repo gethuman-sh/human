@@ -356,6 +356,9 @@ export interface BoardPayload<C> {
   notice?: string;
   truncation?: string;
   columnOrder?: Record<string, string[]>;
+  // Declared not-mine dimming, in percent of full opacity; absent means the
+  // stylesheet default applies (SC-3409).
+  dimPercent?: number;
 }
 
 export interface BoardState<C> {
@@ -365,6 +368,7 @@ export interface BoardState<C> {
   notice: string;
   truncation: string;
   columnOrder?: Record<string, string[]>;
+  dimPercent?: number;
 }
 
 // boardStateFromPayload normalizes a BoardData fetch into the runtime `current`
@@ -380,6 +384,7 @@ export function boardStateFromPayload<C>(payload: BoardPayload<C>, suppressError
     notice: payload.notice || "",
     truncation: payload.truncation || "",
     columnOrder: payload.columnOrder,
+    dimPercent: payload.dimPercent,
   };
 }
 

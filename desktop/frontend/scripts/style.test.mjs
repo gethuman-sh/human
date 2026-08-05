@@ -250,3 +250,15 @@ test("whose-turn colour tokens are defined (SC-1830)", () => {
     assert.match(css, decl, `:root must define ${decl}`);
   }
 });
+
+// SC-3409: the config-declared dimming overrides this token at render time, so
+// the :root value is the SHIPPED FALLBACK and must stay in lockstep with
+// internal/appearance.DefaultDimPercent — a drift would make an unconfigured
+// board and a board configured to the default render differently.
+test("the :root fallback equals the Go default dim percent (SC-3409)", () => {
+  const token = Number(ruleBody(":root").match(/--not-mine-opacity:\s*([\d.]+)/)[1]);
+  const go = readFileSync(resolve(here, "..", "..", "..", "internal", "appearance", "appearance.go"), "utf8");
+  const def = go.match(/DefaultDimPercent\s*=\s*(\d+)/);
+  assert.ok(def, "internal/appearance must define DefaultDimPercent");
+  assert.equal(token, Number(def[1]) / 100, "style.css :root must match DefaultDimPercent");
+});
