@@ -167,6 +167,16 @@ type BoardViewCard struct {
 	// Verdict is the latest review's verdict line; a failing verdict pins the
 	// card in the Code lane with a warning instead of letting it advance.
 	Verdict string `json:"verdict,omitempty"`
+	// VerdictFailed is VerdictFailed(Verdict) computed HERE, so the board never
+	// re-derives it. The frontend used to run its own prefix test that matched
+	// only "fail", while the daemon's also matches "incomplete" — a verdict the
+	// reviewer genuinely posts ("blocks deploy and loops the work back to be
+	// built, exactly like a fail"). The two answers disagreed by one word: the
+	// board put the card in Deploy and withheld the rework gesture while the
+	// daemon refused every drop, leaving the card with no move that could
+	// succeed. Shipping the decision instead of the input leaves the board
+	// nothing to get wrong.
+	VerdictFailed bool `json:"verdictFailed,omitempty"`
 	// ShippedPartial / ShippedPartialFollowOn surface the durable shipped-partial
 	// trace on the card (SC-2910): the ticket shipped with acceptance criteria
 	// deferred to the named follow-on ticket. The frontend renders a "partial

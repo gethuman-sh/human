@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
+import { queueOf, isReworkable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
 import { DAEMON_FORWARDED_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -513,4 +513,31 @@ test("boardStateFromPayload carries dimPercent through the mapping (SC-3409)", (
 // the renderer as a distinct answer so it leaves the stylesheet alone.
 test("boardStateFromPayload leaves dimPercent undefined when the payload omits it (SC-3409)", () => {
   assert.equal(boardStateFromPayload({}).dimPercent, undefined);
+});
+
+// The board reads the daemon's decision, never the verdict string. These two
+// used to be separate implementations one word apart: Go treated "incomplete"
+// as blocking, the board did not. An incomplete review therefore rendered in
+// Ready to Deploy with no Rework gesture, while the daemon refused every drop —
+// a card whose only offered move could not succeed.
+test("verdictFailed prefers the daemon's decision over the verdict text", () => {
+  // The flag wins even when the text would say otherwise, in both directions.
+  assert.equal(verdictFailed({ verdict: "pass", verdictFailed: true }), true);
+  assert.equal(verdictFailed({ verdict: "fail", verdictFailed: false }), false);
+});
+
+test("the legacy fallback matches the Go rule, including incomplete", () => {
+  // Only reached for a payload from a daemon predating the field.
+  assert.equal(verdictFailed({ verdict: "fail — three findings" }), true);
+  assert.equal(verdictFailed({ verdict: "incomplete" }), true);
+  assert.equal(verdictFailed({ verdict: "Incomplete: one criterion unmet" }), true);
+  assert.equal(verdictFailed({ verdict: "pass" }), false);
+  assert.equal(verdictFailed({ verdict: "pass with notes" }), false);
+  assert.equal(verdictFailed({}), false, "absence of a verdict is not failure");
+});
+
+test("an incomplete verdict keeps the card in Code and offers Rework", () => {
+  const card = { stage: "verification", state: "done", verdict: "incomplete", verdictFailed: true, branch: "b" };
+  assert.equal(queueOf(card), "building", "must not sit in Ready to Deploy — the daemon refuses that drop");
+  assert.equal(isReworkable(card), true, "the one gesture that can move it must be offered");
 });
