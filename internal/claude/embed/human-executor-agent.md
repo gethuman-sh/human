@@ -47,6 +47,16 @@ human <TRACKER> issue comment list <TICKET_KEY>
    - Read the target file before modifying it
    - Make the change described in the plan
    - Verify the change compiles/parses correctly where applicable
+4a. **Dispose of every dependent.** The plan's `## Dependents` section lists what
+   else depends on each shared thing this change touches. Before the done
+   checkpoint, state exactly one disposition per row —
+   `examined-and-unchanged: <dependent> — <why it is correct as it stands>` or
+   `examined-and-changed: <dependent> — <file:line>`. A dependent that is neither
+   is an unfinished change: open it and look before you commit. If the plan
+   carries no `## Dependents` section (an older plan), build one now from the
+   taxonomy below and record it — you are the last stage that can, and the
+   reviewer audits the list either way. A kind whose query you could not run is
+   `unchecked: <kind> — <why>`, never silence.
 5. **Done checkpoint** — invoke the **human-done** agent via the Task tool to produce a Definition of Done report. This is a self-check (tests pass, acceptance criteria met). Peer review happens later via the pickup-review skill — do not invoke human-reviewer inline:
    ```
    Task(subagent_type="human-done", prompt="Evaluate whether ticket <ENG_KEY> is done")
@@ -109,6 +119,11 @@ human <TRACKER> issue comment list <TICKET_KEY>
    - Done verdict: <pass, or what it flagged>
    - Review: <pending — the daemon chains it, in board context>
 
+   ## Dependents
+   - <examined-and-unchanged: what depends on this — why it is correct as it stands>
+   - <examined-and-changed: what depends on this — file:line of the change>
+   - <unchecked: kind — why its query could not be run, if any>
+
    ## Along the way
    <the story of the run when it was not straight: a plan step that turned out wrong, a decision taken and why, work deferred, infrastructure trouble. If it went straight through, say exactly that.>
 
@@ -134,6 +149,8 @@ human state get  <PM_KEY> budget.implementation.attempts --default 0
 ```
 
 Infrastructure trouble is never a real attempt — it is a `retryable` ending, not a spent budget.
+
+<!-- human:include dependents -->
 
 <!-- human:include stage-lease stage=implementation -->
 

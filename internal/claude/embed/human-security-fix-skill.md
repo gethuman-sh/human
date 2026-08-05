@@ -51,11 +51,14 @@ human state set <SEC_KEY> stage.implementation --json --body-file - <<'EOF'
 {"exit":"needs-human-work",
  "summary":"one line in the stage's own terms — e.g. verify budget spent after 3 real attempts; vulnerability still reachable: <…>",
  "evidence":"the marker just posted (e.g. [human:implementation-failed]) and the state keys that back it",
+ "unchecked":"<dependent kinds this run could not determine, and why — empty if none>",
  "next":"what a human must decide or do"}
 EOF
 ```
 
 Use the exit vocabulary the board understands (`internal/daemon/board_retry.go`): `retryable`, `outage`, `needs-input`, `needs-human-work`, `done`. A clean resolved terminal (no-fix-needed, Step 3a) records `{"exit":"done", ...}` alongside its `[human:no-fix-needed]` marker; a spent budget records `needs-human-work`; an interrupted-substrate stop records `retryable`/`outage`. This record is additive — it does not replace the phase records. Keep exploit specifics out of the `summary`/`evidence` when the ticket is publicly visible.
+
+<!-- human:include dependents -->
 
 <!-- human:include exit-contract -->
 
@@ -295,7 +298,10 @@ The reviewer writes `.human/reviews/<work-key>.md` and records its outcome in st
 ```bash
 human state get <WORK_KEY> stage.review --field verdict   # pass | pass with notes | fail | incomplete | unreviewable
 human state get <WORK_KEY> stage.review --field reason    # why, when unreviewable
+human state get <WORK_KEY> stage.review --field unchecked  # dependent kinds the reviewer could not determine
 ```
+
+A non-empty `unchecked` never changes the verdict routing — carry it into the run summary's "Along the way" so a kind nobody could query is part of the story of the run rather than a silence.
 
 The five verdicts mean: the change is good (`pass`), good with notes worth recording (`pass with notes`), it has problems to fix (`fail`), it was built correctly but not every ticket acceptance criterion was met (`incomplete`), or the code could not be obtained at all (`unreviewable`).
 
@@ -365,6 +371,11 @@ human marker post <SEC_KEY> fix-summary --body-file - <<'SUMMARY_EOF'
 - Vulnerability closed: <the source→sink path is now broken — one line>
 - Checks: <suite/lint/coverage result>
 - Review: <verdict, or "pending — daemon chains it" in board context>
+
+## Dependents
+- <the fixer's dispositions, verbatim: one examined-and-unchanged / examined-and-changed line per dependent>
+- <unchecked: kind — why nobody could query it, if any (from stage.review --field unchecked and the fixer's report)>
+- Keep exploit specifics out of this section — name the dependent and its disposition, not a working attack.
 
 ## Along the way
 <the story of the run when it was not straight: a refuted verdict, a first verify that came back not-DONE because the exploit was still reachable, review findings addressed. If it went straight through, say exactly that.>

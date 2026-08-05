@@ -41,11 +41,18 @@ Use `human tracker list` first when multiple trackers are configured.
 <!-- human:include build-gate -->
    Where no test runner is found at all, rely on the regression test you ran directly in step 3.
    - Confirm the new test passes and no existing tests regress. If a check fails, do **not** stop on the first failure — apply the retry budget below. Only when the budget is spent do you stop and report what failed; never push a broken branch.
+5a. **Dispose of every dependent.** The plan's `## Dependents` section lists what
+   else depends on each shared thing this fix touches. Before you commit, state
+   one disposition per row — `examined-and-unchanged: <dependent> — <why it is
+   correct as it stands>` or `examined-and-changed: <dependent> — <file:line>`. A
+   dependent that is neither is an unfinished fix. A kind whose query you could
+   not run is `unchecked: <kind> — <why>`. If the plan has no `## Dependents`
+   section, build one from the taxonomy below for the kinds this fix triggers.
 6. **Commit** — one or more commits, each starting with the canonical prefix from `human commits prefix <BUG_KEY> [<ENG_KEY>]` (both keys in split topology, the single bug key otherwise), e.g. `[<PM_KEY>] [<ENG_KEY>] Fix <summary>`.
 7. **Push (conditional)** —
    - **Standalone run**: push the branch: `git push -u origin autofix/<work-key>`.
    - **Board context** (the dispatch prompt contains "BOARD CONTEXT: do NOT run git push"): do NOT push. The workspace is the bind-mounted host repo, so the local branch is already where the daemon's Deploy stage picks it up. Read the branch name from `git rev-parse --abbrev-ref HEAD`. Never push and never fail for missing push credentials.
-8. **Report** the branch name, the commit SHAs (`human commits for <BUG_KEY>` lists them), and a short red→green summary (the failing-then-passing test output). In board context, explicitly note the branch was left local (not pushed).
+8. **Report** the branch name, the commit SHAs (`human commits for <BUG_KEY>` lists them), and a short red→green summary (the failing-then-passing test output). In board context, explicitly note the branch was left local (not pushed). Report the dependent dispositions from step 5a verbatim (one line each) — the calling skill copies them into the run's `[human:fix-summary]` comment, which is where the reviewer reads them.
 
 ## Retry budget and flakes
 
@@ -62,6 +69,8 @@ human state get  <WORK_KEY> budget.fix.attempts --default 0
 ```
 
 Infrastructure trouble — a dead container, a network blip, a runner that never started — is never a real attempt; it is a `retryable` ending. Say so rather than spending the budget on it.
+
+<!-- human:include dependents -->
 
 <!-- human:include stage-lease stage=fix -->
 
