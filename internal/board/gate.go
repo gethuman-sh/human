@@ -51,18 +51,92 @@ func PMRoleNotice(results []daemon.TrackerIssuesResult) string {
 	}
 	var found []string
 	for _, r := range results {
-		// A tracker that errored is reported through its own error banner, not
-		// as a role-misconfiguration hint — skip it so the notice names only
-		// trackers that genuinely resolved without the pm role.
+		// A tracker that errored is reported through the error banner
+		// (ErrorBanner), not as a role-misconfiguration hint — skip it so the
+		// notice names only trackers that genuinely resolved without the pm role.
 		if r.Err != "" {
 			continue
 		}
 		found = append(found, fmt.Sprintf("%s (%s)", r.TrackerName, r.TrackerKind))
 	}
 	if len(found) == 0 {
+		// Nothing resolved at all. If every result is a failure, the honest
+		// message is the error banner — role advice would send the user to edit
+		// a .humanconfig that needs no editing (SC-3554). Only a genuinely
+		// tracker-less install gets the setup hint.
+		if anyFailed(results) {
+			return ""
+		}
 		return "No PM-role tracker configured. Add role: pm to a tracker in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\")."
 	}
 	return fmt.Sprintf("No PM-role tracker configured. Found %s, but none has role: pm — add role: pm to one in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").", strings.Join(found, ", "))
+}
+
+// ErrorBanner is every failure in a fetch, joined into the one line the board
+// shows above the columns.
+//
+// It reads ALL results rather than the PM-role one, because the failure this
+// exists for belongs to no tracker at all: a tracker whose credentials could
+// not be resolved never became a tracker, so it carries no name, kind or role
+// (cmd/cmddaemon appends it as a bare error result). Reading the failure off
+// the PM result made the board's error channel reachable only through a
+// tracker that had already succeeded — so a credential outage rendered as
+// role-misconfiguration advice with no banner at all (SC-3554).
+//
+// Failures that belong to no tracker lead: a load failure names the cause the
+// user can act on ("unlock your secret store"), where a fetch failure is
+// usually its downstream consequence. Identical messages are said once — one
+// instance configured with several projects fails once per project.
+//
+// An empty string means the fetch carried no failure at all.
+func ErrorBanner(results []daemon.TrackerIssuesResult) string {
+	var unattributed, attributed []string
+	for _, r := range results {
+		if r.Err == "" {
+			continue
+		}
+		if r.TrackerName == "" {
+			unattributed = append(unattributed, r.Err)
+			continue
+		}
+		attributed = append(attributed, attributeFailure(r))
+	}
+	return strings.Join(dedupe(append(unattributed, attributed...)), "; ")
+}
+
+// attributeFailure names the tracker a failure came from, because a bare
+// "401 unauthorized" does not say whose credentials expired when more than one
+// tracker is configured.
+func attributeFailure(r daemon.TrackerIssuesResult) string {
+	if r.TrackerKind == "" {
+		return fmt.Sprintf("%s: %s", r.TrackerName, r.Err)
+	}
+	return fmt.Sprintf("%s (%s): %s", r.TrackerName, r.TrackerKind, r.Err)
+}
+
+// dedupe keeps the first occurrence of each message. Order is preserved so the
+// failure that leads the banner stays the one the caller put first.
+func dedupe(msgs []string) []string {
+	seen := make(map[string]struct{}, len(msgs))
+	out := msgs[:0:0]
+	for _, m := range msgs {
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		out = append(out, m)
+	}
+	return out
+}
+
+// anyFailed reports whether the fetch carried any failure at all.
+func anyFailed(results []daemon.TrackerIssuesResult) bool {
+	for _, r := range results {
+		if r.Err != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // CanPrune reports whether a fetch is trustworthy enough to prune local view

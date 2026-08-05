@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/board"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -75,4 +76,18 @@ func TestAnyIssues_DistinguishesRealWorkFromAnAllErrorListing(t *testing.T) {
 	}), "an all-error listing must never become the fallback")
 
 	assert.False(t, anyIssues(nil))
+}
+
+// The announcement only counts if it reaches the screen: the board dropped it
+// because it rides a result that belongs to no tracker, so stale cards rendered
+// as current (SC-3554).
+func TestStaleListing_StalenessReachesTheBoard(t *testing.T) {
+	served, err := staleListing(goodListing(), errors.New("boom"))
+	require.NoError(t, err)
+
+	view := board.Compose(served, true)
+
+	assert.Contains(t, view.Error, "this refresh failed", "stale cards must not render as current")
+	assert.Contains(t, view.Error, "boom")
+	assert.Len(t, view.Cards, 1, "the announcement must not cost the cards")
 }
