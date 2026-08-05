@@ -179,7 +179,8 @@ func TestNeedsPlanningNotRepostedButDrivenWhenAlreadySurfaced(t *testing.T) {
 
 // TestNeedsPlanningNotRepostedWhenLaterFailureLands is the regression test for
 // defect B: the old guard keyed its dedup on the newest marker OVERALL
-// (newestNeedsPlanning), so a later *-failed marker on another stage defeated
+// (the newest-marker-overall rule, now newestTerminalDetermination), so a later
+// *-failed marker on another stage defeated
 // it and the refusal was re-posted once per attempt. The fix keys the dedup on
 // the newest PLANNING-STAGE marker instead (latestStateInStage(comments,
 // BoardPlanning)), which a later implementation-stage marker cannot displace.
