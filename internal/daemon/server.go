@@ -155,6 +155,9 @@ type Server struct {
 	// Ideation owns the board's single agent-driven ideation session. nil
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
+	// DescEdit owns the Product-Backlog description-edit chat (SC-2873). nil
+	// disables the descedit-start/reply/apply/status routes.
+	DescEdit *DescEditEngine
 	// LeaseChecker answers whether the given project currently has any live
 	// (non-expired) stage lease — the daemon-busy route's authoritative half
 	// (the desktop close flow's other half, "is any Claude Code instance
@@ -543,6 +546,10 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"ideation-approve":   func() { s.withBlockingOp(func() { s.handleIdeationApprove(conn, args[1:]) }) },
 		"ideation-status":    func() { s.handleIdeationStatus(conn) },
 		"idea-create":        func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
+		"descedit-start":     func() { s.withBlockingOp(func() { s.handleDescEditStart(conn, args[1:]) }) },
+		"descedit-reply":     func() { s.withBlockingOp(func() { s.handleDescEditReply(conn, args[1:]) }) },
+		"descedit-apply":     func() { s.withBlockingOp(func() { s.handleDescEditApply(conn, args[1:]) }) },
+		"descedit-status":    func() { s.handleDescEditStatus(conn) },
 		"bug-create":         func() { s.withBlockingOp(func() { s.handleBugCreate(conn, args[1:]) }) },
 		"fsm-where":          func() { s.handleFSMWhere(conn, args[1:]) },
 		"security-create":    func() { s.withBlockingOp(func() { s.handleSecurityCreate(conn, args[1:]) }) },

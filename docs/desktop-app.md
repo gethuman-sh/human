@@ -185,6 +185,33 @@ Requires the `claude` CLI installed and authenticated on the daemon host — if
 the binary is missing or the agent turn fails (e.g. not logged in), the panel
 surfaces a visible session error rather than hanging.
 
+## Refining a description — Product Backlog chat editor (SC-2873)
+
+Clicking a card in the Product Backlog lane opens a centered split-view
+**modal** — description on the left, a scoped chat on the right — instead of
+the read-only slide-out detail panel every other lane still opens (the click
+routing guard is `queueOf(card) === "product"`, matching the lane resolution
+`board-queue.ts` already uses elsewhere, not the raw wire stage). This is a
+deliberate, narrow first step (see the ticket's Known Limitation): only the
+Product Backlog lane's click target changed.
+
+The chat is scoped to rewriting the description text only — it declines to
+discuss title, acceptance criteria, labels or any other field. A rewrite the
+agent proposes appears in the left pane as a visibly distinct "Proposed
+rewrite (unsaved)" preview; nothing reaches the tracker until the user clicks
+Apply. Closing the modal without Apply discards nothing but the unwritten
+proposal — the daemon-side chat session itself stays alive and re-attaches on
+reopen, mirroring the ideation panel's AD-4 lifecycle above, but unlike
+ideation the session is **not** persisted across a daemon restart (an
+in-progress, unsaved edit is cheap to lose since nothing was ever written).
+
+The panel talks to four dedicated daemon routes — `descedit-start`,
+`descedit-reply`, `descedit-apply`, `descedit-status` — following the same
+single-JSON-argument route pattern as the ideation routes above. `Apply`
+writes through the role-resolved PM tracker's `Editor`, touching only the
+`Description` field of `tracker.EditOptions` — `Title` and label fields are
+never set, so the write path cannot drift into editing anything else.
+
 ## macOS code-signing / notarization (release-gating follow-up)
 
 `wails build` does NOT sign or notarize the macOS `.app` — it delegates to Apple's `codesign` / `notarytool` with operator-provided signing identities and secrets. Shipping a notarized macOS build is therefore a release-gating follow-up, not covered by the CI matrix above.

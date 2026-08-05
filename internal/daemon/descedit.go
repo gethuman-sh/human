@@ -1,0 +1,356 @@
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/rs/zerolog"
+
+	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/tracker"
+)
+
+// DescEditState is the lifecycle state of one Product-Backlog description-edit
+// chat session.
+type DescEditState string
+
+const (
+	DescEditNone          DescEditState = "none"
+	DescEditThinking      DescEditState = "thinking"
+	DescEditAwaitingReply DescEditState = "awaiting_reply"
+	DescEditApplied       DescEditState = "applied" // terminal for this session — reopen starts a fresh one
+	DescEditError         DescEditState = "error"
+)
+
+// DescEditMessage is one transcript entry. Role is "user", "agent", or
+// "system" (the latter only for the Apply confirmation line).
+type DescEditMessage struct {
+	Role string    `json:"role"`
+	Text string    `json:"text"`
+	Time time.Time `json:"time"`
+}
+
+// DescEditStatus is the wire snapshot returned by every description-edit route.
+type DescEditStatus struct {
+	SessionID  string            `json:"session_id,omitempty"`
+	Key        string            `json:"key,omitempty"`
+	State      DescEditState     `json:"state"`
+	Transcript []DescEditMessage `json:"transcript,omitempty"`
+	// Proposal is the latest agent-proposed replacement description text.
+	// Empty means no live proposal — the left pane shows the saved description.
+	Proposal   string `json:"proposal,omitempty"`
+	AppliedURL string `json:"applied_url,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// DescEditStartRequest starts (or re-attaches to) the chat for one ticket.
+// CurrentDescription seeds the agent's context — the caller fetches it via
+// the existing GetIssueDetail route first (some trackers' list fetches omit
+// descriptions).
+type DescEditStartRequest struct {
+	Key                string `json:"key"`
+	CurrentDescription string `json:"current_description"`
+	Restart            bool   `json:"restart,omitempty"`
+}
+
+// DescEditReplyRequest sends the user's chat message into a running session.
+type DescEditReplyRequest struct {
+	SessionID string `json:"session_id"`
+	Message   string `json:"message"`
+}
+
+// DescEditApplyRequest writes the session's current proposal to the tracker.
+type DescEditApplyRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+// DescEditRunner runs one headless agent turn for the description-edit chat.
+// Same shape as IdeationRunner (Run returns an IdeationTurn) — kept as a
+// distinct interface so the two engines' agent backends can diverge without
+// coupling, even though the daemon wires both to the same host-claude runner.
+type DescEditRunner interface {
+	Run(ctx context.Context, resumeID, prompt string) (IdeationTurn, error)
+}
+
+type descEditSession struct {
+	id                 string
+	key                string
+	currentDescription string
+	state              DescEditState
+	transcript         []DescEditMessage
+	resumeID           string
+	proposal           string
+	appliedURL         string
+	errMsg             string
+	repairAttempted    bool
+}
+
+// DescEditEngine owns the single active Product-Backlog description-edit
+// session. All exported methods are safe for concurrent use. Unlike
+// IdeationEngine, sessions are NOT persisted across a daemon restart: nothing
+// is ever written to the tracker before Apply, so losing an in-progress,
+// unsaved chat is low-cost (see plan's Architecture Decisions).
+type DescEditEngine struct {
+	Runner        DescEditRunner
+	ResolveEditor PMEditorResolver // reused from ideation.go — role-resolved PM tracker.Editor
+	TurnTimeout   time.Duration    // defaults to 5 * time.Minute when zero
+	Logger        zerolog.Logger
+
+	mu   sync.Mutex
+	sess *descEditSession
+}
+
+// descEditSessionSeq guarantees unique session IDs even when Start is called
+// twice within the same clock tick — on some hosts UnixNano() resolves no
+// finer than ~1µs, so two back-to-back calls collide most of the time on a
+// timestamp alone.
+var descEditSessionSeq int64
+
+func newDescEditSessionID() string {
+	return fmt.Sprintf("descedit-%d-%d", time.Now().UnixNano(), atomic.AddInt64(&descEditSessionSeq, 1))
+}
+
+func (e *DescEditEngine) turnTimeout() time.Duration {
+	if e.TurnTimeout > 0 {
+		return e.TurnTimeout
+	}
+	return 5 * time.Minute
+}
+
+func (e *DescEditEngine) snapshot() DescEditStatus {
+	if e.sess == nil {
+		return DescEditStatus{State: DescEditNone}
+	}
+	s := e.sess
+	return DescEditStatus{
+		SessionID:  s.id,
+		Key:        s.key,
+		State:      s.state,
+		Transcript: append([]DescEditMessage(nil), s.transcript...),
+		Proposal:   s.proposal,
+		AppliedURL: s.appliedURL,
+		Error:      s.errMsg,
+	}
+}
+
+// Start begins a new session, or re-attaches to an active one for the SAME
+// key (AD-mirroring ideation's AD-4: closing the modal does not abandon the
+// session). A different key or Restart:true always starts fresh — no LLM
+// turn fires here; the session opens idle (see Architecture Decisions).
+func (e *DescEditEngine) Start(req DescEditStartRequest) (DescEditStatus, error) {
+	if strings.TrimSpace(req.Key) == "" {
+		return DescEditStatus{}, errors.WithDetails("description-edit key must not be empty")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sess != nil && e.sess.key == req.Key && !req.Restart &&
+		(e.sess.state == DescEditThinking || e.sess.state == DescEditAwaitingReply) {
+		return e.snapshot(), nil
+	}
+	e.sess = &descEditSession{
+		id:                 newDescEditSessionID(),
+		key:                req.Key,
+		currentDescription: req.CurrentDescription,
+		state:              DescEditAwaitingReply,
+	}
+	return e.snapshot(), nil
+}
+
+// Reply feeds the user's chat message into the running session. The first
+// real turn (resumeID empty) carries the full scoped system prompt plus the
+// current description; later turns rely on --resume for continuity and send
+// only the plain message (mirrors ideation's Start-vs-Reply prompt split).
+func (e *DescEditEngine) Reply(req DescEditReplyRequest) (DescEditStatus, error) {
+	if strings.TrimSpace(req.Message) == "" {
+		return DescEditStatus{}, errors.WithDetails("description-edit reply message must not be empty")
+	}
+	e.mu.Lock()
+	if e.sess == nil || req.SessionID != e.sess.id {
+		e.mu.Unlock()
+		return DescEditStatus{}, errors.WithDetails("no matching description-edit session", "session", req.SessionID)
+	}
+	if e.sess.state != DescEditAwaitingReply {
+		state := e.sess.state
+		e.mu.Unlock()
+		return DescEditStatus{}, errors.WithDetails("description-edit session is not awaiting a reply", "state", string(state))
+	}
+	e.sess.transcript = append(e.sess.transcript, DescEditMessage{Role: "user", Text: req.Message, Time: time.Now()})
+	e.sess.state = DescEditThinking
+	resumeID := e.sess.resumeID
+	sessID := e.sess.id
+	currentDescription := e.sess.currentDescription
+	snap := e.snapshot()
+	e.mu.Unlock()
+
+	prompt := req.Message
+	if resumeID == "" {
+		prompt = descEditSystemPrompt(currentDescription) + "\n\nUser: " + req.Message
+	}
+	go e.runTurn(sessID, resumeID, prompt)
+	return snap, nil
+}
+
+// Status returns the current snapshot; State==DescEditNone when no session.
+func (e *DescEditEngine) Status() DescEditStatus {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.snapshot()
+}
+
+// Apply writes the session's current proposal to the tracker via the
+// role-resolved PM Editor, touching ONLY the Description field — Title and
+// labels are left nil, so this can never drift into editing other fields
+// (the AC's scope guarantee). Idempotent: re-calling after a successful
+// apply returns the same terminal snapshot without re-writing.
+func (e *DescEditEngine) Apply(req DescEditApplyRequest) (DescEditStatus, error) {
+	e.mu.Lock()
+	if e.sess == nil || req.SessionID != e.sess.id {
+		e.mu.Unlock()
+		return DescEditStatus{}, errors.WithDetails("no matching description-edit session", "session", req.SessionID)
+	}
+	if e.sess.state == DescEditApplied {
+		snap := e.snapshot()
+		e.mu.Unlock()
+		return snap, nil
+	}
+	if strings.TrimSpace(e.sess.proposal) == "" {
+		state := e.sess.state
+		e.mu.Unlock()
+		return DescEditStatus{}, errors.WithDetails("no proposed rewrite to apply yet", "state", string(state))
+	}
+	key := e.sess.key
+	proposal := e.sess.proposal
+	sessID := e.sess.id
+	e.mu.Unlock()
+
+	if e.ResolveEditor == nil {
+		return DescEditStatus{}, errors.WithDetails("no PM ticket editor configured")
+	}
+	editor, err := e.ResolveEditor()
+	if err != nil {
+		return DescEditStatus{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	updated, err := editor.EditIssue(ctx, key, tracker.EditOptions{Description: &proposal})
+	if err != nil {
+		return DescEditStatus{}, errors.WrapWithDetails(err, "saving description edit", "key", key)
+	}
+	if updated == nil {
+		return DescEditStatus{}, errors.WithDetails("tracker returned no issue for the description edit", "key", key)
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sess == nil || e.sess.id != sessID {
+		return DescEditStatus{State: DescEditApplied, Key: key, AppliedURL: updated.URL}, nil
+	}
+	e.sess.state = DescEditApplied
+	e.sess.appliedURL = updated.URL
+	e.sess.transcript = append(e.sess.transcript, DescEditMessage{Role: "system", Text: "Description saved.", Time: time.Now()})
+	return e.snapshot(), nil
+}
+
+// runTurn executes one headless agent turn and applies its result. Runs in
+// its own goroutine so Reply returns immediately (mirrors ideation's AD-3).
+func (e *DescEditEngine) runTurn(sessID, resumeID, prompt string) {
+	ctx, cancel := context.WithTimeout(context.Background(), e.turnTimeout())
+	defer cancel()
+	turn, err := e.Runner.Run(ctx, resumeID, prompt)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sess == nil || e.sess.id != sessID {
+		return
+	}
+	if err != nil {
+		e.Logger.Error().Fields(errors.AllDetails(err)).Msg(errors.CauseChain(err))
+		e.sess.state = DescEditError
+		e.sess.errMsg = err.Error()
+		return
+	}
+	e.sess.resumeID = turn.ResumeID
+
+	proposal, stripped, found, perr := parseDescProposalBlock(turn.Reply)
+	switch {
+	case found && perr == nil:
+		if stripped != "" {
+			e.sess.transcript = append(e.sess.transcript, DescEditMessage{Role: "agent", Text: stripped, Time: time.Now()})
+		}
+		e.sess.proposal = proposal
+		e.sess.state = DescEditAwaitingReply
+		e.sess.repairAttempted = false
+	case found:
+		if !e.sess.repairAttempted {
+			e.sess.repairAttempted = true
+			resume := e.sess.resumeID
+			e.sess.state = DescEditThinking
+			go e.runTurn(sessID, resume, descEditRepairPrompt)
+			return
+		}
+		e.sess.transcript = append(e.sess.transcript, DescEditMessage{Role: "agent", Text: turn.Reply, Time: time.Now()})
+		e.sess.state = DescEditError
+		e.sess.errMsg = "agent emitted a malformed description-proposal block"
+	default:
+		e.sess.transcript = append(e.sess.transcript, DescEditMessage{Role: "agent", Text: turn.Reply, Time: time.Now()})
+		e.sess.state = DescEditAwaitingReply
+		e.sess.repairAttempted = false
+	}
+}
+
+const descProposalMarker = "[human:description-proposal]"
+
+var descProposalBlockRe = regexp.MustCompile(
+	`(?s)\[human:description-proposal\]\s*` + "```(?:markdown|md)?\\s*(.*?)```")
+
+// parseDescProposalBlock extracts the latest proposed replacement description
+// from an agent reply. found is true when the marker is present; err reports
+// a malformed payload (marker present but no fenced block, or an empty
+// proposal). stripped is the reply with the marker block removed and
+// trimmed, for display in the transcript (an empty stripped is normal when
+// the whole reply IS the proposal).
+func parseDescProposalBlock(reply string) (proposal, stripped string, found bool, err error) {
+	if !strings.Contains(reply, descProposalMarker) {
+		return "", reply, false, nil
+	}
+	m := descProposalBlockRe.FindStringSubmatch(reply)
+	if m == nil {
+		return "", reply, true, errors.WithDetails("description-proposal marker present but no fenced block found")
+	}
+	proposal = strings.TrimSpace(m[1])
+	if proposal == "" {
+		return "", reply, true, errors.WithDetails("description-proposal block is empty")
+	}
+	stripped = strings.TrimSpace(descProposalBlockRe.ReplaceAllString(reply, ""))
+	return proposal, stripped, true, nil
+}
+
+// descEditRepairPrompt is the one-shot corrective turn for a malformed marker
+// block. Sent via --resume, so the agent retains full conversation context.
+const descEditRepairPrompt = "Your previous message contained the [human:description-proposal] marker but the fenced " +
+	"block was missing or empty. Re-emit ONLY the line [human:description-proposal] followed by a fenced ```markdown " +
+	"code block containing the complete replacement description text — no other text."
+
+// descEditSystemPrompt builds the scoped, narrow chat discipline this ticket
+// requires: description text ONLY, never other fields, explicit user Apply.
+func descEditSystemPrompt(currentDescription string) string {
+	var b strings.Builder
+	b.WriteString("You are a description-editing assistant helping a product owner refine ONE ticket's description ")
+	b.WriteString("text through conversation. You may read the repository with read-only tools for context.\n\n")
+	b.WriteString("Your ONLY job is proposing rewrites of the description text below. Never suggest or discuss ")
+	b.WriteString("changing the title, acceptance criteria structure, labels, status, or any other ticket field — if ")
+	b.WriteString("asked, say that is out of scope for this chat.\n\n")
+	b.WriteString("Discuss phrasing, structure, and clarity in plain chat replies. When you have a concrete rewrite ")
+	b.WriteString("ready for the user's review, output the line `[human:description-proposal]` followed by a fenced ")
+	b.WriteString("```markdown code block containing the COMPLETE replacement description text (the full text, not a ")
+	b.WriteString("diff or a summary of changes). Only emit the marker when the proposal is genuinely ready for ")
+	b.WriteString("review; ordinary clarifying chat must not include it. Do not create or modify anything yourself — ")
+	b.WriteString("the user applies the change explicitly.\n\n")
+	b.WriteString("Current description:\n<description>\n" + currentDescription + "\n</description>")
+	return b.String()
+}

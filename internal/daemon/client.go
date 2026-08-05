@@ -718,6 +718,55 @@ func ideationCall(addr, token, route string, payload any) (IdeationStatus, error
 	return st, nil
 }
 
+// DescEditStart starts (or re-attaches to) a description-edit chat session
+// for one Product-Backlog ticket.
+func DescEditStart(addr, token string, req DescEditStartRequest) (DescEditStatus, error) {
+	return descEditCall(addr, token, "descedit-start", req)
+}
+
+// DescEditReply sends the user's chat message into the running
+// description-edit session.
+func DescEditReply(addr, token string, req DescEditReplyRequest) (DescEditStatus, error) {
+	return descEditCall(addr, token, "descedit-reply", req)
+}
+
+// DescEditApply writes the session's current proposed rewrite to the
+// tracker — the modal's explicit Apply/Save action.
+func DescEditApply(addr, token string, req DescEditApplyRequest) (DescEditStatus, error) {
+	return descEditCall(addr, token, "descedit-apply", req)
+}
+
+// GetDescEditStatus fetches the current description-edit session snapshot.
+func GetDescEditStatus(addr, token string) (DescEditStatus, error) {
+	out, err := RunRemoteCapture(addr, token, []string{"descedit-status"})
+	if err != nil {
+		return DescEditStatus{}, err
+	}
+	var st DescEditStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return DescEditStatus{}, errors.WrapWithDetails(err, "invalid description-edit status JSON")
+	}
+	return st, nil
+}
+
+// descEditCall marshals payload as the single JSON arg and decodes the
+// returned snapshot — mirrors ideationCall.
+func descEditCall(addr, token, route string, payload any) (DescEditStatus, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return DescEditStatus{}, errors.WrapWithDetails(err, "marshaling "+route+" request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{route, string(data)})
+	if err != nil {
+		return DescEditStatus{}, err
+	}
+	var st DescEditStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return DescEditStatus{}, errors.WrapWithDetails(err, "invalid description-edit status JSON")
+	}
+	return st, nil
+}
+
 // GetPendingConfirms fetches pending destructive operation confirmations from the daemon.
 func GetPendingConfirms(addr, token string) ([]PendingConfirm, error) {
 	out, err := RunRemoteCapture(addr, token, []string{"pending-confirms"})

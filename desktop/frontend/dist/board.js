@@ -21,6 +21,7 @@ import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
+import { descEditInputEnabled, descEditApplyEnabled, buildDescriptionPreview } from "./board-descedit.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
 import { reconcilePending, dropPending } from "./board-pending.js";
@@ -1346,11 +1347,21 @@ function beginPointerDrag(el, card) {
             // only reads its dataset, which a detached node still carries.
             if (target && allowed)
                 performDrop(target, info, { x: ev.clientX, y: ev.clientY });
-            // A press that never crossed the drag threshold is a plain click: toggle
-            // the ticket detail panel. Links/buttons never get here (pointerdown
-            // filters them), and right-clicks go to the contextmenu handler instead.
-            else if (wasClick)
-                toggleTicketDetail(card);
+            // A press that never crossed the drag threshold is a plain click. The
+            // Product Backlog lane opens the chat-assisted description editor
+            // (SC-2873); every other lane keeps the existing read-only detail panel
+            // (SC-203) unchanged — same lane guard the "Create mocks" context-menu
+            // item already uses (queueOf, not the raw wire stage). Links/buttons
+            // never get here (pointerdown filters them), and right-clicks go to the
+            // contextmenu handler instead.
+            else if (wasClick) {
+                if (queueOf(card) === "product" && !card.bug && !card.security) {
+                    void openDescEditModal(card);
+                }
+                else {
+                    toggleTicketDetail(card);
+                }
+            }
         };
         const onCancel = () => {
             teardown();
@@ -2480,6 +2491,225 @@ function renderIdeation() {
 function renderIdeationError(msg) {
     ideation = { ...ideation, state: "error", error: msg };
     renderIdeation();
+}
+// --- Product-Backlog description-edit modal (SC-2873) ----------------------
+//
+// A dynamically-built centered modal (like showBugModal), deliberately NOT
+// the fixed-edge slide-out pattern .detail-panel/.ideation-panel use — the
+// AC requires this click target to be visibly distinct. Closing the modal
+// does NOT abandon the daemon-side session (mirrors ideation's AD-4):
+// reopening the SAME ticket re-attaches via DescEditStatus-equivalent state
+// carried in StartDescEdit's reattach path. Nothing is ever written to the
+// tracker before the user clicks Apply.
+let descEdit = { state: "none", messages: [] };
+let descEditCard = null;
+let descEditSavedDescription = "";
+let descEditSavedHTML = null;
+let descEditTimer = null;
+const DESCEDIT_POLL_MS = 1000;
+function stopDescEditPoll() {
+    if (descEditTimer !== null) {
+        clearInterval(descEditTimer);
+        descEditTimer = null;
+    }
+}
+function startDescEditPoll() {
+    if (descEditTimer !== null)
+        return;
+    descEditTimer = window.setInterval(() => void pollDescEdit(), DESCEDIT_POLL_MS);
+}
+async function openDescEditModal(card) {
+    descEditCard = card;
+    descEdit = { state: "none", messages: [] };
+    descEditSavedDescription = card.description ?? "";
+    descEditSavedHTML = null;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.id = "descedit-overlay";
+    const modal = document.createElement("div");
+    modal.className = "modal descedit-modal";
+    modal.innerHTML = `
+    <div class="descedit-header">
+      <span class="descedit-key">${escapeHtml(card.key)}</span>
+      <button type="button" class="descedit-close" title="Close">×</button>
+    </div>
+    <div class="descedit-body">
+      <div class="descedit-desc-pane">
+        <div class="descedit-desc-label">Description</div>
+        <div id="descedit-desc" class="detail-description">Loading…</div>
+      </div>
+      <div class="descedit-chat-pane">
+        <div id="descedit-transcript" class="descedit-transcript ideation-transcript"></div>
+        <div id="descedit-status-line" class="descedit-status ideation-status hidden"></div>
+        <form id="descedit-form" class="descedit-form ideation-form">
+          <input id="descedit-input" type="text" autocomplete="off" placeholder="How should this description change?" />
+          <button id="descedit-send" type="submit">Send</button>
+        </form>
+      </div>
+    </div>
+    <div class="descedit-actions">
+      <button type="button" class="descedit-cancel modal-cancel">Close</button>
+      <button type="button" id="descedit-apply" class="descedit-apply modal-confirm" disabled>Apply</button>
+    </div>
+  `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    const close = () => closeDescEditModal();
+    overlay.addEventListener("click", (e) => {
+        if (e.target === overlay)
+            close();
+    });
+    modal.addEventListener("keydown", (e) => {
+        if (e.key === "Escape")
+            close();
+    });
+    modal.querySelector(".descedit-close").addEventListener("click", close);
+    modal.querySelector(".descedit-cancel").addEventListener("click", close);
+    modal.querySelector("#descedit-apply").addEventListener("click", () => void applyDescEdit());
+    modal.querySelector("#descedit-form").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const input = document.getElementById("descedit-input");
+        const text = input.value.trim();
+        if (!text)
+            return;
+        input.value = "";
+        void sendDescEditMessage(text);
+    });
+    renderDescEdit();
+    try {
+        const detail = await go().GetIssueDetail(card.trackerKind ?? "", card.tracker ?? "", card.key);
+        if (descEditCard?.key !== card.key)
+            return; // modal closed/reopened for a different ticket meanwhile
+        descEditSavedDescription = detail.description || descEditSavedDescription;
+        descEditSavedHTML = detail.descriptionHTML || null;
+        renderDescEdit();
+        descEdit = await go().StartDescEdit(card.key, descEditSavedDescription, false);
+    }
+    catch (err) {
+        if (descEditCard?.key !== card.key)
+            return;
+        descEdit = { state: "error", messages: [], error: errMessage(err) };
+    }
+    renderDescEdit();
+    if (descEdit.state === "thinking")
+        startDescEditPoll();
+}
+function closeDescEditModal() {
+    stopDescEditPoll();
+    document.getElementById("descedit-overlay")?.remove();
+    descEditCard = null;
+}
+function renderDescEdit() {
+    if (!descEditCard)
+        return;
+    const descEl = document.getElementById("descedit-desc");
+    if (descEl) {
+        const preview = buildDescriptionPreview(descEditSavedDescription, descEdit.proposal, descEdit.state);
+        descEl.classList.toggle("descedit-desc-preview", preview.isPreview);
+        if (preview.isPreview) {
+            descEl.classList.remove("rendered");
+            descEl.innerHTML =
+                `<div class="descedit-preview-badge">Proposed rewrite (unsaved)</div>` +
+                    `<div>${escapeHtml(preview.text).replaceAll("\n", "<br>")}</div>`;
+        }
+        else if (descEditSavedHTML && preview.text === descEditSavedDescription) {
+            descEl.classList.add("rendered");
+            descEl.innerHTML = descEditSavedHTML;
+        }
+        else {
+            descEl.classList.remove("rendered");
+            descEl.textContent = preview.text || "No description";
+        }
+    }
+    const transcript = document.getElementById("descedit-transcript");
+    if (transcript) {
+        transcript.innerHTML = descEdit.messages
+            .map((m) => `<div class="msg ${m.role === "user" ? "user" : "agent"}">${escapeHtml(m.text)}</div>`)
+            .join("");
+        transcript.scrollTop = transcript.scrollHeight;
+    }
+    const statusLine = document.getElementById("descedit-status-line");
+    if (statusLine) {
+        statusLine.classList.remove("hidden", "error");
+        if (descEdit.state === "thinking") {
+            statusLine.textContent = "Thinking…";
+        }
+        else if (descEdit.state === "error") {
+            statusLine.textContent = descEdit.error || "Description chat failed";
+            statusLine.classList.add("error");
+        }
+        else if (descEdit.state === "applied") {
+            statusLine.textContent = "Saved.";
+        }
+        else {
+            statusLine.classList.add("hidden");
+        }
+    }
+    const input = document.getElementById("descedit-input");
+    const send = document.getElementById("descedit-send");
+    const inputEnabled = descEditInputEnabled(descEdit.state);
+    if (input)
+        input.disabled = !inputEnabled;
+    if (send)
+        send.disabled = !inputEnabled;
+    const apply = document.getElementById("descedit-apply");
+    if (apply)
+        apply.disabled = !descEditApplyEnabled(descEdit.state, descEdit.proposal);
+}
+async function pollDescEdit() {
+    if (!descEditCard) {
+        stopDescEditPoll();
+        return;
+    }
+    try {
+        descEdit = await go().DescEditStatus();
+    }
+    catch (err) {
+        descEdit = { ...descEdit, state: "error", error: errMessage(err) };
+        stopDescEditPoll();
+        renderDescEdit();
+        return;
+    }
+    renderDescEdit();
+    if (descEdit.state !== "thinking")
+        stopDescEditPoll();
+}
+async function sendDescEditMessage(text) {
+    if (!descEditCard || !text || descEdit.state === "thinking")
+        return;
+    descEdit = { ...descEdit, state: "thinking", messages: [...descEdit.messages, { role: "user", text }] };
+    renderDescEdit();
+    startDescEditPoll();
+    try {
+        descEdit = await go().ReplyDescEdit(descEdit.sessionId, text);
+    }
+    catch (err) {
+        descEdit = { ...descEdit, state: "error", error: errMessage(err) };
+        stopDescEditPoll();
+    }
+    renderDescEdit();
+}
+async function applyDescEdit() {
+    if (!descEditCard || !descEditApplyEnabled(descEdit.state, descEdit.proposal))
+        return;
+    const applyBtn = document.getElementById("descedit-apply");
+    // Disable-on-click before the round-trip: same guard as the detail panel's
+    // decision buttons (prevents a slow daemon response from double-writing).
+    if (applyBtn)
+        applyBtn.disabled = true;
+    try {
+        descEdit = await go().ApplyDescEdit(descEdit.sessionId);
+        descEditSavedDescription = descEdit.proposal || descEditSavedDescription;
+        descEditSavedHTML = null;
+        renderDescEdit();
+        reconcileEpoch++;
+        await reconcile();
+    }
+    catch (err) {
+        showError(errMessage(err));
+        if (applyBtn)
+            applyBtn.disabled = false;
+    }
 }
 // --- Ticket detail panel ---------------------------------------------------
 //

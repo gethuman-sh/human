@@ -230,6 +230,66 @@ func TestGetIdeationStatus_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid ideation status JSON")
 }
 
+func TestGetDescEditStatus_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		assert.Equal(t, []string{"descedit-status"}, req.Args)
+		data := `{"session_id":"descedit-1","state":"awaiting_reply"}` + "\n"
+		return Response{Stdout: data}
+	})
+
+	st, err := GetDescEditStatus(addr, "tok")
+	require.NoError(t, err)
+	assert.Equal(t, "descedit-1", st.SessionID)
+	assert.Equal(t, DescEditAwaitingReply, st.State)
+}
+
+func TestGetDescEditStatus_InvalidJSON(t *testing.T) {
+	addr := startMockDaemon(t, func(_ Request) Response {
+		return Response{Stdout: "not json\n"}
+	})
+
+	_, err := GetDescEditStatus(addr, "tok")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid description-edit status JSON")
+}
+
+func TestDescEditStart_ErrorPropagates(t *testing.T) {
+	addr := startMockDaemon(t, func(_ Request) Response {
+		return Response{Stderr: "description edit not available\n", ExitCode: 1}
+	})
+
+	_, err := DescEditStart(addr, "tok", DescEditStartRequest{Key: "SC-1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daemon command failed")
+}
+
+func TestDescEditReply_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		require.Len(t, req.Args, 2)
+		assert.Equal(t, "descedit-reply", req.Args[0])
+		data := `{"session_id":"descedit-1","state":"thinking"}` + "\n"
+		return Response{Stdout: data}
+	})
+
+	st, err := DescEditReply(addr, "tok", DescEditReplyRequest{SessionID: "descedit-1", Message: "rewrite it"})
+	require.NoError(t, err)
+	assert.Equal(t, DescEditThinking, st.State)
+}
+
+func TestDescEditApply_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		require.Len(t, req.Args, 2)
+		assert.Equal(t, "descedit-apply", req.Args[0])
+		data := `{"session_id":"descedit-1","state":"applied","applied_url":"https://x/1"}` + "\n"
+		return Response{Stdout: data}
+	})
+
+	st, err := DescEditApply(addr, "tok", DescEditApplyRequest{SessionID: "descedit-1"})
+	require.NoError(t, err)
+	assert.Equal(t, DescEditApplied, st.State)
+	assert.Equal(t, "https://x/1", st.AppliedURL)
+}
+
 func TestRunRemote_VersionForwarded(t *testing.T) {
 	addr := startMockDaemon(t, func(req Request) Response {
 		assert.Equal(t, "1.2.3", req.Version)
