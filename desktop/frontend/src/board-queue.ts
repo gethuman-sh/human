@@ -535,3 +535,13 @@ export function safetyReconcileError<C>(
   }
   return { cards: [], dockerAvailable: false, error: message };
 }
+
+// isReopenable reports a card the pipeline RESOLVED: it concluded there is
+// nothing to plan ([human:nothing-to-do]) or no fix is needed
+// ([human:no-fix-needed]). Both are clean terminals — never red, never retried —
+// which also meant no gesture could move them, so a verdict a person judged
+// wrong could only be undone by editing the tracker by hand. Re-opening is the
+// human override; the machine still never retries a terminal of its own accord.
+export function isReopenable(card: QueueCard): boolean {
+  return card.state === "resolved";
+}

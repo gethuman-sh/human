@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, isReworkable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
+import { queueOf, isReworkable, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
 import { DAEMON_FORWARDED_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -540,4 +540,15 @@ test("an incomplete verdict keeps the card in Code and offers Rework", () => {
   const card = { stage: "verification", state: "done", verdict: "incomplete", verdictFailed: true, branch: "b" };
   assert.equal(queueOf(card), "building", "must not sit in Ready to Deploy — the daemon refuses that drop");
   assert.equal(isReworkable(card), true, "the one gesture that can move it must be offered");
+});
+
+// A resolved card is a clean terminal — never red, never retried — which also
+// meant no gesture could move it. Re-opening is the human override; every other
+// state keeps its existing gestures and must not offer this one.
+test("only a resolved card offers Re-open", () => {
+  assert.equal(isReopenable({ stage: "planning", state: "resolved" }), true);
+  assert.equal(isReopenable({ stage: "implementation", state: "resolved" }), true);
+  assert.equal(isReopenable({ stage: "implementation", state: "failed" }), false, "a failed card already retries");
+  assert.equal(isReopenable({ stage: "implementation", state: "running" }), false);
+  assert.equal(isReopenable({ stage: "verification", state: "done" }), false);
 });

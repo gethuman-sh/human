@@ -16,7 +16,7 @@ import { initMockupsView, showMockups, setPendingMockupSlug, setChosenMockup, } 
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, isReopenable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
@@ -388,6 +388,27 @@ function showCardMenu(card, x, y) {
             void transition(card.key, card.title, "verification", "verification");
         });
         menu.appendChild(retryReview);
+    }
+    // A resolved card — the pipeline concluded there is nothing to do, or no fix
+    // is needed — had no gesture at all. The retry paths key on failed or outage
+    // and the forward path requires done, so overruling a verdict meant editing
+    // the tracker by hand. Re-opening goes through its own daemon entry point
+    // rather than a transition, because the automatic relaunch drives the same
+    // same-stage request and the machine must never re-run its own clean terminal.
+    if (isReopenable(card)) {
+        const reopen = document.createElement("button");
+        reopen.type = "button";
+        reopen.className = "context-menu-item";
+        reopen.textContent = "Re-open";
+        reopen.title = "The pipeline resolved this without a change — run the stage again";
+        reopen.disabled = !current.dockerAvailable;
+        if (reopen.disabled)
+            reopen.title = "Docker required";
+        reopen.addEventListener("click", () => {
+            menu.remove();
+            void runGuardedAction(() => go().Reopen(card.key, card.title, card.stage), (err) => showError(errMessage(err)), reconcile);
+        });
+        menu.appendChild(reopen);
     }
     // A failed deploy is otherwise a dead end: the Deploy zone only accepts
     // stage "verification" (SC-297's isReadyToDeploy), and a deploy failure

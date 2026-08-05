@@ -130,6 +130,22 @@ type BoardTransitionRequest struct {
 	// human-initiated drop, whose interval is deliberation, not a pipeline wait,
 	// and is never recorded.
 	Cause WaitCause `json:"cause,omitempty"`
+	// Reopen restarts a stage the pipeline RESOLVED — a [human:nothing-to-do] or
+	// [human:no-fix-needed] terminal a person judges wrong.
+	//
+	// It is a separate flag rather than another state in the retry predicates
+	// because the automatic relaunch drives the very same path (StageRetry's
+	// Relaunch calls this request with From == To). Widening isBuildRetry or
+	// isPlanningRetry to accept resolved would hand the machine permission to
+	// re-run its own clean terminals forever, which is precisely what "never red,
+	// never retried" exists to prevent. Only a human sets this.
+	//
+	// Without it a resolved card was unrecoverable: no gesture moved it, because
+	// the retry paths key on failed or outage and the forward path requires done.
+	// A wrong not-a-bug verdict could only be undone by editing the tracker by
+	// hand — which is why the verdict must survive an adversarial challenge
+	// before it is trusted at all.
+	Reopen bool `json:"reopen,omitempty"`
 }
 
 // BoardTransitionDeps wires the transition engine's collaborators.
@@ -342,6 +358,14 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 			WaitCauseChain, true)
 		return true, launched, err
 
+	// Re-open: a person judged a resolved terminal wrong. Dispatched before the
+	// retry rules because a resolved card matches none of them by design — the
+	// machine must never re-run its own clean terminal, and only this explicitly
+	// human flag reaches here.
+	case req.Reopen && card.State == BoardResolved:
+		launched, err := d.reopenResolved(ctx, req, card, comments)
+		return true, launched, err
+
 	// Planning retry: a failed planning run is relaunched in place. The retry
 	// gesture targets planning while the card already derives to planning, so
 	// the single-step rule would reject it and the gesture would launch nothing
@@ -397,6 +421,39 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 		return true, err == nil, err
 	}
 	return false, false, nil
+}
+
+// reopenResolved restarts the stage that resolved the card, on a person's say-so.
+//
+// It relaunches the same stage the terminal was posted in: a
+// [human:nothing-to-do] card re-plans, and a [human:no-fix-needed] card re-runs
+// the fix — through its own self-planning pipeline where it has one, so an
+// autofix run that wrongly concluded not-a-bug re-triages rather than being
+// handed to the plan executor, which would refuse it for having no plan.
+//
+// The relaunch's *-started marker is strictly newer than the terminal, so the
+// card leaves resolved by the derivation's ordinary rules; nothing needs to
+// retract the terminal, and the trail keeps both the verdict and the decision to
+// overrule it.
+func (d BoardTransitionDeps) reopenResolved(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (bool, error) {
+	if card.Stage == BoardPlanning {
+		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
+			planPrompt(req.PMKey)+" — a person re-opened this ticket after it was resolved as nothing to do;"+
+				" re-examine it rather than repeating the earlier conclusion",
+			WaitCause(""), false)
+	}
+	switch d.classifyFixPipeline(ctx, req.PMKey, comments) {
+	case fixBug:
+		err := d.ApplyFix(ctx, BoardFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+		return err == nil, err
+	case fixSecurity:
+		err := d.ApplySecurityFix(ctx, SecurityFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+		return err == nil, err
+	}
+	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+		executePrompt(dispatchKey(req.PMKey, card),
+			" — a person re-opened this ticket after it was resolved as needing no fix"),
+		WaitCause(""), true)
 }
 
 // launchForwardStage dispatches an already-sanctioned forward transition to
