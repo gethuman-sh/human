@@ -350,8 +350,14 @@ func (r *Resolver) heldFailure(ref string) error {
 	// cause's own Error() keeps the actionable diagnosis (e.g. "op timed out
 	// after 30s ... unresponsive or waiting on an unlock prompt") in the text
 	// that actually reaches a CLI or board banner.
-	return errors.WrapWithDetails(state.err,
+	// WrapWithDetails treats the message as a printf format string (Wrapf
+	// underneath), so a cause whose own text carries a literal '%' (e.g. op's
+	// raw stderr embedding a percentage) must have it escaped here or it comes
+	// out reformatted as "%!" noise instead of the operator's diagnosis.
+	msg := strings.ReplaceAll(
 		state.err.Error()+" - not retried yet; the store is being left alone for "+state.hold.String()+" (retry at "+state.retryAt.Format(time.RFC3339)+")",
+		"%", "%%")
+	return errors.WrapWithDetails(state.err, msg,
 		"ref", ref, heldOffDetail, true, "hold", state.hold.String(), "retry_at", state.retryAt.Format(time.RFC3339))
 }
 

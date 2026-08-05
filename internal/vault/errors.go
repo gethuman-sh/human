@@ -59,8 +59,16 @@ func IsHeldOff(err error) bool {
 // cause sentinel. Only the sentinel stays in the Unwrap chain (the provider
 // diagnostic already lives in message + details), so errors.Is(returned, cause)
 // holds while errors.CauseChain still renders the full human message.
+//
+// Every caller here builds message by string concatenation, never intending
+// printf-style interpolation — but errors.WrapWithDetails treats message as a
+// format string regardless, and message routinely embeds a provider's raw
+// stderr (e.g. op's own diagnostic), which is content this package does not
+// control and cannot assume is free of a literal '%'. Escaping it here keeps
+// that external text literal instead of letting it come out as "%!(MISSING)"
+// noise in the one channel an operator has to diagnose the failure.
 func tagCause(cause error, message string, details ...any) error {
-	return errors.WrapWithDetails(cause, message, details...)
+	return errors.WrapWithDetails(cause, strings.ReplaceAll(message, "%", "%%"), details...)
 }
 
 // classifySecretStderr maps a store CLI's stderr diagnostic to a cause sentinel.

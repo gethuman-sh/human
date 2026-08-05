@@ -848,6 +848,30 @@ func TestResolver_Resolve_heldFailureKeepsItsCause(t *testing.T) {
 		"the held error's message must still name the remedy/hold")
 }
 
+// A cause whose own text carries a literal '%' (op's raw stderr can, e.g.
+// "disk 95% full") must reach the held error verbatim: heldFailure builds the
+// wrap message by concatenating the cause's Error(), and WrapWithDetails
+// treats that message as a printf format string, so an unescaped '%' would
+// come out as "%!f(MISSING)" noise instead of the operator's diagnosis.
+func TestResolver_Resolve_heldFailurePreservesAPercentInTheCause(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			return "", tagCause(ErrStoreUnreachable, "op read failed: disk 95% full, code %d")
+		},
+	}
+	r := NewResolver(provider)
+
+	_, firstErr := r.Resolve("1pw://vault/item/field")
+	require.Error(t, firstErr)
+
+	_, heldErr := r.Resolve("1pw://vault/item/field")
+	require.Error(t, heldErr)
+	assert.Contains(t, heldErr.Error(), "disk 95% full, code %d",
+		"the cause's literal percent verbs must survive, not be reformatted as %!(MISSING)")
+	assert.NotContains(t, heldErr.Error(), "MISSING")
+}
+
 // The hold is per-reference: one held reference must not block resolution of
 // an unrelated one. Extends TestResolver_Resolve_differentRefsAreNotShared.
 func TestResolver_Resolve_holdIsPerReference(t *testing.T) {
