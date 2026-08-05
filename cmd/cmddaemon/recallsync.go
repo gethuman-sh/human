@@ -137,7 +137,7 @@ func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *
 		// the held-off ones the vault's own backoff already reported once, so a
 		// standing outage does not re-log on every 10m sync (SC-3322).
 		instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
-		logReportableLoadFailures(failures, entry.Dir)
+		logReportableLoadFailures(failures, entry.Dir, "recall sync")
 		instances = ticketSources(instances)
 		if len(instances) == 0 {
 			continue

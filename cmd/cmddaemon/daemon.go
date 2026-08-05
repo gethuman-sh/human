@@ -1971,7 +1971,12 @@ func shouldReportLoadFailure(err error) bool { return !vault.IsHeldOff(err) }
 // held-off ones the vault's own backoff already reported once. Every failure
 // still counts as a load failure at the call site regardless of whether it is
 // logged here, so the board keeps reporting itself as degraded either way.
-func logReportableLoadFailures(failures []error, dir string) {
+//
+// subsystem names the caller (e.g. "board listing", "recall sync") so the one
+// diagnostic channel this fix exists to clean up still tells the reader which
+// loop hit the failure, rather than attributing every caller's failures to
+// whichever subsystem happened to be hardcoded here.
+func logReportableLoadFailures(failures []error, dir, subsystem string) {
 	for _, failure := range failures {
 		if !shouldReportLoadFailure(failure) {
 			continue
@@ -1982,7 +1987,7 @@ func logReportableLoadFailures(failures []error, dir string) {
 		// the whole diagnosis lands — without it a recurring credential blip
 		// leaves nothing to debug after the fact (SC-2005).
 		errors.LogError(failure).Str("dir", dir).
-			Msg("board listing: tracker instances failed to load, continuing without them")
+			Msg(subsystem + ": tracker instances failed to load, continuing without them")
 	}
 }
 
@@ -2002,7 +2007,7 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 	var loadFailures []error
 	for _, entry := range reg.Entries() {
 		instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
-		logReportableLoadFailures(failures, entry.Dir)
+		logReportableLoadFailures(failures, entry.Dir, "board listing")
 		loadFailures = append(loadFailures, failures...)
 		for _, inst := range instances {
 			// A forge-only entry owns no projects and no issues; querying it with

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -30,6 +32,30 @@ func TestShouldReportLoadFailure(t *testing.T) {
 	// own predicate must agree.
 	require.True(t, vault.IsHeldOff(heldOff))
 	require.False(t, vault.IsHeldOff(realFailure))
+}
+
+// SC-3322 review: logReportableLoadFailures shares one implementation between
+// the board-listing and recall-sync call sites. Each call site must still
+// attribute its own failures to itself, not to whichever subsystem happened
+// to be hardcoded — otherwise every recall-sync credential failure would be
+// misdiagnosed as a board-listing problem.
+func TestLogReportableLoadFailures_AttributesTheCallingSubsystem(t *testing.T) {
+	realFailure := errors.WithDetails("secret store failed")
+
+	var boardBuf bytes.Buffer
+	orig := log.Logger
+	log.Logger = zerolog.New(&boardBuf)
+	logReportableLoadFailures([]error{realFailure}, "/dir", "board listing")
+	log.Logger = orig
+	assert.Contains(t, boardBuf.String(), "board listing: tracker instances failed to load, continuing without them")
+	assert.NotContains(t, boardBuf.String(), "recall sync: tracker instances failed to load")
+
+	var recallBuf bytes.Buffer
+	log.Logger = zerolog.New(&recallBuf)
+	logReportableLoadFailures([]error{realFailure}, "/dir", "recall sync")
+	log.Logger = orig
+	assert.Contains(t, recallBuf.String(), "recall sync: tracker instances failed to load, continuing without them")
+	assert.NotContains(t, recallBuf.String(), "board listing: tracker instances failed")
 }
 
 func TestDaemonStartCmd_InteractiveRequiresForeground(t *testing.T) {
