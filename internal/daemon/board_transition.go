@@ -647,7 +647,7 @@ var PlanRedriveBound = 3
 // planStuckMarker is the stable sentinel that distinguishes a plan-stuck
 // escalation body from an ordinary needs-planning refusal. Both share the
 // [human:needs-planning] header — the one marker DeriveBoardCard already
-// promotes over phantom implementation markers (newestNeedsPlanning) — so
+// promotes over phantom implementation markers (newestTerminalDetermination) — so
 // reusing it gets correct card rendering for the escalation with zero
 // derivation changes; the sentinel is how the guard tells the two apart.
 const planStuckMarker = "this ticket could not be planned automatically"
@@ -718,11 +718,11 @@ func planStuckReason(drives int, since tracker.Comment) string {
 // ping-pong bound (PlanRedriveBound) is spent, at which point a standing
 // plan-stuck [human:needs-planning] escalation reaches a person exactly once
 // (SC-2990). The dedup guard is keyed on the newest PLANNING-STAGE marker
-// (latestStateInStage), not the newest marker overall — newestNeedsPlanning is
-// deliberately NOT reused here: it still serves DeriveBoardCard's
-// furthest-stage promotion, whose "newest overall" semantics are load-bearing
-// there, but as this gate's dedup key it let a later *-failed marker on
-// another stage defeat the guard and re-post the refusal once per attempt.
+// (latestStateInStage), not the newest marker overall — newestTerminalDetermination
+// is deliberately NOT reused here: its "newest overall" semantics are
+// load-bearing in DeriveBoardCard's terminal promotion, but as this gate's
+// dedup key it let a later *-failed marker on another stage defeat the guard
+// and re-post the refusal once per attempt.
 //
 // A comment-read failure is deliberately NOT treated as an absence: a tracker
 // blip must not refuse a launch, so the run proceeds and the agent's own plan

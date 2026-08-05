@@ -706,3 +706,145 @@ func TestDeriveBoardCard_noMarkers_noStop(t *testing.T) {
 	assert.Empty(t, card.StopLinkedKey)
 	assert.Empty(t, card.StopReasoning)
 }
+
+// SC-3555: a terminal determination about the WHOLE ticket must retire the
+// phantom run it supersedes, whatever stage that run belonged to. The planner
+// posts [human:nothing-to-do] after earlier implementation runs died without a
+// terminal marker; furthest-stage-wins otherwise pins the card on the phantom
+// and it renders "fixing…" forever with no agent behind it.
+func TestDeriveBoardCard_nothingToDoOverPhantomRun(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+
+	t.Run("under a stale implementation run", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(ImplementationStartedHeader, t0),
+			cmt(NothingToDoHeader+"\nevidence: already merged in PR #271", t1),
+		}, tracker.CategoryStarted, false)
+		assert.Equal(t, BoardPlanning, card.Stage)
+		assert.Equal(t, BoardResolved, card.State)
+		assert.Equal(t, t1, card.StageEnteredAt, "the terminal is the deciding marker")
+	})
+
+	t.Run("under a stale deploy run", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(DeployStartedHeader, t0),
+			cmt(NothingToDoHeader+"\nevidence: already merged in PR #271", t1),
+		}, tracker.CategoryStarted, false)
+		assert.Equal(t, BoardPlanning, card.Stage)
+		assert.Equal(t, BoardResolved, card.State)
+	})
+}
+
+// SC-3555: the implementation stage's clean terminal has the same shape one
+// column over — a no-fix-needed verdict under a phantom verification or deploy
+// run must read as the resolved determination, not as a running build.
+func TestDeriveBoardCard_noFixNeededOverPhantomRun(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+
+	t.Run("under a stale review run", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(ReviewStartedHeader, t0),
+			cmt(NoFixNeededHeader+"\ntriage: not-a-bug", t1),
+		}, tracker.CategoryStarted, false)
+		assert.Equal(t, BoardImplementation, card.Stage)
+		assert.Equal(t, BoardResolved, card.State)
+	})
+
+	t.Run("under a stale deploy run", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(DeployStartedHeader, t0),
+			cmt(NoFixNeededHeader+"\ntriage: undetermined", t1),
+		}, tracker.CategoryStarted, false)
+		assert.Equal(t, BoardImplementation, card.Stage)
+		assert.Equal(t, BoardResolved, card.State)
+	})
+}
+
+// SC-3555: a pre-planning gate's stop verdict (backlog/done, the lowest rank of
+// all) loses to any pipeline phantom — and with it the card's whole stop
+// decision, because ticketReviewStop reads it off the deciding marker. Feeding
+// the terminal in as `latest` restores stage, state AND the recorded reason.
+func TestDeriveBoardCard_ticketReviewStopOverPhantomImplementation(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ImplementationStartedHeader, t0),
+		cmt(TicketReviewedHeader+" rejected\nroot: same as ticket\n\nWorks as designed; not a bug", t1),
+	}, tracker.CategoryStarted, false)
+
+	assert.Equal(t, BoardBacklog, card.Stage)
+	assert.Equal(t, BoardDone, card.State)
+	assert.Equal(t, "rejected", card.StopDecision)
+	assert.Contains(t, card.StopReasoning, "not a bug")
+}
+
+// SC-3555: the override is newest-marker-only on purpose — a genuine
+// re-dispatch after a terminal must move the card onto the new run rather than
+// leaving it parked on a retired determination.
+func TestDeriveBoardCard_terminalRetiredByReDispatch(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	t2 := time.Unix(3000, 0)
+
+	t.Run("a later planning-started wins", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(NothingToDoHeader+"\nevidence: already merged", t0),
+			cmt(PlanningStartedHeader, t1),
+		}, tracker.CategoryStarted, false)
+		assert.Equal(t, BoardPlanning, card.Stage)
+		assert.Equal(t, BoardRunning, card.State)
+	})
+
+	t.Run("a later implementation-started wins", func(t *testing.T) {
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(NothingToDoHeader+"\nevidence: already merged", t0),
+			cmt(ImplementationStartedHeader, t1),
+		}, tracker.CategoryStarted, false)
+		assert.Equal(t, BoardImplementation, card.Stage)
+		assert.Equal(t, BoardRunning, card.State)
+	})
+
+	t.Run("re-buried terminal falls back to furthest-stage-wins", func(t *testing.T) {
+		// Deliberately preserved: once a marker lands after the terminal, the
+		// override stands down and the ordinary rules decide. The card must not
+		// keep advertising the retired determination — supersededByNewerMarker is
+		// NOT widened to demote a running marker (SC-910/SC-1320/SC-1669).
+		card := DeriveBoardCard([]tracker.Comment{
+			cmt(ImplementationStartedHeader, t0),
+			cmt(NothingToDoHeader+"\nevidence: already merged", t1),
+			cmt(PlanningStartedHeader, t2),
+		}, tracker.CategoryStarted, false)
+		assert.Equal(t, BoardImplementation, card.Stage)
+		assert.Equal(t, BoardRunning, card.State)
+		assert.NotEqual(t, BoardResolved, card.State)
+	})
+}
+
+// SC-3555: terminality is registered data, so the next cross-stage terminal
+// cannot re-open the hole by forgetting a bespoke override. Progress markers and
+// non-stop gate verdicts must stay out of the set.
+func TestIsTerminalResolution(t *testing.T) {
+	t.Run("registered terminals", func(t *testing.T) {
+		assert.True(t, isTerminalResolution(NothingToDoHeader+"\nevidence: merged"))
+		assert.True(t, isTerminalResolution(NoFixNeededHeader))
+		assert.True(t, isTerminalResolution(NeedsPlanningHeader+"\n"+needsPlanningReason))
+	})
+	t.Run("ticket-review stop heads", func(t *testing.T) {
+		assert.True(t, isTerminalResolution(TicketReviewedHeader+" rejected\n\nworks as designed"))
+		assert.True(t, isTerminalResolution(TicketReviewedHeader+" superseded\nlinked: SC-100"))
+		assert.True(t, isTerminalResolution(TicketReviewedHeader+" escalated\nlinked: SC-200"))
+	})
+	t.Run("continuing verdicts and progress markers are not terminals", func(t *testing.T) {
+		assert.False(t, isTerminalResolution(TicketReviewedHeader+" ready"))
+		assert.False(t, isTerminalResolution(TicketReviewStartedHeader))
+		assert.False(t, isTerminalResolution(PlanningStartedHeader))
+		assert.False(t, isTerminalResolution(ImplementationStartedHeader))
+		assert.False(t, isTerminalResolution(PlanReadyHeader+"\nengineering: HUM-7"))
+		assert.False(t, isTerminalResolution("just a human comment about nothing-to-do"))
+	})
+	t.Run("a signed marker body still classifies", func(t *testing.T) {
+		assert.True(t, isTerminalResolution(NothingToDoHeader+"\nmachine: 4f3add9a\nbuild: abc123\n\nevidence: merged"))
+	})
+}

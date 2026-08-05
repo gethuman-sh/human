@@ -614,6 +614,39 @@ func deliberateStopRecorded(comments []tracker.Comment) bool {
 	return false
 }
 
+// terminalResolutions registers the marker headers that record a FINAL
+// DETERMINATION ABOUT THE TICKET rather than progress through a stage: the work
+// is already merged (nothing-to-do), no code change is warranted
+// (no-fix-needed), or the launch was refused for want of a plan
+// (needs-planning). What makes them a class is that each files under a stage
+// that ranks BELOW the phantom runs it supersedes, so furthest-stage-wins gives
+// the wrong card unless the determination is recognized as terminal (SC-3555).
+// Registering the fact here — beside terminalStopVerdicts, whose head tokens
+// this set reuses rather than re-listing — means the next cross-stage terminal
+// costs one line instead of re-discovering the same hole.
+var terminalResolutions = []string{
+	NothingToDoHeader,
+	NoFixNeededHeader,
+	NeedsPlanningHeader,
+}
+
+// isTerminalResolution reports whether a comment body is a registered terminal
+// determination — either a whole-header resolution or a gate verdict whose head
+// token records a deliberate stop (ticket-review rejected/superseded/escalated).
+// The head is read through the marker grammar, never by slicing the first line,
+// so a signed marker (machine:/build: spliced in) classifies exactly like an
+// unsigned one.
+func isTerminalResolution(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	for _, header := range terminalResolutions {
+		if strings.HasPrefix(trimmed, header) {
+			return true
+		}
+	}
+	m, ok := marker.ParseBody(trimmed)
+	return ok && terminalStopVerdicts[m.Type][m.Head]
+}
+
 // stageSettled reports whether the stage's latest marker is one of the clean,
 // non-failure endings handleBoardAgentExit treats as settled: the stage's own
 // done-marker, a terminal BoardResolved marker, an open same-stage

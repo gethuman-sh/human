@@ -100,7 +100,8 @@ const (
 	// surfaces back where a human can trigger planning, rather than sitting on a
 	// phantom implementation run that the stuck-running reconcile would later red
 	// as a crash. DeriveBoardCard promotes it over the phantom implementation
-	// markers it refused (newestNeedsPlanning).
+	// markers it refused (newestTerminalDetermination — it is one of the
+	// registered terminalResolutions).
 	NeedsPlanningHeader = "[human:needs-planning]"
 	// NoFixNeededHeader is the autofix pipeline's second clean terminal marker:
 	// triage concluded the reported bug warrants no code change (not-a-bug or

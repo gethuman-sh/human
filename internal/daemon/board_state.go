@@ -230,13 +230,14 @@ func ticketReviewStop(deciding tracker.Comment) (decision, linked, reasoning str
 	return m.Head, strings.TrimSpace(m.Fields["linked"]), strings.TrimSpace(m.Body)
 }
 
-// applyStateOverrides layers the two derivation overrides that must run after
+// applyStateOverrides layers the derivation overrides that must run after
 // the furthest-stage/latest-marker pass but before the Backlog short-circuit:
-// a queued option-decision and a needs-planning refusal. Split out of
-// DeriveBoardCard so the two independent `if`s cost this helper's complexity
-// budget rather than the parent's (SC-2596 pushed DeriveBoardCard over the
-// gocyclo threshold; extracting keeps the override chain readable in one place
-// without re-flattening it into the main derivation).
+// a queued option-decision, a pause on an open question, and a terminal
+// determination about the ticket. Split out of DeriveBoardCard so the
+// independent `if`s cost this helper's complexity budget rather than the
+// parent's (SC-2596 pushed DeriveBoardCard over the gocyclo threshold;
+// extracting keeps the override chain readable in one place without
+// re-flattening it into the main derivation).
 func applyStateOverrides(comments []tracker.Comment, furthest BoardStage, state BoardState, latest tracker.Comment, anyMarker bool) (BoardStage, BoardState, tracker.Comment, bool) {
 	// A recorded decision ([human:option-chosen]) that no started/terminal marker
 	// has yet superseded: the chosen stage is (re)queued while the relaunch's
@@ -250,17 +251,20 @@ func applyStateOverrides(comments []tracker.Comment, furthest BoardStage, state 
 
 	state = pauseOnOpenOptions(state, furthest, comments)
 
-	// A [human:needs-planning] refusal is the last word: the implementation
-	// launch was refused because the ticket has no plan (SC-2596). It is a
-	// planning-stage marker, but the ticket's furthest markers are the phantom
-	// implementation launches it refused, which furthest-stage-wins would show
-	// as a running/failed build instead. Surface the refusal explicitly so the
-	// card returns to Planning carrying the determination — where a human can
-	// trigger the plan (isPlanningRetry) — and no phantom running marker reds it
-	// as a crash. Placed after the decision-queue override so a refusal strictly
-	// newer than a stale option-chosen still wins.
-	if np, ok := newestNeedsPlanning(comments); ok {
-		furthest, state, latest, anyMarker = BoardPlanning, BoardFailed, np, true
+	// A terminal determination is the last word about the whole ticket: the work
+	// is already merged, no fix is warranted, a gate stopped the ticket, or the
+	// launch was refused for want of a plan. Each files under a stage that ranks
+	// BELOW the phantom runs it supersedes — dead launches that died without a
+	// terminal marker — so furthest-stage-wins would show a running build nobody
+	// is running, forever, and the stuck-running pass rightly spares it as a
+	// deliberate stop (SC-3555; the needs-planning case is SC-2596). Surfacing
+	// the determination puts the card where a human can act on it: Planning for a
+	// refusal, the resolved badge for an already-shipped verdict, Backlog
+	// carrying the stop decision for a gate's rejection. Placed after the
+	// decision-queue override so a determination strictly newer than a stale
+	// option-chosen still wins.
+	if t, tStage, tState, ok := newestTerminalDetermination(comments); ok {
+		furthest, state, latest, anyMarker = tStage, tState, t, true
 	}
 
 	return furthest, state, latest, anyMarker
@@ -448,20 +452,23 @@ func hasPlanEvidence(comments []tracker.Comment) bool {
 	return false
 }
 
-// newestNeedsPlanning reports whether the ticket's newest board marker is a
-// [human:needs-planning] refusal, returning that marker so its message reaches
-// the card. Newest-overall (not furthest-stage) on purpose: the refusal must win
-// over the phantom implementation markers it refused, which outrank the planning
-// stage it maps to (SC-2596).
-func newestNeedsPlanning(comments []tracker.Comment) (tracker.Comment, bool) {
-	newest, _, _, ok := latestMarkerOverall(comments)
-	if !ok {
-		return tracker.Comment{}, false
+// newestTerminalDetermination returns the ticket's newest board marker when it
+// is a registered terminal resolution (isTerminalResolution), together with the
+// stage and state that marker classifies to. Newest-OVERALL rather than
+// furthest-stage on purpose: a determination about the whole ticket must win
+// over the phantom runs it supersedes, which outrank the stage it files under.
+// Newest-ONLY on purpose too: a genuine re-dispatch posts a later *-started
+// marker, and the card must then follow the new run rather than stay parked on a
+// retired verdict (SC-3555). Returning the marker's own comment makes it the
+// card's deciding `latest`, so the reason, the posting daemon, the stage-entered
+// time and a gate's StopDecision/StopReasoning all come off the determination
+// instead of the phantom.
+func newestTerminalDetermination(comments []tracker.Comment) (tracker.Comment, BoardStage, BoardState, bool) {
+	newest, stage, state, ok := latestMarkerOverall(comments)
+	if !ok || !isTerminalResolution(newest.Body) {
+		return tracker.Comment{}, "", "", false
 	}
-	if strings.HasPrefix(strings.TrimSpace(newest.Body), NeedsPlanningHeader) {
-		return newest, true
-	}
-	return tracker.Comment{}, false
+	return newest, stage, state, true
 }
 
 // latestPlanComment returns the body of the newest [human:plan] comment with
