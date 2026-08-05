@@ -117,8 +117,9 @@ interface Card {
   // RFC3339 time the newest marker of the card's current stage landed; feeds
   // the Engineering-backlog age badge.
   stageEnteredAt?: string;
-  // Done-stage sub-phase ("pr-review" while the machine review→fix loop runs);
-  // badgeInfo reads it to render "PR review…" instead of "deploying…".
+  // Done-stage sub-phase: "pr-review" while the machine reviewer runs, "pr-fix"
+  // while the fixer runs, absent for a plain deploy. badgeInfo reads it so the
+  // badge names the half that is actually running instead of "deploying…".
   deployPhase?: string;
   // What this viewer's machine could see of the agent behind the card:
   // "live" | "dead" | "elsewhere", absent when unknown (SC-3569). Filled by the
