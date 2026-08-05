@@ -552,3 +552,18 @@ test("only a resolved card offers Re-open", () => {
   assert.equal(isReopenable({ stage: "implementation", state: "running" }), false);
   assert.equal(isReopenable({ stage: "verification", state: "done" }), false);
 });
+
+// The badge said one word for the whole of a run — identical at thirty seconds,
+// at fourteen hours, and when the agent behind it was already dead. The phase
+// the run records is the only thing on a running card that changes as work moves.
+test("a running badge shows the recorded phase when there is one", () => {
+  const badge = badgeInfo({ stage: "implementation", state: "running", activity: "verifying" });
+  assert.equal(badge.text, "verifying…");
+  assert.equal(badge.spinner, true);
+  assert.match(badge.title, /verifying/);
+});
+
+test("a run that recorded no phase keeps the stage word", () => {
+  const badge = badgeInfo({ stage: "implementation", state: "running" });
+  assert.equal(badge.text, "building…", "no invented phase — absence stays absent");
+});

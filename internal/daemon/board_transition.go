@@ -14,6 +14,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
 )
@@ -1168,22 +1169,23 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 func dispatchedFailure(comments []tracker.Comment) string {
 	var headline string
 	for _, c := range comments {
-		trimmed := strings.TrimSpace(c.Body)
-		if !strings.HasPrefix(trimmed, DeployFixStartedHeader) {
+		// ParseBody, never line position: a signed marker carries machine:/build:
+		// between the header and the prose, so "the line after the header" is a
+		// signature field rather than the diagnosis.
+		m, ok := marker.ParseBody(c.Body)
+		if !ok || m.Type != deployFixStartedType {
 			continue
 		}
-		// The headline is the first body line after the header; the pr/number/
-		// branch binding follows it.
-		lines := strings.Split(strings.TrimPrefix(trimmed, DeployFixStartedHeader), "\n")
-		for _, line := range lines {
-			if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, ": ") {
-				headline = line
-				break
-			}
+		if line, _, _ := strings.Cut(strings.TrimSpace(m.Body), "\n"); line != "" {
+			headline = line
 		}
 	}
 	return headline
 }
+
+// deployFixStartedType is DeployFixStartedHeader's marker type — the name
+// marker.ParseBody reports, without the human: prefix and brackets.
+const deployFixStartedType = "deploy-fix-started"
 
 // deployFixEscalationReason renders the actionable headline the failed marker shows
 // when the deploy fixer did not converge.

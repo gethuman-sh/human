@@ -167,6 +167,16 @@ type BoardViewCard struct {
 	// Verdict is the latest review's verdict line; a failing verdict pins the
 	// card in the Code lane with a warning instead of letting it advance.
 	Verdict string `json:"verdict,omitempty"`
+	// Activity is the phase the run itself last recorded (stage.triage,
+	// stage.verify, …), and ActivityAt is when. The records already exist —
+	// every stage writes one with a timestamp so the next stage can read it
+	// back — and the card has simply never shown them. Without it the entire fix
+	// run, from triage through the adversarial challenge, the plan, the fix and
+	// verification, renders as one unchanging "fixing…" that looks identical at
+	// thirty seconds, at fourteen hours, and when the agent behind it died
+	// yesterday afternoon. Empty when the run recorded no phase.
+	Activity   string `json:"activity,omitempty"`
+	ActivityAt string `json:"activityAt,omitempty"`
 	// StageDaemonID is the machine that stamped the card's deciding marker — who
 	// owns the stage. The daemon already guards on it where it acts on its own
 	// (WorkGate.ownedHereOrUnowned refuses to take over a stage a peer stamped),

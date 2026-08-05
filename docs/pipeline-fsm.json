@@ -681,5 +681,11 @@
       "A human gesture is NOT restricted by ownership. Racing a live foreign run is prevented instead by idempotency: a running card refuses every drop (isDuplicateDrop), whichever machine started it.",
       "Ownership is carried to the board as stageDaemonId so a reader can tell a stage owned elsewhere from an unowned one. It is the missing input for liveness across machines: no agent running HERE means dead only if this machine owns the stage."
     ]
+  },
+  "progress": {
+    "doc": "How an item shows that it is moving. Each in-container phase writes stage.<name> to `human state` with a timestamp — preflight, triage, challenge, fix, verify, review, pr-review, pr-fix, deploy-fix — and the board reads the newest one onto a running card as `activity`.",
+    "why": "Between implementation-started and ready-for-review an item passes through six phases that all render as one unchanging word. That word is identical at thirty seconds, at fourteen hours, and when the agent behind it is dead, so nothing on the card distinguishes progress from a hang. The phase changing is the signal; its not changing is the other one.",
+    "where": "internal/board/activity.go; attached in cmd/cmddaemon/daemon.go attachActivity",
+    "note": "Read for running cards only, and never invented: a run that recorded no phase shows the stage word exactly as before."
   }
 }

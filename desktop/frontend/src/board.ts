@@ -106,6 +106,8 @@ interface Card {
   // The daemon's decision on whether that verdict blocks the card. Read this
   // via verdictFailed(card) — the board must never re-test the verdict string.
   verdictFailed?: boolean;
+  activity?: string;
+  activityAt?: string;
   // RFC3339 instant a paused (outage) card's standing marker stated as when
   // the substrate clears, when one was parsed out of the diagnosis (SC-3024).
   // Absent when no time was stated — the badge then reads "paused" with no

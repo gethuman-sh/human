@@ -1883,6 +1883,7 @@ func boardViewFunc(fetch func() ([]daemon.TrackerIssuesResult, error), doctor *d
 		defer cancel()
 		dockerOK := len(doctor.Blockers(ctx, []string{"docker"})) == 0
 		view := board.Compose(results, dockerOK)
+		attachActivity(ctx, reg, &view, logger)
 		rememberBoardView(cache, project, view, logger)
 		return view, nil
 	}
@@ -4149,5 +4150,48 @@ func startSleepInhibitor(ctx context.Context, out io.Writer, logger zerolog.Logg
 		_, _ = fmt.Fprintln(out, "Sleep inhibition: enabled (suspend deferred while agents run)")
 	} else {
 		_, _ = fmt.Fprintln(out, "Sleep inhibition: disabled")
+	}
+}
+
+// attachActivity fills each running card's Activity from the phase records the
+// run itself wrote (stage.triage, stage.verify, …).
+//
+// Nothing here is new information. Every stage already writes its phase with a
+// timestamp so the next stage — or a fresh agent taking over from one that died
+// — can read back what it learned; the board has simply never looked. Until it
+// does, an entire fix run renders as one unchanging "fixing…" that reads
+// identically at thirty seconds, at fourteen hours, and when the agent behind it
+// has been dead since the previous afternoon.
+//
+// Only running cards are read: a finished card's last phase is history, and
+// showing it would suggest work still in flight. A store that will not open, or
+// a scope with nothing recorded, leaves the card exactly as it was — the badge
+// degrades to today's behaviour rather than inventing a phase.
+func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daemon.BoardView, logger zerolog.Logger) {
+	if view == nil || len(view.Cards) == 0 {
+		return
+	}
+	err := withStateStore(func(store agentstate.Store) error {
+		for i, card := range view.Cards {
+			if card.State != string(daemon.BoardRunning) {
+				continue
+			}
+			entries, err := store.List(ctx, boardStateProject(reg, card.Key), card.Key, board.StagePrefix)
+			if err != nil || len(entries) == 0 {
+				continue
+			}
+			phase, at := board.LatestActivity(entries)
+			if phase == "" {
+				continue
+			}
+			view.Cards[i].Activity = board.ActivityLabel(phase)
+			view.Cards[i].ActivityAt = at.UTC().Format(time.RFC3339)
+		}
+		return nil
+	})
+	if err != nil {
+		// The phase is an enrichment, never a gate: a board that cannot read the
+		// state store still renders every card it fetched.
+		logger.Debug().Err(err).Msg("board view: could not read phase records; cards render without them")
 	}
 }

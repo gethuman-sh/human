@@ -165,13 +165,19 @@ export function badgeInfo(card) {
         return { cls: "decided", text, title: label.title };
     }
     if (card.state === "running") {
-        const text = card.stage === "done" && card.deployPhase === "pr-review"
+        const stageText = card.stage === "done" && card.deployPhase === "pr-review"
             ? "PR review…"
             : (RUNNING_LABELS[card.stage] ?? "working…");
+        // The run's own phase, when it recorded one. Without it the badge says the
+        // same word for the whole of a fix run — triage, the challenge, the plan,
+        // the fix, verification — so it reads identically at thirty seconds and at
+        // fourteen hours, and identically again when the agent behind it is dead.
+        // The phase changing is the only thing on the card that shows movement.
+        const text = card.activity ? `${card.activity}…` : stageText;
         return {
             cls: "running",
             text,
-            title: "Agent running",
+            title: card.activity ? `Agent running — ${card.activity}` : "Agent running",
             spinner: true,
         };
     }
