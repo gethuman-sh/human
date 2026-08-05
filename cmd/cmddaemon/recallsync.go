@@ -8,7 +8,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
-	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/recall"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -134,12 +133,11 @@ func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *
 
 	for _, entry := range reg.Entries() {
 		// Tolerant loading so one tracker's momentary credential failure does not
-		// cost the others their refresh (SC-2005).
+		// cost the others their refresh (SC-2005). logReportableLoadFailures skips
+		// the held-off ones the vault's own backoff already reported once, so a
+		// standing outage does not re-log on every 10m sync (SC-3322).
 		instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
-		for _, failure := range failures {
-			errors.LogError(failure).Str("dir", entry.Dir).
-				Msg("recall sync: tracker instances failed to load, continuing without them")
-		}
+		logReportableLoadFailures(failures, entry.Dir, "recall sync")
 		instances = ticketSources(instances)
 		if len(instances) == 0 {
 			continue

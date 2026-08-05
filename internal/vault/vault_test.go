@@ -2,6 +2,7 @@ package vault
 
 import (
 	"context"
+	stderrors "errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -552,6 +553,351 @@ func TestResolveField_plainValue(t *testing.T) {
 	val, err := ResolveField(r, "ghp_abc")
 	require.NoError(t, err)
 	assert.Equal(t, "ghp_abc", val)
+}
+
+// SC-3322 regression guard: one failed read must not be re-asked at poll
+// rate. Before the fix, a reference whose read fails is indistinguishable
+// from one never read, so the very next call reaches the provider again —
+// which is how one unanswered approval dialog became 705 queued prompts.
+func TestResolver_Resolve_failedReadIsNotAskedAgainImmediately(t *testing.T) {
+	calls := 0
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			calls++
+			return "", tagCause(ErrStoreUnreachable, "op timed out")
+		},
+	}
+	r := NewResolver(provider)
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+
+	_, err = r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+
+	assert.Equal(t, 1, calls, "a second read inside the hold must not reach the provider again")
+}
+
+// The hold expires and the store is consulted again once it passes.
+func TestResolver_Resolve_holdExpiresAndTheStoreIsConsultedAgain(t *testing.T) {
+	calls := 0
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			calls++
+			return "", tagCause(ErrStoreUnreachable, "op timed out")
+		},
+	}
+	now := time.Unix(0, 0)
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+	assert.Equal(t, 1, calls)
+
+	now = now.Add(FailureHoldInitial + time.Second)
+	_, err = r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+	assert.Equal(t, 2, calls, "once the hold passes the store must be consulted again")
+}
+
+// Consecutive failures back off with doubling holds, capped at FailureHoldMax.
+func TestResolver_Resolve_consecutiveFailuresBackOffAndCap(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			return "", tagCause(ErrStoreUnreachable, "op timed out")
+		},
+	}
+	now := time.Unix(0, 0)
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+
+	wantHolds := []time.Duration{
+		FailureHoldInitial,     // 30s
+		2 * FailureHoldInitial, // 1m
+		4 * FailureHoldInitial, // 2m
+		8 * FailureHoldInitial, // 4m
+		FailureHoldMax,         // capped at 5m
+	}
+	for _, want := range wantHolds {
+		_, err := r.Resolve("1pw://vault/item/field")
+		require.Error(t, err)
+
+		r.mu.Lock()
+		got := r.failures["1pw://vault/item/field"].hold
+		r.mu.Unlock()
+		assert.Equal(t, want, got)
+
+		// Advance past this hold so the next Resolve reaches the provider again.
+		now = now.Add(got + time.Second)
+	}
+}
+
+// Recovery resets the backoff: the next outage starts again from
+// FailureHoldInitial rather than from wherever the previous run left off.
+func TestResolver_Resolve_recoveryResetsTheBackoff(t *testing.T) {
+	fail := true
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			if fail {
+				return "", tagCause(ErrStoreUnreachable, "op timed out")
+			}
+			return "secret", nil
+		},
+	}
+	now := time.Unix(0, 0)
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+	now = now.Add(FailureHoldInitial + time.Second)
+
+	// Recover.
+	fail = false
+	val, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "secret", val)
+
+	// Fail again immediately after — since the value cache is fresh, force a
+	// fresh outage by expiring the cached value first.
+	r.mu.Lock()
+	delete(r.cache, "1pw://vault/item/field")
+	r.mu.Unlock()
+
+	fail = true
+	_, err = r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+
+	r.mu.Lock()
+	got := r.failures["1pw://vault/item/field"].hold
+	r.mu.Unlock()
+	assert.Equal(t, FailureHoldInitial, got, "a fresh outage after a recovery must not inherit the previous doubled hold")
+}
+
+// SC-2039 regression: a still-fresh cached value must be served even when a
+// failure is on record for the same reference — the cache is consulted first.
+func TestResolver_Resolve_freshCachedValueBeatsAHeldFailure(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			t.Fatal("provider must not be consulted when a fresh value is cached")
+			return "", nil
+		},
+	}
+	now := time.Unix(0, 0)
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+	// The absolute deadline must be seeded too, and in the future: cached()
+	// drops any entry whose deadline has passed (SC-3321), so a zero deadline
+	// would evict this entry on read and leave the test asserting nothing about
+	// the cache-beats-hold ordering it exists to guard.
+	r.cache["1pw://vault/item/field"] = cachedSecret{
+		value:     seal("cached-value"),
+		expiresAt: now.Add(time.Minute),
+		deadline:  now.Add(DefaultMaxCacheTTL),
+	}
+	r.failures["1pw://vault/item/field"] = failureState{
+		err:     tagCause(ErrStoreUnreachable, "op timed out"),
+		hold:    FailureHoldInitial,
+		retryAt: now.Add(FailureHoldInitial),
+	}
+
+	val, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "cached-value", val)
+}
+
+// Where the two windows meet: the sliding idle window (SC-3321) must not let a
+// held failure (SC-3322) serve plaintext past the absolute ceiling. Once the
+// deadline passes, the entry is gone, so the hold surfaces as the failure it is
+// rather than resurrecting a secret that should no longer be in memory.
+func TestResolver_Resolve_heldFailureDoesNotResurrectAnEntryPastItsDeadline(t *testing.T) {
+	now := time.Unix(0, 0)
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			t.Fatal("the store must not be consulted while the hold is on")
+			return "", nil
+		},
+	}
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+	r.maxTTL = time.Hour
+	// Idle window still open, absolute deadline already passed — the state the
+	// sliding window produces for a secret used right up to its ceiling.
+	r.cache["1pw://vault/item/field"] = cachedSecret{
+		value:     seal("cached-value"),
+		expiresAt: now.Add(time.Minute),
+		deadline:  now.Add(-time.Second),
+	}
+	r.failures["1pw://vault/item/field"] = failureState{
+		err:     tagCause(ErrStoreUnreachable, "op timed out"),
+		hold:    FailureHoldInitial,
+		retryAt: now.Add(FailureHoldInitial),
+	}
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.Error(t, err, "a secret past its absolute ceiling must not be served")
+	assert.True(t, stderrors.Is(err, ErrStoreUnreachable))
+	assert.True(t, IsHeldOff(err), "the store is still being left alone, so the hold is what surfaces")
+
+	r.mu.Lock()
+	_, stillCached := r.cache["1pw://vault/item/field"]
+	r.mu.Unlock()
+	assert.False(t, stillCached, "the expired entry must be dropped, not left in memory")
+}
+
+// A successful read clears the failure memory even though the sliding window
+// rewrote remember(): the recovery path must survive the SC-3321 merge.
+func TestResolver_Resolve_successAfterHoldClearsFailureAndCachesWithBothDeadlines(t *testing.T) {
+	now := time.Unix(0, 0)
+	fail := true
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			if fail {
+				return "", tagCause(ErrStoreUnreachable, "op timed out")
+			}
+			return "token", nil
+		},
+	}
+	r := NewResolver(provider)
+	r.now = func() time.Time { return now }
+	r.ttl = time.Minute
+	r.maxTTL = time.Hour
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+
+	// Past the hold, the store answers again.
+	now = now.Add(FailureHoldInitial + time.Second)
+	fail = false
+	val, err := r.Resolve("1pw://vault/item/field")
+	require.NoError(t, err)
+	assert.Equal(t, "token", val)
+
+	r.mu.Lock()
+	_, heldStill := r.failures["1pw://vault/item/field"]
+	entry := r.cache["1pw://vault/item/field"]
+	r.mu.Unlock()
+	assert.False(t, heldStill, "a successful read must clear the failure memory")
+	assert.Equal(t, now.Add(time.Minute), entry.expiresAt, "the idle window starts from the successful read")
+	assert.Equal(t, now.Add(time.Hour), entry.deadline, "the absolute ceiling is set at the successful read")
+}
+
+// The failure backoff is not gated on caching being enabled: an operator who
+// disables the value cache (to keep plaintext out of memory) must still not
+// be handed one approval prompt per call.
+func TestResolver_Resolve_backoffAppliesWithCachingDisabled(t *testing.T) {
+	calls := 0
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			calls++
+			return "", tagCause(ErrStoreUnreachable, "op timed out")
+		},
+	}
+	r := NewResolver(provider)
+	r.ttl = 0
+
+	_, err := r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+	_, err = r.Resolve("1pw://vault/item/field")
+	require.Error(t, err)
+
+	assert.Equal(t, 1, calls, "the backoff must apply even with the value cache disabled")
+}
+
+// A held failure must keep its classified cause reachable via errors.Is, and
+// must carry the held-off detail flag; the first, real failure must not.
+func TestResolver_Resolve_heldFailureKeepsItsCause(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			return "", tagCause(ErrStoreUnreachable, "op timed out")
+		},
+	}
+	r := NewResolver(provider)
+
+	_, firstErr := r.Resolve("1pw://vault/item/field")
+	require.Error(t, firstErr)
+	assert.True(t, stderrors.Is(firstErr, ErrStoreUnreachable))
+	assert.True(t, IsSecretFailure(firstErr))
+	assert.False(t, IsHeldOff(firstErr), "the first, real failure must not be reported as held off")
+
+	_, heldErr := r.Resolve("1pw://vault/item/field")
+	require.Error(t, heldErr)
+	assert.True(t, stderrors.Is(heldErr, ErrStoreUnreachable))
+	assert.True(t, IsSecretFailure(heldErr))
+	assert.True(t, IsHeldOff(heldErr))
+
+	// The held error's Error() is the only text that survives a daemon->client
+	// hop (SC-2005): it must still name the original diagnosis, not just the
+	// fact that a hold is in effect, or an operator sees no remedy for the
+	// duration of the outage.
+	assert.Contains(t, heldErr.Error(), "op timed out",
+		"the held error's message must still carry the original diagnosis")
+	assert.Contains(t, heldErr.Error(), "not retried yet",
+		"the held error's message must still name the remedy/hold")
+}
+
+// A cause whose own text carries a literal '%' (op's raw stderr can, e.g.
+// "disk 95% full") must reach the held error verbatim: heldFailure builds the
+// wrap message by concatenating the cause's Error(), and WrapWithDetails
+// treats that message as a printf format string, so an unescaped '%' would
+// come out as "%!f(MISSING)" noise instead of the operator's diagnosis.
+func TestResolver_Resolve_heldFailurePreservesAPercentInTheCause(t *testing.T) {
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(string) (string, error) {
+			return "", tagCause(ErrStoreUnreachable, "op read failed: disk 95% full, code %d")
+		},
+	}
+	r := NewResolver(provider)
+
+	_, firstErr := r.Resolve("1pw://vault/item/field")
+	require.Error(t, firstErr)
+
+	_, heldErr := r.Resolve("1pw://vault/item/field")
+	require.Error(t, heldErr)
+	assert.Contains(t, heldErr.Error(), "disk 95% full, code %d",
+		"the cause's literal percent verbs must survive, not be reformatted as %!(MISSING)")
+	assert.NotContains(t, heldErr.Error(), "MISSING")
+}
+
+// The hold is per-reference: one held reference must not block resolution of
+// an unrelated one. Extends TestResolver_Resolve_differentRefsAreNotShared.
+func TestResolver_Resolve_holdIsPerReference(t *testing.T) {
+	calls := map[string]int{}
+	provider := &fakeProvider{
+		canResolve: func(string) bool { return true },
+		resolve: func(ref string) (string, error) {
+			calls[ref]++
+			if ref == "1pw://vault/item/a" {
+				return "", tagCause(ErrStoreUnreachable, "op timed out")
+			}
+			return "ok", nil
+		},
+	}
+	r := NewResolver(provider)
+
+	_, err := r.Resolve("1pw://vault/item/a")
+	require.Error(t, err)
+	_, err = r.Resolve("1pw://vault/item/a")
+	require.Error(t, err)
+	assert.Equal(t, 1, calls["1pw://vault/item/a"], "the held reference must not be re-asked")
+
+	val, err := r.Resolve("1pw://vault/item/b")
+	require.NoError(t, err)
+	assert.Equal(t, "ok", val)
+	assert.Equal(t, 1, calls["1pw://vault/item/b"], "an unrelated reference must resolve normally")
 }
 
 // fakeProvider implements SecretProvider for testing.
