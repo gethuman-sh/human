@@ -162,16 +162,73 @@ func TestPMRoleNotice(t *testing.T) {
 			want: "No PM-role tracker configured. Found work (linear), but none has role: pm — add role: pm to one in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
 		},
 		{
-			name: "errored trackers are excluded from the naming",
+			name: "every result failed — the banner speaks, not role advice",
 			results: []daemon.TrackerIssuesResult{
 				{TrackerName: "broken", TrackerKind: "jira", Err: "boom"},
 			},
-			want: "No PM-role tracker configured. Add role: pm to a tracker in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
+			want: "",
+		},
+		{
+			name: "a resolved tracker beside a failed one is still named",
+			results: []daemon.TrackerIssuesResult{
+				{TrackerName: "broken", TrackerKind: "jira", Err: "boom"},
+				{TrackerName: "work", TrackerKind: "linear", Issues: []tracker.Issue{{Key: "ENG-1"}}},
+			},
+			want: "No PM-role tracker configured. Found work (linear), but none has role: pm — add role: pm to one in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, board.PMRoleNotice(tc.results))
+		})
+	}
+}
+
+// The board's error channel must be reachable by a failure that belongs to no
+// tracker — that is the class of failure (credentials) it was silently
+// dropping (SC-3554).
+func TestErrorBanner(t *testing.T) {
+	tests := []struct {
+		name    string
+		results []daemon.TrackerIssuesResult
+		want    string
+	}{
+		{name: "nothing failed", results: []daemon.TrackerIssuesResult{{TrackerRole: "pm", TrackerName: "prod"}}, want: ""},
+		{
+			name:    "a failure with no tracker identity stands on its own words",
+			results: []daemon.TrackerIssuesResult{{Project: "credentials", Err: "cannot connect to 1Password app"}},
+			want:    "cannot connect to 1Password app",
+		},
+		{
+			name:    "a tracker's failure is attributed to it",
+			results: []daemon.TrackerIssuesResult{{TrackerName: "work", TrackerKind: "linear", Err: "401"}},
+			want:    "work (linear): 401",
+		},
+		{
+			name:    "a named tracker with no kind is still attributed",
+			results: []daemon.TrackerIssuesResult{{TrackerName: "work", Err: "401"}},
+			want:    "work: 401",
+		},
+		{
+			name: "the load failure leads — it names the cause the user can act on",
+			results: []daemon.TrackerIssuesResult{
+				{TrackerName: "work", TrackerKind: "linear", Err: "401"},
+				{Project: "credentials", Err: "cannot connect to 1Password app"},
+			},
+			want: "cannot connect to 1Password app; work (linear): 401",
+		},
+		{
+			name: "one instance failing across several projects says it once",
+			results: []daemon.TrackerIssuesResult{
+				{TrackerName: "work", TrackerKind: "linear", Project: "a", Err: "401"},
+				{TrackerName: "work", TrackerKind: "linear", Project: "b", Err: "401"},
+			},
+			want: "work (linear): 401",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, board.ErrorBanner(tc.results))
 		})
 	}
 }

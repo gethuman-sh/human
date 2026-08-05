@@ -233,8 +233,59 @@ func TestCompose_PMFetchErrorIsCarried(t *testing.T) {
 
 	view := Compose([]daemon.TrackerIssuesResult{res}, false)
 
-	assert.Equal(t, "tracker unreachable", view.Error)
+	assert.Equal(t, "human (shortcut): tracker unreachable", view.Error)
 	assert.Len(t, view.Cards, 1, "the error must not discard the cards that did arrive")
+}
+
+// The reported defect (SC-3554): a tracker whose credentials could not be
+// resolved never became a tracker, so its failure carried no pm role and the
+// board dropped it — leaving only role-misconfiguration advice for a config
+// that needed no editing. The failure must reach the banner, and the advice
+// must not be given.
+func TestCompose_CredentialFailureReachesTheBanner(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{{
+		Project: "credentials",
+		Err:     "1Password CLI op could not read 1pw://Private/Shortcut Token/notesPlain: connecting to desktop app: cannot connect to 1Password app, make sure it is running",
+	}}, true)
+
+	assert.Contains(t, view.Error, "cannot connect to 1Password app",
+		"a credential failure must read as a credential failure")
+	assert.NotContains(t, view.Notice, "role: pm",
+		"nothing is misconfigured — role advice here sends the user to edit a correct config")
+	assert.Empty(t, view.Notice, "the banner is the whole message when every result failed")
+}
+
+// Sibling 1: the stale-refresh announcement rides a result that belongs to no
+// tracker (cmd/cmddaemon staleListing). Dropping it renders yesterday's cards
+// as current — the outcome that function exists to prevent.
+func TestCompose_StaleRefreshAnnouncementReachesTheBanner(t *testing.T) {
+	pm := pmResult([]tracker.Issue{{Key: "SC-1", Title: "one"}},
+		map[string]daemon.BoardCard{"SC-1": {Stage: daemon.BoardBacklog}})
+
+	view := Compose([]daemon.TrackerIssuesResult{pm, {
+		Project: "refresh",
+		Err:     "showing the last successful fetch — this refresh failed: boom",
+	}}, true)
+
+	assert.Contains(t, view.Error, "this refresh failed")
+	assert.Contains(t, view.Error, "boom", "the cause travels with the announcement")
+	assert.Len(t, view.Cards, 1, "stale cards still render — they are just no longer presented as current")
+}
+
+// Sibling 2: a non-PM tracker's failure alongside a healthy PM result was
+// invisible on the board. It must be shown, and named, so the user knows whose
+// credentials to fix.
+func TestCompose_NonPMTrackerFailureIsNamed(t *testing.T) {
+	pm := pmResult([]tracker.Issue{{Key: "SC-1", Title: "one"}},
+		map[string]daemon.BoardCard{"SC-1": {Stage: daemon.BoardBacklog}})
+
+	view := Compose([]daemon.TrackerIssuesResult{pm, {
+		TrackerName: "eng", TrackerKind: "linear", TrackerRole: "engineering",
+		Err: "401 unauthorized",
+	}}, true)
+
+	assert.Equal(t, "eng (linear): 401 unauthorized", view.Error)
+	assert.Len(t, view.Cards, 1)
 }
 
 // Facts about the ticket and its derived run must survive composition intact —

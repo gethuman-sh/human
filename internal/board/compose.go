@@ -23,16 +23,19 @@ import (
 // the host that actually matters.
 func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.BoardView {
 	view := daemon.BoardView{DockerAvailable: dockerAvailable}
+	// Set before any early return: a fetch's failures must reach the banner even
+	// when no PM-role tracker resolved — that is exactly the case where the only
+	// thing that failed was the credentials (SC-3554).
+	view.Error = ErrorBanner(results)
 	pm, ok := FirstPMResult(results)
 	if !ok {
 		// No PM-role tracker resolved: rather than five silently empty columns
 		// that read as "no work" (SC-1655), surface an explicit notice telling
-		// the user a tracker needs role: pm to appear on the board.
+		// the user a tracker needs role: pm to appear on the board. PMRoleNotice
+		// stays silent when everything failed, so the banner is not contradicted
+		// by advice about a config that is already correct.
 		view.Notice = PMRoleNotice(results)
 		return view
-	}
-	if pm.Err != "" {
-		view.Error = pm.Err
 	}
 	// A capped fetch renders a full board that silently omits the overflow; the
 	// affordance tells the user the list is partial (and that their saved state
