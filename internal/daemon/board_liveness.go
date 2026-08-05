@@ -27,16 +27,27 @@ func AgentNamesForCard(card BoardViewCard) []string {
 	switch {
 	case stage == BoardDoneStage:
 		// A done-stage card has an agent only while the pre-merge review→fix loop
-		// or the deploy fixer is mid-flight; DeployPhase is the marker-derived
-		// signal that the loop is running. Both halves and the deploy fixer are
-		// listed because any of them legitimately owns the card between rounds.
+		// is mid-flight; DeployPhase is the marker-derived signal that it is. Both
+		// halves are listed because either legitimately owns the card between
+		// rounds, and which one is running says nothing about whether the other's
+		// container has yet been reaped.
+		//
+		// The deploy FIXER is deliberately absent, and its liveness stays unknown:
+		// DeployPhase only ever names a PR-loop half (donePhaseFromLoopMarker,
+		// board_state.go), so a card whose newest done marker is
+		// DeployFixStartedHeader reports no phase and returns nil above. Naming
+		// the deployfix agent here would therefore only ever be consulted while
+		// deploy-fix is NOT the current work — turning a not-yet-reaped container
+		// from an earlier round into a false "live". Covering it needs a wire
+		// signal the viewer does not have; teaching donePhaseFromLoopMarker the
+		// deploy-fix header instead would silently widen doneStageLoopActive,
+		// which gates the PR-loop re-drive and the stuck-running guard.
 		if card.DeployPhase == "" {
 			return nil
 		}
 		return []string{
 			agentNameFor(card.Key, prReviewAgentStage),
 			agentNameFor(card.Key, prFixAgentStage),
-			agentNameFor(card.Key, deployFixAgentStage),
 		}
 	case stage == BoardVerification && state == BoardDone && VerdictFailed(card.Verdict):
 		// The rework a failed verdict triggers re-runs the IMPLEMENTATION stage
