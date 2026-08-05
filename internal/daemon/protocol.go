@@ -208,10 +208,13 @@ type BoardViewCard struct {
 	// landed (RFC3339); the board's age badge renders how long the card has
 	// been sitting. Empty when the card has no derived stage yet.
 	StageEnteredAt string `json:"stageEnteredAt,omitempty"`
-	// DeployPhase names the done-stage sub-phase ("pr-review" while the machine
-	// review→fix loop runs, empty for a plain deploy) so the badge reads "PR
-	// review…" instead of "deploying…". Populated by the explicit field copy
-	// below — the daemon→desktop hop is a Go copy, not a JSON re-tag.
+	// DeployPhase names the done-stage sub-phase of a running card: "pr-review"
+	// while the machine reviewer runs, "pr-fix" while the fixer runs, empty for
+	// a plain deploy. Both halves of the loop are named because they are
+	// separate agents doing opposite work — a card that says "PR review…" while
+	// the fixer runs sends a reader to the wrong log (SC-3569). Populated by the
+	// explicit field copy below — the daemon→desktop hop is a Go copy, not a
+	// JSON re-tag.
 	DeployPhase string `json:"deployPhase,omitempty"`
 	// Degraded marks a card whose markers could not be read this scan (a
 	// ListComments error). The frontend renders it locked — non-draggable and
@@ -278,6 +281,25 @@ type BoardViewCard struct {
 	// the card is the viewer's own, has no owner, or identity is unknown: those
 	// all render at full opacity (dimming is a hint, never applied on a guess).
 	NotMine bool `json:"notMine,omitempty"`
+	// StageDaemonID is the machine id signed onto the card's deciding stage
+	// marker (BoardCard.StageDaemonID, read via ParseDaemonID). It exists on the
+	// wire so a VIEWER can tell "no agent HERE" from "no agent anywhere": on a
+	// board several daemons drive, a stage another machine owns is invisible to
+	// this host's container list, and reporting that silence as death is the
+	// mistake this field prevents (SC-3569). Empty for an unsigned marker.
+	StageDaemonID string `json:"stageDaemonID,omitempty"`
+	// AgentLiveness answers "is an agent actually working this card right now":
+	// AgentLive, AgentDead, AgentElsewhere, or "" for unknown. A viewer-local
+	// field like NotMine — filled by the desktop overlay (applyLocal via
+	// board.MarkAgentLiveness), NEVER by Compose, because liveness is a property
+	// of the machine looking rather than of the project.
+	//
+	// "" is the load-bearing value: it means the question could not be answered
+	// (no Docker engine here, a discovery error, an unsigned marker, a stage
+	// that runs no named agent, or an agent still starting up) and the card must
+	// then render exactly as it did before this existed. Absence of a signal is
+	// never proof of death.
+	AgentLiveness string `json:"agentLiveness,omitempty"`
 	// Options carries the card's open decision block: a stage ended in a fork
 	// and a human must pick a direction. OptionsContext is the one-line why.
 	Options        []BoardOption `json:"options,omitempty"`
