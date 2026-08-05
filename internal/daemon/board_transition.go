@@ -1099,19 +1099,59 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
-		DeployFailedHeader+"\n"+deployFixEscalationReason(fixExit))
+		DeployFailedHeader+"\n"+deployFixEscalationReason(fixExit, dispatchedFailure(comments)))
 	return nil
+}
+
+// dispatchedFailure recovers WHAT the deploy fixer was sent to fix: the headline
+// the gate wrote onto the newest [human:deploy-fix-started] marker, which for a
+// CI failure already names the failing checks ("CI checks failed on the pull
+// request (failing: frontend-test)"). The escalation had this on the ticket all
+// along and quoted none of it.
+func dispatchedFailure(comments []tracker.Comment) string {
+	var headline string
+	for _, c := range comments {
+		trimmed := strings.TrimSpace(c.Body)
+		if !strings.HasPrefix(trimmed, DeployFixStartedHeader) {
+			continue
+		}
+		// The headline is the first body line after the header; the pr/number/
+		// branch binding follows it.
+		lines := strings.Split(strings.TrimPrefix(trimmed, DeployFixStartedHeader), "\n")
+		for _, line := range lines {
+			if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, ": ") {
+				headline = line
+				break
+			}
+		}
+	}
+	return headline
 }
 
 // deployFixEscalationReason renders the actionable headline the failed marker shows
 // when the deploy fixer did not converge.
-func deployFixEscalationReason(fixExit StageExit) string {
+//
+// It names the condition that is blocking, and it does not offer a gesture that
+// cannot work. "Re-run Deploy" was the only instruction the default case gave,
+// and re-running changes nothing about the branch — so the same check fails the
+// same way, which is what SC-3615 recorded: a card whose one offered move
+// reproduced its own failure, and whose actual cause (a single red check) took
+// three queries to establish though it was written on the ticket already.
+func deployFixEscalationReason(fixExit StageExit, dispatched string) string {
+	blocking := ""
+	if dispatched != "" {
+		blocking = " The failure it was sent to fix: " + dispatched
+	}
 	switch fixExit {
 	case ExitNeedsInput:
-		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy"
+		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy." + blocking
 	case ExitNeedsHumanWork:
-		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy"
+		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy." + blocking
 	default:
+		if dispatched != "" {
+			return "the deploy fixer could not recover the deploy. Fix it on the branch and push — " +
+				"re-running Deploy alone will hit the same failure." + blocking
+		}
 		return "the deploy fixer stopped without recovering the deploy — check the PR and its CI, then re-run Deploy"
 	}
 }

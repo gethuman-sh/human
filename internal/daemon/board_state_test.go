@@ -871,3 +871,35 @@ func TestDeriveBoardCard_APassingLoopRetiresTheReviewPhase(t *testing.T) {
 	assert.Equal(t, BoardRunning, card.State, "the merge is still work in progress")
 	assert.Empty(t, card.DeployPhase, "the review is over — the card must stop saying 'PR review…'")
 }
+
+// SC-3615: the deploy fixer's escalation told the reader to "check the PR and
+// its CI, then re-run Deploy" and named nothing. Re-running changes nothing
+// about the branch, so the same check fails identically — the card's one offered
+// move reproduced its own failure. The cause was on the ticket the whole time:
+// the gate writes the failing checks onto the deploy-fix-started marker when it
+// dispatches the fixer.
+func TestDeployFixEscalation_NamesTheFailureAndRefusesAPointlessRetry(t *testing.T) {
+	dispatched := "CI checks failed on the pull request (failing: frontend-test) — fix the failing checks, then re-run Deploy"
+
+	reason := deployFixEscalationReason(ExitRetryable, dispatched)
+	assert.Contains(t, reason, "frontend-test", "the blocking check must be named on the card")
+	assert.Contains(t, reason, "will hit the same failure", "a retry that cannot work must not be the advice")
+
+	// With nothing recorded there is nothing to name, and the old wording stands
+	// rather than inventing a cause.
+	assert.Equal(t,
+		"the deploy fixer stopped without recovering the deploy — check the PR and its CI, then re-run Deploy",
+		deployFixEscalationReason(ExitRetryable, ""))
+}
+
+// The headline is recovered from the newest dispatch, so a second round names
+// what the second dispatch was sent to fix rather than the first.
+func TestDispatchedFailure_TakesTheNewestDispatch(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	comments := []tracker.Comment{
+		{Body: DeployFixStartedHeader + "\nthe first failure\npr: u\nnumber: 1\nbranch: b", Created: base},
+		{Body: DeployFixStartedHeader + "\nthe second failure\npr: u\nnumber: 1\nbranch: b", Created: base.Add(time.Minute)},
+	}
+	assert.Equal(t, "the second failure", dispatchedFailure(comments))
+	assert.Empty(t, dispatchedFailure(nil), "no dispatch recorded means nothing to quote")
+}

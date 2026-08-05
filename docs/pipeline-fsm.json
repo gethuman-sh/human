@@ -343,7 +343,10 @@
       "runs": "human-bug-verify",
       "marker": "[human:bug-verify]",
       "state_key": "stage.verify verdict=DONE",
-      "prompt": "human-bug-verify-agent.md"
+      "prompt": "human-bug-verify-agent.md",
+      "moves_item": true,
+      "classified": false,
+      "doc": "[human:bug-verify] is evidence, not a stage transition: both verdicts keep the item inside the fix run — DONE leads to the handoff, which is the marker that actually moves it, and NOT DONE loops back to fixing while the budget holds."
     },
     {
       "name": "verify-not-done",
@@ -356,7 +359,10 @@
       "marker": "[human:bug-verify]",
       "state_key": "stage.verify verdict=NOT DONE",
       "prompt": "human-autofix-skill.md Step 6",
-      "guard": "under the retry budget; only a failure that reproduced charges an attempt"
+      "guard": "under the retry budget; only a failure that reproduced charges an attempt",
+      "moves_item": false,
+      "classified": false,
+      "doc": "[human:bug-verify] is evidence, not a stage transition: both verdicts keep the item inside the fix run — DONE leads to the handoff, which is the marker that actually moves it, and NOT DONE loops back to fixing while the budget holds."
     },
     {
       "name": "fix-budget-spent",
@@ -573,7 +579,8 @@
       "marker": "[human:deploy-failed]",
       "required_fields": [
         "reason"
-      ]
+      ],
+      "doc": "The deploy gave up. The marker names the condition that is blocking — for a deploy-fixer escalation it quotes the failure the fixer was dispatched to fix, which for CI names the red checks — and it does not offer a gesture that cannot work: where re-running Deploy would hit the same failure, it says so instead of advising the retry."
     },
     {
       "name": "stage-asks",
