@@ -17,38 +17,77 @@ interface Headline {
   failure: number;
 }
 
+interface TokenTotals {
+  input: number;
+  output: number;
+  cacheCreate: number;
+  cacheRead: number;
+  costUSD: number;
+}
+
+interface TicketCost {
+  ticket: string;
+  costUSD: number;
+  contextCostUSD: number;
+  answersCostUSD: number;
+  outputTokens: number;
+  contextTokens: number;
+  durationMs: number;
+}
+
+interface ModelTokens {
+  model: string;
+  input: number;
+  output: number;
+  cacheCreate: number;
+  cacheRead: number;
+  costUSD: number;
+}
+
+interface ToolCount {
+  tool_name: string;
+  count: number;
+}
+
+interface AuditDay {
+  day: string;
+  approved: number;
+  denied: number;
+  failed: number;
+}
+
+interface NetworkDecision {
+  source: string;
+  status: string;
+  host: string;
+  count: number;
+  last_seen: string;
+}
+
+// StatsOverview is the NORMALIZED payload: every field statsFromPayload
+// guarantees to have filled in, by type, before render() ever sees it.
 export interface StatsOverview {
   range: string;
   generatedAt: string;
   daemonStartedAt: string;
-  tokens: { input: number; output: number; cacheCreate: number; cacheRead: number; costUSD: number };
+  tokens: TokenTotals;
   toolCalls: Headline;
   audit: Headline;
   agentRuns: Headline;
-  ticketCosts: {
-    ticket: string;
-    costUSD: number;
-    contextCostUSD: number;
-    answersCostUSD: number;
-    outputTokens: number;
-    contextTokens: number;
-    durationMs: number;
-  }[];
-  tokensByModel: {
-    model: string;
-    input: number;
-    output: number;
-    cacheCreate: number;
-    cacheRead: number;
-    costUSD: number;
-  }[];
-  toolsByTool: { tool_name: string; count: number }[];
-  auditByDay: { day: string; approved: number; denied: number; failed: number }[];
-  networkDecisions: { source: string; status: string; host: string; count: number; last_seen: string }[];
+  ticketCosts: TicketCost[];
+  tokensByModel: ModelTokens[];
+  toolsByTool: ToolCount[];
+  auditByDay: AuditDay[];
+  networkDecisions: NetworkDecision[];
 }
 
+// StatsPayload is what actually arrives over the wire: the daemon and the
+// board app are separate builds, so any field here may be missing or of a
+// different shape than StatsOverview declares (SC-3508).
+export type StatsPayload = Partial<StatsOverview>;
+
 export interface StatsBindings {
-  Stats(range: string): Promise<StatsOverview>;
+  Stats(range: string): Promise<StatsPayload>;
 }
 
 type StatsRange = "24h" | "7d" | "30d";
@@ -87,6 +126,115 @@ export function setStatsRange(r: StatsRange): void {
   void showStats();
 }
 
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function num(v: unknown): number {
+  return typeof v === "number" && isFinite(v) ? v : 0;
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+// rowList coerces an arbitrary payload field into a list of normalized rows:
+// anything other than an array becomes empty (a field whose type changed —
+// e.g. a list that became an object — degrades exactly like a missing field),
+// and each element is normalized individually so one bad row cannot cost its
+// neighbours.
+function rowList<T>(v: unknown, normalizeRow: (row: unknown) => T): T[] {
+  if (!Array.isArray(v)) return [];
+  return v.map(normalizeRow);
+}
+
+function headline(v: unknown): Headline {
+  const o = isObj(v) ? v : ({} as Record<string, unknown>);
+  return { total: num(o.total), success: num(o.success), failure: num(o.failure) };
+}
+
+function tokenTotals(v: unknown): TokenTotals {
+  const o = isObj(v) ? v : ({} as Record<string, unknown>);
+  return {
+    input: num(o.input),
+    output: num(o.output),
+    cacheCreate: num(o.cacheCreate),
+    cacheRead: num(o.cacheRead),
+    costUSD: num(o.costUSD),
+  };
+}
+
+function ticketCostRow(v: unknown): TicketCost {
+  const o = isObj(v) ? v : ({} as Record<string, unknown>);
+  return {
+    ticket: str(o.ticket),
+    costUSD: num(o.costUSD),
+    contextCostUSD: num(o.contextCostUSD),
+    answersCostUSD: num(o.answersCostUSD),
+    outputTokens: num(o.outputTokens),
+    contextTokens: num(o.contextTokens),
+    durationMs: num(o.durationMs),
+  };
+}
+
+function modelTokensRow(v: unknown): ModelTokens {
+  const o = isObj(v) ? v : ({} as Record<string, unknown>);
+  return {
+    model: str(o.model),
+    input: num(o.input),
+    output: num(o.output),
+    cacheCreate: num(o.cacheCreate),
+    cacheRead: num(o.cacheRead),
+    costUSD: num(o.costUSD),
+  };
+}
+
+function toolCountRow(v: unknown): ToolCount {
+  const o = isObj(v) ? v : ({} as Record<string, unknown>);
+  return { tool_name: str(o.tool_name), count: num(o.count) };
+}
+
+function auditDayRow(v: unknown): AuditDay {
+  const o = isObj(v) ? v : ({} as Record<string, unknown>);
+  return { day: str(o.day), approved: num(o.approved), denied: num(o.denied), failed: num(o.failed) };
+}
+
+function networkDecisionRow(v: unknown): NetworkDecision {
+  const o = isObj(v) ? v : ({} as Record<string, unknown>);
+  return {
+    source: str(o.source),
+    status: str(o.status),
+    host: str(o.host),
+    count: num(o.count),
+    last_seen: str(o.last_seen),
+  };
+}
+
+// statsFromPayload is the single door the fetched payload comes through: the
+// daemon and the board app are separate builds, so a field this app expects
+// may be missing, or of a different shape, from what StatsOverview declares.
+// Every field is coerced by runtime type rather than passed through with
+// `?? []`, so a field whose TYPE changed (not just one that vanished)
+// degrades the same way — to an empty/zeroed value — instead of throwing
+// deep inside a panel (SC-3508).
+export function statsFromPayload(raw: unknown): StatsOverview {
+  const o = isObj(raw) ? raw : ({} as Record<string, unknown>);
+  return {
+    range: str(o.range),
+    generatedAt: str(o.generatedAt),
+    daemonStartedAt: str(o.daemonStartedAt),
+    tokens: tokenTotals(o.tokens),
+    toolCalls: headline(o.toolCalls),
+    audit: headline(o.audit),
+    agentRuns: headline(o.agentRuns),
+    ticketCosts: rowList(o.ticketCosts, ticketCostRow),
+    tokensByModel: rowList(o.tokensByModel, modelTokensRow),
+    toolsByTool: rowList(o.toolsByTool, toolCountRow),
+    auditByDay: rowList(o.auditByDay, auditDayRow),
+    networkDecisions: rowList(o.networkDecisions, networkDecisionRow),
+  };
+}
+
 // showStats paints first, then fetches. The synchronous render() shows the
 // header and a Loading state (or the last data) the instant the view activates,
 // so the section is never blank while the fetch is in flight. A fetch already
@@ -107,7 +255,7 @@ export async function showStats(): Promise<void> {
     do {
       pendingFetch = false;
       try {
-        latest = await bindings().Stats(range);
+        latest = statsFromPayload(await bindings().Stats(range));
         error = "";
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
@@ -208,11 +356,23 @@ function host(): HTMLElement | null {
   return document.getElementById("stats");
 }
 
+// render resolves the host and hands drawing to paint(), routing any throw —
+// from a panel nobody has thought to guard yet — to paintFault() instead of
+// leaving #stats on whatever it last painted (SC-3508). Normalization removes
+// the payload faults we already know about; this is the backstop for the rest.
 function render(): void {
   const h = host();
   if (!h) return;
+  try {
+    paint(h);
+  } catch (err) {
+    paintFault(h, err);
+  }
+}
+
+function paint(h: HTMLElement): void {
   if (error) {
-    h.innerHTML = `<div class="stats-header">Stats</div><div class="banner">${escapeHtml(error)}</div>`;
+    h.innerHTML = renderHeader() + `<div class="banner">${escapeHtml(error)}</div>`;
     wireRange(h);
     return;
   }
@@ -220,8 +380,30 @@ function render(): void {
     h.innerHTML = `<div class="stats-header">Stats</div><div class="stats-empty">Loading…</div>`;
     return;
   }
-  h.innerHTML = renderHeader() + renderFillingNote() + renderHeadlines() + renderPanels();
+  h.innerHTML = renderHeader() + renderFillingNote(latest) + renderHeadlines(latest) + renderPanels(latest);
   wireRange(h);
+}
+
+// paintFault paints the same banner shape a fetch error uses, naming the
+// remedy directly (a stale build, not a data problem the user can fix). It
+// does not touch the sticky `error` state — a render fault that set it would
+// keep bannering after the payload recovered until the next successful
+// fetch, coupling the state machine to which of two render() calls faulted.
+// If the banner render itself throws (a host that rejects every write), fall
+// back to plain text rather than leaving the page exactly as broken as before.
+function paintFault(h: HTMLElement, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  const banner = `The board app is out of date relative to the daemon — rebuild it (make desktop). Details: ${escapeHtml(msg)}`;
+  try {
+    h.innerHTML = renderHeader() + `<div class="banner">${banner}</div>`;
+    wireRange(h);
+  } catch {
+    try {
+      h.textContent = `The board app is out of date relative to the daemon — rebuild it (make desktop). Details: ${msg}`;
+    } catch {
+      // nothing left to try: the host rejects every write we know how to make
+    }
+  }
 }
 
 function renderHeader(): string {
@@ -237,9 +419,8 @@ function renderHeader(): string {
 
 // The note appears only while the daemon's uptime is shorter than the selected
 // range, so an empty panel there reads as "no history yet" rather than "no data".
-function renderFillingNote(): string {
-  if (!latest) return "";
-  if (rangeCoversHistory(latest.daemonStartedAt, range, Date.now())) return "";
+function renderFillingNote(s: StatsOverview): string {
+  if (rangeCoversHistory(s.daemonStartedAt, range, Date.now())) return "";
   return `<div class="stats-note">Daemon started recently — history is still filling.</div>`;
 }
 
@@ -253,8 +434,7 @@ function headlineCard(label: string, big: string, sub: string): string {
   );
 }
 
-function renderHeadlines(): string {
-  const s = latest!;
+function renderHeadlines(s: StatsOverview): string {
   const cards = [
     headlineCard(
       "Tokens (5h window)",
@@ -268,14 +448,14 @@ function renderHeadlines(): string {
   return `<div class="stats-headline-row">${cards.join("")}</div>`;
 }
 
-function renderPanels(): string {
+function renderPanels(s: StatsOverview): string {
   return (
     `<div class="stats-panels">` +
-    panelTicketCosts() +
-    panelTokensByModel() +
-    panelTools() +
-    panelAudit() +
-    panelNetwork() +
+    panelTicketCosts(s) +
+    panelTokensByModel(s) +
+    panelTools(s) +
+    panelAudit(s) +
+    panelNetwork(s) +
     `</div>`
   );
 }
@@ -303,8 +483,8 @@ function emptyBody(): string {
 // A ticket with no priced spend still lists, at $0.00: rows written before the
 // proxy could read usage off a compressed body carry duration only, and hiding
 // them would claim the work never ran.
-function panelTicketCosts(): string {
-  const rows = latest!.ticketCosts;
+function panelTicketCosts(s: StatsOverview): string {
+  const rows = s.ticketCosts;
   if (rows.length === 0) return panelShell("Cost by ticket", "", emptyBody());
   const all = rows.flatMap((r) => [r.outputTokens, r.contextTokens]);
   const pcts = barPercents(all);
@@ -330,8 +510,8 @@ function panelTicketCosts(): string {
 // Tokens-by-model: one row per model with two bars (output, context)
 // normalized against the overall max, so the tier split (opus/sonnet/haiku)
 // reads at a glance over the selected range.
-function panelTokensByModel(): string {
-  const rows = latest!.tokensByModel;
+function panelTokensByModel(s: StatsOverview): string {
+  const rows = s.tokensByModel;
   if (rows.length === 0) return panelShell("Tokens by model", "", emptyBody());
   const all = rows.flatMap((r) => [r.output, contextTokens(r)]);
   const pcts = barPercents(all);
@@ -354,8 +534,8 @@ function panelTokensByModel(): string {
   return panelShell("Tokens by model", "output / context", body);
 }
 
-function panelTools(): string {
-  const rows = latest!.toolsByTool;
+function panelTools(s: StatsOverview): string {
+  const rows = s.toolsByTool;
   if (rows.length === 0) return panelShell("Tool calls by tool", "", emptyBody());
   const pcts = barPercents(rows.map((r) => r.count));
   const body = rows
@@ -374,8 +554,8 @@ function panelTools(): string {
 
 // Audit-by-day: a stacked bar per day (approved/denied/failed) normalized
 // against the busiest day so relative volume reads across the week.
-function panelAudit(): string {
-  const rows = latest!.auditByDay;
+function panelAudit(s: StatsOverview): string {
+  const rows = s.auditByDay;
   if (rows.length === 0) return panelShell("Audit outcomes by day", "", emptyBody());
   const totals = rows.map((r) => r.approved + r.denied + r.failed);
   const pcts = barPercents(totals);
@@ -403,8 +583,8 @@ function panelAudit(): string {
 // Network decisions is the one range-exempt panel: the daemon's buffer is a live
 // in-memory snapshot with no historical timestamps, so it carries a "live" badge
 // and is unaffected by the range switch.
-function panelNetwork(): string {
-  const rows = latest!.networkDecisions;
+function panelNetwork(s: StatsOverview): string {
+  const rows = s.networkDecisions;
   if (rows.length === 0) return panelShell("Network decisions", "live", emptyBody());
   const body = rows
     .slice()
