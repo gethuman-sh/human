@@ -44,6 +44,27 @@ If neither the local ref nor origin yields the branch, record `verdict: unreview
 1. **Bind.** Resolve the local branch head as above. When the fixer recorded a head, confirm you are reading it: `human state get <WORK_KEY> stage.pr-fix` — if its `head` is set and differs from `HEAD_SHA` above, the branch moved under you; re-resolve rather than reviewing a stale SHA.
 2. **Context.** Fetch the ticket and its plan for intent: `human get <WORK_KEY>` and `human plan show <WORK_KEY>` (or the ticket description). Read the plan as intent and guidance, not as a checklist — the diff is judged against whether the ticket's outcome became true, plus general correctness, security, and test adequacy.
 3. **Read the diff** (`git diff "$BASE...$BRANCH"`). Read surrounding code with Read/Grep (or `git show "$BRANCH:<path>"`) where a hunk's correctness depends on context the diff does not show.
+3a. **Audit dependents.** When the ticket's plan carries a `## Dependents`
+   section (`human plan show <WORK_KEY>`) and/or the fixer recorded
+   dispositions in its stage record (`human state get <WORK_KEY> stage.pr-fix
+   --field dependents`, `--field unchecked`), check each row against the diff:
+   - the diff changes it → **examined-and-changed**; check the change is
+     actually correct for that dependent.
+   - the diff does not change it → it is only examined if `dependents` states
+     `examined-and-unchanged: <dependent> — <reason>` and that reason holds up
+     when you read the code. A row with neither a change nor a stated
+     disposition is an **unexamined dependent**: a blocking finding
+     (`changes-requested`) — it is an unfinished fix, not a finished one.
+   - an `unchecked: <kind> — <why>` entry names a query the fixer could not
+     run. Run that kind's cheap fallback yourself (the taxonomy's literal `rg`
+     search below) and treat anything it turns up as a listed dependent, so it
+     can block; if the fallback also finds nothing, note the unchecked kind in
+     your findings without blocking on it alone.
+
+   If the plan carries a `## Dependents` section but the fixer's stage record
+   has no `dependents` field at all, and the diff changes a shared thing, that
+   absence is itself an unexamined-dependents finding: run the taxonomy's
+   queries for the kinds the diff triggers and report what you find.
 4. **Record every finding in the verdict.** Your `findings` field is the **authoritative channel** the fixer reads — a board reviewer has no GitHub write path, so this, not the PR thread, is what the next fix pass acts on. Make each finding concrete and line-anchored: file, line, what is wrong, what to change.
 5. **Post inline PR comments — best-effort, for humans.** When a `gh` write path exists, also mirror your findings onto the PR so humans reading it see them. Anchor to the origin head, not your local SHA (the local commit may not be pushed yet), and never let a failed post change your verdict:
    ```bash
@@ -55,6 +76,8 @@ If neither the local ref nor origin yields the branch, record `verdict: unreview
 6. **Judge with teeth.** A finding blocks (`changes-requested`) when the diff is wrong, unsafe, under-tested for its risk, or fails to achieve the ticket's outcome. Cosmetic-only nits do not block — note them, verdict `approved`. Do not invent blockers to look thorough, and do not wave through real ones to look agreeable.
 
 <!-- human:include outcome-not-mechanism -->
+
+<!-- human:include dependents -->
 
 ## Verdict — what the orchestrator reads
 

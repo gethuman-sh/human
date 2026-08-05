@@ -28,6 +28,7 @@ var dependentsScopedPrompts = []string{
 	"human-reviewer-agent.md",
 	"human-bug-fixer-agent.md",
 	"human-pr-fixer-agent.md",
+	"human-pr-reviewer-agent.md",
 	"human-deploy-fixer-agent.md",
 	"human-autofix-skill.md",
 	"human-security-fix-skill.md",

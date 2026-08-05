@@ -15,7 +15,7 @@ borrowed from another kind is not evidence.
 | Kind | You are changing… | Query that finds its dependents |
 |---|---|---|
 | **function/type** | a declared function, method, type or interface | `human codenav impact <qname> --depth 2` |
-| **closed set of values** | one member of a vocabulary: an exit class, a verdict, a status, a marker type, a stage name, a serialized field name | a literal search for the value across the code, **and** across the project's prompt/instruction files (in this project `internal/claude/embed/*.md`): `rg -n '<the literal>'` then `rg -n '<the literal>' internal/claude/embed/`. A vocabulary lives in prose as often as in a switch |
+| **closed set of values** | one member of a vocabulary: an exit class, a verdict, a status, a marker type, a stage name, a serialized field name | a literal search for the value across the code, **and** across your project's prompt/instruction files (e.g. `internal/claude/embed/*.md` in this codebase): `rg -n '<the literal>'` then `rg -n '<the literal>' <your prompt/instruction directory>`. A vocabulary lives in prose as often as in a switch |
 | **stored format** | what gets written into an artifact someone else reads: a comment/marker body, a state record, a file format, output another component parses | every reader of the format, **tests included** — `rg -n '<a distinctive literal from the format>'`, then read each hit and ask whether it reads by **position** (line index, field order, offset) rather than by name |
 | **instruction/convention** | a rule stated in one prompt or doc that a sibling states too | `rg -n '<a distinctive phrase from the rule>' internal/claude/embed/` — the siblings that say the same thing in different words |
 
@@ -40,8 +40,8 @@ command that found it is an opinion:
 - thing: the exit value `outage` — kind: closed set of values
   query: rg -n '"outage"' . && rg -n 'outage' internal/claude/embed/
   result: internal/daemon/board_retry.go:34 (the ExitOutage constant),
-          internal/daemon/board_retry.go:156 (the exit-class switch),
-          human-autofix-skill.md:54 (the vocabulary restated in prose)
+          internal/daemon/board_retry.go:157 (the exit-class switch),
+          human-autofix-skill.md:55 (the vocabulary restated in prose)
 ```
 
 **Carry each dependent to a disposition.** A list nobody acts on is decoration.
