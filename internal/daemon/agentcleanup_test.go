@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,7 +65,7 @@ func TestRunAgentCleanup_ReusedNameSecondExitCleansAgain(t *testing.T) {
 	cleaner := newCountingCleaner()
 
 	ctx := t.Context()
-	go RunAgentCleanup(ctx, store, cleaner, zerolog.Nop())
+	go RunAgentCleanup(ctx, store, cleaner, nil, zerolog.Nop())
 	time.Sleep(50 * time.Millisecond)
 
 	name := "board-201-implementation"
@@ -98,7 +100,7 @@ func TestRunAgentCleanup_StopEvent(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		RunAgentCleanup(ctx, store, cleaner, logger)
+		RunAgentCleanup(ctx, store, cleaner, nil, logger)
 		close(done)
 	}()
 
@@ -130,7 +132,7 @@ func TestRunAgentCleanup_SessionEndEvent(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		RunAgentCleanup(ctx, store, cleaner, logger)
+		RunAgentCleanup(ctx, store, cleaner, nil, logger)
 		close(done)
 	}()
 
@@ -160,7 +162,7 @@ func TestRunAgentCleanup_IgnoresNonAgentEvents(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		RunAgentCleanup(ctx, store, cleaner, logger)
+		RunAgentCleanup(ctx, store, cleaner, nil, logger)
 		close(done)
 	}()
 
@@ -178,4 +180,91 @@ func TestRunAgentCleanup_IgnoresNonAgentEvents(t *testing.T) {
 	<-done
 
 	assert.Empty(t, cleaner.deleted)
+}
+
+// shrinkCleanupWait makes the exit wait test-fast and restores it afterwards,
+// so a regression test costs milliseconds rather than the production budget.
+func shrinkCleanupWait(t *testing.T, wait time.Duration) {
+	t.Helper()
+	poll, w := cleanupExitPoll, cleanupExitWait
+	cleanupExitPoll, cleanupExitWait = 5*time.Millisecond, wait
+	t.Cleanup(func() { cleanupExitPoll, cleanupExitWait = poll, w })
+}
+
+// SC-3785: an exit hook event names the CONTAINER's agent, so a subagent's Stop
+// is indistinguishable from its parent's. Tearing the container down on that
+// event SIGKILLed runs that were still working. A run whose claude is provably
+// still running must be left alone.
+func TestRunAgentCleanup_LeavesRunAliveWhenClaudeStillRunning(t *testing.T) {
+	shrinkCleanupWait(t, 50*time.Millisecond)
+	store := NewHookEventStore()
+	cleaner := &mockCleaner{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	alive := func(context.Context, string) (bool, error) { return true, nil }
+	go RunAgentCleanup(ctx, store, cleaner, alive, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "Stop", AgentName: "board-3785-verification", Timestamp: time.Now()})
+
+	time.Sleep(500 * time.Millisecond)
+	assert.Empty(t, cleaner.deleted, "a run whose claude is still running must not be torn down by somebody else's Stop")
+}
+
+// The other half of the same contract: once claude really is gone, the teardown
+// still happens — the wait defers cleanup, it does not cancel it.
+func TestRunAgentCleanup_DeletesOnceClaudeExits(t *testing.T) {
+	shrinkCleanupWait(t, 5*time.Second)
+	store := NewHookEventStore()
+	cleaner := newCountingCleaner()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var probes int32
+	alive := func(context.Context, string) (bool, error) {
+		// Alive for the first two probes, gone after — the shape of a run that
+		// takes a moment to unwind after firing its exit hook.
+		return atomic.AddInt32(&probes, 1) <= 2, nil
+	}
+	go RunAgentCleanup(ctx, store, cleaner, alive, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "Stop", AgentName: "board-3785-implementation", Timestamp: time.Now()})
+
+	select {
+	case got := <-cleaner.ch:
+		assert.Equal(t, "board-3785-implementation", got)
+	case <-time.After(4 * time.Second):
+		t.Fatal("teardown must still happen once claude has exited")
+	}
+}
+
+// An agent that cannot be probed is not evidence of a live run — the container
+// is unreachable — so teardown proceeds exactly as it did before the probe
+// existed. Sparing it would strand containers whenever docker hiccups.
+func TestRunAgentCleanup_ProbeErrorTearsDown(t *testing.T) {
+	shrinkCleanupWait(t, 5*time.Second)
+	store := NewHookEventStore()
+	cleaner := newCountingCleaner()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	alive := func(context.Context, string) (bool, error) {
+		return false, errors.New("no such container")
+	}
+	go RunAgentCleanup(ctx, store, cleaner, alive, zerolog.Nop())
+	time.Sleep(50 * time.Millisecond)
+
+	store.Append(hookevents.Event{EventName: "SessionEnd", AgentName: "board-3785-planning", Timestamp: time.Now()})
+
+	select {
+	case got := <-cleaner.ch:
+		assert.Equal(t, "board-3785-planning", got)
+	case <-time.After(4 * time.Second):
+		t.Fatal("an unreachable agent must still be cleaned up")
+	}
 }

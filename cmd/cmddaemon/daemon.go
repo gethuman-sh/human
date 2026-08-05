@@ -730,7 +730,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		logger.Warn().Err(err).Msg("hook upgrade failed")
 	}
 
-	go daemon.RunAgentCleanup(ctx, ds.srv.HookEvents, &dockerAgentCleaner{}, logger)
+	go daemon.RunAgentCleanup(ctx, ds.srv.HookEvents, &dockerAgentCleaner{}, agentClaudeAlive, logger)
 	hookEvents := ds.srv.HookEvents
 	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, agentProgressWithInflight(hookEvents, inflight), func(agentName string, reason daemon.ReapReason) {
 		// A reaped agent died without firing hooks, so no exit event exists
@@ -4084,6 +4084,22 @@ func closeExecOnContextDone(ctx context.Context, resp devcontainer.ExecAttachRes
 		}
 	}()
 	return func() { close(done) }
+}
+
+// agentClaudeAlive reports whether the named agent's claude process is still
+// running, reusing the zombie sweep's own liveness check so both teardown paths
+// ask the container the same question. A missing meta or an empty container id
+// means there is nothing left to be alive; any other failure is returned so the
+// caller can decide (the cleanup listener treats unreachable as ended, SC-3785).
+func agentClaudeAlive(ctx context.Context, name string) (bool, error) {
+	meta, err := agent.ReadMeta(name)
+	if err != nil {
+		return false, err
+	}
+	if meta.ContainerID == "" {
+		return false, nil
+	}
+	return (&dockerAgentSweeper{}).IsProcessRunning(ctx, meta.ContainerID, "claude")
 }
 
 func (s *dockerAgentSweeper) DeleteAgent(ctx context.Context, name string) error {
