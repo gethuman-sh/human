@@ -175,7 +175,7 @@ func TestPrintUsage_EmptyInstances_CallsLocalUsage(t *testing.T) {
 	// printUsage with empty instances calls printLocalUsage.
 	// This may fail if ~/.claude doesn't exist, but should not panic.
 	buf := &bytes.Buffer{}
-	_ = printUsage(buf, nil, fixedTime())
+	_ = printUsage(buf, nil, nil, fixedTime())
 	_ = buf
 }
 
@@ -342,7 +342,7 @@ func TestPrintUsage_WithInstances(t *testing.T) {
 		{Label: "Host (PID 100)", Source: "host", Walker: walker, Root: "/tmp/test"},
 	}
 	buf := &bytes.Buffer{}
-	err := printUsage(buf, instances, now)
+	err := printUsage(buf, instances, nil, now)
 	require.NoError(t, err)
 
 	out := buf.String()

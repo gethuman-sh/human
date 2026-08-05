@@ -3,13 +3,13 @@ package cmdusage
 import (
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // BuildUsageCmd creates the "usage" command.
@@ -29,7 +29,7 @@ func RunUsage(cmd *cobra.Command, finder claude.InstanceFinder, now time.Time) e
 	w := cmd.OutOrStdout()
 
 	instances, _ := finder.FindInstances(cmd.Context())
-	if err := printUsage(w, instances, now); err != nil {
+	if err := printUsage(w, instances, localTranscriptRoots(), now); err != nil {
 		return err
 	}
 
@@ -54,24 +54,51 @@ func RunUsage(cmd *cobra.Command, finder claude.InstanceFinder, now time.Time) e
 	return nil
 }
 
-func printUsage(w io.Writer, instances []claude.Instance, now time.Time) error {
+func printUsage(w io.Writer, instances []claude.Instance, roots []string, now time.Time) error {
 	if len(instances) == 0 {
-		return printLocalUsage(w, now)
+		return printLocalUsage(w, roots, now)
 	}
 	return printInstanceUsage(w, instances, now)
 }
 
-func printLocalUsage(w io.Writer, now time.Time) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	root := filepath.Join(home, ".claude", "projects")
-	summary, err := claude.CalculateUsage(claude.OSDirWalker{}, root, now)
-	if err != nil {
-		return err
-	}
+// printLocalUsage reports the current window across every transcript root on
+// this host, not just the operator's own — the agents' spend is the larger half
+// on a machine that runs the pipeline (SC-3581).
+func printLocalUsage(w io.Writer, roots []string, now time.Time) error {
+	summary := claude.CalculateUsageRoots(claude.OSDirWalker{}, roots, now)
 	return claude.FormatUsage(w, summary, now)
+}
+
+// localTranscriptRoots enumerates the transcript roots this command can see.
+// `usage` never forwards to the daemon (main.go localSubcommands), so it has no
+// ProjectRegistry: the registered project dirs are read from the daemon info
+// file, which records them and is readable whether or not a daemon is running.
+// The working directory is offered too, so the command is still complete on a
+// machine where a daemon was never started; TranscriptRoots de-duplicates the
+// overlap.
+func localTranscriptRoots() []string {
+	dirs := registeredProjectDirs()
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		dirs = append(dirs, cwd)
+	}
+	return claude.TranscriptRoots(dirs)
+}
+
+// registeredProjectDirs reads the project dirs the daemon registered. A missing
+// or malformed daemon info file yields none rather than an error: the operator
+// tree alone is a smaller answer, not a broken one.
+func registeredProjectDirs() []string {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return nil
+	}
+	dirs := make([]string, 0, len(info.Projects))
+	for _, p := range info.Projects {
+		if p.Dir != "" {
+			dirs = append(dirs, p.Dir)
+		}
+	}
+	return dirs
 }
 
 func printInstanceUsage(w io.Writer, instances []claude.Instance, now time.Time) error {
