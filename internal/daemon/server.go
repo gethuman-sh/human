@@ -156,7 +156,7 @@ type Server struct {
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
 	// DescEdit owns the Product-Backlog description-edit chat (SC-2873). nil
-	// disables the descedit-start/reply/apply/status routes.
+	// disables the descedit-start/reply/apply/discard/status routes.
 	DescEdit *DescEditEngine
 	// LeaseChecker answers whether the given project currently has any live
 	// (non-expired) stage lease — the daemon-busy route's authoritative half
@@ -550,6 +550,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"descedit-reply":     func() { s.withBlockingOp(func() { s.handleDescEditReply(conn, args[1:]) }) },
 		"descedit-apply":     func() { s.withBlockingOp(func() { s.handleDescEditApply(conn, args[1:]) }) },
 		"descedit-status":    func() { s.handleDescEditStatus(conn) },
+		"descedit-discard":   func() { s.withBlockingOp(func() { s.handleDescEditDiscard(conn, args[1:]) }) },
 		"bug-create":         func() { s.withBlockingOp(func() { s.handleBugCreate(conn, args[1:]) }) },
 		"fsm-where":          func() { s.handleFSMWhere(conn, args[1:]) },
 		"security-create":    func() { s.withBlockingOp(func() { s.handleSecurityCreate(conn, args[1:]) }) },

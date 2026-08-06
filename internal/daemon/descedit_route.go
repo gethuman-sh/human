@@ -89,3 +89,20 @@ func (s *Server) handleDescEditStatus(conn net.Conn) {
 	}
 	s.writeDescEditStatus(conn, s.DescEdit.Status())
 }
+
+func (s *Server) handleDescEditDiscard(conn net.Conn, args []string) {
+	if s.DescEdit == nil {
+		s.writeError(conn, "description edit not available", 1)
+		return
+	}
+	if len(args) != 1 {
+		s.writeError(conn, "descedit-discard requires one JSON arg", 1)
+		return
+	}
+	var req DescEditDiscardRequest
+	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
+		s.writeError(conn, "invalid descedit-discard request: "+err.Error(), 1)
+		return
+	}
+	s.writeDescEditStatus(conn, s.DescEdit.Discard(req))
+}

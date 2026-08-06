@@ -170,6 +170,49 @@ func TestHandleDescEditApplyNoSession(t *testing.T) {
 	assert.Contains(t, resp.Stderr, "no matching description-edit session")
 }
 
+func TestHandleDescEditDiscardNilEngine(t *testing.T) {
+	token := "tok"
+	addr := startDescEditServer(t, token, nil)
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"descedit-discard", "{}"}})
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "description edit not available")
+}
+
+func TestHandleDescEditDiscardBadArg(t *testing.T) {
+	token := "tok"
+	engine := newTestDescEditEngine(&fakeRunner{}, nil)
+	addr := startDescEditServer(t, token, engine)
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"descedit-discard", "not json"}})
+	assert.Equal(t, 1, resp.ExitCode)
+	assert.Contains(t, resp.Stderr, "invalid descedit-discard request")
+}
+
+// TestHandleDescEditDiscardValid covers the AC6 route end to end: Discard
+// ends the matching session, and Status confirms None afterward.
+func TestHandleDescEditDiscardValid(t *testing.T) {
+	token := "tok"
+	engine := newTestDescEditEngine(&fakeRunner{}, nil)
+	addr := startDescEditServer(t, token, engine)
+
+	startBody, _ := json.Marshal(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
+	startResp := sendRequest(t, addr, Request{Token: token, Args: []string{"descedit-start", string(startBody)}})
+	require.Equal(t, 0, startResp.ExitCode)
+	var started DescEditStatus
+	require.NoError(t, json.Unmarshal([]byte(startResp.Stdout), &started))
+
+	discardBody, _ := json.Marshal(DescEditDiscardRequest{SessionID: started.SessionID})
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"descedit-discard", string(discardBody)}})
+	assert.Equal(t, 0, resp.ExitCode)
+	var discarded DescEditStatus
+	require.NoError(t, json.Unmarshal([]byte(resp.Stdout), &discarded))
+	assert.Equal(t, DescEditNone, discarded.State)
+
+	statusResp := sendRequest(t, addr, Request{Token: token, Args: []string{"descedit-status"}})
+	var status DescEditStatus
+	require.NoError(t, json.Unmarshal([]byte(statusResp.Stdout), &status))
+	assert.Equal(t, DescEditNone, status.State)
+}
+
 func TestDetectDestructiveBypassesDescEdit(t *testing.T) {
 	_, ok := detectDestructive([]string{"descedit-start", `{"key":"SC-1"}`})
 	assert.False(t, ok)
@@ -177,5 +220,10 @@ func TestDetectDestructiveBypassesDescEdit(t *testing.T) {
 
 func TestDetectDestructiveBypassesDescEditApply(t *testing.T) {
 	_, ok := detectDestructive([]string{"descedit-apply", `{"session_id":"x"}`})
+	assert.False(t, ok)
+}
+
+func TestDetectDestructiveBypassesDescEditDiscard(t *testing.T) {
+	_, ok := detectDestructive([]string{"descedit-discard", `{"session_id":"x"}`})
 	assert.False(t, ok)
 }

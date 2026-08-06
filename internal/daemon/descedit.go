@@ -69,6 +69,12 @@ type DescEditApplyRequest struct {
 	SessionID string `json:"session_id"`
 }
 
+// DescEditDiscardRequest ends a session without writing anything to the
+// tracker — the modal's close-without-apply path (AC6).
+type DescEditDiscardRequest struct {
+	SessionID string `json:"session_id"`
+}
+
 // DescEditRunner runs one headless agent turn for the description-edit chat.
 // Same shape as IdeationRunner (Run returns an IdeationTurn) — kept as a
 // distinct interface so the two engines' agent backends can diverge without
@@ -139,9 +145,12 @@ func (e *DescEditEngine) snapshot() DescEditStatus {
 }
 
 // Start begins a new session, or re-attaches to an active one for the SAME
-// key (AD-mirroring ideation's AD-4: closing the modal does not abandon the
-// session). A different key or Restart:true always starts fresh — no LLM
-// turn fires here; the session opens idle (see Architecture Decisions).
+// key. Unlike ideation's AD-4, closing the description-edit modal DOES end
+// the session (Discard, called from the modal's close path) — so in normal
+// use this reattach only ever fires within a single still-open modal
+// instance (e.g. a retried Start racing its own in-flight call), never across
+// a close/reopen. A different key or Restart:true always starts fresh — no
+// LLM turn fires here; the session opens idle (see Architecture Decisions).
 func (e *DescEditEngine) Start(req DescEditStartRequest) (DescEditStatus, error) {
 	if strings.TrimSpace(req.Key) == "" {
 		return DescEditStatus{}, errors.WithDetails("description-edit key must not be empty")
@@ -254,6 +263,26 @@ func (e *DescEditEngine) Apply(req DescEditApplyRequest) (DescEditStatus, error)
 	e.sess.appliedURL = updated.URL
 	e.sess.transcript = append(e.sess.transcript, DescEditMessage{Role: "system", Text: "Description saved.", Time: time.Now()})
 	return e.snapshot(), nil
+}
+
+// Discard ends the session named by SessionID without touching the tracker —
+// the modal's close-without-apply path (AC6: "closing the modal discards the
+// proposed (unsaved) rewrite"). Ending the session, not just clearing its
+// proposal, is what matters: Start's same-key reattach (above) checks
+// e.sess != nil, so dropping the session is what makes a later Start for the
+// same key start genuinely fresh instead of reattaching to a stale
+// AwaitingReply session that still carries the discarded proposal and chat
+// history. A SessionID that no longer names the active session (already
+// applied, already discarded, or superseded by a fresh Start for a different
+// ticket) is a safe no-op — the caller fires this best-effort from the
+// modal's close handler without waiting on network ordering.
+func (e *DescEditEngine) Discard(req DescEditDiscardRequest) DescEditStatus {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sess != nil && e.sess.id == req.SessionID {
+		e.sess = nil
+	}
+	return e.snapshot()
 }
 
 // runTurn executes one headless agent turn and applies its result. Runs in

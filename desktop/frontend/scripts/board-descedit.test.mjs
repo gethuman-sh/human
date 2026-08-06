@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { descEditInputEnabled, descEditApplyEnabled, buildDescriptionPreview } from "../build/board-descedit.js";
+import {
+  descEditInputEnabled,
+  descEditApplyEnabled,
+  buildDescriptionPreview,
+  descEditShouldDiscardOnClose,
+} from "../build/board-descedit.js";
 
 // SC-2873: the Product-Backlog chat-assisted description editor. These pure
 // helpers gate the modal's input/Apply controls and resolve which text the
@@ -44,4 +49,21 @@ test("buildDescriptionPreview folds the proposal into saved text once applied", 
     text: "new rewrite",
     isPreview: false,
   });
+});
+
+// AC6: closing the modal without Apply/Save must discard the pending session
+// so a later reopen never reattaches to a stale proposal or chat history.
+test("descEditShouldDiscardOnClose discards a live awaiting_reply or thinking or error session", () => {
+  assert.equal(descEditShouldDiscardOnClose("awaiting_reply", "sess-1"), true);
+  assert.equal(descEditShouldDiscardOnClose("thinking", "sess-1"), true);
+  assert.equal(descEditShouldDiscardOnClose("error", "sess-1"), true);
+});
+
+test("descEditShouldDiscardOnClose is a no-op once applied — that lifecycle already ended", () => {
+  assert.equal(descEditShouldDiscardOnClose("applied", "sess-1"), false);
+});
+
+test("descEditShouldDiscardOnClose is a no-op with no session to discard", () => {
+  assert.equal(descEditShouldDiscardOnClose("none", undefined), false);
+  assert.equal(descEditShouldDiscardOnClose("awaiting_reply", undefined), false);
 });

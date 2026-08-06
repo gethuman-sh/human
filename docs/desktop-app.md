@@ -199,18 +199,24 @@ The chat is scoped to rewriting the description text only — it declines to
 discuss title, acceptance criteria, labels or any other field. A rewrite the
 agent proposes appears in the left pane as a visibly distinct "Proposed
 rewrite (unsaved)" preview; nothing reaches the tracker until the user clicks
-Apply. Closing the modal without Apply discards nothing but the unwritten
-proposal — the daemon-side chat session itself stays alive and re-attaches on
-reopen, mirroring the ideation panel's AD-4 lifecycle above, but unlike
-ideation the session is **not** persisted across a daemon restart (an
+Apply. Unlike the ideation panel's AD-4 above, closing this modal without
+Apply/Save **discards the daemon-side chat session outright** (AC6): the
+modal's close path (Close button, Escape, backdrop click) calls
+`descedit-discard` on whatever session was live, so reopening the SAME ticket
+always starts a genuinely fresh session — no stale proposal, no stale chat
+history. The session is also **not** persisted across a daemon restart (an
 in-progress, unsaved edit is cheap to lose since nothing was ever written).
 
-The panel talks to four dedicated daemon routes — `descedit-start`,
-`descedit-reply`, `descedit-apply`, `descedit-status` — following the same
-single-JSON-argument route pattern as the ideation routes above. `Apply`
-writes through the role-resolved PM tracker's `Editor`, touching only the
-`Description` field of `tracker.EditOptions` — `Title` and label fields are
-never set, so the write path cannot drift into editing anything else.
+The panel talks to five dedicated daemon routes — `descedit-start`,
+`descedit-reply`, `descedit-apply`, `descedit-discard`, `descedit-status` —
+following the same single-JSON-argument route pattern as the ideation routes
+above. `Apply` writes through the role-resolved PM tracker's `Editor`,
+touching only the `Description` field of `tracker.EditOptions` — `Title` and
+label fields are never set, so the write path cannot drift into editing
+anything else. `Discard` never touches the tracker either; it only ends the
+in-memory session so `Start`'s same-key reattach (used within a single
+still-open modal instance, e.g. a retried `Start` call) has nothing stale left
+to reattach to after a close.
 
 ## macOS code-signing / notarization (release-gating follow-up)
 

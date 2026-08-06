@@ -14,6 +14,16 @@ export function descEditInputEnabled(state) {
 export function descEditApplyEnabled(state, proposal) {
     return !!proposal && proposal.trim() !== "" && state !== "thinking" && state !== "applied";
 }
+// descEditShouldDiscardOnClose: AC6 — closing the modal without Apply/Save
+// must discard the pending session, so a later reopen of the same ticket
+// never reattaches to a stale proposal or chat history. Only a live,
+// un-applied session needs discarding: "applied" is already terminal (Apply
+// itself ended the pending-proposal lifecycle, and reopening re-fetches the
+// saved text from the tracker per AC5), and no sessionId means there is
+// nothing running on the daemon side to discard.
+export function descEditShouldDiscardOnClose(state, sessionId) {
+    return !!sessionId && state !== "applied" && state !== "none";
+}
 // buildDescriptionPreview resolves which text the left pane shows: the live
 // proposal while one is pending review, otherwise the last-known-saved
 // description. "applied" folds the proposal into the saved text (no longer a

@@ -57,6 +57,12 @@ func TestDescEditEngine_StartCreatesAwaitingReplySession(t *testing.T) {
 	assert.Equal(t, 0, runner.callCount())
 }
 
+// TestDescEditEngine_StartReattachesSameKey covers Start called twice for the
+// same key with no Discard in between — e.g. a retried Start racing its own
+// in-flight call while the modal is still open. This is NOT the AC6 scenario
+// (see TestDescEditEngine_DiscardThenStartSameKeyStartsFresh below): AC6 is
+// close-without-apply-then-reopen, which now runs Discard between the two
+// Starts and must NOT reattach.
 func TestDescEditEngine_StartReattachesSameKey(t *testing.T) {
 	e := newTestDescEditEngine(&fakeRunner{}, nil)
 
@@ -305,6 +311,63 @@ func TestDescEditEngine_ApplyNoEditorConfigured(t *testing.T) {
 	_, err = e.Apply(DescEditApplyRequest{SessionID: st.SessionID})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no PM ticket editor configured")
+}
+
+// TestDescEditEngine_DiscardEndsMatchingSession covers the modal's plain
+// close path (Close/Escape/backdrop before any Apply): Discard ends the
+// session outright, not merely clears its proposal — Status reports None
+// afterward, same as if nothing had ever started.
+func TestDescEditEngine_DiscardEndsMatchingSession(t *testing.T) {
+	e := newTestDescEditEngine(&fakeRunner{}, nil)
+	st, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
+	require.NoError(t, err)
+
+	discarded := e.Discard(DescEditDiscardRequest{SessionID: st.SessionID})
+	assert.Equal(t, DescEditNone, discarded.State)
+	assert.Equal(t, DescEditNone, e.Status().State)
+}
+
+// TestDescEditEngine_DiscardThenStartSameKeyStartsFresh is the literal AC6
+// scenario the review flagged: a proposal is set (session left in
+// AwaitingReply, exactly the state Start's same-key reattach checks for),
+// the modal closes without Apply (Discard runs), and reopening the SAME
+// ticket must NOT reattach to the stale proposal/transcript — it must start
+// a brand new session.
+func TestDescEditEngine_DiscardThenStartSameKeyStartsFresh(t *testing.T) {
+	runner := &fakeRunner{turns: []IdeationTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
+	e := newTestDescEditEngine(runner, nil)
+	st, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
+	require.NoError(t, err)
+	_, err = e.Reply(DescEditReplyRequest{SessionID: st.SessionID, Message: "rewrite it"})
+	require.NoError(t, err)
+	live := waitForDescEditState(t, e, DescEditAwaitingReply)
+	require.Equal(t, "Proposed text", live.Proposal, "sanity: the session really does carry a pending proposal before close")
+
+	// The modal's close path: Discard, then (on reopen) Start for the SAME key.
+	e.Discard(DescEditDiscardRequest{SessionID: live.SessionID})
+	reopened, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, live.SessionID, reopened.SessionID, "reopen must start a NEW session, not reattach to the discarded one")
+	assert.Empty(t, reopened.Proposal, "no stale proposal should survive close-without-apply")
+	assert.Empty(t, reopened.Transcript, "no stale chat history should survive close-without-apply")
+}
+
+// TestDescEditEngine_DiscardIsNoopForStaleSessionID covers the fire-and-forget
+// call racing a fresh Start (e.g. the user closed ticket A and immediately
+// opened ticket B before A's Discard landed) — it must never tear down a
+// session it no longer names.
+func TestDescEditEngine_DiscardIsNoopForStaleSessionID(t *testing.T) {
+	e := newTestDescEditEngine(&fakeRunner{}, nil)
+	_, err := e.Start(DescEditStartRequest{Key: "SC-1"})
+	require.NoError(t, err)
+	current, err := e.Start(DescEditStartRequest{Key: "SC-2", Restart: true})
+	require.NoError(t, err)
+
+	e.Discard(DescEditDiscardRequest{SessionID: "some-stale-or-unknown-id"})
+
+	assert.Equal(t, current.SessionID, e.Status().SessionID)
+	assert.Equal(t, DescEditAwaitingReply, e.Status().State)
 }
 
 func TestParseDescProposalBlock_Found(t *testing.T) {

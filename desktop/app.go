@@ -975,6 +975,22 @@ func (a *App) ApplyDescEdit(sessionID string) (DescEditView, error) {
 	return descEditView(st), nil
 }
 
+// DiscardDescEdit ends the named session without writing anything to the
+// tracker — called from the modal's close path (Close button, Escape,
+// backdrop click) so a later reopen of the same ticket starts genuinely
+// fresh instead of reattaching to the discarded proposal/chat history (AC6).
+func (a *App) DiscardDescEdit(sessionID string) (DescEditView, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return DescEditView{}, err
+	}
+	st, err := daemon.DescEditDiscard(info.Addr, info.Token, daemon.DescEditDiscardRequest{SessionID: sessionID})
+	if err != nil {
+		return DescEditView{}, daemonCause(err)
+	}
+	return descEditView(st), nil
+}
+
 // DescEditStatus returns the current description-edit session snapshot, for
 // modal-open re-attach and in-flight-turn polling.
 func (a *App) DescEditStatus() (DescEditView, error) {

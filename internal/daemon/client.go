@@ -736,6 +736,12 @@ func DescEditApply(addr, token string, req DescEditApplyRequest) (DescEditStatus
 	return descEditCall(addr, token, "descedit-apply", req)
 }
 
+// DescEditDiscard ends a description-edit session without writing anything to
+// the tracker — the modal's close-without-apply path (AC6).
+func DescEditDiscard(addr, token string, req DescEditDiscardRequest) (DescEditStatus, error) {
+	return descEditCall(addr, token, "descedit-discard", req)
+}
+
 // GetDescEditStatus fetches the current description-edit session snapshot.
 func GetDescEditStatus(addr, token string) (DescEditStatus, error) {
 	out, err := RunRemoteCapture(addr, token, []string{"descedit-status"})

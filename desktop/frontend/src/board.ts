@@ -71,7 +71,12 @@ import type { Box, Drawn, Side } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection, type TicketCost } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
-import { descEditInputEnabled, descEditApplyEnabled, buildDescriptionPreview } from "./board-descedit.js";
+import {
+  descEditInputEnabled,
+  descEditApplyEnabled,
+  buildDescriptionPreview,
+  descEditShouldDiscardOnClose,
+} from "./board-descedit.js";
 import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
 import { reconcilePending, dropPending, type Pending } from "./board-pending.js";
@@ -402,6 +407,7 @@ interface AppBindings {
   StartDescEdit(key: string, currentDescription: string, restart: boolean): Promise<DescEditView>;
   ReplyDescEdit(sessionId: string, message: string): Promise<DescEditView>;
   ApplyDescEdit(sessionId: string): Promise<DescEditView>;
+  DiscardDescEdit(sessionId: string): Promise<DescEditView>;
   DescEditStatus(): Promise<DescEditView>;
   Instances(): Promise<InstancesData>;
   Features(): Promise<FeatureDoc>;
@@ -3064,11 +3070,13 @@ function renderIdeationError(msg: string): void {
 //
 // A dynamically-built centered modal (like showBugModal), deliberately NOT
 // the fixed-edge slide-out pattern .detail-panel/.ideation-panel use — the
-// AC requires this click target to be visibly distinct. Closing the modal
-// does NOT abandon the daemon-side session (mirrors ideation's AD-4):
-// reopening the SAME ticket re-attaches via DescEditStatus-equivalent state
-// carried in StartDescEdit's reattach path. Nothing is ever written to the
-// tracker before the user clicks Apply.
+// AC requires this click target to be visibly distinct. Unlike ideation's
+// AD-4 (chat survives a close), AC6 requires the opposite here: closing the
+// modal without Apply/Save discards the pending proposal and chat, so
+// closeDescEditModal ends the daemon-side session via DiscardDescEdit —
+// reopening the SAME ticket after a close always starts genuinely fresh, not
+// re-attached. Nothing is ever written to the tracker before the user clicks
+// Apply.
 
 let descEdit: DescEditView = { state: "none", messages: [] };
 let descEditCard: Card | null = null;
@@ -3165,8 +3173,19 @@ async function openDescEditModal(card: Card): Promise<void> {
 
 function closeDescEditModal(): void {
   stopDescEditPoll();
+  const { state, sessionId } = descEdit;
   document.getElementById("descedit-overlay")?.remove();
   descEditCard = null;
+  // AC6: discard the daemon-side session so a later reopen of the same
+  // ticket never reattaches to this proposal/chat history. Fire-and-forget —
+  // the modal is already gone either way, and a failed discard only risks a
+  // stale session reattaching once rather than corrupting anything (Discard
+  // never touches the tracker).
+  if (descEditShouldDiscardOnClose(state, sessionId)) {
+    void go()
+      .DiscardDescEdit(sessionId!)
+      .catch(() => {});
+  }
 }
 
 function renderDescEdit(): void {
