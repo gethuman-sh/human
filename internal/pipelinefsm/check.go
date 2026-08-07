@@ -164,6 +164,43 @@ func checkDescribed(doc Document) []Finding {
 	return findings
 }
 
+// checkInheritance guards the shared rules themselves. Two ways they rot: a
+// state inheriting a default nobody declares (it then silently has no answer at
+// all), and a state restating verbatim what it already inherits — which is the
+// duplication the defaults were extracted to remove, growing back one paste at a
+// time. A `note` is the way to record a deviation without restating the rule.
+func checkInheritance(doc Document) []Finding {
+	var findings []Finding
+	for _, s := range doc.States {
+		if s.Inherits == "" {
+			if s.Note != "" {
+				findings = append(findings, Finding{
+					RuleInvariant, SeverityWarning, s.Name,
+					"has a note but inherits nothing — the note has no rule to add to",
+				})
+			}
+			continue
+		}
+		base, ok := doc.StageDefaults.Rules[s.Inherits]
+		if !ok || (base.StaleWhen == "" && base.IfNothingHappens == "") {
+			findings = append(findings, Finding{
+				RuleInvariant, SeverityError, s.Name,
+				fmt.Sprintf("inherits %q, which stage_defaults does not declare", s.Inherits),
+			})
+			continue
+		}
+		if s.StaleWhen == base.StaleWhen && s.StaleWhen != "" {
+			findings = append(findings, Finding{RuleInvariant, SeverityWarning, s.Name,
+				"restates the stale_when it already inherits — delete it, or say how it differs"})
+		}
+		if s.IfNothingHappens == base.IfNothingHappens && s.IfNothingHappens != "" {
+			findings = append(findings, Finding{RuleInvariant, SeverityWarning, s.Name,
+				"restates the if_nothing_happens it already inherits — delete it, or put the difference in `note`"})
+		}
+	}
+	return findings
+}
+
 // checkTopology holds the graph to its own terms: a transition may not come from
 // or lead to a state nobody declared, and no two may share a name — the name is
 // the alphabet, and a duplicate silently shadows one of them.
@@ -359,8 +396,8 @@ func checkActorsAgree(doc Document) []Finding {
 // only for the one case that contradicts itself — a state nobody may act on that
 // is not actually an end.
 func checkInvariants(doc Document) []Finding {
-	var findings []Finding
-	for _, s := range doc.States {
+	findings := checkInheritance(doc)
+	for _, s := range doc.ResolvedStates() {
 		if s.Name == "" {
 			continue
 		}
