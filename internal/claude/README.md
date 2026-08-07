@@ -9,6 +9,8 @@
 - Discover all running Claude sessions, including containers
 - Show live status: working, idle, blocked, or errored
 - See the current tool, subagents, and task list
-- Report token usage for the current window
+- Report token usage for the current window across every transcript root on the host — the operator's own sessions and each registered project's agent container
+
+Agent containers keep their Claude state in the project (`<project>/.devcontainer/claude`) rather than in the operator's home directory, so usage and cost read both trees; only each root's `projects/` subtree is walked, never the credential store beside it.
 
 `Install` also writes the bot git identity (`GIT_AUTHOR_*` / `GIT_COMMITTER_*`, resolved from `botidentity` and the project `.humanconfig` `bot:` section) into the project `.claude/settings.json` `env` block, so host-run agent commits attribute to the bot while a developer's own terminal commits keep their identity; the session-tracking hooks continue to go to the global `~/.claude/settings.json`.

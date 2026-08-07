@@ -165,6 +165,22 @@ func CalculateUsage(walker DirWalker, root string, now time.Time) (*UsageSummary
 	return summary, nil
 }
 
+// CalculateUsageRoots folds CalculateUsage over every transcript root and merges
+// the per-model totals, so `human usage` reports the same whole-machine window
+// the board's panel does. Like ScanTokensRoots it degrades per root: an
+// unreadable tree contributes nothing rather than failing the command.
+func CalculateUsageRoots(walker DirWalker, roots []string, now time.Time) *UsageSummary {
+	merged := &UsageSummary{Models: make(map[string]*ModelUsage)}
+	for _, root := range roots {
+		summary, err := CalculateUsage(walker, root, now)
+		if err != nil {
+			continue
+		}
+		MergeUsage(merged, summary)
+	}
+	return merged
+}
+
 // TokenHourBucket is one hour's token split into the four separately-priced
 // classes, plus their computed cost. Input, output, cache-create and
 // cache-read are priced very differently (output is the most expensive,
@@ -332,25 +348,93 @@ func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (Tok
 		return TokenScan{}, errors.WrapWithDetails(err, "scanning JSONL for token scan", "root", root)
 	}
 
-	scan.PerHour = make([]TokenHourBucket, 0, len(buckets))
-	for _, b := range buckets {
-		scan.PerHour = append(scan.PerHour, *b)
-	}
-	sort.Slice(scan.PerHour, func(i, j int) bool { return scan.PerHour[i].Bucket < scan.PerHour[j].Bucket })
-
-	scan.ByModel = make([]ModelTokens, 0, len(byModel))
-	for _, m := range byModel {
-		scan.ByModel = append(scan.ByModel, *m)
-	}
-	// Sort by cost desc so the biggest spend reads first; break ties on model
-	// name for deterministic output.
-	sort.Slice(scan.ByModel, func(i, j int) bool {
-		if scan.ByModel[i].CostUSD != scan.ByModel[j].CostUSD {
-			return scan.ByModel[i].CostUSD > scan.ByModel[j].CostUSD
-		}
-		return scan.ByModel[i].Model < scan.ByModel[j].Model
-	})
+	scan.PerHour = flushHourBuckets(buckets)
+	scan.ByModel = flushModelTokens(byModel)
 	return scan, nil
+}
+
+// flushHourBuckets flattens and orders per-hour buckets. Shared by the
+// single-root and multi-root scans so both produce identically ordered output.
+func flushHourBuckets(buckets map[string]*TokenHourBucket) []TokenHourBucket {
+	out := make([]TokenHourBucket, 0, len(buckets))
+	for _, b := range buckets {
+		out = append(out, *b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Bucket < out[j].Bucket })
+	return out
+}
+
+// flushModelTokens flattens per-model totals, biggest spend first, breaking ties
+// on model name for deterministic output.
+func flushModelTokens(byModel map[string]*ModelTokens) []ModelTokens {
+	out := make([]ModelTokens, 0, len(byModel))
+	for _, m := range byModel {
+		out = append(out, *m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CostUSD != out[j].CostUSD {
+			return out[i].CostUSD > out[j].CostUSD
+		}
+		return out[i].Model < out[j].Model
+	})
+	return out
+}
+
+// ScanTokensRoots folds ScanTokens over every transcript root on this host and
+// returns one combined scan, so the board's token panel describes the whole
+// machine rather than only the operator's own sessions (SC-3581).
+//
+// It returns no error by construction: a root that cannot be read contributes
+// nothing and the remaining roots are still scanned, because one unreadable
+// tree emptying the entire panel would be a worse answer than a partial one.
+// Callers must pass de-duplicated roots (see TranscriptRoots) — the scan has no
+// per-message dedupe, so a tree reached twice is counted twice.
+func ScanTokensRoots(walker DirWalker, roots []string, since, until, now time.Time) TokenScan {
+	var total TokenScan
+	buckets := make(map[string]*TokenHourBucket)
+	byModel := make(map[string]*ModelTokens)
+
+	for _, root := range roots {
+		scan, err := ScanTokens(walker, root, since, until, now)
+		if err != nil {
+			continue // per-root degrade: one bad root must not empty the panel
+		}
+		total.WindowInput += scan.WindowInput
+		total.WindowOutput += scan.WindowOutput
+		total.WindowCacheCreate += scan.WindowCacheCreate
+		total.WindowCacheRead += scan.WindowCacheRead
+		total.WindowCostUSD += scan.WindowCostUSD
+
+		for _, b := range scan.PerHour {
+			acc := buckets[b.Bucket]
+			if acc == nil {
+				acc = &TokenHourBucket{Bucket: b.Bucket}
+				buckets[b.Bucket] = acc
+			}
+			acc.Input += b.Input
+			acc.Output += b.Output
+			acc.CacheCreate += b.CacheCreate
+			acc.CacheRead += b.CacheRead
+			acc.CostUSD += b.CostUSD
+		}
+
+		for _, m := range scan.ByModel {
+			acc := byModel[m.Model]
+			if acc == nil {
+				acc = &ModelTokens{Model: m.Model}
+				byModel[m.Model] = acc
+			}
+			acc.Input += m.Input
+			acc.Output += m.Output
+			acc.CacheCreate += m.CacheCreate
+			acc.CacheRead += m.CacheRead
+			acc.CostUSD += m.CostUSD
+		}
+	}
+
+	total.PerHour = flushHourBuckets(buckets)
+	total.ByModel = flushModelTokens(byModel)
+	return total
 }
 
 func formatBytes(b uint64) string {

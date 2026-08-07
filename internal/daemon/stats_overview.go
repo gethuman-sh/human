@@ -212,7 +212,7 @@ func (s *Server) scanTokensCached(r StatsRange, since, until, now time.Time) cla
 
 	scanner := s.TokenScanner
 	if scanner == nil {
-		scanner = defaultTokenScan
+		scanner = defaultTokenScan(s.registeredProjectDirs())
 	}
 	scan, err := scanner(since, until, now)
 	if err != nil {
@@ -226,15 +226,37 @@ func (s *Server) scanTokensCached(r StatsRange, since, until, now time.Time) cla
 	return scan
 }
 
-// defaultTokenScan is the production TokenScanner: one JSONL pass over the real
-// ~/.claude/projects tree. A missing root (Claude never ran) yields an empty
-// scan with no error, preserving the degrade-to-empty contract.
-func defaultTokenScan(since, until, now time.Time) (claude.TokenScan, error) {
-	root, err := claude.ClaudeProjectsRoot()
-	if err != nil {
-		return claude.TokenScan{}, nil
+// registeredProjectDirs lists the directories of every project the daemon knows
+// about, which is where each project's agent container keeps its Claude state.
+// A nil registry (a daemon started without one, and every test server that omits
+// it) yields no dirs, and the scan then covers the operator's own tree alone.
+func (s *Server) registeredProjectDirs() []string {
+	if s.Projects == nil {
+		return nil
 	}
-	return claude.ScanTokens(claude.OSDirWalker{}, root, since, until, now)
+	entries := s.Projects.Entries()
+	dirs := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.Dir != "" {
+			dirs = append(dirs, e.Dir)
+		}
+	}
+	return dirs
+}
+
+// defaultTokenScan builds the production TokenScanner: one JSONL pass over every
+// transcript root on this host — the operator's own tree plus each registered
+// project's agent tree (SC-3581). Before this, the panel read the operator's
+// tree alone and reported the machine's spend as if the person at the desk were
+// the only one working.
+//
+// A missing or unreadable root contributes nothing and never errors, per root,
+// so one absent project cannot empty the whole panel.
+func defaultTokenScan(projectDirs []string) func(since, until, now time.Time) (claude.TokenScan, error) {
+	return func(since, until, now time.Time) (claude.TokenScan, error) {
+		roots := claude.TranscriptRoots(projectDirs)
+		return claude.ScanTokensRoots(claude.OSDirWalker{}, roots, since, until, now), nil
+	}
 }
 
 // auditOverRange buckets audit events by UTC day and folds the per-day counts
