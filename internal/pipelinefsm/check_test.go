@@ -410,3 +410,124 @@ func TestValidate_AnUnfilledWhoMayActIsAGapNotATerminal(t *testing.T) {
 	assert.Equal(t, pipelinefsm.SeverityWarning, f.Severity)
 	assert.Contains(t, f.Message, "who_may_act")
 }
+
+// Inheritance. Seven running states shared one liveness rule; seven copies would
+// need seven coordinated edits to stay true, which is the drift this document
+// exists to prevent, reproduced inside it.
+
+const inheritingMachine = `{
+  "version": 1,
+  "describes": "commit abc1234",
+  "item": "a ticket",
+  "initial": "filed",
+  "actors": {"daemon": "the host process", "user": "a person"},
+  "stage_defaults": {
+    "doc": "the liveness rule for a running stage, stated once",
+    "rules": {
+      "build": {
+        "stale_when": "past the grace with no live agent",
+        "if_nothing_happens": "the reconcile pass reds it and relaunches, up to twice"
+      }
+    }
+  },
+  "states": [
+    {"name": "filed", "doc": "the ticket exists",
+     "holds": "no marker yet", "who_may_act": ["daemon"],
+     "stale_when": "never", "if_nothing_happens": "nothing"},
+    {"name": "working", "doc": "an agent is on it", "inherits": "build",
+     "holds": "an agent owns the stage", "who_may_act": ["daemon"]},
+    {"name": "done", "doc": "shipped", "terminal": true,
+     "holds": "merged", "who_may_act": [],
+     "stale_when": "never", "if_nothing_happens": "nothing"}
+  ],
+  "events": [
+    {"name": "start", "src": ["filed"], "dst": "working", "actor": "daemon",
+     "marker": "[human:started]", "where": "board.go", "doc": "work begins"},
+    {"name": "finish", "src": ["working"], "dst": "done", "actor": "daemon",
+     "marker": "[human:deployed]", "where": "deploy.go", "doc": "work ends"}
+  ]
+}`
+
+func mutateInheriting(t *testing.T, edit func(m map[string]any)) string {
+	t.Helper()
+	var m map[string]any
+	require.NoError(t, json.Unmarshal([]byte(inheritingMachine), &m))
+	edit(m)
+	out, err := json.Marshal(m)
+	require.NoError(t, err)
+	return string(out)
+}
+
+// A state that inherits its liveness rule is fully specified — the invariant
+// pass must read the resolved value, not the empty field.
+func TestValidate_AnInheritedInvariantCountsAsSaid(t *testing.T) {
+	assert.Empty(t, validate(t, inheritingMachine))
+}
+
+func TestResolve_FillsTheInheritedFields(t *testing.T) {
+	doc, err := pipelinefsm.ParseDocument([]byte(inheritingMachine))
+	require.NoError(t, err)
+
+	var working pipelinefsm.State
+	for _, s := range doc.ResolvedStates() {
+		if s.Name == "working" {
+			working = s
+		}
+	}
+	assert.Equal(t, "past the grace with no live agent", working.StaleWhen)
+	assert.Equal(t, "the reconcile pass reds it and relaunches, up to twice", working.IfNothingHappens)
+}
+
+// A note records what is true of one state on top of the shared rule, so a
+// deviation never costs a restatement of the rule it deviates from.
+func TestResolve_AppendsTheStatesOwnNote(t *testing.T) {
+	machine := mutateInheriting(t, func(m map[string]any) {
+		states(t, m)[1].(map[string]any)["note"] = "This is the state SC-1136 froze in."
+	})
+	doc, err := pipelinefsm.ParseDocument([]byte(machine))
+	require.NoError(t, err)
+
+	for _, s := range doc.ResolvedStates() {
+		if s.Name == "working" {
+			assert.Contains(t, s.IfNothingHappens, "up to twice")
+			assert.Contains(t, s.IfNothingHappens, "SC-1136")
+		}
+	}
+}
+
+// Inheriting a rule nobody declares leaves the state with no answer at all,
+// which reads exactly like a state that was never filled in.
+func TestValidate_InheritingAnUndeclaredRuleIsAnError(t *testing.T) {
+	machine := mutateInheriting(t, func(m map[string]any) {
+		states(t, m)[1].(map[string]any)["inherits"] = "nope"
+	})
+	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleInvariant, "working")
+	assert.Equal(t, pipelinefsm.SeverityError, f.Severity)
+	assert.Contains(t, f.Message, `inherits "nope"`)
+}
+
+// The guard on the duplication growing back one paste at a time.
+func TestValidate_RestatingAnInheritedRuleIsFlagged(t *testing.T) {
+	machine := mutateInheriting(t, func(m map[string]any) {
+		states(t, m)[1].(map[string]any)["if_nothing_happens"] = "the reconcile pass reds it and relaunches, up to twice"
+	})
+	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleInvariant, "working")
+	assert.Equal(t, pipelinefsm.SeverityWarning, f.Severity)
+	assert.Contains(t, f.Message, "restates the if_nothing_happens it already inherits")
+}
+
+// Overriding with something DIFFERENT is the point of allowing an override.
+func TestValidate_OverridingAnInheritedRuleWithSomethingElseIsFine(t *testing.T) {
+	machine := mutateInheriting(t, func(m map[string]any) {
+		states(t, m)[1].(map[string]any)["if_nothing_happens"] = "nothing — this one is re-driven rather than reddened"
+	})
+	assert.Empty(t, validate(t, machine))
+}
+
+func TestValidate_ANoteWithNothingToAddToIsFlagged(t *testing.T) {
+	machine := mutateInheriting(t, func(m map[string]any) {
+		states(t, m)[0].(map[string]any)["note"] = "dangling"
+	})
+	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleInvariant, "filed")
+	assert.Contains(t, f.Message, "inherits nothing")
+}

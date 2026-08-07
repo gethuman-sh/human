@@ -71,8 +71,7 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "It has sat past StuckRunningGrace (15 minutes) and no agent for (key, planning) is alive on the machine that owns the stage — or one is alive but has recorded no new phase, which the reconcile pass stops before redding.",
-      "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:planning-failed] and relaunches in place, up to DefaultStageRetries (2). A machine-chosen silence stop does not charge that budget."
+      "inherits": "planning"
     },
     {
       "name": "planned",
@@ -107,8 +106,7 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
-      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "implementation"
     },
     {
       "name": "triaging",
@@ -119,8 +117,7 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
-      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "implementation"
     },
     {
       "name": "challenging",
@@ -131,8 +128,7 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
-      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "implementation"
     },
     {
       "name": "resolved-no-fix",
@@ -156,8 +152,7 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
-      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "implementation"
     },
     {
       "name": "fixing",
@@ -168,8 +163,7 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
-      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "implementation"
     },
     {
       "name": "verifying",
@@ -180,8 +174,8 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
-      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2). This is the state SC-1136 froze in: a NOT DONE verify that halted silently left a card reading 'being fixed' forever, which is the dead end the durable pass exists to close."
+      "inherits": "implementation",
+      "note": "This is the state SC-1136 froze in: a NOT DONE verify that halted silently left a card reading \"being fixed\" forever, which is the dead end the durable pass exists to close."
     },
     {
       "name": "implementing",
@@ -192,8 +186,7 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
-      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "implementation"
     },
     {
       "name": "handed-off",
@@ -215,8 +208,7 @@
         "skill",
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, verification).",
-      "if_nothing_happens": "The reconcile pass posts [human:review-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "verification"
     },
     {
       "name": "reviewed",
@@ -238,8 +230,7 @@
       "who_may_act": [
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, done).",
-      "if_nothing_happens": "The reconcile pass posts [human:deploy-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "done"
     },
     {
       "name": "pr-review",
@@ -250,8 +241,7 @@
         "daemon",
         "skill"
       ],
-      "stale_when": "No loop half-agent alive on this machine. The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so this state is recovered by re-driving rather than by redding.",
-      "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by DefaultPRReviewRounds (3); past it the loop escalates rather than merging on a state it cannot read."
+      "inherits": "pr-loop"
     },
     {
       "name": "pr-fix",
@@ -261,8 +251,7 @@
       "who_may_act": [
         "daemon"
       ],
-      "stale_when": "No loop half-agent alive on this machine; the generic stuck-running pass skips loop cards.",
-      "if_nothing_happens": "reconcilePRLoops re-drives the loop from the recorded state. Bounded by DefaultPRReviewRounds (3)."
+      "inherits": "pr-loop"
     },
     {
       "name": "ci-gate",
@@ -272,8 +261,7 @@
       "who_may_act": [
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, done) — this is NOT a loop-active state, so the generic pass does apply.",
-      "if_nothing_happens": "The reconcile pass posts [human:deploy-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      "inherits": "done"
     },
     {
       "name": "deploy-fixing",
@@ -283,8 +271,8 @@
       "who_may_act": [
         "daemon"
       ],
-      "stale_when": "Past StuckRunningGrace with no live agent for (key, done).",
-      "if_nothing_happens": "The reconcile pass posts [human:deploy-failed] and relaunches in place. Rounds are separately bounded by DefaultDeployFixRounds (2); past that the escalation names the condition that is blocking rather than advising a retry that would hit the same wall."
+      "inherits": "done",
+      "note": "Rounds are separately bounded by DefaultDeployFixRounds (2); past that the escalation names the condition that is blocking rather than advising a retry that would hit the same wall."
     },
     {
       "name": "merged",
@@ -986,6 +974,31 @@
       "DefaultPRReviewRounds": "3 — review→fix rounds before the loop escalates (internal/daemon/pr_review_loop.go)",
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
       "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)"
+    }
+  },
+  "stage_defaults": {
+    "doc": "The liveness rule for a RUNNING stage, stated once. A state naming one of these in `inherits` takes its stale_when and if_nothing_happens from here, and `note` adds what is true of that state alone. Once rather than per state because it IS one rule: seven copies would need seven coordinated edits to stay true, which is the drift this document exists to prevent — reproduced inside it.",
+    "rules": {
+      "planning": {
+        "stale_when": "It has sat past StuckRunningGrace (15 minutes) and no agent for (key, planning) is alive on the machine that owns the stage — or one is alive but has recorded no new phase, which the reconcile pass stops before redding.",
+        "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:planning-failed] and relaunches in place, up to DefaultStageRetries (2). A machine-chosen silence stop does not charge that budget."
+      },
+      "implementation": {
+        "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
+        "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      },
+      "verification": {
+        "stale_when": "Past StuckRunningGrace with no live agent for (key, verification).",
+        "if_nothing_happens": "The reconcile pass posts [human:review-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      },
+      "done": {
+        "stale_when": "Past StuckRunningGrace with no live agent for (key, done).",
+        "if_nothing_happens": "The reconcile pass posts [human:deploy-failed] and relaunches in place, up to DefaultStageRetries (2)."
+      },
+      "pr-loop": {
+        "stale_when": "No loop half-agent alive on this machine. The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so a loop is recovered by re-driving rather than by redding.",
+        "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by DefaultPRReviewRounds (3); past it the loop escalates rather than merging on a state it cannot read."
+      }
     }
   }
 }

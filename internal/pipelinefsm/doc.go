@@ -42,6 +42,18 @@ type Document struct {
 	Actors    map[string]string `json:"actors"`
 	States    []State           `json:"states"`
 	Events    []Event           `json:"events"`
+
+	// StageDefaults holds the liveness rules states inherit.
+	StageDefaults StageDefaults `json:"stage_defaults"`
+}
+
+// ResolvedStates returns every state with its inherited fields filled in.
+func (d Document) ResolvedStates() []State {
+	out := make([]State, 0, len(d.States))
+	for _, s := range d.States {
+		out = append(out, s.Resolve(d.StageDefaults))
+	}
+	return out
 }
 
 // State is one state an item can be in.
@@ -67,6 +79,50 @@ type State struct {
 	WhoMayAct        []string `json:"who_may_act"`
 	StaleWhen        string   `json:"stale_when"`
 	IfNothingHappens string   `json:"if_nothing_happens"`
+
+	// Inherits names a stage default to take StaleWhen and IfNothingHappens
+	// from. Seven running states share one liveness rule, and seven copies of it
+	// would need seven coordinated edits to stay true — the drift this document
+	// exists to prevent, reproduced inside it.
+	Inherits string `json:"inherits"`
+
+	// Note is what is true of THIS state on top of the inherited rule, so a
+	// deviation can be recorded without restating the rule it deviates from.
+	Note string `json:"note"`
+}
+
+// StageDefaults carries the shared rules and the prose explaining them. The
+// rules live under their own key so the map stays homogeneous — prose beside
+// rules in one map means every reader has to know which keys are which.
+type StageDefaults struct {
+	Doc   string                  `json:"doc"`
+	Rules map[string]StageDefault `json:"rules"`
+}
+
+// StageDefault is the liveness rule shared by every running state of one stage.
+type StageDefault struct {
+	StaleWhen        string `json:"stale_when"`
+	IfNothingHappens string `json:"if_nothing_happens"`
+}
+
+// Resolve returns the state with its inherited fields filled in. Callers read
+// the resolved state so inheritance is invisible at the point of use: what a
+// reader gets is the whole answer, whether or not it was written here.
+func (s State) Resolve(defaults StageDefaults) State {
+	base, ok := defaults.Rules[s.Inherits]
+	if !ok {
+		return s
+	}
+	if s.StaleWhen == "" {
+		s.StaleWhen = base.StaleWhen
+	}
+	if s.IfNothingHappens == "" {
+		s.IfNothingHappens = base.IfNothingHappens
+	}
+	if s.Note != "" {
+		s.IfNothingHappens += " " + s.Note
+	}
+	return s
 }
 
 // HasInvariants reports whether the state declares who may act. Distinguishes a
