@@ -178,7 +178,8 @@
       "actor": "user",
       "runs": "human-ticket-reviewer",
       "marker": "[human:ticket-review-started]",
-      "where": "internal/daemon/board_transition.go startAgentStage"
+      "where": "internal/daemon/board_transition.go startAgentStage",
+      "doc": "The pre-planning gate is dispatched: before any code is planned, something asks whether solving this ticket solves the problem."
     },
     {
       "name": "ticket-review-verdict",
@@ -196,7 +197,8 @@
         "escalated",
         "rejected"
       ],
-      "prompt": "human-ticket-reviewer-agent.md"
+      "prompt": "human-ticket-reviewer-agent.md",
+      "doc": "The gate returned one of five heads. `ready` and `reframed` continue into planning; `superseded`, `escalated` and `rejected` are stop decisions and say why, so the item rests in Backlog with the reason on the ticket rather than quietly never being picked up."
     },
     {
       "name": "start-planning",
@@ -235,7 +237,8 @@
       "actor": "skill",
       "runs": "human-planner",
       "marker": "[human:nothing-to-do]",
-      "prompt": "human-plan-skill.md"
+      "prompt": "human-plan-skill.md",
+      "doc": "The planner established the work is already merged, so there is nothing to build. A clean terminal rather than a failure — and reopenable, because it is a judgement and a person may overrule it."
     },
     {
       "name": "planning-failed",
@@ -245,7 +248,8 @@
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:planning-failed]",
-      "where": "board_failure.go"
+      "where": "board_failure.go",
+      "doc": "The planning stage itself failed — a spent retry budget, an agent that died without a verdict. Distinct from the planner concluding there is nothing to do, which is a terminal rather than a fault and must never be reddened as one."
     },
     {
       "name": "start-fix-run",
@@ -271,7 +275,8 @@
       "actor": "skill",
       "runs": "human-autofix",
       "state_key": "stage.preflight ready=yes",
-      "prompt": "human-autofix-skill.md Step 1a"
+      "prompt": "human-autofix-skill.md Step 1a",
+      "doc": "Preflight found no question that only a human can answer, so the run proceeds to reproduce the report. Everything the evidence could settle, it settled."
     },
     {
       "name": "preflight-asks",
@@ -296,7 +301,8 @@
       "runs": "human-bug-triage",
       "marker": "[human:bug-verdict]",
       "state_key": "stage.triage verdict=confirmed",
-      "prompt": "human-bug-triage-agent.md"
+      "prompt": "human-bug-triage-agent.md",
+      "doc": "Triage reproduced the report, so the run continues as a confirmed bug and plans its fix. A not-a-bug or undetermined verdict goes to the skeptic instead of ending the run."
     },
     {
       "name": "triage-verdict-no-bug",
@@ -321,7 +327,8 @@
       "runs": "human-verdict-skeptic",
       "marker": "[human:no-fix-needed]",
       "state_key": "stage.challenge challenge=upheld, stage.implementation exit=done",
-      "prompt": "human-autofix-skill.md Step 3a"
+      "prompt": "human-autofix-skill.md Step 3a",
+      "doc": "The skeptic could not refute the not-a-bug or undetermined verdict, so it stands and the run ends without a code change. The challenge runs once — a verdict that survives it is not re-challenged."
     },
     {
       "name": "challenge-refutes",
@@ -344,7 +351,8 @@
       "actor": "skill",
       "runs": "human-autofix",
       "marker": "[human:plan]",
-      "prompt": "human-autofix-skill.md Step 4"
+      "prompt": "human-autofix-skill.md Step 4",
+      "doc": "The self-planning fix run wrote its own plan and starts carrying it out. It plans for itself because it entered from a bug report rather than from a planned ticket, so there is no attached plan to execute."
     },
     {
       "name": "fix-written",
@@ -355,7 +363,8 @@
       "actor": "skill",
       "runs": "human-autofix",
       "state_key": "stage.fix",
-      "prompt": "human-autofix-skill.md Step 5"
+      "prompt": "human-autofix-skill.md Step 5",
+      "doc": "A regression test that fails first, then the change that makes it pass. Verification is a separate step so the fails-before/passes-after evidence is produced by something other than the code that wrote the fix."
     },
     {
       "name": "verify-not-done",
@@ -382,7 +391,8 @@
       "runs": "human-autofix",
       "marker": "[human:implementation-failed]",
       "state_key": "stage.implementation exit=needs-human-work",
-      "prompt": "human-autofix-skill.md Step 6"
+      "prompt": "human-autofix-skill.md Step 6",
+      "doc": "The fix could not be made to verify within the run's budget. The item stops for a human rather than shipping a change nothing proved."
     },
     {
       "name": "start-implementation",
@@ -414,7 +424,8 @@
         "commits"
       ],
       "prompt": "human-executor-agent.md, human-autofix-skill.md Step 7.1",
-      "where": "posted via `human handoff post`, which verifies the commits are reachable on the branch first"
+      "where": "posted via `human handoff post`, which verifies the commits are reachable on the branch first",
+      "doc": "Branch and commits are recorded on the ticket for whoever reviews next. The commits are verified reachable on the branch before the marker is posted, so a handoff never names work nobody else can see."
     },
     {
       "name": "implementation-failed",
@@ -471,7 +482,8 @@
       "required_fields": [
         "reason"
       ],
-      "doc": "The review stage itself failed — a binding gate such as a missing branch or unreachable commits — not a failing verdict."
+      "doc": "The review stage itself failed — a binding gate such as a missing branch or unreachable commits — not a failing verdict.",
+      "where": "internal/daemon/board_failure.go — the failure watcher, via failedHeaderFor(BoardVerification)"
     },
     {
       "name": "start-deploy",
@@ -496,7 +508,8 @@
       "actor": "daemon",
       "runs": "human-pr-reviewer",
       "marker": "[human:pr-review-started]",
-      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone."
+      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone.",
+      "where": "internal/daemon/board_transition.go AdvancePRLoop, PRActionReview"
     },
     {
       "name": "pr-changes-requested",
@@ -508,7 +521,8 @@
       "runs": "human-pr-fixer",
       "marker": "[human:pr-fix-started]",
       "guard": "bounded: 3 rounds",
-      "doc": "The fixer commits to the LOCAL branch and never pushes, so the reviewer reads the new commit rather than a stale pushed head."
+      "doc": "The fixer commits to the LOCAL branch and never pushes, so the reviewer reads the new commit rather than a stale pushed head.",
+      "where": "internal/daemon/board_transition.go AdvancePRLoop, PRActionFix"
     },
     {
       "name": "pr-refixed",
@@ -518,7 +532,9 @@
       "dst": "pr-review",
       "actor": "daemon",
       "runs": "human-pr-reviewer",
-      "marker": "[human:pr-review-started]"
+      "marker": "[human:pr-review-started]",
+      "where": "internal/daemon/board_transition.go AdvancePRLoop, PRActionReview — the same action, re-entered after a fix round",
+      "doc": "The reviewer re-reads the branch after the fixer's commit. It is the same review step rather than a different one, so what bounds the loop is the round count, not a separate escalating transition."
     },
     {
       "name": "pr-review-passed",
@@ -540,7 +556,8 @@
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:pr-review-failed]",
-      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read."
+      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read.",
+      "where": "internal/daemon/board_transition.go AdvancePRLoop — prEscalationReason names which of the three it was"
     },
     {
       "name": "ci-red",
@@ -552,7 +569,8 @@
       "runs": "human-deploy-fixer",
       "marker": "[human:deploy-fix-started]",
       "guard": "bounded: 2 rounds",
-      "doc": "A red-but-mechanical failure dispatches the fixer instead of failing the item. A cancelled check counts as no answer yet, not as a no."
+      "doc": "A red-but-mechanical failure dispatches the fixer instead of failing the item. A cancelled check counts as no answer yet, not as a no.",
+      "where": "internal/daemon/board_transition.go deployFailedOrDispatchFixer — ciFailureFixable decides fixer or stop"
     },
     {
       "name": "ci-regated",
@@ -560,7 +578,9 @@
         "deploy-fixing"
       ],
       "dst": "ci-gate",
-      "actor": "daemon"
+      "actor": "daemon",
+      "where": "internal/daemon/board_transition.go AdvanceDeployFix — publishes the fixer's branch, then re-enters DeployBranch",
+      "doc": "The fixer's container holds no push credentials, so its deliverable is the local branch and the daemon publishes it before re-entering the gate. Publishing first is what makes the resolution count at all: the gate reads the branch from origin, so an unpublished fix would be silently discarded and the same failure re-hit."
     },
     {
       "name": "ci-green-merged",
@@ -573,7 +593,8 @@
       "required_fields": [
         "pr"
       ],
-      "doc": "If the base moved on, the branch is rebased and CI re-gated on the new head before merging. Past the merge, branch cleanup and closing the ticket are best-effort and never fail the item."
+      "doc": "If the base moved on, the branch is rebased and CI re-gated on the new head before merging. Past the merge, branch cleanup and closing the ticket are best-effort and never fail the item.",
+      "where": "internal/daemon/board_transition.go DeployBranch — one engine, entered from the board and from `human deploy` (cmd/cmddeploy/deploy.go RunDeploy)"
     },
     {
       "name": "deploy-failed",
@@ -588,7 +609,8 @@
       "required_fields": [
         "reason"
       ],
-      "doc": "The deploy gave up. The marker names the condition that is blocking — for a deploy-fixer escalation it quotes the failure the fixer was dispatched to fix, which for CI names the red checks — and it does not offer a gesture that cannot work: where re-running Deploy would hit the same failure, it says so instead of advising the retry."
+      "doc": "The deploy gave up. The marker names the condition that is blocking — for a deploy-fixer escalation it quotes the failure the fixer was dispatched to fix, which for CI names the red checks — and it does not offer a gesture that cannot work: where re-running Deploy would hit the same failure, it says so instead of advising the retry.",
+      "where": "internal/daemon/board_transition.go deployFailed, and AdvanceDeployFix for a fixer that did not converge"
     },
     {
       "name": "stage-asks",
