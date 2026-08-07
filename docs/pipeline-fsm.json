@@ -30,142 +30,317 @@
     {
       "name": "filed",
       "doc": "The ticket exists. No pipeline activity.",
-      "board": "Backlog"
+      "board": "Backlog",
+      "holds": "The ticket is open and carries no pipeline marker.",
+      "who_may_act": [
+        "user"
+      ],
+      "stale_when": "Never. Waiting is what Backlog is for, and an item may rest here indefinitely.",
+      "if_nothing_happens": "Nothing. The machine does not start work nobody asked for — every transition out of `filed` is a person's gesture."
     },
     {
       "name": "ticket-review",
       "doc": "The pre-planning gate is judging whether solving this ticket solves the problem.",
-      "board": "Backlog, running"
+      "board": "Backlog, running",
+      "holds": "The pre-planning gate is running as the FIRST PHASE of the planning dispatch, so the agent that owns it is registered under the planning stage, not this one.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent, like any running stage.",
+      "if_nothing_happens": "The agent's death is recorded as a PLANNING failure, because planning is the stage it runs under. Note the gap: the backlog stage has no *-failed marker of its own (failedHeaderFor returns none for it), so neither the live watcher nor the durable pass can red a card derived at backlog/running directly — recovery here depends entirely on the enclosing planning dispatch."
     },
     {
       "name": "ticket-reviewed",
       "doc": "The gate returned a verdict: ready, reframed, superseded, escalated or rejected. The last three are stop decisions.",
-      "board": "Backlog, done"
+      "board": "Backlog, done",
+      "holds": "A verdict is recorded with one of five heads.",
+      "who_may_act": [
+        "skill",
+        "user"
+      ],
+      "stale_when": "Never — a verdict is a resting point, not work in progress.",
+      "if_nothing_happens": "For `ready` and `reframed`, the same run continues into planning without anything further. For the three stop heads the item rests in Backlog with the reason on the ticket; only a person restarts it."
     },
     {
       "name": "planning",
       "doc": "A planner is exploring the codebase and writing an implementation plan.",
-      "board": "Planning, running"
+      "board": "Planning, running",
+      "holds": "A planner owns the stage and [human:planning-started] is the item's newest planning marker.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "It has sat past StuckRunningGrace (15 minutes) and no agent for (key, planning) is alive on the machine that owns the stage — or one is alive but has recorded no new phase, which the reconcile pass stops before redding.",
+      "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:planning-failed] and relaunches in place, up to DefaultStageRetries (2). A machine-chosen silence stop does not charge that budget."
     },
     {
       "name": "planned",
       "doc": "A plan is attached to the ticket. The item waits for a human to start the build.",
-      "board": "Planning, done"
+      "board": "Planning, done",
+      "holds": "A [human:plan] comment is attached and no build has started.",
+      "who_may_act": [
+        "user"
+      ],
+      "stale_when": "Never. A plan nobody has acted on is not a fault.",
+      "if_nothing_happens": "Nothing. The machine does not begin an implementation on its own — a plan waits for a person to start the build."
     },
     {
       "name": "nothing-to-do",
       "doc": "The planner proved the work is already merged. Clean terminal.",
       "board": "Planning, resolved",
       "terminal": true,
-      "reopenable": true
+      "reopenable": true,
+      "holds": "The planner established the work is already merged. Clean terminal.",
+      "who_may_act": [
+        "user"
+      ],
+      "stale_when": "Never.",
+      "if_nothing_happens": "Nothing. The machine must never re-run its own clean terminal, which is exactly why reopen is a separate entry point from every retry gesture: the automatic relaunch drives the identical same-stage request."
     },
     {
       "name": "preflight",
       "doc": "The fix run is resolving what it may do and settling what the evidence can settle, before any work.",
-      "board": "Fix, running"
+      "board": "Fix, running",
+      "holds": "A fix run owns the implementation stage and is resolving what it may do before any work.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
+      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "triaging",
       "doc": "The run is reproducing the report to reach a verdict.",
-      "board": "Fix, running"
+      "board": "Fix, running",
+      "holds": "The run is reproducing the report; the implementation stage is claimed.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
+      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "challenging",
       "doc": "A skeptic is trying to refute a not-a-bug or undetermined verdict before it is acted on.",
-      "board": "Fix, running"
+      "board": "Fix, running",
+      "holds": "A skeptic is trying to refute a not-a-bug or undetermined verdict. It runs ONCE — a verdict that survives is not re-challenged.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
+      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "resolved-no-fix",
       "doc": "The no-fix verdict survived the challenge. Clean terminal — the ticket needs no code change.",
       "board": "Fix, resolved",
       "terminal": true,
-      "reopenable": true
+      "reopenable": true,
+      "holds": "The no-fix verdict survived the challenge. Clean terminal — no code change is warranted.",
+      "who_may_act": [
+        "user"
+      ],
+      "stale_when": "Never.",
+      "if_nothing_happens": "Nothing. As with nothing-to-do, only an explicitly human call may re-run a clean terminal."
     },
     {
       "name": "fix-planning",
       "doc": "The self-planning fix run is producing its own plan.",
-      "board": "Fix, running"
+      "board": "Fix, running",
+      "holds": "The self-planning fix run is writing its own plan, because it entered from a report rather than from a planned ticket.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
+      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "fixing",
       "doc": "A regression test that fails first, then the change that makes it pass.",
-      "board": "Fix, running"
+      "board": "Fix, running",
+      "holds": "A regression test that fails first exists, or is being written, along with the change that makes it pass.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
+      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "verifying",
       "doc": "Proving the test fails before and passes after, on a green suite.",
-      "board": "Fix, running"
+      "board": "Fix, running",
+      "holds": "The fix exists and its fails-before/passes-after evidence is being produced by something other than the code that wrote it.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
+      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2). This is the state SC-1136 froze in: a NOT DONE verify that halted silently left a card reading 'being fixed' forever, which is the dead end the durable pass exists to close."
     },
     {
       "name": "implementing",
       "doc": "A plan executor is carrying out an attached plan (the non-bug path).",
-      "board": "Code, running"
+      "board": "Code, running",
+      "holds": "A plan executor is carrying out an ATTACHED plan. A launch onto a ticket with no plan is refused before any agent claims the stage.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
+      "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "handed-off",
       "doc": "Branch and commits are recorded on the ticket, checked reachable.",
-      "board": "Code, done"
+      "board": "Code, done",
+      "holds": "Branch and commits are recorded on the ticket AND the commits were verified reachable on the branch before the marker was posted.",
+      "who_may_act": [
+        "daemon"
+      ],
+      "stale_when": "The review was never chained — the live hook was lost to a daemon restart.",
+      "if_nothing_happens": "reconcileOrphanedHandoffs chains the review, but only when the commits are DEFINITELY present on this machine. A clean absence or an unreadable check leaves the card alone rather than redding work another machine may be able to serve."
     },
     {
       "name": "in-review",
       "doc": "A reviewer is checking the change against the ticket's acceptance criteria. In a board fix run this happens inline, in the same warm container.",
-      "board": "Review, running"
+      "board": "Review, running",
+      "holds": "A reviewer owns the verification stage and is checking the change against the ticket's acceptance criteria.",
+      "who_may_act": [
+        "skill",
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, verification).",
+      "if_nothing_happens": "The reconcile pass posts [human:review-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "reviewed",
       "doc": "The review returned a verdict. A failing verdict blocks the deploy and sends the item back to be rebuilt.",
-      "board": "Review, done"
+      "board": "Review, done",
+      "holds": "A verdict is recorded. The board reads the daemon's blocking DECISION, never the verdict string.",
+      "who_may_act": [
+        "user",
+        "daemon"
+      ],
+      "stale_when": "Never.",
+      "if_nothing_happens": "Nothing automatic on the shipping path: a passing verdict waits for the Deploy gesture, and a failing or incomplete one waits for a rework the board must offer, because the daemon refuses the deploy drop. The daemon does act here on the legacy PR path only."
     },
     {
       "name": "deploying",
       "doc": "The daemon pushed the branch and opened a draft pull request.",
-      "board": "Deploy, running"
+      "board": "Deploy, running",
+      "holds": "The branch is pushed and a DRAFT pull request is open, so a half-reviewed change is not mergeable by anyone.",
+      "who_may_act": [
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, done).",
+      "if_nothing_happens": "The reconcile pass posts [human:deploy-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "pr-review",
       "doc": "The machine reviewer is reading the open pull request.",
-      "board": "Deploy, running"
+      "board": "Deploy, running",
+      "holds": "The machine reviewer is reading the open pull request; the newest done-stage marker is a loop-started marker.",
+      "who_may_act": [
+        "daemon",
+        "skill"
+      ],
+      "stale_when": "No loop half-agent alive on this machine. The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so this state is recovered by re-driving rather than by redding.",
+      "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by DefaultPRReviewRounds (3); past it the loop escalates rather than merging on a state it cannot read."
     },
     {
       "name": "pr-fix",
       "doc": "The machine fixer is addressing the review's findings on the local branch.",
-      "board": "Deploy, running"
+      "board": "Deploy, running",
+      "holds": "The machine fixer is committing to the LOCAL branch and never pushing, so the reviewer reads the new commit rather than a stale pushed head.",
+      "who_may_act": [
+        "daemon"
+      ],
+      "stale_when": "No loop half-agent alive on this machine; the generic stuck-running pass skips loop cards.",
+      "if_nothing_happens": "reconcilePRLoops re-drives the loop from the recorded state. Bounded by DefaultPRReviewRounds (3)."
     },
     {
       "name": "ci-gate",
       "doc": "Every check must be green before the merge.",
-      "board": "Deploy, running"
+      "board": "Deploy, running",
+      "holds": "The review converged and every check must be green before the merge. If the base moved on, the branch is rebased and CI re-gated on the new head first.",
+      "who_may_act": [
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, done) — this is NOT a loop-active state, so the generic pass does apply.",
+      "if_nothing_happens": "The reconcile pass posts [human:deploy-failed] and relaunches in place, up to DefaultStageRetries (2)."
     },
     {
       "name": "deploy-fixing",
       "doc": "A CI failure or a rebase conflict dispatched the deploy fixer instead of failing the item.",
-      "board": "Deploy, running"
+      "board": "Deploy, running",
+      "holds": "A mechanical failure — red CI or a rebase conflict — dispatched the fixer instead of failing the item. The fixer's container holds no push credentials.",
+      "who_may_act": [
+        "daemon"
+      ],
+      "stale_when": "Past StuckRunningGrace with no live agent for (key, done).",
+      "if_nothing_happens": "The reconcile pass posts [human:deploy-failed] and relaunches in place. Rounds are separately bounded by DefaultDeployFixRounds (2); past that the escalation names the condition that is blocking rather than advising a retry that would hit the same wall."
     },
     {
       "name": "merged",
       "doc": "Merged, branch deleted, ticket closed. The shipping terminal.",
       "board": "Deploy, done",
-      "terminal": true
+      "terminal": true,
+      "holds": "Merged, branch deleted, ticket closed. Past the merge, cleanup and closing are best-effort and never fail the item.",
+      "who_may_act": [],
+      "stale_when": "Never.",
+      "if_nothing_happens": "Nothing. This is the shipping terminal — the only state with no actor able to leave it."
     },
     {
       "name": "awaiting-decision",
       "doc": "The item is parked on a genuine fork. Only a human choosing an answer moves it.",
-      "board": "any column, decision needed"
+      "board": "any column, decision needed",
+      "holds": "An open [human:options] block names this item's own stage, or an earlier stage the answer would rework.",
+      "who_may_act": [
+        "user"
+      ],
+      "stale_when": "Never by time. A pause on an open decision is deliberate, and BOTH the live guard (stagePausedOnOptions) and the reconcile pass exclude it from the stuck-running sweep on purpose — a card waiting for a person is not a card that has hung.",
+      "if_nothing_happens": "Nothing. This is the one state the machine may not resolve for itself, which is the whole point of raising a fork rather than guessing."
     },
     {
       "name": "stopped",
       "doc": "A stage gave up and said why: a spent budget, an unreviewable change, a failed deploy. Needs a human.",
-      "board": "any column, error"
+      "board": "any column, error",
+      "holds": "A stage gave up and the marker says why, naming the blocking condition rather than offering a gesture that cannot work.",
+      "who_may_act": [
+        "user",
+        "daemon"
+      ],
+      "stale_when": "Never automatically — a stop is a request for a person.",
+      "if_nothing_happens": "Not nothing — this is the state most easily mistaken for a dead end. Within DefaultStageRetries (2) the machine relaunches the failed stage IN PLACE: the failure is recorded first and the relaunch is the same transition a person Retry gesture issues, so every existing guard applies unchanged. Past the budget it waits for a person. One further case clears it without any relaunch: a done-stage failure whose pull request the forge reports MERGED is retired by reconcileShippedFailures with a [human:deployed] marker, because the work shipped out of band and the red is stale rather than true."
     },
     {
       "name": "substrate-down",
       "doc": "A stage reported the thing it needs was unreachable. Not a failure — it spends no retry budget and is relaunched when the substrate returns.",
-      "board": "any column, outage"
+      "board": "any column, outage",
+      "holds": "A stage reported the thing it needs was unreachable. Nothing about the work is wrong, so it spends no retry budget.",
+      "who_may_act": [
+        "daemon",
+        "user"
+      ],
+      "stale_when": "The outage has lasted past OutageWaitBound (6 hours). An outage that never ends looks exactly like one that will return, until someone measures how long it has run.",
+      "if_nothing_happens": "Each reconcile tick relaunches the stage WITHOUT charging DefaultStageRetries, until the substrate returns and a *-started marker supersedes the outage. Past OutageWaitBound the card is handed to a person instead — still charging nothing."
     },
     {
       "name": "unknown",
       "doc": "The item's own state is unchanged, but the tracker that carries it failed to load, so nothing can be observed about it. It is the only state not derived from the item's markers — it says the board could not look, not that the item moved. Every item on that tracker enters and leaves it together, and it resolves by itself on the next fetch that reads the source.",
-      "board": "not rendered — the board shows a load-failure banner instead of the columns"
+      "board": "not rendered — the board shows a load-failure banner instead of the columns",
+      "holds": "Nothing about the ITEM is known. Its own state is unchanged; the tracker carrying it failed to load, so every item on that tracker enters and leaves this state together.",
+      "who_may_act": [
+        "daemon"
+      ],
+      "stale_when": "Not applicable — this is a property of the fetch, not of the item.",
+      "if_nothing_happens": "The next fetch that reads the source re-derives the item's real state from its markers. It returns to whatever they say, not to where it started."
     }
   ],
   "events": [
@@ -178,8 +353,9 @@
       "actor": "user",
       "runs": "human-ticket-reviewer",
       "marker": "[human:ticket-review-started]",
-      "where": "internal/daemon/board_transition.go startAgentStage",
-      "doc": "The pre-planning gate is dispatched: before any code is planned, something asks whether solving this ticket solves the problem."
+      "where": "launched as the first phase of the planning dispatch — board_transition.go startAgentStage(BoardPlanning, PlanningStartedHeader)",
+      "doc": "The pre-planning gate is dispatched: before any code is planned, something asks whether solving this ticket solves the problem.",
+      "prompt": "human-ticket-reviewer-agent.md — the gate posts its own ticket-review-started marker"
     },
     {
       "name": "ticket-review-verdict",
@@ -794,5 +970,22 @@
     "why": "Between implementation-started and ready-for-review an item passes through six phases that all render as one unchanging word. That word is identical at thirty seconds, at fourteen hours, and when the agent behind it is dead, so nothing on the card distinguishes progress from a hang. The phase changing is the signal; its not changing is the other one.",
     "where": "internal/board/activity.go; attached in cmd/cmddaemon/daemon.go attachActivity",
     "note": "Read for running cards only, and never invented: a run that recorded no phase shows the stage word exactly as before."
+  },
+  "invariants": {
+    "doc": "What each state guarantees while an item sits in it. The transition table says how an item MOVES; these four fields say what is true when it does not, which is the question the pipeline's stuck-card bugs kept turning out to be.",
+    "fields": {
+      "holds": "What must be true of the item while it is in this state.",
+      "who_may_act": "Which declared actors can move it out. An empty list is a true terminal.",
+      "stale_when": "What makes the state suspect rather than merely slow.",
+      "if_nothing_happens": "What the machine does on its own when nobody acts — the answer a planner needs and the one a transition table cannot hold."
+    },
+    "constants": {
+      "BoardReconcileInterval": "2m, jittered ±50% — how often the durable pass re-scans open cards (internal/daemon/board_reconcile.go)",
+      "StuckRunningGrace": "15m — how long a running card is left alone before liveness is judged",
+      "DefaultStageRetries": "2 — automatic in-place relaunches of one stage (internal/daemon/board_retry.go)",
+      "DefaultPRReviewRounds": "3 — review→fix rounds before the loop escalates (internal/daemon/pr_review_loop.go)",
+      "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
+      "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)"
+    }
   }
 }

@@ -20,9 +20,15 @@ const soundMachine = `{
   "initial": "filed",
   "actors": {"daemon": "the host process", "user": "a person"},
   "states": [
-    {"name": "filed", "doc": "the ticket exists"},
-    {"name": "working", "doc": "an agent is on it"},
-    {"name": "done", "doc": "shipped", "terminal": true}
+    {"name": "filed", "doc": "the ticket exists",
+     "holds": "no marker yet", "who_may_act": ["daemon"],
+     "stale_when": "never", "if_nothing_happens": "nothing"},
+    {"name": "working", "doc": "an agent is on it",
+     "holds": "an agent owns the stage", "who_may_act": ["daemon"],
+     "stale_when": "past the grace with no live agent", "if_nothing_happens": "the reconcile pass reds it"},
+    {"name": "done", "doc": "shipped", "terminal": true,
+     "holds": "merged", "who_may_act": [],
+     "stale_when": "never", "if_nothing_happens": "nothing"}
   ],
   "events": [
     {"name": "start", "src": ["filed"], "dst": "working", "actor": "daemon",
@@ -61,23 +67,18 @@ func states(t *testing.T, m map[string]any) []any {
 	return m["states"].([]any)
 }
 
-// findingFor returns the first finding of a rule, so a test asserts on the rule
-// it is about and not on the order findings happen to sort in.
-func findingFor(findings []pipelinefsm.Finding, rule pipelinefsm.Rule) (pipelinefsm.Finding, bool) {
-	for _, f := range findings {
-		if f.Rule == rule {
-			return f, true
-		}
-	}
-	return pipelinefsm.Finding{}, false
-}
-
+// requireFinding returns the finding for a (rule, subject) pair. Matching on
+// both matters: one mutation can now trip several rules, and picking "the first
+// of this rule" would assert on whichever happened to sort first.
 func requireFinding(t *testing.T, findings []pipelinefsm.Finding, rule pipelinefsm.Rule, subject string) pipelinefsm.Finding {
 	t.Helper()
-	f, ok := findingFor(findings, rule)
-	require.True(t, ok, "expected a %q finding, got %v", rule, findings)
-	assert.Equal(t, subject, f.Subject)
-	return f
+	for _, f := range findings {
+		if f.Rule == rule && f.Subject == subject {
+			return f
+		}
+	}
+	require.FailNow(t, "no such finding", "expected %q on %q, got %v", rule, subject, findings)
+	return pipelinefsm.Finding{}
 }
 
 func TestValidate_ASoundMachineHasNothingToSay(t *testing.T) {
@@ -138,7 +139,8 @@ func TestValidate_ASourceListedTwiceIsAMistake(t *testing.T) {
 // Description of something that cannot happen.
 func TestValidate_EveryStateMustBeReachable(t *testing.T) {
 	machine := mutate(t, func(m map[string]any) {
-		m["states"] = append(states(t, m), map[string]any{"name": "orphan", "doc": "nothing reaches this", "terminal": true})
+		m["states"] = append(states(t, m), map[string]any{"name": "orphan", "doc": "nothing reaches this", "terminal": true,
+			"holds": "unreachable", "who_may_act": []any{}, "stale_when": "never", "if_nothing_happens": "nothing"})
 	})
 	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleReachability, "orphan")
 	assert.Contains(t, f.Message, `unreachable from "filed"`)
@@ -181,6 +183,7 @@ func TestValidate_ATerminalWithAWayOutMustSayItIsReopenable(t *testing.T) {
 func TestValidate_AReopenableTerminalWithAWayOutIsFine(t *testing.T) {
 	machine := mutate(t, func(m map[string]any) {
 		states(t, m)[2].(map[string]any)["reopenable"] = true
+		states(t, m)[2].(map[string]any)["who_may_act"] = []any{"user"}
 		m["events"] = append(events(t, m), map[string]any{
 			"name": "reopen", "src": []any{"done"}, "dst": "working",
 			"actor": "user", "where": "board.go", "doc": "a person overrules it",
@@ -210,7 +213,8 @@ func TestValidate_ReopenableOnANonTerminalMeansNothing(t *testing.T) {
 // moving. Counting that as a way out would make "terminal" undeclarable.
 func TestValidate_ANonMovingEdgeDoesNotContradictATerminal(t *testing.T) {
 	machine := mutate(t, func(m map[string]any) {
-		m["states"] = append(states(t, m), map[string]any{"name": "unobservable", "doc": "the source could not be read"})
+		m["states"] = append(states(t, m), map[string]any{"name": "unobservable", "doc": "the source could not be read",
+			"holds": "nothing is known", "who_may_act": []any{"daemon"}, "stale_when": "n/a", "if_nothing_happens": "the next fetch re-derives it"})
 		m["events"] = append(events(t, m),
 			map[string]any{
 				"name": "source-unreadable", "src": []any{"filed", "working", "done"}, "dst": "unobservable",
@@ -313,4 +317,96 @@ func TestValidate_APromptCountsAsSayingWhereATransitionLives(t *testing.T) {
 func TestParseDocument_RejectsNonsense(t *testing.T) {
 	_, err := pipelinefsm.ParseDocument([]byte("not json"))
 	require.Error(t, err)
+}
+
+// The invariants: what holds while an item SITS in a state. The transition
+// table says how an item moves; "nothing happened" has no row in it, which is
+// why it kept being nobody's case.
+
+// The rule that makes the two halves of the document check each other. Written
+// separately they drift silently — a state claiming only a person can move it
+// while a daemon transition leaves it is "machine acts, never asks" broken in
+// description before it is broken in code.
+func TestValidate_WhoMayActMustAgreeWithTheTransitionsThatLeave(t *testing.T) {
+	machine := mutate(t, func(m map[string]any) {
+		states(t, m)[1].(map[string]any)["who_may_act"] = []any{"user"}
+	})
+	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleActor, "working")
+	assert.Equal(t, pipelinefsm.SeverityError, f.Severity)
+	assert.Contains(t, f.Message, `who_may_act omits "daemon"`)
+	assert.Contains(t, f.Message, `"finish" leaves this state`)
+}
+
+// An observability edge leaves every state without anything acting on the item.
+// Counting it would force the daemon into every state's list and make the rule
+// say nothing at all.
+func TestValidate_ANonMovingEdgeDoesNotForceItsActorIntoWhoMayAct(t *testing.T) {
+	machine := mutate(t, func(m map[string]any) {
+		m["states"] = append(states(t, m), map[string]any{
+			"name": "unobservable", "doc": "the source could not be read",
+			"holds": "nothing is known", "who_may_act": []any{"daemon"},
+			"stale_when": "n/a", "if_nothing_happens": "the next fetch re-derives it",
+		})
+		m["events"] = append(events(t, m),
+			map[string]any{
+				"name": "source-unreadable", "src": []any{"filed", "working", "done"}, "dst": "unobservable",
+				"actor": "daemon", "where": "compose.go", "doc": "the tracker failed to load", "moves_item": false,
+			},
+			map[string]any{
+				"name": "source-readable-again", "src": []any{"unobservable"}, "dst": "filed",
+				"actor": "daemon", "where": "compose.go", "doc": "the source came back", "moves_item": false,
+			})
+	})
+	assert.Empty(t, validate(t, machine), "a non-moving edge must not drag its actor into every state")
+}
+
+func TestValidate_WhoMayActMustNameDeclaredActors(t *testing.T) {
+	machine := mutate(t, func(m map[string]any) {
+		states(t, m)[0].(map[string]any)["who_may_act"] = []any{"robot"}
+	})
+	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleActor, "filed")
+	assert.Contains(t, f.Message, `who_may_act names "robot"`)
+}
+
+// A state nobody may act on that is not an end is the stuck card written down.
+func TestValidate_NobodyMayActIsOnlyAllowedAtAnEnd(t *testing.T) {
+	machine := mutate(t, func(m map[string]any) {
+		states(t, m)[1].(map[string]any)["who_may_act"] = []any{}
+	})
+	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleInvariant, "working")
+	assert.Equal(t, pipelinefsm.SeverityError, f.Severity)
+	assert.Contains(t, f.Message, "can never leave")
+}
+
+// An empty list is a true terminal and must not be confused with an unfilled
+// one. The fixture's `done` carries exactly that, so a sound machine passing is
+// the assertion.
+func TestValidate_NobodyMayActIsFineAtATrueEnd(t *testing.T) {
+	assert.Empty(t, validate(t, soundMachine))
+}
+
+func TestValidate_AMissingInvariantWarnsRatherThanFails(t *testing.T) {
+	machine := mutate(t, func(m map[string]any) {
+		s := states(t, m)[1].(map[string]any)
+		delete(s, "if_nothing_happens")
+		delete(s, "stale_when")
+	})
+	findings := validate(t, machine)
+	require.Len(t, findings, 2)
+	assert.Zero(t, pipelinefsm.Errors(findings))
+	for _, f := range findings {
+		assert.Equal(t, pipelinefsm.RuleInvariant, f.Rule)
+		assert.Equal(t, "working", f.Subject)
+	}
+}
+
+// An unfilled who_may_act is a gap; an explicitly empty one is an answer. A
+// slice cannot tell them apart, so the document's absence has to.
+func TestValidate_AnUnfilledWhoMayActIsAGapNotATerminal(t *testing.T) {
+	machine := mutate(t, func(m map[string]any) {
+		delete(states(t, m)[1].(map[string]any), "who_may_act")
+	})
+	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleInvariant, "working")
+	assert.Equal(t, pipelinefsm.SeverityWarning, f.Severity)
+	assert.Contains(t, f.Message, "who_may_act")
 }

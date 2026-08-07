@@ -18,6 +18,7 @@ const (
 	RuleActor        Rule = "actor"         // every transition names a declared actor
 	RuleMarkerSyntax Rule = "marker-syntax" // a marker is written the way a marker is written
 	RuleDescribed    Rule = "described"     // a transition says what it means and where it lives
+	RuleInvariant    Rule = "invariant"     // a state says what holds, who may act, and what happens if nobody does
 )
 
 // Severity separates a machine that does not hold together from one that holds
@@ -73,6 +74,7 @@ func Validate(doc Document) []Finding {
 	findings = append(findings, checkActors(doc)...)
 	findings = append(findings, checkMarkerSyntax(doc)...)
 	findings = append(findings, checkDescribed(doc)...)
+	findings = append(findings, checkInvariants(doc)...)
 
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Severity != findings[j].Severity {
@@ -294,6 +296,90 @@ func checkActors(doc Document) []Finding {
 		}
 		if _, ok := doc.Actors[e.Actor]; !ok {
 			findings = append(findings, Finding{RuleActor, SeverityError, e.Name, fmt.Sprintf("actor %q is not declared", e.Actor)})
+		}
+	}
+	for _, s := range doc.States {
+		for _, actor := range s.WhoMayAct {
+			if _, ok := doc.Actors[actor]; !ok {
+				findings = append(findings, Finding{RuleActor, SeverityError, s.Name, fmt.Sprintf("who_may_act names %q, which is not a declared actor", actor)})
+			}
+		}
+	}
+	return append(findings, checkActorsAgree(doc)...)
+}
+
+// checkActorsAgree is the one rule that makes the two halves of the document
+// check each other: who a state says may act on it, against who the transitions
+// leaving it are actually caused by. Written separately they drift, and the
+// drift is silent — a state claiming only a person can move it while a daemon
+// transition leaves it is the "machine acts, never asks" rule broken in
+// description before it is broken in code.
+//
+// Non-moving transitions are excluded. An observability edge leaves every state
+// including the terminals without anything acting on the item, so counting it
+// would force `daemon` into every state's list and make the rule say nothing.
+func checkActorsAgree(doc Document) []Finding {
+	declared := map[string]map[string]bool{}
+	for _, s := range doc.States {
+		if !s.HasInvariants() {
+			continue // not filled in; the invariant rule reports that
+		}
+		allowed := map[string]bool{}
+		for _, a := range s.WhoMayAct {
+			allowed[a] = true
+		}
+		declared[s.Name] = allowed
+	}
+
+	var findings []Finding
+	seen := map[string]bool{}
+	for _, e := range doc.Events {
+		if !e.Moves() || e.Actor == "" {
+			continue
+		}
+		for _, src := range e.Src {
+			allowed, known := declared[src]
+			if !known || allowed[e.Actor] {
+				continue
+			}
+			if key := src + "/" + e.Actor; !seen[key] {
+				seen[key] = true
+				findings = append(findings, Finding{
+					RuleActor, SeverityError, src,
+					fmt.Sprintf("who_may_act omits %q, but %q leaves this state and is caused by it", e.Actor, e.Name),
+				})
+			}
+		}
+	}
+	return findings
+}
+
+// checkInvariants is the completeness pass for what a state guarantees while an
+// item sits in it. Warnings for the prose, like any other description; an error
+// only for the one case that contradicts itself — a state nobody may act on that
+// is not actually an end.
+func checkInvariants(doc Document) []Finding {
+	var findings []Finding
+	for _, s := range doc.States {
+		if s.Name == "" {
+			continue
+		}
+		if !s.HasInvariants() {
+			findings = append(findings, Finding{RuleInvariant, SeverityWarning, s.Name, "should say who may act on it (who_may_act)"})
+		} else if len(s.WhoMayAct) == 0 && (!s.Terminal || movingExit(doc, s.Name)) {
+			findings = append(findings, Finding{
+				RuleInvariant, SeverityError, s.Name,
+				"nobody may act on it, yet it is not an end — an item reaching it can never leave",
+			})
+		}
+		for _, missing := range []struct{ field, value string }{
+			{"holds", s.Holds},
+			{"stale_when", s.StaleWhen},
+			{"if_nothing_happens", s.IfNothingHappens},
+		} {
+			if strings.TrimSpace(missing.value) == "" {
+				findings = append(findings, Finding{RuleInvariant, SeverityWarning, s.Name, "should say " + missing.field})
+			}
 		}
 	}
 	return findings

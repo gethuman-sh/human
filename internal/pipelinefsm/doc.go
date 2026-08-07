@@ -58,6 +58,22 @@ type State struct {
 	// agree: a terminal with an exit and no reopenable is either mislabelled or
 	// describes a way out nobody meant to offer.
 	Reopenable bool `json:"reopenable"`
+
+	// The four invariants. The transition table says how an item MOVES; these say
+	// what is true while it does not — which is what the pipeline's stuck-card
+	// bugs kept turning out to be. "Nothing happened" has no row in a transition
+	// table, and that is exactly why it kept being nobody's case.
+	Holds            string   `json:"holds"`
+	WhoMayAct        []string `json:"who_may_act"`
+	StaleWhen        string   `json:"stale_when"`
+	IfNothingHappens string   `json:"if_nothing_happens"`
+}
+
+// HasInvariants reports whether the state declares who may act. Distinguishes a
+// state that names nobody — a true terminal — from one that has not been filled
+// in, which an empty slice alone cannot.
+func (s State) HasInvariants() bool {
+	return s.WhoMayAct != nil
 }
 
 // Event is one transition. Name, Src and Dst are the looplab/fsm shape on
