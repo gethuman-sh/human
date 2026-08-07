@@ -2346,3 +2346,43 @@ func TestPlanPromptNamesTheTerminalMarkerForUnplannableVerdicts(t *testing.T) {
 	assert.Contains(t, p, "re-plans the ticket forever",
 		"the dispatch must say what happens without the marker, so the rule is not dropped as boilerplate")
 }
+
+// A resolved card was unrecoverable: the retry paths key on failed or outage and
+// the forward path requires done, so a nothing-to-do or no-fix-needed terminal a
+// person judged wrong could only be undone by editing the tracker by hand.
+func TestApplyTransition_ReopenRestartsAResolvedStage(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt(PlanningStartedHeader, time.Unix(1, 0)),
+		cmt(NothingToDoHeader+"\nevidence: already merged", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardPlanning, Reopen: true})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, l.calls, "re-opening must actually relaunch the stage")
+	require.NotEmpty(t, c.added)
+	assert.Contains(t, c.added[len(c.added)-1], PlanningStartedHeader,
+		"the fresh started marker is what carries the card out of resolved")
+}
+
+// The machine must never re-run its own clean terminal. The automatic relaunch
+// drives the identical request (From == To) without the flag, so the flag is the
+// only thing separating a person overruling a verdict from the retry loop
+// deciding to have another go at one.
+func TestApplyTransition_AResolvedCardIsNotRetriedWithoutReopen(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt(ImplementationStartedHeader, time.Unix(1, 0)),
+		cmt(NoFixNeededHeader+"\nverdict: not-a-bug", time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardImplementation})
+
+	require.Error(t, err, "an unflagged same-stage move on a resolved card is not a retry the machine may make")
+	assert.Zero(t, l.calls)
+}

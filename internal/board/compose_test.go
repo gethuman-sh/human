@@ -377,3 +377,50 @@ func TestCompose_OnlyWaitingRelationsBadge(t *testing.T) {
 
 	assert.Empty(t, cardByKey(t, view, "SC-2").Blockers)
 }
+
+// The board must never re-derive whether a verdict blocks the card: Compose
+// ships the daemon's own answer. "incomplete" is the case that mattered — the
+// frontend's private prefix test matched only "fail", so an incomplete review
+// (acceptance criteria unmet) put the card in Ready to Deploy and withheld the
+// rework gesture, while the daemon refused every Deploy drop. Both verdicts
+// must arrive already decided, and a card with no verdict must not read failed.
+func TestCompose_shipsTheVerdictDecisionNotTheString(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{
+			{Key: "SC-1", Title: "failed"},
+			{Key: "SC-2", Title: "incomplete"},
+			{Key: "SC-3", Title: "passed"},
+			{Key: "SC-4", Title: "no verdict yet"},
+		},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardVerification, State: daemon.BoardDone, Verdict: "fail — three findings"},
+			"SC-2": {Stage: daemon.BoardVerification, State: daemon.BoardDone, Verdict: "incomplete"},
+			"SC-3": {Stage: daemon.BoardVerification, State: daemon.BoardDone, Verdict: "pass"},
+			"SC-4": {Stage: daemon.BoardImplementation, State: daemon.BoardRunning},
+		},
+	)}, true)
+
+	assert.True(t, cardByKey(t, view, "SC-1").VerdictFailed, "a fail verdict must arrive already decided")
+	assert.True(t, cardByKey(t, view, "SC-2").VerdictFailed,
+		"an incomplete verdict blocks the deploy exactly like a fail — the divergence that stranded cards")
+	assert.False(t, cardByKey(t, view, "SC-3").VerdictFailed)
+	assert.False(t, cardByKey(t, view, "SC-4").VerdictFailed, "absence of a verdict is not failure")
+}
+
+// Ownership must reach the reader. The daemon already refuses to take over a
+// stage a peer stamped (WorkGate.ownedHereOrUnowned), but the fact stopped at the
+// daemon — so a board with several machines could not tell "no agent running
+// here" from "dead", which are the same observation and opposite conclusions.
+func TestCompose_CarriesTheOwningMachine(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "owned elsewhere"}, {Key: "SC-2", Title: "unowned"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardImplementation, State: daemon.BoardRunning, StageDaemonID: "andre"},
+			"SC-2": {Stage: daemon.BoardImplementation, State: daemon.BoardRunning},
+		},
+	)}, true)
+
+	assert.Equal(t, "andre", cardByKey(t, view, "SC-1").StageDaemonID)
+	assert.Empty(t, cardByKey(t, view, "SC-2").StageDaemonID,
+		"a single-daemon install stamps nothing, and absence must not read as a machine named \"\"")
+}

@@ -7,8 +7,22 @@ export const QUEUE_TRANSITION_TO = {
     engineering: "planning",
     building: "implementation",
 };
-export function verdictFailed(verdict) {
-    return (verdict ?? "").trim().toLowerCase().startsWith("fail");
+// verdictFailed reports whether the review verdict blocks the card. The answer
+// is the DAEMON's — it arrives on the payload as verdictFailed, computed by
+// daemon.VerdictFailed. The board must not re-derive it: this function used to
+// test `verdict` for a "fail" prefix and nothing else, while the daemon also
+// treats "incomplete" as blocking. The reviewer posts "incomplete" for a ticket
+// whose acceptance criteria are unmet, so on those cards the board offered
+// Deploy and withheld Rework while the daemon refused every Deploy drop — a card
+// with no move that could succeed.
+//
+// The string fallback exists only for a payload from a daemon predating the
+// field, and it mirrors the Go rule exactly rather than reinventing it.
+export function verdictFailed(card) {
+    if (card.verdictFailed !== undefined)
+        return card.verdictFailed;
+    const v = (card.verdict ?? "").trim().toLowerCase();
+    return v.startsWith("fail") || v.startsWith("incomplete");
 }
 // queueOf maps (stage, state) onto the column that is true of the card. Running
 // and failed cards render in their DESTINATION lane, not their origin queue:
@@ -25,7 +39,7 @@ export function queueOf(card) {
         case "implementation":
             return "building";
         case "verification":
-            return card.state === "done" && !verdictFailed(card.verdict) && !!card.branch ? "deploy" : "building";
+            return card.state === "done" && !verdictFailed(card) && !!card.branch ? "deploy" : "building";
         case "done":
             return "deploy";
         default:
@@ -33,7 +47,7 @@ export function queueOf(card) {
     }
 }
 export function isReworkable(card) {
-    return card.stage === "verification" && card.state === "done" && (verdictFailed(card.verdict) || !card.branch);
+    return card.stage === "verification" && card.state === "done" && (verdictFailed(card) || !card.branch);
 }
 // ageDays converts a card's stage timestamp into whole days elapsed, or null
 // when the timestamp is absent or unparseable.
@@ -151,13 +165,19 @@ export function badgeInfo(card) {
         return { cls: "decided", text, title: label.title };
     }
     if (card.state === "running") {
-        const text = card.stage === "done" && card.deployPhase === "pr-review"
+        const stageText = card.stage === "done" && card.deployPhase === "pr-review"
             ? "PR review…"
             : (RUNNING_LABELS[card.stage] ?? "working…");
+        // The run's own phase, when it recorded one. Without it the badge says the
+        // same word for the whole of a fix run — triage, the challenge, the plan,
+        // the fix, verification — so it reads identically at thirty seconds and at
+        // fourteen hours, and identically again when the agent behind it is dead.
+        // The phase changing is the only thing on the card that shows movement.
+        const text = card.activity ? `${card.activity}…` : stageText;
         return {
             cls: "running",
             text,
-            title: "Agent running",
+            title: card.activity ? `Agent running — ${card.activity}` : "Agent running",
             spinner: true,
         };
     }
@@ -210,7 +230,7 @@ export function badgeInfo(card) {
     // `fixing` badge with the running spinner and copy that says what is
     // happening — never the amber `warning`/`decision` "your turn" register with
     // a ⚠ glyph (SC-1830).
-    if (card.stage === "verification" && card.state === "done" && verdictFailed(card.verdict)) {
+    if (card.stage === "verification" && card.state === "done" && verdictFailed(card)) {
         return {
             cls: "fixing",
             text: "review found problems — fixing…",
@@ -345,7 +365,7 @@ export function isNextQueue(fromQueue, toQueue) {
 // branch there is nothing to ship: deploying can only fail, so the card must
 // never be offered (SC-297).
 export function isReadyToDeploy(card) {
-    return card.stage === "verification" && card.state === "done" && !verdictFailed(card.verdict) && !!card.branch;
+    return card.stage === "verification" && card.state === "done" && !verdictFailed(card) && !!card.branch;
 }
 // deploySideOf maps a card to its own kind — bug and security are disjoint,
 // everything else is a feature. The one place the split is decided, so the
@@ -413,4 +433,13 @@ export function safetyReconcileError(prev, message) {
         return { ...prev, error: `Board may be stale — ${message}` };
     }
     return { cards: [], dockerAvailable: false, error: message };
+}
+// isReopenable reports a card the pipeline RESOLVED: it concluded there is
+// nothing to plan ([human:nothing-to-do]) or no fix is needed
+// ([human:no-fix-needed]). Both are clean terminals — never red, never retried —
+// which also meant no gesture could move them, so a verdict a person judged
+// wrong could only be undone by editing the tracker by hand. Re-opening is the
+// human override; the machine still never retries a terminal of its own accord.
+export function isReopenable(card) {
+    return card.state === "resolved";
 }

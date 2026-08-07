@@ -63,6 +63,8 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			Error:                  card.Error,
 			ResumeAt:               card.ResumeAt,
 			Verdict:                card.Verdict,
+			VerdictFailed:          daemon.VerdictFailed(card.Verdict),
+			StageDaemonID:          card.StageDaemonID,
 			ShippedPartial:         card.ShippedPartial,
 			ShippedPartialFollowOn: card.ShippedPartialFollowOn,
 			StageEnteredAt:         formatStageTime(card.StageEnteredAt),

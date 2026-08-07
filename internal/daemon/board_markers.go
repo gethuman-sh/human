@@ -142,6 +142,16 @@ const (
 	PRReviewStartedHeader = "[human:pr-review-started]"
 	PRFixStartedHeader    = "[human:pr-fix-started]"
 	PRReviewFailedHeader  = "[human:pr-review-failed]"
+	// PRReviewPassedHeader records the loop CONVERGING: the reviewer approved and
+	// the card proceeds to the CI gate and merge. Every other outcome of the loop
+	// already left a marker — both launches and the escalation — so success was
+	// the one transition the thread did not record, and a reader could not tell
+	// "the review passed, the merge is running" from "the review is still going".
+	// It is also what retires the loop sub-phase: while a *-started marker is the
+	// newest done-stage marker the badge reads "PR review…", so without this the
+	// card kept claiming a review was in flight for the whole of the CI gate,
+	// rebase and merge.
+	PRReviewPassedHeader = "[human:pr-review-passed]" // #nosec G101 -- a marker header; "Passed" trips the credential-name heuristic
 
 	// DeployFixStartedHeader marks the deploy stage's automated fixer sub-phase
 	// (SC-1557): a CI failure or rebase conflict at the deploy gate dispatches the
@@ -235,6 +245,19 @@ func hasCompletedRelatedRecord(comments []tracker.Comment) bool {
 // [human:plan] means a self-planning fix pipeline was interrupted mid-run, a
 // place to resume from rather than a ticket to refuse (SC-2986).
 const BugVerdictHeader = "[human:bug-verdict]"
+
+// BugVerifyHeader marks the verify stage's done-gate verdict
+// ([human:bug-verify] DONE|NOT DONE). Like BugVerdictHeader it is the run's
+// permanent evidence, NOT a stage transition, and it is deliberately kept out of
+// orderedMarkerSpecs: both verdicts leave the item inside the fix run. DONE
+// leads to the handoff, which is the marker that actually moves the card, and
+// NOT DONE loops back to the fix while the retry budget holds.
+//
+// It had no constant here at all until the pipeline-machine conformance test
+// asked for one — it existed only as a validation spec in internal/marker, which
+// is how it ended up being a marker the prompts post eight times over and the
+// board had never been told about in either direction.
+const BugVerifyHeader = "[human:bug-verify]"
 
 // hasBugVerdict reports whether the ticket carries a triage verdict comment —
 // the marker heuristic a recovery relaunch falls back on when no ticket-kind
@@ -333,6 +356,7 @@ var orderedMarkerSpecs = []markerSpec{
 	{DeployFailedHeader, BoardDoneStage, BoardFailed},
 	{PRReviewStartedHeader, BoardDoneStage, BoardRunning},
 	{PRFixStartedHeader, BoardDoneStage, BoardRunning},
+	{PRReviewPassedHeader, BoardDoneStage, BoardRunning},
 	{PRReviewFailedHeader, BoardDoneStage, BoardFailed},
 	{DeployFixStartedHeader, BoardDoneStage, BoardRunning},
 	{PlanningOutageHeader, BoardPlanning, BoardOutage},

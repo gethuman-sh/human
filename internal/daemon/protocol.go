@@ -167,6 +167,36 @@ type BoardViewCard struct {
 	// Verdict is the latest review's verdict line; a failing verdict pins the
 	// card in the Code lane with a warning instead of letting it advance.
 	Verdict string `json:"verdict,omitempty"`
+	// Activity is the phase the run itself last recorded (stage.triage,
+	// stage.verify, …), and ActivityAt is when. The records already exist —
+	// every stage writes one with a timestamp so the next stage can read it
+	// back — and the card has simply never shown them. Without it the entire fix
+	// run, from triage through the adversarial challenge, the plan, the fix and
+	// verification, renders as one unchanging "fixing…" that looks identical at
+	// thirty seconds, at fourteen hours, and when the agent behind it died
+	// yesterday afternoon. Empty when the run recorded no phase.
+	Activity   string `json:"activity,omitempty"`
+	ActivityAt string `json:"activityAt,omitempty"`
+	// StageDaemonID is the machine that stamped the card's deciding marker — who
+	// owns the stage. The daemon already guards on it where it acts on its own
+	// (WorkGate.ownedHereOrUnowned refuses to take over a stage a peer stamped),
+	// but the fact never reached the reader, and it is the missing input for the
+	// question a board with several daemons cannot otherwise answer: no agent
+	// running HERE means dead only if this machine owns the stage. Owned
+	// elsewhere, it means "being worked somewhere I cannot see", which is not the
+	// same thing and must not be rendered as if it were. Empty on a single-daemon
+	// install and on threads written before stages were stamped.
+	StageDaemonID string `json:"stageDaemonId,omitempty"`
+	// VerdictFailed is VerdictFailed(Verdict) computed HERE, so the board never
+	// re-derives it. The frontend used to run its own prefix test that matched
+	// only "fail", while the daemon's also matches "incomplete" — a verdict the
+	// reviewer genuinely posts ("blocks deploy and loops the work back to be
+	// built, exactly like a fail"). The two answers disagreed by one word: the
+	// board put the card in Deploy and withheld the rework gesture while the
+	// daemon refused every drop, leaving the card with no move that could
+	// succeed. Shipping the decision instead of the input leaves the board
+	// nothing to get wrong.
+	VerdictFailed bool `json:"verdictFailed,omitempty"`
 	// ShippedPartial / ShippedPartialFollowOn surface the durable shipped-partial
 	// trace on the card (SC-2910): the ticket shipped with acceptance criteria
 	// deferred to the named follow-on ticket. The frontend renders a "partial

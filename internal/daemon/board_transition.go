@@ -14,6 +14,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
 )
@@ -130,6 +131,22 @@ type BoardTransitionRequest struct {
 	// human-initiated drop, whose interval is deliberation, not a pipeline wait,
 	// and is never recorded.
 	Cause WaitCause `json:"cause,omitempty"`
+	// Reopen restarts a stage the pipeline RESOLVED — a [human:nothing-to-do] or
+	// [human:no-fix-needed] terminal a person judges wrong.
+	//
+	// It is a separate flag rather than another state in the retry predicates
+	// because the automatic relaunch drives the very same path (StageRetry's
+	// Relaunch calls this request with From == To). Widening isBuildRetry or
+	// isPlanningRetry to accept resolved would hand the machine permission to
+	// re-run its own clean terminals forever, which is precisely what "never red,
+	// never retried" exists to prevent. Only a human sets this.
+	//
+	// Without it a resolved card was unrecoverable: no gesture moved it, because
+	// the retry paths key on failed or outage and the forward path requires done.
+	// A wrong not-a-bug verdict could only be undone by editing the tracker by
+	// hand — which is why the verdict must survive an adversarial challenge
+	// before it is trusted at all.
+	Reopen bool `json:"reopen,omitempty"`
 }
 
 // BoardTransitionDeps wires the transition engine's collaborators.
@@ -342,6 +359,14 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 			WaitCauseChain, true)
 		return true, launched, err
 
+	// Re-open: a person judged a resolved terminal wrong. Dispatched before the
+	// retry rules because a resolved card matches none of them by design — the
+	// machine must never re-run its own clean terminal, and only this explicitly
+	// human flag reaches here.
+	case req.Reopen && card.State == BoardResolved:
+		launched, err := d.reopenResolved(ctx, req, card, comments)
+		return true, launched, err
+
 	// Planning retry: a failed planning run is relaunched in place. The retry
 	// gesture targets planning while the card already derives to planning, so
 	// the single-step rule would reject it and the gesture would launch nothing
@@ -397,6 +422,39 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 		return true, err == nil, err
 	}
 	return false, false, nil
+}
+
+// reopenResolved restarts the stage that resolved the card, on a person's say-so.
+//
+// It relaunches the same stage the terminal was posted in: a
+// [human:nothing-to-do] card re-plans, and a [human:no-fix-needed] card re-runs
+// the fix — through its own self-planning pipeline where it has one, so an
+// autofix run that wrongly concluded not-a-bug re-triages rather than being
+// handed to the plan executor, which would refuse it for having no plan.
+//
+// The relaunch's *-started marker is strictly newer than the terminal, so the
+// card leaves resolved by the derivation's ordinary rules; nothing needs to
+// retract the terminal, and the trail keeps both the verdict and the decision to
+// overrule it.
+func (d BoardTransitionDeps) reopenResolved(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (bool, error) {
+	if card.Stage == BoardPlanning {
+		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
+			planPrompt(req.PMKey)+" — a person re-opened this ticket after it was resolved as nothing to do;"+
+				" re-examine it rather than repeating the earlier conclusion",
+			WaitCause(""), false)
+	}
+	switch d.classifyFixPipeline(ctx, req.PMKey, comments) {
+	case fixBug:
+		err := d.ApplyFix(ctx, BoardFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+		return err == nil, err
+	case fixSecurity:
+		err := d.ApplySecurityFix(ctx, SecurityFixRequest{PMKey: req.PMKey, PMTitle: req.PMTitle})
+		return err == nil, err
+	}
+	return d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
+		executePrompt(dispatchKey(req.PMKey, card),
+			" — a person re-opened this ticket after it was resolved as needing no fix"),
+		WaitCause(""), true)
 }
 
 // launchForwardStage dispatches an already-sanctioned forward transition to
@@ -944,6 +1002,19 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		}
 		return d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage, prFixDispatch(pmKey, number, branch))
 	case PRActionMerge:
+		// Record the loop converging BEFORE acting on it. Both launches and the
+		// escalation already post a marker, so without this the one outcome the
+		// thread never recorded was success — and it is the outcome a reader most
+		// needs, because it is what separates "the review passed, the merge is
+		// running" from "the review is still going". Posting it also retires the
+		// loop sub-phase, so the badge stops saying "PR review…" for the whole of
+		// the CI gate, rebase and merge that follow. A failure to post is not
+		// fatal: the merge is the work, and refusing to ship over a missing
+		// comment would trade a lost sentence for lost code.
+		if _, err := d.Commenter.AddComment(ctx, pmKey, PRReviewPassedHeader); err != nil {
+			d.Logger.Warn().Err(err).Str("pm", pmKey).
+				Msg("board PR loop: could not record the passing review; continuing to the merge")
+		}
 		if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, number); err != nil {
 			return d.deployFailed(pmKey, url, deployReason(
 				"the reviewed PR could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
@@ -1086,19 +1157,60 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
-		DeployFailedHeader+"\n"+deployFixEscalationReason(fixExit))
+		DeployFailedHeader+"\n"+deployFixEscalationReason(fixExit, dispatchedFailure(comments)))
 	return nil
 }
 
+// dispatchedFailure recovers WHAT the deploy fixer was sent to fix: the headline
+// the gate wrote onto the newest [human:deploy-fix-started] marker, which for a
+// CI failure already names the failing checks ("CI checks failed on the pull
+// request (failing: frontend-test)"). The escalation had this on the ticket all
+// along and quoted none of it.
+func dispatchedFailure(comments []tracker.Comment) string {
+	var headline string
+	for _, c := range comments {
+		// ParseBody, never line position: a signed marker carries machine:/build:
+		// between the header and the prose, so "the line after the header" is a
+		// signature field rather than the diagnosis.
+		m, ok := marker.ParseBody(c.Body)
+		if !ok || m.Type != deployFixStartedType {
+			continue
+		}
+		if line, _, _ := strings.Cut(strings.TrimSpace(m.Body), "\n"); line != "" {
+			headline = line
+		}
+	}
+	return headline
+}
+
+// deployFixStartedType is DeployFixStartedHeader's marker type — the name
+// marker.ParseBody reports, without the human: prefix and brackets.
+const deployFixStartedType = "deploy-fix-started"
+
 // deployFixEscalationReason renders the actionable headline the failed marker shows
 // when the deploy fixer did not converge.
-func deployFixEscalationReason(fixExit StageExit) string {
+//
+// It names the condition that is blocking, and it does not offer a gesture that
+// cannot work. "Re-run Deploy" was the only instruction the default case gave,
+// and re-running changes nothing about the branch — so the same check fails the
+// same way, which is what SC-3615 recorded: a card whose one offered move
+// reproduced its own failure, and whose actual cause (a single red check) took
+// three queries to establish though it was written on the ticket already.
+func deployFixEscalationReason(fixExit StageExit, dispatched string) string {
+	blocking := ""
+	if dispatched != "" {
+		blocking = " The failure it was sent to fix: " + dispatched
+	}
 	switch fixExit {
 	case ExitNeedsInput:
-		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy"
+		return "the deploy fixer needs a human decision — read the PR and its CI, decide, then re-run Deploy." + blocking
 	case ExitNeedsHumanWork:
-		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy"
+		return "the deploy failure needs manual work the fixer could not do — resolve it on the branch, then re-run Deploy." + blocking
 	default:
+		if dispatched != "" {
+			return "the deploy fixer could not recover the deploy. Fix it on the branch and push — " +
+				"re-running Deploy alone will hit the same failure." + blocking
+		}
 		return "the deploy fixer stopped without recovering the deploy — check the PR and its CI, then re-run Deploy"
 	}
 }

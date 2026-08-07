@@ -1,229 +1,774 @@
 {
   "$comment": "The state transitions of one item (a ticket) through the human pipeline, as the code and prompts implement them today. Each transition names the ACTOR that causes it, the SKILL that does the work, the MARKER that records it, and WHERE it is implemented. Topology is name/src/dst only; every other field is annotation.",
   "version": 1,
-  "describes": "commit 16cfe7e2, 2026-08-05",
+  "describes": "commit 2dcdc5a4, 2026-08-07",
   "item": "a ticket, from filing to merged",
   "initial": "filed",
-
   "actors": {
     "user": "a person, via a board gesture (drag, button) or a CLI command",
     "daemon": "the host process — it launches agents, posts their started markers, and is the only thing with push credentials",
     "skill": "an agent running in a container, following the named prompt"
   },
-
+  "unclassified_markers": {
+    "doc": "Posted by the pipeline but deliberately not transitions: they record content or decorate the card, and the item's state is unchanged by them.",
+    "markers": [
+      "plan",
+      "bug-verdict",
+      "bug-verify",
+      "pipeline",
+      "close-failed",
+      "related-started",
+      "related",
+      "shipped-partial",
+      "handoff-check-unreadable",
+      "fix-summary",
+      "claim",
+      "stage-wait"
+    ]
+  },
   "states": [
-    { "name": "filed", "doc": "The ticket exists. No pipeline activity.", "board": "Backlog" },
-    { "name": "ticket-review", "doc": "The pre-planning gate is judging whether solving this ticket solves the problem.", "board": "Backlog, running" },
-    { "name": "ticket-reviewed", "doc": "The gate returned a verdict: ready, reframed, superseded, escalated or rejected. The last three are stop decisions.", "board": "Backlog, done" },
-
-    { "name": "planning", "doc": "A planner is exploring the codebase and writing an implementation plan.", "board": "Planning, running" },
-    { "name": "planned", "doc": "A plan is attached to the ticket. The item waits for a human to start the build.", "board": "Planning, done" },
-    { "name": "nothing-to-do", "doc": "The planner proved the work is already merged. Clean terminal.", "board": "Planning, resolved", "terminal": true },
-
-    { "name": "preflight", "doc": "The fix run is resolving what it may do and settling what the evidence can settle, before any work.", "board": "Fix, running" },
-    { "name": "triaging", "doc": "The run is reproducing the report to reach a verdict.", "board": "Fix, running" },
-    { "name": "challenging", "doc": "A skeptic is trying to refute a not-a-bug or undetermined verdict before it is acted on.", "board": "Fix, running" },
-    { "name": "resolved-no-fix", "doc": "The no-fix verdict survived the challenge. Clean terminal — the ticket needs no code change.", "board": "Fix, resolved", "terminal": true },
-    { "name": "fix-planning", "doc": "The self-planning fix run is producing its own plan.", "board": "Fix, running" },
-    { "name": "fixing", "doc": "A regression test that fails first, then the change that makes it pass.", "board": "Fix, running" },
-    { "name": "verifying", "doc": "Proving the test fails before and passes after, on a green suite.", "board": "Fix, running" },
-    { "name": "implementing", "doc": "A plan executor is carrying out an attached plan (the non-bug path).", "board": "Code, running" },
-
-    { "name": "handed-off", "doc": "Branch and commits are recorded on the ticket, checked reachable.", "board": "Code, done" },
-    { "name": "in-review", "doc": "A reviewer is checking the change against the ticket's acceptance criteria. In a board fix run this happens inline, in the same warm container.", "board": "Review, running" },
-    { "name": "reviewed", "doc": "The review returned a verdict. A failing verdict blocks the deploy and sends the item back to be rebuilt.", "board": "Review, done" },
-
-    { "name": "deploying", "doc": "The daemon pushed the branch and opened a draft pull request.", "board": "Deploy, running" },
-    { "name": "pr-review", "doc": "The machine reviewer is reading the open pull request.", "board": "Deploy, running" },
-    { "name": "pr-fix", "doc": "The machine fixer is addressing the review's findings on the local branch.", "board": "Deploy, running" },
-    { "name": "ci-gate", "doc": "Every check must be green before the merge.", "board": "Deploy, running" },
-    { "name": "deploy-fixing", "doc": "A CI failure or a rebase conflict dispatched the deploy fixer instead of failing the item.", "board": "Deploy, running" },
-    { "name": "merged", "doc": "Merged, branch deleted, ticket closed. The shipping terminal.", "board": "Deploy, done", "terminal": true },
-
-    { "name": "awaiting-decision", "doc": "The item is parked on a genuine fork. Only a human choosing an answer moves it.", "board": "any column, decision needed" },
-    { "name": "stopped", "doc": "A stage gave up and said why: a spent budget, an unreviewable change, a failed deploy. Needs a human.", "board": "any column, error" },
-    { "name": "substrate-down", "doc": "A stage reported the thing it needs was unreachable. Not a failure — it spends no retry budget and is relaunched when the substrate returns.", "board": "any column, outage" }
+    {
+      "name": "filed",
+      "doc": "The ticket exists. No pipeline activity.",
+      "board": "Backlog"
+    },
+    {
+      "name": "ticket-review",
+      "doc": "The pre-planning gate is judging whether solving this ticket solves the problem.",
+      "board": "Backlog, running"
+    },
+    {
+      "name": "ticket-reviewed",
+      "doc": "The gate returned a verdict: ready, reframed, superseded, escalated or rejected. The last three are stop decisions.",
+      "board": "Backlog, done"
+    },
+    {
+      "name": "planning",
+      "doc": "A planner is exploring the codebase and writing an implementation plan.",
+      "board": "Planning, running"
+    },
+    {
+      "name": "planned",
+      "doc": "A plan is attached to the ticket. The item waits for a human to start the build.",
+      "board": "Planning, done"
+    },
+    {
+      "name": "nothing-to-do",
+      "doc": "The planner proved the work is already merged. Clean terminal.",
+      "board": "Planning, resolved",
+      "terminal": true,
+      "reopenable": true
+    },
+    {
+      "name": "preflight",
+      "doc": "The fix run is resolving what it may do and settling what the evidence can settle, before any work.",
+      "board": "Fix, running"
+    },
+    {
+      "name": "triaging",
+      "doc": "The run is reproducing the report to reach a verdict.",
+      "board": "Fix, running"
+    },
+    {
+      "name": "challenging",
+      "doc": "A skeptic is trying to refute a not-a-bug or undetermined verdict before it is acted on.",
+      "board": "Fix, running"
+    },
+    {
+      "name": "resolved-no-fix",
+      "doc": "The no-fix verdict survived the challenge. Clean terminal — the ticket needs no code change.",
+      "board": "Fix, resolved",
+      "terminal": true,
+      "reopenable": true
+    },
+    {
+      "name": "fix-planning",
+      "doc": "The self-planning fix run is producing its own plan.",
+      "board": "Fix, running"
+    },
+    {
+      "name": "fixing",
+      "doc": "A regression test that fails first, then the change that makes it pass.",
+      "board": "Fix, running"
+    },
+    {
+      "name": "verifying",
+      "doc": "Proving the test fails before and passes after, on a green suite.",
+      "board": "Fix, running"
+    },
+    {
+      "name": "implementing",
+      "doc": "A plan executor is carrying out an attached plan (the non-bug path).",
+      "board": "Code, running"
+    },
+    {
+      "name": "handed-off",
+      "doc": "Branch and commits are recorded on the ticket, checked reachable.",
+      "board": "Code, done"
+    },
+    {
+      "name": "in-review",
+      "doc": "A reviewer is checking the change against the ticket's acceptance criteria. In a board fix run this happens inline, in the same warm container.",
+      "board": "Review, running"
+    },
+    {
+      "name": "reviewed",
+      "doc": "The review returned a verdict. A failing verdict blocks the deploy and sends the item back to be rebuilt.",
+      "board": "Review, done"
+    },
+    {
+      "name": "deploying",
+      "doc": "The daemon pushed the branch and opened a draft pull request.",
+      "board": "Deploy, running"
+    },
+    {
+      "name": "pr-review",
+      "doc": "The machine reviewer is reading the open pull request.",
+      "board": "Deploy, running"
+    },
+    {
+      "name": "pr-fix",
+      "doc": "The machine fixer is addressing the review's findings on the local branch.",
+      "board": "Deploy, running"
+    },
+    {
+      "name": "ci-gate",
+      "doc": "Every check must be green before the merge.",
+      "board": "Deploy, running"
+    },
+    {
+      "name": "deploy-fixing",
+      "doc": "A CI failure or a rebase conflict dispatched the deploy fixer instead of failing the item.",
+      "board": "Deploy, running"
+    },
+    {
+      "name": "merged",
+      "doc": "Merged, branch deleted, ticket closed. The shipping terminal.",
+      "board": "Deploy, done",
+      "terminal": true
+    },
+    {
+      "name": "awaiting-decision",
+      "doc": "The item is parked on a genuine fork. Only a human choosing an answer moves it.",
+      "board": "any column, decision needed"
+    },
+    {
+      "name": "stopped",
+      "doc": "A stage gave up and said why: a spent budget, an unreviewable change, a failed deploy. Needs a human.",
+      "board": "any column, error"
+    },
+    {
+      "name": "substrate-down",
+      "doc": "A stage reported the thing it needs was unreachable. Not a failure — it spends no retry budget and is relaunched when the substrate returns.",
+      "board": "any column, outage"
+    },
+    {
+      "name": "unknown",
+      "doc": "The item's own state is unchanged, but the tracker that carries it failed to load, so nothing can be observed about it. It is the only state not derived from the item's markers — it says the board could not look, not that the item moved. Every item on that tracker enters and leaves it together, and it resolves by itself on the next fetch that reads the source.",
+      "board": "not rendered — the board shows a load-failure banner instead of the columns"
+    }
   ],
-
   "events": [
-    { "name": "start-ticket-review", "src": ["filed"], "dst": "ticket-review",
-      "actor": "user", "runs": "human-ticket-reviewer", "marker": "[human:ticket-review-started]",
-      "where": "internal/daemon/board_transition.go startAgentStage" },
-
-    { "name": "ticket-review-verdict", "src": ["ticket-review"], "dst": "ticket-reviewed",
-      "actor": "skill", "runs": "human-ticket-reviewer", "marker": "[human:ticket-review]",
-      "head_enum": ["ready", "reframed", "superseded", "escalated", "rejected"],
-      "prompt": "human-ticket-reviewer-agent.md" },
-
-    { "name": "start-planning", "src": ["filed", "ticket-reviewed", "planned", "stopped", "substrate-down"], "dst": "planning",
-      "actor": "user", "runs": "human-planner", "marker": "[human:planning-started]",
+    {
+      "name": "start-ticket-review",
+      "src": [
+        "filed"
+      ],
+      "dst": "ticket-review",
+      "actor": "user",
+      "runs": "human-ticket-reviewer",
+      "marker": "[human:ticket-review-started]",
+      "where": "internal/daemon/board_transition.go startAgentStage"
+    },
+    {
+      "name": "ticket-review-verdict",
+      "src": [
+        "ticket-review"
+      ],
+      "dst": "ticket-reviewed",
+      "actor": "skill",
+      "runs": "human-ticket-reviewer",
+      "marker": "[human:ticket-review]",
+      "head_enum": [
+        "ready",
+        "reframed",
+        "superseded",
+        "escalated",
+        "rejected"
+      ],
+      "prompt": "human-ticket-reviewer-agent.md"
+    },
+    {
+      "name": "start-planning",
+      "src": [
+        "filed",
+        "ticket-reviewed",
+        "planned",
+        "stopped",
+        "substrate-down"
+      ],
+      "dst": "planning",
+      "actor": "user",
+      "runs": "human-planner",
+      "marker": "[human:planning-started]",
       "where": "board_transition.go launchForwardStage / isPlanningRetry",
-      "doc": "A drop on Planning. From planned it is a replan; from stopped or substrate-down it is a retry in place." },
-
-    { "name": "plan-attached", "src": ["planning"], "dst": "planned",
-      "actor": "skill", "runs": "human-planner", "marker": "[human:plan-ready]",
+      "doc": "A drop on Planning. From planned it is a replan; from stopped or substrate-down it is a retry in place."
+    },
+    {
+      "name": "plan-attached",
+      "src": [
+        "planning"
+      ],
+      "dst": "planned",
+      "actor": "skill",
+      "runs": "human-planner",
+      "marker": "[human:plan-ready]",
       "prompt": "human-plan-skill.md",
-      "doc": "The plan itself is attached as a [human:plan] comment; plan-ready is what moves the item." },
-
-    { "name": "plan-finds-nothing-to-do", "src": ["planning"], "dst": "nothing-to-do",
-      "actor": "skill", "runs": "human-planner", "marker": "[human:nothing-to-do]",
-      "prompt": "human-plan-skill.md" },
-
-    { "name": "planning-failed", "src": ["planning"], "dst": "stopped",
-      "actor": "daemon", "marker": "[human:planning-failed]",
-      "where": "board_failure.go" },
-
-    { "name": "start-fix-run", "src": ["filed", "ticket-reviewed", "stopped", "substrate-down"], "dst": "preflight",
-      "actor": "user", "runs": "human-autofix", "marker": "[human:implementation-started]",
+      "doc": "The plan itself is attached as a [human:plan] comment; plan-ready is what moves the item."
+    },
+    {
+      "name": "plan-finds-nothing-to-do",
+      "src": [
+        "planning"
+      ],
+      "dst": "nothing-to-do",
+      "actor": "skill",
+      "runs": "human-planner",
+      "marker": "[human:nothing-to-do]",
+      "prompt": "human-plan-skill.md"
+    },
+    {
+      "name": "planning-failed",
+      "src": [
+        "planning"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:planning-failed]",
+      "where": "board_failure.go"
+    },
+    {
+      "name": "start-fix-run",
+      "src": [
+        "filed",
+        "ticket-reviewed",
+        "stopped",
+        "substrate-down"
+      ],
+      "dst": "preflight",
+      "actor": "user",
+      "runs": "human-autofix",
+      "marker": "[human:implementation-started]",
       "where": "board_transition.go ApplyFix",
-      "doc": "Dropping a bug on Fix. The run is self-planning — it produces its own plan rather than requiring one." },
-
-    { "name": "preflight-clear", "src": ["preflight"], "dst": "triaging",
-      "actor": "skill", "runs": "human-autofix", "state_key": "stage.preflight ready=yes",
-      "prompt": "human-autofix-skill.md Step 1a" },
-
-    { "name": "preflight-asks", "src": ["preflight"], "dst": "awaiting-decision",
-      "actor": "skill", "runs": "human-autofix", "marker": "[human:options]",
+      "doc": "Dropping a bug on Fix. The run is self-planning — it produces its own plan rather than requiring one."
+    },
+    {
+      "name": "preflight-clear",
+      "src": [
+        "preflight"
+      ],
+      "dst": "triaging",
+      "actor": "skill",
+      "runs": "human-autofix",
+      "state_key": "stage.preflight ready=yes",
+      "prompt": "human-autofix-skill.md Step 1a"
+    },
+    {
+      "name": "preflight-asks",
+      "src": [
+        "preflight"
+      ],
+      "dst": "awaiting-decision",
+      "actor": "skill",
+      "runs": "human-autofix",
+      "marker": "[human:options]",
       "state_key": "stage.implementation exit=needs-input",
       "prompt": "human-autofix-skill.md Step 1a",
-      "doc": "The one place the pipeline asks a question, asked up front rather than halfway through." },
-
-    { "name": "triage-verdict-confirmed", "src": ["triaging"], "dst": "fix-planning",
-      "actor": "skill", "runs": "human-bug-triage", "marker": "[human:bug-verdict]",
+      "doc": "The one place the pipeline asks a question, asked up front rather than halfway through."
+    },
+    {
+      "name": "triage-verdict-confirmed",
+      "src": [
+        "triaging"
+      ],
+      "dst": "fix-planning",
+      "actor": "skill",
+      "runs": "human-bug-triage",
+      "marker": "[human:bug-verdict]",
       "state_key": "stage.triage verdict=confirmed",
-      "prompt": "human-bug-triage-agent.md" },
-
-    { "name": "triage-verdict-no-bug", "src": ["triaging"], "dst": "challenging",
-      "actor": "skill", "runs": "human-bug-triage", "marker": "[human:bug-verdict]",
+      "prompt": "human-bug-triage-agent.md"
+    },
+    {
+      "name": "triage-verdict-no-bug",
+      "src": [
+        "triaging"
+      ],
+      "dst": "challenging",
+      "actor": "skill",
+      "runs": "human-bug-triage",
+      "marker": "[human:bug-verdict]",
       "state_key": "stage.triage verdict=not-a-bug | undetermined",
       "prompt": "human-autofix-skill.md Step 3",
-      "doc": "A no-fix verdict is never acted on directly — it must survive a challenge first." },
-
-    { "name": "challenge-upholds", "src": ["challenging"], "dst": "resolved-no-fix",
-      "actor": "skill", "runs": "human-verdict-skeptic", "marker": "[human:no-fix-needed]",
+      "doc": "A no-fix verdict is never acted on directly — it must survive a challenge first."
+    },
+    {
+      "name": "challenge-upholds",
+      "src": [
+        "challenging"
+      ],
+      "dst": "resolved-no-fix",
+      "actor": "skill",
+      "runs": "human-verdict-skeptic",
+      "marker": "[human:no-fix-needed]",
       "state_key": "stage.challenge challenge=upheld, stage.implementation exit=done",
-      "prompt": "human-autofix-skill.md Step 3a" },
-
-    { "name": "challenge-refutes", "src": ["challenging"], "dst": "fix-planning",
-      "actor": "skill", "runs": "human-verdict-skeptic",
+      "prompt": "human-autofix-skill.md Step 3a"
+    },
+    {
+      "name": "challenge-refutes",
+      "src": [
+        "challenging"
+      ],
+      "dst": "fix-planning",
+      "actor": "skill",
+      "runs": "human-verdict-skeptic",
       "state_key": "stage.challenge challenge=refuted",
       "prompt": "human-autofix-skill.md Step 3a",
-      "doc": "The skeptic reproduced it. The run continues as a confirmed bug, using the skeptic's reproduction. Runs once — never loops back through triage." },
-
-    { "name": "fix-plan-written", "src": ["fix-planning"], "dst": "fixing",
-      "actor": "skill", "runs": "human-autofix", "marker": "[human:plan]",
-      "prompt": "human-autofix-skill.md Step 4" },
-
-    { "name": "fix-written", "src": ["fixing"], "dst": "verifying",
-      "actor": "skill", "runs": "human-autofix", "state_key": "stage.fix",
-      "prompt": "human-autofix-skill.md Step 5" },
-
-    { "name": "verify-done", "src": ["verifying"], "dst": "handed-off",
-      "actor": "skill", "runs": "human-bug-verify", "marker": "[human:bug-verify]",
-      "state_key": "stage.verify verdict=DONE",
-      "prompt": "human-bug-verify-agent.md" },
-
-    { "name": "verify-not-done", "src": ["verifying"], "dst": "fixing",
-      "actor": "skill", "runs": "human-bug-verify", "marker": "[human:bug-verify]",
+      "doc": "The skeptic reproduced it. The run continues as a confirmed bug, using the skeptic's reproduction. Runs once — never loops back through triage."
+    },
+    {
+      "name": "fix-plan-written",
+      "src": [
+        "fix-planning"
+      ],
+      "dst": "fixing",
+      "actor": "skill",
+      "runs": "human-autofix",
+      "marker": "[human:plan]",
+      "prompt": "human-autofix-skill.md Step 4"
+    },
+    {
+      "name": "fix-written",
+      "src": [
+        "fixing"
+      ],
+      "dst": "verifying",
+      "actor": "skill",
+      "runs": "human-autofix",
+      "state_key": "stage.fix",
+      "prompt": "human-autofix-skill.md Step 5"
+    },
+    {
+      "name": "verify-not-done",
+      "src": [
+        "verifying"
+      ],
+      "dst": "fixing",
+      "actor": "skill",
+      "runs": "human-bug-verify",
       "state_key": "stage.verify verdict=NOT DONE",
       "prompt": "human-autofix-skill.md Step 6",
-      "guard": "under the retry budget; only a failure that reproduced charges an attempt" },
-
-    { "name": "fix-budget-spent", "src": ["verifying"], "dst": "stopped",
-      "actor": "skill", "runs": "human-autofix", "marker": "[human:implementation-failed]",
+      "guard": "under the retry budget; only a failure that reproduced charges an attempt",
+      "moves_item": false,
+      "classified": false,
+      "doc": "The verify gate found the fix wanting and the run loops back inside itself. No marker records it: [human:bug-verify] is evidence, not a transition, so nothing on the ticket distinguishes this from the fix still running. The item genuinely moves; the record does not."
+    },
+    {
+      "name": "fix-budget-spent",
+      "src": [
+        "verifying"
+      ],
+      "dst": "stopped",
+      "actor": "skill",
+      "runs": "human-autofix",
+      "marker": "[human:implementation-failed]",
       "state_key": "stage.implementation exit=needs-human-work",
-      "prompt": "human-autofix-skill.md Step 6" },
-
-    { "name": "start-implementation", "src": ["planned", "reviewed", "stopped", "substrate-down"], "dst": "implementing",
-      "actor": "user", "runs": "human-executor", "marker": "[human:implementation-started]",
+      "prompt": "human-autofix-skill.md Step 6"
+    },
+    {
+      "name": "start-implementation",
+      "src": [
+        "planned",
+        "reviewed",
+        "stopped",
+        "substrate-down"
+      ],
+      "dst": "implementing",
+      "actor": "user",
+      "runs": "human-executor",
+      "marker": "[human:implementation-started]",
       "where": "board_transition.go launchForwardStage / isReworkTransition / isBuildRetry",
-      "doc": "The plan-executing path. From reviewed it is the rework loop — a failing review verdict sends the item back to be rebuilt with the findings." },
-
-    { "name": "handoff-posted", "src": ["implementing", "verifying"], "dst": "handed-off",
-      "actor": "skill", "runs": "human-executor | human-autofix", "marker": "[human:ready-for-review]",
-      "required_fields": ["branch", "commits"],
+      "doc": "The plan-executing path. From reviewed it is the rework loop — a failing review verdict sends the item back to be rebuilt with the findings."
+    },
+    {
+      "name": "handoff-posted",
+      "src": [
+        "implementing",
+        "verifying"
+      ],
+      "dst": "handed-off",
+      "actor": "skill",
+      "runs": "human-executor | human-autofix",
+      "marker": "[human:ready-for-review]",
+      "required_fields": [
+        "branch",
+        "commits"
+      ],
       "prompt": "human-executor-agent.md, human-autofix-skill.md Step 7.1",
-      "where": "posted via `human handoff post`, which verifies the commits are reachable on the branch first" },
-
-    { "name": "implementation-failed", "src": ["implementing"], "dst": "stopped",
-      "actor": "daemon", "marker": "[human:implementation-failed]",
+      "where": "posted via `human handoff post`, which verifies the commits are reachable on the branch first"
+    },
+    {
+      "name": "implementation-failed",
+      "src": [
+        "implementing"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:implementation-failed]",
       "where": "board_failure.go",
-      "doc": "The daemon's failure watcher classifies an agent that exited without posting its handoff." },
-
-    { "name": "start-review", "src": ["handed-off", "stopped", "substrate-down"], "dst": "in-review",
-      "actor": "daemon", "runs": "human-reviewer", "marker": "[human:review-started]",
+      "doc": "The daemon's failure watcher classifies an agent that exited without posting its handoff."
+    },
+    {
+      "name": "start-review",
+      "src": [
+        "handed-off",
+        "stopped",
+        "substrate-down"
+      ],
+      "dst": "in-review",
+      "actor": "daemon",
+      "runs": "human-reviewer",
+      "marker": "[human:review-started]",
       "where": "board_failure.go chainReviewAfterCleanBuild; board_reconcile.go if that hook was lost",
-      "doc": "Automatic: a clean build whose handoff names a reachable branch flows straight into its review. A board fix run instead runs the review inline in its own container and the daemon launches no second one." },
-
-    { "name": "review-verdict", "src": ["in-review"], "dst": "reviewed",
-      "actor": "skill", "runs": "human-reviewer", "marker": "[human:review-complete]",
-      "required_fields": ["verdict"],
+      "doc": "Automatic: a clean build whose handoff names a reachable branch flows straight into its review. A board fix run instead runs the review inline in its own container and the daemon launches no second one."
+    },
+    {
+      "name": "review-verdict",
+      "src": [
+        "in-review"
+      ],
+      "dst": "reviewed",
+      "actor": "skill",
+      "runs": "human-reviewer",
+      "marker": "[human:review-complete]",
+      "required_fields": [
+        "verdict"
+      ],
       "prompt": "human-review-skill.md",
-      "doc": "Pass and fail are the same marker and the same state — the verdict rides in a field, and it is what decides whether the item may deploy or must be rebuilt." },
-
-    { "name": "review-failed", "src": ["in-review"], "dst": "stopped",
-      "actor": "daemon", "marker": "[human:review-failed]", "required_fields": ["reason"],
-      "doc": "The review stage itself failed — a binding gate such as a missing branch or unreachable commits — not a failing verdict." },
-
-    { "name": "start-deploy", "src": ["reviewed", "stopped", "substrate-down"], "dst": "deploying",
-      "actor": "user", "marker": "[human:deploy-started]",
+      "doc": "Pass and fail are the same marker and the same state — the verdict rides in a field. Whether that verdict BLOCKS is decided once, by daemon.VerdictFailed, and shipped to the board as verdictFailed; the board never re-tests the string. A blocking verdict keeps the item out of Deploy and offers the rework gesture instead.",
+      "verdict_blocking": [
+        "fail",
+        "incomplete"
+      ]
+    },
+    {
+      "name": "review-failed",
+      "src": [
+        "in-review"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:review-failed]",
+      "required_fields": [
+        "reason"
+      ],
+      "doc": "The review stage itself failed — a binding gate such as a missing branch or unreachable commits — not a failing verdict."
+    },
+    {
+      "name": "start-deploy",
+      "src": [
+        "reviewed",
+        "stopped",
+        "substrate-down"
+      ],
+      "dst": "deploying",
+      "actor": "user",
+      "marker": "[human:deploy-started]",
       "where": "board_transition.go runDoneStage / isDeployRetry",
       "guard": "the review verdict must not be failing",
-      "doc": "Dropping on Deploy. The daemon does this itself — no agent holds push credentials." },
-
-    { "name": "pr-opened", "src": ["deploying"], "dst": "pr-review",
-      "actor": "daemon", "runs": "human-pr-reviewer", "marker": "[human:pr-review-started]",
-      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone." },
-
-    { "name": "pr-changes-requested", "src": ["pr-review"], "dst": "pr-fix",
-      "actor": "daemon", "runs": "human-pr-fixer", "marker": "[human:pr-fix-started]",
+      "doc": "Dropping on Deploy. The daemon does this itself — no agent holds push credentials."
+    },
+    {
+      "name": "pr-opened",
+      "src": [
+        "deploying"
+      ],
+      "dst": "pr-review",
+      "actor": "daemon",
+      "runs": "human-pr-reviewer",
+      "marker": "[human:pr-review-started]",
+      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone."
+    },
+    {
+      "name": "pr-changes-requested",
+      "src": [
+        "pr-review"
+      ],
+      "dst": "pr-fix",
+      "actor": "daemon",
+      "runs": "human-pr-fixer",
+      "marker": "[human:pr-fix-started]",
       "guard": "bounded: 3 rounds",
-      "doc": "The fixer commits to the LOCAL branch and never pushes, so the reviewer reads the new commit rather than a stale pushed head." },
-
-    { "name": "pr-refixed", "src": ["pr-fix"], "dst": "pr-review",
-      "actor": "daemon", "runs": "human-pr-reviewer", "marker": "[human:pr-review-started]" },
-
-    { "name": "pr-review-passed", "src": ["pr-review"], "dst": "ci-gate",
+      "doc": "The fixer commits to the LOCAL branch and never pushes, so the reviewer reads the new commit rather than a stale pushed head."
+    },
+    {
+      "name": "pr-refixed",
+      "src": [
+        "pr-fix"
+      ],
+      "dst": "pr-review",
+      "actor": "daemon",
+      "runs": "human-pr-reviewer",
+      "marker": "[human:pr-review-started]"
+    },
+    {
+      "name": "pr-review-passed",
+      "src": [
+        "pr-review"
+      ],
+      "dst": "ci-gate",
       "actor": "daemon",
       "where": "board_transition.go AdvancePRLoop",
-      "doc": "The draft is un-drafted and the item goes to the CI gate." },
-
-    { "name": "pr-loop-escalates", "src": ["pr-review", "pr-fix"], "dst": "stopped",
-      "actor": "daemon", "marker": "[human:pr-review-failed]",
-      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read." },
-
-    { "name": "ci-red", "src": ["ci-gate"], "dst": "deploy-fixing",
-      "actor": "daemon", "runs": "human-deploy-fixer", "marker": "[human:deploy-fix-started]",
+      "doc": "The reviewer approved. The draft is un-drafted and the item goes to the CI gate. Recorded as a marker like every other outcome of the loop — success used to be the only transition here that left no trace, so a reader could not tell an approved review whose merge is running from a review still in flight. It also retires the loop sub-phase, so the badge stops reading 'PR review…' through the CI gate, rebase and merge.",
+      "marker": "[human:pr-review-passed]"
+    },
+    {
+      "name": "pr-loop-escalates",
+      "src": [
+        "pr-review",
+        "pr-fix"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:pr-review-failed]",
+      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read."
+    },
+    {
+      "name": "ci-red",
+      "src": [
+        "ci-gate"
+      ],
+      "dst": "deploy-fixing",
+      "actor": "daemon",
+      "runs": "human-deploy-fixer",
+      "marker": "[human:deploy-fix-started]",
       "guard": "bounded: 2 rounds",
-      "doc": "A red-but-mechanical failure dispatches the fixer instead of failing the item. A cancelled check counts as no answer yet, not as a no." },
-
-    { "name": "ci-regated", "src": ["deploy-fixing"], "dst": "ci-gate", "actor": "daemon" },
-
-    { "name": "ci-green-merged", "src": ["ci-gate"], "dst": "merged",
-      "actor": "daemon", "marker": "[human:deployed]", "required_fields": ["pr"],
-      "doc": "If the base moved on, the branch is rebased and CI re-gated on the new head before merging. Past the merge, branch cleanup and closing the ticket are best-effort and never fail the item." },
-
-    { "name": "deploy-failed", "src": ["ci-gate", "deploy-fixing", "deploying"], "dst": "stopped",
-      "actor": "daemon", "marker": "[human:deploy-failed]", "required_fields": ["reason"] },
-
-    { "name": "stage-asks", "src": ["planning", "triaging", "fixing", "verifying", "implementing", "in-review", "pr-review"], "dst": "awaiting-decision",
-      "actor": "skill", "marker": "[human:options]", "required_fields": ["stage"],
+      "doc": "A red-but-mechanical failure dispatches the fixer instead of failing the item. A cancelled check counts as no answer yet, not as a no."
+    },
+    {
+      "name": "ci-regated",
+      "src": [
+        "deploy-fixing"
+      ],
+      "dst": "ci-gate",
+      "actor": "daemon"
+    },
+    {
+      "name": "ci-green-merged",
+      "src": [
+        "ci-gate"
+      ],
+      "dst": "merged",
+      "actor": "daemon",
+      "marker": "[human:deployed]",
+      "required_fields": [
+        "pr"
+      ],
+      "doc": "If the base moved on, the branch is rebased and CI re-gated on the new head before merging. Past the merge, branch cleanup and closing the ticket are best-effort and never fail the item."
+    },
+    {
+      "name": "deploy-failed",
+      "src": [
+        "ci-gate",
+        "deploy-fixing",
+        "deploying"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:deploy-failed]",
+      "required_fields": [
+        "reason"
+      ],
+      "doc": "The deploy gave up. The marker names the condition that is blocking — for a deploy-fixer escalation it quotes the failure the fixer was dispatched to fix, which for CI names the red checks — and it does not offer a gesture that cannot work: where re-running Deploy would hit the same failure, it says so instead of advising the retry."
+    },
+    {
+      "name": "stage-asks",
+      "src": [
+        "planning",
+        "triaging",
+        "fixing",
+        "verifying",
+        "implementing",
+        "in-review",
+        "pr-review"
+      ],
+      "dst": "awaiting-decision",
+      "actor": "skill",
+      "marker": "[human:options]",
+      "required_fields": [
+        "stage"
+      ],
       "where": "board_state.go pauseOnOpenOptions",
-      "doc": "A stage found a genuine fork and stopped. The item is not working and not dead — it is waiting on a person." },
-
-    { "name": "decision-made", "src": ["awaiting-decision"], "dst": "planning",
-      "actor": "user", "marker": "[human:option-chosen]",
+      "doc": "A stage found a genuine fork and stopped. The item is not working and not dead — it is waiting on a person, and reads as decision-needed rather than running."
+    },
+    {
+      "name": "decision-made",
+      "src": [
+        "awaiting-decision"
+      ],
+      "dst": "planning",
+      "actor": "user",
+      "marker": "[human:option-chosen]",
       "where": "board_state.go optionChosenQueued",
-      "doc": "A human picked an answer. The chosen stage is relaunched with the choice in hand; dst is whichever stage the block named — planning is the common case." },
-
-    { "name": "substrate-unreachable", "src": ["planning", "triaging", "fixing", "verifying", "implementing", "in-review", "deploying", "ci-gate"], "dst": "substrate-down",
-      "actor": "daemon", "marker": "[human:planning-outage] | [human:implementation-outage] | [human:review-outage] | [human:deploy-outage]",
+      "doc": "A human picked an answer; the run relaunches with the choice in hand. dst is the stage the block NAMES, not the stage the item sits in — planning is the common case. A PR-loop escalation deliberately names implementation even though the item is in the deploy stage: the fixer raised a question only a code change can answer, so the choice rebuilds, and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named."
+    },
+    {
+      "name": "substrate-unreachable",
+      "src": [
+        "planning",
+        "triaging",
+        "fixing",
+        "verifying",
+        "implementing",
+        "in-review",
+        "deploying",
+        "ci-gate"
+      ],
+      "dst": "substrate-down",
+      "actor": "daemon",
+      "marker": "[human:planning-outage] | [human:implementation-outage] | [human:review-outage] | [human:deploy-outage]",
       "where": "board_retry.go ExitOutage",
-      "doc": "One marker per stage. It costs no retry budget and the reconcile pass relaunches it each interval until the substrate returns." },
-
-    { "name": "launch-refused-no-plan", "src": ["implementing"], "dst": "stopped",
-      "actor": "daemon", "marker": "[human:needs-planning]",
+      "doc": "One marker per stage. It costs no retry budget and the reconcile pass relaunches it each interval until the substrate returns."
+    },
+    {
+      "name": "launch-refused-no-plan",
+      "src": [
+        "implementing"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:needs-planning]",
       "where": "board_transition.go refuseIfUnplanned",
-      "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one." }
-  ]
+      "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one."
+    },
+    {
+      "name": "source-unreadable",
+      "src": [
+        "filed",
+        "ticket-review",
+        "ticket-reviewed",
+        "planning",
+        "planned",
+        "nothing-to-do",
+        "preflight",
+        "triaging",
+        "challenging",
+        "resolved-no-fix",
+        "fix-planning",
+        "fixing",
+        "verifying",
+        "implementing",
+        "handed-off",
+        "in-review",
+        "reviewed",
+        "deploying",
+        "pr-review",
+        "pr-fix",
+        "ci-gate",
+        "deploy-fixing",
+        "merged",
+        "awaiting-decision",
+        "stopped",
+        "substrate-down"
+      ],
+      "dst": "unknown",
+      "actor": "daemon",
+      "where": "internal/board/gate.go PMRoleNotice; internal/board/compose.go",
+      "doc": "The tracker instance failed to load — an unreachable credential store, a config error. Every item it carries becomes unobservable at once, so this is a property of the fetch rather than of any one ticket. It resolves by itself when the source is reachable again; nothing about the item changed."
+    },
+    {
+      "name": "source-readable-again",
+      "src": [
+        "unknown"
+      ],
+      "dst": "filed",
+      "actor": "daemon",
+      "where": "internal/board/compose.go — the next fetch that resolves a PM-role result",
+      "doc": "The source came back and the item's real state is re-derived from its markers — it returns to whatever they say, not to `filed`. The single dst here is a topological placeholder: this machine has one destination per transition and the true one is computed. Nothing about the item changed while it was unobservable.",
+      "dst_is_derived": true
+    },
+    {
+      "name": "reopen-planning",
+      "src": [
+        "nothing-to-do"
+      ],
+      "dst": "planning",
+      "actor": "user",
+      "runs": "human-planner",
+      "marker": "[human:planning-started]",
+      "where": "board_transition.go reopenResolved; desktop App.Reopen",
+      "doc": "A person judged the nothing-to-do terminal wrong and re-plans. Separate from every retry gesture because the automatic relaunch drives the identical same-stage request — only an explicitly human call may re-run a clean terminal."
+    },
+    {
+      "name": "reopen-fix",
+      "src": [
+        "resolved-no-fix"
+      ],
+      "dst": "preflight",
+      "actor": "user",
+      "runs": "human-autofix",
+      "marker": "[human:implementation-started]",
+      "where": "board_transition.go reopenResolved — classifyFixPipeline routes to ApplyFix/ApplySecurityFix",
+      "doc": "A person judged the no-fix-needed verdict wrong. The card re-enters its OWN self-planning pipeline, so it re-triages from the top rather than being handed to the plan executor, which would refuse it for having no plan."
+    },
+    {
+      "name": "legacy-pr-opened",
+      "src": [
+        "reviewed"
+      ],
+      "dst": "deploying",
+      "actor": "daemon",
+      "marker": "[human:pr-started]",
+      "legacy": true,
+      "where": "board_markers.go orderedMarkerSpecs",
+      "doc": "The PR-opening lifecycle that predates the deploy pipeline. Still classified so threads written before deploy markers existed keep deriving; nothing posts it today."
+    },
+    {
+      "name": "legacy-pr-pushed",
+      "src": [
+        "deploying"
+      ],
+      "dst": "merged",
+      "actor": "daemon",
+      "marker": "[human:pr-pushed]",
+      "legacy": true,
+      "where": "board_markers.go orderedMarkerSpecs",
+      "doc": "Legacy: the PR was opened. It classifies as the done stage's DONE state — the same state the merge produces — so on an old thread an opened PR renders where a shipped one does. Recognized for those threads only."
+    },
+    {
+      "name": "legacy-pr-failed",
+      "src": [
+        "deploying"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:pr-failed]",
+      "legacy": true,
+      "where": "board_markers.go orderedMarkerSpecs",
+      "doc": "Legacy: opening the PR failed. Recognized for pre-deploy-pipeline threads only."
+    }
+  ],
+  "ownership": {
+    "doc": "Which machine may fire a transition. A stage is stamped with the daemon that posted its deciding marker (BoardCard.StageDaemonID, from the marker's machine: field).",
+    "rules": [
+      "The machine acting on its own initiative — the reconcile takeover pass — refuses a stage another daemon stamped: WorkGate.ownedHereOrUnowned in internal/daemon/board_reconcile_gate.go. An unstamped stage (single-daemon, or a thread written before stamping) is takeable by anyone.",
+      "A human gesture is NOT restricted by ownership. Racing a live foreign run is prevented instead by idempotency: a running card refuses every drop (isDuplicateDrop), whichever machine started it.",
+      "Ownership is carried to the board as stageDaemonId so a reader can tell a stage owned elsewhere from an unowned one. It is the missing input for liveness across machines: no agent running HERE means dead only if this machine owns the stage."
+    ]
+  },
+  "progress": {
+    "doc": "How an item shows that it is moving. Each in-container phase writes stage.<name> to `human state` with a timestamp — preflight, triage, challenge, fix, verify, review, pr-review, pr-fix, deploy-fix — and the board reads the newest one onto a running card as `activity`.",
+    "why": "Between implementation-started and ready-for-review an item passes through six phases that all render as one unchanging word. That word is identical at thirty seconds, at fourteen hours, and when the agent behind it is dead, so nothing on the card distinguishes progress from a hang. The phase changing is the signal; its not changing is the other one.",
+    "where": "internal/board/activity.go; attached in cmd/cmddaemon/daemon.go attachActivity",
+    "note": "Read for running cards only, and never invented: a run that recorded no phase shows the stage word exactly as before."
+  }
 }

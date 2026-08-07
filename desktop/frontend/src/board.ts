@@ -50,6 +50,7 @@ import {
   queueOf,
   isReworkable,
   isReviewRetryable,
+  isReopenable,
   ageBadge,
   isReplannable,
   forwardDropAllowed,
@@ -102,6 +103,11 @@ interface Card {
   trackerKind?: string;
   error?: string;
   verdict?: string;
+  // The daemon's decision on whether that verdict blocks the card. Read this
+  // via verdictFailed(card) — the board must never re-test the verdict string.
+  verdictFailed?: boolean;
+  activity?: string;
+  activityAt?: string;
   // RFC3339 instant a paused (outage) card's standing marker stated as when
   // the substrate clears, when one was parsed out of the diagnosis (SC-3024).
   // Absent when no time was stated — the badge then reads "paused" with no
@@ -357,6 +363,10 @@ interface AppBindings {
   TicketCost(key: string): Promise<TicketCost>;
   CardsQuick(): Promise<BoardData>;
   Transition(pmKey: string, pmTitle: string, from: string, to: string): Promise<void>;
+  // Re-running a stage the pipeline resolved. Separate from Transition because
+  // the daemon's retry machinery drives the same same-stage request, and only an
+  // explicitly human call may re-run a clean terminal.
+  Reopen(pmKey: string, pmTitle: string, stage: string): Promise<void>;
   FixBug(pmKey: string, pmTitle: string): Promise<void>;
   FixSecurity(pmKey: string, pmTitle: string): Promise<void>;
   FindRelatedWork(pmKey: string, pmTitle: string): Promise<void>;
@@ -802,6 +812,31 @@ function showCardMenu(card: Card, x: number, y: number): void {
       void transition(card.key, card.title, "verification", "verification");
     });
     menu.appendChild(retryReview);
+  }
+
+  // A resolved card — the pipeline concluded there is nothing to do, or no fix
+  // is needed — had no gesture at all. The retry paths key on failed or outage
+  // and the forward path requires done, so overruling a verdict meant editing
+  // the tracker by hand. Re-opening goes through its own daemon entry point
+  // rather than a transition, because the automatic relaunch drives the same
+  // same-stage request and the machine must never re-run its own clean terminal.
+  if (isReopenable(card)) {
+    const reopen = document.createElement("button");
+    reopen.type = "button";
+    reopen.className = "context-menu-item";
+    reopen.textContent = "Re-open";
+    reopen.title = "The pipeline resolved this without a change — run the stage again";
+    reopen.disabled = !current.dockerAvailable;
+    if (reopen.disabled) reopen.title = "Docker required";
+    reopen.addEventListener("click", () => {
+      menu.remove();
+      void runGuardedAction(
+        () => go().Reopen(card.key, card.title, card.stage),
+        (err) => showError(errMessage(err)),
+        reconcile,
+      );
+    });
+    menu.appendChild(reopen);
   }
 
   // A failed deploy is otherwise a dead end: the Deploy zone only accepts

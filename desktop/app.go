@@ -502,6 +502,26 @@ func (a *App) Transition(pmKey, pmTitle, from, to string) error {
 	}))
 }
 
+// Reopen restarts a stage the pipeline resolved — a nothing-to-do or
+// no-fix-needed terminal the reader judges wrong. It is deliberately a separate
+// entry point from Transition: the daemon's retry machinery drives the same
+// same-stage request, and only an explicitly human call may re-run a clean
+// terminal. Without it a resolved card had no gesture at all and could be
+// recovered only by editing the tracker by hand.
+func (a *App) Reopen(pmKey, pmTitle, stage string) error {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return err
+	}
+	return daemonCause(daemon.BoardTransition(info.Addr, info.Token, daemon.BoardTransitionRequest{
+		PMKey:   pmKey,
+		PMTitle: pmTitle,
+		From:    daemon.BoardStage(stage),
+		To:      daemon.BoardStage(stage),
+		Reopen:  true,
+	}))
+}
+
 // FixBug asks the daemon to launch the autonomous bug-fix pipeline
 // (/human-autofix) on a bug ticket — the Bugs pane's Fix drop. Like Transition
 // it goes through the daemon so the agent runs containerized with the daemon's

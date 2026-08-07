@@ -848,3 +848,58 @@ func TestIsTerminalResolution(t *testing.T) {
 		assert.True(t, isTerminalResolution(NothingToDoHeader+"\nmachine: 4f3add9a\nbuild: abc123\n\nevidence: merged"))
 	})
 }
+
+// Both launches of the PR review→fix loop post a marker, and so does its
+// escalation — success was the only outcome that recorded nothing. A reader, or
+// a daemon that restarted, could not tell an approved review whose merge is
+// running from a review still in flight. The passing marker also retires the
+// loop sub-phase, so the badge stops claiming a review is in progress for the
+// whole of the CI gate, rebase and merge.
+func TestDeriveBoardCard_APassingLoopRetiresTheReviewPhase(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	loop := []tracker.Comment{
+		{Body: DeployStartedHeader, Created: base},
+		{Body: PRReviewStartedHeader, Created: base.Add(time.Minute)},
+	}
+	mid := DeriveBoardCard(loop, tracker.CategoryUnstarted, false)
+	assert.Equal(t, "pr-review", mid.DeployPhase, "while the loop runs the card names the sub-phase")
+
+	passed := append(loop, tracker.Comment{Body: PRReviewPassedHeader, Created: base.Add(2 * time.Minute)})
+	card := DeriveBoardCard(passed, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State, "the merge is still work in progress")
+	assert.Empty(t, card.DeployPhase, "the review is over — the card must stop saying 'PR review…'")
+}
+
+// SC-3615: the deploy fixer's escalation told the reader to "check the PR and
+// its CI, then re-run Deploy" and named nothing. Re-running changes nothing
+// about the branch, so the same check fails identically — the card's one offered
+// move reproduced its own failure. The cause was on the ticket the whole time:
+// the gate writes the failing checks onto the deploy-fix-started marker when it
+// dispatches the fixer.
+func TestDeployFixEscalation_NamesTheFailureAndRefusesAPointlessRetry(t *testing.T) {
+	dispatched := "CI checks failed on the pull request (failing: frontend-test) — fix the failing checks, then re-run Deploy"
+
+	reason := deployFixEscalationReason(ExitRetryable, dispatched)
+	assert.Contains(t, reason, "frontend-test", "the blocking check must be named on the card")
+	assert.Contains(t, reason, "will hit the same failure", "a retry that cannot work must not be the advice")
+
+	// With nothing recorded there is nothing to name, and the old wording stands
+	// rather than inventing a cause.
+	assert.Equal(t,
+		"the deploy fixer stopped without recovering the deploy — check the PR and its CI, then re-run Deploy",
+		deployFixEscalationReason(ExitRetryable, ""))
+}
+
+// The headline is recovered from the newest dispatch, so a second round names
+// what the second dispatch was sent to fix rather than the first.
+func TestDispatchedFailure_TakesTheNewestDispatch(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	comments := []tracker.Comment{
+		{Body: DeployFixStartedHeader + "\nthe first failure\npr: u\nnumber: 1\nbranch: b", Created: base},
+		{Body: DeployFixStartedHeader + "\nthe second failure\npr: u\nnumber: 1\nbranch: b", Created: base.Add(time.Minute)},
+	}
+	assert.Equal(t, "the second failure", dispatchedFailure(comments))
+	assert.Empty(t, dispatchedFailure(nil), "no dispatch recorded means nothing to quote")
+}
