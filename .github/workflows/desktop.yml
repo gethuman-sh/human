@@ -57,13 +57,19 @@ jobs:
       # dist/board.js it is always freshly built from the current src/ — the
       # dist half of board-error-guard.test.mjs would otherwise be tautological
       # in CI, unable to catch a dist/ that lagged a fixed src/ the way it can
-      # locally. Diff dist/ against what's committed first so a stale dist/ is
-      # its own failure, distinct from the guard test.
+      # locally.
       - run: npm run build
         working-directory: desktop/frontend
-      - run: git diff --exit-code -- dist
-        working-directory: desktop/frontend
       - run: npm test
+        working-directory: desktop/frontend
+      # A stale dist/ stays its own failure, distinct from the guard test — but
+      # it is a question about the emitted CODE, not its bytes: `git diff
+      # --exit-code -- dist` here once turned two trailing spaces into a red
+      # check that blocked every deploy and that no re-run could clear, since
+      # this job is read-only and cannot commit the rebuild (SC-3613). The tests
+      # run first so a drifting bundle does not hide their result.
+      - name: Verify committed dist/ matches its rebuild
+        run: node scripts/dist-guard.mjs
         working-directory: desktop/frontend
 
   build:
