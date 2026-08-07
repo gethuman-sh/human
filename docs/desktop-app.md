@@ -89,6 +89,19 @@ CGO_LDFLAGS="-framework UniformTypeIdentifiers" \
 
 Equivalent dev-loop command: `wails dev` (or `make desktop-dev`, if defined).
 
+### The frontend bundle (`dist/`)
+
+`desktop/frontend/dist/` is **checked in** and embedded via `//go:embed all:frontend/dist`, so the app runs without an npm build — which also means a `src/` edit that was never rebuilt ships stale. After editing anything under `desktop/frontend/src/` or `static/`:
+
+```bash
+make desktop-frontend        # npm ci && npm run build — regenerates dist/
+make desktop-frontend-check  # the same drift check CI runs
+```
+
+Then commit the changed `dist/` files with your source change. Never hand-edit `dist/`: it is build output, and a hand-transcribed bundle is what broke every deploy for a day (SC-3613).
+
+The check compares the committed bundle against a fresh build **after normalizing whole-line whitespace** — line endings, indentation and trailing spaces. Two builds of identical source may differ that way, and blocking a merge on it is not a real failure; anything else, including a changed string literal, still fails. Neither target is part of `make check`, which runs where npm is unavailable.
+
 ## Exiting the app
 
 The app has two exit paths, and they answer to different people.
@@ -118,6 +131,7 @@ So a future change that breaks `wails build` is caught automatically rather than
 1. A comment in `desktop/main.go` directly above the build-tag-guarded `wails.Run` call, explaining that a plain `go build` fails at startup by design and pointing here.
 2. `make desktop` runs `wails build -tags wailsapp`; `make desktop-dev` runs `wails dev -tags wailsapp`; `make desktop-package` produces a clean distributable bundle.
 3. A CI matrix (`.github/workflows/desktop.yml`) that runs the real `wails build` on `ubuntu-24.04` and `macos-14` so the cgo build path is exercised on every change under `desktop/`. Windows is not built: its runner took ~8 minutes and gated every desktop merge, and no Windows desktop bundle ships today — restore the row before one does. This is a SEPARATE workflow from `ci.yml`; the main lint/test/build jobs deliberately do not install webview headers and rely on the `wailsapp` build tag to keep the cgo path out of `go vet ./...` / `go build .`.
+4. `desktop/frontend/scripts/dist-guard.mjs`, run by the `frontend-test` job and by `make desktop-frontend-check`: it rebuilds nothing on its own but compares the committed `dist/` against the freshly built one, so a bundle whose behaviour lags `src/` cannot ship. It is deliberately not a byte comparison — see the section above.
 
 ## Release safety
 

@@ -1,4 +1,4 @@
-.PHONY: all build fmt fmt-check install test check-test test-integration coverage coverage-check fuzz fsm fsm-diagram lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package
+.PHONY: all build fmt fmt-check install test check-test test-integration coverage coverage-check fuzz fsm fsm-diagram lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package desktop-frontend desktop-frontend-check
 
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
@@ -129,6 +129,17 @@ desktop:
 # desktop-dev runs the live-reload dev loop.
 desktop-dev:
 	cd desktop && wails dev -tags $(DESKTOP_TAGS)
+
+# The frontend half of the desktop build, on its own: `wails build` runs it as a
+# sub-step, but dist/ is checked in and embedded, so a src/ edit that never got
+# rebuilt ships stale (SC-3613). desktop-frontend-check runs the same comparison
+# CI runs, so drift is visible before a push instead of only after one.
+# Deliberately NOT part of `check`: that gate runs where npm does not exist.
+desktop-frontend:
+	cd desktop/frontend && npm ci && npm run build
+
+desktop-frontend-check: desktop-frontend
+	cd desktop/frontend && node scripts/dist-guard.mjs
 
 # desktop-package produces a clean distributable bundle (.app/.exe/AppImage) for
 # the current OS. Note: macOS code-signing/notarization is NOT performed here —
