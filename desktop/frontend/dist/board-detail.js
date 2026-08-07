@@ -96,19 +96,33 @@ function fmtDuration(ms) {
     const h = Math.floor(m / 60);
     return `${h}h ${m % 60}m`;
 }
+// elapsedLabel names what the current-stage clock actually measures. "running"
+// is a claim about a live process: when the viewer can see there is none — the
+// agent died, or the stage belongs to another machine — the same number must be
+// labelled honestly, or a card that has been dead for fourteen hours reads as
+// the busiest one on the board (SC-3569). Unknown liveness keeps today's word,
+// because absence of a signal is not proof.
+function elapsedLabel(agentLiveness) {
+    if (agentLiveness === "dead")
+        return "since last activity";
+    if (agentLiveness === "elsewhere")
+        return "— on another machine";
+    return "running";
+}
 // buildCostSection renders the ticket's whole-life cost (with the answers/context
 // split) and elapsed time (per-stage plus the live current-stage clock). A ticket
 // with no recorded spend says so plainly rather than showing $0.00 (SC-2847
 // criterion 5). currentStage/stageEnteredAt come from the open card; nowMs is
-// injected for tests.
-export function buildCostSection(c, currentStage, stageEnteredAt, nowMs) {
+// injected for tests. agentLiveness comes from the open card's viewer-side
+// overlay; absent means unknown and keeps the pre-SC-3569 wording.
+export function buildCostSection(c, currentStage, stageEnteredAt, nowMs, agentLiveness) {
     if (!c || !c.hasSpend) {
         return `<section class="detail-section detail-cost"><h3 class="detail-section-title">Cost &amp; time</h3>` +
             `<div class="detail-cost-empty">No spend recorded for this ticket yet.</div></section>`;
     }
     const curElapsed = stageEnteredAt
         ? `<div class="detail-cost-current">Current stage (${escapeText(currentStage ?? "")}): ` +
-            `${escapeText(fmtDuration(Math.max(0, nowMs - Date.parse(stageEnteredAt))))} running</div>`
+            `${escapeText(fmtDuration(Math.max(0, nowMs - Date.parse(stageEnteredAt))))} ${escapeText(elapsedLabel(agentLiveness))}</div>`
         : "";
     const stageRows = c.stages.map((s) => `<div class="detail-cost-stage"><span>${escapeText(s.stage || "—")}</span>` +
         `<span>${escapeText(fmtUSD(s.costUSD))} · ${escapeText(fmtDuration(s.durationMs))}</span></div>`).join("");
