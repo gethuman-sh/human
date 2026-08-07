@@ -77,6 +77,8 @@ Do NOT use a custom tracker status for review signalling — that would require 
 
 A prompt saying "after X, post Y" is a definition of a transition, exactly as much as the Go code that reads Y. Both belong in the document, and a transition that exists in one but not the other is the bug.
 
+**Check it with `make fsm`.** `cmd/fsmcheck` validates the document as a machine — every `dst` and `src` names a declared state, names are unique, nothing is unreachable, no non-terminal state is a trap with no way out, terminal and `reopenable` agree with the edges that exist, every transition names a declared actor and says where it lives (`where:` for Go, `prompt:` for an agent instruction). Errors fail `make check` via `internal/pipelinefsm`; missing prose is a warning. `make fsm-diagram` draws it as a mermaid state diagram. Whether the document is *true of the code* is a separate question the daemon's own conformance test asks (`internal/daemon/pipeline_fsm_doc_test.go`) — a green `make fsm` means the machine holds together, not that it matches.
+
 `docs/reaper.md` is its companion along the other axis: the FSM document follows one ticket, the reaper document follows one container — every condition under which the machine kills an agent (the zombie sweep, the silence reap, the stuck-running and orphan reconcile passes, close-is-cancellation), what it deliberately spares, what the reap costs the ticket's retry budget, and what artifacts it leaves behind. Same rules: read it before changing the sweep, the idle budgets, or any path that stops an agent, and update it in the same commit.
 
 # Daemon
