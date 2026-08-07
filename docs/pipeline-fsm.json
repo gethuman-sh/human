@@ -683,7 +683,8 @@
       "dst": "unknown",
       "actor": "daemon",
       "where": "internal/board/gate.go PMRoleNotice; internal/board/compose.go",
-      "doc": "The tracker instance failed to load — an unreachable credential store, a config error. Every item it carries becomes unobservable at once, so this is a property of the fetch rather than of any one ticket. It resolves by itself when the source is reachable again; nothing about the item changed."
+      "doc": "The tracker instance failed to load — an unreachable credential store, a config error. Every item it carries becomes unobservable at once, so this is a property of the fetch rather than of any one ticket. It resolves by itself when the source is reachable again; nothing about the item changed.",
+      "moves_item": false
     },
     {
       "name": "source-readable-again",
@@ -694,7 +695,8 @@
       "actor": "daemon",
       "where": "internal/board/compose.go — the next fetch that resolves a PM-role result",
       "doc": "The source came back and the item's real state is re-derived from its markers — it returns to whatever they say, not to `filed`. The single dst here is a topological placeholder: this machine has one destination per transition and the true one is computed. Nothing about the item changed while it was unobservable.",
-      "dst_is_derived": true
+      "dst_is_derived": true,
+      "moves_item": false
     },
     {
       "name": "reopen-planning",

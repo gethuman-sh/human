@@ -13,10 +13,14 @@ import (
 )
 
 // docs/pipeline-fsm.json is the written-down machine. These tests are what stop
-// it drifting from the code, which is the failure that produced every defect it
-// describes: a marker the prompts post that the daemon has never been told
-// about, a state named in one place and not the other, a transition that exists
-// in the prose and nowhere else.
+// it drifting from the CODE: a marker the prompts post that the daemon has never
+// been told about, a marker string no constant carries.
+//
+// Whether the document is a well-formed machine at all — dangling destinations,
+// unreachable states, states with no way out — is a question about the document
+// alone, and lives in internal/pipelinefsm (and the fsmcheck command). Two
+// questions, two checks: this one needs the daemon's constants and so has to live
+// here; that one needs nothing but the file and so should not.
 //
 // Kept as a test rather than a separate tool so `make check` runs it and a
 // change to the machine cannot merge without the description following it.
@@ -47,63 +51,6 @@ func loadFSMDoc(t *testing.T) fsmDoc {
 	require.NotEmpty(t, doc.States)
 	require.NotEmpty(t, doc.Events)
 	return doc
-}
-
-// Topology has to hold on its own terms: a transition may not come from or lead
-// to a state nobody declared, and no two transitions may share a name (the name
-// is the alphabet, and a duplicate silently shadows one of them).
-func TestPipelineFSM_TopologyIsSound(t *testing.T) {
-	doc := loadFSMDoc(t)
-	states := map[string]bool{}
-	for _, s := range doc.States {
-		require.False(t, states[s.Name], "duplicate state %q", s.Name)
-		states[s.Name] = true
-	}
-	require.True(t, states[doc.Initial], "the initial state %q must be declared", doc.Initial)
-
-	seen := map[string]bool{}
-	for _, e := range doc.Events {
-		require.NotEmpty(t, e.Name, "every transition needs a name")
-		require.False(t, seen[e.Name], "duplicate transition name %q", e.Name)
-		seen[e.Name] = true
-		require.NotEmpty(t, e.Src, "%s: a transition needs at least one source", e.Name)
-		require.True(t, states[e.Dst], "%s: dst %q is not a declared state", e.Name, e.Dst)
-		for _, s := range e.Src {
-			require.True(t, states[s], "%s: src %q is not a declared state", e.Name, s)
-		}
-	}
-}
-
-// Every state must be reachable and every non-terminal state must have a way
-// out. A state nothing reaches is dead description; a non-terminal state with no
-// exit is a trap the machine can enter and never leave.
-func TestPipelineFSM_NoUnreachableStatesAndNoDeadEnds(t *testing.T) {
-	doc := loadFSMDoc(t)
-
-	reached := map[string]bool{doc.Initial: true}
-	for range doc.States {
-		for _, e := range doc.Events {
-			for _, s := range e.Src {
-				if reached[s] {
-					reached[e.Dst] = true
-				}
-			}
-		}
-	}
-	exits := map[string]bool{}
-	for _, e := range doc.Events {
-		for _, s := range e.Src {
-			if e.Dst != s {
-				exits[s] = true
-			}
-		}
-	}
-	for _, s := range doc.States {
-		require.True(t, reached[s.Name], "state %q is unreachable from %q", s.Name, doc.Initial)
-		if !s.Terminal {
-			require.True(t, exits[s.Name], "state %q is not terminal and has no way out", s.Name)
-		}
-	}
 }
 
 // Marker strings in the document must be real. Checked against the daemon's own
