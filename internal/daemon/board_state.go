@@ -91,9 +91,10 @@ type BoardCard struct {
 	// single-daemon behaviour.
 	StageDaemonID string `json:"stage_daemon_id,omitempty"`
 	// DeployPhase names the done-stage sub-phase for a running card: "pr-review"
-	// while the machine review→fix loop is mid-flight, empty for a plain deploy.
-	// It lets the board badge read "PR review…" instead of "deploying…" so the
-	// loop is visible while it runs.
+	// while the machine reviewer runs, "pr-fix" while the fixer runs, empty for
+	// a plain deploy. It lets the board badge read "PR review…"/"fixing PR
+	// review findings…" instead of "deploying…" so the loop is visible while it
+	// runs.
 	DeployPhase string `json:"deploy_phase,omitempty"`
 	// Degraded marks a card whose comment thread could not be read this scan
 	// (a ListComments error/timeout). It is set at the fetch-error site, never
@@ -312,15 +313,44 @@ func supersededByNewerMarker(state BoardState, furthest BoardStage, comments []t
 		(furthest == BoardDoneStage && doneStageLoopActive(comments))
 }
 
-// deployPhaseFor names the done-stage sub-phase of a running card: "pr-review"
-// while the pre-merge review→fix loop is mid-flight, empty for a plain deploy so
-// the board badge reads "PR review…" rather than "deploying…" while the loop
-// runs.
+// DeployPhase values for a done-stage card mid PR review→fix loop. Two values,
+// not one, because the halves are separate agents doing opposite work: a card
+// reading "PR review…" while board-<key>-prfix runs human-pr-fixer sends its
+// reader to the wrong container and the wrong log (SC-3569).
+const (
+	DeployPhasePRReview = "pr-review"
+	DeployPhasePRFix    = "pr-fix"
+)
+
+// deployPhaseFor names the done-stage sub-phase of a running card, empty for a
+// plain deploy so the board badge reads "deploying…" rather than a loop phase.
 func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
-	if card.Stage == BoardDoneStage && card.State == BoardRunning && doneStageLoopActive(comments) {
-		return "pr-review"
+	if card.Stage != BoardDoneStage || card.State != BoardRunning {
+		return ""
 	}
-	return ""
+	return donePhaseFromLoopMarker(comments)
+}
+
+// donePhaseFromLoopMarker reads WHICH half of the review→fix loop the newest
+// done-stage marker started, or "" when that marker starts neither.
+//
+// doneStageLoopActive answers the coarser "is the loop mid-flight at all" off
+// this same result, and must keep matching BOTH halves for its own callers (the
+// loop re-drive at board_reconcile.go:262 and the stuck-running guard at :370,
+// whose whole point is that a loop card's half-agents come and go between
+// rounds). One reader, two questions — so the header set can never drift apart
+// between them.
+func donePhaseFromLoopMarker(comments []tracker.Comment) string {
+	_, latest := latestStateInStage(comments, BoardDoneStage)
+	body := strings.TrimSpace(latest.Body)
+	switch {
+	case strings.HasPrefix(body, PRFixStartedHeader):
+		return DeployPhasePRFix
+	case strings.HasPrefix(body, PRReviewStartedHeader):
+		return DeployPhasePRReview
+	default:
+		return ""
+	}
 }
 
 // derivePRURL resolves the card's PR link, newest-marker-first: a deployed

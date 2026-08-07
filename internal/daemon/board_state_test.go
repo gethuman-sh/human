@@ -505,6 +505,36 @@ func TestDeriveBoardCard_DeployPhasePRReview(t *testing.T) {
 	assert.Equal(t, "pr-review", card.DeployPhase)
 }
 
+// The observed SC-3322 case: the newest done-stage marker is pr-fix-started and
+// the live agent is board-SC-3322-prfix running human-pr-fixer, yet the badge
+// read "PR review…". The phase must name the half that is actually running, or
+// the card sends a reader to the wrong log (SC-3569).
+func TestDeriveBoardCard_DeployPhasePRFix(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Equal(t, "pr-fix", card.DeployPhase)
+}
+
+// doneStageLoopActive answers the COARSER question — is the review→fix loop
+// mid-flight at all — for the re-drive pass (board_reconcile.go:262) and the
+// stuck-running guard (:370). Splitting the phase out must not narrow it: both
+// halves keep the loop card away from those passes.
+func TestDoneStageLoopActive_MatchesBothLoopHalves(t *testing.T) {
+	review := []tracker.Comment{cmt(PRReviewStartedHeader, time.Unix(2, 0))}
+	fix := []tracker.Comment{cmt(PRFixStartedHeader, time.Unix(2, 0))}
+	deploy := []tracker.Comment{cmt(DeployedHeader, time.Unix(2, 0))}
+
+	assert.True(t, doneStageLoopActive(review))
+	assert.True(t, doneStageLoopActive(fix))
+	assert.False(t, doneStageLoopActive(deploy))
+}
+
 // An implementation stage that reported the substrate was down derives to the
 // distinct BoardOutage state (not BoardFailed) and carries the reason line so
 // the badge can read WHAT is down (SC-2307).

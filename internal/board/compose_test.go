@@ -301,8 +301,8 @@ func TestCompose_CarriesTicketAndRunFacts(t *testing.T) {
 			Stage: daemon.BoardImplementation, State: daemon.BoardRunning,
 			Branch: "autofix/sc-1", PRURL: "https://example/pr/1",
 			EngineeringKey: "HUM-1", Verdict: "pass", DeployPhase: "pr-review",
-			StageEnteredAt: entered,
-			Options:        []daemon.BoardOption{{ID: "1", Label: "A"}}, OptionsContext: "why",
+			StageEnteredAt: entered, StageDaemonID: "d1",
+			Options: []daemon.BoardOption{{ID: "1", Label: "A"}}, OptionsContext: "why",
 		}},
 	)}, true)
 
@@ -323,6 +323,23 @@ func TestCompose_CarriesTicketAndRunFacts(t *testing.T) {
 	require.Len(t, c.Options, 1)
 	assert.Equal(t, "why", c.OptionsContext)
 	assert.True(t, view.DockerAvailable, "docker availability is the launching host's, passed in")
+	// The deciding marker's machine id must survive composition: without it the
+	// viewer cannot tell "no agent here" from "no agent anywhere", and a card a
+	// peer daemon is working would render as dead (SC-3569).
+	assert.Equal(t, "d1", c.StageDaemonID)
+}
+
+// Liveness is a property of the machine LOOKING at the board, not of the
+// project, so the shared composed board must leave it blank — exactly like
+// NotMine (SC-3569).
+func TestCompose_LeavesAgentLivenessToTheViewer(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "one"}},
+		map[string]daemon.BoardCard{"SC-1": {
+			Stage: daemon.BoardImplementation, State: daemon.BoardRunning, StageDaemonID: "d1",
+		}},
+	)}, true)
+	assert.Empty(t, cardByKey(t, view, "SC-1").AgentLiveness)
 }
 
 // blockedIssue builds an issue waiting for the given keys.
