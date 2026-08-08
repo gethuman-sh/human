@@ -243,6 +243,16 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
+// Accepts reports whether the machine describes a move out of state recorded by
+// marker — the question to ask BEFORE posting one, not after.
+//
+// It is the same question replay asks of a recorded history, asked of a move
+// that has not happened yet, which is what lets the machine be a gate rather
+// than only a description.
+func (d Document) Accepts(state, marker string) bool {
+	return len(d.newReplayIndex().destinations(state, normalizeMarker(marker))) > 0
+}
+
 // Trace is one ticket's marker history, oldest first — the unit of the corpus.
 type Trace struct {
 	Key     string   `json:"key"`

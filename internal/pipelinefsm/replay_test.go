@@ -3,6 +3,7 @@ package pipelinefsm
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -176,10 +177,42 @@ func TestReplay_DerivedDestinationStillRefusesAnUnknownMove(t *testing.T) {
 }
 
 // baseline is the recorded disagreement between the shipped machine and the
-// histories the pipeline actually wrote.
+// histories the pipeline actually wrote, sorted by what should be done about it.
 type baseline struct {
-	Refusals    map[string]int `json:"refusals"`
-	Ambiguities map[string]int `json:"ambiguities"`
+	Undescribed struct {
+		Kinds map[string]int `json:"kinds"`
+	} `json:"undescribed"`
+	Violations struct {
+		Kinds map[string]violation `json:"kinds"`
+	} `json:"violations"`
+	Unexplained struct {
+		Kinds map[string]int `json:"kinds"`
+	} `json:"unexplained"`
+	Ambiguities struct {
+		Kinds map[string]int `json:"kinds"`
+	} `json:"ambiguities"`
+}
+
+// violation is a move the machine forbids and the pipeline made anyway.
+type violation struct {
+	Count int    `json:"count"`
+	Why   string `json:"why"`
+}
+
+// refusals flattens the three refusal buckets. Which bucket an entry sits in
+// says what to do about it; the total is what the corpus must reproduce.
+func (b baseline) refusals() map[string]int {
+	all := map[string]int{}
+	for k, v := range b.Undescribed.Kinds {
+		all[k] = v
+	}
+	for k, v := range b.Unexplained.Kinds {
+		all[k] = v
+	}
+	for k, v := range b.Violations.Kinds {
+		all[k] = v.Count
+	}
+	return all
 }
 
 func loadBaseline(t *testing.T) baseline {
@@ -219,11 +252,44 @@ func TestReplayCorpus_DisagreementMatchesTheBaseline(t *testing.T) {
 	}
 
 	want := loadBaseline(t)
-	assert.Equal(t, want.Refusals, refusals,
+	assert.Equal(t, want.refusals(), refusals,
 		"the machine and the recorded histories disagree differently than the baseline records — "+
 			"fix docs/pipeline-fsm.json, or update testdata/replay-baseline.json if the change is intended")
-	assert.Equal(t, want.Ambiguities, ambiguities,
+	assert.Equal(t, want.Ambiguities.Kinds, ambiguities,
 		"the markers that fit more than one edge have changed")
+}
+
+// The violation guard below is only worth anything if Accepts can say yes, so
+// the shipped machine is asked one of each. Without this, an Accepts that always
+// returned false would make that guard pass forever while checking nothing.
+func TestDocumentAccepts_GivesBothAnswers(t *testing.T) {
+	doc, err := LoadDocument("../..")
+	require.NoError(t, err)
+
+	assert.True(t, doc.Accepts("planning", "plan-ready"), "a planner attaching its plan is a described move")
+	assert.False(t, doc.Accepts("filed", "deployed"), "merging a Backlog ticket is not")
+}
+
+// TestReplayCorpus_NoViolationIsAbsorbedIntoTheMachine is the guard on the
+// baseline's own integrity.
+//
+// A violation is the pipeline doing something the machine forbids, and there is
+// an easy way to make one stop failing: widen the document until it is allowed.
+// That closes the entry and destroys the reason the document exists, so the
+// escape is closed here — every violation must still be a move the machine
+// refuses. An entry that has genuinely become legitimate has to be argued into
+// `undescribed` by hand, where the change is visible in the diff.
+func TestReplayCorpus_NoViolationIsAbsorbedIntoTheMachine(t *testing.T) {
+	doc, err := LoadDocument("../..")
+	require.NoError(t, err)
+
+	for kind, v := range loadBaseline(t).Violations.Kinds {
+		marker, state, ok := strings.Cut(kind, "@")
+		require.True(t, ok, "a violation is written marker@state: %q", kind)
+		assert.False(t, doc.Accepts(state, marker),
+			"%s is recorded as a violation (%s) but the machine now allows it — "+
+				"if that move became legitimate, move the entry to `undescribed` and say why", kind, v.Why)
+	}
 }
 
 // A corpus with nothing in it would let every assertion above pass vacuously, so
