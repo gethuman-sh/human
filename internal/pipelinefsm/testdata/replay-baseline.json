@@ -86,7 +86,7 @@
         "evidence": [
           "SC-3024"
         ],
-        "ticket": "none yet"
+        "ticket": "SC-3857"
       },
       "planning-failed@stopped": {
         "count": 1,
@@ -94,7 +94,7 @@
         "evidence": [
           "SC-3580"
         ],
-        "ticket": "none yet"
+        "ticket": "SC-3857"
       },
       "pr-review-failed@stopped": {
         "count": 1,
@@ -102,7 +102,7 @@
         "evidence": [
           "SC-3581"
         ],
-        "ticket": "none yet"
+        "ticket": "SC-3857"
       },
       "implementation-failed@planning": {
         "count": 2,
