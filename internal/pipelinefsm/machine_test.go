@@ -27,7 +27,7 @@ func TestTheShippedMachineHoldsTogether(t *testing.T) {
 			errs = append(errs, f.String())
 		}
 	}
-	assert.Empty(t, errs, "docs/pipeline-fsm.json is not a well-formed machine:\n%s", strings.Join(errs, "\n"))
+	assert.Empty(t, errs, "internal/pipelinefsm/pipeline-fsm.json is not a well-formed machine:\n%s", strings.Join(errs, "\n"))
 }
 
 func TestMermaid_DrawsEveryEdgeAndBothEnds(t *testing.T) {

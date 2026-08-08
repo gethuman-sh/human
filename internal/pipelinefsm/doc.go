@@ -1,5 +1,6 @@
-// Package pipelinefsm validates docs/pipeline-fsm.json — the written-down
-// pipeline state machine.
+// Package pipelinefsm validates pipeline-fsm.json — the written-down pipeline
+// state machine, which lives beside this code rather than under docs/ because
+// it is read at runtime and checked by the build, not only by people.
 //
 // This checks the document against ITSELF: that it is a well-formed machine.
 // Every transition comes from and leads to a state that exists, no two states or
@@ -26,7 +27,7 @@ import (
 )
 
 // DocPath is the document's location relative to the repository root.
-const DocPath = "docs/pipeline-fsm.json"
+const DocPath = "internal/pipelinefsm/pipeline-fsm.json"
 
 // Document is the written machine.
 //

@@ -1,4 +1,4 @@
-// Command fsmcheck validates docs/pipeline-fsm.json — the pipeline state
+// Command fsmcheck validates internal/pipelinefsm/pipeline-fsm.json — the pipeline state
 // machine written down.
 //
 // It checks the document against itself: that it is a well-formed machine.
@@ -84,14 +84,14 @@ func report(findings []pipelinefsm.Finding, format string) error {
 		return enc.Encode(findings)
 	case "text":
 		if len(findings) == 0 {
-			fmt.Println("docs/pipeline-fsm.json is a well-formed machine")
+			fmt.Println("internal/pipelinefsm/pipeline-fsm.json is a well-formed machine")
 			return nil
 		}
 		for _, f := range findings {
 			fmt.Println(f)
 		}
 		errs := pipelinefsm.Errors(findings)
-		fmt.Printf("\n%d error(s), %d warning(s) in docs/pipeline-fsm.json\n", errs, len(findings)-errs)
+		fmt.Printf("\n%d error(s), %d warning(s) in internal/pipelinefsm/pipeline-fsm.json\n", errs, len(findings)-errs)
 		return nil
 	default:
 		return fmt.Errorf("unknown format %q: want text or json", format)

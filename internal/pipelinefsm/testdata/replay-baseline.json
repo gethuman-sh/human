@@ -15,7 +15,7 @@
     "cause": "Before SC-3718 (eca9baf2, 2026-08-05) the PR review loop recorded its starts and its stops but never its passing verdict, so a history from that era leaves the item at pr-review and the next thing it shows is a deploy-stage marker. Of the corpus histories that reached the loop, 7 from before that commit refuse at pr-review and 0 from after it do — which is the reason to believe this is retired rather than merely rarer."
   },
   "violations": {
-    "doc": "The pipeline made a move the machine forbids. Fix the CODE. These must never be closed by editing docs/pipeline-fsm.json — the test asserts the machine still refuses each one, so absorbing a violation into the description fails the build. Each names the ticket that owns the fix, so an entry cannot outlive the work silently.",
+    "doc": "The pipeline made a move the machine forbids. Fix the CODE. These must never be closed by editing internal/pipelinefsm/pipeline-fsm.json — the test asserts the machine still refuses each one, so absorbing a violation into the description fails the build. Each names the ticket that owns the fix, so an entry cannot outlive the work silently.",
     "kinds": {
       "deployed@filed": {
         "count": 15,

@@ -263,7 +263,7 @@ func TestReplayCorpus_DisagreementMatchesTheBaseline(t *testing.T) {
 	want := loadBaseline(t)
 	assert.Equal(t, want.refusals(), refusals,
 		"the machine and the recorded histories disagree differently than the baseline records — "+
-			"fix docs/pipeline-fsm.json, or update testdata/replay-baseline.json if the change is intended")
+			"fix internal/pipelinefsm/pipeline-fsm.json, or update testdata/replay-baseline.json if the change is intended")
 	assert.Equal(t, want.Ambiguities.Kinds, ambiguities,
 		"the markers that fit more than one edge have changed")
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// docs/pipeline-fsm.json is the written-down machine. These tests are what stop
+// internal/pipelinefsm/pipeline-fsm.json is the written-down machine. These tests are what stop
 // it drifting from the CODE: a marker the prompts post that the daemon has never
 // been told about, a marker string no constant carries.
 //
@@ -44,7 +44,7 @@ type fsmDoc struct {
 
 func loadFSMDoc(t *testing.T) fsmDoc {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "pipeline-fsm.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "pipelinefsm", "pipeline-fsm.json"))
 	require.NoError(t, err, "the pipeline machine must be readable")
 	var doc fsmDoc
 	require.NoError(t, json.Unmarshal(raw, &doc), "the pipeline machine must be valid JSON")
@@ -132,5 +132,5 @@ func TestPipelineFSM_EveryPromptedMarkerIsAccountedFor(t *testing.T) {
 	sort.Strings(orphans)
 	require.Empty(t, orphans,
 		"these markers are posted by a prompt but are neither a transition nor listed as deliberately not one — "+
-			"decide which they are and record it in docs/pipeline-fsm.json")
+			"decide which they are and record it in internal/pipelinefsm/pipeline-fsm.json")
 }
