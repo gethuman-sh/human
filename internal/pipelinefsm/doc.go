@@ -45,6 +45,8 @@ type Document struct {
 
 	// StageDefaults holds the liveness rules states inherit.
 	StageDefaults StageDefaults `json:"stage_defaults"`
+
+	Unclassified Unclassified `json:"unclassified_markers"`
 }
 
 // ResolvedStates returns every state with its inherited fields filled in.
@@ -201,4 +203,11 @@ func ParseDocument(raw []byte) (Document, error) {
 		return Document{}, errors.WrapWithDetails(err, "parsing the pipeline machine")
 	}
 	return doc, nil
+}
+
+// Unclassified names the markers the pipeline posts that record content rather
+// than movement. Modelled so a reader replaying a real comment thread can tell
+// "this marker moves nothing" from "this marker is missing from the machine".
+type Unclassified struct {
+	Markers []string `json:"markers"`
 }
