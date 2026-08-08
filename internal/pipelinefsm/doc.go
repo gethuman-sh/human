@@ -240,4 +240,16 @@ func ParseDocument(raw []byte) (Document, error) {
 // "this marker moves nothing" from "this marker is missing from the machine".
 type Unclassified struct {
 	Markers []string `json:"markers"`
+
+	// DualRole names the markers that are deliberately BOTH — a transition from
+	// some states and a record of content from others — and says why for each.
+	//
+	// The overlap looks like a contradiction and is not one. [human:plan] moves
+	// a self-planning fix run from fix-planning to fixing, and records content
+	// when a planner attaches a plan to a ticket that is not going anywhere yet.
+	// The list of markers has no way to say "here but not there", so without this
+	// field the choice is between a document that contradicts itself and one that
+	// is wrong. Declaring the overlap makes it visible and, more to the point,
+	// makes an UNdeclared overlap an error rather than an accident.
+	DualRole map[string]string `json:"dual_role,omitempty"`
 }

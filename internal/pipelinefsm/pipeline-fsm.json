@@ -24,7 +24,11 @@
       "fix-summary",
       "claim",
       "stage-wait"
-    ]
+    ],
+    "dual_role": {
+      "plan": "A transition inside a self-planning fix run (fix-plan-written: fix-planning to fixing, the run writing the plan it is about to carry out) and a record of content everywhere else, where a planner attaches a plan to a ticket that does not move until [human:plan-ready]. Measured on the 59-history corpus: dropping it from this list turns 21 histories' plan markers into refusals, 16 of them at `filed` or `planning` where nothing moved. The overlap is what keeps those 16 from being reported as defects.",
+      "bug-verdict": "A transition out of triaging — to fix-planning on a confirmed bug, to challenging on a not-a-bug, which is why the corpus records bug-verdict@preflight as a known ambiguity rather than a defect — and a record of content when it lands anywhere else. Dropping it from this list adds 2 refusals at `implementing`."
+    }
   },
   "states": [
     {
