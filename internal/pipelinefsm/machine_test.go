@@ -10,15 +10,12 @@ import (
 	"github.com/gethuman-sh/human/internal/pipelinefsm"
 )
 
-// repoRoot is this package's distance to the checkout.
-const repoRoot = "../.."
-
 // The real machine, checked on every `make check`. This is the point of the
 // package: a transition added with a dst nobody declared, or a state with no way
 // out, fails the build rather than waiting to mislead whoever plans the next
 // pipeline change against it.
 func TestTheShippedMachineHoldsTogether(t *testing.T) {
-	findings, err := pipelinefsm.Check(repoRoot)
+	findings, err := pipelinefsm.Check()
 	require.NoError(t, err)
 
 	var errs []string
@@ -31,7 +28,7 @@ func TestTheShippedMachineHoldsTogether(t *testing.T) {
 }
 
 func TestMermaid_DrawsEveryEdgeAndBothEnds(t *testing.T) {
-	doc, err := pipelinefsm.LoadDocument(repoRoot)
+	doc, err := pipelinefsm.Load()
 	require.NoError(t, err)
 
 	diagram := pipelinefsm.Mermaid(doc)
