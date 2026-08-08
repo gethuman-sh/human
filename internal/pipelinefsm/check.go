@@ -19,6 +19,7 @@ const (
 	RuleMarkerSyntax Rule = "marker-syntax" // a marker is written the way a marker is written
 	RuleDescribed    Rule = "described"     // a transition says what it means and where it lives
 	RuleInvariant    Rule = "invariant"     // a state says what holds, who may act, and what happens if nobody does
+	RuleDualRole     Rule = "dual-role"     // a marker that both moves an item and records content says so on purpose
 )
 
 // Severity separates a machine that does not hold together from one that holds
@@ -75,6 +76,7 @@ func Validate(doc Document) []Finding {
 	findings = append(findings, checkMarkerSyntax(doc)...)
 	findings = append(findings, checkDescribed(doc)...)
 	findings = append(findings, checkInvariants(doc)...)
+	findings = append(findings, checkDualRole(doc)...)
 
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Severity != findings[j].Severity {
@@ -436,6 +438,42 @@ func checkMarkerSyntax(doc Document) []Finding {
 			if !strings.HasPrefix(m, markerPrefix) || !strings.HasSuffix(m, "]") || len(m) <= len(markerPrefix)+1 {
 				findings = append(findings, Finding{RuleMarkerSyntax, SeverityError, e.Name, fmt.Sprintf("marker %q is not written as [human:…]", m)})
 			}
+		}
+	}
+	return findings
+}
+
+// checkDualRole holds the line between a deliberate overlap and an accidental
+// one.
+//
+// A marker may legitimately be a transition from one state and a record of
+// content from another — [human:plan] is both — and the flat marker list cannot
+// express that, so the overlap has to be allowed. What must not be allowed is an
+// overlap nobody meant: a marker added to a transition while it still sits in
+// the unclassified list is a marker replay will silently absorb wherever no edge
+// happens to exist, which hides real disagreements rather than recording them.
+// Declaring it costs a sentence and turns silence into a decision.
+func checkDualRole(doc Document) []Finding {
+	var findings []Finding
+	transitions := map[string]bool{}
+	for _, e := range doc.Events {
+		for _, m := range e.Markers() {
+			transitions[strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(m), markerPrefix), "]")] = true
+		}
+	}
+	unclassified := map[string]bool{}
+	for _, m := range doc.Unclassified.Markers {
+		unclassified[m] = true
+		if transitions[m] && strings.TrimSpace(doc.Unclassified.DualRole[m]) == "" {
+			findings = append(findings, Finding{RuleDualRole, SeverityError, m,
+				"is declared both as a transition marker and as recording no movement, with no dual_role entry saying why — " +
+					"either it is one or the other, or the overlap is deliberate and needs a reason"})
+		}
+	}
+	for m := range doc.Unclassified.DualRole {
+		if !transitions[m] || !unclassified[m] {
+			findings = append(findings, Finding{RuleDualRole, SeverityWarning, m,
+				"has a dual_role reason but is no longer both a transition marker and unclassified — the reason outlived what it explained"})
 		}
 	}
 	return findings
