@@ -190,6 +190,9 @@ type baseline struct {
 	} `json:"legacy"`
 	Unexplained struct {
 		Kinds map[string]int `json:"kinds"`
+		// RuledOut is keyed by the entry — or the comma-joined entries — a note is
+		// about, so a note cannot outlive its subject unnoticed.
+		RuledOut map[string]string `json:"ruled_out"`
 	} `json:"unexplained"`
 	Ambiguities struct {
 		Kinds map[string]int `json:"kinds"`
@@ -283,6 +286,23 @@ func TestReplayBaseline_BucketsAreDisjoint(t *testing.T) {
 				t.Errorf("%s is in both %s and %s — it can only mean one thing", k, other, bucket)
 			}
 			seen[k] = bucket
+		}
+	}
+}
+
+// An unexplained entry's note records what was ruled out, so the next reader
+// starts where the last one stopped. A note whose subject has been explained and
+// moved is worse than no note: it reads as current thinking about a live
+// question that is already closed.
+func TestReplayBaseline_RuledOutNotesNameLiveEntries(t *testing.T) {
+	b := loadBaseline(t)
+
+	for subject := range b.Unexplained.RuledOut {
+		for _, kind := range strings.Split(subject, ", ") {
+			_, live := b.Unexplained.Kinds[kind]
+			assert.True(t, live,
+				"a ruled-out note is written about %s, which is no longer unexplained — "+
+					"fold what it says into the bucket the entry moved to, or delete it", kind)
 		}
 	}
 }

@@ -669,9 +669,9 @@
       "dst": "deploying",
       "actor": "user",
       "marker": "[human:deploy-started]",
-      "where": "board_transition.go runDoneStage / isDeployRetry",
+      "where": "internal/marker/marker.go — the only thing left that knows this marker; no pipeline code posts it",
       "guard": "the review verdict must not be failing",
-      "doc": "Dropping on Deploy. The daemon does this itself — no agent holds push credentials."
+      "doc": "Dropping on Deploy, the pre-loop way. Nothing in the pipeline posts deploy-started any more — the Done stage fronts the merge with the PR review loop (start-pr-review) and records pr-review-started instead. The marker stays a valid one to post by hand, and the board still reads it as Done/Running, so the edge is real but nobody automatic walks it. The corpus agrees: the one history carrying deploy-started is also the one carrying no pr-review marker at all."
     },
     {
       "name": "pr-opened",
@@ -974,13 +974,25 @@
     {
       "name": "start-pr-review",
       "src": [
-        "reviewed"
+        "reviewed",
+        "stopped"
       ],
       "dst": "pr-review",
       "actor": "user",
       "marker": "[human:pr-review-started]",
-      "where": "internal/daemon/board_transition.go runDoneStage — the Done stage opens the draft PR and launches the reviewer",
-      "doc": "Dropping on Done. The stage fronts the deploy with the PR review loop rather than posting deploy-started and merging, so the item enters the loop directly and deploying is never recorded on this path."
+      "where": "internal/daemon/board_transition.go runDoneStage — the Done stage opens the draft PR and launches the reviewer; isDeployRetry re-enters it on a card whose deploy already failed",
+      "doc": "Dropping on Done. The stage fronts the deploy with the PR review loop rather than posting deploy-started and merging, so the item enters the loop directly and deploying is never recorded on this path. Re-dropping a failed card is the same move, which is why stopped is a source: without it a conflicted deploy would be a dead end escapable only by re-implementing already-reviewed work (SC-735)."
+    },
+    {
+      "name": "redeploy-after-outage",
+      "src": [
+        "substrate-down"
+      ],
+      "dst": "pr-review",
+      "actor": "daemon",
+      "marker": "[human:pr-review-started]",
+      "where": "internal/daemon/board_transition.go isDeployRetry — an outage card at the Done stage is relaunched in place exactly like a failed one, so the reconcile backoff can re-drive it (SC-2307)",
+      "doc": "The same re-entry as start-pr-review, made by the machine rather than by a person: an infrastructure failure is not the ticket's fault, so nobody should have to drag the card back. Split from start-pr-review because the actor differs, and a state's who_may_act is checked against the transitions that leave it."
     },
     {
       "name": "gate-verdict-in-planning",
