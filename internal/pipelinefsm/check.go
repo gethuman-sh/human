@@ -91,9 +91,9 @@ func Validate(doc Document) []Finding {
 	return findings
 }
 
-// Check validates the document in a repository root.
-func Check(root string) ([]Finding, error) {
-	doc, err := LoadDocument(root)
+// Check validates the compiled-in document.
+func Check() ([]Finding, error) {
+	doc, err := Load()
 	if err != nil {
 		return nil, err
 	}

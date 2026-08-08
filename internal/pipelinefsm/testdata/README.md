@@ -2,7 +2,7 @@
 
 `replay-corpus.json` is a recorded set of real ticket marker histories, oldest
 first, marker **types** only — no bodies, no titles. It is the evidence half of
-the pipeline machine: `docs/pipeline-fsm.json` says how an item moves, and these
+the pipeline machine: `internal/pipelinefsm/pipeline-fsm.json` says how an item moves, and these
 are threads the pipeline itself wrote while moving them.
 
 `replay-baseline.json` is every disagreement between the two that the corpus

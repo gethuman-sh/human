@@ -1,5 +1,6 @@
-// Package pipelinefsm validates docs/pipeline-fsm.json — the written-down
-// pipeline state machine.
+// Package pipelinefsm validates pipeline-fsm.json — the written-down pipeline
+// state machine, which lives beside this code rather than under docs/ because
+// it is read at runtime and checked by the build, not only by people.
 //
 // This checks the document against ITSELF: that it is a well-formed machine.
 // Every transition comes from and leads to a state that exists, no two states or
@@ -17,16 +18,25 @@
 package pipelinefsm
 
 import (
+	_ "embed"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
 )
 
-// DocPath is the document's location relative to the repository root.
-const DocPath = "docs/pipeline-fsm.json"
+// DocPath is where the document lives, for messages that have to name it.
+const DocPath = "internal/pipelinefsm/pipeline-fsm.json"
+
+// raw is the machine, compiled in.
+//
+// It is the same machine for every project — human's pipeline, not the
+// checkout's — so a reader should never have to say which copy it means, and
+// nothing that asks should need a checkout to ask from. That is what lets an
+// agent inside a container query the machine it is running in.
+//
+//go:embed pipeline-fsm.json
+var raw []byte
 
 // Document is the written machine.
 //
@@ -185,17 +195,17 @@ func (e Event) Markers() []string {
 	return splitMarkers(e.Marker)
 }
 
-// LoadDocument reads the machine from a repository root.
-func LoadDocument(root string) (Document, error) {
-	path := filepath.Join(root, filepath.FromSlash(DocPath))
-	raw, err := os.ReadFile(path) // #nosec G304 -- a path the operator names, in their own checkout
-	if err != nil {
-		return Document{}, errors.WrapWithDetails(err, "reading the pipeline machine", "path", path)
-	}
+// Load returns the compiled-in machine.
+//
+// There is no path argument on purpose. The document is not the checkout's, so
+// "which one" was never a question worth being able to ask — and being able to
+// ask it meant every caller had to know its own distance to a repository root,
+// which is a fact about the caller and not about the machine.
+func Load() (Document, error) {
 	return ParseDocument(raw)
 }
 
-// ParseDocument decodes the machine. Split from LoadDocument so the rules can be
+// ParseDocument decodes the machine. Split from Load so the rules can be
 // exercised on a document held in memory.
 func ParseDocument(raw []byte) (Document, error) {
 	var doc Document

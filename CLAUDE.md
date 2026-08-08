@@ -69,7 +69,9 @@ Do NOT use a custom tracker status for review signalling — that would require 
 
 # Pipeline state machine
 
-`docs/pipeline-fsm.json` describes how one item — a ticket — moves through the pipeline: every state, every transition, and for each transition the actor that causes it (user, daemon, or skill), the skill that does the work, the marker that records it, and where in the code or the prompt it is implemented. It describes the system **as it is**.
+`internal/pipelinefsm/pipeline-fsm.json` describes how one item — a ticket — moves through the pipeline: every state, every transition, and for each transition the actor that causes it (user, daemon, or skill), the skill that does the work, the marker that records it, and where in the code or the prompt it is implemented. It describes the system **as it is**.
+
+It lives beside the code that parses it, not under `docs/`, because it is not documentation: the build checks it, the tests replay real ticket histories against it, and the binary carries it. A change to it is a code change and its commit needs an issue reference like any other.
 
 **Read it before you plan.** Any change to the derivation, the launchers, the reconcile passes, the marker vocabulary, the board rendering, or any agent prompt that posts a marker: read the document first and plan the change against it, naming the states and transitions you add, remove or redefine. Planning a pipeline change without reading it is how the same bug gets reintroduced under a new number.
 
@@ -85,7 +87,7 @@ Running states share one liveness rule per stage, held once in `stage_defaults.r
 
 `who_may_act` is cross-checked against the transitions that leave the state: if a `daemon` transition leaves a state whose `who_may_act` says only `user`, that is an error. The two halves are written separately and would otherwise drift silently — and a state claiming only a person can move it, while the machine moves it anyway, is "machine acts, never asks" broken in the description before it breaks in code.
 
-`docs/reaper.md` is its companion along the other axis: the FSM document follows one ticket, the reaper document follows one container — every condition under which the machine kills an agent (the zombie sweep, the silence reap, the stuck-running and orphan reconcile passes, close-is-cancellation), what it deliberately spares, what the reap costs the ticket's retry budget, and what artifacts it leaves behind. Same rules: read it before changing the sweep, the idle budgets, or any path that stops an agent, and update it in the same commit.
+`docs/reaper.md` is its companion along the other axis — prose, so it stays under `docs/`: the FSM document follows one ticket, the reaper document follows one container — every condition under which the machine kills an agent (the zombie sweep, the silence reap, the stuck-running and orphan reconcile passes, close-is-cancellation), what it deliberately spares, what the reap costs the ticket's retry budget, and what artifacts it leaves behind. Same rules: read it before changing the sweep, the idle budgets, or any path that stops an agent, and update it in the same commit.
 
 # Daemon
 

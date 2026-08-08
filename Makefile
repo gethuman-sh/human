@@ -68,7 +68,7 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzSanitizeFTSQuery -fuzztime=30s ./internal/index/...
 	go test -run=^$$ -fuzz=FuzzPeekClientHello -fuzztime=30s ./internal/proxy/...
 
-# fsm validates docs/pipeline-fsm.json as a machine: dangling destinations,
+# fsm validates internal/pipelinefsm/pipeline-fsm.json as a machine: dangling destinations,
 # unreachable states, states with no way out, undeclared actors. `check` already
 # fails on those through internal/pipelinefsm's own test — this target is for
 # reading the whole list at once while fixing it, warnings included.

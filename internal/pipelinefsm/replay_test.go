@@ -243,7 +243,7 @@ func loadBaseline(t *testing.T) baseline {
 // the description caught up and the worklist is stale, which has to be as loud —
 // an allowlist nobody prunes stops being evidence and becomes permission.
 func TestReplayCorpus_DisagreementMatchesTheBaseline(t *testing.T) {
-	doc, err := LoadDocument("../..")
+	doc, err := Load()
 	require.NoError(t, err)
 	traces, err := LoadCorpus("testdata/replay-corpus.json")
 	require.NoError(t, err)
@@ -263,7 +263,7 @@ func TestReplayCorpus_DisagreementMatchesTheBaseline(t *testing.T) {
 	want := loadBaseline(t)
 	assert.Equal(t, want.refusals(), refusals,
 		"the machine and the recorded histories disagree differently than the baseline records — "+
-			"fix docs/pipeline-fsm.json, or update testdata/replay-baseline.json if the change is intended")
+			"fix internal/pipelinefsm/pipeline-fsm.json, or update testdata/replay-baseline.json if the change is intended")
 	assert.Equal(t, want.Ambiguities.Kinds, ambiguities,
 		"the markers that fit more than one edge have changed")
 }
@@ -319,7 +319,7 @@ func keysOf[V any](m map[string]V) []string {
 // the shipped machine is asked one of each. Without this, an Accepts that always
 // returned false would make that guard pass forever while checking nothing.
 func TestDocumentAccepts_GivesBothAnswers(t *testing.T) {
-	doc, err := LoadDocument("../..")
+	doc, err := Load()
 	require.NoError(t, err)
 
 	assert.True(t, doc.Accepts("planning", "plan-ready"), "a planner attaching its plan is a described move")
@@ -336,7 +336,7 @@ func TestDocumentAccepts_GivesBothAnswers(t *testing.T) {
 // refuses. An entry that has genuinely become legitimate has to be argued into
 // `undescribed` by hand, where the change is visible in the diff.
 func TestReplayCorpus_NoViolationIsAbsorbedIntoTheMachine(t *testing.T) {
-	doc, err := LoadDocument("../..")
+	doc, err := Load()
 	require.NoError(t, err)
 
 	for kind, v := range loadBaseline(t).Violations.Kinds {
