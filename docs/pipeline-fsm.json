@@ -805,7 +805,8 @@
       "actor": "user",
       "marker": "[human:option-chosen]",
       "where": "board_state.go optionChosenQueued",
-      "doc": "A human picked an answer; the run relaunches with the choice in hand. dst is the stage the block NAMES, not the stage the item sits in — planning is the common case. A PR-loop escalation deliberately names implementation even though the item is in the deploy stage: the fixer raised a question only a code change can answer, so the choice rebuilds, and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named."
+      "doc": "A human picked an answer; the run relaunches with the choice in hand. dst is the stage the block NAMES, not the stage the item sits in — planning is the common case. A PR-loop escalation deliberately names implementation even though the item is in the deploy stage: the fixer raised a question only a code change can answer, so the choice rebuilds, and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named.",
+      "dst_is_derived": true
     },
     {
       "name": "substrate-unreachable",

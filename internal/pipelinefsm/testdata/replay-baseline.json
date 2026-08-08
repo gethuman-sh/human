@@ -6,21 +6,23 @@
     "deployed@awaiting-decision": 1,
     "deployed@deploying": 2,
     "deployed@filed": 15,
+    "deployed@stopped": 1,
     "implementation-failed@challenging": 5,
+    "implementation-failed@planning": 2,
     "implementation-failed@preflight": 1,
     "implementation-failed@stopped": 1,
-    "implementation-started@planning": 2,
-    "needs-planning@planning": 3,
     "plan-ready@filed": 4,
     "plan-ready@stopped": 1,
     "pr-review-started@reviewed": 6,
     "ready-for-review@stopped": 1,
     "review-complete@reviewed": 1,
+    "review-complete@stopped": 2,
     "ticket-review-started@planning": 12
   },
   "ambiguities": {
     "bug-verdict@preflight": 15,
-    "implementation-started@stopped": 18,
+    "implementation-started@(derived)": 5,
+    "implementation-started@stopped": 20,
     "implementation-started@substrate-down": 2
   }
 }

@@ -18,7 +18,7 @@ func replayMachine() Document {
 		Version: 1, Describes: "test", Item: "ticket", Initial: "filed",
 		Actors: map[string]string{"user": "a person", "daemon": "the host"},
 		States: []State{
-			{Name: "filed"}, {Name: "working"}, {Name: "checking"},
+			{Name: "filed"}, {Name: "working"}, {Name: "checking"}, {Name: "paused"},
 			{Name: "done", Terminal: true}, {Name: "gave-up", Terminal: true},
 			{Name: "unseen"},
 		},
@@ -31,6 +31,10 @@ func replayMachine() Document {
 			{Name: "fail", Src: []string{"checking"}, Dst: "gave-up", Actor: "daemon", Marker: "[human:verdict]"},
 			// Non-moving: leaves every state, moves nothing.
 			{Name: "observe", Src: []string{"filed", "working"}, Dst: "unseen", Actor: "daemon", MovesItem: &no},
+			{Name: "ask", Src: []string{"working"}, Dst: "paused", Actor: "daemon", Marker: "[human:asked]"},
+			// The destination is computed from something the marker header does
+			// not carry, so the declared dst is only a placeholder.
+			{Name: "resume", Src: []string{"paused"}, Dst: "working", Actor: "user", Marker: "[human:resumed]", DstIsDerived: true},
 		},
 	}
 }
@@ -114,6 +118,41 @@ func TestReplay_ReportsReachingATerminal(t *testing.T) {
 	r := replayMachine().Replay([]string{"started", "verdict"})
 
 	assert.True(t, r.Terminal)
+}
+
+// A computed destination is the document declining to say where the item went.
+// Believing the placeholder would report a position nothing supports.
+func TestReplay_DerivedDestinationIsNotAPosition(t *testing.T) {
+	r := replayMachine().Replay([]string{"started", "asked", "resumed"})
+
+	assert.True(t, r.DestinationUnknown())
+	assert.Equal(t, DerivedDestination, r.State)
+	assert.Empty(t, r.Refused, "a computed destination is not a defect")
+}
+
+// The next recorded move says where the item had been, even though the previous
+// one did not — so a history the document let go of is re-pinned rather than
+// lost. Without this, every marker after a computed destination reads as a
+// defect and the real disagreements stay hidden behind it.
+func TestReplay_TheNextMarkerRepinsADerivedDestination(t *testing.T) {
+	// "started" leaves only `filed`, which is nowhere near where the placeholder
+	// pointed — so accepting it proves the search widened.
+	r := replayMachine().Replay([]string{"started", "asked", "resumed", "started"})
+
+	assert.Empty(t, r.Refused)
+	assert.Equal(t, "working", r.State)
+	assert.False(t, r.DestinationUnknown(), "the history is pinned again")
+}
+
+// The widening is bounded by the marker vocabulary: one that no edge anywhere
+// records is still a defect. Otherwise a single computed destination would
+// excuse every marker that followed it, and the histories that most need
+// checking are exactly the ones that pass through a decision.
+func TestReplay_DerivedDestinationStillRefusesAnUnknownMove(t *testing.T) {
+	r := replayMachine().Replay([]string{"started", "asked", "resumed", "unrecorded"})
+
+	require.Len(t, r.Refused, 1)
+	assert.Equal(t, DerivedDestination, r.Refused[0].State)
 }
 
 // baseline is the recorded disagreement between the shipped machine and the

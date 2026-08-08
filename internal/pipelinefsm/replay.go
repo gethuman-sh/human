@@ -40,6 +40,21 @@ type Replay struct {
 	Terminal bool
 }
 
+// DerivedDestination is where an item stands after a transition whose
+// destination the document declines to fix — the real one is computed from
+// something a marker header does not carry, like the stage named inside an
+// options block. Treating the declared placeholder as the answer would make
+// every following marker read as a defect, when what actually happened is that
+// the document said, correctly, that it cannot say.
+const DerivedDestination = "(derived)"
+
+// DestinationUnknown reports whether the history ends somewhere the document
+// declined to name. A reader that needs the real state has to get it from
+// somewhere other than the markers.
+func (r Replay) DestinationUnknown() bool {
+	return r.State == DerivedDestination
+}
+
 // Disagreement is one marker the machine could not account for, and where the
 // item had got to when it arrived.
 type Disagreement struct {
@@ -102,16 +117,27 @@ type replayIndex struct {
 	silent map[string][]string
 
 	// moves maps a state and a marker to where that marker leads.
-	moves map[string]map[string][]string
+	moves map[string]map[string][]target
+
+	// states is every state a move may start from, which is the search space
+	// once the document has declined to say where an item went.
+	states []string
 
 	unclassified map[string]bool
 	terminal     map[string]bool
 }
 
+// target is one place a marker could have moved an item, and whether the
+// document committed to it.
+type target struct {
+	dst     string
+	derived bool
+}
+
 func (d Document) newReplayIndex() *replayIndex {
 	idx := &replayIndex{
 		silent:       map[string][]string{},
-		moves:        map[string]map[string][]string{},
+		moves:        map[string]map[string][]target{},
 		unclassified: map[string]bool{},
 		terminal:     map[string]bool{},
 	}
@@ -120,6 +146,7 @@ func (d Document) newReplayIndex() *replayIndex {
 	}
 	for _, s := range d.States {
 		idx.terminal[s.Name] = s.Terminal
+		idx.states = append(idx.states, s.Name)
 	}
 	for _, e := range d.Events {
 		if !e.Moves() {
@@ -131,10 +158,11 @@ func (d Document) newReplayIndex() *replayIndex {
 				continue
 			}
 			if idx.moves[src] == nil {
-				idx.moves[src] = map[string][]string{}
+				idx.moves[src] = map[string][]target{}
 			}
 			for _, m := range e.Markers() {
-				idx.moves[src][normalizeMarker(m)] = append(idx.moves[src][normalizeMarker(m)], e.Dst)
+				key := normalizeMarker(m)
+				idx.moves[src][key] = append(idx.moves[src][key], target{dst: e.Dst, derived: e.DstIsDerived})
 			}
 		}
 	}
@@ -142,15 +170,29 @@ func (d Document) newReplayIndex() *replayIndex {
 }
 
 // destinations returns every state the marker could have moved the item to,
-// searching from everywhere it might silently already be.
+// searching from everywhere it might silently already be — or, when the item's
+// own position was left underived, from everywhere at all. Searching widely is
+// what re-pins a history the document deliberately let go of: the next recorded
+// move says where the item had been, even though the previous one did not.
 func (idx *replayIndex) destinations(state, marker string) []string {
 	found := map[string]bool{}
-	for _, from := range idx.closure(state) {
-		for _, dst := range idx.moves[from][marker] {
-			found[dst] = true
+	for _, from := range idx.searchSpace(state) {
+		for _, t := range idx.moves[from][marker] {
+			if t.derived {
+				found[DerivedDestination] = true
+				continue
+			}
+			found[t.dst] = true
 		}
 	}
 	return sortedKeys(found)
+}
+
+func (idx *replayIndex) searchSpace(state string) []string {
+	if state == DerivedDestination {
+		return idx.states
+	}
+	return idx.closure(state)
 }
 
 // closure returns every state reachable from start without leaving a trace on the
