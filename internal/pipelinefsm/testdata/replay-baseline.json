@@ -3,18 +3,16 @@
   "counting": "Refusals count the FIRST refusal per ticket only. Once replay has lost the thread every later marker is refused too, so a raw total measures how long a history is rather than how wrong the document is. This also means the list is a LOWER BOUND: each entry hides the rest of its own history, so closing one reveals what was behind it.",
   "undescribed": {
     "doc": "The pipeline made a move that is legitimate and simply not written down. Fix the document. These shrink to zero.",
+    "kinds": {}
+  },
+  "legacy": {
+    "doc": "Written by a pipeline that no longer exists. Fix NEITHER side: the document describes the machine as it is, and these histories are evidence about a machine it was. An entry here needs the change that retired the behaviour, and a reason to believe newer histories are clean.",
     "kinds": {
-      "deploy-fix-started@pr-review": 3,
-      "deploy-fix-started@stopped": 1,
-      "deploy-fix-started@implementing": 1,
       "deploy-failed@pr-review": 1,
-      "pr-fix-started@stopped": 1,
-      "pr-review-started@stopped": 1,
-      "needs-planning@stopped": 1,
-      "options@pr-fix": 1,
-      "review-started@in-review": 1
+      "deploy-fix-started@pr-review": 3,
+      "deployed@pr-review": 3
     },
-    "note": "Most of these are one defect: [human:pr-review-failed] records TWO different things — a round's negative verdict, after which the loop dispatches the fixer, and the loop escalating to a stop. The document models only the stop, so every marker the loop posts after a failed round refuses. Same shape as bug-verdict: one marker, two meanings, separable only by the body."
+    "cause": "Before SC-3718 (eca9baf2, 2026-08-05) the PR review loop recorded its starts and its stops but never its passing verdict, so a history from that era leaves the item at pr-review and the next thing it shows is a deploy-stage marker. Of the corpus histories that reached the loop, 7 from before that commit refuse at pr-review and 0 from after it do — which is the reason to believe this is retired rather than merely rarer."
   },
   "violations": {
     "doc": "The pipeline made a move the machine forbids. Fix the CODE. These must never be closed by editing docs/pipeline-fsm.json — the test asserts the machine still refuses each one, so absorbing a violation into the description fails the build. Each names the ticket that owns the fix, so an entry cannot outlive the work silently.",
@@ -95,19 +93,23 @@
   "unexplained": {
     "doc": "Not yet traced to a code path. Do nothing: a single occurrence can be a one-off — a marker posted by hand, an agent killed mid-write — and widening the document on a guess is how a specification becomes a rubber stamp. Each entry leaves here by being explained, in either direction.",
     "kinds": {
-      "deployed@pr-review": 1,
+      "deploy-fix-started@implementing": 1,
+      "deploy-fix-started@stopped": 1,
       "implementation-failed@planning": 2,
       "planning-failed@stopped": 1,
+      "pr-fix-started@stopped": 1,
+      "pr-review-started@stopped": 1,
       "ready-for-review@planned": 1,
       "review-complete@reviewed": 1,
-      "review-started@implementing": 1
+      "review-started@implementing": 1,
+      "review-started@in-review": 1
     }
   },
   "ambiguities": {
     "doc": "Markers that fit several edges leading to different states. Not defects — the header genuinely does not say which move was made, and the answer is in the marker BODY the corpus deliberately does not carry. A NEW ambiguity should fail; these should not.",
     "kinds": {
       "bug-verdict@preflight": 14,
-      "implementation-started@(derived)": 4,
+      "implementation-started@(derived)": 5,
       "implementation-started@stopped": 32,
       "implementation-started@substrate-down": 2
     }

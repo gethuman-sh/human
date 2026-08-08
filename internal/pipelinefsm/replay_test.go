@@ -185,6 +185,9 @@ type baseline struct {
 	Violations struct {
 		Kinds map[string]violation `json:"kinds"`
 	} `json:"violations"`
+	Legacy struct {
+		Kinds map[string]int `json:"kinds"`
+	} `json:"legacy"`
 	Unexplained struct {
 		Kinds map[string]int `json:"kinds"`
 	} `json:"unexplained"`
@@ -207,6 +210,9 @@ func (b baseline) refusals() map[string]int {
 		all[k] = v
 	}
 	for k, v := range b.Unexplained.Kinds {
+		all[k] = v
+	}
+	for k, v := range b.Legacy.Kinds {
 		all[k] = v
 	}
 	for k, v := range b.Violations.Kinds {
@@ -257,6 +263,36 @@ func TestReplayCorpus_DisagreementMatchesTheBaseline(t *testing.T) {
 			"fix docs/pipeline-fsm.json, or update testdata/replay-baseline.json if the change is intended")
 	assert.Equal(t, want.Ambiguities.Kinds, ambiguities,
 		"the markers that fit more than one edge have changed")
+}
+
+// The buckets say what to do about a disagreement, so one entry sitting in two
+// of them is two contradictory instructions — and it would go unnoticed, because
+// flattening them for the count silently keeps whichever was merged last.
+func TestReplayBaseline_BucketsAreDisjoint(t *testing.T) {
+	b := loadBaseline(t)
+
+	seen := map[string]string{}
+	for bucket, kinds := range map[string][]string{
+		"undescribed": keysOf(b.Undescribed.Kinds),
+		"unexplained": keysOf(b.Unexplained.Kinds),
+		"legacy":      keysOf(b.Legacy.Kinds),
+		"violations":  keysOf(b.Violations.Kinds),
+	} {
+		for _, k := range kinds {
+			if other, dup := seen[k]; dup {
+				t.Errorf("%s is in both %s and %s — it can only mean one thing", k, other, bucket)
+			}
+			seen[k] = bucket
+		}
+	}
+}
+
+func keysOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // The violation guard below is only worth anything if Accepts can say yes, so
