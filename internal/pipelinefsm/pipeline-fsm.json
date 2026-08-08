@@ -1129,27 +1129,28 @@
       "DefaultStageRetries": "2 — automatic in-place relaunches of one stage (internal/daemon/board_retry.go)",
       "DefaultPRReviewRounds": "3 — review→fix rounds before the loop escalates (internal/daemon/pr_review_loop.go)",
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
-      "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)"
+      "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)",
+      "MaxSilenceReaps": "3 — silence reaps of one stage before the machine stops relaunching and asks for a person (internal/daemon/board_failure.go). Uncharged against DefaultStageRetries, which is why it needs its own bound."
     }
   },
   "stage_defaults": {
     "doc": "The liveness rule for a RUNNING stage, stated once. A state naming one of these in `inherits` takes its stale_when and if_nothing_happens from here, and `note` adds what is true of that state alone. Once rather than per state because it IS one rule: seven copies would need seven coordinated edits to stay true, which is the drift this document exists to prevent — reproduced inside it.",
     "rules": {
       "planning": {
-        "stale_when": "It has sat past StuckRunningGrace (15 minutes) and no agent for (key, planning) is alive on the machine that owns the stage — or one is alive but has recorded no new phase, which the reconcile pass stops before redding.",
-        "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:planning-failed] and relaunches in place, up to DefaultStageRetries (2). A machine-chosen silence stop does not charge that budget."
+        "stale_when": "Past StuckRunningGrace (15 minutes) with no agent for (key, planning) alive on the machine that owns the stage — or one alive but recording no new phase, which the reconcile pass judges hung and stops before redding. Both halves apply to every stage: reconcileOneStuckCard branches on neither.",
+        "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:planning-failed] and relaunches in place. TWO budgets bound that, and which one is spent depends on how the stage died. A vanished agent is an unexplained death and is charged: DefaultStageRetries (2). An agent this pass judged hung and stopped itself is NOT charged — the work did not fail, a judgement about it did — but repetition is bounded separately by MaxSilenceReaps (3), past which the machine stops relaunching and says a person is needed."
       },
       "implementation": {
-        "stale_when": "Past StuckRunningGrace with no live agent for (key, implementation).",
-        "if_nothing_happens": "The reconcile pass posts [human:implementation-failed] and relaunches in place, up to DefaultStageRetries (2)."
+        "stale_when": "Past StuckRunningGrace (15 minutes) with no agent for (key, implementation) alive on the machine that owns the stage — or one alive but recording no new phase, which the reconcile pass judges hung and stops before redding. Both halves apply to every stage: reconcileOneStuckCard branches on neither.",
+        "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:implementation-failed] and relaunches in place. TWO budgets bound that, and which one is spent depends on how the stage died. A vanished agent is an unexplained death and is charged: DefaultStageRetries (2). An agent this pass judged hung and stopped itself is NOT charged — the work did not fail, a judgement about it did — but repetition is bounded separately by MaxSilenceReaps (3), past which the machine stops relaunching and says a person is needed."
       },
       "verification": {
-        "stale_when": "Past StuckRunningGrace with no live agent for (key, verification).",
-        "if_nothing_happens": "The reconcile pass posts [human:review-failed] and relaunches in place, up to DefaultStageRetries (2)."
+        "stale_when": "Past StuckRunningGrace (15 minutes) with no agent for (key, verification) alive on the machine that owns the stage — or one alive but recording no new phase, which the reconcile pass judges hung and stops before redding. Both halves apply to every stage: reconcileOneStuckCard branches on neither.",
+        "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:review-failed] and relaunches in place. TWO budgets bound that, and which one is spent depends on how the stage died. A vanished agent is an unexplained death and is charged: DefaultStageRetries (2). An agent this pass judged hung and stopped itself is NOT charged — the work did not fail, a judgement about it did — but repetition is bounded separately by MaxSilenceReaps (3), past which the machine stops relaunching and says a person is needed."
       },
       "done": {
-        "stale_when": "Past StuckRunningGrace with no live agent for (key, done).",
-        "if_nothing_happens": "The reconcile pass posts [human:deploy-failed] and relaunches in place, up to DefaultStageRetries (2)."
+        "stale_when": "Past StuckRunningGrace (15 minutes) with no agent for (key, done) alive on the machine that owns the stage — or one alive but recording no new phase, which the reconcile pass judges hung and stops before redding. Both halves apply to every stage: reconcileOneStuckCard branches on neither.",
+        "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:deploy-failed] and relaunches in place. TWO budgets bound that, and which one is spent depends on how the stage died. A vanished agent is an unexplained death and is charged: DefaultStageRetries (2). An agent this pass judged hung and stopped itself is NOT charged — the work did not fail, a judgement about it did — but repetition is bounded separately by MaxSilenceReaps (3), past which the machine stops relaunching and says a person is needed."
       },
       "pr-loop": {
         "stale_when": "No loop half-agent alive on this machine. The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so a loop is recovered by re-driving rather than by redding.",
