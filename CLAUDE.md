@@ -173,6 +173,14 @@ internal/tracker/ is an abstraction layer for issue trackers. **ALWAYS** define 
 
 # Tools
 
+**Run `human` with no arguments at the start of a session.** It prints the whole command
+surface, and that surface is the point: nearly every job here has a command that already
+does it properly — reading a ticket, posting a marker, navigating code, opening a PR,
+running the deploy gate. Reaching for `gh`, `rg` or a hand-built comment when `human`
+has a command for it is how the pipeline's own invariants get bypassed. Check the list
+first; the tool changes faster than any description of it, so the help output is the
+source of record, not this file.
+
 Is it about finding FILES? use 'fd' instead of 'find'
 Is it about finding TEXT/strings? use 'rg' instead of 'grep'
 Is it about interacting with Markdown? use 'mdq'
