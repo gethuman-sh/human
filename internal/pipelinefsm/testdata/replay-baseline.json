@@ -1,26 +1,85 @@
 {
-  "doc": "Every disagreement the corpus currently demonstrates between the written machine and the pipeline that produced these histories. A WORKLIST, not an allowlist: each entry is a defect to close, and closing one means deleting its line here. The test fails on an entry that no longer occurs exactly as loudly as on one that is new, so this file cannot quietly outlive what it excuses.",
-  "counting": "Refusals count the FIRST refusal per ticket only. Once replay has lost the thread every later marker is refused too, so a raw total measures how long a history is rather than how wrong the document is.",
-  "refusals": {
-    "deploy-failed@filed": 1,
-    "deployed@awaiting-decision": 1,
-    "deployed@deploying": 2,
-    "deployed@filed": 15,
-    "implementation-failed@challenging": 5,
-    "implementation-failed@preflight": 1,
-    "implementation-failed@stopped": 1,
-    "implementation-started@planning": 2,
-    "needs-planning@planning": 3,
-    "plan-ready@filed": 4,
-    "plan-ready@stopped": 1,
-    "pr-review-started@reviewed": 6,
-    "ready-for-review@stopped": 1,
-    "review-complete@reviewed": 1,
-    "ticket-review-started@planning": 12
+  "doc": "Every disagreement the corpus demonstrates between the written machine and the pipeline that produced these histories, sorted by what should happen about it. The sorting is the point: a refusal is a question — the machine says this move should not happen, and either the machine is wrong or the pipeline is — and answering it the lazy way, by widening the document until nothing objects, would destroy the only thing the document is for.",
+  "counting": "Refusals count the FIRST refusal per ticket only. Once replay has lost the thread every later marker is refused too, so a raw total measures how long a history is rather than how wrong the document is. This also means the list is a LOWER BOUND: each entry hides the rest of its own history, so closing one reveals what was behind it.",
+
+  "undescribed": {
+    "doc": "The pipeline made a move that is legitimate and simply not written down. Fix the document. These shrink to zero.",
+    "kinds": {
+      "deploy-fix-started@pr-review": 3,
+      "deploy-fix-started@stopped": 1,
+      "deploy-fix-started@implementing": 1,
+      "deploy-failed@pr-review": 1,
+      "pr-fix-started@stopped": 1,
+      "pr-review-started@stopped": 1,
+      "needs-planning@stopped": 1,
+      "options@pr-fix": 1,
+      "review-started@in-review": 1
+    },
+    "note": "Most of these are one defect: [human:pr-review-failed] records TWO different things — a round's negative verdict, after which the loop dispatches the fixer, and the loop escalating to a stop. The document models only the stop, so every marker the loop posts after a failed round refuses. Same shape as bug-verdict: one marker, two meanings, separable only by the body."
   },
+
+  "violations": {
+    "doc": "The pipeline made a move the machine forbids. Fix the CODE. These must never be closed by editing docs/pipeline-fsm.json — the test asserts the machine still refuses each one, so absorbing a violation into the description fails the build.",
+    "kinds": {
+      "deployed@filed": {
+        "count": 15,
+        "why": "human deploy <KEY> --branch merges without the ticket entering the state machine at all: no started marker, no review, no PR loop. The card goes Backlog to Done and nothing describes the move. RunDeploy reads a branch straight from the flag and calls deployEngine (cmd/cmddeploy/deploy.go).",
+        "evidence": ["SC-3282"]
+      },
+      "deployed@stopped": {
+        "count": 2,
+        "why": "The same bypass, onto a card that had already failed.",
+        "evidence": ["SC-2804"]
+      },
+      "deployed@planned": {"count": 1, "why": "The same bypass, onto a card holding an unstarted plan.", "evidence": []},
+      "deploy-failed@filed": {"count": 1, "why": "The same bypass, failing.", "evidence": ["SC-3497"]},
+      "deployed@awaiting-decision": {
+        "count": 1,
+        "why": "Merged while an options block was open — the one state nothing is allowed to move, because the machine has explicitly said only a person can answer.",
+        "evidence": ["SC-3295"]
+      },
+      "plan-ready@stopped": {
+        "count": 3,
+        "why": "The planner posted its plan after the watcher had declared it dead. Work continuing past a stop, with no relaunch in between.",
+        "evidence": ["SC-2910", "SC-3305"]
+      },
+      "review-complete@stopped": {
+        "count": 3,
+        "why": "The reviewer posted its verdict after review-failed. Same race.",
+        "evidence": ["SC-1655"]
+      },
+      "ready-for-review@stopped": {
+        "count": 3,
+        "why": "The run handed off after implementation-failed. Same race.",
+        "evidence": ["SC-2005"]
+      },
+      "implementation-failed@stopped": {
+        "count": 1,
+        "why": "Two failure markers for one ending, with no relaunch between them: the skill posts its own terminal marker when the budget is spent AND the daemon's exit watcher posts one when the agent leaves.",
+        "evidence": ["SC-3024"]
+      }
+    }
+  },
+
+  "unexplained": {
+    "doc": "Not yet traced to a code path. Do nothing: a single occurrence can be a one-off — a marker posted by hand, an agent killed mid-write — and widening the document on a guess is how a specification becomes a rubber stamp. Each entry leaves here by being explained, in either direction.",
+    "kinds": {
+      "deployed@pr-review": 1,
+      "implementation-failed@planning": 2,
+      "planning-failed@stopped": 1,
+      "ready-for-review@planned": 1,
+      "review-complete@reviewed": 1,
+      "review-started@implementing": 1
+    }
+  },
+
   "ambiguities": {
-    "bug-verdict@preflight": 15,
-    "implementation-started@stopped": 18,
-    "implementation-started@substrate-down": 2
+    "doc": "Markers that fit several edges leading to different states. Not defects — the header genuinely does not say which move was made, and the answer is in the marker BODY the corpus deliberately does not carry. A NEW ambiguity should fail; these should not.",
+    "kinds": {
+      "bug-verdict@preflight": 14,
+      "implementation-started@(derived)": 4,
+      "implementation-started@stopped": 32,
+      "implementation-started@substrate-down": 2
+    }
   }
 }
