@@ -149,24 +149,37 @@ func (d Document) newReplayIndex() *replayIndex {
 		idx.states = append(idx.states, s.Name)
 	}
 	for _, e := range d.Events {
-		if !e.Moves() {
-			continue // an observability edge changes what we can see, not where the item is
-		}
 		for _, src := range e.Src {
+			// A recorded transition that moves nothing is a PHASE: the pipeline
+			// says what it is doing without the item going anywhere. Replay has to
+			// accept the marker and stay put — refusing it would report a defect
+			// for the machine working exactly as described, and moving on it would
+			// invent a position. (A non-moving edge with no marker records nothing
+			// at all and is invisible here.)
+			if !e.Moves() {
+				if strings.TrimSpace(e.Marker) != "" {
+					idx.addMove(src, e, target{dst: src})
+				}
+				continue
+			}
 			if strings.TrimSpace(e.Marker) == "" {
 				idx.silent[src] = append(idx.silent[src], e.Dst)
 				continue
 			}
-			if idx.moves[src] == nil {
-				idx.moves[src] = map[string][]target{}
-			}
-			for _, m := range e.Markers() {
-				key := normalizeMarker(m)
-				idx.moves[src][key] = append(idx.moves[src][key], target{dst: e.Dst, derived: e.DstIsDerived})
-			}
+			idx.addMove(src, e, target{dst: e.Dst, derived: e.DstIsDerived})
 		}
 	}
 	return idx
+}
+
+func (idx *replayIndex) addMove(src string, e Event, to target) {
+	if idx.moves[src] == nil {
+		idx.moves[src] = map[string][]target{}
+	}
+	for _, m := range e.Markers() {
+		key := normalizeMarker(m)
+		idx.moves[src][key] = append(idx.moves[src][key], to)
+	}
 }
 
 // destinations returns every state the marker could have moved the item to,

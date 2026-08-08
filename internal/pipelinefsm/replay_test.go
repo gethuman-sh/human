@@ -31,6 +31,8 @@ func replayMachine() Document {
 			{Name: "fail", Src: []string{"checking"}, Dst: "gave-up", Actor: "daemon", Marker: "[human:verdict]"},
 			// Non-moving: leaves every state, moves nothing.
 			{Name: "observe", Src: []string{"filed", "working"}, Dst: "unseen", Actor: "daemon", MovesItem: &no},
+			// A recorded phase: the pipeline says what it is doing, the item stays.
+			{Name: "phase", Src: []string{"working"}, Dst: "working", Actor: "skill", Marker: "[human:phase]", MovesItem: &no},
 			{Name: "ask", Src: []string{"working"}, Dst: "paused", Actor: "daemon", Marker: "[human:asked]"},
 			// The destination is computed from something the marker header does
 			// not carry, so the declared dst is only a placeholder.
@@ -118,6 +120,24 @@ func TestReplay_ReportsReachingATerminal(t *testing.T) {
 	r := replayMachine().Replay([]string{"started", "verdict"})
 
 	assert.True(t, r.Terminal)
+}
+
+// A phase marker is the pipeline reporting what it is doing without the item
+// going anywhere. Refusing it would report a defect for the machine working as
+// described; moving on it would invent a position.
+func TestReplay_PhaseMarkersAreAcceptedAndMoveNothing(t *testing.T) {
+	r := replayMachine().Replay([]string{"started", "phase"})
+
+	assert.Empty(t, r.Refused)
+	assert.Equal(t, "working", r.State)
+}
+
+// And the stage's own markers keep working afterwards, which is the whole point:
+// a phase inside a stage must not cost the stage its exits.
+func TestReplay_APhaseDoesNotConsumeTheStagesExits(t *testing.T) {
+	r := replayMachine().Replay([]string{"started", "phase", "verdict"})
+
+	assert.Empty(t, r.Refused)
 }
 
 // A computed destination is the document declining to say where the item went.

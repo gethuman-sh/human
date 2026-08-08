@@ -33,10 +33,11 @@
       "board": "Backlog",
       "holds": "The ticket is open and carries no pipeline marker.",
       "who_may_act": [
-        "user"
+        "user",
+        "skill"
       ],
       "stale_when": "Never. Waiting is what Backlog is for, and an item may rest here indefinitely.",
-      "if_nothing_happens": "Nothing. The machine does not start work nobody asked for — every transition out of `filed` is a person's gesture."
+      "if_nothing_happens": "Nothing. The machine does not start work nobody asked for. A person may hand a Backlog ticket straight to an agent — a directly invoked plan or ticket-review run posts its markers here without the board dispatching anything — but nothing begins on its own."
     },
     {
       "name": "ticket-review",
@@ -341,8 +342,8 @@
       "actor": "user",
       "runs": "human-ticket-reviewer",
       "marker": "[human:ticket-review-started]",
-      "where": "launched as the first phase of the planning dispatch — board_transition.go startAgentStage(BoardPlanning, PlanningStartedHeader)",
-      "doc": "The pre-planning gate is dispatched: before any code is planned, something asks whether solving this ticket solves the problem.",
+      "where": "cmd/cmdplan — /human-ticket-review invoked directly against a Backlog ticket",
+      "doc": "The pre-planning gate, run on its own: before any code is planned, something asks whether solving this ticket solves the problem.",
       "prompt": "human-ticket-reviewer-agent.md — the gate posts its own ticket-review-started marker"
     },
     {
@@ -383,26 +384,29 @@
     {
       "name": "plan-attached",
       "src": [
-        "planning"
+        "planning",
+        "filed"
       ],
       "dst": "planned",
       "actor": "skill",
       "runs": "human-planner",
       "marker": "[human:plan-ready]",
       "prompt": "human-plan-skill.md",
-      "doc": "The plan itself is attached as a [human:plan] comment; plan-ready is what moves the item."
+      "doc": "The plan itself is attached as a [human:plan] comment; plan-ready is what moves the item. Planning run on its own attaches a plan to a ticket the board never dispatched, so the marker arrives with no planning-started before it.",
+      "where": "internal/claude/embed/human-plan-skill.md posts plan-ready as its last step, whether or not the board dispatched it"
     },
     {
       "name": "plan-finds-nothing-to-do",
       "src": [
-        "planning"
+        "planning",
+        "ticket-reviewed"
       ],
       "dst": "nothing-to-do",
       "actor": "skill",
       "runs": "human-planner",
       "marker": "[human:nothing-to-do]",
       "prompt": "human-plan-skill.md",
-      "doc": "The planner established the work is already merged, so there is nothing to build. A clean terminal rather than a failure — and reopenable, because it is a judgement and a person may overrule it."
+      "doc": "The planner established the work is already merged, so there is nothing to build. A clean terminal rather than a failure — and reopenable, because it is a judgement and a person may overrule it. The ticket-review gate posts it too: its own verdict marker classifies under the backlog stage and would leave the card reading as planning-in-progress, so a stop verdict posts the planning stage's terminal marker alongside it."
     },
     {
       "name": "planning-failed",
@@ -594,13 +598,19 @@
     {
       "name": "implementation-failed",
       "src": [
+        "preflight",
+        "triaging",
+        "challenging",
+        "fix-planning",
+        "fixing",
+        "verifying",
         "implementing"
       ],
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:implementation-failed]",
       "where": "board_failure.go",
-      "doc": "The daemon's failure watcher classifies an agent that exited without posting its handoff."
+      "doc": "The daemon's failure watcher classifies an agent that exited without posting its handoff. It fires for the implementation stage as a whole — failedHeaderFor(BoardImplementation) knows the stage, never which phase the run had reached — so every state of the stage leads here."
     },
     {
       "name": "start-review",
@@ -749,7 +759,8 @@
     {
       "name": "ci-green-merged",
       "src": [
-        "ci-gate"
+        "ci-gate",
+        "deploying"
       ],
       "dst": "merged",
       "actor": "daemon",
@@ -757,7 +768,7 @@
       "required_fields": [
         "pr"
       ],
-      "doc": "If the base moved on, the branch is rebased and CI re-gated on the new head before merging. Past the merge, branch cleanup and closing the ticket are best-effort and never fail the item.",
+      "doc": "If the base moved on, the branch is rebased and CI re-gated on the new head before merging. Past the merge, branch cleanup and closing the ticket are best-effort and never fail the item. A branch already merged into the base is the same outcome reached without a PR at all: the engine records it and stops, which is why the merge is reachable directly from deploying.",
       "where": "internal/daemon/board_transition.go DeployBranch — one engine, entered from the board and from `human deploy` (cmd/cmddeploy/deploy.go RunDeploy)"
     },
     {
@@ -944,6 +955,43 @@
       "legacy": true,
       "where": "board_markers.go orderedMarkerSpecs",
       "doc": "Legacy: opening the PR failed. Recognized for pre-deploy-pipeline threads only."
+    },
+    {
+      "name": "gate-opens-planning",
+      "src": [
+        "planning"
+      ],
+      "dst": "planning",
+      "actor": "skill",
+      "runs": "human-ticket-reviewer",
+      "marker": "[human:ticket-review-started]",
+      "where": "internal/daemon/board_transition.go planPrompt — every planning dispatch runs /human-ticket-review as its first phase",
+      "doc": "The ordinary path into the gate, and it moves nothing. The daemon posts planning-started when it dispatches and the gate is the first thing that dispatch runs, so the gate marker arrives AFTER the planning marker — and the card keeps reading as planning, because furthest-stage-wins ranks the planning marker above the gate's backlog-stage one. The gate is a PHASE of planning here, not a stage the item leaves planning for: the same run carries straight on into planning's own work, and planning's markers keep arriving as if the gate had never been a place.",
+      "prompt": "human-ticket-reviewer-agent.md — the gate posts its own ticket-review-started marker",
+      "moves_item": false
+    },
+    {
+      "name": "start-pr-review",
+      "src": [
+        "reviewed"
+      ],
+      "dst": "pr-review",
+      "actor": "user",
+      "marker": "[human:pr-review-started]",
+      "where": "internal/daemon/board_transition.go runDoneStage — the Done stage opens the draft PR and launches the reviewer",
+      "doc": "Dropping on Done. The stage fronts the deploy with the PR review loop rather than posting deploy-started and merging, so the item enters the loop directly and deploying is never recorded on this path."
+    },
+    {
+      "name": "gate-verdict-in-planning",
+      "src": [
+        "planning"
+      ],
+      "dst": "planning",
+      "actor": "skill",
+      "marker": "[human:ticket-review]",
+      "moves_item": false,
+      "where": "internal/claude/embed/human-ticket-reviewer-agent.md",
+      "doc": "The gate's verdict inside a planning dispatch. It records why, and deliberately does not end the stage — a stop verdict posts planning's own terminal marker alongside it, and ready/reframed simply carry on. Both are why the verdict moves nothing here."
     }
   ],
   "ownership": {
