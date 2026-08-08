@@ -101,6 +101,26 @@ type State struct {
 	// Note is what is true of THIS state on top of the inherited rule, so a
 	// deviation can be recorded without restating the rule it deviates from.
 	Note string `json:"note"`
+
+	// Board is where a reader would find an item in this state, as a placement
+	// the code can be asked about rather than a sentence a person reads. It used
+	// to be prose ("Fix, running"), which named frontend columns rather than the
+	// stages the derivation actually produces — so the one question worth asking
+	// of it could not be asked: is there a place a card can be that no state here
+	// describes?
+	Board BoardPlacement `json:"board"`
+}
+
+// BoardPlacement is where a state's item sits on the board: the stage column
+// and the within-stage status the derivation would report for it.
+//
+// Two escape values, both meaning "not one placement": "any" for a state that
+// can be reached from any column (an item does not leave its column to be
+// stopped), and "none" for one the board does not place at all.
+type BoardPlacement struct {
+	Stage string `json:"stage"`
+	State string `json:"state"`
+	Note  string `json:"note,omitempty"`
 }
 
 // StageDefaults carries the shared rules and the prose explaining them. The

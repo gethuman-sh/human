@@ -1,0 +1,27 @@
+{
+  "doc": "Places a card can sit that no state in internal/pipelinefsm/pipeline-fsm.json describes. Found by driving the real DeriveBoardCard over the real marker vocabulary and comparing what comes out against what the machine claims. Recorded rather than fixed: what to do about each is a separate question, and answering it here — by widening the document until nothing is left over — is the move that would make the machine agree with anything.",
+  "bound": "A LOWER BOUND, permanently. The enumeration builds threads of one and two markers, so a placement reachable only from three cannot appear. An entry here is real; an absence proves nothing.",
+  "unclaimed": {
+    "planning/queued": {
+      "reached_by": "[human:options] stage: planning, then [human:option-chosen]",
+      "note": "See implementation/queued — one cause, three stages (optionStages is planning, implementation, verification; the done stage raises its decisions against implementation, so there is no done/queued)."
+    },
+    "implementation/queued": {
+      "reached_by": "[human:options] stage: implementation, then [human:option-chosen]",
+      "note": "A decision is recorded and the stage it named is requeued, but no agent has posted that stage's started marker. BoardQueued exists to stop the stuck-running pass redding a just-decided card (SC-1320) — and it does that by being a state that pass does not look at. Nor does any other: every reconcile pass keys on running, outage, a handoff, a loop, or a container. optionChosenQueued's own doc says a deferred launch can leave a card here indefinitely.",
+      "known": "That a card CAN sit here indefinitely is documented in the code. Whether one ever has is NOT measured — the marker corpus cannot show it, because the evidence of it is the absence of a later marker, which looks exactly like a card that has not got there yet."
+    },
+    "verification/queued": {
+      "reached_by": "[human:options] stage: verification, then [human:option-chosen]",
+      "note": "See implementation/queued."
+    },
+    "hidden/": {
+      "reached_by": "a ticket whose tracker status is done or closed",
+      "note": "Closing a ticket takes it off the board from ANY state, and reaper.md treats close as cancellation — it stops the ticket's agents. So it is a transition out of every state at once, fired from outside the marker bus, recorded in no comment. That is why fifty-nine replayed histories never surfaced it and a state-space enumeration does: the two measurements are blind to different things."
+    },
+    "ideas/": {
+      "reached_by": "a ticket carrying the idea label",
+      "note": "The machine's initial state is `filed`, and idea-to-PM promotion is a label swap rather than a marker, so an idea is arguably before the machine rather than missing from it. Recorded because the enumeration cannot tell 'deliberately outside' from 'left out' — only a person can."
+    }
+  }
+}

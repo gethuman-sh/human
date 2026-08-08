@@ -30,7 +30,10 @@
     {
       "name": "filed",
       "doc": "The ticket exists. No pipeline activity.",
-      "board": "Backlog",
+      "board": {
+        "stage": "backlog",
+        "state": ""
+      },
       "holds": "The ticket is open and carries no pipeline marker.",
       "who_may_act": [
         "user",
@@ -42,7 +45,10 @@
     {
       "name": "ticket-review",
       "doc": "The pre-planning gate is judging whether solving this ticket solves the problem.",
-      "board": "Backlog, running",
+      "board": {
+        "stage": "backlog",
+        "state": "running"
+      },
       "holds": "The pre-planning gate is running as the FIRST PHASE of the planning dispatch, so the agent that owns it is registered under the planning stage, not this one.",
       "who_may_act": [
         "skill",
@@ -54,7 +60,10 @@
     {
       "name": "ticket-reviewed",
       "doc": "The gate returned a verdict: ready, reframed, superseded, escalated or rejected. The last three are stop decisions.",
-      "board": "Backlog, done",
+      "board": {
+        "stage": "backlog",
+        "state": "done"
+      },
       "holds": "A verdict is recorded with one of five heads.",
       "who_may_act": [
         "skill",
@@ -66,7 +75,10 @@
     {
       "name": "planning",
       "doc": "A planner is exploring the codebase and writing an implementation plan.",
-      "board": "Planning, running",
+      "board": {
+        "stage": "planning",
+        "state": "running"
+      },
       "holds": "A planner owns the stage and [human:planning-started] is the item's newest planning marker.",
       "who_may_act": [
         "skill",
@@ -77,7 +89,10 @@
     {
       "name": "planned",
       "doc": "A plan is attached to the ticket. The item waits for a human to start the build.",
-      "board": "Planning, done",
+      "board": {
+        "stage": "planning",
+        "state": "done"
+      },
       "holds": "A [human:plan] comment is attached and no build has started.",
       "who_may_act": [
         "user"
@@ -88,7 +103,10 @@
     {
       "name": "nothing-to-do",
       "doc": "The planner proved the work is already merged. Clean terminal.",
-      "board": "Planning, resolved",
+      "board": {
+        "stage": "planning",
+        "state": "resolved"
+      },
       "terminal": true,
       "reopenable": true,
       "holds": "The planner established the work is already merged. Clean terminal.",
@@ -101,7 +119,10 @@
     {
       "name": "preflight",
       "doc": "The fix run is resolving what it may do and settling what the evidence can settle, before any work.",
-      "board": "Fix, running",
+      "board": {
+        "stage": "implementation",
+        "state": "running"
+      },
       "holds": "A fix run owns the implementation stage and is resolving what it may do before any work.",
       "who_may_act": [
         "skill",
@@ -112,7 +133,10 @@
     {
       "name": "triaging",
       "doc": "The run is reproducing the report to reach a verdict.",
-      "board": "Fix, running",
+      "board": {
+        "stage": "implementation",
+        "state": "running"
+      },
       "holds": "The run is reproducing the report; the implementation stage is claimed.",
       "who_may_act": [
         "skill",
@@ -123,7 +147,10 @@
     {
       "name": "challenging",
       "doc": "A skeptic is trying to refute a not-a-bug or undetermined verdict before it is acted on.",
-      "board": "Fix, running",
+      "board": {
+        "stage": "implementation",
+        "state": "running"
+      },
       "holds": "A skeptic is trying to refute a not-a-bug or undetermined verdict. It runs ONCE — a verdict that survives is not re-challenged.",
       "who_may_act": [
         "skill",
@@ -134,7 +161,10 @@
     {
       "name": "resolved-no-fix",
       "doc": "The no-fix verdict survived the challenge. Clean terminal — the ticket needs no code change.",
-      "board": "Fix, resolved",
+      "board": {
+        "stage": "implementation",
+        "state": "resolved"
+      },
       "terminal": true,
       "reopenable": true,
       "holds": "The no-fix verdict survived the challenge. Clean terminal — no code change is warranted.",
@@ -147,7 +177,10 @@
     {
       "name": "fix-planning",
       "doc": "The self-planning fix run is producing its own plan.",
-      "board": "Fix, running",
+      "board": {
+        "stage": "implementation",
+        "state": "running"
+      },
       "holds": "The self-planning fix run is writing its own plan, because it entered from a report rather than from a planned ticket.",
       "who_may_act": [
         "skill",
@@ -158,7 +191,10 @@
     {
       "name": "fixing",
       "doc": "A regression test that fails first, then the change that makes it pass.",
-      "board": "Fix, running",
+      "board": {
+        "stage": "implementation",
+        "state": "running"
+      },
       "holds": "A regression test that fails first exists, or is being written, along with the change that makes it pass.",
       "who_may_act": [
         "skill",
@@ -169,7 +205,10 @@
     {
       "name": "verifying",
       "doc": "Proving the test fails before and passes after, on a green suite.",
-      "board": "Fix, running",
+      "board": {
+        "stage": "implementation",
+        "state": "running"
+      },
       "holds": "The fix exists and its fails-before/passes-after evidence is being produced by something other than the code that wrote it.",
       "who_may_act": [
         "skill",
@@ -181,7 +220,10 @@
     {
       "name": "implementing",
       "doc": "A plan executor is carrying out an attached plan (the non-bug path).",
-      "board": "Code, running",
+      "board": {
+        "stage": "implementation",
+        "state": "running"
+      },
       "holds": "A plan executor is carrying out an ATTACHED plan. A launch onto a ticket with no plan is refused before any agent claims the stage.",
       "who_may_act": [
         "skill",
@@ -192,7 +234,10 @@
     {
       "name": "handed-off",
       "doc": "Branch and commits are recorded on the ticket, checked reachable.",
-      "board": "Code, done",
+      "board": {
+        "stage": "implementation",
+        "state": "done"
+      },
       "holds": "Branch and commits are recorded on the ticket AND the commits were verified reachable on the branch before the marker was posted.",
       "who_may_act": [
         "daemon"
@@ -203,7 +248,10 @@
     {
       "name": "in-review",
       "doc": "A reviewer is checking the change against the ticket's acceptance criteria. In a board fix run this happens inline, in the same warm container.",
-      "board": "Review, running",
+      "board": {
+        "stage": "verification",
+        "state": "running"
+      },
       "holds": "A reviewer owns the verification stage and is checking the change against the ticket's acceptance criteria.",
       "who_may_act": [
         "skill",
@@ -214,7 +262,10 @@
     {
       "name": "reviewed",
       "doc": "The review returned a verdict. A failing verdict blocks the deploy and sends the item back to be rebuilt.",
-      "board": "Review, done",
+      "board": {
+        "stage": "verification",
+        "state": "done"
+      },
       "holds": "A verdict is recorded. The board reads the daemon's blocking DECISION, never the verdict string.",
       "who_may_act": [
         "user",
@@ -226,7 +277,10 @@
     {
       "name": "deploying",
       "doc": "The daemon pushed the branch and opened a draft pull request.",
-      "board": "Deploy, running",
+      "board": {
+        "stage": "done",
+        "state": "running"
+      },
       "holds": "The branch is pushed and a DRAFT pull request is open, so a half-reviewed change is not mergeable by anyone.",
       "who_may_act": [
         "daemon"
@@ -236,7 +290,10 @@
     {
       "name": "pr-review",
       "doc": "The machine reviewer is reading the open pull request.",
-      "board": "Deploy, running",
+      "board": {
+        "stage": "done",
+        "state": "running"
+      },
       "holds": "The machine reviewer is reading the open pull request; the newest done-stage marker is a loop-started marker.",
       "who_may_act": [
         "daemon",
@@ -247,7 +304,10 @@
     {
       "name": "pr-fix",
       "doc": "The machine fixer is addressing the review's findings on the local branch.",
-      "board": "Deploy, running",
+      "board": {
+        "stage": "done",
+        "state": "running"
+      },
       "holds": "The machine fixer is committing to the LOCAL branch and never pushing, so the reviewer reads the new commit rather than a stale pushed head.",
       "who_may_act": [
         "daemon"
@@ -257,7 +317,10 @@
     {
       "name": "ci-gate",
       "doc": "Every check must be green before the merge.",
-      "board": "Deploy, running",
+      "board": {
+        "stage": "done",
+        "state": "running"
+      },
       "holds": "The review converged and every check must be green before the merge. If the base moved on, the branch is rebased and CI re-gated on the new head first.",
       "who_may_act": [
         "daemon"
@@ -267,7 +330,10 @@
     {
       "name": "deploy-fixing",
       "doc": "A CI failure or a rebase conflict dispatched the deploy fixer instead of failing the item.",
-      "board": "Deploy, running",
+      "board": {
+        "stage": "done",
+        "state": "running"
+      },
       "holds": "A mechanical failure — red CI or a rebase conflict — dispatched the fixer instead of failing the item. The fixer's container holds no push credentials.",
       "who_may_act": [
         "daemon"
@@ -278,7 +344,10 @@
     {
       "name": "merged",
       "doc": "Merged, branch deleted, ticket closed. The shipping terminal.",
-      "board": "Deploy, done",
+      "board": {
+        "stage": "done",
+        "state": "done"
+      },
       "terminal": true,
       "holds": "Merged, branch deleted, ticket closed. Past the merge, cleanup and closing are best-effort and never fail the item.",
       "who_may_act": [],
@@ -288,7 +357,11 @@
     {
       "name": "awaiting-decision",
       "doc": "The item is parked on a genuine fork. Only a human choosing an answer moves it.",
-      "board": "any column, decision needed",
+      "board": {
+        "stage": "any",
+        "state": "",
+        "note": "Idle in whatever column the card was in, with an open [human:options] block — pauseOnOpenOptions turns running or failed into idle. \"Decision needed\" is not a BoardState; the open block is what distinguishes it."
+      },
       "holds": "An open [human:options] block names this item's own stage, or an earlier stage the answer would rework.",
       "who_may_act": [
         "user"
@@ -299,7 +372,10 @@
     {
       "name": "stopped",
       "doc": "A stage gave up and said why: a spent budget, an unreviewable change, a failed deploy. Needs a human.",
-      "board": "any column, error",
+      "board": {
+        "stage": "any",
+        "state": "failed"
+      },
       "holds": "A stage gave up and the marker says why, naming the blocking condition rather than offering a gesture that cannot work.",
       "who_may_act": [
         "user",
@@ -311,7 +387,10 @@
     {
       "name": "substrate-down",
       "doc": "A stage reported the thing it needs was unreachable. Not a failure — it spends no retry budget and is relaunched when the substrate returns.",
-      "board": "any column, outage",
+      "board": {
+        "stage": "any",
+        "state": "outage"
+      },
       "holds": "A stage reported the thing it needs was unreachable. Nothing about the work is wrong, so it spends no retry budget.",
       "who_may_act": [
         "daemon",
@@ -323,7 +402,11 @@
     {
       "name": "unknown",
       "doc": "The item's own state is unchanged, but the tracker that carries it failed to load, so nothing can be observed about it. It is the only state not derived from the item's markers — it says the board could not look, not that the item moved. Every item on that tracker enters and leaves it together, and it resolves by itself on the next fetch that reads the source.",
-      "board": "not rendered — the board shows a load-failure banner instead of the columns",
+      "board": {
+        "stage": "none",
+        "state": "none",
+        "note": "Not a placement at all. A card whose thread could not be read is marked Degraded and keeps its last-known stage and state, so the board shows an error banner rather than moving it anywhere."
+      },
       "holds": "Nothing about the ITEM is known. Its own state is unchanged; the tracker carrying it failed to load, so every item on that tracker enters and leaves this state together.",
       "who_may_act": [
         "daemon"
