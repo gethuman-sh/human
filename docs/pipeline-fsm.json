@@ -840,13 +840,14 @@
     {
       "name": "launch-refused-no-plan",
       "src": [
-        "implementing"
+        "implementing",
+        "stopped"
       ],
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:needs-planning]",
       "where": "board_transition.go refuseIfUnplanned",
-      "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one."
+      "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one. A relaunch attempted on a card that already failed meets the same gate, so the refusal is also a move a stopped card makes onto itself: the plan is still missing, and the card stays exactly as red as it was."
     },
     {
       "name": "source-unreadable",
@@ -992,6 +993,17 @@
       "moves_item": false,
       "where": "internal/claude/embed/human-ticket-reviewer-agent.md",
       "doc": "The gate's verdict inside a planning dispatch. It records why, and deliberately does not end the stage — a stop verdict posts planning's own terminal marker alongside it, and ready/reframed simply carry on. Both are why the verdict moves nothing here."
+    },
+    {
+      "name": "pr-fix-asks",
+      "src": [
+        "pr-fix"
+      ],
+      "dst": "awaiting-decision",
+      "actor": "daemon",
+      "marker": "[human:options]",
+      "where": "internal/daemon/board_transition.go escalatePRLoop — a fixer that ends needing input becomes a decision rather than a red card",
+      "doc": "The PR fixer hit something only a person can settle. Unlike every other stage-asks, the daemon raises this one rather than the agent: the fixer records its need on exit and the loop turns that into the block, naming the implementation stage so choosing rebuilds through the normal chain and re-adopts the still-open draft PR."
     }
   ],
   "ownership": {
