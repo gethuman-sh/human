@@ -824,14 +824,23 @@ func TestRootCmd_defaultShowsHelp(t *testing.T) {
 	assert.Contains(t, buf.String(), "human")
 }
 
-// --- instanceFromFlags tests ---
+// --- credential flag removal ---
 
-func TestInstanceFromFlags_noFlags(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{})
-	_ = cmd.Execute()
-	inst := cmdutil.InstanceFromFlags(cmd)
-	assert.Nil(t, inst)
+// Credentials resolve from .humanconfig and the <KIND>_<NAME>_TOKEN convention,
+// which needs no per-provider code. Re-adding a --<kind>-token/--<kind>-url pair
+// would restore a second, provider-specific path to building a tracker instance
+// — and a URL flag beside a credential is a redirection primitive that a
+// forwarded daemon request must not be able to set. Adding a tracker must not
+// mean adding flags, so this asserts the whole shape is gone rather than naming
+// the sixteen flags that used to be here.
+func TestRootCmd_hasNoPerTrackerCredentialFlags(t *testing.T) {
+	pf := newRootCmd().PersistentFlags()
+	for _, kind := range []string{"jira", "github", "gitlab", "linear", "azure", "shortcut", "clickup"} {
+		for _, suffix := range []string{"token", "url", "key", "user", "org"} {
+			name := kind + "-" + suffix
+			assert.Nil(t, pf.Lookup(name), "per-tracker credential flag --%s must not exist", name)
+		}
+	}
 }
 
 // --- tracker find tests ---
@@ -904,8 +913,6 @@ func TestIsLocalSubcommand(t *testing.T) {
 		// Space-separated value-taking flags must be skipped over (C-LOGIC-025).
 		{[]string{"--tracker", "work", "daemon", "stop"}, true},
 		{[]string{"--tracker=work", "daemon", "stop"}, true},
-		{[]string{"--github-token", "ghp_xx", "install"}, true},
-		{[]string{"--clickup-token", "X", "index"}, true},
 		{[]string{"--tracker", "work", "init"}, true},
 		// Tracker-forwarded commands should stay forwarded even with space flags.
 		{[]string{"--tracker", "work", "jira", "issue", "get", "KAN-1"}, false},

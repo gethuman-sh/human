@@ -63,8 +63,7 @@ func TestBuildAutoPRCreateCmd_run(t *testing.T) {
 				Forge:    forgegithub.New(srv.URL, "t"),
 			}}, nil
 		},
-		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },
-		AuditLogPath:      func() string { return "" },
+		AuditLogPath: func() string { return "" },
 	}
 
 	root := &cobra.Command{Use: "human"}

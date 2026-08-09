@@ -37,7 +37,6 @@ import (
 type Deps struct {
 	LoadInstances       func(dir string) ([]tracker.Instance, error)
 	LoadInstancesCtx    func(ctx context.Context, dir string) ([]tracker.Instance, error)
-	InstanceFromFlags   func(cmd *cobra.Command) *tracker.Instance
 	AuditLogPath        func() string
 	DestructiveLogPath  func() string
 	DestructiveNotifier func(ctx context.Context) tracker.DestructiveNotifier // returns nil if no notification configured; ctx carries per-request env
@@ -48,7 +47,6 @@ func DefaultDeps() Deps {
 	return Deps{
 		LoadInstances:       LoadAllInstances,
 		LoadInstancesCtx:    LoadAllInstancesCtx,
-		InstanceFromFlags:   InstanceFromFlags,
 		AuditLogPath:        AuditLogPath,
 		DestructiveLogPath:  DestructiveLogPath,
 		DestructiveNotifier: loadDestructiveNotifier,
@@ -63,17 +61,13 @@ type AutoResult struct {
 	Cleanup  func()
 }
 
-// ResolveProvider loads instances, applies CLI flag overrides, and resolves
-// the provider for the given kind using the tracker name from persistent flags.
+// ResolveProvider loads the configured instances and resolves the provider for
+// the given kind using the tracker name from persistent flags.
 func ResolveProvider(cmd *cobra.Command, kind string, deps Deps) (tracker.Provider, func(), error) {
 	ctx := cmdContext(cmd)
 	instances, err := loadInstancesCtx(ctx, deps)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	if inst := deps.InstanceFromFlags(cmd); inst != nil {
-		instances = append(instances, *inst)
 	}
 
 	trackerName, _ := cmd.Root().PersistentFlags().GetString("tracker")
@@ -116,10 +110,6 @@ func ResolveForge(cmd *cobra.Command, kind string, deps Deps) (forge.Forge, erro
 	instances, err := loadInstancesCtx(ctx, deps)
 	if err != nil {
 		return nil, err
-	}
-
-	if inst := deps.InstanceFromFlags(cmd); inst != nil {
-		instances = append(instances, *inst)
 	}
 
 	trackerName, _ := cmd.Root().PersistentFlags().GetString("tracker")
@@ -182,8 +172,8 @@ func OriginRepo(cmd *cobra.Command) (string, error) {
 	return repo, nil
 }
 
-// ResolveAutoProvider loads all instances, applies flag overrides, and resolves
-// the provider without requiring a fixed kind. It uses tracker.Resolve for
+// ResolveAutoProvider loads all instances and resolves the provider without
+// requiring a fixed kind. It uses tracker.Resolve for
 // auto-detection and falls back to FindTracker + ResolveByKind for ambiguous
 // get commands.
 //
@@ -210,10 +200,6 @@ func resolveFromURL(ctx context.Context, cmd *cobra.Command, rawURL string, deps
 	instances, err := loadInstancesCtx(ctx, deps)
 	if err != nil {
 		return nil, err
-	}
-
-	if inst := deps.InstanceFromFlags(cmd); inst != nil {
-		instances = append(instances, *inst)
 	}
 
 	if instance := matchInstanceByKindAndURL(instances, parsed.Kind, parsed.BaseURL); instance != nil {
@@ -246,10 +232,6 @@ func resolveFromKey(ctx context.Context, cmd *cobra.Command, keyHint string, all
 	instances, err := loadInstancesCtx(ctx, deps)
 	if err != nil {
 		return nil, err
-	}
-
-	if inst := deps.InstanceFromFlags(cmd); inst != nil {
-		instances = append(instances, *inst)
 	}
 
 	trackerName, _ := cmd.Root().PersistentFlags().GetString("tracker")
