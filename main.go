@@ -46,6 +46,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdproxy"
 	"github.com/gethuman-sh/human/cmd/cmdslack"
 	"github.com/gethuman-sh/human/cmd/cmdstate"
+	"github.com/gethuman-sh/human/cmd/cmdstats"
 	"github.com/gethuman-sh/human/cmd/cmdtelegram"
 	"github.com/gethuman-sh/human/cmd/cmdtracker"
 	"github.com/gethuman-sh/human/cmd/cmdunderway"
@@ -369,6 +370,7 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	rootCmd.AddCommand(usageCmd)
 
 	rootCmd.AddCommand(cmdaudit.BuildAuditCmd())
+	rootCmd.AddCommand(cmdstats.BuildStatsCmd())
 
 	indexDeps := cmdindex.DefaultIndexDeps()
 	indexCmd := cmdindex.BuildIndexCmd(indexDeps)
