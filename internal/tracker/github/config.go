@@ -1,8 +1,8 @@
 package github
 
 import (
+	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/config"
-	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -44,31 +44,19 @@ var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	Build:   buildInstance,
 }
 
-// buildInstance turns one githubs: entry into a tracker.Instance, splitting the
-// tracker and forge capabilities by the entry's role ([SC-1671]):
+// buildInstance turns one githubs: entry into a tracker instance.
 //
-//   - role: forge          → forge-only: a code-host client with a nil Provider,
-//     invisible to tracker resolution, counting and issue listing.
-//   - no role              → BOTH tracker and forge, preserving the single-entry
-//     configs that predate the split (backwards compatibility).
-//   - any other role       → tracker-only (pm, engineering, tracker): no forge.
-//     Declare a separate forges: entry to run GitHub as both deliberately.
+// A githubs: entry is an issue tracker, and only that. GitHub's pull-request
+// capability is configured as a forge, in the forges: section, loaded by
+// internal/forge/github into a type of its own — so this function has no role to
+// branch on and nothing to decide ([SC-3876]). The dual identity it used to
+// build is what made a GitHub entry two things at once, and every caller then
+// had to ask which.
 func buildInstance(cfg Config) (tracker.Instance, bool) {
 	if cfg.Token == "" {
 		return tracker.Instance{}, false
 	}
-	if cfg.Role == tracker.RoleForge {
-		return tracker.Instance{
-			Name:        cfg.Name,
-			Kind:        "github",
-			URL:         cfg.URL,
-			Description: cfg.Description,
-			Role:        tracker.RoleForge,
-			Safe:        cfg.Safe,
-			Forge:       forgegithub.New(cfg.URL, cfg.Token),
-		}, true
-	}
-	inst := tracker.Instance{
+	return tracker.Instance{
 		Name:        cfg.Name,
 		Kind:        "github",
 		URL:         cfg.URL,
@@ -78,19 +66,38 @@ func buildInstance(cfg Config) (tracker.Instance, bool) {
 		Projects:    cfg.Projects,
 		CreateIn:    cfg.CreateIn,
 		Provider:    New(cfg.URL, cfg.Token),
+	}, true
+}
+
+// rejectForgeRole fails a load whose githubs: entry still declares role: forge.
+//
+// That role meant "this entry is a code host, not a tracker", and the section no
+// longer has a way to say it — a forge is configured under forges:. Left to
+// build, the entry would become a tracker carrying an unknown role, which is the
+// worst of the three outcomes: it would join PM resolution and could quietly
+// become the board's tracker. Failing the load puts the message where the user
+// is already looking, since a load failure reaches the board's error banner
+// ([SC-3876]).
+func rejectForgeRole(instances []tracker.Instance, err error) ([]tracker.Instance, error) {
+	if err != nil {
+		return nil, err
 	}
-	// A roleless entry keeps GitHub's historical dual identity so existing
-	// single-entry configs open pull requests exactly as before.
-	if cfg.Role == "" {
-		inst.Forge = forgegithub.New(cfg.URL, cfg.Token)
+	for _, inst := range instances {
+		if inst.Role != "forge" {
+			continue
+		}
+		return nil, errors.WithDetails(
+			"githubs: entry "+inst.Name+" declares role: forge, but a githubs: entry is an issue tracker. "+
+				"A code host is configured in the forges: section — run `human config migrate` to move it.",
+			"instance", inst.Name, "section", "githubs")
 	}
-	return inst, true
+	return instances, nil
 }
 
 // LoadInstances reads config, applies env overrides, creates clients,
 // and returns ready-to-use tracker instances.
 func LoadInstances(dir string) ([]tracker.Instance, error) {
-	return config.LoadInstances(dir, instanceSpec)
+	return rejectForgeRole(config.LoadInstances(dir, instanceSpec))
 }
 
 // LoadInstancesWithLookup is like LoadInstances but uses a custom env lookup
@@ -98,7 +105,7 @@ func LoadInstances(dir string) ([]tracker.Instance, error) {
 func LoadInstancesWithLookup(dir string, lookup config.EnvLookup) ([]tracker.Instance, error) {
 	spec := instanceSpec
 	spec.Lookup = lookup
-	return config.LoadInstances(dir, spec)
+	return rejectForgeRole(config.LoadInstances(dir, spec))
 }
 
 // LoadInstancesWithResolver is like LoadInstances but uses a custom env lookup
@@ -107,5 +114,5 @@ func LoadInstancesWithResolver(dir string, lookup config.EnvLookup, resolver con
 	spec := instanceSpec
 	spec.Lookup = lookup
 	spec.SecretResolver = resolver
-	return config.LoadInstances(dir, spec)
+	return rejectForgeRole(config.LoadInstances(dir, spec))
 }
