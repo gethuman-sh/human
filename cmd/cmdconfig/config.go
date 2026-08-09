@@ -24,13 +24,16 @@ func BuildConfigCmd() *cobra.Command {
 		Long: `Write the forges: section a config needs now that a githubs: entry is an
 issue tracker and nothing more.
 
-A githubs: entry with no role used to be both a tracker and the code host that
-opened pull requests. It stays as the tracker and gains a forge entry beside it
-carrying the same token. An entry that declared role: forge was never a tracker
-and is moved into forges: outright.
+A githubs: entry that declared no role — or the retired role: forge — held
+credentials for the code host, so it moves into forges:. If GitHub is genuinely
+where your issues live, declare that with role: pm on a githubs: entry, which is
+what the board has always required of a GitHub tracker anyway.
 
-Vault references are copied as references, never resolved — a token written
-into a config file is a credential leak. Running it twice changes nothing.`,
+Only name, kind, url and token travel; projects, role and the rest are tracker
+concepts. Comments come with the entry, vault references stay references — a
+token written into a config file is a credential leak — and an entry whose
+credentials cannot be carried is left alone rather than deleted. Running it
+twice changes nothing.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return RunMigrate(cmd.OutOrStdout(), ".", dryRun)
 		},
@@ -52,21 +55,24 @@ func RunMigrate(out io.Writer, dir string, dryRun bool) error {
 		return err
 	}
 
-	verb := "Wrote"
+	verb, target := "Moved", "Updated"
 	if dryRun {
-		verb = "Would write"
-	}
-	for _, name := range result.Added {
-		if _, err := fmt.Fprintf(out, "%s forges: entry %q\n", verb, name); err != nil {
-			return err
-		}
+		verb, target = "Would move", "Target"
 	}
 	for _, name := range result.Moved {
-		if _, err := fmt.Fprintf(out, "%s githubs: entry %q (role: forge) into forges:\n",
-			map[bool]string{true: "Would move", false: "Moved"}[dryRun], name); err != nil {
+		if _, err := fmt.Fprintf(out, "%s githubs: entry %q into forges:\n", verb, name); err != nil {
 			return err
 		}
 	}
-	_, err = fmt.Fprintf(out, "%s: %s\n", map[bool]string{true: "Target", false: "Updated"}[dryRun], result.File)
+	// Named explicitly, because this is the one thing the migration cannot know:
+	// an entry that declared nothing looked exactly like credentials, and if it
+	// was in fact someone's issue tracker they need the line that says so.
+	if len(result.Moved) > 0 {
+		if _, err := fmt.Fprintln(out,
+			"If GitHub is where your issues live, add a githubs: entry with role: pm — a GitHub tracker has always needed it to reach the board."); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(out, "%s: %s\n", target, result.File)
 	return err
 }

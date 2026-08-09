@@ -15,7 +15,7 @@ func writeCfg(t *testing.T, dir, content string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte(content), 0o600))
 }
 
-func TestRunMigrate_reportsWhatItWrote(t *testing.T) {
+func TestRunMigrate_reportsWhatItMoved(t *testing.T) {
 	dir := t.TempDir()
 	writeCfg(t, dir, "githubs:\n  - name: human\n    token: gh://token\n")
 
@@ -23,8 +23,19 @@ func TestRunMigrate_reportsWhatItWrote(t *testing.T) {
 	require.NoError(t, RunMigrate(&buf, dir, false))
 
 	out := buf.String()
-	assert.Contains(t, out, `Wrote forges: entry "human"`)
+	assert.Contains(t, out, `Moved githubs: entry "human" into forges:`)
 	assert.Contains(t, out, "Updated:")
+}
+
+// The one thing the migration cannot know is whether that entry was in fact
+// someone's issue tracker, so it must say so rather than decide in silence.
+func TestRunMigrate_saysHowToKeepAGitHubTracker(t *testing.T) {
+	dir := t.TempDir()
+	writeCfg(t, dir, "githubs:\n  - name: human\n    token: gh://token\n")
+
+	var buf bytes.Buffer
+	require.NoError(t, RunMigrate(&buf, dir, false))
+	assert.Contains(t, buf.String(), "role: pm")
 }
 
 // A dry run says "would", not "did". Reporting a write that did not happen is
@@ -37,7 +48,7 @@ func TestRunMigrate_dryRunSaysWould(t *testing.T) {
 	require.NoError(t, RunMigrate(&buf, dir, true))
 
 	out := buf.String()
-	assert.Contains(t, out, "Would write")
+	assert.Contains(t, out, "Would move")
 	assert.NotContains(t, out, "Updated:")
 }
 

@@ -25,17 +25,27 @@ func (m ForgeMigration) Empty() bool { return len(m.Added) == 0 && len(m.Moved) 
 // MigrateForges writes the forges: section a config needs now that a githubs:
 // entry is an issue tracker and nothing more.
 //
-// Two shapes predate the separation and both are handled, because both stop
-// opening pull requests without it:
+// Two shapes predate the separation, and both MOVE — the githubs: entry becomes
+// a forges: entry and is removed:
 //
-//   - A githubs: entry with no role used to be tracker AND forge. It stays as
-//     the tracker and gains a forge entry beside it carrying the same token —
-//     the one identity becomes the two it was always doing the work of.
-//   - A githubs: entry with role: forge was never a tracker at all. It moves:
-//     the forge entry is written and the githubs: entry is removed, because
-//     leaving it behind would leave a tracker declaring a role that no longer
-//     exists — and loading it now fails loudly, which would make a completed
-//     migration look like a broken one.
+//   - role: forge was never a tracker at all. Leaving it behind would leave a
+//     tracker declaring a role that no longer exists, and loading it now fails,
+//     which would make a completed migration look like a broken one.
+//   - No role at all is the same case wearing no label. It is what a GitHub
+//     entry looked like when one entry meant both things, and what it held was
+//     credentials — the evidence is three bugs deep ([SC-1671], [SC-2132],
+//     [SC-3868]), every one of them an unattended pass asking such an entry for
+//     tickets and getting a rate-limited search across every issue the token
+//     could see. Copying it instead of moving it would leave that entry standing
+//     as a tracker and hand the board the same 403 banner the separation was
+//     meant to end.
+//
+// So a migration reports what it moved, and says how to declare a GitHub issue
+// tracker if that is genuinely what the entry was: role: pm, which the board has
+// required from a GitHub tracker all along. Guessing the other way is the
+// costlier mistake — a config that quietly resumes burning a search quota looks
+// like a tool bug, where a tracker that has to be re-declared is a line of YAML
+// and a message that names it.
 //
 // An entry whose token is a vault reference migrates as the reference, never as
 // a resolved secret: this writes a config file, and a resolved token in one is
@@ -122,15 +132,24 @@ func planEntry(entry *yaml.Node, existing map[string]bool) entryPlan {
 	role := scalarAt(entry, "role")
 	token := scalarAt(entry, "token")
 
-	// A tracker role (pm, engineering, tracker) never opened pull requests, so
-	// the entry has nothing to migrate and stays exactly as it is.
+	// A declared tracker role (pm, engineering, tracker) says the entry is an
+	// issue tracker, so it never opened pull requests and stays exactly as it is.
 	if role != "" && role != "forge" {
 		return entryPlan{name: name, keep: true}
 	}
-	plan := entryPlan{name: name, keep: role != "forge", moved: role == "forge"}
+	// An undeclared entry, or one declaring the retired forge role, is credentials
+	// for the code host: it moves.
+	plan := entryPlan{name: name}
 	if token != "" && !existing[name] {
-		plan.forge = forgeEntryNode(name, scalarAt(entry, "url"), token)
+		plan.forge = forgeEntryFrom(entry, name)
 	}
+	// Removal is only earned by a forge entry actually written — except for the
+	// retired role, where leaving the entry in place would fail the load and a
+	// successful-looking migration would hand back a broken config. Anything else
+	// stays: deleting configuration without replacing it is the one outcome a
+	// migration must never produce.
+	plan.moved = plan.forge != nil || role == "forge"
+	plan.keep = !plan.moved
 	return plan
 }
 
@@ -150,22 +169,29 @@ func existingForgeNames(mapping *yaml.Node) map[string]bool {
 	return names
 }
 
-// forgeEntryNode builds one forges: entry. The URL is carried only when the
-// source entry set one, so a migrated config does not acquire a hardcoded
-// api.github.com that the loader would have defaulted anyway.
-func forgeEntryNode(name, url, token string) *yaml.Node {
-	entry := &yaml.Node{Kind: yaml.MappingNode}
-	add := func(k, v string) {
-		entry.Content = append(entry.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k},
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v})
+// forgeEntryFrom turns a githubs: entry into a forges: entry by moving the node
+// itself and dropping the keys a forge has no use for.
+//
+// Moving rather than rebuilding is what keeps the comments: someone wrote
+// "# the token lives in 1Password" next to that line, and a migration that
+// silently eats their notes has damaged the file it was asked to repair. Only
+// name, kind, url and token survive — projects, role, create_in, safe and
+// description are issue-tracker concepts, and carrying them across would rebuild
+// the union in the config file.
+func forgeEntryFrom(entry *yaml.Node, name string) *yaml.Node {
+	keep := map[string]bool{"name": true, "kind": true, "url": true, "token": true}
+	var content []*yaml.Node
+	for i := 0; i+1 < len(entry.Content); i += 2 {
+		if keep[entry.Content[i].Value] {
+			content = append(content, entry.Content[i], entry.Content[i+1])
+		}
 	}
-	add("name", name)
-	if url != "" {
-		add("url", url)
+	entry.Content = content
+	head := fmt.Sprintf("Moved here from githubs: by `human config migrate` — %q opens pull requests.", name)
+	if entry.HeadComment != "" {
+		head += "\n" + entry.HeadComment
 	}
-	add("token", token)
-	entry.HeadComment = fmt.Sprintf("Written by `human config migrate` from the githubs: entry %q.", name)
+	entry.HeadComment = head
 	return entry
 }
 

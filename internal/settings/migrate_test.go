@@ -39,21 +39,54 @@ func readCfg(t *testing.T, path string) string {
 	return string(data)
 }
 
-// The common case: an entry that was tracker and forge at once becomes the two
-// things it was doing the work of. The tracker entry stays exactly where it was.
-func TestMigrateForges_addsAForgeBesideTheTracker(t *testing.T) {
+// The common case, and the one the whole separation is about: an undeclared
+// githubs: entry was credentials for the code host, so it MOVES. Copying it
+// would leave it standing as a tracker, and the board would go straight back to
+// asking GitHub for a rate-limited search across every issue the token can see —
+// the SC-3868 banner, restored by the migration meant to end it.
+func TestMigrateForges_movesAnUndeclaredEntry(t *testing.T) {
 	dir := t.TempDir()
 	path := writeCfg(t, dir, "githubs:\n  - name: human\n    token: gh://token\n")
 
 	result, err := MigrateForges(dir, false)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"human"}, result.Added)
-	assert.Empty(t, result.Moved)
+	assert.Equal(t, []string{"human"}, result.Moved)
 
 	out := readCfg(t, path)
 	assert.Contains(t, out, "forges:")
-	assert.Contains(t, out, "githubs:", "the tracker entry stays — it is a tracker")
+	assert.NotContains(t, sectionKeys(out), "githubs",
+		"an undeclared entry was never declared to hold tickets")
 	assert.Contains(t, out, "gh://token")
+}
+
+// Tracker-only fields do not travel: carrying projects or a role onto a forge
+// would rebuild the union in the config file itself.
+func TestMigrateForges_dropsTrackerFieldsOnTheWay(t *testing.T) {
+	dir := t.TempDir()
+	path := writeCfg(t, dir,
+		"githubs:\n  - name: human\n    token: ghp_x\n    projects:\n      - acme/web\n    create_in: acme/web\n    safe: true\n")
+
+	_, err := MigrateForges(dir, false)
+	require.NoError(t, err)
+
+	out := readCfg(t, path)
+	assert.Contains(t, out, "token: ghp_x")
+	assert.NotContains(t, out, "projects")
+	assert.NotContains(t, out, "create_in")
+	assert.NotContains(t, out, "safe")
+}
+
+// An entry with no token has nothing to move: a migration must never delete
+// configuration it cannot replace.
+func TestMigrateForges_keepsAnEntryItCannotReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := writeCfg(t, dir, "githubs:\n  - name: human\n")
+
+	result, err := MigrateForges(dir, false)
+	require.NoError(t, err)
+	assert.True(t, result.Empty())
+	assert.Contains(t, sectionKeys(readCfg(t, path)), "githubs")
 }
 
 // A vault reference migrates as a reference. Resolving it would write a live
@@ -146,17 +179,6 @@ shortcuts:
 	assert.Contains(t, out, "# the token lives in 1Password")
 	assert.Contains(t, out, "role: pm")
 	assert.Contains(t, out, "forges:")
-}
-
-// A token-less entry has nothing to carry over, so no forge entry is written
-// for it — a forge with no credential could not open a pull request anyway.
-func TestMigrateForges_skipsATokenlessEntry(t *testing.T) {
-	dir := t.TempDir()
-	writeCfg(t, dir, "githubs:\n  - name: human\n")
-
-	result, err := MigrateForges(dir, false)
-	require.NoError(t, err)
-	assert.True(t, result.Empty())
 }
 
 func TestMigrateForges_noConfigFile(t *testing.T) {
