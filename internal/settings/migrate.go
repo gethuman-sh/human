@@ -143,12 +143,20 @@ func planEntry(entry *yaml.Node, existing map[string]bool) entryPlan {
 	if token != "" && !existing[name] {
 		plan.forge = forgeEntryFrom(entry, name)
 	}
-	// Removal is only earned by a forge entry actually written — except for the
-	// retired role, where leaving the entry in place would fail the load and a
-	// successful-looking migration would hand back a broken config. Anything else
-	// stays: deleting configuration without replacing it is the one outcome a
-	// migration must never produce.
-	plan.moved = plan.forge != nil || role == "forge"
+	// Removal is earned three ways, and the third is the one this missed at
+	// first. A forge entry written here obviously replaces it. The retired
+	// role: forge must go whether or not anything replaced it, since leaving it
+	// fails the load. And an undeclared entry whose name is ALREADY in forges:
+	// was carried across by an earlier run — the replacement is right there in
+	// the file, so keeping the tracker only leaves the board searching GitHub
+	// for issues again ([SC-3868]). That state is not hypothetical: the first
+	// version of this migration copied instead of moving, so every config
+	// migrated before [SC-3884] looks exactly like it.
+	//
+	// Everything else stays. Deleting configuration with no replacement in sight
+	// is the one outcome a migration must never produce.
+	alreadyCarried := role == "" && token != "" && existing[name]
+	plan.moved = plan.forge != nil || role == "forge" || alreadyCarried
 	plan.keep = !plan.moved
 	return plan
 }
