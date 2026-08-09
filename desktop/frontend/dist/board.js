@@ -3087,7 +3087,75 @@ async function createStartProject(tpl) {
 // App.Instances() binding, which runs the monitor in-process (not via the
 // daemon). The view only polls while it is the active view — the discovery scan
 // is cheap but pointless for a hidden panel, mirroring the ideation poll.
-let agentsData = { agents: [] };
+// The Instances() payload comes through one door. Every field is coerced by
+// runtime TYPE rather than passed through with `?? []`, so a field whose type
+// changed degrades exactly like a missing one instead of throwing five levels
+// down in a row renderer — the pane can then only ever paint empty, never blank
+// (SC-3603, the SC-3508 remedy applied here).
+function isObj(v) {
+    return typeof v === "object" && v !== null;
+}
+function num(v) {
+    return typeof v === "number" && isFinite(v) ? v : 0;
+}
+function str(v) {
+    return typeof v === "string" ? v : "";
+}
+function bool(v) {
+    return v === true;
+}
+// rowList coerces an arbitrary payload field into a list of normalized rows:
+// anything other than an array becomes empty, and each element is normalized
+// individually so one bad row cannot cost its neighbours.
+function rowList(v, normalizeRow) {
+    if (!Array.isArray(v))
+        return [];
+    return v.map(normalizeRow);
+}
+function modelUsageRow(v) {
+    const o = isObj(v) ? v : {};
+    return { name: str(o.name), inputTokens: num(o.inputTokens), outputTokens: num(o.outputTokens) };
+}
+function subagentRow(v) {
+    const o = isObj(v) ? v : {};
+    return {
+        description: str(o.description),
+        type: str(o.type),
+        done: bool(o.done),
+        startedAtUnix: num(o.startedAtUnix),
+        durationMs: num(o.durationMs),
+    };
+}
+function agentRow(v) {
+    const o = isObj(v) ? v : {};
+    return {
+        label: str(o.label),
+        source: str(o.source),
+        status: str(o.status),
+        hasActivity: bool(o.hasActivity),
+        slug: str(o.slug),
+        pid: num(o.pid),
+        containerID: str(o.containerID),
+        cwd: str(o.cwd),
+        memory: str(o.memory),
+        currentTool: str(o.currentTool),
+        blockedTool: str(o.blockedTool),
+        errorType: str(o.errorType),
+        startedAtUnix: num(o.startedAtUnix),
+        daemonConnected: bool(o.daemonConnected),
+        proxyConfigured: bool(o.proxyConfigured),
+        models: rowList(o.models, modelUsageRow),
+        tasksPending: num(o.tasksPending),
+        tasksInProgress: num(o.tasksInProgress),
+        tasksDone: num(o.tasksDone),
+        subagents: rowList(o.subagents, subagentRow),
+    };
+}
+function instancesFromPayload(raw) {
+    const o = isObj(raw) ? raw : {};
+    return { agents: rowList(o.agents, agentRow), error: str(o.error) };
+}
+let agentsData = instancesFromPayload({});
 let agentsTimer = null;
 const AGENTS_POLL_MS = 2000;
 function stopAgentsPoll() {
@@ -3103,10 +3171,10 @@ function startAgentsPoll() {
 }
 async function pollAgents() {
     try {
-        agentsData = await go().Instances();
+        agentsData = instancesFromPayload(await go().Instances());
     }
     catch (err) {
-        agentsData = { agents: [], error: errMessage(err) };
+        agentsData = instancesFromPayload({ agents: [], error: errMessage(err) });
     }
     renderAgents();
 }
@@ -3226,10 +3294,22 @@ function renderAgentRow(a) {
     ${subagentLines(a.subagents)}
   </div>`;
 }
+// renderAgents resolves the host and hands drawing to paintAgents(), routing any
+// throw to paintAgentsFault() instead of leaving #agents on whatever it last
+// painted — which, since the section ships empty, is nothing at all (SC-3603).
+// Normalization removes the payload faults we know about; this is the backstop.
 function renderAgents() {
     const host = document.getElementById("agents");
     if (!host)
         return;
+    try {
+        paintAgents(host);
+    }
+    catch (err) {
+        paintAgentsFault(host, err);
+    }
+}
+function paintAgents(host) {
     if (agentsData.error) {
         host.innerHTML = `<div class="agents-header">Running agents</div><div class="banner">${escapeHtml(agentsData.error)}</div>`;
         return;
@@ -3240,6 +3320,25 @@ function renderAgents() {
     }
     host.innerHTML =
         `<div class="agents-header">Running agents</div>` + agentsData.agents.map(renderAgentRow).join("");
+}
+// paintAgentsFault paints the same banner shape a fetch error uses, naming the
+// remedy directly (a stale build, not a data problem the user can fix). If the
+// banner render itself throws — a host that rejects every write — fall back to
+// plain text rather than leaving the pane exactly as blank as before.
+function paintAgentsFault(host, err) {
+    const msg = errMessage(err);
+    const banner = `The board app is out of date relative to the daemon — rebuild it (make desktop). Details: ${escapeHtml(msg)}`;
+    try {
+        host.innerHTML = `<div class="agents-header">Running agents</div><div class="banner">${banner}</div>`;
+    }
+    catch {
+        try {
+            host.textContent = `The board app is out of date relative to the daemon — rebuild it (make desktop). Details: ${msg}`;
+        }
+        catch {
+            // nothing left to try: the host rejects every write we know how to make
+        }
+    }
 }
 // --- Features view -----------------------------------------------------
 //
