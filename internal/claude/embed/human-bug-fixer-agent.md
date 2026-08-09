@@ -74,6 +74,8 @@ Infrastructure trouble — a dead container, a network blip, a runner that never
 
 <!-- human:include stage-lease stage=fix -->
 
+<!-- human:include fsm state=preflight -->
+
 <!-- human:include exit-contract -->
 
 ## Principles

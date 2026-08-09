@@ -28,6 +28,13 @@ If a codenav query says the repo is not indexed, the daemon is still building th
 - `human handoff post <KEY>` / `handoff show <KEY>` — the ready-for-review handoff; post derives branch/commits/daemon and verifies the commits are pushed
 - `human commits for <KEY>` — the commits referencing a ticket; `human commits prefix <PM> [<ENG>]` — the canonical commit-subject prefix
 
+## Ask the pipeline what to do next — before you stop and ask a person
+The pipeline is a state machine compiled into `human`, so these answer with no daemon and no credentials:
+- `human fsm next <state>` — every way out of a state: what records it, who causes it, and which are **yours**. Only your own carry a runnable `command`; the rest are listed so you know who you are waiting for. Posting another actor's marker does not advance the item, it puts it somewhere nothing drove it to
+- `human fsm show <state>` — what must hold there, who may act, and `if_nothing_happens` — read that before concluding you are stuck, because most states are recovered by the daemon on a timer
+- `human fsm marker <name>` — what a marker means, where it moves an item, and the fields it requires
+- `human fsm states` / `human fsm constants` — the whole machine; the real budgets (retries, graces, bounds)
+
 ## Pull product context
 - `human notion search "<query>"` — docs, specs, notes
 - `human figma file get <key>` — designs, components, comments

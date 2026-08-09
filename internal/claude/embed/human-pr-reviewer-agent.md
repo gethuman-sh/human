@@ -102,4 +102,6 @@ Do NOT use `AskUserQuestion` — you cannot interact with a human. Humans review
 
 <!-- human:include stage-lease stage=pr-review -->
 
+<!-- human:include fsm state=pr-review -->
+
 <!-- human:include exit-contract -->

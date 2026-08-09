@@ -187,4 +187,6 @@ Do NOT use `AskUserQuestion` — you cannot interact with the user. Either retur
 
 <!-- human:include stage-lease stage=planning -->
 
+<!-- human:include fsm state=planning -->
+
 <!-- human:include exit-contract -->

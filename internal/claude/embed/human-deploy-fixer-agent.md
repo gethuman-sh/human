@@ -76,4 +76,6 @@ Do NOT use `AskUserQuestion` — you cannot interact with a human.
 
 <!-- human:include stage-lease stage=deploy-fix -->
 
+<!-- human:include fsm state=deploy-fixing -->
+
 <!-- human:include exit-contract -->

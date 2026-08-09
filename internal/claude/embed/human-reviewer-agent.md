@@ -195,4 +195,6 @@ Use `unreviewable` only when the code itself could not be obtained (branch unrea
 
 <!-- human:include stage-lease stage=review -->
 
+<!-- human:include fsm state=in-review -->
+
 <!-- human:include exit-contract -->

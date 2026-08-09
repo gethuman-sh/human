@@ -54,6 +54,21 @@ var outcomeNotMechanismFragment []byte
 //go:embed embed/shared/dependents.md
 var dependentsFragment []byte
 
+// The machine an agent runs inside was written down and invisible to it: no
+// prompt mentioned pipeline-fsm.json, so every agent decided what to post, and
+// whether it was stuck, from its own prompt alone. This fragment is the half of
+// `human fsm` that changes behaviour — the commands only make asking possible.
+//
+// The state is a REQUIRED argument for the reason stage-lease's is: the answer
+// an agent needs is about the state it is actually in, and a fragment carrying
+// an example state would be copied. It names the state an agent normally
+// occupies rather than a stage, because stages are a coarser vocabulary that
+// cannot answer "what may I post next" — and note it is NOT the lease scope,
+// which is a third vocabulary again (`fix`, `pr-fix`, `triage`).
+//
+//go:embed embed/shared/fsm.md
+var fsmFragment []byte
+
 // sharedFragments are prompt blocks that must read identically in every skill
 // and agent that carries them. Keeping one copy here and substituting it at
 // install time is what stops twenty prompts from drifting apart, which is how
@@ -65,6 +80,7 @@ var sharedFragments = map[string][]byte{
 	"build-gate":            buildGateFragment,
 	"outcome-not-mechanism": outcomeNotMechanismFragment,
 	"dependents":            dependentsFragment,
+	"fsm":                   fsmFragment,
 }
 
 // fragmentArgs names the arguments each shared fragment requires. A fragment
@@ -75,6 +91,7 @@ var sharedFragments = map[string][]byte{
 // choose for itself.
 var fragmentArgs = map[string][]string{
 	"stage-lease": {"stage"},
+	"fsm":         {"state"},
 }
 
 // includePattern matches a whole-line include directive, with optional
