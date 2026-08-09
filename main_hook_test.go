@@ -60,12 +60,42 @@ func TestRunHook_CanonicalKey_ForwardsSuccessfully(t *testing.T) {
 	err := runHook(strings.NewReader(payload), &stderr, deliver)
 
 	require.NoError(t, err)
-	require.Len(t, captured, 11)
+	require.Len(t, captured, 12)
 	assert.Equal(t, "PostToolUse", captured[1])
 	assert.Equal(t, "s2", captured[2])
 	assert.Equal(t, "/w", captured[3])
 	assert.Equal(t, "Bash", captured[5])
 	assert.Empty(t, stderr.String(), "a successful delivery must stay quiet")
+}
+
+// The run id rides back on every event so the daemon can recognise its own work
+// (SC-4082). It is appended LAST: the daemon parses positionally, so a container
+// running an older CLI must keep parsing cleanly, and a new field can only go on
+// the end.
+func TestRunHook_ForwardsTheRunID(t *testing.T) {
+	t.Setenv("HUMAN_RUN_ID", "run-abc123")
+	payload := `{"hook_event_name":"Stop","session_id":"s3","cwd":"/w"}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	require.NoError(t, runHook(strings.NewReader(payload), &bytes.Buffer{}, deliver))
+	require.Len(t, captured, 12)
+	assert.Equal(t, "run-abc123", captured[11])
+}
+
+// Outside a daemon-launched container there is no run id, and the event must
+// still be delivered — the daemon has an explicit no-id path for exactly this.
+func TestRunHook_NoRunIDStillForwards(t *testing.T) {
+	t.Setenv("HUMAN_RUN_ID", "")
+	payload := `{"hook_event_name":"Stop","session_id":"s4","cwd":"/w"}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	require.NoError(t, runHook(strings.NewReader(payload), &bytes.Buffer{}, deliver))
+	require.Len(t, captured, 12)
+	assert.Empty(t, captured[11])
 }
 
 // A PreToolUse payload carrying a Bash command must forward the command, not
