@@ -425,3 +425,74 @@ func TestUnifyTrackers_leavesForgesAlone(t *testing.T) {
 	assert.Contains(t, sectionKeys(out), "forges")
 	require.Len(t, parse(t, out).Forges(), 1)
 }
+
+// --- The document defends its own invariants (SC-3889) ---
+
+// A change that breaks the configuration does not reach the disk. Every broken
+// config this codebase produced was written by this tool, so the write is where
+// it has to be caught.
+func TestWrite_refusesAFaultThisChangeIntroduced(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".humanconfig.yaml")
+	sound := "shortcuts:\n  - name: board\n    role: pm\n    token: t\nforges:\n  - name: prs\n    token: t\n"
+	require.NoError(t, os.WriteFile(path, []byte(sound), 0o600))
+
+	doc, err := Load(dir)
+	require.NoError(t, err)
+	// The retired role, introduced by this edit.
+	require.NoError(t, doc.AddTracker(Tracker{Kind: "github", Name: "prs", Role: RetiredForgeRole, Token: "t"}))
+
+	err = doc.Write()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to write")
+
+	after, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Equal(t, sound, string(after), "the file is untouched, not half written")
+}
+
+// A fault the file already had is not this edit's doing. Refusing here would
+// mean nobody can fix their Slack channel while their GitHub entry is half
+// migrated — every rule becomes a wall.
+func TestWrite_allowsAnUnrelatedEditToAnAlreadyBrokenConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".humanconfig.yaml")
+	broken := "githubs:\n  - name: human\n    token: t\nforges:\n  - name: human\n    token: t\n"
+	require.NoError(t, os.WriteFile(path, []byte(broken), 0o600))
+
+	doc, err := Load(dir)
+	require.NoError(t, err)
+	require.True(t, Errors(doc.Validate()), "precondition: this config is already broken")
+
+	require.NoError(t, doc.AddTracker(Tracker{Kind: "shortcut", Name: "board", Role: "pm", Token: "t"}))
+	require.NoError(t, doc.Write(), "an unrelated change is not held hostage to a fault it did not cause")
+
+	reread, err := Load(dir)
+	require.NoError(t, err)
+	assert.Len(t, reread.Trackers(), 2, "the leftover GitHub tracker and the one just added")
+}
+
+// The escape hatch is explicit, because repairing a file means passing through
+// states that are still wrong.
+func TestWriteAllowingErrors_persistsAnyway(t *testing.T) {
+	dir := t.TempDir()
+	doc, err := Load(dir)
+	require.NoError(t, err)
+	require.NoError(t, doc.AddTracker(Tracker{Kind: "github", Name: "prs", Role: RetiredForgeRole, Token: "t"}))
+
+	require.Error(t, doc.Write())
+	require.NoError(t, doc.WriteAllowingErrors())
+	assert.FileExists(t, filepath.Join(dir, ".humanconfig.yaml"))
+}
+
+// Warnings are the author's business. A config that works and costs more than
+// they meant still saves.
+func TestWrite_warningsDoNotBlock(t *testing.T) {
+	dir := t.TempDir()
+	doc, err := Load(dir)
+	require.NoError(t, err)
+	// No forge, and an unscoped GitHub tracker: two warnings, no errors.
+	require.NoError(t, doc.AddTracker(Tracker{Kind: "github", Name: "work", Role: "pm", Token: "t"}))
+
+	require.NoError(t, doc.Write())
+}

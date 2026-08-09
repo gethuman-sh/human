@@ -1,68 +1,43 @@
 package cmdutil
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
-// AutoSaveTrackerConfig ensures the parsed tracker URL is represented in
-// .humanconfig.yaml. If the config file doesn't exist, it creates one.
-// If it exists, it appends the tracker entry if not already present.
+// AutoSaveTrackerConfig ensures the tracker behind a pasted URL is represented
+// in .humanconfig, adding it when it is not.
+//
+// It goes through the config document, which is the only thing that should be
+// editing this file. It used to append the entry by string surgery — finding
+// the section header in the raw text and splicing YAML after it — which wrote
+// the right thing often enough to look correct: a "jiras:" inside a comment was
+// a valid splice point, an entry could land under the wrong section, and the
+// shape written was always the per-vendor one whatever the file used
+// ([SC-3889]).
 func AutoSaveTrackerConfig(parsed *tracker.ParsedURL, configDir string) error {
-	section, ok := tracker.KindToSection[parsed.Kind]
-	if !ok {
-		return errors.WithDetails("unknown tracker kind", "kind", parsed.Kind)
+	doc, err := config.Load(configDir)
+	if err != nil {
+		return err
 	}
-
-	configFile := filepath.Join(configDir, ".humanconfig.yaml")
-
-	// Check if the URL is already configured.
-	var existing []struct {
-		URL string `mapstructure:"url"`
-	}
-	_ = config.UnmarshalSection(configDir, section, &existing)
-	for _, e := range existing {
-		if urlsCompatible(e.URL, parsed.BaseURL) {
+	for _, existing := range doc.Trackers() {
+		if existing.Kind == parsed.Kind && urlsCompatible(existing.URL, parsed.BaseURL) {
 			return nil // Already configured.
 		}
 	}
 
-	name := instanceNameFromURL(parsed)
-	entry := buildYAMLEntry(parsed, name)
-
-	// If file doesn't exist, create it with the section.
-	if _, err := os.Stat(configFile); os.IsNotExist(err) {
-		content := section + ":\n" + entry
-		return os.WriteFile(configFile, []byte(content), 0o600)
+	entry := config.Tracker{
+		Kind: parsed.Kind,
+		Name: instanceNameFromURL(parsed),
+		URL:  parsed.BaseURL,
+		Org:  parsed.Org,
 	}
-
-	// File exists — append the entry to the appropriate section.
-	data, err := os.ReadFile(configFile) // #nosec G304 -- configFile is built from configDir parameter
-	if err != nil {
-		return errors.WrapWithDetails(err, "reading config file")
+	if err := doc.AddTracker(entry); err != nil {
+		return err
 	}
-
-	content := string(data)
-
-	// Check if the section already exists in the file.
-	sectionHeader := section + ":"
-	if strings.Contains(content, sectionHeader) {
-		// Append entry after the section header.
-		content = strings.Replace(content, sectionHeader, sectionHeader+"\n"+entry, 1)
-	} else {
-		// Add new section at the end.
-		if !strings.HasSuffix(content, "\n") {
-			content += "\n"
-		}
-		content += "\n" + sectionHeader + "\n" + entry
-	}
-
-	return os.WriteFile(configFile, []byte(content), 0o644) // #nosec G306 -- .humanconfig.yaml is a project config file, not secrets
+	return doc.Write()
 }
 
 // instanceNameFromURL derives a human-readable instance name from the parsed URL.
@@ -97,17 +72,4 @@ func instanceNameFromURL(parsed *tracker.ParsedURL) string {
 	}
 
 	return host
-}
-
-// buildYAMLEntry creates a YAML snippet for a tracker instance.
-func buildYAMLEntry(parsed *tracker.ParsedURL, name string) string {
-	var b strings.Builder
-	b.WriteString("  - name: " + name + "\n")
-	b.WriteString("    url: " + parsed.BaseURL + "\n")
-
-	if parsed.Org != "" {
-		b.WriteString("    org: " + parsed.Org + "\n")
-	}
-
-	return b.String()
 }

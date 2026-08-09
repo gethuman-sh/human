@@ -37,7 +37,7 @@ section and `tracker.Instance.Kind`), and a **stage** is what the board is runni
 (planning, implementation, review, deploy). Maturity says what is attached to the
 ticket; stage says what is working on it; kind says where it lives.
 
-**Topology rule:** whether planning ALSO creates a separate engineering ticket depends on the tracker config. Single-tracker is the default: unless a tracker carries an **explicit** `role: engineering` in `.humanconfig`, there is no second ticket — the plan comment on the ticket is the plan, and commits reference the one key. Split topology is opt-in: give a tracker an explicit `role: engineering` and planning then creates an engineering ticket on it whose description is the plan, with traceability running PM ticket → engineering ticket → git commits (reference the PM ticket in the engineering ticket, and both in commit messages). Role is never inferred from the tracker kind for the engineering side — a bare `linears:` entry with no `role:` stays single-tracker.
+**Topology rule:** whether planning ALSO creates a separate engineering ticket depends on the tracker config. Single-tracker is the default: unless a tracker carries an **explicit** `role: engineering` in `.humanconfig`, there is no second ticket — the plan comment on the ticket is the plan, and commits reference the one key. Split topology is opt-in: give a tracker an explicit `role: engineering` and planning then creates an engineering ticket on it whose description is the plan, with traceability running PM ticket → engineering ticket → git commits (reference the PM ticket in the engineering ticket, and both in commit messages). Role is never inferred from the tracker kind for the engineering side — a Linear entry with no `role:` stays single-tracker.
 
 # Board rendering
 
@@ -46,8 +46,9 @@ The desktop workflow board renders the issues of the **PM-role tracker only**. A
 So: **if your PM tracker is anything other than Shortcut, it needs an explicit `role: pm`** to appear on the board:
 
 ```yaml
-linears:
-  - name: work
+trackers:
+  - kind: linear
+    name: work
     role: pm            # required for non-Shortcut PM trackers to render on the board
 ```
 
@@ -119,19 +120,23 @@ vault:
   provider: 1password
   account: my-account    # 1Password account name (top-left in app sidebar)
 
-githubs:
-  - name: personal
-    token: 1pw://Development/GitHub PAT/token
-
-linears:
-  - name: work
+trackers:
+  - kind: linear
+    name: work
     token: 1pw://Development/Linear Token/token
 
-jiras:
-  - name: amazingcto
+  - kind: jira
+    name: amazingcto
     url: https://amazingcto.atlassian.net
     user: alice@example.com
     key: 1pw://Development/Jira API Key/token
+
+# The GitHub PAT that opens pull requests is a FORGE, not a tracker. A
+# githubs: (or trackers: kind: github) entry is an issue tracker and is
+# listed for issues; put it there only if your issues live on GitHub.
+forges:
+  - name: personal
+    token: 1pw://Development/GitHub PAT/token
 ```
 
 Secrets are resolved through the 1Password CLI (`op`) on every platform and every build. Install `op` and sign in (`op signin`); on WSL the Windows `op.exe` is used across the boundary. An in-process SDK used to sit in front of the CLI in CGO builds; it reached the same desktop app by a second route, so it was a second implementation of the working path rather than a capability of its own, and it is gone (SC-2183).
@@ -141,7 +146,7 @@ A resolved secret is served from the daemon's memory for `cache_ttl` (default 15
 GitHub tokens can instead come straight from the GitHub CLI's keyring with a `gh://` reference — no PAT to copy anywhere:
 
 ```yaml
-githubs:
+forges:
   - name: personal
     token: gh://token          # gh auth token
   # token: gh://ghe.corp.com/token   # specific host (GitHub Enterprise)
@@ -162,7 +167,7 @@ export AZUREDEVOPS_GETHUMAN_TOKEN="$(op.exe item get 'Azure Token' --fields labe
 export TELEGRAM_BOT_TOKEN="$(op.exe item get 'Telegram Token' --fields label=notesPlain)"
 ```
 
-The env var naming convention is `<TRACKER>_<CONFIG_NAME>_TOKEN` (or `_KEY` for Jira), matching the uppercase `name:` field in `.humanconfig`.
+The env var naming convention is `<KIND>_<CONFIG_NAME>_TOKEN` (or `_KEY` for Jira) — the uppercased tracker kind and the entry's `name:`, which is why the unified `trackers:` shape changed nothing about token names. A `forges:` entry uses `FORGE_<NAME>_TOKEN`.
 
 # Project Structure
 
@@ -175,11 +180,11 @@ Packages under `internal/` are grouped by the user-facing feature they provide. 
 - `internal/messaging/` — Chat integrations (`internal/messaging/slack`, `internal/messaging/telegram`)
 - `internal/proxy/`, `internal/devcontainer/` — top-level features in their own right
 - `internal/codenav/` — local code-navigation engine (SQLite index; go-to-def, refs, call graph, search), surfaced as the local `human codenav` command; vendored from the standalone octi project, so prefer minimal changes for re-sync
-- `internal/config/` — Reads `.humanconfig` in either shape — the unified `trackers:` list where each entry names its `kind:`, and the older per-vendor sections (`githubs:`, `jiras:`, …) which are still read and always will be. A new config is written unified; `human config migrate --group` converts an existing one on request. Holds the file as one object: `config.Document` parses the whole file, exposes typed `Trackers()`/`Forges()`, mutates through intention-revealing methods, validates itself (including rules spanning two sections), and writes back preserving comments and unknown sections. **A new configuration rule belongs on the Document** (`internal/config/validate.go`), never hand-hung on a provider's loader or buried in a command — that is what left the rules with two copies that disagreed ([SC-3889]). `human config check` surfaces them
+- `internal/config/` — Reads `.humanconfig` in either shape — the unified `trackers:` list where each entry names its `kind:`, and the older per-vendor sections (`githubs:`, `jiras:`, …) which are still read and always will be. A new config is written unified; `human config migrate --group` converts an existing one on request. Holds the file as one object: `config.Document` parses the whole file, exposes typed `Trackers()`/`Forges()`, mutates through intention-revealing methods, validates itself (including rules spanning two sections), and writes back preserving comments and unknown sections. **A new configuration rule belongs on the Document** (`internal/config/validate.go`), never hand-hung on a provider's loader or buried in a command — and **nothing else may read or write `.humanconfig` directly**: no second yaml parse, no string splicing, no private node plumbing. Those were the three copies that drifted — that is what left the rules with two copies that disagreed ([SC-3889]). `human config check` surfaces them
 - `internal/vault/` — Pluggable vault secret resolution (1Password, extensible to Vault/AWS/etc.)
 - `errors/` — Custom error handling (WithDetails)
 
-internal/tracker/ is an abstraction layer for issue trackers. **ALWAYS** define new tracker operations as interfaces in `internal/tracker/`. **NEVER** add provider-specific types or logic to `internal/tracker/`. Concrete tracker implementations (Jira, Linear, GitHub, …) go under `internal/tracker/<provider>/` and **MUST** implement the `internal/tracker/` interfaces. Code-host (pull request) operations are a separate abstraction in `internal/forge/`, with implementations under `internal/forge/<provider>/`. A backend that is both a tracker and a forge (e.g. GitHub) is split into two packages — `internal/tracker/github` and `internal/forge/github` — rather than one package implementing both, and the split runs all the way down: each has its own config section (`githubs:` and `forges:`), its own loader, and its own type (`tracker.Instance` and `forge.Instance`). **NEVER** reunite them by giving one type both capabilities or by asking at a call site which kind a value is — an `IsTracker()`-style predicate is the signature of exactly that mistake, and it cost SC-1671, SC-2132 and SC-3868 before the domains were separated in SC-3876.
+internal/tracker/ is an abstraction layer for issue trackers. **ALWAYS** define new tracker operations as interfaces in `internal/tracker/`. **NEVER** add provider-specific types or logic to `internal/tracker/`. Concrete tracker implementations (Jira, Linear, GitHub, …) go under `internal/tracker/<provider>/` and **MUST** implement the `internal/tracker/` interfaces. Code-host (pull request) operations are a separate abstraction in `internal/forge/`, with implementations under `internal/forge/<provider>/`. A backend that is both a tracker and a forge (e.g. GitHub) is split into two packages — `internal/tracker/github` and `internal/forge/github` — rather than one package implementing both, and the split runs all the way down: each has its own config section (a tracker entry — `trackers:` with `kind: github`, or the legacy `githubs:` — versus `forges:`), its own loader, and its own type (`tracker.Instance` and `forge.Instance`). **NEVER** reunite them by giving one type both capabilities or by asking at a call site which kind a value is — an `IsTracker()`-style predicate is the signature of exactly that mistake, and it cost SC-1671, SC-2132 and SC-3868 before the domains were separated in SC-3876.
 
 # Tools
 
