@@ -11,6 +11,23 @@ githubs:
     description: "Open-source side projects and personal repos"
     # url: https://api.github.com  # optional, this is the default
     # token comes from env: export GITHUB_PERSONAL_TOKEN=ghp_xxx
+    # role: pm
+    # GitHub is the one backend that can be an issue tracker AND a pull-request
+    # forge, so say which you mean: pm or engineering for a tracker, forge for
+    # pull requests only. Left unset it is BOTH — and because that is a guess
+    # rather than a statement, unattended passes (board listing, reconcile, the
+    # record sync) treat it as forge credentials and never ask it for tickets.
+    # `human tracker topology` prints what your entry actually resolved to.
+
+# Code hosts used only to open pull requests. A forges: entry contributes no
+# tracker at all: it never counts toward tracker resolution and is never asked
+# for issues, so a GitHub token kept here purely for `human pr create` cannot be
+# mistaken for a backlog.
+forges:
+  - name: prs
+    # kind: github                 # optional, this is the default
+    # url: https://api.github.com  # optional, this is the default
+    # token comes from env: export FORGE_PRS_TOKEN=ghp_xxx
 
 gitlabs:
   - name: work
