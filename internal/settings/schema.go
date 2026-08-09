@@ -113,6 +113,39 @@ func tokenField() []Field {
 	return []Field{{Key: "token", Label: "API token", Type: TypeSecret, Description: "API token — literal or 1pw:// vault reference"}}
 }
 
+// githubTrackerFields is trackerFields with forge added to the role choices.
+//
+// GitHub is the only backend that can be a code forge as well as a tracker, so
+// it is the only one whose role may be forge — offering the choice on Jira would
+// describe something that cannot exist. Without it the settings screen could not
+// express the declaration that resolves GitHub's ambiguity at all: an entry left
+// roleless is quietly both, and the daemon's unattended passes then read the
+// silence as forge credentials ([SC-3868]).
+func githubTrackerFields() []Field {
+	fields := trackerFields(tokenField())
+	for i := range fields {
+		if fields[i].Key != "role" {
+			continue
+		}
+		fields[i].Enum = []string{"pm", "engineering", "forge"}
+		fields[i].Description = "Topology role: pm or engineering for a tracker, or forge for an entry that only opens pull requests. " +
+			"Leave it empty and this entry is BOTH a tracker and the forge — which is why unattended listings never ask it for tickets."
+	}
+	return fields
+}
+
+// forgeFields describes one forges: entry — a code host used only to open pull
+// requests. No projects, no role, no safe mode: a forge holds no issues, which
+// is the whole point of declaring one.
+func forgeFields() []Field {
+	return []Field{
+		{Key: "name", Label: "Name", Type: TypeString, Description: "Instance name — identity for env vars and settings paths"},
+		{Key: "kind", Label: "Kind", Type: TypeString, Description: "Forge kind (github); defaulted, and present so the section can grow"},
+		{Key: "url", Label: "URL", Type: TypeString, Description: "API base URL"},
+		{Key: "token", Label: "API token", Type: TypeSecret, Description: "API token — literal or 1pw:// vault reference"},
+	}
+}
+
 func buildRegistry() []SectionDef {
 	return []SectionDef{
 		{
@@ -154,7 +187,7 @@ func buildRegistry() []SectionDef {
 					{Key: "user", Label: "User", Type: TypeString, Description: "Jira account email"},
 					{Key: "key", Label: "API key", Type: TypeSecret, Description: "API key — literal or 1pw:// vault reference"},
 				})},
-				{Section: "githubs", Label: "GitHub", Kind: "github", IsList: true, Fields: trackerFields(tokenField())},
+				{Section: "githubs", Label: "GitHub", Kind: "github", IsList: true, Fields: githubTrackerFields()},
 				{Section: "gitlabs", Label: "GitLab", Kind: "gitlab", IsList: true, Fields: trackerFields(tokenField())},
 				{Section: "linears", Label: "Linear", Kind: "linear", IsList: true, Fields: trackerFields(tokenField())},
 				{Section: "shortcuts", Label: "Shortcut", Kind: "shortcut", IsList: true, Fields: trackerFields(tokenField())},
@@ -162,6 +195,17 @@ func buildRegistry() []SectionDef {
 					Field{Key: "org", Label: "Organization", Type: TypeString, Description: "Azure DevOps organization"})},
 				{Section: "clickups", Label: "ClickUp", Kind: "clickup", IsList: true, Fields: trackerFields(tokenField(),
 					Field{Key: "team_id", Label: "Team ID", Type: TypeString, Description: "ClickUp team (workspace) id"})},
+			},
+		},
+		{
+			// Forges are their own section rather than a tracker: an entry here
+			// contributes no issue tracker at all, and grouping it under Trackers
+			// would restate the confusion this section exists to end. Until now the
+			// schema had no forges group, so a configured forge could not be seen
+			// or edited from the settings screen at all.
+			Key: "forges", Label: "Forges",
+			Groups: []Group{
+				{Section: "forges", Label: "Forge", Kind: "github", IsList: true, Fields: forgeFields()},
 			},
 		},
 		{

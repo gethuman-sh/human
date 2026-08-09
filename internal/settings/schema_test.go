@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRegistrySectionKeysUnique(t *testing.T) {
@@ -102,5 +103,53 @@ func TestRegistryTrackerSectionsCoverKnownProviders(t *testing.T) {
 	joined := strings.Join(trackerSections, ",")
 	for _, want := range []string{"jiras", "githubs", "gitlabs", "linears", "shortcuts", "azuredevops", "clickups"} {
 		assert.Contains(t, joined, want)
+	}
+	assert.NotContains(t, joined, "forges",
+		"a forge holds no issues — filing it under Trackers restates the confusion the section exists to end")
+}
+
+// The settings screen was the one place a configured forge could not be seen:
+// the schema had no forges group, so `human pr create`'s backend was invisible
+// to the only interface a board-first user has (SC-3871).
+func TestRegistryHasAForgesSection(t *testing.T) {
+	var forgeGroups []Group
+	for _, sec := range Registry() {
+		if sec.Key == "forges" {
+			forgeGroups = sec.Groups
+		}
+	}
+	require.Len(t, forgeGroups, 1, "the forges: section must be editable like every other backend")
+	assert.Equal(t, "forges", forgeGroups[0].Section)
+	assert.True(t, forgeGroups[0].IsList)
+
+	for _, absent := range []string{"projects", "role", "create_in"} {
+		_, ok := forgeGroups[0].FieldByKey(absent)
+		assert.False(t, ok, "a forge carries no %s — it holds no issues", absent)
+	}
+	token, ok := forgeGroups[0].FieldByKey("token")
+	require.True(t, ok)
+	assert.Equal(t, TypeSecret, token.Type)
+}
+
+// Declaring intent must be possible from the settings screen, not only by hand
+// editing YAML — and only for the backend where it means anything.
+func TestRegistryOffersTheForgeRoleOnGitHubAlone(t *testing.T) {
+	for _, sec := range Registry() {
+		if sec.Key != "trackers" {
+			continue
+		}
+		for _, g := range sec.Groups {
+			role, ok := g.FieldByKey("role")
+			if !ok {
+				continue
+			}
+			if g.Section == "githubs" {
+				assert.Contains(t, role.Enum, "forge",
+					"GitHub is the only tracker that can also be a forge, so it is the only one that can declare it")
+				continue
+			}
+			assert.NotContains(t, role.Enum, "forge",
+				"%s cannot open pull requests, so offering the role would describe something impossible", g.Section)
+		}
 	}
 }
