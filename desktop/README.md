@@ -48,7 +48,7 @@ daemon ships on the wire — the frontend never re-derives a stage.
 
 - `app.go` — the Go backend bound into the webview. It talks ONLY to the daemon client (`daemon.GetTrackerIssues` / `daemon.BoardTransition` / `daemon.Subscribe`); credential handling, PM-role resolution and the destructive-confirm bypass all live in the daemon. Its `CachedCards()` binding serves the last-known board snapshot from the local `internal/boardcache` store (`~/.human/boardcache.json`) for the instant cold-open paint — a network-free file read, one of the local UI stores alongside `boardprefs`, `ideaspace`, and `recentprojects`.
 - `main.go` — Wails bootstrap and the daemon subscription bridge.
-- `frontend/` — the HTML/TS board. `src/board.ts` is the typed source; `dist/` is the checked-in built output that `//go:embed all:frontend/dist` ships, so the app runs without a separate npm build. `npm run build` regenerates `dist/`.
+- `frontend/` — the HTML/TS board. `src/board.ts` is the typed source; `dist/` is the checked-in built output that `//go:embed all:frontend/dist` ships, so the app runs without a separate npm build. `npm run build` (or `make desktop-frontend`) regenerates `dist/`; `make desktop-frontend-check` runs the drift guard CI runs, which compares the emitted code rather than its bytes (SC-3613). Never hand-edit `dist/`.
 
 The whole Go package is behind the `wailsapp` build tag (cgo webview backend), so
 `make build` / `make check` on a plain toolchain never touch it.
