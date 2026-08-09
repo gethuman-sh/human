@@ -15,6 +15,13 @@ know which state you are in, because that is what it tells you — along with wh
 must be true while an item sits there, who may move it, and what happens if
 nobody does.
 
+It also tells you where the item has **been**. `history` lists the states it
+passed through with times, oldest first, and stops before now; `entered` says
+when it reached where it is. Read them before repeating work: they are how you
+tell a first attempt from a third, which the retry budget does not show because
+it counts stage relaunches and not review rounds. History is the trail only —
+where you are **now** is `state` (or `candidates`), never the last history entry.
+
 **Only a way out marked `"yours": true` carries a `command`.** That is the point
 of asking. The rest are listed so you can see what waiting buys you and who you
 are waiting for — the daemon, or a person — but they are not yours to take.
