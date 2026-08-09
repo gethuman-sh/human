@@ -56,6 +56,12 @@ func classifyErrorType(errorType string) (endingKind, string) {
 		return endingPaused, "model usage limit"
 	case t == "overloaded" || t == "overloaded_error":
 		return endingPaused, "model API overloaded"
+	// The model API's own 5xx. It is the substrate failing, not the work, and
+	// Claude Code retries through it — so a run that carries on past one must not
+	// have been charged for it, and one that does not is still an outage rather
+	// than a stage that decided something wrong (SC-4026).
+	case t == "server_error" || t == "api_error":
+		return endingPaused, "model API returned an error"
 	case t == "authentication_error" || t == "auth":
 		return endingNeedsPerson, "model API authentication was refused"
 	case strings.Contains(t, "billing") || strings.Contains(t, "credit"):

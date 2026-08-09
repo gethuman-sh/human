@@ -810,7 +810,7 @@
       "dst": "ci-gate",
       "actor": "daemon",
       "where": "board_transition.go AdvancePRLoop",
-      "doc": "The reviewer approved. The draft is un-drafted and the item goes to the CI gate. Recorded as a marker like every other outcome of the loop — success used to be the only transition here that left no trace, so a reader could not tell an approved review whose merge is running from a review still in flight. It also retires the loop sub-phase, so the badge stops reading 'PR review…' through the CI gate, rebase and merge.",
+      "doc": "The reviewer approved. The draft is un-drafted and the item goes to the CI gate. This is the approval route, and it is not the only way in: the deploy gate itself now refuses a pull request it finds still in draft, before the CI wait rather than at the merge, and says the review loop is holding it — a person who has judged it reviewed enough overrides that with `human deploy --ready`, which un-drafts and ships (SC-4027). No automatic path clears the interlock, because a machine that can clear its own interlock has none. Recorded as a marker like every other outcome of the loop — success used to be the only transition here that left no trace, so a reader could not tell an approved review whose merge is running from a review still in flight. It also retires the loop sub-phase, so the badge stops reading 'PR review…' through the CI gate, rebase and merge.",
       "marker": "[human:pr-review-passed]"
     },
     {
@@ -822,7 +822,7 @@
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:pr-review-failed]",
-      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read.",
+      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read. What does NOT fire it: a substrate failure mid-run. The hook reports a model API error as StopFailure and Claude Code retries through it, so the run carries on — driving the loop there read a verdict the reviewer had not written yet and reddened a review that went on to approve (SC-4026). Such an event is consumed and ignored; a run that genuinely dies on one is recovered by the durable re-drive, on the machine that owns the stage. It also fires at most once per dead round: one run can raise both a StopFailure and a Stop, and an escalation with nothing changed since the last one is not restated.",
       "where": "internal/daemon/board_transition.go AdvancePRLoop — prEscalationReason names which of the three it was"
     },
     {
@@ -1064,8 +1064,9 @@
     }
   ],
   "ownership": {
-    "doc": "Which machine may fire a transition. A stage is stamped with the daemon that posted its deciding marker (BoardCard.StageDaemonID, from the marker's machine: field).",
+    "doc": "Who may fire a transition, on two axes. Whose TICKET it is: the assignee, or the reporter when unassigned (daemon.OwnerOf), compared against the machine's declared identity (the .humanconfig `me:` section). Which MACHINE holds a running stage: the daemon that posted the stage's deciding marker (BoardCard.StageDaemonID, from the marker's machine: field). The ticket axis decides whether this machine touches the item at all; the machine axis decides who may take over a stage already running.",
     "rules": [
+      "A machine does autonomous work only on tickets its own person owns: WorkGate.mineToWork in internal/daemon/board_reconcile_gate.go, checked before any intent, so every reconcile pass that writes to a ticket inherits it. Two absences both mean carry on rather than refuse — no identity declared (an install that never said whose work this machine does keeps working as before) and no owner resolvable on the card (an empty owner is unknown, not someone else's, and a tracker that fails to resolve a member name returns exactly that). Only a resolved owner who is demonstrably not this machine's person refuses.",
       "The machine acting on its own initiative — the reconcile takeover pass — refuses a stage another daemon stamped: WorkGate.ownedHereOrUnowned in internal/daemon/board_reconcile_gate.go. An unstamped stage (single-daemon, or a thread written before stamping) is takeable by anyone.",
       "A human gesture is NOT restricted by ownership. Racing a live foreign run is prevented instead by idempotency: a running card refuses every drop (isDuplicateDrop), whichever machine started it.",
       "Ownership is carried to the board as stageDaemonId so a reader can tell a stage owned elsewhere from an unowned one. It is the missing input for liveness across machines: no agent running HERE means dead only if this machine owns the stage."
@@ -1116,7 +1117,7 @@
         "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:deploy-failed] and relaunches in place. TWO budgets bound that, and which one is spent depends on how the stage died. A vanished agent is an unexplained death and is charged: DefaultStageRetries (2). An agent this pass judged hung and stopped itself is NOT charged — the work did not fail, a judgement about it did — but repetition is bounded separately by MaxSilenceReaps (3), past which the machine stops relaunching and says a person is needed."
       },
       "pr-loop": {
-        "stale_when": "No loop half-agent alive on this machine. The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so a loop is recovered by re-driving rather than by redding.",
+        "stale_when": "No loop half-agent alive on the machine that owns the stage — the same ownership qualifier the other stage rules carry, and the one this rule was missing. A loop's outcome lives in the owning host's agent state store and is never posted to the tracker, so 'no agent alive HERE' is evidence only on the machine that started it; read as a fleet-wide fact it made a peer red a review that was still running and went on to approve (SC-4025). The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so a loop is recovered by re-driving rather than by redding.",
         "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by DefaultPRReviewRounds (3); past it the loop escalates rather than merging on a state it cannot read."
       }
     }

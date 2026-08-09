@@ -178,6 +178,7 @@ func (c *Client) FindOpenPullRequest(ctx context.Context, repoName, head string)
 				Repo:   repoName,
 				Head:   head,
 				Title:  item.Title,
+				Draft:  item.Draft,
 				Number: item.Number,
 				URL:    item.HTMLURL,
 			}, nil

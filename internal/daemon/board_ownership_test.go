@@ -83,3 +83,23 @@ func TestSetTicketOwnerIgnoresAnEmptyKey(t *testing.T) {
 
 	assert.Empty(t, owned)
 }
+
+// OwnerOf is the one definition of "whose ticket is this?" — the daemon's work
+// gate and the board's dimming overlay both read it, so the cases are pinned
+// here rather than in either caller.
+func TestOwnerOf(t *testing.T) {
+	t.Run("assignee wins", func(t *testing.T) {
+		assert.Equal(t, "Alice", OwnerOf("Alice", "Bob"))
+	})
+	t.Run("reporter when unassigned", func(t *testing.T) {
+		assert.Equal(t, "Bob", OwnerOf("", "Bob"))
+	})
+	t.Run("whitespace is not an assignee", func(t *testing.T) {
+		assert.Equal(t, "Bob", OwnerOf("   ", "Bob"))
+	})
+	// Neither field recorded is "owner unknown", not "owned by nobody": the empty
+	// string is what every caller keys its unknown-owner branch off.
+	t.Run("neither recorded is empty", func(t *testing.T) {
+		assert.Empty(t, OwnerOf("", ""))
+	})
+}

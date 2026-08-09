@@ -37,6 +37,37 @@ func takeoverSetAs(cards []ReconcileCard, reachable BranchReachable, daemonID st
 	return WorkGate{reachable: reachable, daemonID: daemonID}.forTakeover(cards)
 }
 
+// ownWork is the branch-free gate: the pass whose subject is the forge's merge
+// state, not a branch this machine must resolve.
+func ownWork(cards []ReconcileCard) DrivableCards {
+	return WorkGate{}.forOwnWork(cards)
+}
+
+// asPerson is the identity resolver a test uses to pin the ticket-ownership arm:
+// every key resolves to the same declared person.
+func asPerson(names ...string) TicketIdentity {
+	return func(string) OwnerIdentity { return testIdentity(names) }
+}
+
+// testIdentity mirrors vieweridentity.Identity's contract (a set of names, matched
+// case-insensitively, an empty name never matching) without importing it, so the
+// gate's tests exercise the interface the gate actually declares.
+type testIdentity []string
+
+func (t testIdentity) Known() bool { return len(t) > 0 }
+
+func (t testIdentity) Matches(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	for _, n := range t {
+		if strings.EqualFold(n, strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
+}
+
 // An orphaned handoff — a [human:ready-for-review] with no subsequent review
 // marker — is exactly the card the live fix→review chain missed on restart, so
 // the reconcile pass must launch its review.
@@ -211,7 +242,7 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, nil, nil, chain, nil, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, nil, nil, nil, chain, nil, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
 
 	select {
 	case pmKey := <-chained:
@@ -238,7 +269,7 @@ func TestReconcileShippedFailures_MergedPRClearsRed(t *testing.T) {
 		postedKey, postedURL = pmKey, prURL
 		return nil
 	}
-	n := reconcileShippedFailures(context.Background(), cards, merged, post, zerolog.Nop())
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), merged, post, zerolog.Nop())
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, "SC-1", postedKey)
@@ -257,7 +288,7 @@ func TestReconcileShippedFailures_UnmergedPRLeftRed(t *testing.T) {
 	posted := false
 	merged := func(_ context.Context, _ string) (bool, error) { return false, nil }
 	post := func(_ context.Context, _, _ string) error { posted = true; return nil }
-	n := reconcileShippedFailures(context.Background(), cards, merged, post, zerolog.Nop())
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), merged, post, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, posted)
@@ -273,7 +304,7 @@ func TestReconcileShippedFailures_NoPRURLSkipped(t *testing.T) {
 	probed := false
 	merged := func(_ context.Context, _ string) (bool, error) { probed = true; return true, nil }
 	post := func(_ context.Context, _, _ string) error { return nil }
-	n := reconcileShippedFailures(context.Background(), cards, merged, post, zerolog.Nop())
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), merged, post, zerolog.Nop())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, probed)
@@ -283,7 +314,7 @@ func TestReconcileShippedFailures_NoPRURLSkipped(t *testing.T) {
 func TestReconcileShippedFailures_NilDepsDisabled(t *testing.T) {
 	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
 		cmt("[human:deploy-failed]\nx\npr: https://github.com/o/r/pull/7", time.Unix(1, 0))}}}
-	assert.Equal(t, 0, reconcileShippedFailures(context.Background(), cards, nil, nil, zerolog.Nop()))
+	assert.Equal(t, 0, reconcileShippedFailures(context.Background(), ownWork(cards), nil, nil, zerolog.Nop()))
 }
 
 // liveAgents is the test lister: the set of board agent names currently running

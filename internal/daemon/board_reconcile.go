@@ -32,6 +32,12 @@ var BoardReconcileJitter = 0.5
 type ReconcileCard struct {
 	Key      string
 	Comments []tracker.Comment
+	// Assignee and Reporter answer whose ticket this is, the fact the work gate
+	// needs to refuse another person's work (SC-4063). Empty on both means the
+	// owner could not be resolved, which the gate reads as unknown rather than as
+	// someone else's — see WorkGate.mineToWork.
+	Assignee string
+	Reporter string
 }
 
 // ReconcileLister enumerates the open PM cards to reconcile. Injected so the
@@ -112,14 +118,14 @@ type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, participates ProjectParticipation, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, participates ProjectParticipation, identityFor TicketIdentity, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
 
 	logger.Info().Msg("board reconcile started")
 
-	gate := WorkGate{reachable: reachable, participates: participates, daemonID: daemonID}
+	gate := WorkGate{reachable: reachable, participates: participates, daemonID: daemonID, identityFor: identityFor}
 
 	// Recover a restart-orphaned handoff immediately, before the first wait. The
 	// jitter applies only to subsequent cycles, so a restart-orphan is never made
@@ -160,24 +166,28 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
 		return
 	}
-	// The by-construction choke point (SC-2047): every work-driving pass below is
-	// handed cards ONLY through the gate — forReview for the ones that continue a
-	// finished-and-handed-off stage, forTakeover for the one that reds and
-	// relaunches a still-running stage. Neither can see the raw board, so a path
-	// added here cannot act on work this machine cannot reach or does not own; the
-	// two machine-local passes (a read-only forge probe and this machine's own
-	// orphaned containers) keep the raw list because they act on nothing that
-	// lives on another disk.
+	// The choke point (SC-2047, widened by SC-4063): every pass below that WRITES
+	// to a ticket is handed cards only through the gate — forReview for the ones
+	// that continue a finished-and-handed-off stage, forTakeover for those that red
+	// and relaunch a still-running stage, forOwnWork for the one whose subject is
+	// the forge rather than a branch. So no pass can act on a ticket belonging to
+	// another person, or on work this machine cannot reach or does not own.
+	//
+	// reconcileOrphanedAgents is the ONE pass left on the raw list, and only
+	// because it writes to no ticket: it stops containers running on THIS machine,
+	// which is this machine's business whoever owns the ticket — leaving a
+	// container alive because its ticket is someone else's would strand a process
+	// nobody else can reach.
 	if n := reconcileOrphanedHandoffs(gate.forReview(cards), commitsPresent, chainReview, logger); n > 0 {
 		logger.Info().Int("launched", n).Msg("board reconcile: chained review for orphaned handoffs")
 	}
-	if n := reconcileShippedFailures(ctx, cards, mergedProbe, postDeployed, logger); n > 0 {
+	if n := reconcileShippedFailures(ctx, gate.forOwnWork(cards), mergedProbe, postDeployed, logger); n > 0 {
 		logger.Info().Int("cleared", n).Msg("board reconcile: confirmed shipped, cleared stale deploy-failed red")
 	}
 	// The PR-loop re-drive runs BEFORE the stuck-running pass so a loop card
 	// stranded by a restart is re-driven rather than reddened — the stuck pass
 	// also skips it (doneStageLoopActive), but ordering makes the ownership clear.
-	if n := reconcilePRLoops(ctx, gate.forReview(cards), liveAgents, driveLoop, logger); n > 0 {
+	if n := reconcilePRLoops(ctx, gate.forTakeover(cards), liveAgents, driveLoop, logger); n > 0 {
 		logger.Info().Int("redriven", n).Msg("board reconcile: re-drove stalled PR review→fix loops")
 	}
 	// An outage card is re-driven BEFORE the stuck-running pass: it is not a hang
@@ -242,12 +252,26 @@ func doneStageLoopActive(comments []tracker.Comment) bool {
 // idempotently (AdvancePRLoop's escalate no-ops on an already-open options
 // block, and the alive-guard prevents racing a second launch). nil deps disable it.
 //
-// It receives DrivableCards from the forReview gate, so it only ever sees loop
-// cards whose branch this machine can obtain: a loop re-drive walks the producing
-// machine's branch toward the credentialed Deploy that publishes it, and a daemon
-// that cannot reach that branch is not handed the card at all (SC-2047). This is
-// the by-construction replacement for the per-path reachability check the loop
-// re-drive was missing — the gate is now the only way a card reaches this pass.
+// It receives DrivableCards from the forTAKEOVER gate, not forReview. A
+// mid-flight review→fix loop is a RUNNING stage, and the gate's two intents split
+// exactly there: forTakeover governs a still-running stage, forReview governs work
+// its owner has finished and handed off. Being on the wrong side of that line is
+// what let a peer daemon red a review it was not running (SC-4025).
+//
+// The peer cannot help itself. The outcome this pass reads — the reviewer's
+// verdict in stage.pr-review — lives in the agent state store, which is local to
+// the daemon host and never posted to the tracker. A machine that did not launch
+// the reviewer reads its own empty store, concludes the step recorded nothing, and
+// escalates: on SC-3613 and SC-3569 that happened 21 to 117 seconds into rounds
+// that went on to finish and approve. Reachability could not have stopped it,
+// because the loop pushes its branch before opening the draft PR, so origin
+// resolves the branch on every peer.
+//
+// forTakeover carries the reachability arm too, so the SC-2047 property this pass
+// had before is unchanged; what it adds is the ownership arm, and the loop's
+// started marker carries the machine: stamp that arm reads. The daemon id is
+// persisted across restarts (LoadOrCreateDaemonID), so the restart-orphan case
+// this pass exists for still matches its own stamp and is still re-driven.
 func reconcilePRLoops(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, driveLoop func(pmKey string) error, logger zerolog.Logger) int {
 	if driveLoop == nil || liveAgents == nil {
 		return 0
@@ -640,12 +664,18 @@ func stuckRunningReason(stage BoardStage) string {
 // retires the failure on the next derivation. Reuses DeriveBoardCard verbatim so
 // detection can never disagree with the board's rendered state. nil deps disable
 // the pass. Returns the number of cards cleared.
-func reconcileShippedFailures(ctx context.Context, cards []ReconcileCard, mergedProbe PRMergedProbe, postDeployed DeployedPoster, logger zerolog.Logger) int {
+//
+// It takes the forOwnWork gate rather than the raw board: posting [human:deployed]
+// is a write on someone's ticket and must obey the ownership rule like every other
+// write (SC-4063). It must NOT take forReview — that arm demands a reachable
+// branch, and the branch of a merged PR is deleted at merge, so reachability would
+// filter out exactly the cards this pass exists to clear.
+func reconcileShippedFailures(ctx context.Context, drivable DrivableCards, mergedProbe PRMergedProbe, postDeployed DeployedPoster, logger zerolog.Logger) int {
 	if mergedProbe == nil || postDeployed == nil {
 		return 0
 	}
 	cleared := 0
-	for _, card := range cards {
+	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
 		// Only a done-stage failure that names a PR can be confirmed shipped: the
 		// out-of-band merge posts no marker, so the forge's merged flag is the only

@@ -29,6 +29,7 @@ import (
 // BuildDeployCmd creates the top-level "deploy" command.
 func BuildDeployCmd(deps cmdutil.Deps) *cobra.Command {
 	var branch, title string
+	var ready bool
 	cmd := &cobra.Command{
 		Use:   "deploy KEY",
 		Short: "Ship a ticket's branch: PR, CI gate, rebase if stale, merge, markers, ticket close",
@@ -45,11 +46,12 @@ gate blocks until checks conclude, so this command can run for many minutes.`,
 				return err
 			}
 			defer resolved.Cleanup()
-			return RunDeploy(cmd.Context(), resolved.Provider, cmd.OutOrStdout(), resolved.Key, branch, title)
+			return RunDeploy(cmd.Context(), resolved.Provider, cmd.OutOrStdout(), resolved.Key, branch, title, ready)
 		},
 	}
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch to ship (default: the ticket's review-handoff branch)")
 	cmd.Flags().StringVar(&title, "title", "", "PR title (default: the ticket title)")
+	cmd.Flags().BoolVar(&ready, "ready", false, "Ship a pull request the machine review loop is still holding in draft: un-draft it and merge")
 	return cmd
 }
 
@@ -84,7 +86,7 @@ var newTransitionDeps = func(p tracker.Provider) daemon.BoardTransitionDeps {
 }
 
 // RunDeploy derives branch and title, then runs the deploy gate.
-func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, branch, title string) error {
+func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, branch, title string, ready bool) error {
 	engineering := ""
 	if branch == "" {
 		comments, err := p.ListComments(ctx, key)
@@ -109,7 +111,11 @@ func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, bran
 		title = issue.Title
 	}
 
-	if err := deployEngine(ctx, newTransitionDeps(p), key, title, prBody(key, engineering, branch), branch); err != nil {
+	deps := newTransitionDeps(p)
+	// Only an explicit gesture may clear the review loop's draft interlock; the
+	// engine refuses a draft otherwise and says what is holding it (SC-4027).
+	deps.MergeDraftPR = ready
+	if err := deployEngine(ctx, deps, key, title, prBody(key, engineering, branch), branch); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(out, "Deployed %s (%s)\n", key, branch)

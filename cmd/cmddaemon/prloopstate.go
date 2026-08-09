@@ -18,9 +18,19 @@ import (
 // (SC-1484/SC-2133); the state-store read that decides this loop never got
 // the same treatment, which is exactly how SC-2307 read a superseded verdict.
 // Package vars so tests can shrink them to keep the suite fast.
+// The bound is set by how long a step's write can trail the event that looks like
+// its exit, not by how long a write takes. On SC-3613 the reviewer's `Stop`
+// arrived at 08:42:32 and its verdict landed at 08:43:39 — 67 seconds later — and
+// a 6-second settle concluded "recorded nothing" and reddened a review that went
+// on to approve (SC-4026). 100 seconds covers that with margin.
+//
+// It costs nothing in the ordinary case: a step writes its report as the last
+// thing it does, so a real exit is fresh on the first read and never waits. Only
+// the pathological read backs off, and there the alternative is a red card a
+// person has to clear.
 var (
-	prLoopReadRecheckStep  = 2 * time.Second
-	prLoopReadRecheckTries = 3
+	prLoopReadRecheckStep  = 10 * time.Second
+	prLoopReadRecheckTries = 10
 )
 
 // readPRReviewVerdict returns the machine reviewer's verdict recorded in

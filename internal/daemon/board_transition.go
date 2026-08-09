@@ -97,6 +97,13 @@ type PRRequest struct {
 type PRResult struct {
 	URL    string
 	Number int
+	// Draft reports that the pull request the gate is about to ship is in the
+	// forge's draft state. It is carried out of PR creation/adoption because the
+	// deploy gate cannot otherwise know: the review loop opens its PR draft on
+	// purpose, and an adopted PR is returned as-is, so a deploy driven by anything
+	// other than the loop's own approval reaches the merge with no idea the change
+	// is still held for review (SC-4027).
+	Draft bool
 }
 
 // deployWaitHeartbeat is how many CI polls pass between "still running" log
@@ -173,6 +180,13 @@ type BoardTransitionDeps struct {
 	// Empty leaves markers un-signed (the signer's empty-machine no-op), so an
 	// un-provisioned daemon still functions.
 	DaemonID string
+	// MergeDraftPR authorizes the deploy gate to un-draft a pull request the
+	// machine review loop is still holding, and ship it. It is a person saying "I
+	// have judged this reviewed enough", so it is set only from an explicit
+	// gesture (`human deploy --ready`) and never by an automatic path: the draft is
+	// the interlock that stops a half-reviewed change merging when the daemon's own
+	// gate fails, and a machine that could clear its own interlock has none.
+	MergeDraftPR bool
 	// Logger records best-effort post-merge failures (e.g. a failed automated
 	// close) and the deploy gate's progress. The zero value is a safe no-op
 	// writer, so an un-wired path stays valid without a logger — but wire one
@@ -1046,6 +1060,14 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 	if _, open := openOptionsBlock(comments); open {
 		return nil
 	}
+	// Already escalated and nothing has moved since: say it once. A single run can
+	// produce two events that both look like its exit — the hook fires StopFailure
+	// on an API error and Stop when the turn ends, and the parser's own contract
+	// is that a Stop may follow a StopFailure — which drove this twice sixteen
+	// seconds apart on SC-3613 and posted the identical marker both times.
+	if _, latest := latestStateInStage(comments, BoardDoneStage); strings.HasPrefix(strings.TrimSpace(latest.Body), PRReviewFailedHeader) {
+		return nil
+	}
 	stage := latestPRLoopStage(comments)
 	if stage == PRStageFix && outcome.FixExit != PRFixDone {
 		var b strings.Builder
@@ -1241,6 +1263,72 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 	_ = d.DeployBranch(ctx, req.PMKey, req.PMTitle, doneBody(req.PMKey, card), card.Branch)
 }
 
+// settleDraft decides a pull request the machine review loop is still holding,
+// BEFORE the CI gate rather than at the merge.
+//
+// The loop opens its PR draft so a half-reviewed change cannot be merged even if
+// the daemon's own gate failed, and only the loop's approval un-drafts it. A
+// deploy arriving by any other route — the CLI, the board's Deploy, a deploy-fix
+// re-run — used to spend the whole CI wait and then take a forge 405 that named
+// nothing about drafts (SC-4027). Deciding it here means the card says what is
+// actually holding the change, and costs nothing when there is no draft.
+//
+// MergeDraftPR is a person overriding the interlock, so the log says the un-draft
+// was deliberate rather than leaving a silent release in the trail.
+//
+// Extracted from DeployBranch rather than inlined: the gate is already at the
+// complexity ceiling, and "what to do about a draft" is one subject with its own
+// two outcomes.
+func (d BoardTransitionDeps) settleDraft(ctx context.Context, pmKey string, res PRResult, logger zerolog.Logger) error {
+	if !res.Draft {
+		return nil
+	}
+	if !d.MergeDraftPR {
+		return d.deployFailed(pmKey, res.URL, deployReason(
+			"this pull request is held in draft by the machine review loop, so the forge will not merge it — it un-drafts itself when the review approves; to ship it without that, re-run the deploy with --ready",
+			nil))
+	}
+	logger.Info().Int("pr", res.Number).Msg("deploy: un-drafting the reviewed PR on explicit instruction")
+	if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, res.Number); err != nil {
+		return d.deployFailed(pmKey, res.URL, deployReason(
+			"the pull request could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
+	}
+	return nil
+}
+
+// regateAfterRebase re-establishes the two facts a freshness rebase invalidated,
+// and is a no-op when no rebase happened.
+//
+// The force-push rewrote the head, which re-triggers CI on it and clears the
+// forge's cached mergeability. Merging into either of those is the SC-1184 race:
+// GitHub reports the state unstable and 405s a merge on a branch that is
+// perfectly clean. So the CI gate runs again on the rebased head — the
+// mergeability recompute alone does not cover in-flight checks — and then the
+// recompute is waited out.
+//
+// Extracted from DeployBranch to keep that function inside the complexity gate;
+// it is one subject, "the branch moved, so re-check what moving invalidated".
+func (d BoardTransitionDeps) regateAfterRebase(ctx context.Context, pmKey string, res PRResult, branch string, rebased bool, logger zerolog.Logger) error {
+	if !rebased {
+		return nil
+	}
+	logger.Info().Int("pr", res.Number).Msg("deploy: branch was stale; rebased onto the base, re-gating CI")
+	if err := d.waitForChecks(ctx, res); err != nil {
+		if ciFailureFixable(err) {
+			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
+		}
+		return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
+	}
+	if err := d.awaitMergeable(ctx, res.Number); err != nil {
+		headline := "the forge still reports the pull request unmergeable after the freshness rebase — open the PR to see why, then re-run Deploy"
+		if stateUnreadable(err) {
+			headline = "could not read the pull request's mergeability — " + credentialRemedy
+		}
+		return d.deployFailed(pmKey, res.URL, deployReason(headline, err))
+	}
+	return nil
+}
+
 // DeployBranch runs the deterministic deploy gate for pmKey's branch: the
 // already-merged short-circuit, push + PR, the CI gate, the freshness rebase,
 // the merge, branch cleanup, markers, and the ticket close. Failures are both
@@ -1287,6 +1375,9 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 			err))
 	}
 	logger.Info().Int("pr", res.Number).Str("url", res.URL).Msg("deploy: pull request open")
+	if err := d.settleDraft(ctx, pmKey, res, logger); err != nil {
+		return err
+	}
 	if err := d.waitForChecks(ctx, res); err != nil {
 		if ciFailureFixable(err) {
 			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
@@ -1321,29 +1412,8 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 				ensureErr, branch)
 		}
 	}
-	if rebased {
-		logger.Info().Int("pr", res.Number).Msg("deploy: branch was stale; rebased onto the base, re-gating CI")
-		// The freshness force-push rewrote the head and re-triggered CI on it.
-		// Merging while that fresh run is still in_progress is exactly the
-		// SC-1184 race: GitHub reports mergeable_state unstable and 405s the
-		// merge. Re-gate CI on the rebased head — the mergeability recompute
-		// alone does not cover the in-flight checks — before waiting out the
-		// recompute window.
-		if err := d.waitForChecks(ctx, res); err != nil {
-			if ciFailureFixable(err) {
-				return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
-			}
-			return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
-		}
-		// The re-push invalidated the forge's cached mergeability; merging
-		// before the recompute settles draws a spurious 405 on a clean branch.
-		if err := d.awaitMergeable(ctx, res.Number); err != nil {
-			headline := "the forge still reports the pull request unmergeable after the freshness rebase — open the PR to see why, then re-run Deploy"
-			if stateUnreadable(err) {
-				headline = "could not read the pull request's mergeability — " + credentialRemedy
-			}
-			return d.deployFailed(pmKey, res.URL, deployReason(headline, err))
-		}
+	if err := d.regateAfterRebase(ctx, pmKey, res, branch, rebased, logger); err != nil {
+		return err
 	}
 	if err := d.mergeWithRetry(ctx, res.Number); err != nil {
 		return d.deployFailed(pmKey, res.URL, deployReason(
@@ -1550,6 +1620,12 @@ func isTransientMergeRefusal(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+	// A draft refusal is also a 405, and it is the opposite of transient: nothing
+	// about the branch changes while it is retried, so matching it here spent the
+	// full retry window on a refusal that was never going to lift (SC-4027).
+	if strings.Contains(msg, "still a draft") {
+		return false
+	}
 	return strings.Contains(msg, "not mergeable") || strings.Contains(msg, "405")
 }
 

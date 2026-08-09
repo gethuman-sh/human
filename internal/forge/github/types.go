@@ -96,7 +96,12 @@ type pullListItem struct {
 	Title   string `json:"title"`
 	HTMLURL string `json:"html_url"`
 	State   string `json:"state"`
-	Head    struct {
+	// Draft is why a deploy that adopts this PR may not be able to merge it. The
+	// review loop opens its PR draft on purpose, and a draft that is otherwise
+	// clean is still reported mergeable by the REST API, so this field is the only
+	// thing that distinguishes the two (SC-4027).
+	Draft bool `json:"draft"`
+	Head  struct {
 		Ref string `json:"ref"`
 	} `json:"head"`
 }
