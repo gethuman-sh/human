@@ -266,7 +266,6 @@ export function badgeInfo(card, nowMs = Date.now()) {
             spinner: true,
         }, card.agentLiveness, `decision recorded — ${verb} never started`, "A direction was chosen but no agent picked the work up on this machine. Retry the stage.");
     }
-
     // A paused (outage) card is the do-nothing register: a substrate the run
     // depends on is unavailable, the work stays written and safe on the ticket,
     // and it resumes on its own — never the amber "your turn" register and
