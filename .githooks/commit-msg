@@ -11,6 +11,12 @@
 #
 # Exempt: merge commits, reverts, fixup/squash commits.
 # Bypass:  git commit --no-verify
+#
+# This is the SECOND spelling of a grammar internal/commitref owns in Go. It
+# stays shell on purpose — a hook that needs the binary built cannot be the
+# thing that gates building it — so the two are held in step by both being run
+# over internal/commitref.Corpus, which fails the build when they disagree.
+# Changing anything below means adding the case to that corpus first.
 
 msg=$(cat "$1")
 

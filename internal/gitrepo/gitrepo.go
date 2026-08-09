@@ -6,10 +6,10 @@ package gitrepo
 import (
 	"context"
 	"os/exec"
-	"regexp"
 	"strings"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/commitref"
 )
 
 // runner executes a command and returns its combined stdout. It is a package
@@ -364,20 +364,6 @@ type Commit struct {
 	Subject  string `json:"subject"`
 }
 
-// keyRefPattern builds the extended-regexp grep pattern matching every accepted
-// commit-message reference form for key (the .githooks/commit-msg grammar):
-// bracket style ([SC-57]), "Issue SC-57" / "Issue #123", and guarded bare or
-// path-style occurrences (owner/repo#42, MyProject/42). Guards keep a numeric
-// key from matching inside longer numbers and a prefixed key from matching
-// inside longer keys (SC-5 must not match SC-57).
-func keyRefPattern(key string) string {
-	esc := regexp.QuoteMeta(key)
-	if regexp.MustCompile(`^[0-9]+$`).MatchString(key) {
-		return `\[#?` + esc + `\]|(^|[^0-9])#` + esc + `([^0-9]|$)|Issue #?` + esc + `([^0-9]|$)|/` + esc + `([^0-9]|$)`
-	}
-	return `\[` + esc + `\]|Issue ` + esc + `([^0-9]|$)|(^|[^A-Za-z0-9-])` + esc + `([^0-9]|$)`
-}
-
 // CommitsFor lists the commits on HEAD whose message references key in any
 // accepted reference format, newest first, excluding merge-PR commits — the
 // exact discovery agents otherwise hand-roll with git log --grep incantations.
@@ -392,7 +378,7 @@ var CommitsFor = func(ctx context.Context, dir, key string) ([]Commit, error) {
 // can stub git access in tests.
 var CommitsForRev = func(ctx context.Context, dir, key, rev string) ([]Commit, error) {
 	out, err := runner(ctx, "git", "-C", dir, "log", "--extended-regexp",
-		"--grep="+keyRefPattern(key), "--format=%H%x1f%h%x1f%s", rev)
+		"--grep="+commitref.GrepPattern(key), "--format=%H%x1f%h%x1f%s", rev)
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "listing commits for key", "dir", dir, "key", key)
 	}
@@ -444,14 +430,6 @@ var CurrentBranch = func(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// prefixedKeyPattern and numericRefPattern are the fixed extraction grammar
-// for ticket keys in commit subjects: bracketed-or-bare PREFIX-N keys and #N
-// numeric references.
-var (
-	prefixedKeyPattern = regexp.MustCompile(`\[?([A-Z]{2,}-[0-9]+)\]?`)
-	numericRefPattern  = regexp.MustCompile(`#([0-9]+)`)
-)
-
 // TicketKeys extracts the ticket keys referenced by commits touching paths
 // (all history when paths is empty): prefixed keys first, then numeric ones,
 // each deduped in order of first appearance (newest commit first). Package var
@@ -465,23 +443,7 @@ var TicketKeys = func(ctx context.Context, dir string, paths []string) ([]string
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "listing commit subjects", "dir", dir)
 	}
-	var prefixed, numeric []string
-	seen := map[string]bool{}
-	for _, subject := range strings.Split(string(out), "\n") {
-		for _, m := range prefixedKeyPattern.FindAllStringSubmatch(subject, -1) {
-			if !seen[m[1]] {
-				seen[m[1]] = true
-				prefixed = append(prefixed, m[1])
-			}
-		}
-		for _, m := range numericRefPattern.FindAllStringSubmatch(subject, -1) {
-			if !seen[m[1]] {
-				seen[m[1]] = true
-				numeric = append(numeric, m[1])
-			}
-		}
-	}
-	return append(prefixed, numeric...), nil
+	return commitref.Keys(strings.Split(string(out), "\n")), nil
 }
 
 // LatestTag resolves the recency boundary tag: the nearest reachable tag,

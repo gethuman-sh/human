@@ -696,20 +696,6 @@ func TestCommitsFor_gitError(t *testing.T) {
 	}
 }
 
-func TestKeyRefPattern_numericVsPrefixed(t *testing.T) {
-	num := keyRefPattern("42")
-	if want := `\[#?42\]`; !strings.Contains(num, want) {
-		t.Errorf("numeric pattern %q missing %q", num, want)
-	}
-	pre := keyRefPattern("SC-57")
-	if want := `\[SC-57\]`; !strings.Contains(pre, want) {
-		t.Errorf("prefixed pattern %q missing %q", pre, want)
-	}
-	if strings.Contains(pre, `#?SC-57\]`) {
-		t.Errorf("prefixed pattern %q must not carry the numeric hash form", pre)
-	}
-}
-
 func TestCurrentBranch(t *testing.T) {
 	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		return []byte("feature/x\n"), nil
