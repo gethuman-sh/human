@@ -277,3 +277,17 @@ test("liveness badge classes carry a colour of their own (SC-3569)", () => {
 test("recovering badge stays in the machine register, not the person amber (SC-3569)", () => {
   assert.match(ruleBody(".badge.recovering"), /color:\s*var\(--turn-machine\)/);
 });
+
+// SC-3577: the flow strip must be able to disappear entirely, and must carry two
+// visually distinct registers — loud for a stall (a demand), muted for "cannot
+// tell" (an admission), so the second never competes with the first.
+test("flow strip hides itself and has a loud and a muted register", () => {
+  assert.match(ruleBody(".flow-strip.hidden"), /display:\s*none/, "the strip must be able to vanish");
+
+  const stalled = ruleBody(".flow-strip.stalled");
+  const unknown = ruleBody(".flow-strip.unknown");
+  const bg = (body) => (body.match(/background:\s*([^;]+)/) || [])[1];
+  assert.ok(bg(stalled), "the stall register must set a background");
+  assert.ok(bg(unknown), "the unknown register must set a background");
+  assert.notEqual(bg(stalled).trim(), bg(unknown).trim(), "a demand must not look like an admission");
+});

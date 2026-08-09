@@ -1287,6 +1287,34 @@ body {
   border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.1));
 }
 
+/* Pipeline-level flow signal (SC-3577). Full width above the board and outside
+   #board so it stays visible in every view — a stopped line is news wherever
+   you are looking. Loud for a stall, muted for "cannot tell": the second is an
+   admission, not a demand, and must not compete with the first. */
+.flow-strip {
+  padding: 10px 14px;
+  font-weight: 600;
+  font-size: 0.95em;
+  line-height: 1.4;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+.flow-strip.hidden {
+  display: none;
+}
+
+.flow-strip.stalled {
+  background: var(--warn, #b26a00);
+  color: #fff;
+}
+
+.flow-strip.unknown {
+  background: var(--panel, #2a2a2a);
+  color: var(--muted);
+  font-weight: 500;
+  border-bottom-color: var(--border, rgba(255, 255, 255, 0.1));
+}
+
 /* Shown on each card while its real stage is still being derived from comments
    (quick titles land in Backlog first). Muted so it reads as "pending
    placement", distinct from the amber "agent running" badge. */

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, isReworkable, reworkKind, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, formatSilence, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
-import { DAEMON_FORWARDED_STATES } from "../build/board-states.js";
+import { queueOf, isReworkable, reworkKind, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, formatSilence, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS, flowNotice } from "../build/board-queue.js";
+import { DAEMON_FORWARDED_STATES, FLOW_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -980,4 +980,85 @@ test("formatSilence renders the coarsest honest unit (SC-5328)", () => {
   assert.equal(formatSilence(250), "4m");
   assert.equal(formatSilence(3600), "1h");
   assert.equal(formatSilence(4200), "1h 10m");
+});
+
+// SC-3577: the pipeline-level flow strip. Silence is the default — a signal that
+// also fires when nothing is wrong is a signal nobody reads.
+const FLOW_NOW = new Date("2026-08-05T12:00:00Z");
+
+test("flowNotice stays silent for flowing and idle", () => {
+  assert.equal(flowNotice({ state: "flowing" }, FLOW_NOW), null);
+  assert.equal(flowNotice({ state: "idle" }, FLOW_NOW), null);
+});
+
+test("flowNotice stays silent when the daemon made no claim", () => {
+  assert.equal(flowNotice(undefined, FLOW_NOW), null);
+});
+
+test("flowNotice names the age and the tickets for a stall", () => {
+  const n = flowNotice(
+    { state: "stalled", since: "2026-08-04T22:00:00Z", inFlight: 2, keys: ["SC-1", "SC-2"] },
+    FLOW_NOW,
+  );
+  assert.equal(n.level, "stalled");
+  assert.match(n.text, /14h 0m/);
+  assert.match(n.text, /2 tickets/);
+  assert.match(n.text, /SC-1, SC-2/);
+});
+
+test("flowNotice reports the unnamed remainder", () => {
+  const n = flowNotice(
+    { state: "stalled", since: "2026-08-04T22:00:00Z", inFlight: 6, keys: ["SC-1", "SC-2", "SC-3"] },
+    FLOW_NOW,
+  );
+  assert.match(n.text, /\+3 more/);
+});
+
+test("flowNotice falls back when the stall has no timestamp", () => {
+  const n = flowNotice({ state: "stalled", inFlight: 1, keys: ["SC-1"] }, FLOW_NOW);
+  assert.match(n.text, /an unusual length of time/);
+  assert.doesNotMatch(n.text, /NaN/);
+});
+
+test("flowNotice says plainly when it cannot tell", () => {
+  const n = flowNotice({ state: "unknown", unreadable: 2 }, FLOW_NOW);
+  assert.equal(n.level, "unknown");
+  assert.match(n.text, /cannot tell idle from stalled/);
+  assert.match(n.text, /2 tickets/);
+});
+
+test("flowNotice unknown without a count still explains itself", () => {
+  const n = flowNotice({ state: "unknown" }, FLOW_NOW);
+  assert.match(n.text, /no progress timestamp could be read/);
+});
+
+test("flowNotice singularizes one ticket", () => {
+  const n = flowNotice(
+    { state: "stalled", since: "2026-08-04T22:00:00Z", inFlight: 1, keys: ["SC-1"] },
+    FLOW_NOW,
+  );
+  assert.match(n.text, /1 ticket /);
+  assert.doesNotMatch(n.text, /1 tickets/);
+});
+
+// The frontend half of the flow drift lock: a state the daemon can send must not
+// be one this file has never heard of.
+test("flowNotice handles every FLOW_STATES entry without throwing", () => {
+  for (const state of FLOW_STATES) {
+    const n = flowNotice({ state }, FLOW_NOW);
+    if (state === "stalled" || state === "unknown") {
+      assert.ok(n, `${state} must earn the strip`);
+      assert.equal(n.level, state);
+    } else {
+      assert.equal(n, null, `${state} must stay silent`);
+    }
+  }
+});
+
+test("boardStateFromPayload carries the flow claim", () => {
+  assert.equal(boardStateFromPayload({ flow: { state: "stalled" } }).flow.state, "stalled");
+});
+
+test("boardStateFromPayload invents no claim", () => {
+  assert.equal(boardStateFromPayload({}).flow, undefined);
 });
