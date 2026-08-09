@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 )
 
 // A newer Claude Code renamed the event key; the daemon is unreachable.
@@ -129,4 +130,87 @@ func TestRunHook_EmptyBody_NoWarnNoDeliver(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, delivered)
 	assert.Empty(t, stderr.String())
+}
+
+// SC-3582 regression: Claude Code nests the sub-agent attribution inside
+// tool_input for an Agent spawn. This test pins that payload shape — if the
+// forwarder ever reads the wrong level again, the two fields go empty here.
+func TestRunHook_AgentSpawn_CapturesNestedAttribution(t *testing.T) {
+	payload := `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w",` +
+		`"tool_name":"Agent","tool_input":{"description":"Fix PR review findings",` +
+		`"prompt":"Fix the findings on SC-1","subagent_type":"human-pr-fixer","model":"sonnet"}}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	var stderr bytes.Buffer
+	require.NoError(t, runHook(strings.NewReader(payload), &stderr, deliver))
+	require.Len(t, captured, 12)
+	assert.Equal(t, "human-pr-fixer", captured[9], "sub-agent type must come from tool_input")
+	assert.Equal(t, "sonnet", captured[10], "model must come from tool_input")
+}
+
+// The attribution keys trail a real dispatch's prompt. Extraction must happen
+// before the daemon's 1 KiB cap, so a long prompt may not push them out of reach.
+func TestRunHook_AgentSpawn_LongPromptBeforeAttribution(t *testing.T) {
+	longPrompt := strings.Repeat("a", 5000)
+	payload := `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w",` +
+		`"tool_name":"Agent","tool_input":{"prompt":"` + longPrompt + `",` +
+		`"subagent_type":"human-planner","model":"opus"}}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	var stderr bytes.Buffer
+	require.NoError(t, runHook(strings.NewReader(payload), &stderr, deliver))
+	require.Len(t, captured, 12)
+	assert.Equal(t, "human-planner", captured[9])
+	assert.Equal(t, "opus", captured[10])
+}
+
+// A spawn that names no model inherits its parent's; that must be recorded as
+// a fact, not left empty where it would read as "never captured".
+func TestRunHook_AgentSpawn_NoModel_RecordsInherited(t *testing.T) {
+	payload := `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w",` +
+		`"tool_name":"Agent","tool_input":{"subagent_type":"human-executor","prompt":"go"}}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	var stderr bytes.Buffer
+	require.NoError(t, runHook(strings.NewReader(payload), &stderr, deliver))
+	require.Len(t, captured, 12)
+	assert.Equal(t, "human-executor", captured[9])
+	assert.Equal(t, hookevents.ModelInherited, captured[10])
+}
+
+// SessionStart is the event kind that carries model at the top level; it must
+// keep working, because the nested read is an addition, not a replacement.
+func TestRunHook_TopLevelModel_StillForwarded(t *testing.T) {
+	payload := `{"hook_event_name":"SessionStart","session_id":"s1","cwd":"/w","model":"opus"}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	var stderr bytes.Buffer
+	require.NoError(t, runHook(strings.NewReader(payload), &stderr, deliver))
+	require.Len(t, captured, 12)
+	assert.Empty(t, captured[9])
+	assert.Equal(t, "opus", captured[10], "a top-level model must survive the nested read")
+}
+
+// An ordinary tool call is not a spawn: both fields stay empty, which is what
+// downstream reads as "not captured" rather than as an inheriting spawn.
+func TestRunHook_NonSpawnTool_LeavesAttributionEmpty(t *testing.T) {
+	payload := `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w",` +
+		`"tool_name":"Bash","tool_input":{"command":"go test ./..."}}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	var stderr bytes.Buffer
+	require.NoError(t, runHook(strings.NewReader(payload), &stderr, deliver))
+	require.Len(t, captured, 12)
+	assert.Empty(t, captured[9])
+	assert.Empty(t, captured[10])
 }

@@ -53,6 +53,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/cliflags"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/daemon"
@@ -522,6 +523,49 @@ type hookInput struct {
 	Model            string          `json:"model"`
 }
 
+// nestedAttribution is the sub-agent attribution Claude Code puts inside
+// tool_input when an agent spawns another. Reading it here, from the raw
+// payload, is deliberate: the daemon redacts and caps tool_input at 1 KiB
+// before storing it, and on a real dispatch these two keys sit after a
+// multi-KiB prompt — so anything that reads the stored column instead sees
+// them only on short fixtures (SC-3582).
+type nestedAttribution struct {
+	SubagentType string `json:"subagent_type"`
+	Model        string `json:"model"`
+}
+
+// resolveAttribution picks the sub-agent type and model for an event. Agent
+// spawns nest both inside tool_input; SessionStart puts model at the top level,
+// so the nested value wins only where it is actually present and the top-level
+// reading stays a fallback rather than being replaced. The top-level
+// subagent_type has no producer in today's Claude Code — it is kept so a future
+// promotion of the key needs no change here, not because anything fills it.
+func resolveAttribution(in hookInput) (subagentType, model string) {
+	subagentType, model = in.SubagentType, in.Model
+
+	if len(bytes.TrimSpace(in.ToolInput)) > 0 {
+		var nested nestedAttribution
+		// A tool input that is not an object (or is malformed) simply carries no
+		// attribution — the top-level reading then stands.
+		if err := json.Unmarshal(in.ToolInput, &nested); err == nil {
+			if nested.SubagentType != "" {
+				subagentType = nested.SubagentType
+			}
+			if nested.Model != "" {
+				model = nested.Model
+			}
+		}
+	}
+
+	// A spawn that named no model ran on its parent's. Recording that as a fact
+	// is what keeps it answerable apart from an event that never carried an
+	// attribution at all (SC-3582).
+	if subagentType != "" && model == "" {
+		model = hookevents.ModelInherited
+	}
+	return subagentType, model
+}
+
 // hookDeliverer forwards resolved hook-event args to the daemon. Injected so
 // the forwarding path is testable without opening a socket.
 type hookDeliverer func(args []string) error
@@ -579,9 +623,10 @@ func runHook(stdin io.Reader, stderr io.Writer, deliver hookDeliverer) error {
 	// daemon handles explicitly.
 	runID := os.Getenv("HUMAN_RUN_ID")
 	toolInput := compactJSON(input.ToolInput) // "" when absent
+	subagentType, model := resolveAttribution(input)
 	args := []string{"hook-event", eventName, input.SessionID, input.Cwd,
 		input.NotificationType, input.ToolName, input.ErrorType, agentName,
-		toolInput, input.SubagentType, input.Model, runID}
+		toolInput, subagentType, model, runID}
 	if err := deliver(args); err != nil {
 		_, _ = fmt.Fprintf(stderr, "human hook: failed to deliver %q event to daemon: %v\n", eventName, err) // #nosec G705 -- CLI terminal output, not web
 	}

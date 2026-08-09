@@ -34,6 +34,12 @@ type Event struct {
 	RunID string `json:"run_id,omitempty"`
 }
 
+// ModelInherited is recorded as the model of a spawn that named none and
+// therefore ran on its parent's. Recording the fact keeps it distinguishable
+// from an empty model, which continues to mean the attribution was never
+// captured at all — the pre-SC-3582 history and every non-spawn event.
+const ModelInherited = "inherited"
+
 // SessionSnapshot holds the derived working/idle state for one session.
 type SessionSnapshot struct {
 	SessionID   string                  `json:"session_id"`
