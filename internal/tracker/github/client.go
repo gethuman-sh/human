@@ -57,6 +57,9 @@ func (c *Client) ListIssues(ctx context.Context, opts tracker.ListOptions) ([]tr
 // as on every other backend (SC-1693).
 func (c *Client) ListIssuesPage(ctx context.Context, opts tracker.ListOptions) (tracker.IssuePage, error) {
 	if opts.Project == "" {
+		if opts.Unattended {
+			return tracker.IssuePage{}, errors.WithDetails(unscopedListingRefusal, "backend", "github")
+		}
 		return c.listAllIssuesPage(ctx, opts)
 	}
 
@@ -124,6 +127,19 @@ func clampPerPage(n int) int {
 		return n
 	}
 }
+
+// unscopedListingRefusal is what a poll loop is told instead of being handed an
+// account-wide search.
+//
+// It refuses rather than truncating or sampling because a partial answer is the
+// worse failure here: the board would render a subset of someone's backlog as
+// though it were the whole thing, and a prune guard would erase saved view state
+// for everything it did not see. An honest refusal names the entry, the cost and
+// the one line that fixes it, and the board shows it where the missing tickets
+// would have been ([SC-3888]).
+const unscopedListingRefusal = "a GitHub tracker with no projects: cannot be listed on a schedule — " +
+	"an unscoped GitHub listing searches every issue the token can see, on the search endpoint's own rate limit, " +
+	"once per refresh. Add projects: [owner/repo] to the githubs: entry, or move it to forges: if it only opens pull requests"
 
 // listAllIssuesPage uses GET /search/issues to list issues across all repos,
 // paging up to the cap the same way the per-repo path does (SC-1693).

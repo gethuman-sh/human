@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -588,5 +589,36 @@ func TestSync_indexesTheTrackersItIsGiven(t *testing.T) {
 	}
 	if result.Errors != 0 {
 		t.Errorf("expected 0 errors, got %d", result.Errors)
+	}
+}
+
+// The scheduled record sync is a poll loop like the board's refresh, so it
+// declares itself and a backend may refuse work too expensive to repeat. A
+// person running `human index` is not a loop and is left alone ([SC-3888]).
+func TestSync_passesUnattendedThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []Option
+		want bool
+	}{
+		{name: "hand-run index", want: false},
+		{name: "scheduled pass", opts: []Option{Unattended}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStore(t)
+			var got bool
+			provider := &mockProvider{
+				listFn: func(_ context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
+					got = opts.Unattended
+					return nil, nil
+				},
+			}
+			instances := []tracker.Instance{{Name: "work", Kind: "github", Provider: provider}}
+
+			var buf bytes.Buffer
+			_, err := Sync(context.Background(), s, instances, false, &buf, tc.opts...)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
 	}
 }

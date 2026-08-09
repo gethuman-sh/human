@@ -109,7 +109,9 @@ func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *
 		// errors with no way to learn what failed is the shape of problem this
 		// work exists to remove, and discarding the detail put it right back.
 		var detail strings.Builder
-		res, sErr := recall.Sync(ctx, store, instances, full, &detail)
+		// The scheduled pass, not a person waiting: a backend may refuse work
+		// too expensive to repeat on a timer ([SC-3888]).
+		res, sErr := recall.Sync(ctx, store, instances, full, &detail, recall.Unattended)
 		if sErr != nil {
 			logger.Warn().Err(sErr).Str("dir", entry.Dir).Str("detail", detail.String()).
 				Msg("recall sync: failed")

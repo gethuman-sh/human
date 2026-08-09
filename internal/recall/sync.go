@@ -26,12 +26,16 @@ type SyncResult struct {
 // fetches descriptions, upserts entries, and prunes stale keys.
 // When fullSync is false, it performs incremental sync using the last
 // indexed timestamp per source to only fetch recently updated issues.
-func Sync(ctx context.Context, store Store, instances []tracker.Instance, fullSync bool, logger io.Writer) (*SyncResult, error) {
+func Sync(ctx context.Context, store Store, instances []tracker.Instance, fullSync bool, logger io.Writer, opts ...Option) (*SyncResult, error) {
 	result := &SyncResult{}
+	var cfg options
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	for i := range instances {
 		inst := &instances[i]
-		if err := syncInstance(ctx, store, inst, fullSync, logger, result); err != nil {
+		if err := syncInstance(ctx, store, inst, fullSync, cfg.unattended, logger, result); err != nil {
 			_, _ = fmt.Fprintf(logger, "Error syncing %s (%s): %v\n", inst.Name, inst.Kind, err)
 			result.Errors++
 		}
@@ -41,7 +45,7 @@ func Sync(ctx context.Context, store Store, instances []tracker.Instance, fullSy
 }
 
 // syncInstance syncs a single tracker instance.
-func syncInstance(ctx context.Context, store Store, inst *tracker.Instance, fullSync bool, logger io.Writer, result *SyncResult) error {
+func syncInstance(ctx context.Context, store Store, inst *tracker.Instance, fullSync, unattended bool, logger io.Writer, result *SyncResult) error {
 	seen := make(map[string]bool)
 
 	// Determine if we can do incremental sync.
@@ -68,7 +72,7 @@ func syncInstance(ctx context.Context, store Store, inst *tracker.Instance, full
 	// whole instance's absence set unreliable.
 	truncated := false
 	for _, project := range projects {
-		if syncProject(ctx, store, inst, project, fullSync, incremental, lastIndexed, logger, result, seen) {
+		if syncProject(ctx, store, inst, project, fullSync, incremental, unattended, lastIndexed, logger, result, seen) {
 			truncated = true
 		}
 	}
@@ -195,12 +199,26 @@ func planBody(ctx context.Context, p tracker.Provider, key string) string {
 	return m.Body
 }
 
+// Option adjusts a sync. Variadic so the scheduled pass can say what it is
+// without every hand-run caller and test restating a default.
+type Option func(*options)
+
+type options struct{ unattended bool }
+
+// Unattended marks a sync as the daemon's scheduled pass rather than someone
+// running `human index` and waiting. Backends may refuse work that is too
+// expensive to do on a loop — an unscoped GitHub listing searches every issue
+// the token can see ([SC-3888]) — and a person who asked for it explicitly is a
+// different case from a timer asking every ten minutes.
+func Unattended(o *options) { o.unattended = true }
+
 // syncProject fetches and indexes issues for a single project (or all projects when project is "").
 // syncProject reports whether the listing was truncated, which the caller needs
 // before it may delete anything.
-func syncProject(ctx context.Context, store Store, inst *tracker.Instance, project string, fullSync, incremental bool, lastIndexed time.Time, logger io.Writer, result *SyncResult, seen map[string]bool) bool {
+func syncProject(ctx context.Context, store Store, inst *tracker.Instance, project string, fullSync, incremental, unattended bool, lastIndexed time.Time, logger io.Writer, result *SyncResult, seen map[string]bool) bool {
 	opts := tracker.ListOptions{
-		Project: project,
+		Project:    project,
+		Unattended: unattended,
 		// The index wants the whole record, so the cap is set far above any real
 		// backlog rather than at a page size. A backend that still cuts the list
 		// short reports it through Truncated, which gates the prune.
