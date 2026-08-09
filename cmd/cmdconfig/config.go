@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -20,7 +21,7 @@ func BuildConfigCmd() *cobra.Command {
 		Short: "Work on .humanconfig itself",
 	}
 
-	var dryRun bool
+	var dryRun, unify bool
 	migrateCmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "Bring .humanconfig up to date with the current config shape",
@@ -36,12 +37,19 @@ Only name, kind, url and token travel; projects, role and the rest are tracker
 concepts. Comments come with the entry, vault references stay references — a
 token written into a config file is a credential leak — and an entry whose
 credentials cannot be carried is left alone rather than deleted. Running it
-twice changes nothing.`,
+twice changes nothing.
+
+--group additionally folds the per-vendor sections into a single trackers: list
+where each entry names its kind, the shape forges: already has. It is opt-in
+because it changes a working file for the sake of how it reads: both shapes are
+read, and will be. Nobody should have to rewrite a config to keep it working.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return RunMigrate(cmd.OutOrStdout(), ".", dryRun)
+			return RunMigrate(cmd.OutOrStdout(), ".", dryRun, unify)
 		},
 	}
 	migrateCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report what would change without writing")
+	migrateCmd.Flags().BoolVar(&unify, "group", false,
+		"Also fold the per-vendor sections (githubs:, jiras:, …) into one trackers: list with a kind: field")
 
 	var checkJSON bool
 	checkCmd := &cobra.Command{
@@ -133,9 +141,13 @@ func exitCode(problems []config.Problem) error {
 // errSilentFailure carries a non-zero exit with nothing left to say.
 var errSilentFailure = errors.WithDetails("configuration has errors")
 
-// RunMigrate performs the forge migration and reports what it did.
-func RunMigrate(out io.Writer, dir string, dryRun bool) error {
-	result, err := settings.MigrateForges(dir, dryRun)
+// RunMigrate performs the migration and reports what it did.
+func RunMigrate(out io.Writer, dir string, dryRun, unify bool) error {
+	run := settings.MigrateForges
+	if unify {
+		run = settings.MigrateAll
+	}
+	result, err := run(dir, dryRun)
 	if err != nil {
 		return err
 	}
@@ -162,6 +174,31 @@ func RunMigrate(out io.Writer, dir string, dryRun bool) error {
 			return err
 		}
 	}
+	if len(result.Unified) > 0 {
+		verb := "Folded"
+		if dryRun {
+			verb = "Would fold"
+		}
+		if _, err := fmt.Fprintf(out, "%s %d entries into one trackers: list (%s)\n",
+			verb, len(result.Unified), strings.Join(unique(result.Unified), ", ")); err != nil {
+			return err
+		}
+	}
 	_, err = fmt.Fprintf(out, "%s: %s\n", target, result.File)
 	return err
+}
+
+// unique keeps the first occurrence of each kind, so a config with four Jira
+// projects reports jira once rather than four times.
+func unique(items []string) []string {
+	seen := make(map[string]bool, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out
 }

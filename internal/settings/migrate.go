@@ -17,10 +17,13 @@ type ForgeMigration struct {
 	File string
 	// Moved names the githubs: entries that became forges: entries.
 	Moved []string
+	// Unified names the kinds folded from their per-vendor sections into the
+	// single trackers: list ([SC-3874]).
+	Unified []string
 }
 
 // Empty reports that there was nothing to migrate.
-func (m ForgeMigration) Empty() bool { return len(m.Moved) == 0 }
+func (m ForgeMigration) Empty() bool { return len(m.Moved) == 0 && len(m.Unified) == 0 }
 
 // MigrateForges moves the code-host credentials into the forges: section a
 // config needs now that a githubs: entry is an issue tracker and nothing more.
@@ -47,6 +50,22 @@ func (m ForgeMigration) Empty() bool { return len(m.Moved) == 0 }
 // already reached forges: is a leftover, and the document removes it rather
 // than seeing a name it recognises and stopping ([SC-3887]).
 func MigrateForges(dir string, dryRun bool) (ForgeMigration, error) {
+	return migrate(dir, dryRun, false)
+}
+
+// MigrateAll is MigrateForges plus the shape change: the per-vendor sections
+// fold into one trackers: list, with each entry stamped with the kind its
+// section used to imply.
+//
+// Separate from MigrateForges because the two are different kinds of change. The
+// forge move repairs a config that has stopped opening pull requests; the
+// grouping is a preference about how a working file is written, and nobody
+// should have their file restructured while asking for a repair ([SC-3874]).
+func MigrateAll(dir string, dryRun bool) (ForgeMigration, error) {
+	return migrate(dir, dryRun, true)
+}
+
+func migrate(dir string, dryRun, unify bool) (ForgeMigration, error) {
 	if _, exists := config.LocateFile(dir); !exists {
 		return ForgeMigration{}, errNoConfig(dir)
 	}
@@ -67,6 +86,12 @@ func MigrateForges(dir string, dryRun bool) (ForgeMigration, error) {
 		if moved {
 			result.Moved = append(result.Moved, t.Name)
 		}
+	}
+
+	// Grouping runs after the forge move, so credentials that are leaving the
+	// tracker list are not folded into it on the way out.
+	if unify {
+		result.Unified = doc.UnifyTrackers()
 	}
 
 	if result.Empty() || dryRun {
