@@ -168,6 +168,7 @@ Packages under `internal/` are grouped by the user-facing feature they provide. 
 - `internal/messaging/` — Chat integrations (`internal/messaging/slack`, `internal/messaging/telegram`)
 - `internal/proxy/`, `internal/devcontainer/` — top-level features in their own right
 - `internal/codenav/` — local code-navigation engine (SQLite index; go-to-def, refs, call graph, search), surfaced as the local `human codenav` command; vendored from the standalone octi project, so prefer minimal changes for re-sync
+- `internal/config/` — Reads `.humanconfig`, and holds it as one object: `config.Document` parses the whole file, exposes typed `Trackers()`/`Forges()`, mutates through intention-revealing methods, validates itself (including rules spanning two sections), and writes back preserving comments and unknown sections. **A new configuration rule belongs on the Document** (`internal/config/validate.go`), never hand-hung on a provider's loader or buried in a command — that is what left the rules with two copies that disagreed ([SC-3889]). `human config check` surfaces them
 - `internal/vault/` — Pluggable vault secret resolution (1Password, extensible to Vault/AWS/etc.)
 - `errors/` — Custom error handling (WithDetails)
 

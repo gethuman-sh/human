@@ -78,17 +78,21 @@ func buildInstance(cfg Config) (tracker.Instance, bool) {
 // become the board's tracker. Failing the load puts the message where the user
 // is already looking, since a load failure reaches the board's error banner
 // ([SC-3876]).
+//
+// The condition and its wording come from config, which is also where the whole
+// document is checked ([SC-3889]). They were separate strings, and a rule whose
+// enforcement carries its own copy of itself is a rule with two versions waiting
+// to disagree — the settings screen offered this very value while this loader
+// rejected it.
 func rejectForgeRole(instances []tracker.Instance, err error) ([]tracker.Instance, error) {
 	if err != nil {
 		return nil, err
 	}
 	for _, inst := range instances {
-		if inst.Role != "forge" {
+		if inst.Role != config.RetiredForgeRole {
 			continue
 		}
-		return nil, errors.WithDetails(
-			"githubs: entry "+inst.Name+" declares role: forge, but a githubs: entry is an issue tracker. "+
-				"A code host is configured in the forges: section — run `human config migrate` to move it.",
+		return nil, errors.WithDetails(config.RetiredForgeRoleMessage(inst.Name),
 			"instance", inst.Name, "section", "githubs")
 	}
 	return instances, nil
