@@ -38,25 +38,17 @@ import (
 // the options block with one stage-and-count, so a placement that needs a
 // particular body cannot appear.
 
-// boardPlacement is one place a card can be.
-type boardPlacement struct {
-	Stage BoardStage `json:"stage"`
-	State BoardState `json:"state"`
-}
-
-func (p boardPlacement) String() string { return string(p.Stage) + "/" + string(p.State) }
-
 // producibleBoardPlacements returns every placement the derivation yields for
 // some thread built out of the marker vocabulary.
 //
 // The vocabulary comes from orderedMarkerSpecs rather than a list written here:
 // a list would be one more thing to keep in step with the markers, which is the
 // drift this whole exercise exists to catch, reproduced inside the check for it.
-func producibleBoardPlacements() map[boardPlacement][]string {
-	found := map[boardPlacement][]string{}
+func producibleBoardPlacements() map[Placement][]string {
+	found := map[Placement][]string{}
 	record := func(how string, comments []tracker.Comment, status tracker.Category, isIdea bool) {
 		card := DeriveBoardCard(comments, status, isIdea)
-		p := boardPlacement{card.Stage, card.State}
+		p := card.placement()
 		if _, seen := found[p]; !seen {
 			found[p] = []string{how}
 		}
@@ -119,12 +111,12 @@ func placementHow(body string) string {
 // claimedBoardPlacements maps each placement the machine describes to the
 // states claiming it. Several states may claim one placement — that is the blur
 // a marker thread cannot resolve, not a contradiction.
-func claimedBoardPlacements(t *testing.T) map[boardPlacement][]string {
+func claimedBoardPlacements(t *testing.T) map[Placement][]string {
 	t.Helper()
 	doc, err := pipelinefsm.Load()
 	require.NoError(t, err)
 
-	claimed := map[boardPlacement][]string{}
+	claimed := map[Placement][]string{}
 	for _, s := range doc.States {
 		if s.Board.Stage == "none" {
 			continue
@@ -134,11 +126,53 @@ func claimedBoardPlacements(t *testing.T) map[boardPlacement][]string {
 			stages = []BoardStage{BoardBacklog, BoardPlanning, BoardImplementation, BoardVerification, BoardDoneStage}
 		}
 		for _, stage := range stages {
-			p := boardPlacement{stage, BoardState(s.Board.State)}
+			p := placementOf(stage, BoardState(s.Board.State))
 			claimed[p] = append(claimed[p], s.Name)
 		}
 	}
 	return claimed
+}
+
+// TestBoardPlacement_EveryProducedPlacementIsLegal is the guard the Placement
+// type exists for: whatever the derivation's rules compose, the result must be
+// a placement the machine has a way to reach.
+//
+// It is the half the claimed-placement measurement below cannot cover. That one
+// compares against pipeline-fsm.json, a document written by hand and widened by
+// hand; this compares against the marker table the code itself dispatches on, so
+// it fails on a pair no marker and no transition can produce — a card rendered
+// somewhere the board cannot explain and no reconcile pass will move.
+func TestBoardPlacement_EveryProducedPlacementIsLegal(t *testing.T) {
+	for p, hows := range producibleBoardPlacements() {
+		assert.True(t, p.legal(),
+			"the derivation produces %s, which no marker or transition can reach — put %q through a named transition, or say why the pair is legal", p, hows[0])
+	}
+}
+
+// A guard that calls everything legal is not a guard. These are pairs the two
+// halves can spell but no rule produces: a closed card cannot be running, an
+// idea cannot fail, and a stage with no agent to lose has no outage.
+func TestBoardPlacement_APairNoRuleProducesIsIllegal(t *testing.T) {
+	for _, p := range []Placement{
+		placementOf(BoardHidden, BoardRunning),
+		placementOf(BoardIdeas, BoardFailed),
+		placementOf(BoardBacklog, BoardOutage),
+		placementOf(BoardIdeas, BoardQueued),
+	} {
+		assert.False(t, p.legal(), "%s is a pair no rule produces and must not be legal", p)
+	}
+}
+
+// The legal set is the derivation's own vocabulary, so every placement in it
+// must be one the board can render. A pair that is legal but unreachable is the
+// opposite drift: a rule that used to produce it and no longer does.
+func TestBoardPlacement_TheLegalSetIsNamedByRealStagesAndStates(t *testing.T) {
+	for _, p := range sortedLegalPlacements() {
+		assert.NotEmpty(t, string(p.Stage()), "a legal placement must name a stage: %s", p)
+		_, ranked := stageRank[p.Stage()]
+		assert.True(t, ranked || p.Stage() == BoardHidden,
+			"legal placement %s names a stage the board does not rank", p)
+	}
 }
 
 // A placement the document names must be a placement that exists. This is the
