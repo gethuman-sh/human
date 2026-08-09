@@ -6,7 +6,6 @@ package cmdbug
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -104,27 +103,9 @@ func RunSecurityCreate(out io.Writer, title, description string) error {
 // A package var so tests can point it at an unreachable address.
 var dockerHostFallbackAddr = fmt.Sprintf("%s:%d", daemon.DockerHost, daemon.DefaultPort)
 
-// resolveDaemon locates the running daemon: env vars first, then the info file,
-// then the host.docker.internal fallback so the command works inside a
-// devcontainer. Mirrors main.discoverDaemon. Returns a clear error when no
-// daemon is reachable, since it holds the tracker credentials and .humanconfig.
+// resolveDaemon delegates to the daemon package's discovery. Kept as a thin
+// local name so the call sites read the same, with one implementation of the
+// order behind it.
 func resolveDaemon() (addr, token string, err error) {
-	addr = os.Getenv("HUMAN_DAEMON_ADDR")
-	token = os.Getenv("HUMAN_DAEMON_TOKEN")
-
-	info, readErr := daemon.ReadInfo()
-	if token == "" && readErr == nil {
-		token = info.Token
-	}
-	if addr != "" {
-		return addr, token, nil
-	}
-	if readErr == nil && info.IsReachable() {
-		return info.Addr, token, nil
-	}
-	fallback := daemon.DaemonInfo{Addr: dockerHostFallbackAddr}
-	if fallback.IsReachable() {
-		return fallback.Addr, token, nil
-	}
-	return "", "", errors.WithDetails("human daemon not reachable — start it with `human daemon start` (it holds the tracker credentials and resolves the configured PM group)")
+	return daemon.ResolveDaemon()
 }

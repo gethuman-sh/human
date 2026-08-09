@@ -937,3 +937,51 @@ func selectedEnv() map[string]string {
 	}
 	return env
 }
+
+// FSMWhere asks the daemon where one ticket is in the pipeline. A route rather
+// than a forwarded command because the answer needs the daemon's own liveness
+// records and retry counters, which a forwarded cobra command has no handle to.
+func FSMWhere(addr, token string, req WhereRequest) (WhereReport, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return WhereReport{}, errors.WrapWithDetails(err, "marshaling fsm-where request")
+	}
+	out, err := RunRemoteCapture(addr, token, []string{"fsm-where", string(data)})
+	if err != nil {
+		return WhereReport{}, err
+	}
+	var resp WhereReport
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return WhereReport{}, errors.WrapWithDetails(err, "invalid fsm-where JSON")
+	}
+	return resp, nil
+}
+
+// ResolveDaemon locates the running daemon: env first, then the info file, then
+// the host.docker.internal fallback so a command works from inside a
+// devcontainer.
+//
+// Exported and living here because more than one command needs it and the
+// daemon package is what knows how a daemon is found. A second copy in a command
+// package is how the discovery order drifts, and a command that looks in a
+// different order finds a different daemon.
+func ResolveDaemon() (addr, token string, err error) {
+	addr = os.Getenv("HUMAN_DAEMON_ADDR")
+	token = os.Getenv("HUMAN_DAEMON_TOKEN")
+
+	info, readErr := ReadInfo()
+	if token == "" && readErr == nil {
+		token = info.Token
+	}
+	if addr != "" {
+		return addr, token, nil
+	}
+	if readErr == nil && info.IsReachable() {
+		return info.Addr, token, nil
+	}
+	fallback := DaemonInfo{Addr: fmt.Sprintf("%s:%d", DockerHost, DefaultPort)}
+	if fallback.IsReachable() {
+		return fallback.Addr, token, nil
+	}
+	return "", "", errors.WithDetails("human daemon not reachable — start it with `human daemon start` (it holds the tracker credentials and resolves the configured PM group)")
+}

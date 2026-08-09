@@ -462,18 +462,25 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		BoardSecurityFixer: securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
 		BoardOptioner:      boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
 		BugCreator:         bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID)),
-		SecurityCreator:    securityCreatorFunc(projectRegistry, vaultResolver),
-		CloseTicketer:      closeTicketerFunc(projectRegistry, vaultResolver, liveBoardAgents, (&dockerAgentCleaner{}).DeleteAgent, logger),
-		FeaturesGenerator:  featuresGeneratorFunc(projectRegistry),
-		FindbugsRunner:     findbugsRunnerFunc(projectRegistry),
-		RelateLauncher:     relateLauncherFunc(projectRegistry, daemonID),
-		SecurityRunner:     securityRunnerFunc(projectRegistry),
-		MockupsCreator:     mockupsCreatorFunc(projectRegistry),
-		VariationsCreator:  variationsCreatorFunc(projectRegistry),
-		MockupChooser:      mockupChooserFunc(projectRegistry),
-		MockupPruner:       mockupPrunerFunc(projectRegistry),
-		Ideation:           ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
-		LeaseChecker:       leaseChecker,
+		WhereComments:      whereCommentsFunc(projectRegistry, vaultResolver),
+		WhereAttempts: func(pmKey string, stage daemon.BoardStage) (int, error) {
+			// The READ-ONLY twin of the retry path's counter. bumpStageRetries
+			// increments as it reads, so wiring it here would spend a ticket's
+			// budget every time an agent asked where it was.
+			return readStageRetries(context.Background(), boardStateProject(projectRegistry, pmKey), pmKey, stage)
+		},
+		SecurityCreator:   securityCreatorFunc(projectRegistry, vaultResolver),
+		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver, liveBoardAgents, (&dockerAgentCleaner{}).DeleteAgent, logger),
+		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
+		FindbugsRunner:    findbugsRunnerFunc(projectRegistry),
+		RelateLauncher:    relateLauncherFunc(projectRegistry, daemonID),
+		SecurityRunner:    securityRunnerFunc(projectRegistry),
+		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
+		VariationsCreator: variationsCreatorFunc(projectRegistry),
+		MockupChooser:     mockupChooserFunc(projectRegistry),
+		MockupPruner:      mockupPrunerFunc(projectRegistry),
+		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
+		LeaseChecker:      leaseChecker,
 	}
 
 	// Bring back a chat the previous process was in the middle of, before the
@@ -4213,5 +4220,47 @@ func attachActivity(ctx context.Context, reg *daemon.ProjectRegistry, view *daem
 		// The phase is an enrichment, never a gate: a board that cannot read the
 		// state store still renders every card it fetched.
 		logger.Debug().Err(err).Msg("board view: could not read phase records; cards render without them")
+	}
+}
+
+// whereCommentsFunc loads one ticket's thread for the fsm-where route: the
+// comments the placement is derived from, plus the status and idea label that
+// take an item off the board entirely.
+//
+// Modelled on issueGetterFunc rather than sharing it, because that path builds
+// the desktop panel's extras and caches them; a question about where an item is
+// must read the thread as it stands now.
+func whereCommentsFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) daemon.WhereCommentReader {
+	return func(key string) ([]tracker.Comment, tracker.Category, bool, error) {
+		entry, err := reg.EntryForKey(key)
+		if err != nil {
+			return nil, "", false, err
+		}
+		instances, err := cmdutil.LoadAllInstancesWithResolver(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			return nil, "", false, err
+		}
+		inst, err := tracker.Resolve("", instances, key)
+		if err != nil {
+			return nil, "", false, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		issue, err := inst.Provider.GetIssue(ctx, key)
+		if err != nil {
+			return nil, "", false, err
+		}
+		lister, ok := inst.Provider.(tracker.Commenter)
+		if !ok {
+			return nil, issue.StatusType, issue.IsIdea(), nil
+		}
+		comments, err := lister.ListComments(ctx, key)
+		if err != nil {
+			// The thread is what the placement is derived from, so an unreadable
+			// one must fail rather than answer "backlog, nothing here" — that
+			// would be a confident wrong answer where none is much cheaper.
+			return nil, "", false, err
+		}
+		return comments, issue.StatusType, issue.IsIdea(), nil
 	}
 }

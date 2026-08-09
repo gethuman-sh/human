@@ -57,6 +57,26 @@ type Document struct {
 	StageDefaults StageDefaults `json:"stage_defaults"`
 
 	Unclassified Unclassified `json:"unclassified_markers"`
+
+	// Invariants carries the budgets the states' prose refers to by name.
+	// Modelled so a caller can be told the number instead of the name: a plan or
+	// an agent that reads "past the budget it waits for a person" and has to
+	// guess what the budget is will guess, and a guessed budget is how the same
+	// timing bug gets rediscovered under a new number.
+	Invariants Invariants `json:"invariants"`
+}
+
+// Invariants is the document's block of cross-cutting facts: the named budgets
+// and the fields every state carries.
+type Invariants struct {
+	Doc string `json:"doc"`
+
+	// Constants maps a budget's name to its value and where it lives, e.g.
+	// "StuckRunningGrace" -> "15m — how long a running card is left alone …".
+	Constants map[string]string `json:"constants"`
+
+	// Fields documents what each per-state invariant means.
+	Fields map[string]string `json:"fields"`
 }
 
 // ResolvedStates returns every state with its inherited fields filled in.
