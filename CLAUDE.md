@@ -188,20 +188,6 @@ forges:
 
 internal/tracker/ is an abstraction layer for issue trackers. **ALWAYS** define new tracker operations as interfaces in `internal/tracker/`. **NEVER** add provider-specific types or logic to `internal/tracker/`. Concrete tracker implementations (Jira, Linear, GitHub, …) go under `internal/tracker/<provider>/` and **MUST** implement the `internal/tracker/` interfaces. Code-host (pull request) operations are a separate abstraction in `internal/forge/`, with implementations under `internal/forge/<provider>/`. A backend that is both a tracker and a forge (e.g. GitHub) is split into two packages — `internal/tracker/github` and `internal/forge/github` — rather than one package implementing both, and the split runs all the way down: each has its own config section (a tracker entry — `trackers:` with `kind: github`, or the legacy `githubs:` — versus `forges:`), its own loader, and its own type (`tracker.Instance` and `forge.Instance`). **NEVER** reunite them by giving one type both capabilities or by asking at a call site which kind a value is — an `IsTracker()`-style predicate is the signature of exactly that mistake, and it cost SC-1671, SC-2132 and SC-3868 before the domains were separated in SC-3876.
 
-`config.Document` is the only reader and writer of `.humanconfig`: no second yaml
-parse, no string splicing, no private node plumbing. A new configuration rule goes
-in `internal/config/validate.go` — never hand-hung on a provider's loader or buried
-in a command, which is how the rules ended up in three copies that disagreed
-([SC-3889]). `human config check` surfaces them.
-
-`internal/codenav/` is vendored from the standalone octi project; keep changes
-minimal so it can be re-synced.
-
-A README belongs to a **feature**, not a provider: one at the group root
-(`internal/tracker/README.md` covers every tracker) or at a standalone package.
-They are orientation prose and never a capability inventory — the code is the
-authority, and tooling must not read them as one.
-
 # Tools
 
 **Run `human` with no arguments at the start of a session.** It prints the whole command
