@@ -143,38 +143,19 @@ const nodeFeatureKey = "ghcr.io/devcontainers/features/node:1"
 // ensureHumanFeature reads an existing devcontainer.json and adds the human
 // feature if it is missing. Returns hints if the file was updated.
 func ensureHumanFeature(w io.Writer, fw claude.FileWriter) ([]string, error) {
-	data, err := fw.ReadFile(devcontainerPath)
+	doc, err := devcontainer.LoadDocument(fw, devcontainerPath)
 	if err != nil {
-		return nil, errors.WrapWithDetails(err, "reading existing devcontainer config")
+		return nil, err
 	}
-
-	raw := map[string]any{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, errors.WrapWithDetails(err, "parsing existing devcontainer config")
+	if err := doc.AddFeature(humanFeatureKey); err != nil {
+		return nil, err
 	}
-
-	features, _ := raw["features"].(map[string]any)
-	if features != nil {
-		if _, ok := features[humanFeatureKey]; ok {
-			_, _ = fmt.Fprintln(w, "Keeping existing devcontainer config (human feature already present).")
-			return nil, nil
-		}
+	if !doc.Changed() {
+		_, _ = fmt.Fprintln(w, "Keeping existing devcontainer config (human feature already present).")
+		return nil, nil
 	}
-
-	if features == nil {
-		features = map[string]any{}
-		raw["features"] = features
-	}
-	features[humanFeatureKey] = map[string]any{}
-
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return nil, errors.WrapWithDetails(err, "marshalling updated devcontainer config")
-	}
-	out = append(out, '\n')
-
-	if err := fw.WriteFile(devcontainerPath, out, 0o644); err != nil {
-		return nil, errors.WrapWithDetails(err, "writing updated devcontainer config")
+	if err := doc.Save(); err != nil {
+		return nil, err
 	}
 
 	_, _ = fmt.Fprintln(w, "Added human feature to existing devcontainer config.")

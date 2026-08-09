@@ -11,6 +11,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/devcontainer"
 )
 
 // LspPlugin describes an LSP server and its Claude Code plugin.
@@ -279,37 +280,27 @@ func enableLspTool(w io.Writer, fw claude.FileWriter) error {
 // appendLspToDevcontainer reads .devcontainer/devcontainer.json and appends
 // LSP install commands to postStartCommand. Silently skips if no config exists.
 func appendLspToDevcontainer(w io.Writer, fw claude.FileWriter, cmds []string) {
-	data, err := fw.ReadFile(devcontainerPath)
+	doc, err := devcontainer.LoadDocument(fw, devcontainerPath)
 	if err != nil {
 		return
 	}
-	raw := map[string]any{}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	// A shape the document will not edit blind (an argv array) is reported here
+	// rather than swallowed with everything else: skipping silently is what let
+	// the previous version delete the user's command without saying so.
+	if err := doc.AppendPostStartCommand(lspPostStartName, strings.Join(cmds, " && ")); err != nil {
+		_, _ = fmt.Fprintf(w, "  Left %s alone: %v\n", devcontainerPath, err)
 		return
 	}
-
-	lspCmd := strings.Join(cmds, " && ")
-
-	// Check if commands are already present.
-	existing, _ := raw["postStartCommand"].(string)
-	if strings.Contains(existing, lspCmd) {
+	if !doc.Changed() {
 		return
 	}
-
-	if existing != "" {
-		raw["postStartCommand"] = existing + " && " + lspCmd
-	} else {
-		raw["postStartCommand"] = lspCmd
-	}
-
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return
-	}
-	out = append(out, '\n')
-
-	if err := fw.WriteFile(devcontainerPath, out, 0o644); err != nil {
+	if err := doc.Save(); err != nil {
 		return
 	}
 	_, _ = fmt.Fprintf(w, "  Updated %s with LSP install commands\n", devcontainerPath)
 }
+
+// lspPostStartName is the key the LSP installs take when postStartCommand is an
+// object of named commands — so re-running the step updates its own entry
+// instead of adding another.
+const lspPostStartName = "human-lsp"
