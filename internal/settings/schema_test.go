@@ -100,6 +100,9 @@ func TestRegistryTrackerSectionsCoverKnownProviders(t *testing.T) {
 			trackerSections = append(trackerSections, g.Section)
 		}
 	}
+	assert.Contains(t, trackerSections, "trackers",
+		"the unified list is where a config written today declares its backends")
+
 	joined := strings.Join(trackerSections, ",")
 	for _, want := range []string{"jiras", "githubs", "gitlabs", "linears", "shortcuts", "azuredevops", "clickups"} {
 		assert.Contains(t, joined, want)
@@ -129,6 +132,32 @@ func TestRegistryHasAForgesSection(t *testing.T) {
 	token, ok := forgeGroups[0].FieldByKey("token")
 	require.True(t, ok)
 	assert.Equal(t, TypeSecret, token.Type)
+}
+
+// The unified list must be able to describe any backend, since the section no
+// longer says which one an entry is — kind does ([SC-3874]).
+func TestRegistryUnifiedTrackerGroupCoversEveryBackendsFields(t *testing.T) {
+	var unified *Group
+	for _, sec := range Registry() {
+		for i := range sec.Groups {
+			if sec.Groups[i].Section == "trackers" {
+				unified = &sec.Groups[i]
+			}
+		}
+	}
+	require.NotNil(t, unified)
+
+	kind, ok := unified.FieldByKey("kind")
+	require.True(t, ok, "without a kind the entry says nothing about what it configures")
+	for _, want := range []string{"jira", "github", "gitlab", "linear", "shortcut", "azuredevops", "clickup"} {
+		assert.Contains(t, kind.Enum, want)
+	}
+	// The fields only some backends need still have to exist, or those backends
+	// cannot be configured from the screen at all.
+	for _, key := range []string{"user", "key", "org", "team_id", "projects", "role", "create_in"} {
+		_, ok := unified.FieldByKey(key)
+		assert.True(t, ok, "the unified list needs a %s field", key)
+	}
 }
 
 // The forge role is gone from every tracker section: a githubs: entry is an

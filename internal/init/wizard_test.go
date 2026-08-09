@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -522,9 +523,14 @@ func TestServicesStep_FullFlow(t *testing.T) {
 	assert.Contains(t, buf.String(), "JIRA_WORK_KEY")
 	assert.Contains(t, buf.String(), "GITHUB_OSS_TOKEN")
 
+	// A config written today uses the unified shape: one list, each entry
+	// naming what it is ([SC-3874]).
 	yaml := string(fw.files[".humanconfig.yaml"])
-	assert.Contains(t, yaml, "jiras:")
-	assert.Contains(t, yaml, "githubs:")
+	assert.Contains(t, yaml, "trackers:")
+	assert.Contains(t, yaml, "kind: jira")
+	assert.Contains(t, yaml, "kind: github")
+	assert.NotContains(t, yaml, "jiras:")
+	assert.NotContains(t, yaml, "githubs:")
 }
 
 func TestServicesStep_OverwriteError(t *testing.T) {
@@ -1080,8 +1086,9 @@ func TestRunInit_FullWizardFlow(t *testing.T) {
 	assert.Contains(t, buf.String(), "Done!")
 
 	yaml := string(fw.files[".humanconfig.yaml"])
-	assert.Contains(t, yaml, "jiras:")
-	assert.Contains(t, yaml, "githubs:")
+	assert.Contains(t, yaml, "trackers:")
+	assert.Contains(t, yaml, "kind: jira")
+	assert.Contains(t, yaml, "kind: github")
 
 	dcJSON := string(fw.files[".devcontainer/devcontainer.json"])
 	assert.Contains(t, dcJSON, "ghcr.io/gethuman-sh/treehouse/human:1")
@@ -1389,4 +1396,59 @@ func TestHasYAMLKey(t *testing.T) {
 	assert.True(t, hasYAMLKey(content, "jiras"))
 	assert.False(t, hasYAMLKey(content, "devcontainer"))
 	assert.False(t, hasYAMLKey(content, ""))
+}
+
+// Trackers land in one list; the services that were never ambiguous about what
+// they are keep their own sections ([SC-3874]).
+func TestGenerateConfig_unifiesTrackersButNotTheRest(t *testing.T) {
+	registry := ServiceRegistry()
+	byLabel := func(label string) ServiceType {
+		for _, s := range registry {
+			if s.Label == label {
+				return s
+			}
+		}
+		t.Fatalf("service %q not in registry", label)
+		return ServiceType{}
+	}
+
+	out, err := GenerateConfig([]serviceInstance{
+		{Service: byLabel("Jira"), Values: map[string]string{"name": "work", "url": "https://jira.example.com", "user": "me"}},
+		{Service: byLabel("Shortcut"), Values: map[string]string{"name": "board"}},
+		{Service: byLabel("Notion"), Values: map[string]string{"name": "docs"}},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "trackers:")
+	assert.Contains(t, out, "kind: jira")
+	assert.Contains(t, out, "kind: shortcut")
+	assert.Contains(t, out, "notions:", "a docs connector is not a tracker and keeps its section")
+	assert.NotContains(t, out, "kind: notion")
+	assert.Equal(t, 1, strings.Count(out, "trackers:"), "one list, not one per kind")
+}
+
+// The generated file must actually load, or the wizard hands someone a config
+// that reads as no trackers configured at all.
+func TestGenerateConfig_unifiedOutputLoads(t *testing.T) {
+	registry := ServiceRegistry()
+	var shortcut ServiceType
+	for _, s := range registry {
+		if s.Label == "Shortcut" {
+			shortcut = s
+		}
+	}
+
+	out, err := GenerateConfig([]serviceInstance{
+		{Service: shortcut, Values: map[string]string{"name": "board"}},
+	})
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte(out), 0o600))
+
+	doc, err := config.Load(dir)
+	require.NoError(t, err)
+	require.Len(t, doc.Trackers(), 1)
+	assert.Equal(t, "shortcut", doc.Trackers()[0].Kind)
+	assert.Equal(t, "board", doc.Trackers()[0].Name)
 }
