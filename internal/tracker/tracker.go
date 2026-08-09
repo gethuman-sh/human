@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/commitref"
 )
 
 // githubIssueRe matches GitHub issue keys like "owner/repo#123".
@@ -138,11 +139,10 @@ func ExtractProject(key string) string {
 const shortcutCommitPrefix = "SC-"
 
 // trimKeyBrackets strips surrounding whitespace and one layer of [ ] from a
-// key, the form the board/pipeline sometimes passes internally.
-func trimKeyBrackets(key string) string {
-	trimmed := strings.TrimSpace(key)
-	return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
-}
+// key, the form the board/pipeline sometimes passes internally. The shape of a
+// key inside a commit reference belongs to the commit-reference grammar, so it
+// is asked rather than spelled again here.
+func trimKeyBrackets(key string) string { return commitref.TrimBrackets(key) }
 
 // CanonicalCommitKey normalizes a ticket key to the canonical form used in
 // commit references. kind is the owning tracker's kind. A bare numeric key is
@@ -155,7 +155,7 @@ func trimKeyBrackets(key string) string {
 // returned unchanged.
 func CanonicalCommitKey(key, kind string) string {
 	trimmed := trimKeyBrackets(key)
-	if kind == "shortcut" && numericRe.MatchString(trimmed) {
+	if kind == "shortcut" && commitref.IsNumericKey(trimmed) {
 		return shortcutCommitPrefix + trimmed
 	}
 	return trimmed
@@ -170,7 +170,7 @@ func CanonicalCommitKey(key, kind string) string {
 // Shortcut's "SC-" prefix (SC-2855). Any key that already carries its own
 // format prefix is irrelevant to canonicalization, so "" is returned.
 func CommitKind(key string, instances []Instance) string {
-	if !numericRe.MatchString(trimKeyBrackets(key)) {
+	if !commitref.IsNumericKey(trimKeyBrackets(key)) {
 		return ""
 	}
 	for _, inst := range instances {
