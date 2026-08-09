@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -533,4 +534,51 @@ func TestReconcileStuckRunning_SkipsActiveLoop(t *testing.T) {
 
 	assert.Equal(t, 0, n, "a mid-flight PR loop must never be reddened by the stuck pass")
 	assert.Empty(t, posted)
+}
+
+// A CLI deploy has no agent for the sweep to probe and its CI gate can
+// legitimately block for the whole of deployTimeout — the ordinary 15-minute
+// grace must not red it out from under a healthy run (SC-3852).
+func TestReconcileStuckRunning_sparesARunningDeployInsideItsOwnGrace(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt(DeployStartedHeader, now.Add(-20*time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+
+	assert.Equal(t, 0, n, "a deploy 20 minutes in is still well inside deployTimeout + StuckRunningGrace")
+	assert.Empty(t, posted)
+}
+
+// Bounded, not exempt: past its own grace a deploy that never returned is as
+// dead as any other stage.
+func TestReconcileStuckRunning_redsADeployPastItsOwnGrace(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt(DeployStartedHeader, now.Add(-61*time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+
+	assert.Equal(t, 1, n)
+	require.Len(t, posted, 1)
+	assert.True(t, strings.HasPrefix(posted[0].Body, DeployFailedHeader))
+}
+
+// The new grace is done-stage-and-deploy-marker only: an ordinary running
+// stage still reds at the un-widened 15-minute grace.
+func TestReconcileStuckRunning_ordinaryStagesKeepTheShortGrace(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cards := []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-20*time.Minute))},
+	}}
+	var posted []struct{ Key, Body string }
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+
+	assert.Equal(t, 1, n, "20 minutes is past the ordinary 15-minute grace")
+	require.Len(t, posted, 1)
 }

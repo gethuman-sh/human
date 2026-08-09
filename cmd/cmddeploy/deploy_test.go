@@ -55,20 +55,24 @@ func (s *stubProvider) ListStatuses(context.Context, string) ([]tracker.Status, 
 
 type engineCall struct {
 	pmKey, title, prBody, branch string
+	overrideDecision             bool
 }
 
+// stubEngine swaps deployEntry rather than the engine underneath it: the seam
+// this route now calls first is the pre-deploy prelude (StartDeploy), so a
+// test exercising RunDeploy's derivation stubs at that boundary.
 func stubEngine(t *testing.T, err error) *[]engineCall {
 	t.Helper()
 	var calls []engineCall
-	prevEngine, prevDeps := deployEngine, newTransitionDeps
-	deployEngine = func(_ context.Context, _ daemon.BoardTransitionDeps, pmKey, title, prBody, branch string) error {
-		calls = append(calls, engineCall{pmKey, title, prBody, branch})
+	prevEntry, prevDeps := deployEntry, newTransitionDeps
+	deployEntry = func(_ context.Context, _ daemon.BoardTransitionDeps, req daemon.StartDeployRequest) error {
+		calls = append(calls, engineCall{req.PMKey, req.Title, req.PRBody, req.Branch, req.OverrideDecision})
 		return err
 	}
 	newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
 		return daemon.BoardTransitionDeps{}
 	}
-	t.Cleanup(func() { deployEngine, newTransitionDeps = prevEngine, prevDeps })
+	t.Cleanup(func() { deployEntry, newTransitionDeps = prevEntry, prevDeps })
 	return &calls
 }
 
@@ -150,7 +154,7 @@ func TestRunDeploy_refusesWhileADecisionIsOpen(t *testing.T) {
 	})
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "")
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "deploy refused")
@@ -166,12 +170,44 @@ func TestRunDeploy_recordsTheStartBeforeTheMerge(t *testing.T) {
 	})
 	var buf bytes.Buffer
 
-	require.NoError(t, RunDeploy(context.Background(), p, &buf, "SC-1", "", ""))
+	require.NoError(t, RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false))
 
 	require.NotEmpty(t, *events)
 	assert.Equal(t, "comment:[human:deploy-started]", (*events)[0],
 		"the start is recorded on the ticket before the engine touches the forge")
 	assert.Contains(t, p.posted[0], "branch: feat/x")
+}
+
+// A person may decide to ship past their own open question. --override-decision
+// is that explicit decision — it must still record the start and still run the
+// engine, it just skips the refusal.
+func TestRunDeploy_overrideShipsWhileADecisionIsOpen(t *testing.T) {
+	p, events := realRoute(t, []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x\ncommits: abc", Created: time.Now()},
+		{Body: "[human:options]\nstage: implementation\ncontext: c\n1: a\n2: b", Created: time.Now()},
+	})
+	var buf bytes.Buffer
+
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, true)
+
+	require.NoError(t, err)
+	assert.Contains(t, *events, "engine")
+	require.NotEmpty(t, p.posted)
+	assert.Contains(t, p.posted[0], "[human:deploy-started]")
+}
+
+// RunDeploy's own job is derivation; whether to override is the caller's flag,
+// passed straight through to the entry point untouched.
+func TestRunDeploy_passesTheOverrideThroughToTheEntryPoint(t *testing.T) {
+	calls := stubEngine(t, nil)
+	p := &stubProvider{}
+	var buf bytes.Buffer
+
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false, true)
+
+	require.NoError(t, err)
+	require.Len(t, *calls, 1)
+	assert.True(t, (*calls)[0].overrideDecision)
 }
 
 func TestRunDeploy_derivesBranchAndTitleFromHandoffAndTicket(t *testing.T) {
@@ -185,7 +221,7 @@ func TestRunDeploy_derivesBranchAndTitleFromHandoffAndTicket(t *testing.T) {
 	}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
 	call := (*calls)[0]
@@ -202,7 +238,7 @@ func TestRunDeploy_explicitFlagsSkipDerivation(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "Custom title", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "Custom title", false, false)
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
 	assert.Equal(t, "release/x", (*calls)[0].branch)
@@ -214,7 +250,7 @@ func TestRunDeploy_noHandoffNoBranchFails(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no review handoff")
 	assert.Empty(t, *calls)
@@ -228,7 +264,7 @@ func TestRunDeploy_handoffWithoutBranchFails(t *testing.T) {
 	}}}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no branch")
 	assert.Empty(t, *calls)
@@ -239,7 +275,7 @@ func TestRunDeploy_engineErrorPropagates(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false, false)
 	require.Error(t, err)
 	assert.NotContains(t, buf.String(), "Deployed")
 }

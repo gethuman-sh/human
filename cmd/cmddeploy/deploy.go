@@ -4,7 +4,10 @@
 // through by prose with raw gh commands. The engine is the daemon's
 // DeployBranch, so a CLI deploy and a board deploy cannot drift apart; that
 // includes the already-merged short-circuit (SC-911) that turns a re-run on
-// shipped work into a clean success instead of a 422.
+// shipped work into a clean success instead of a 422. The command now runs
+// the pre-deploy prelude — the open-decision refusal and the
+// [human:deploy-started] record — through internal/daemon's StartDeploy, the
+// same entry point a board route would use (SC-3852).
 package cmddeploy
 
 import (
@@ -29,7 +32,7 @@ import (
 // BuildDeployCmd creates the top-level "deploy" command.
 func BuildDeployCmd(deps cmdutil.Deps) *cobra.Command {
 	var branch, title string
-	var ready bool
+	var ready, overrideDecision bool
 	cmd := &cobra.Command{
 		Use:   "deploy KEY",
 		Short: "Ship a ticket's branch: PR, CI gate, rebase if stale, merge, markers, ticket close",
@@ -38,7 +41,9 @@ func BuildDeployCmd(deps cmdutil.Deps) *cobra.Command {
 The branch defaults to the ticket's newest [human:ready-for-review] handoff;
 the PR title defaults to the ticket title. A branch already merged into the
 base is a clean success (marker posted, ticket closed), not an error. The CI
-gate blocks until checks conclude, so this command can run for many minutes.`,
+gate blocks until checks conclude, so this command can run for many minutes.
+A ticket paused on an open [human:options] decision is refused rather than
+shipped; --override-decision ships anyway.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved, err := cmdutil.ResolveAutoProvider(cmd.Context(), cmd, args[0], true, deps)
@@ -46,19 +51,24 @@ gate blocks until checks conclude, so this command can run for many minutes.`,
 				return err
 			}
 			defer resolved.Cleanup()
-			return RunDeploy(cmd.Context(), resolved.Provider, cmd.OutOrStdout(), resolved.Key, branch, title, ready)
+			return RunDeploy(cmd.Context(), resolved.Provider, cmd.OutOrStdout(), resolved.Key, branch, title, ready, overrideDecision)
 		},
 	}
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch to ship (default: the ticket's review-handoff branch)")
 	cmd.Flags().StringVar(&title, "title", "", "PR title (default: the ticket title)")
 	cmd.Flags().BoolVar(&ready, "ready", false, "Ship a pull request the machine review loop is still holding in draft: un-draft it and merge")
+	cmd.Flags().BoolVar(&overrideDecision, "override-decision", false,
+		"Deploy even while an open [human:options] decision is waiting on a person")
 	return cmd
 }
 
-// deployEngine is the seam to the daemon's deploy implementation; a package
-// var so tests exercise derivation without a forge.
-var deployEngine = func(ctx context.Context, d daemon.BoardTransitionDeps, pmKey, title, prBody, branch string) error {
-	return d.DeployBranch(ctx, pmKey, title, prBody, branch)
+// deployEntry is the seam to the daemon's pre-deploy entry point — the prelude
+// (open-decision refusal, start marker) and the engine behind it. A package
+// var so tests exercise derivation without a forge; it deliberately points at
+// StartDeploy rather than DeployBranch, because the prelude is the thing this
+// route used to skip (SC-3852).
+var deployEntry = func(ctx context.Context, d daemon.BoardTransitionDeps, req daemon.StartDeployRequest) error {
+	return d.StartDeploy(ctx, req)
 }
 
 // newTransitionDeps builds the production wiring; a package var for tests.
@@ -86,7 +96,7 @@ var newTransitionDeps = func(p tracker.Provider) daemon.BoardTransitionDeps {
 }
 
 // RunDeploy derives branch and title, then runs the deploy gate.
-func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, branch, title string, ready bool) error {
+func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, branch, title string, ready, overrideDecision bool) error {
 	engineering := ""
 	if branch == "" {
 		comments, err := p.ListComments(ctx, key)
@@ -115,7 +125,13 @@ func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, bran
 	// Only an explicit gesture may clear the review loop's draft interlock; the
 	// engine refuses a draft otherwise and says what is holding it (SC-4027).
 	deps.MergeDraftPR = ready
-	if err := deployEngine(ctx, deps, key, title, prBody(key, engineering, branch), branch); err != nil {
+	if err := deployEntry(ctx, deps, daemon.StartDeployRequest{
+		PMKey:            key,
+		Title:            title,
+		PRBody:           prBody(key, engineering, branch),
+		Branch:           branch,
+		OverrideDecision: overrideDecision,
+	}); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(out, "Deployed %s (%s)\n", key, branch)

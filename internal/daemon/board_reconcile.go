@@ -398,6 +398,31 @@ func doneStageStartedHalf(comments []tracker.Comment) string {
 	return half
 }
 
+// deployEngineRunning reports a card inside the deploy engine's own bounded run:
+// the newest done-stage marker is [human:deploy-started] and nothing has
+// superseded it.
+func deployEngineRunning(comments []tracker.Comment) bool {
+	_, latest := latestStateInStage(comments, BoardDoneStage)
+	return strings.HasPrefix(strings.TrimSpace(latest.Body), DeployStartedHeader)
+}
+
+// stuckGraceFor is how long THIS card is left alone before liveness is judged.
+//
+// A deploy reports no agent liveness at all — the engine runs in the daemon (or
+// in a forwarded CLI call), not in a container the sweep can see — and its CI
+// gate legitimately blocks for the whole of deployTimeout. Judging it by the
+// ordinary grace would red a deploy that is merely waiting on CI and relaunch a
+// second one on top of it, which is the regression that shipping the start
+// marker would otherwise have caused (SC-3852). Bounded, not exempt: past the
+// engine's own timeout plus the ordinary grace, a deploy that never returned is
+// as dead as any other stage and is redded as usual.
+func stuckGraceFor(derived BoardCard, comments []tracker.Comment) time.Duration {
+	if derived.Stage == BoardDoneStage && deployEngineRunning(comments) {
+		return deployTimeout + StuckRunningGrace
+	}
+	return StuckRunningGrace
+}
+
 // reconcilePRLoops re-drives a loop card the live exit hook missed: a
 // done/running card whose newest done marker is a loop-started marker and for
 // which no loop half-agent is alive on this machine (a daemon restart lost the
@@ -643,7 +668,7 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	if failedType == "" {
 		return false
 	}
-	if now.Sub(derived.StageEnteredAt) < StuckRunningGrace {
+	if now.Sub(derived.StageEnteredAt) < stuckGraceFor(derived, card.Comments) {
 		// Young enough to still be genuine in-flight work.
 		return false
 	}
