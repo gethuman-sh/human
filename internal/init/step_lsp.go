@@ -1,7 +1,6 @@
 package init
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
