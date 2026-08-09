@@ -51,7 +51,7 @@ func TestHandleBoardAgentExit_stampsFailedMarker(t *testing.T) {
 	signing := marker.NewSigningCommenter(c, "d1", "rev1")
 	commenterFor := func() (tracker.Commenter, error) { return signing, nil }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "",
+	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "",
 		commenterFor, nil, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, nil, "d1", zerolog.Nop())
 
 	require.Len(t, c.added, 1)

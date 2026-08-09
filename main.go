@@ -545,10 +545,15 @@ func runHook(stdin io.Reader, stderr io.Writer, deliver hookDeliverer) error {
 	}
 
 	agentName := os.Getenv("HUMAN_AGENT_NAME")
+	// The daemon minted this when it launched the run and injected it here; it is
+	// how the daemon recognises its own work on the way back (SC-4082). Absent
+	// outside a daemon-launched container, which is the "no run id" case the
+	// daemon handles explicitly.
+	runID := os.Getenv("HUMAN_RUN_ID")
 	toolInput := compactJSON(input.ToolInput) // "" when absent
 	args := []string{"hook-event", eventName, input.SessionID, input.Cwd,
 		input.NotificationType, input.ToolName, input.ErrorType, agentName,
-		toolInput, input.SubagentType, input.Model}
+		toolInput, input.SubagentType, input.Model, runID}
 	if err := deliver(args); err != nil {
 		_, _ = fmt.Fprintf(stderr, "human hook: failed to deliver %q event to daemon: %v\n", eventName, err) // #nosec G705 -- CLI terminal output, not web
 	}

@@ -275,6 +275,11 @@ func ParseHookEventArgs(args []string) hookevents.Event {
 	if len(args) > 9 {
 		evt.Model = clampField(args[9])
 	}
+	// Appended last so a container running an older human CLI — which sends ten
+	// args — still parses cleanly and simply carries no run id.
+	if len(args) > 10 {
+		evt.RunID = clampField(args[10])
+	}
 	return evt
 }
 

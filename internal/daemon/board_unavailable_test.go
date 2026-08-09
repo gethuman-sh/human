@@ -36,7 +36,7 @@ func TestHandleBoardAgentExit_RateLimitHookRoutesToOutageAndSpendsNoBudget(t *te
 	var attemptCalls int
 	policy := countingPolicy("", false, &relaunched, &resets, &attemptCalls)
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "rate_limit", "StopFailure", commenterFor,
+	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "rate_limit", "StopFailure", commenterFor,
 		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
 
 	require.Empty(t, relaunched, "the live path never relaunches an outage — reconcile owns the backoff")
@@ -68,7 +68,7 @@ func TestHandleBoardAgentExit_RateLimitModelClassRoutesToOutage(t *testing.T) {
 	policy := countingPolicy("", false, &relaunched, &resets, &attemptCalls)
 	latestClass := func(string, string) (string, bool) { return proxy.ClassRateLimit, true }
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "StopFailure", commenterFor,
+	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "StopFailure", commenterFor,
 		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, latestClass, "d1", zerolog.Nop())
 
 	require.Empty(t, relaunched)
@@ -100,7 +100,7 @@ func TestHandleBoardAgentExit_AuthRoutesToUnchargedRed(t *testing.T) {
 	var attemptCalls int
 	policy := countingPolicy("", false, &relaunched, &resets, &attemptCalls)
 
-	handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "authentication_error", "StopFailure", commenterFor,
+	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "authentication_error", "StopFailure", commenterFor,
 		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
 
 	require.Empty(t, relaunched, "an auth wall must never be auto-relaunched")

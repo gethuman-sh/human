@@ -50,7 +50,7 @@ func TestHandleBoardAgentExit_OutageIsStatedOnce(t *testing.T) {
 	policy := retryPolicyFor(ExitOutage, true, &relaunched, &resets)
 
 	for range 3 {
-		handleBoardAgentExit(context.Background(), "board-SC-1-implementation", "", "", commenterFor,
+		handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "", commenterFor,
 			nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
 	}
 

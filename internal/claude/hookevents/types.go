@@ -24,6 +24,14 @@ type Event struct {
 	Model        string `json:"model,omitempty"`
 	// DurationMs is the tool's wall time, derived by pairing Post→Pre daemon-side.
 	DurationMs int64 `json:"duration_ms,omitempty"`
+	// RunID is the token the daemon minted when it launched this run and injected
+	// into the container. It is what lets the daemon act on ITS OWN launches
+	// rather than on whatever a caller names: AgentName is filled from an
+	// environment variable inside the container and identifies the work only by
+	// convention, while a RunID the daemon does not hold in its own registry is,
+	// by construction, not a run it started (SC-4082). Empty from a container
+	// launched before this existed.
+	RunID string `json:"run_id,omitempty"`
 }
 
 // SessionSnapshot holds the derived working/idle state for one session.
