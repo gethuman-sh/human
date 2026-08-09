@@ -1,8 +1,6 @@
 package board
 
 import (
-	"strings"
-
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/vieweridentity"
 )
@@ -37,10 +35,10 @@ func MarkOwnership(cards []daemon.BoardViewCard, viewer vieweridentity.Identity)
 	}
 }
 
-// ownerOf is the assignee, or the reporter when there is no assignee.
+// ownerOf reads the shared rule off the card. The rule itself lives in
+// daemon.OwnerOf because the daemon's work gate decides what to WORK by the same
+// answer this decides what to DIM; if they disagreed the board would dim cards
+// the machine is driving, or show as yours cards it will never touch.
 func ownerOf(c daemon.BoardViewCard) string {
-	if a := strings.TrimSpace(c.Assignee); a != "" {
-		return a
-	}
-	return strings.TrimSpace(c.Reporter)
+	return daemon.OwnerOf(c.Assignee, c.Reporter)
 }
