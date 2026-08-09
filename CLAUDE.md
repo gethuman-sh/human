@@ -20,15 +20,14 @@ everything else and say plainly what is blocked and why.
 
 # Communication
 
-Write for the reader this project has: an experienced engineer who is also the
+Write for the reader this project has: an experienced engineer who is also a
 product manager. They know the stack, the tracker and the pipeline, so the
 preamble, the restatement of the request and the tour of what you just did are
-all waste.
+all waste. Keep it fact based and concise.
 
 - **Answer first.** The finding, the verdict or the result in the opening line;
   evidence after it, by the shortest path.
-- **Compress the style, never the substance** — the point of
-  [caveman](https://github.com/juliusbrussee/caveman): brain big, mouth small.
+- **Compress the style, never the substance** — brain big, mouth small.
   Code, commands, paths, keys, SHAs, error strings and numbers stay byte-for-byte;
   the prose around them is what goes.
 - **Report the fact, not the process that produced it.** No narrating your own
@@ -50,7 +49,7 @@ Forty-five words that were five:
 > worth saying plainly since the summary line said exit 0 while `make check` had
 > actually exited 2. I checked the real exit code rather than trusting the wrapper.
 
-`gocyclo: split DeployBranch, now 16.`
+`gocyclo: DeployBranch 18, split, now 16.`
 
 # Tickets
 
@@ -71,9 +70,8 @@ ticket; stage says what is working on it; kind says where it lives.
 
 # Board rendering
 
-The desktop workflow board renders the issues of the **PM-role tracker only**. A tracker resolves to the pm role either through an explicit `role: pm` in `.humanconfig` or by kind inference — and **only Shortcut is inferred as pm for free** (see `tracker.Instance.InferRole`). Every other kind (Linear, Jira, GitHub, GitLab, Azure DevOps, ClickUp) resolves to no role unless you write `role: pm`, and a tracker with no pm role contributes nothing to the board even when it is configured correctly and returns issues.
-
-So: **if your PM tracker is anything other than Shortcut, it needs an explicit `role: pm`** to appear on the board:
+The desktop workflow board renders the issues of the **PM-role tracker only**. A tracker resolves to the pm role through an explicit `role: pm` in `.humanconfig` 
+It needs an explicit `role: pm` to appear on the board:
 
 ```yaml
 trackers:
@@ -82,7 +80,7 @@ trackers:
     role: pm            # required for non-Shortcut PM trackers to render on the board
 ```
 
-When a tracker resolves but none of them carries the pm role — or no tracker is configured at all — the board shows an explicit "No PM-role tracker configured" notice (naming the trackers it did find) instead of five silently empty columns, so the misconfiguration is visible rather than mistaken for "no work yet". A tracker that *failed to load* is a different fault and gets a different message: its failure is reported through the board's error banner (`board.ErrorBanner`), and the role notice stays silent, because telling a user whose secret store was unreachable to add `role: pm` sends them to edit a `.humanconfig` that needs no editing (SC-3554). Inference is intentionally left narrow — widening it risks the SC-254/SC-660 split-topology regressions — so the fix for a blank board is to add `role: pm`, not to expect auto-detection.
+When a tracker resolves but none of them carries the pm role — or no tracker is configured at all — the board shows an explicit "No PM-role tracker configured" notice (naming the trackers it did find) instead of five silently empty columns, so the misconfiguration is visible rather than mistaken for "no work yet". A tracker that *failed to load* is a different fault and gets a different message: its failure is reported through the board's error banner (`board.ErrorBanner`), and the role notice stays silent, because telling a user whose secret store was unreachable to add `role: pm` sends them to edit a `.humanconfig` that needs no editing. 
 
 # Review handoff
 
@@ -137,11 +135,7 @@ The daemon is auto-discovered via `~/.human/daemon.json`. Check with `human daem
 
 `~/.human/state.db` (`internal/agentstate`) and the recall search index (`internal/recall`) are keyed by `(project, …)`, not by ticket key alone — two registered projects whose keys collide (e.g. both have a `SC-1`) never share a run's working memory, retry budgets, or stage leases. The project is resolved daemon-side from the ticket key via `ProjectRegistry.EntryForKey` — the same routing the board driver already uses — and injected into a forwarded `human state` command as `HUMAN_STATE_PROJECT`; no prompt names the project. Single-project installs, direct CLI use, and rows written before this existed all resolve to the empty string, the "default project" — so an existing `state.db` migrates in place with no reconfiguration and no visible migration step. The recall index makes the same call: `project` is folded into its dedup identity (`UNIQUE(key, source, project)`) so two projects indexing the same tracker instance and key no longer silently replace each other's entry in search results.
 
-# Tracker Tokens (Daemon Host Setup)
-
-These tokens only need to be set **once on the host where the daemon runs**. They are NOT needed for individual CLI invocations when the daemon is running.
-
-## Preferred: Native vault provider (1Password)
+## Native vault provider (1Password)
 
 Add a `vault` section and use `1pw://` references directly in `.humanconfig.yaml`:
 
@@ -161,9 +155,7 @@ trackers:
     user: alice@example.com
     key: 1pw://Development/Jira API Key/token
 
-# The GitHub PAT that opens pull requests is a FORGE, not a tracker. A
-# githubs: (or trackers: kind: github) entry is an issue tracker and is
-# listed for issues; put it there only if your issues live on GitHub.
+# The GitHub PAT that opens pull requests is a FORGE, not a tracker. 
 forges:
   - name: personal
     token: 1pw://Development/GitHub PAT/token
