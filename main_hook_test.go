@@ -10,6 +10,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // A newer Claude Code renamed the event key; the daemon is unreachable.
@@ -197,6 +198,30 @@ func TestRunHook_TopLevelModel_StillForwarded(t *testing.T) {
 	require.Len(t, captured, 12)
 	assert.Empty(t, captured[9])
 	assert.Equal(t, "opus", captured[10], "a top-level model must survive the nested read")
+}
+
+// The producer writes a 12-element slice and the daemon's reader indexes into
+// it after the router has stripped the leading "hook-event" token. Each half is
+// pinned on its own side; this pins the seam between them, because a position
+// that means one thing to the writer and another to the reader is the same
+// class of defect as reading the wrong level of the payload (SC-3582).
+func TestRunHook_AgentSpawn_SurvivesTheDaemonsPositionalRead(t *testing.T) {
+	payload := `{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w",` +
+		`"tool_name":"Agent","tool_input":{"prompt":"go","subagent_type":"human-reviewer","model":"opus"}}`
+
+	var captured []string
+	deliver := func(args []string) error { captured = args; return nil }
+
+	var stderr bytes.Buffer
+	require.NoError(t, runHook(strings.NewReader(payload), &stderr, deliver))
+	require.Len(t, captured, 12)
+
+	// The router hands the reader everything after the command token.
+	evt := daemon.ParseHookEventArgs(captured[1:])
+	assert.Equal(t, "PreToolUse", evt.EventName)
+	assert.Equal(t, "Agent", evt.ToolName)
+	assert.Equal(t, "human-reviewer", evt.SubagentType)
+	assert.Equal(t, "opus", evt.Model)
 }
 
 // An ordinary tool call is not a spawn: both fields stay empty, which is what
