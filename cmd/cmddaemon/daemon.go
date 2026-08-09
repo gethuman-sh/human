@@ -1235,10 +1235,53 @@ func staleBuildNotice(runningCommit, onDiskCommit string) string {
 		runningCommit, onDiskCommit)
 }
 
+// Stop timing. The grace period is what an idle daemon needs to put itself
+// down. The drain default deliberately does NOT cover a whole deploy: every
+// caller of `daemon stop` wants a prompt answer (the desktop's close flow shells
+// out to this command), so a daemon that is genuinely mid-deploy is reported
+// rather than waited on for the better part of an hour. Someone who does want to
+// sit through it says so with --wait.
+const stopPollInterval = 100 * time.Millisecond
+
+// Vars, not consts, so tests can shrink the waits they are exercising.
+var (
+	stopGrace        = 5 * time.Second
+	stopDrainDefault = 30 * time.Second
+)
+
+// inFlightOps reports how many restart-blocking operations the daemon is
+// running, best-effort. It is asked BEFORE the stop signal, because a daemon
+// that has begun shutting down closes its listener first and could no longer
+// answer — so the number is read while the answer still exists. A package var
+// for tests.
+var inFlightOps = func() (int, bool) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return 0, false
+	}
+	status, err := daemon.GetDaemonBusy(info.Addr, info.Token)
+	if err != nil {
+		return 0, false
+	}
+	return status.InFlight, true
+}
+
 func buildDaemonStopCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	var wait time.Duration
+	cmd := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop a running daemon",
+		Long: `Stop the running daemon.
+
+A daemon runs its forwarded commands in its own process and exits once they
+finish, and the long one is a ` + "`human deploy`" + ` sitting on its CI gate for minutes.
+So a daemon that does not stop promptly is reported as what it is — still
+finishing N operations — instead of as a bare timeout, and --wait sits through it.
+
+--force ends the daemon now and abandons that work. It signals this daemon's
+process alone — unlike killing by name, which also ends every other ` + "`human`" + `
+command running on the machine, including a deploy someone is waiting on.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
 
@@ -1250,26 +1293,24 @@ func buildDaemonStopCmd() *cobra.Command {
 				return nil
 			}
 
+			// Read the in-flight count before signalling: this is the only moment
+			// the daemon can still be asked.
+			inFlight, known := 0, false
+			if !force {
+				inFlight, known = inFlightOps()
+			}
+
 			_, _ = fmt.Fprintf(out, "Stopping daemon (PID %d)...\n", pid)
-			if err := stopProcess(pid); err != nil {
-				return errors.WrapWithDetails(err, "failed to stop daemon", "pid", pid)
+			signal, verb := stopProcess, "stop"
+			if force {
+				signal, verb = killProcess, "force-stop"
+			}
+			if err := signal(pid); err != nil {
+				return errors.WrapWithDetails(err, "failed to "+verb+" daemon", "pid", pid)
 			}
 
-			// Poll for exit (up to 5s).
-			const (
-				pollInterval = 100 * time.Millisecond
-				pollTimeout  = 5 * time.Second
-			)
-			deadline := time.Now().Add(pollTimeout)
-			for time.Now().Before(deadline) {
-				if !isProcessAlive(pid) {
-					break
-				}
-				time.Sleep(pollInterval)
-			}
-
-			if isProcessAlive(pid) {
-				return errors.WithDetails("daemon did not exit within timeout", "pid", pid)
+			if err := awaitDaemonExit(out, pid, inFlight, wait, known, force); err != nil {
+				return err
 			}
 
 			RemovePidFile()
@@ -1278,6 +1319,52 @@ func buildDaemonStopCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "End the daemon immediately, abandoning in-flight work (signals this daemon only)")
+	cmd.Flags().DurationVar(&wait, "wait", stopDrainDefault, "How long to wait for in-flight work to finish (e.g. 45m to sit through a deploy)")
+	return cmd
+}
+
+// awaitDaemonExit waits for the signalled daemon to go. Past the grace period it
+// splits the two cases a single timeout used to report as one: a daemon draining
+// work it was told to finish, which is named and waited on for wait, and a
+// daemon that is stuck with nothing in flight, which is reported with the
+// remedy. The split is the point — "did not exit within timeout" reads as broken
+// and sends an operator to a signal aimed by name, which also ends the CLI half
+// of the very deploy the daemon was finishing.
+func awaitDaemonExit(out io.Writer, pid, inFlight int, wait time.Duration, known, force bool) error {
+	if waitForProcessExit(pid, stopGrace) {
+		return nil
+	}
+	if force {
+		return errors.WithDetails("daemon did not exit after a forced stop", "pid", pid)
+	}
+	if !known || inFlight == 0 {
+		return errors.WithDetails(
+			"daemon did not exit within the grace period and reported no work in flight — re-run with --force to end it (that signals this daemon only, unlike killing by name)",
+			"pid", pid, "grace", stopGrace.String())
+	}
+	_, _ = fmt.Fprintf(out,
+		"The daemon is finishing %d in-flight operation(s) and exits when they are done — a deploy on its CI gate can take many minutes.\nWaiting %s; --wait sits through it, --force ends it now and abandons the work.\n",
+		inFlight, wait)
+	if waitForProcessExit(pid, wait) {
+		return nil
+	}
+	return errors.WithDetails(
+		"daemon is still finishing in-flight work — it exits on its own when that work is done, so re-run stop later, re-run with --wait to sit through it, or --force to end it now (that signals this daemon only, unlike killing by name)",
+		"pid", pid, "in_flight", inFlight, "waited", wait.String())
+}
+
+// waitForProcessExit polls until the process is gone or the bound elapses,
+// reporting whether it exited.
+func waitForProcessExit(pid int, bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
+	for time.Now().Before(deadline) {
+		if !isProcessAlive(pid) {
+			return true
+		}
+		time.Sleep(stopPollInterval)
+	}
+	return !isProcessAlive(pid)
 }
 
 // --- PID file helpers (delegated to internal/daemon) ---

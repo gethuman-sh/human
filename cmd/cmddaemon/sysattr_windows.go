@@ -42,3 +42,10 @@ func stopProcess(pid int) error {
 	}
 	return p.Kill()
 }
+
+// killProcess ends the process outright. Windows has no gentler stop to
+// distinguish it from, so it is the same call — the flag still matters because
+// it names one pid instead of every process called "human".
+func killProcess(pid int) error {
+	return stopProcess(pid)
+}

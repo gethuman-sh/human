@@ -14,6 +14,14 @@ import (
 // view already does (SC-3015).
 type DaemonBusyStatus struct {
 	Busy bool `json:"busy"`
+	// InFlight is how many restart-blocking operations the daemon is running
+	// right now — forwarded commands (a `human deploy` on its CI gate is the
+	// long one) and the heavy board routes. It is what turns "the daemon did
+	// not exit within the timeout" from a dead end into a sentence that names
+	// what the daemon is finishing, so an operator waits instead of reaching
+	// for a signal that also kills every other `human` process on the machine.
+	// Zero on an older daemon that does not send the field.
+	InFlight int `json:"in_flight"`
 }
 
 // handleDaemonBusy answers the daemon-busy route. A nil LeaseChecker (an
@@ -30,7 +38,9 @@ func (s *Server) handleDaemonBusy(conn net.Conn) {
 			return
 		}
 	}
-	data, err := json.Marshal(DaemonBusyStatus{Busy: busy})
+	// The route itself is not counted (routeSimpleCommand runs it uncounted), so
+	// asking the question never becomes part of its own answer.
+	data, err := json.Marshal(DaemonBusyStatus{Busy: busy, InFlight: s.BlockingOps()})
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return

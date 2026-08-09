@@ -26,3 +26,11 @@ func isProcessAlive(pid int) bool {
 func stopProcess(pid int) error {
 	return syscall.Kill(pid, syscall.SIGTERM)
 }
+
+// killProcess ends the process with the given PID outright. It exists so
+// `human daemon stop --force` has an answer for a wedged daemon that names ONE
+// pid — the reach for `killall human` matches every process of that name, which
+// on this machine includes the `human deploy` a user is waiting on.
+func killProcess(pid int) error {
+	return syscall.Kill(pid, syscall.SIGKILL)
+}
