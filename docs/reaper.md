@@ -296,8 +296,11 @@ ends is the daemon process going away underneath it — and the work that dies
 there is not in a container at all. A forwarded command executes **inside** the
 daemon (`Server.executeCommand`), and the long one is `human deploy`, which can
 sit up to `deployTimeout` = **45 minutes** on its CI gate. It leaves no
-container, no execution log and no marker, so an interrupted deploy is
-afterwards indistinguishable from one that never started.
+container and no execution log; since SC-3852 it does leave a marker — the
+entry point (`internal/daemon.StartDeploy`) posts `[human:deploy-started]`
+before anything is pushed — so an interrupted deploy is now visible on the
+ticket as a done-stage card that started and never finished, rather than being
+indistinguishable from one that never started.
 
 Three things keep that from happening silently:
 
