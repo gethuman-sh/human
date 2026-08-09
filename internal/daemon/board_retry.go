@@ -201,9 +201,30 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 	case relaunchOutage:
 		return r.relaunchOutage(pmKey, stage, logger)
 	}
+	return r.relaunchBounded(ctx, pmKey, stage, relaunchReason(outcome, recorded), commenter, daemonID, logger)
+}
 
-	// relaunchBounded: the charged, capped path for a flake, a dead container, or
-	// an undiagnosed death.
+// relaunchReason says, for the retry note, why this relaunch is happening.
+func relaunchReason(outcome StageExit, recorded bool) string {
+	if recorded {
+		return "the stage recorded exit: " + string(outcome)
+	}
+	return "the agent exited without recording an outcome"
+}
+
+// relaunchBounded is the charged, capped path: a flake, a dead container, an
+// undiagnosed death, or a launch that never happened at all. Shared with the
+// queued-launch pass rather than copied into it — a second budget ladder is the
+// defect class this package keeps finding in itself, and the cap is only a cap
+// if one counter guards every automatic relaunch.
+//
+// The caller supplies the reason because only the caller knows it: an exit this
+// path classified, or a decision whose launch went missing before any agent
+// existed to record anything.
+func (r StageRetry) relaunchBounded(ctx context.Context, pmKey string, stage BoardStage, reason string, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) bool {
+	if !r.enabled() {
+		return false
+	}
 	attempt, err := r.Attempts(pmKey, stage)
 	if err != nil {
 		// Without a trustworthy count an automatic relaunch could loop, so fall
@@ -235,7 +256,7 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 			Msg("board retry: relaunch refused (nothing started); attempt not charged")
 		return false
 	}
-	r.note(ctx, pmKey, stage, attempt, outcome, recorded, commenter, daemonID, logger)
+	r.note(ctx, pmKey, stage, attempt, reason, commenter, daemonID, logger)
 	logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Int("attempt", attempt).
 		Msg("board retry: stage relaunched automatically")
 	return true
@@ -315,13 +336,9 @@ func (r StageRetry) recordedOutage(pmKey string, stage BoardStage) bool {
 // note records the automatic retry on the ticket so the trail shows why the
 // stage started again. It is a plain comment on purpose — a [human:*] header
 // would be classified as a stage marker and move the card.
-func (r StageRetry) note(ctx context.Context, pmKey string, stage BoardStage, attempt int, outcome StageExit, recorded bool, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) {
+func (r StageRetry) note(ctx context.Context, pmKey string, stage BoardStage, attempt int, reason string, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) {
 	if commenter == nil {
 		return
-	}
-	reason := "the agent exited without recording an outcome"
-	if recorded {
-		reason = "the stage recorded exit: " + string(outcome)
 	}
 	body := "Automatic retry " + strconv.Itoa(attempt) + "/" + strconv.Itoa(r.max()) + " of the " +
 		string(stage) + " stage — " + reason + "."

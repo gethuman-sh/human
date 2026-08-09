@@ -374,6 +374,22 @@
       "if_nothing_happens": "Nothing. This is the one state the machine may not resolve for itself, which is the whole point of raising a fork rather than guessing."
     },
     {
+      "name": "queued",
+      "doc": "A decision is answered and names a stage to run; nothing has started it yet.",
+      "board": {
+        "stage": "any",
+        "state": "queued",
+        "note": "Only the three stages an options block may relaunch — planning, implementation, verification (optionStages) — so backlog and done never carry it. Synthesized by optionChosenQueued when [human:option-chosen] is the newest board-relevant signal; any classified marker newer than the choice supersedes it."
+      },
+      "holds": "The newest board-relevant marker is an [human:option-chosen] whose block names a resumable stage, and that stage's started marker has not been posted.",
+      "who_may_act": [
+        "user",
+        "daemon"
+      ],
+      "stale_when": "Past QueuedLaunchGrace (2m) with no live agent for the stage. Recording the choice and launching the stage are the two halves of one ApplyOption call, in that order, so the ordinary window is microseconds; the grace exists only so a reconcile tick landing inside it does not race a launch already on its way.",
+      "if_nothing_happens": "reconcileQueuedLaunch starts the stage the decision named, on the next tick past the grace. It relaunches through the CHARGED, capped path (DefaultStageRetries), so a stage that cannot be launched is tried twice and then left for a person rather than forever — and a refusal that starts nothing, the plan gate, is not charged at all and routes the card itself to needs-planning. It deliberately does not go through the ordinary retry classifier: that reads the stage's last recorded exit, which here is the ExitNeedsInput of the stage that RAISED the decision, and would classify the card as one to leave for a human — refusing to start exactly the cards this pass exists for. Until SC-3865 nothing watched this state at all: it exists so the stuck-running sweep will not red a card whose decision was just answered (SC-1320), and it achieved that by being a state no sweep looked at — one property, protection from one side and a hole from the other."
+    },
+    {
       "name": "stopped",
       "doc": "A stage gave up and said why: a spent budget, an unreviewable change, a failed deploy. Needs a human.",
       "board": {
@@ -459,7 +475,8 @@
         "ticket-reviewed",
         "planned",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "queued"
       ],
       "dst": "planning",
       "actor": "user",
@@ -512,7 +529,8 @@
         "filed",
         "ticket-reviewed",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "queued"
       ],
       "dst": "preflight",
       "actor": "user",
@@ -655,7 +673,8 @@
         "planned",
         "reviewed",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "queued"
       ],
       "dst": "implementing",
       "actor": "user",
@@ -704,7 +723,8 @@
       "src": [
         "handed-off",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "queued"
       ],
       "dst": "in-review",
       "actor": "daemon",
@@ -899,12 +919,12 @@
       "src": [
         "awaiting-decision"
       ],
-      "dst": "planning",
+      "dst": "queued",
       "actor": "user",
       "marker": "[human:option-chosen]",
-      "where": "board_state.go optionChosenQueued",
-      "doc": "A human picked an answer; the run relaunches with the choice in hand. dst is the stage the block NAMES, not the stage the item sits in — planning is the common case. A PR-loop escalation deliberately names implementation even though the item is in the deploy stage: the fixer raised a question only a code change can answer, so the choice rebuilds, and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named.",
-      "dst_is_derived": true
+      "where": "board_options.go ApplyOption — records the choice, then starts the stage; board_state.go optionChosenQueued reads the window between the two",
+      "doc": "A human picked an answer. This records it and nothing more: ApplyOption posts the choice comment and only then calls startAgentStage, so the item is queued for a stage before it is running in one. The stage that gets queued is the one the block NAMES, not the one the item sits in — planning is the common case, while a PR-loop escalation deliberately names implementation even though the item is in the deploy stage, because the fixer raised a question only a code change can answer and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named. The stage is derived; the state is not — every answered decision lands here first.",
+      "dst_is_derived": false
     },
     {
       "name": "substrate-unreachable",
@@ -928,7 +948,8 @@
       "name": "launch-refused-no-plan",
       "src": [
         "implementing",
-        "stopped"
+        "stopped",
+        "queued"
       ],
       "dst": "stopped",
       "actor": "daemon",
@@ -1130,6 +1151,7 @@
     "constants": {
       "BoardReconcileInterval": "2m, jittered ±50% — how often the durable pass re-scans open cards (internal/daemon/board_reconcile.go)",
       "StuckRunningGrace": "15m — how long a running card is left alone before liveness is judged",
+    "QueuedLaunchGrace": "2m — how long a card whose decision was answered may sit unstarted before the machine starts it (internal/daemon/board_reconcile_queued.go). Short because the launch is the same call that recorded the choice; it exists only so a tick landing inside that call does not race it.",
       "DefaultStageRetries": "2 — automatic in-place relaunches of one stage (internal/daemon/board_retry.go)",
       "DefaultPRReviewRounds": "3 — review→fix rounds before the loop escalates (internal/daemon/pr_review_loop.go)",
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
