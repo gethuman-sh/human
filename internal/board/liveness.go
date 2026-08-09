@@ -106,19 +106,51 @@ func livenessOf(card daemon.BoardViewCard, live LiveAgents) string {
 	if card.StageDaemonID != live.DaemonID {
 		return daemon.AgentElsewhere
 	}
-	if withinGrace(card.StageEnteredAt, live.Now) {
+	if withinGrace(card.StageEnteredAt, live.Now, agentLaunchGrace) {
 		return ""
+	}
+	if recoverableByStuckRunning(card) && withinGrace(card.StageEnteredAt, live.Now, daemon.StuckRunningGrace) {
+		// Past agentLaunchGrace but not yet past StuckRunningGrace, and this is
+		// exactly the class reconcileStuckRunning owns (board_reconcile.go:482):
+		// the daemon's own bounded relaunch is still due on this very
+		// timestamp. Saying AgentDead here would send the reader to retry work
+		// the machine has not yet had its turn to fix.
+		return daemon.AgentRecovering
 	}
 	return daemon.AgentDead
 }
 
-// withinGrace reports whether the card's stage marker is too fresh for a missing
-// agent to mean anything yet. An absent or unparseable timestamp counts as
-// fresh: a death verdict must never rest on a time we could not read.
-func withinGrace(stageEnteredAt string, now time.Time) bool {
+// recoverableByStuckRunning reports whether a card belongs to the class
+// reconcileStuckRunning owns: a running planning/implementation/verification
+// card (board_reconcile.go:379, board_transition.go:1946-1959 name exactly
+// these three plus done). Deliberately narrower than that failedHeaderFor set:
+// a running done-stage card is a PR review<->fix loop, which
+// reconcilePRLoops re-drives with NO grace at all (board_reconcile.go:253), so
+// it must keep reading dead the moment agentLaunchGrace passes rather than
+// wait out StuckRunningGrace too. A verification/done/verdict=failed card is
+// never BoardRunning (it derives BoardDone), so it is excluded here already
+// and stays on the dead path unchanged — that is the ticket's headline
+// SC-1542 case and must not soften.
+func recoverableByStuckRunning(card daemon.BoardViewCard) bool {
+	if card.State != string(daemon.BoardRunning) {
+		return false
+	}
+	switch daemon.BoardStage(card.Stage) {
+	case daemon.BoardPlanning, daemon.BoardImplementation, daemon.BoardVerification:
+		return true
+	default:
+		return false
+	}
+}
+
+// withinGrace reports whether the card's stage marker is too fresh, against
+// the given window, for a missing agent to mean anything yet. An absent or
+// unparseable timestamp counts as fresh: a death verdict must never rest on a
+// time we could not read.
+func withinGrace(stageEnteredAt string, now time.Time, grace time.Duration) bool {
 	t, err := time.Parse(time.RFC3339, stageEnteredAt)
 	if err != nil {
 		return true
 	}
-	return now.Sub(t) < agentLaunchGrace
+	return now.Sub(t) < grace
 }

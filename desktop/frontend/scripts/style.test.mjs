@@ -269,3 +269,11 @@ test("liveness badge classes carry a colour of their own (SC-3569)", () => {
   assert.match(ruleBody(".badge.stalled"), /color:\s*var\(--turn-person\)/);
   assert.match(ruleBody(".badge.elsewhere"), /color:\s*var\(--turn-machine\)/);
 });
+
+// SC-3569 PR review finding: "recovering" (dead, but the daemon's own
+// StuckRunningGrace relaunch is not yet due) must stay in the MACHINE
+// register like "elsewhere" — never the person-facing amber "stalled" uses,
+// or the card would ask a person for work the machine is still due to retry.
+test("recovering badge stays in the machine register, not the person amber (SC-3569)", () => {
+  assert.match(ruleBody(".badge.recovering"), /color:\s*var\(--turn-machine\)/);
+});

@@ -358,6 +358,24 @@ test("a dead card's elapsed time is not labelled running (SC-3569)", () => {
   assert.match(html, /since last activity/);
 });
 
+// SC-3569 PR review finding: "recovering" is dead-but-machine-owed, and the
+// elapsed clock must read exactly as honestly as "dead" — no process is
+// visible either way, and which register the BADGE uses is a separate
+// question this label does not answer.
+test("a recovering card's elapsed time reads the same as a dead one (SC-3569)", () => {
+  const now = Date.now();
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: true, totalCostUSD: 1.0, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
+    "implementation",
+    new Date(now - 300_000).toISOString(), // 5m ago
+    now,
+    "recovering",
+  );
+  assert.match(html, /5m 0s/);
+  assert.doesNotMatch(html, /running/, "a recovering card must not claim work is in progress either");
+  assert.match(html, /since last activity/);
+});
+
 test("an elsewhere card names the other machine rather than claiming local progress (SC-3569)", () => {
   const now = Date.now();
   const html = buildCostSection(

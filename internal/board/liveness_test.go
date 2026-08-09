@@ -71,8 +71,50 @@ func TestMarkAgentLiveness_freshLaunchIsNotDead(t *testing.T) {
 	assert.Empty(t, cards[0].AgentLiveness)
 }
 
+// Just past agentLaunchGrace, reconcileStuckRunning's own StuckRunningGrace
+// relaunch is not yet due for a running implementation card (the class it
+// owns), so this must read as machine-owed recovery, not a person's turn.
 func TestMarkAgentLiveness_graceBoundary(t *testing.T) {
 	c := card("SC-1", string(daemon.BoardImplementation), string(daemon.BoardRunning), "d1", agentLaunchGrace+time.Second, livenessNow)
+	cards := []daemon.BoardViewCard{c}
+	MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+	assert.Equal(t, daemon.AgentRecovering, cards[0].AgentLiveness)
+}
+
+// A running planning/implementation/verification card is exactly the class
+// reconcileStuckRunning owns (board_reconcile.go:379-410): it relaunches at
+// StuckRunningGrace (15m), measured from the same StageEnteredAt this overlay
+// reads. Between agentLaunchGrace and StuckRunningGrace the card must render
+// as machine-owed recovery — never AgentDead, which the board paints in the
+// person-facing register with a "Retry it" ask. Once StuckRunningGrace has
+// actually passed, the machine's own pass has already had its turn, so the
+// verdict must become AgentDead — silence past that point IS the person's
+// turn, and the ticket's core value (surfacing a truly abandoned card) must
+// not be lost to an unbounded machine register.
+func TestMarkAgentLiveness_recoveringUntilStuckRunningGraceThenDead(t *testing.T) {
+	for _, stage := range []daemon.BoardStage{daemon.BoardPlanning, daemon.BoardImplementation, daemon.BoardVerification} {
+		recovering := card("SC-1", string(stage), string(daemon.BoardRunning), "d1", daemon.StuckRunningGrace-time.Second, livenessNow)
+		recoveringCards := []daemon.BoardViewCard{recovering}
+		MarkAgentLiveness(recoveringCards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+		assert.Equal(t, daemon.AgentRecovering, recoveringCards[0].AgentLiveness,
+			"%s: reconcileStuckRunning's own relaunch is still due — must not read as needing a person yet", stage)
+
+		dead := card("SC-1", string(stage), string(daemon.BoardRunning), "d1", daemon.StuckRunningGrace+time.Second, livenessNow)
+		deadCards := []daemon.BoardViewCard{dead}
+		MarkAgentLiveness(deadCards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+		assert.Equal(t, daemon.AgentDead, deadCards[0].AgentLiveness,
+			"%s: past StuckRunningGrace the machine's own pass has already had its turn — now it is the person's", stage)
+	}
+}
+
+// reconcilePRLoops re-drives a done-stage PR review<->fix loop card with NO
+// grace at all (board_reconcile.go:253), unlike the three running stages
+// above. A done-stage loop card must therefore move straight to AgentDead the
+// moment agentLaunchGrace passes — StuckRunningGrace has no bearing on this
+// class, and it must not linger in the machine register longer than before.
+func TestMarkAgentLiveness_doneStageLoopStaysDeadNotRecovering(t *testing.T) {
+	c := card("SC-1", string(daemon.BoardDoneStage), string(daemon.BoardRunning), "d1", agentLaunchGrace+time.Second, livenessNow)
+	c.DeployPhase = "pr-review"
 	cards := []daemon.BoardViewCard{c}
 	MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
 	assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness)
@@ -85,6 +127,14 @@ func TestMarkAgentLiveness_graceBoundary(t *testing.T) {
 func TestAgentLaunchGrace_outlastsTheDaemonsOwnRecovery(t *testing.T) {
 	assert.Greater(t, agentLaunchGrace, daemon.QueuedLaunchGrace,
 		"a card must never read as needing a person while the machine's own relaunch pass is still due")
+	// Pin the StuckRunningGrace relation too, so the two constants can never
+	// drift back into step the way agentLaunchGrace and QueuedLaunchGrace once
+	// did: agentLaunchGrace is the point a running card first reads as
+	// machine-owed recovery, and it must land strictly before the daemon's own
+	// StuckRunningGrace relaunch — otherwise a running card would jump straight
+	// from "starting" to AgentDead with no recovery window at all.
+	assert.Less(t, agentLaunchGrace, daemon.StuckRunningGrace,
+		"a running card must have a machine-owed recovery window before StuckRunningGrace, not a straight jump to AgentDead")
 }
 
 // The relation above is only worth pinning for what it renders, so pin that

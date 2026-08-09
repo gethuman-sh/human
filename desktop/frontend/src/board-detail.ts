@@ -160,10 +160,13 @@ function fmtDuration(ms: number): string {
 // live process: when the viewer can see there is none — the agent died, or
 // the stage belongs to another machine — the same number must be labelled
 // honestly, or a card whose agent has been dead for fourteen hours reads as
-// the busiest one on the board (SC-3569). Unknown liveness keeps today's
-// word, because absence of a signal is not proof.
+// the busiest one on the board (SC-3569). "recovering" reads the same as
+// "dead" here: no process is visible either way, and the elapsed clock is
+// honest about that regardless of whether the daemon's own relaunch has come
+// due yet — that distinction belongs to the badge, not this label. Unknown
+// liveness keeps today's word, because absence of a signal is not proof.
 function elapsedLabel(agentLiveness: string | undefined): string {
-  if (agentLiveness === "dead") return "since last activity";
+  if (agentLiveness === "dead" || agentLiveness === "recovering") return "since last activity";
   if (agentLiveness === "elsewhere") return "— on another machine";
   return "running";
 }

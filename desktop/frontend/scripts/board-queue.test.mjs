@@ -709,6 +709,21 @@ test("unknown liveness renders exactly as today (SC-3569)", () => {
   );
 });
 
+// SC-3569 PR review finding: "dead" and "recovering" must NOT render the
+// same. A running card between agentLaunchGrace and StuckRunningGrace is
+// dead-but-machine-owed — the daemon's own relaunch is still due — so it must
+// never carry the "stalled" class (the person register) or the "Retry it"
+// wording, only "recovering" (the machine register).
+test("a recovering agent stays in the machine register, never the person's (SC-3569)", () => {
+  const dead = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "dead" });
+  const recovering = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "recovering" });
+  assert.equal(dead.cls, "stalled");
+  assert.equal(recovering.cls, "recovering", "must not share the person-facing stalled class");
+  assert.notDeepEqual(dead, recovering);
+  assert.equal(recovering.spinner, false, "no live process is asserted either");
+  assert.doesNotMatch(recovering.title, /Retry it/, "the machine, not the person, is due to act next");
+});
+
 // The queued and fixing badges spin on the same unchecked assumption.
 test("queued and fixing badges also drop the spinner for a dead agent (SC-3569)", () => {
   const queued = badgeInfo({ stage: "implementation", state: "queued", agentLiveness: "dead" });

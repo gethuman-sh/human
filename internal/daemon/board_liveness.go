@@ -5,9 +5,19 @@ package daemon
 // distinction between "nothing is running" and "we could not ask" is the whole
 // point of the set (SC-3569).
 const (
-	AgentLive      = "live"
-	AgentDead      = "dead"
-	AgentElsewhere = "elsewhere"
+	AgentLive = "live"
+	AgentDead = "dead"
+	// AgentRecovering is "dead, but the machine still owes it a try": a running
+	// planning/implementation/verification card whose agent is gone, but not
+	// yet past StuckRunningGrace — the window reconcileStuckRunning itself
+	// waits out before relaunching (board_reconcile.go:482). Rendering this the
+	// same as AgentDead would ask a person to retry work the daemon's own
+	// bounded relaunch has not yet had its turn to fix (the SC-1830 rule
+	// board.agentLaunchGrace already applies to the queued class); this value
+	// lets the viewer paint the machine register instead until that turn has
+	// passed (SC-3569 PR review finding).
+	AgentRecovering = "recovering"
+	AgentElsewhere  = "elsewhere"
 )
 
 // AgentNamesForCard names every board agent that could legitimately be running

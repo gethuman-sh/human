@@ -39,10 +39,14 @@ export interface QueueCard {
   deployPhase?: string;
   // What this viewer's machine could see of the agent behind the card, filled by
   // the desktop overlay and never by the daemon (SC-3569): "live" = a board agent
-  // is running here; "dead" = the stage is this machine's to run and nothing is
-  // running it; "elsewhere" = another machine's daemon owns the stage, so it
-  // cannot be seen from here. ABSENT means unknown — render exactly as before,
-  // because absence of a signal is never proof.
+  // is running here; "dead" = the stage is this machine's to run, nothing is
+  // running it, and the daemon's own recovery pass for this class has already
+  // had its turn; "recovering" = same absence, but that recovery pass is not
+  // yet due (a running planning/implementation/verification card before
+  // StuckRunningGrace) — dead, but still the machine's turn, not the person's;
+  // "elsewhere" = another machine's daemon owns the stage, so it cannot be seen
+  // from here. ABSENT means unknown — render exactly as before, because absence
+  // of a signal is never proof.
   agentLiveness?: string;
   // The pre-planning gate's recorded STOP verdict (superseded/escalated/
   // rejected) and the ticket it names. Present only on a decided card; drives
@@ -218,6 +222,18 @@ export const STOP_DECISION_LABELS: Record<string, { text: string; title: string 
 function livenessBadge(base: BadgeInfo, liveness: string | undefined, deadText: string, deadTitle: string): BadgeInfo {
   if (liveness === "dead") {
     return { cls: "stalled", text: deadText, title: deadTitle, spinner: false };
+  }
+  if (liveness === "recovering") {
+    // Dead here, but the daemon's own StuckRunningGrace relaunch is not yet
+    // due for this stage's class (SC-3569 PR review finding): the machine
+    // still owes this card a try, so it stays in the machine register — no ⚠
+    // glyph, no "Retry it" ask — until that window has actually passed.
+    return {
+      cls: "recovering",
+      text: `${deadText} — retrying automatically`,
+      title: "No agent is running this stage on this machine yet, but the daemon has not yet had its turn to relaunch it. No action needed yet.",
+      spinner: false,
+    };
   }
   if (liveness === "elsewhere") {
     return {

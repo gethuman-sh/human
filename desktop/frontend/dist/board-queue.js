@@ -151,6 +151,18 @@ function livenessBadge(base, liveness, deadText, deadTitle) {
     if (liveness === "dead") {
         return { cls: "stalled", text: deadText, title: deadTitle, spinner: false };
     }
+    if (liveness === "recovering") {
+        // Dead here, but the daemon's own StuckRunningGrace relaunch is not yet
+        // due for this stage's class (SC-3569 PR review finding): the machine
+        // still owes this card a try, so it stays in the machine register — no ⚠
+        // glyph, no "Retry it" ask — until that window has actually passed.
+        return {
+            cls: "recovering",
+            text: `${deadText} — retrying automatically`,
+            title: "No agent is running this stage on this machine yet, but the daemon has not yet had its turn to relaunch it. No action needed yet.",
+            spinner: false,
+        };
+    }
     if (liveness === "elsewhere") {
         return {
             cls: "elsewhere",

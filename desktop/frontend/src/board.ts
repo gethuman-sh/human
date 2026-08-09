@@ -122,8 +122,11 @@ interface Card {
   // badge names the half that is actually running instead of "deploying…".
   deployPhase?: string;
   // What this viewer's machine could see of the agent behind the card:
-  // "live" | "dead" | "elsewhere", absent when unknown (SC-3569). Filled by the
-  // desktop overlay (applyLocal → board.MarkAgentLiveness), never by the daemon.
+  // "live" | "dead" | "recovering" | "elsewhere", absent when unknown (SC-3569).
+  // "recovering" is dead-but-not-yet-the-person's-turn: the daemon's own
+  // StuckRunningGrace relaunch is still due for this card's class. Filled by
+  // the desktop overlay (applyLocal → board.MarkAgentLiveness), never by the
+  // daemon.
   agentLiveness?: string;
   // Machine id signed onto the card's deciding stage marker. Consumed by the Go
   // overlay to decide agentLiveness; nothing in the frontend reads it. Field

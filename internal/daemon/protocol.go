@@ -282,10 +282,15 @@ type BoardViewCard struct {
 	// all render at full opacity (dimming is a hint, never applied on a guess).
 	NotMine bool `json:"notMine,omitempty"`
 	// AgentLiveness answers "is an agent actually working this card right now":
-	// AgentLive, AgentDead, AgentElsewhere, or "" for unknown. A viewer-local
-	// field like NotMine — filled by the desktop overlay (applyLocal via
-	// board.MarkAgentLiveness), NEVER by Compose, because liveness is a property
-	// of the machine looking rather than of the project.
+	// AgentLive, AgentDead, AgentRecovering, AgentElsewhere, or "" for unknown.
+	// AgentRecovering is AgentDead's softer sibling: the agent is gone, but the
+	// daemon's own StuckRunningGrace relaunch is not yet due for this card's
+	// class, so it must render in the machine register rather than ask a
+	// person to retry work the machine hasn't had its turn at yet (SC-3569 PR
+	// review finding). A viewer-local field like NotMine — filled by the
+	// desktop overlay (applyLocal via board.MarkAgentLiveness), NEVER by
+	// Compose, because liveness is a property of the machine looking rather
+	// than of the project.
 	//
 	// "" is the load-bearing value: it means the question could not be answered
 	// (no Docker engine here, a discovery error, an unsigned marker, a stage
