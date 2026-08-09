@@ -44,14 +44,23 @@ func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployReq
 		return errors.WrapWithDetails(err, "loading PM comments before the deploy", "pm", req.PMKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	if awaitingDecision(card) && !req.OverrideDecision {
-		return errors.WrapWithDetails(ErrDeployAwaitingDecision,
-			"deploy refused: this ticket is waiting on a decision — answer the open [human:options] block, or re-run with --override-decision",
-			"pm", req.PMKey, "stage", string(card.Stage))
+	override := ""
+	if awaitingDecision(card) {
+		if !req.OverrideDecision {
+			return errors.WrapWithDetails(ErrDeployAwaitingDecision,
+				"deploy refused: this ticket is waiting on a decision — answer the open [human:options] block, or re-run with --override-decision",
+				"pm", req.PMKey, "stage", string(card.Stage))
+		}
+		// openOptionsBlock (board_options.go:127-137) retires the open block on
+		// ANY later BoardRunning-classified marker, and deploy-started is one — so
+		// an override that leaves no trace would make the board silently forget
+		// the question was ever asked. Name what was walked past instead.
+		override = "\noverride: deployed with an open decision on stage " + string(card.OptionsStage) +
+			" — " + card.OptionsContext
 	}
 	// Best-effort, exactly like the PR loop's converging marker: the merge is the
 	// work, and refusing to ship over a lost sentence trades code for a comment.
-	if _, err := d.Commenter.AddComment(ctx, req.PMKey, deployStartedBody(req.Branch)); err != nil {
+	if _, err := d.Commenter.AddComment(ctx, req.PMKey, deployStartedBody(req.Branch, override)); err != nil {
 		d.Logger.Warn().Err(err).Str("pm", req.PMKey).
 			Msg("deploy: could not record the start on the ticket; continuing to the gate")
 	}
@@ -59,10 +68,13 @@ func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployReq
 }
 
 // deployStartedBody names the branch on the start marker so a reader can tell
-// WHICH branch a deploy carried without waiting for the merge to say so.
-func deployStartedBody(branch string) string {
-	if branch == "" {
-		return DeployStartedHeader
+// WHICH branch a deploy carried without waiting for the merge to say so, and
+// carries the override line (empty unless the deploy walked past an open
+// decision) so an overridden deploy still says what it overrode.
+func deployStartedBody(branch, override string) string {
+	body := DeployStartedHeader
+	if branch != "" {
+		body += "\nbranch: " + branch
 	}
-	return DeployStartedHeader + "\nbranch: " + branch
+	return body + override
 }

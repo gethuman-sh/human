@@ -85,6 +85,8 @@ func TestStartDeploy_overrideShipsPastAnOpenDecision(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, c.added)
 	assert.Contains(t, c.added[0], DeployStartedHeader)
+	assert.Contains(t, c.added[0], "override: deployed with an open decision on stage implementation — c",
+		"an override that leaves no trace is indistinguishable from never having been asked")
 }
 
 // Pins gap 1 shut: DeployStartedHeader has exactly one production poster
