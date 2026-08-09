@@ -200,6 +200,29 @@ func TestMarkAgentLiveness_failedVerdictJoinsTheReworkBuild(t *testing.T) {
 	assert.Equal(t, daemon.AgentDead, dead[0].AgentLiveness)
 }
 
+// A verification/done/verdict=failed card is never BoardRunning (it derives
+// BoardDone), so stuckRunningCandidate (board_reconcile.go:379-380) never
+// selects it and no daemon reconcile pass ever recovers it. recoverableByStuckRunning
+// must therefore stay false for this class at every instant inside the
+// agentLaunchGrace..StuckRunningGrace window, not merely outside it — this is
+// the ticket's headline SC-1542 case, and the window is exactly where a
+// running implementation card legitimately reads AgentRecovering, so it is
+// exactly where this class must NOT borrow that reading.
+func TestMarkAgentLiveness_failedVerdictStaysDeadThroughoutTheRecoveryWindow(t *testing.T) {
+	for _, ago := range []time.Duration{
+		agentLaunchGrace + time.Second,
+		10 * time.Minute,
+		daemon.StuckRunningGrace - time.Second,
+	} {
+		c := card("SC-1", string(daemon.BoardVerification), string(daemon.BoardDone), "d1", ago, livenessNow)
+		c.Verdict = "fail"
+		cards := []daemon.BoardViewCard{c}
+		MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+		assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness,
+			"at %s: no reconcile pass ever recovers this class, so it must read as the person's turn, never machine-owed recovery", ago)
+	}
+}
+
 func TestMarkAgentLiveness_restingCardStaysUnknown(t *testing.T) {
 	c := card("SC-1", string(daemon.BoardBacklog), string(daemon.BoardDone), "d1", 3*time.Hour, livenessNow)
 	cards := []daemon.BoardViewCard{c}
