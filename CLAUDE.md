@@ -2,16 +2,12 @@
 
 'human' enables AI to act as human developers.
 
-Phase 1: Interact with issue trackers with product management issues and create implementation tickets with an implementation plan.
-
 # Done Done
 
 The status of 'done done' means not only things are done,
 but nothing more needs to be done, e.g. change documentation,
 website, configuration and the project is in the state for 
 a new release.
-
-Whatever you do, the new state needs to be 'done done'.
 
 **Shipping is part of 'done done'.** Do not stop at a local branch and report the
 work as finished — a commit nobody can see is not done. Once `make check` is
@@ -188,35 +184,7 @@ forges:
 
 `gh://` resolves under any configured vault provider (and with `provider: github` on its own), so 1Password and gh references mix freely.
 
-## Alternative: Environment variables
-
-Tracker API tokens can also be injected via env vars (legacy approach):
-
-```sh
-export SHORTCUT_HUMAN_TOKEN="$(op.exe item get 'Shortcut Token' --fields label=notesPlain)"
-export LINEAR_WORK_TOKEN="$(op.exe item get 'Linear Token' --fields label=notesPlain)"
-export JIRA_AMAZINGCTO_KEY="$(op.exe item get 'Jira API Key' --fields label=notesPlain)"
-export GITLAB_HUMAN_TOKEN="$(op.exe item get 'Gitlab Token' --fields label=notesPlain)"
-export AZUREDEVOPS_GETHUMAN_TOKEN="$(op.exe item get 'Azure Token' --fields label=notesPlain)"
-export TELEGRAM_BOT_TOKEN="$(op.exe item get 'Telegram Token' --fields label=notesPlain)"
-```
-
-The env var naming convention is `<KIND>_<CONFIG_NAME>_TOKEN` (or `_KEY` for Jira) — the uppercased tracker kind and the entry's `name:`, which is why the unified `trackers:` shape changed nothing about token names. A `forges:` entry uses `FORGE_<NAME>_TOKEN`.
-
 # Project Structure
-
-Packages under `internal/` are grouped by the user-facing feature they provide. Each **feature** carries one high-level `README.md` — a short prose intro to what the package is for — at the group root for grouped providers (`internal/tracker/README.md` covers all trackers, `internal/knowledge/README.md`, `internal/messaging/README.md`, `internal/forge/README.md`), and at the package for standalone features (`internal/proxy`, `internal/daemon`, …). These READMEs are orientation prose, **not** a source of record for product capabilities — the code is the authority (command registrations, exported interfaces, routes); any capability-style bullets a README carries are illustrative only, never authoritative, and tooling must not treat them as a capability inventory. The top `README.md` links them all under "Module features". Do not add per-provider `README.md` files under a grouped feature; fold the description into the group's `README.md`.
-
-- `main.go` — CLI entry point
-- `internal/tracker/` — Provider-agnostic issue tracker interfaces (Lister, Getter, Creator, etc.) plus one subpackage per tracker provider (`internal/tracker/jira`, `internal/tracker/linear`, `internal/tracker/github`, `internal/tracker/gitlab`, `internal/tracker/shortcut`, `internal/tracker/azuredevops`, `internal/tracker/clickup`)
-- `internal/forge/` — Provider-agnostic code-host (pull request) interfaces plus one subpackage per forge provider (`internal/forge/github`)
-- `internal/knowledge/` — Docs/design/analytics connectors (`internal/knowledge/notion`, `internal/knowledge/figma`, `internal/knowledge/amplitude`)
-- `internal/messaging/` — Chat integrations (`internal/messaging/slack`, `internal/messaging/telegram`)
-- `internal/proxy/`, `internal/devcontainer/` — top-level features in their own right
-- `internal/codenav/` — local code-navigation engine (SQLite index; go-to-def, refs, call graph, search), surfaced as the local `human codenav` command; vendored from the standalone octi project, so prefer minimal changes for re-sync
-- `internal/config/` — Reads `.humanconfig` in either shape — the unified `trackers:` list where each entry names its `kind:`, and the older per-vendor sections (`githubs:`, `jiras:`, …) which are still read and always will be. A new config is written unified; `human config migrate --group` converts an existing one on request. Holds the file as one object: `config.Document` parses the whole file, exposes typed `Trackers()`/`Forges()`, mutates through intention-revealing methods, validates itself (including rules spanning two sections), and writes back preserving comments and unknown sections. **A new configuration rule belongs on the Document** (`internal/config/validate.go`), never hand-hung on a provider's loader or buried in a command — and **nothing else may read or write `.humanconfig` directly**: no second yaml parse, no string splicing, no private node plumbing. Those were the three copies that drifted — that is what left the rules with two copies that disagreed ([SC-3889]). `human config check` surfaces them
-- `internal/vault/` — Pluggable vault secret resolution (1Password, extensible to Vault/AWS/etc.)
-- `errors/` — Custom error handling (WithDetails)
 
 internal/tracker/ is an abstraction layer for issue trackers. **ALWAYS** define new tracker operations as interfaces in `internal/tracker/`. **NEVER** add provider-specific types or logic to `internal/tracker/`. Concrete tracker implementations (Jira, Linear, GitHub, …) go under `internal/tracker/<provider>/` and **MUST** implement the `internal/tracker/` interfaces. Code-host (pull request) operations are a separate abstraction in `internal/forge/`, with implementations under `internal/forge/<provider>/`. A backend that is both a tracker and a forge (e.g. GitHub) is split into two packages — `internal/tracker/github` and `internal/forge/github` — rather than one package implementing both, and the split runs all the way down: each has its own config section (a tracker entry — `trackers:` with `kind: github`, or the legacy `githubs:` — versus `forges:`), its own loader, and its own type (`tracker.Instance` and `forge.Instance`). **NEVER** reunite them by giving one type both capabilities or by asking at a call site which kind a value is — an `IsTracker()`-style predicate is the signature of exactly that mistake, and it cost SC-1671, SC-2132 and SC-3868 before the domains were separated in SC-3876.
 
@@ -229,14 +197,6 @@ running the deploy gate. Reaching for `gh`, `rg` or a hand-built comment when `h
 has a command for it is how the pipeline's own invariants get bypassed. Check the list
 first; the tool changes faster than any description of it, so the help output is the
 source of record, not this file.
-
-Is it about finding FILES? use 'fd' instead of 'find'
-Is it about finding TEXT/strings? use 'rg' instead of 'grep'
-Is it about interacting with Markdown? use 'mdq'
-Is it about interacting with JSON? use 'jq'
-Use 'sd' instead of 'sed'
-Is it about interacting with YAML or XML? use 'yq'
-For accessing Github **ALWAYS** use 'gh'
 
 # Commit
 
@@ -275,10 +235,6 @@ examined-and-changed — and a kind whose query cannot be run is recorded as
 `unchecked`, never left silent. The shipped agents carry this as the shared
 `internal/claude/embed/shared/dependents.md` fragment; do not paraphrase it into
 a prompt, include it.
-
-# Process
-
-Use todo list as much as possible.
 
 # Release
 
