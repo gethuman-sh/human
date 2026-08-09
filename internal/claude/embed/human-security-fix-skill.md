@@ -341,16 +341,19 @@ REVIEW_EOF
 
 Only after a passing review. This is the board's deploy pipeline (push → PR → CI gate → merge → close) driven from the skill:
 
-1. Post the started marker: `human marker post <SEC_KEY> deploy-started`.
-2. Run the deploy gate:
+1. Run the deploy gate:
 
    ```bash
    human deploy <SEC_KEY> --branch autofix/<work-key> --title "[<SEC_KEY>] [<ENG_KEY>] <short summary>"
    ```
 
    (single-tracker: only `[<SEC_KEY>]` in the title). Keep the title and PR body free of exploit detail. The command owns the whole gate: push + PR, the CI wait, rebase-if-stale, merge, remote-branch cleanup, the `[human:deployed]` marker with its `pr:` line, and the ticket close. A `[human:deploy-failed]` is an honest needs-human end state, not a first-failure stop: do NOT merge by hand and do NOT re-implement the reviewed work; the PR stays open for a human with the named blocker.
-3. In split topology, close `<ENG_KEY>` as well: `human done <ENG_KEY>`.
-4. For the Step 9 report, read `<PR_URL>` from the deployed marker if needed: `human marker show <SEC_KEY> deployed`.
+
+   `human deploy` records the start on the ticket itself (`[human:deploy-started]`) before it touches the forge — do **not** post that marker by hand.
+
+   One outcome is neither success nor failure: if the command exits with **`deploy refused: this ticket is waiting on a decision`**, an open `[human:options]` block is waiting on a person. That is not a crash and not a deploy failure — no `[human:deploy-failed]` is posted and the card is not red. Do **not** re-run with `--override-decision` (only a person may decide to ship past their own open question) and do **not** merge by hand. Post the Step 9 run summary, record the stage outcome as `needs-input` (per "Recording the board stage outcome"), and STOP, leaving the card paused where it is.
+2. In split topology, close `<ENG_KEY>` as well: `human done <ENG_KEY>`.
+3. For the Step 9 report, read `<PR_URL>` from the deployed marker if needed: `human marker show <SEC_KEY> deployed`.
 
 ## Step 9 — Run summary: ticket comment, then report
 
