@@ -96,7 +96,7 @@ func latestFailureReason(comments []tracker.Comment) string {
 	// Agree with the card (DeriveBoardCard): a failure reason is shown only while
 	// the *-failed marker is the ticket's newest marker. A strictly-newer marker
 	// anywhere supersedes it (SC-910).
-	if newest, _, _, ok := latestMarkerOverall(comments); ok && commentNewer(newest, latest) {
+	if newest, ok := latestMarkerOverall(comments); ok && commentNewer(newest.comment, latest) {
 		return ""
 	}
 	return failureBody(latest.Body)

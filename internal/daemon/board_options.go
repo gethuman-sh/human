@@ -332,13 +332,13 @@ func attachOpenOptions(card *BoardCard, comments []tracker.Comment) {
 	// Posting is now rejected for this (marker.MinDecisionOptions), so this is
 	// the recovery path for blocks already on a ticket.
 	if len(opts) < marker.MinDecisionOptions {
-		card.State = BoardFailed
+		card.placeAt(card.placement().failedOn())
 		card.Error = "decision block offers only " + strconv.Itoa(len(opts)) + " answer; a decision needs at least " +
 			strconv.Itoa(marker.MinDecisionOptions) + " — the stage should have handled this itself"
 		return
 	}
 	if !optionStages[stage] {
-		card.State = BoardFailed
+		card.placeAt(card.placement().failedOn())
 		card.Error = "decision block names stage \"" + string(stage) + "\" the board cannot resume"
 		return
 	}
