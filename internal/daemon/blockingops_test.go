@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/spf13/cobra"
 )
 
 func TestBlockingOpsCounting(t *testing.T) {
@@ -65,6 +66,65 @@ func TestBlockingOpsNested(t *testing.T) {
 	wg.Wait()
 	if got := s.BlockingOps(); got != 0 {
 		t.Fatalf("after all ops BlockingOps = %d, want 0", got)
+	}
+}
+
+// TestForwardedCommandIsBlockingOp proves a plain forwarded command — the shape
+// `human deploy` takes, which sits for minutes on a CI gate — counts as
+// restart-blocking work. Without it the binary watcher hands over while the
+// outgoing process is still running the deploy, and the deploy belongs to a
+// daemon that has already given its identity away.
+func TestForwardedCommandIsBlockingOp(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	s := &Server{
+		Token:  "tok",
+		Logger: zerolog.Nop(),
+		CmdFactory: func() *cobra.Command {
+			root := &cobra.Command{Use: "test", SilenceUsage: true}
+			root.AddCommand(&cobra.Command{
+				Use: "slow",
+				RunE: func(_ *cobra.Command, _ []string) error {
+					close(entered)
+					<-release
+					return nil
+				},
+			})
+			return root
+		},
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s.Listener = ln
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = s.ListenAndServe(ctx) }()
+
+	conn, err := net.DialTimeout("tcp", ln.Addr().String(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	req := Request{Token: "tok", Protocol: Protocol, Args: []string{"slow"}}
+	line, _ := json.Marshal(req)
+	if _, err := conn.Write(append(line, '\n')); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	<-entered
+	if got := s.BlockingOps(); got != 1 {
+		t.Fatalf("BlockingOps during a forwarded command = %d, want 1", got)
+	}
+	close(release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for s.BlockingOps() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("BlockingOps stayed at %d after the command returned", s.BlockingOps())
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

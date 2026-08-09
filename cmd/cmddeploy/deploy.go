@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/cmd/cmdauto"
@@ -69,6 +70,11 @@ var newTransitionDeps = func(p tracker.Provider) daemon.BoardTransitionDeps {
 	return daemon.BoardTransitionDeps{
 		Commenter: p,
 		Deployer:  cmddaemon.NewForgeDeployer(vault.NewResolverFromConfig(vcfg), os.LookupEnv),
+		// The gate's own progress, on stderr: forwarded to the daemon this is the
+		// daemon log (the only place a deploy that was interrupted mid-CI leaves a
+		// trace), and run locally it is the terminal — which is what a command
+		// that can legitimately sit fifteen minutes on a CI gate owes its caller.
+		Logger: zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger(),
 		CloseTicket: func(pmKey string) error {
 			return cmdauto.RunSemanticTransition(context.Background(), p, io.Discard, pmKey, tracker.CategoryDone, false)
 		},
