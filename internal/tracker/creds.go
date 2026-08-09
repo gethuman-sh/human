@@ -115,6 +115,9 @@ type diagnoseEntry struct {
 	Token  string `mapstructure:"token"`
 	Secret string `mapstructure:"secret"` // #nosec G117 -- config field name, not an actual secret value
 	Role   string `mapstructure:"role"`
+	// Kind is set only on entries read from the unified trackers: section,
+	// where the vendor is a field rather than the section name ([SC-3874]).
+	Kind string `mapstructure:"kind"`
 }
 
 func (e diagnoseEntry) fieldValue(suffix string) string {
@@ -178,12 +181,60 @@ func DiagnoseTrackers(dir string, unmarshal func(dir, section string, target any
 			})
 		}
 	}
+	result = append(result, diagnoseUnified(dir, unmarshal, getenv)...)
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Kind != result[j].Kind {
 			return result[i].Kind < result[j].Kind
 		}
 		return result[i].Name < result[j].Name
 	})
+	return result
+}
+
+// diagnoseUnified diagnoses the entries declared in the unified trackers:
+// section, where each says its own kind.
+//
+// Credential diagnosis reads the file directly rather than going through the
+// loaders, so it has to learn each shape the file may take; a config written
+// the new way would otherwise report as no trackers configured at all, which is
+// the silent-absence failure this codebase keeps deciding is the worse one.
+func diagnoseUnified(dir string, unmarshal func(dir, section string, target any) error, getenv func(string) string) []TrackerStatus {
+	var entries []diagnoseEntry
+	if err := unmarshal(dir, "trackers", &entries); err != nil {
+		return []TrackerStatus{{
+			Name:    "trackers",
+			Working: false,
+			Missing: []string{"config parse error: " + err.Error()},
+		}}
+	}
+	var result []TrackerStatus
+	for _, entry := range entries {
+		spec, ok := CredSpecs[entry.Kind]
+		if !ok {
+			// An entry naming no kind, or a kind nothing implements, configures
+			// nothing. Reported rather than dropped: a typo in one field should
+			// not make a whole backend quietly absent.
+			result = append(result, TrackerStatus{
+				Name:    entry.Name,
+				Kind:    entry.Kind,
+				Label:   entry.Kind,
+				Working: false,
+				Missing: []string{"unknown kind: " + entry.Kind},
+				Role:    entry.Role,
+			})
+			continue
+		}
+		missing, vaultRef := diagnoseMissing(spec, entry, getenv)
+		result = append(result, TrackerStatus{
+			Name:     entry.Name,
+			Kind:     entry.Kind,
+			Label:    spec.Label,
+			Working:  len(missing) == 0 && !vaultRef,
+			VaultRef: vaultRef,
+			Missing:  missing,
+			Role:     entry.Role,
+		})
+	}
 	return result
 }
 

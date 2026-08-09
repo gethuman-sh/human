@@ -18,12 +18,19 @@ func writeCfg(t *testing.T, dir, content string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte(content), 0o600))
 }
 
+func readCfg(t *testing.T, dir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, ".humanconfig.yaml")) // #nosec G304 -- test-owned temp path
+	require.NoError(t, err)
+	return string(data)
+}
+
 func TestRunMigrate_reportsWhatItMoved(t *testing.T) {
 	dir := t.TempDir()
 	writeCfg(t, dir, "githubs:\n  - name: human\n    token: gh://token\n")
 
 	var buf bytes.Buffer
-	require.NoError(t, RunMigrate(&buf, dir, false))
+	require.NoError(t, RunMigrate(&buf, dir, false, false))
 
 	out := buf.String()
 	assert.Contains(t, out, `Moved githubs: entry "human" into forges:`)
@@ -37,7 +44,7 @@ func TestRunMigrate_saysHowToKeepAGitHubTracker(t *testing.T) {
 	writeCfg(t, dir, "githubs:\n  - name: human\n    token: gh://token\n")
 
 	var buf bytes.Buffer
-	require.NoError(t, RunMigrate(&buf, dir, false))
+	require.NoError(t, RunMigrate(&buf, dir, false, false))
 	assert.Contains(t, buf.String(), "role: pm")
 }
 
@@ -48,7 +55,7 @@ func TestRunMigrate_dryRunSaysWould(t *testing.T) {
 	writeCfg(t, dir, "githubs:\n  - name: human\n    token: gh://token\n")
 
 	var buf bytes.Buffer
-	require.NoError(t, RunMigrate(&buf, dir, true))
+	require.NoError(t, RunMigrate(&buf, dir, true, false))
 
 	out := buf.String()
 	assert.Contains(t, out, "Would move")
@@ -60,13 +67,42 @@ func TestRunMigrate_nothingToDo(t *testing.T) {
 	writeCfg(t, dir, "shortcuts:\n  - name: board\n    token: x\n")
 
 	var buf bytes.Buffer
-	require.NoError(t, RunMigrate(&buf, dir, false))
+	require.NoError(t, RunMigrate(&buf, dir, false, false))
 	assert.Contains(t, buf.String(), "Nothing to migrate")
 }
 
 func TestRunMigrate_noConfig(t *testing.T) {
 	var buf bytes.Buffer
-	require.Error(t, RunMigrate(&buf, t.TempDir(), false))
+	require.Error(t, RunMigrate(&buf, t.TempDir(), false, false))
+}
+
+// --group folds the per-vendor sections into one list, and says so.
+func TestRunMigrate_groupReportsTheFold(t *testing.T) {
+	dir := t.TempDir()
+	writeCfg(t, dir, "jiras:\n  - name: work\n    token: t\nshortcuts:\n  - name: board\n    role: pm\n    token: t\n")
+
+	var buf bytes.Buffer
+	require.NoError(t, RunMigrate(&buf, dir, false, true))
+
+	out := buf.String()
+	assert.Contains(t, out, "Folded 2 entries into one trackers: list")
+	assert.Contains(t, out, "jira")
+	assert.Contains(t, out, "shortcut")
+}
+
+// Without the flag a working file is left in the shape its author chose: the
+// grouping is a preference, and a repair must not restructure someone's config
+// on the way past.
+func TestRunMigrate_withoutGroupLeavesTheShapeAlone(t *testing.T) {
+	dir := t.TempDir()
+	writeCfg(t, dir, "jiras:\n  - name: work\n    token: t\n")
+	before := readCfg(t, dir)
+
+	var buf bytes.Buffer
+	require.NoError(t, RunMigrate(&buf, dir, false, false))
+
+	assert.Contains(t, buf.String(), "Nothing to migrate")
+	assert.Equal(t, before, readCfg(t, dir))
 }
 
 func TestBuildConfigCmd_hasMigrateAndCheck(t *testing.T) {

@@ -32,6 +32,7 @@ func LoadConfigs(dir string) ([]Config, error) {
 // instanceSpec defines how ClickUp configs are loaded and built.
 var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	Section:    "clickups",
+	Kind:       "clickup",
 	EnvPrefix:  "CLICKUP_",
 	DefaultURL: "https://api.clickup.com",
 	EnvFields: []config.EnvField[Config]{

@@ -9,6 +9,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/claude"
+	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/logo"
 )
 
@@ -32,8 +33,14 @@ type Prompter interface {
 
 // ServiceType describes a configurable service with its YAML key, defaults, and env var pattern.
 type ServiceType struct {
-	Label       string   // display name, e.g. "Jira"
-	ConfigKey   string   // YAML top-level key, e.g. "jiras"
+	Label string // display name, e.g. "Jira"
+	// Kind is what this backend IS, for the services that are issue trackers.
+	// A new config is written in the unified shape — one trackers: list with a
+	// kind: field — so the file the wizard produces says what each backend does
+	// rather than only who makes it ([SC-3874]). Empty for the services that are
+	// not trackers (docs, analytics, chat); they keep their own sections.
+	Kind        string
+	ConfigKey   string   // legacy per-vendor YAML key, e.g. "jiras"; still read
 	DefaultURL  string   // empty means user must provide it
 	URLRequired bool     // if true and DefaultURL is empty, prompt for URL
 	ExtraFields []string // additional fields beyond name+description, e.g. "user", "org"
@@ -45,33 +52,33 @@ type ServiceType struct {
 func ServiceRegistry() []ServiceType {
 	return []ServiceType{
 		{
-			Label: "Jira", ConfigKey: "jiras",
+			Label: "Jira", Kind: "jira", ConfigKey: "jiras",
 			URLRequired: true, ExtraFields: []string{"user"},
 			EnvVars: []string{"KEY"}, EnvPrefix: "JIRA",
 		},
 		{
-			Label: "GitHub", ConfigKey: "githubs",
+			Label: "GitHub", Kind: "github", ConfigKey: "githubs",
 			DefaultURL: "https://api.github.com",
 			EnvVars:    []string{"TOKEN"}, EnvPrefix: "GITHUB",
 		},
 		{
-			Label: "GitLab", ConfigKey: "gitlabs",
+			Label: "GitLab", Kind: "gitlab", ConfigKey: "gitlabs",
 			DefaultURL: "https://gitlab.com",
 			EnvVars:    []string{"TOKEN"}, EnvPrefix: "GITLAB",
 		},
 		{
-			Label: "Linear", ConfigKey: "linears",
+			Label: "Linear", Kind: "linear", ConfigKey: "linears",
 			DefaultURL: "https://api.linear.app",
 			EnvVars:    []string{"TOKEN"}, EnvPrefix: "LINEAR",
 		},
 		{
-			Label: "Azure DevOps", ConfigKey: "azuredevops",
+			Label: "Azure DevOps", Kind: "azuredevops", ConfigKey: "azuredevops",
 			DefaultURL:  "https://dev.azure.com",
 			ExtraFields: []string{"org"},
 			EnvVars:     []string{"TOKEN"}, EnvPrefix: "AZURE",
 		},
 		{
-			Label: "Shortcut", ConfigKey: "shortcuts",
+			Label: "Shortcut", Kind: "shortcut", ConfigKey: "shortcuts",
 			DefaultURL: "https://api.app.shortcut.com",
 			EnvVars:    []string{"TOKEN"}, EnvPrefix: "SHORTCUT",
 		},
@@ -116,6 +123,7 @@ type configSection struct {
 }
 
 type configInstance struct {
+	Kind        string
 	Name        string
 	URL         string
 	User        string
@@ -131,12 +139,18 @@ func GenerateConfig(instances []serviceInstance) (string, error) {
 	sectionMap := make(map[string][]configInstance)
 
 	for _, inst := range instances {
+		// Every tracker lands in one list; everything else keeps its own
+		// section, because those were never ambiguous about what they are.
 		key := inst.Service.ConfigKey
+		if inst.Service.Kind != "" {
+			key = config.TrackerSection
+		}
 		if _, exists := sectionMap[key]; !exists {
 			sectionOrder = append(sectionOrder, key)
 		}
 
 		ci := configInstance{
+			Kind:        inst.Service.Kind,
 			Name:        inst.Values["name"],
 			URL:         inst.Values["url"],
 			User:        inst.Values["user"],
@@ -178,7 +192,12 @@ func GenerateConfig(instances []serviceInstance) (string, error) {
 const configTemplate = `{{- range $i, $section := .Sections }}{{ if $i }}
 {{ end }}{{ $section.ConfigKey }}:
 {{- range $section.Instances }}
+{{- if .Kind }}
+  - kind: {{ .Kind | yamlSafe }}
+    name: {{ .Name | yamlSafe }}
+{{- else }}
   - name: {{ .Name | yamlSafe }}
+{{- end }}
 {{- if .URL }}
     url: {{ .URL | yamlSafe }}
 {{- end }}

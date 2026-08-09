@@ -32,6 +32,7 @@ func LoadConfigs(dir string) ([]Config, error) {
 // instanceSpec defines how Azure DevOps configs are loaded and built.
 var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	Section:    "azuredevops",
+	Kind:       "azuredevops",
 	EnvPrefix:  "AZURE_",
 	DefaultURL: "https://dev.azure.com",
 	EnvFields: []config.EnvField[Config]{

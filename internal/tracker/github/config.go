@@ -32,6 +32,7 @@ func LoadConfigs(dir string) ([]Config, error) {
 // instanceSpec defines how GitHub configs are loaded and built.
 var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	Section:    "githubs",
+	Kind:       "github",
 	EnvPrefix:  "GITHUB_",
 	DefaultURL: "https://api.github.com",
 	EnvFields: []config.EnvField[Config]{

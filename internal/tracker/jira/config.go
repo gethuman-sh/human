@@ -32,6 +32,7 @@ func LoadConfigs(dir string) ([]Config, error) {
 // instanceSpec defines how Jira configs are loaded and built.
 var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	Section:   "jiras",
+	Kind:      "jira",
 	EnvPrefix: "JIRA_",
 	EnvFields: []config.EnvField[Config]{
 		{Suffix: "URL", Set: func(c *Config, v string) { c.URL = v }, Get: func(c Config) string { return c.URL }},

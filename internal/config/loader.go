@@ -59,8 +59,24 @@ func ApplyEnvOverrides[C any](cfg *C, name, envPrefix string, fields []EnvField[
 
 // InstanceSpec defines how to load and build instances from config entries.
 type InstanceSpec[C any, I any] struct {
-	// Section is the YAML key in .humanconfig (e.g. "githubs", "jiras").
+	// Section is the legacy per-vendor YAML key in .humanconfig (e.g. "githubs",
+	// "jiras"). Entries there are still read, and will be for a long time: a
+	// config file is written by hand and nobody should have to rewrite one to
+	// keep a working install working.
 	Section string
+
+	// Kind is what this backend IS ("github", "jira", …), which is also how an
+	// entry in the unified trackers: section names itself.
+	//
+	// The file used to say who makes a backend and leave what it does to be
+	// inferred, which is exactly where the inference broke: GitHub is the one
+	// vendor that can be two things ([SC-3876]). Grouping by capability lets the
+	// section answer that question instead of a call site ([SC-3874]).
+	//
+	// Empty means the spec is not addressable from the unified section — the
+	// forges: section is already grouped by capability and has no vendor list to
+	// merge.
+	Kind string
 
 	// EnvPrefix is the prefix for environment variables (e.g. "GITHUB_", "JIRA_").
 	EnvPrefix string
@@ -103,6 +119,11 @@ func LoadInstances[C any, I any](dir string, spec InstanceSpec[C, I]) ([]I, erro
 	if err := UnmarshalSection(dir, spec.Section, &configs); err != nil {
 		return nil, err
 	}
+	unified, err := unifiedEntries[C](dir, spec.Kind)
+	if err != nil {
+		return nil, err
+	}
+	configs = append(configs, unified...)
 
 	instances := make([]I, 0, len(configs))
 	for _, cfg := range configs {
@@ -139,6 +160,45 @@ func LoadInstances[C any, I any](dir string, spec InstanceSpec[C, I]) ([]I, erro
 		instances = append(instances, inst)
 	}
 	return instances, nil
+}
+
+// TrackerSection is the unified list where a backend is declared by what it is,
+// with the vendor demoted to a kind: field.
+const TrackerSection = "trackers"
+
+// unifiedEntries returns the trackers: entries of one kind, decoded into the
+// provider's own config type.
+//
+// It decodes the section twice — once as the provider's type, once as bare
+// kinds — and pairs them by index. Two passes rather than one because the
+// provider config types have no kind field and should not grow one: which
+// backend an entry configures is the section's business, not the provider's,
+// and adding it to seven structs would put the vendor back at the centre of a
+// shape that exists to demote it.
+func unifiedEntries[C any](dir, kind string) ([]C, error) {
+	if kind == "" {
+		return nil, nil
+	}
+	var typed []C
+	if err := UnmarshalSection(dir, TrackerSection, &typed); err != nil {
+		return nil, err
+	}
+	if len(typed) == 0 {
+		return nil, nil
+	}
+	var kinds []struct {
+		Kind string `mapstructure:"kind"`
+	}
+	if err := UnmarshalSection(dir, TrackerSection, &kinds); err != nil {
+		return nil, err
+	}
+	out := make([]C, 0, len(typed))
+	for i := range typed {
+		if i < len(kinds) && kinds[i].Kind == kind {
+			out = append(out, typed[i])
+		}
+	}
+	return out, nil
 }
 
 // skippedInstances remembers why each configured entry was last reported as

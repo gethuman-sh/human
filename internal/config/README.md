@@ -5,7 +5,8 @@ A single `.humanconfig.yaml` file tells `human` which issue trackers and code fo
 - Reads your `.humanconfig.yaml` from the working directory
 - Keeps machine-local overrides in a separate `local/` folder
 - Runs fine even with no config file present
-- Configures multiple named trackers and forges at once
+- Configures multiple named trackers and forges at once, grouped by what a backend is rather than who makes it: one `trackers:` list whose entries carry `kind: github`, `kind: jira`, … alongside the `forges:` list, which always had that shape
+- Reads the older per-vendor sections (`githubs:`, `jiras:`, …) exactly as before, and will keep doing so — a working config never has to be rewritten. `human config migrate --group` folds them into the one list when you want it, moving the entries so comments and field order come along
 - Overrides any token from an environment variable
 - Targets a specific named instance with per-instance variables
 - Resolves `1pw://` vault references so tokens stay secret

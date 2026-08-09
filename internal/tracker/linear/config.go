@@ -31,6 +31,7 @@ func LoadConfigs(dir string) ([]Config, error) {
 // instanceSpec defines how Linear configs are loaded and built.
 var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	Section:    "linears",
+	Kind:       "linear",
 	EnvPrefix:  "LINEAR_",
 	DefaultURL: "https://api.linear.app",
 	EnvFields: []config.EnvField[Config]{

@@ -31,6 +31,7 @@ func LoadConfigs(dir string) ([]Config, error) {
 // instanceSpec defines how GitLab configs are loaded and built.
 var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	Section:    "gitlabs",
+	Kind:       "gitlab",
 	EnvPrefix:  "GITLAB_",
 	DefaultURL: "https://gitlab.com",
 	EnvFields: []config.EnvField[Config]{

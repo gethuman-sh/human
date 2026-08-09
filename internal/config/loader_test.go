@@ -550,3 +550,89 @@ func TestResolveSecrets_fieldsWithoutGet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "1pw://vault/item/field", cfg.Token) // unchanged
 }
+
+// --- Unified trackers: section (SC-3874) ---
+
+// unifiedSpec is testSpec addressable from the trackers: section.
+func unifiedSpec() InstanceSpec[testConfig, testInstance] {
+	spec := testSpec("")
+	spec.Kind = "test"
+	return spec
+}
+
+// The same backend, declared the new way: the section says what it is and the
+// vendor is a field.
+func TestLoadInstances_readsTheUnifiedSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "trackers:\n  - kind: test\n    name: work\n    token: tok\n")
+	unsetTestEnv(t)
+
+	got, err := LoadInstances(dir, unifiedSpec())
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "work", got[0].Name)
+}
+
+// An entry of another kind in the same list is not this provider's business.
+func TestLoadInstances_ignoresOtherKinds(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "trackers:\n  - kind: other\n    name: nope\n    token: tok\n  - kind: test\n    name: mine\n    token: tok\n")
+	unsetTestEnv(t)
+
+	got, err := LoadInstances(dir, unifiedSpec())
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "mine", got[0].Name)
+}
+
+// Both shapes at once: a config part-way through a migration, or one keeping a
+// legacy entry deliberately, must not lose either half.
+func TestLoadInstances_readsBothShapes(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "tests:\n  - name: legacy\n    token: tok\ntrackers:\n  - kind: test\n    name: unified\n    token: tok\n")
+	unsetTestEnv(t)
+
+	got, err := LoadInstances(dir, unifiedSpec())
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "legacy", got[0].Name, "the legacy section is read first, so its entries keep their order")
+	assert.Equal(t, "unified", got[1].Name)
+}
+
+// An entry with no kind belongs to nobody: it is a typo, not every provider's
+// entry at once.
+func TestLoadInstances_unifiedEntryNeedsAKind(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "trackers:\n  - name: work\n    token: tok\n")
+	unsetTestEnv(t)
+
+	got, err := LoadInstances(dir, unifiedSpec())
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// A spec with no kind is not addressable from the unified section at all —
+// forges: is already grouped by capability and has no vendor list to merge.
+func TestLoadInstances_specWithoutKindIgnoresTheUnifiedSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "trackers:\n  - kind: test\n    name: work\n    token: tok\n")
+	unsetTestEnv(t)
+
+	got, err := LoadInstances(dir, testSpec(""))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// Tokens keep their names: a config that changes shape must not change what its
+// environment variables are called, or every install breaks on a rename.
+func TestLoadInstances_unifiedEntryKeepsEnvNaming(t *testing.T) {
+	dir := t.TempDir()
+	writeTestConfig(t, dir, "trackers:\n  - kind: test\n    name: work\n")
+	unsetTestEnv(t)
+	t.Setenv("TEST_WORK_TOKEN", "from-env")
+
+	got, err := LoadInstances(dir, unifiedSpec())
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "from-env", got[0].Token)
+}

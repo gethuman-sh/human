@@ -109,6 +109,32 @@ func trackerFields(credentials []Field, extra ...Field) []Field {
 	return fields
 }
 
+// unifiedTrackerFields describes an entry in the single trackers: list. It is
+// the union of every backend's fields: one list must be able to describe any of
+// them, and which one is answered by kind rather than by which section the entry
+// sits in.
+func unifiedTrackerFields() []Field {
+	fields := []Field{
+		{Key: "name", Label: "Name", Type: TypeString, Description: "Instance name — identity for env vars and settings paths"},
+		{Key: "kind", Label: "Kind", Type: TypeEnum,
+			Enum:        []string{"jira", "github", "gitlab", "linear", "shortcut", "azuredevops", "clickup"},
+			Description: "Which backend this entry configures"},
+		{Key: "url", Label: "URL", Type: TypeString, Description: "API base URL"},
+	}
+	fields = append(fields, tokenField()...)
+	return append(fields,
+		Field{Key: "user", Label: "User", Type: TypeString, Description: "Jira account email (Jira only)"},
+		Field{Key: "key", Label: "API key", Type: TypeSecret, Description: "API key — Jira uses this instead of a token"},
+		Field{Key: "org", Label: "Organization", Type: TypeString, Description: "Azure DevOps organization"},
+		Field{Key: "team_id", Label: "Team ID", Type: TypeString, Description: "ClickUp team (workspace) id"},
+		Field{Key: "description", Label: "Description", Type: TypeString, Description: "What this tracker is used for"},
+		Field{Key: "role", Label: "Role", Type: TypeEnum, Enum: []string{"pm", "engineering"}, Description: "Topology role: pm or engineering"},
+		Field{Key: "safe", Label: "Safe mode", Type: TypeBool, Description: "Block destructive operations (deletes)"},
+		Field{Key: "projects", Label: "Projects", Type: TypeStringList, Description: "Project keys the board indexes and shows (empty = show all work)"},
+		Field{Key: "create_in", Label: "File new tickets in", Type: TypeString, Description: "Where new tickets are filed (defaults to the first indexed project)"},
+	)
+}
+
 func tokenField() []Field {
 	return []Field{{Key: "token", Label: "API token", Type: TypeSecret, Description: "API token — literal or 1pw:// vault reference"}}
 }
@@ -162,6 +188,11 @@ func buildRegistry() []SectionDef {
 		{
 			Key: "trackers", Label: "Trackers",
 			Groups: []Group{
+				// The unified list first, because it is the shape a config
+				// written today uses ([SC-3874]). Its fields are the union of
+				// what the backends need — one list has to be able to describe
+				// any of them — and `kind` is what says which.
+				{Section: "trackers", Label: "Trackers (any backend)", IsList: true, Fields: unifiedTrackerFields()},
 				{Section: "jiras", Label: "Jira", Kind: "jira", IsList: true, Fields: trackerFields([]Field{
 					{Key: "user", Label: "User", Type: TypeString, Description: "Jira account email"},
 					{Key: "key", Label: "API key", Type: TypeSecret, Description: "API key — literal or 1pw:// vault reference"},
