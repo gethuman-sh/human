@@ -1,6 +1,10 @@
 package pipelinefsm
 
-import "github.com/gethuman-sh/human/internal/marker"
+import (
+	"strings"
+
+	"github.com/gethuman-sh/human/internal/marker"
+)
 
 // WayOut is one transition leaving a state, as the thing standing in that state
 // needs to see it.
@@ -68,6 +72,9 @@ func (d Document) WaysOut(state, actor string) []WayOut {
 // and wrong silently: the asker would build a command that post-time validation
 // then rejects, which is the failure moved later rather than prevented.
 func CommandFor(e Event, key string) string {
+	if c := strings.TrimSpace(e.Command); c != "" {
+		return strings.ReplaceAll(c, "<KEY>", key)
+	}
 	markers := e.Markers()
 	if len(markers) != 1 {
 		return ""

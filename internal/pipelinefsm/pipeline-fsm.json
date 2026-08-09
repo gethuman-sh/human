@@ -238,14 +238,15 @@
     },
     {
       "name": "handed-off",
-      "doc": "Branch and commits are recorded on the ticket, checked reachable.",
+      "doc": "Branch and commits are recorded on the ticket, checked reachable. A person may also ship it straight from the command line (`human deploy`), which is the one non-daemon move that leaves this state.",
       "board": {
         "stage": "implementation",
         "state": "done"
       },
       "holds": "Branch and commits are recorded on the ticket AND the commits were verified reachable on the branch before the marker was posted.",
       "who_may_act": [
-        "daemon"
+        "daemon",
+        "user"
       ],
       "stale_when": "The review was never chained — the live hook was lost to a daemon restart.",
       "if_nothing_happens": "reconcileOrphanedHandoffs chains the review, but only when the commits are DEFINITELY present on this machine. A clean absence or an unreadable check leaves the card alone rather than redding work another machine may be able to serve."
@@ -286,10 +287,11 @@
         "stage": "done",
         "state": "running"
       },
-      "holds": "The branch is pushed and a DRAFT pull request is open, so a half-reviewed change is not mergeable by anyone.",
+      "holds": "A deploy is under way and recorded on the ticket. One engine run holds the process-wide deploy gate, so no second deploy for any card runs beside it. On the board's PR-loop entry the branch is pushed and a DRAFT pull request is open; on the `human deploy` entry the marker is posted first and the push follows.",
       "who_may_act": [
         "daemon"
       ],
+      "stale_when": "Past deployTimeout + StuckRunningGrace (60 minutes) — not the ordinary 15. A deploy reports no agent liveness at all and its CI gate legitimately blocks for the whole of deployTimeout, so the stuck-running sweep gives it its own grace (stuckGraceFor, internal/daemon/board_reconcile.go); judging it by the ordinary rule reds a healthy deploy and relaunches a second one on top of it.",
       "inherits": "done"
     },
     {
@@ -755,16 +757,22 @@
     {
       "name": "start-deploy",
       "src": [
+        "filed",
+        "ticket-reviewed",
+        "planned",
+        "handed-off",
         "reviewed",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "awaiting-decision"
       ],
       "dst": "deploying",
       "actor": "user",
       "marker": "[human:deploy-started]",
-      "where": "internal/marker/marker.go — the only thing left that knows this marker; no pipeline code posts it",
-      "guard": "the review verdict must not be failing",
-      "doc": "Dropping on Deploy, the pre-loop way. Nothing in the pipeline posts deploy-started any more — the Done stage fronts the merge with the PR review loop (start-pr-review) and records pr-review-started instead. The marker stays a valid one to post by hand, and the board still reads it as Done/Running, so the edge is real but nobody automatic walks it. The corpus agrees: the one history carrying deploy-started is also the one carrying no pr-review marker at all."
+      "command": "human deploy <KEY>",
+      "where": "cmd/cmddeploy/deploy.go RunDeploy → internal/daemon/deploy_entry.go StartDeploy — the shared pre-deploy entry that refuses on an open decision and records the start before the engine (DeployBranch) runs",
+      "guard": "no open [human:options] block on the ticket, unless --override-decision is passed",
+      "doc": "`human deploy KEY`. The one edge into deploying that a person takes, and it is taken by a command rather than by hand — posting the marker yourself posts it twice, which is why this edge carries its own command. The wide src is the honest list of where a CLI deploy starts from: a card whose handoff names the branch (handed-off, reviewed), a card whose deploy already failed (stopped, substrate-down), and a card with --branch given explicitly and no pipeline history at all (filed, ticket-reviewed, planned) — the 15 Backlog-to-Done histories in the replay corpus. awaiting-decision is a source ONLY under --override-decision: the refusal is the default, and overriding it is a person deciding to ship past their own open question. The board's Deploy drop does NOT walk this edge — it fronts the merge with the PR review loop and records pr-review-started (start-pr-review); pre-loop board histories that carry deploy-started walked it before SC-1387."
     },
     {
       "name": "pr-opened",
@@ -1109,7 +1117,8 @@
       "DefaultPRReviewRounds": "3 — review→fix rounds before the loop escalates (internal/daemon/pr_review_loop.go)",
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
       "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)",
-      "MaxSilenceReaps": "3 — silence reaps of one stage before the machine stops relaunching and asks for a person (internal/daemon/board_failure.go). Uncharged against DefaultStageRetries, which is why it needs its own bound."
+      "MaxSilenceReaps": "3 — silence reaps of one stage before the machine stops relaunching and asks for a person (internal/daemon/board_failure.go). Uncharged against DefaultStageRetries, which is why it needs its own bound.",
+      "DeployRunningGrace": "60m = deployTimeout (45m) + StuckRunningGrace (15m) — how long a card recorded as deploying is left alone before the stuck-running sweep judges it (stuckGraceFor, internal/daemon/board_reconcile.go). The deploy has no agent for the sweep to probe, so time is the only evidence available."
     }
   },
   "stage_defaults": {
