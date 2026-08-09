@@ -181,12 +181,17 @@ test("SC-3603: dropping any single row field of a full payload still renders", a
 });
 
 test("SC-3603: a field the app has never heard of is ignored", async () => {
-  const full = { agents: [fullAgentRow()] };
+  // One row built once and rendered twice: fullAgentRow() derives
+  // startedAtUnix from the clock, so building it separately per render lets a
+  // whole-second boundary fall between the two and report a difference the
+  // unknown field did not cause.
+  const row = fullAgentRow();
+  const full = { agents: [row] };
   const { el: elFull, api: apiFull } = makePane(async () => full);
   await apiFull.pollAgents();
 
   const withExtra = {
-    agents: [{ ...fullAgentRow(), futureField: { nested: 1 } }],
+    agents: [{ ...row, futureField: { nested: 1 } }],
     newTopLevel: 7,
   };
   const { el: elExtra, api: apiExtra } = makePane(async () => withExtra);
