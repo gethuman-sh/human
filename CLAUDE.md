@@ -234,7 +234,7 @@ Every commit message **must** contain an issue reference, **unless** the commit 
 
 When a change was implemented from an engineering ticket that traces back to a PM ticket (split topology), the commit message **must reference both**: the PM ticket and the engineering ticket (e.g. `[SC-79] [HUM-59] Add validation`). This preserves the full PM → engineering → commit trail; the two tickets usually live on different trackers (e.g. Shortcut PM + Linear engineering) — the format is the same regardless. In single-tracker topology there is one evolving ticket and every commit references that single key (e.g. `[SC-79] Add validation`).
 
-**WATNING** The commit log is public. Make sure to not expose bug fix or security information that could endanger existing installs.
+**WARNING** The commit log is public. Make sure to not expose bug fix or security information that could endanger existing installs or compromise the project.
 
 # Code
 
