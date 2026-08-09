@@ -214,6 +214,18 @@ func statesFor(doc pipelinefsm.Document, card BoardCard, comments []tracker.Comm
 		}
 	}
 
+	// A closed ticket has left the pipeline. That is not a gap in the machine:
+	// the machine describes how an item moves THROUGH the pipeline, and closing
+	// takes it out rather than moving it within. The one real effect of closing —
+	// the ticket's agents are stopped — belongs to the reaper, which follows a
+	// container where this document follows a ticket, and docs/reaper.md already
+	// owns it. Saying "gap in the document" here sent a reader to fix the wrong
+	// file.
+	if card.Stage == BoardHidden {
+		return nil, "this ticket is closed, so it is no longer in the pipeline and no state describes it — " +
+			"closing takes an item out rather than moving it, and stopping its agents is the reaper's job (docs/reaper.md)"
+	}
+
 	candidates := doc.StatesAtPlacement(string(card.Stage), string(card.State))
 	switch len(candidates) {
 	case 0:
@@ -350,7 +362,11 @@ func intersectByName(candidates, allowed []pipelinefsm.State) []pipelinefsm.Stat
 // recomputes staleness: AgentProgress.Stalled already holds the rule, including
 // that a blocked agent is waiting for a person rather than hung.
 func whereAgent(key string, card BoardCard, deps WhereDeps) *WhereAgent {
-	if deps.Progress == nil || card.Stage == "" {
+	// Hidden is the board's way of saying "not on the board", not a stage work
+	// runs in, so there is no agent to be live or dead. Composing a name from it
+	// produced `board-SC-1234-hidden` — an agent that has never existed,
+	// reported as merely unknown, which reads as "we lost track of it".
+	if deps.Progress == nil || card.Stage == "" || card.Stage == BoardHidden {
 		return nil
 	}
 	name := agentNameFor(key, card.Stage)
@@ -374,7 +390,10 @@ func whereAgent(key string, card BoardCard, deps WhereDeps) *WhereAgent {
 // whereBudget reports what the stage has already spent. Read-only by contract:
 // the caller supplies a reader, never StageRetry.Attempts, which increments.
 func whereBudget(key string, card BoardCard, deps WhereDeps) *WhereBudget {
-	if deps.Attempts == nil || card.Stage == "" {
+	// Same as the agent: a closed ticket has no stage whose relaunches could be
+	// counted, and reading a counter for `hidden` would report a budget for work
+	// that will never run.
+	if deps.Attempts == nil || card.Stage == "" || card.Stage == BoardHidden {
 		return nil
 	}
 	spent, err := deps.Attempts(key, card.Stage)

@@ -112,7 +112,26 @@ func TestWhere_SaysWhenNoStateDescribesThePlacement(t *testing.T) {
 	assert.Equal(t, string(BoardHidden), report.Board.Stage)
 	assert.Empty(t, report.State)
 	assert.Empty(t, report.Candidates)
-	assert.Contains(t, report.Why, "no state in the machine describes")
+	assert.Contains(t, report.Why, "closed", "and says WHY, in terms a reader can act on")
+	assert.NotContains(t, report.Why, "gap in the document",
+		"closing is not a gap: the machine describes movement THROUGH the pipeline, and reaper.md owns the agent stop")
+}
+
+// A closed ticket has no stage work runs in, so it must not be given an agent
+// name composed from `hidden` — `board-SC-1234-hidden` is an agent that has
+// never existed, and reporting it as merely unknown reads as "we lost track".
+func TestWhere_ClosedTicketHasNoAgentOrBudget(t *testing.T) {
+	deps := WhereDeps{
+		Now:      time.Unix(10_000, 0),
+		Progress: func(string) (AgentProgress, bool) { return AgentProgress{}, false },
+		Attempts: func(string, BoardStage) (int, error) { return 2, nil },
+	}
+	report := BuildWhere(whereDoc(t), "SC-1",
+		[]tracker.Comment{cmt(DeployedHeader, time.Unix(1000, 0))},
+		tracker.CategoryDone, false, "skill", deps)
+
+	assert.Nil(t, report.Agent, "nothing runs on a closed ticket")
+	assert.Nil(t, report.Budget, "and nothing will be relaunched")
 }
 
 // Liveness is read from the daemon's own record, never recomputed. A blocked
