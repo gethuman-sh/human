@@ -152,14 +152,19 @@ func TestPMRoleNotice(t *testing.T) {
 		{
 			name:    "no trackers at all gives generic hint",
 			results: nil,
-			want:    "No PM-role tracker configured. Add role: pm to a tracker in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
+			want:    "No tracker configured. Add one to .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
 		},
 		{
-			name: "non-pm tracker is named so the user knows what to annotate",
+			// A LONE undeclared tracker no longer reaches this notice at all: it
+			// resolves to pm whatever backend it is, so the daemon stamps the role
+			// and the board renders. This is the several-candidates case, which is
+			// the only one the machine genuinely cannot decide.
+			name: "undeclared candidates are named so the user knows what to annotate",
 			results: []daemon.TrackerIssuesResult{
 				{TrackerName: "work", TrackerKind: "linear", Issues: []tracker.Issue{{Key: "ENG-1"}}},
+				{TrackerName: "board", TrackerKind: "shortcut", Issues: []tracker.Issue{{Key: "SC-1"}}},
 			},
-			want: "No PM-role tracker configured. Found work (linear), but none has role: pm — add role: pm to one in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
+			want: "More than one tracker is configured and none says which board this is. Found work (linear), board (shortcut) — add role: pm to the one whose issues belong here (see CLAUDE.md, \"Board rendering\").",
 		},
 		{
 			name: "every result failed — the banner speaks, not role advice",
@@ -174,7 +179,7 @@ func TestPMRoleNotice(t *testing.T) {
 				{TrackerName: "broken", TrackerKind: "jira", Err: "boom"},
 				{TrackerName: "work", TrackerKind: "linear", Issues: []tracker.Issue{{Key: "ENG-1"}}},
 			},
-			want: "No PM-role tracker configured. Found work (linear), but none has role: pm — add role: pm to one in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").",
+			want: "More than one tracker is configured and none says which board this is. Found work (linear) — add role: pm to the one whose issues belong here (see CLAUDE.md, \"Board rendering\").",
 		},
 	}
 	for _, tc := range tests {

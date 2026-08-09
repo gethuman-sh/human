@@ -846,12 +846,18 @@ func TestInferRole_SC254(t *testing.T) {
 		inst Instance
 		want string
 	}{
-		{"linear without role no longer infers engineering", Instance{Kind: "linear"}, ""},
+		// InferRole reports what an instance DECLARES and infers nothing from the
+		// backend. Which tracker is the PM one is a property of the set, answered
+		// by ResolveTopology — see the topology tests.
 		{"explicit engineering role honored", Instance{Kind: "linear", Role: "engineering"}, "engineering"},
 		{"explicit engineering role honored on any kind", Instance{Kind: "github", Role: "engineering"}, "engineering"},
-		{"shortcut still infers pm", Instance{Kind: "shortcut"}, "pm"},
-		{"explicit role overrides kind", Instance{Kind: "shortcut", Role: "engineering"}, "engineering"},
-		{"unknown kind without role is empty", Instance{Kind: "jira"}, ""},
+		{"explicit pm role honored", Instance{Kind: "jira", Role: "pm"}, "pm"},
+		// No backend is privileged: not the one that used to be, and not any other.
+		{"shortcut declares nothing", Instance{Kind: "shortcut"}, ""},
+		{"linear declares nothing", Instance{Kind: "linear"}, ""},
+		{"jira declares nothing", Instance{Kind: "jira"}, ""},
+		{"github declares nothing", Instance{Kind: "github"}, ""},
+		{"an unknown kind declares nothing", Instance{Kind: "somethingnew"}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

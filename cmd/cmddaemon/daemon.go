@@ -1818,6 +1818,11 @@ type fetchJob struct {
 	inst    tracker.Instance
 	project string
 	dir     string
+	// role is the instance's role RESOLVED ACROSS ITS SET, not asked of the
+	// instance alone: which tracker is the PM one depends on what else is
+	// configured beside it, and asking each instance in isolation is how only
+	// Shortcut ever answered "pm" (SC-4120).
+	role string
 }
 
 func fetchTrackerIssuesFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) func() ([]daemon.TrackerIssuesResult, error) {
@@ -2109,13 +2114,25 @@ func logReportableLoadFailures(failures []error, dir, subsystem string) {
 // the whole listing for a single-project backend.
 func listingJobs(instances []tracker.Instance, dir string) []fetchJob {
 	var jobs []fetchJob
+	// Resolved once for the whole set, then stamped on every job cut from it.
+	top := tracker.ResolveTopology(instances)
+	roleOf := func(inst tracker.Instance) string {
+		switch {
+		case top.PM != nil && top.PM.Name == inst.Name && top.PM.Kind == inst.Kind:
+			return "pm"
+		case top.Engineering != nil && top.Engineering.Name == inst.Name && top.Engineering.Kind == inst.Kind:
+			return "engineering"
+		default:
+			return inst.InferRole()
+		}
+	}
 	for _, inst := range instances {
 		projects := inst.Projects
 		if len(projects) == 0 {
 			projects = []string{""}
 		}
 		for _, p := range projects {
-			jobs = append(jobs, fetchJob{inst: inst, project: p, dir: dir})
+			jobs = append(jobs, fetchJob{inst: inst, project: p, dir: dir, role: roleOf(inst)})
 		}
 	}
 	return jobs
@@ -2178,7 +2195,7 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 			results[i] = daemon.TrackerIssuesResult{
 				TrackerName: job.inst.Name,
 				TrackerKind: job.inst.Kind,
-				TrackerRole: job.inst.InferRole(),
+				TrackerRole: job.role,
 				Project:     label,
 				Issues:      page.Issues,
 				Truncated:   page.Truncated,
@@ -3054,6 +3071,16 @@ func boardPRMerged(ctx context.Context, projects *daemon.ProjectRegistry, resolv
 	return reader.PullRequestMerged(ctx, repo, number)
 }
 
+// errNoPMTracker is the one answer every PM resolver gives when the set does not
+// name a PM tracker. It states the remedy in the terms the config uses, because
+// the two ways to get here — no tracker at all, and several undeclared ones —
+// have the same fix: say which one it is.
+func errNoPMTracker(dir string) error {
+	return errors.WithDetails(
+		"no PM-role tracker configured — add role: pm to the tracker whose issues belong on the board",
+		"dir", dir)
+}
+
 // resolvePMCommenter resolves the PM-role tracker.Commenter for a workspace.
 // It selects by ROLE (InferRole()=="pm"), never by key prefix: both trackers
 // can be configured with the same name, so key auto-detect mis-routes.
@@ -3062,13 +3089,16 @@ func resolvePMCommenter(dir string, lookup config.EnvLookup, resolver *vault.Res
 	if err != nil {
 		return nil, err
 	}
-	for _, inst := range instances {
-		if inst.InferRole() != "pm" {
-			continue
-		}
-		if c, ok := inst.Provider.(tracker.Commenter); ok {
-			return c, nil
-		}
+	// The PM tracker is a property of the SET, not of any one instance: an
+	// explicit role: pm wins, and failing that a lone non-engineering tracker
+	// is it, whatever backend it runs on. Asking each instance what it is was
+	// how only Shortcut ever answered "pm" (SC-4120).
+	pm := tracker.ResolveTopology(instances).PM
+	if pm == nil {
+		return nil, errNoPMTracker(dir)
+	}
+	if c, ok := pm.Provider.(tracker.Commenter); ok {
+		return c, nil
 	}
 	return nil, errors.WithDetails("no PM-role tracker with comment support configured", "dir", dir)
 }
@@ -3082,13 +3112,16 @@ func resolvePMGetter(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 	if err != nil {
 		return nil, err
 	}
-	for _, inst := range instances {
-		if inst.InferRole() != "pm" {
-			continue
-		}
-		if g, ok := inst.Provider.(tracker.Getter); ok {
-			return g, nil
-		}
+	// The PM tracker is a property of the SET, not of any one instance: an
+	// explicit role: pm wins, and failing that a lone non-engineering tracker
+	// is it, whatever backend it runs on. Asking each instance what it is was
+	// how only Shortcut ever answered "pm" (SC-4120).
+	pm := tracker.ResolveTopology(instances).PM
+	if pm == nil {
+		return nil, errNoPMTracker(dir)
+	}
+	if g, ok := pm.Provider.(tracker.Getter); ok {
+		return g, nil
 	}
 	return nil, errors.WithDetails("no PM-role tracker with fetch support configured", "dir", dir)
 }
@@ -3102,13 +3135,16 @@ func resolvePMCurrentUser(dir string, lookup config.EnvLookup, resolver *vault.R
 	if err != nil {
 		return nil, err
 	}
-	for _, inst := range instances {
-		if inst.InferRole() != "pm" {
-			continue
-		}
-		if n, ok := inst.Provider.(tracker.CurrentUserNamer); ok {
-			return n, nil
-		}
+	// The PM tracker is a property of the SET, not of any one instance: an
+	// explicit role: pm wins, and failing that a lone non-engineering tracker
+	// is it, whatever backend it runs on. Asking each instance what it is was
+	// how only Shortcut ever answered "pm" (SC-4120).
+	pm := tracker.ResolveTopology(instances).PM
+	if pm == nil {
+		return nil, errNoPMTracker(dir)
+	}
+	if n, ok := pm.Provider.(tracker.CurrentUserNamer); ok {
+		return n, nil
 	}
 	return nil, nil
 }
@@ -3225,13 +3261,16 @@ func resolvePMTransitioner(dir string, lookup config.EnvLookup, resolver *vault.
 	if err != nil {
 		return nil, err
 	}
-	for _, inst := range instances {
-		if inst.InferRole() != "pm" {
-			continue
-		}
-		if t, ok := inst.Provider.(tracker.Transitioner); ok {
-			return t, nil
-		}
+	// The PM tracker is a property of the SET, not of any one instance: an
+	// explicit role: pm wins, and failing that a lone non-engineering tracker
+	// is it, whatever backend it runs on. Asking each instance what it is was
+	// how only Shortcut ever answered "pm" (SC-4120).
+	pm := tracker.ResolveTopology(instances).PM
+	if pm == nil {
+		return nil, errNoPMTracker(dir)
+	}
+	if t, ok := pm.Provider.(tracker.Transitioner); ok {
+		return t, nil
 	}
 	return nil, errors.WithDetails("no PM-role tracker with transition support configured", "dir", dir)
 }
@@ -3245,13 +3284,11 @@ func resolvePMOwner(dir string, lookup config.EnvLookup, resolver *vault.Resolve
 	if err != nil {
 		return nil, err
 	}
-	for _, inst := range instances {
-		if inst.InferRole() != "pm" {
-			continue
-		}
-		return inst.Provider, nil
+	pm := tracker.ResolveTopology(instances).PM
+	if pm == nil {
+		return nil, errors.WithDetails("no PM-role tracker configured to record ownership", "dir", dir)
 	}
-	return nil, errors.WithDetails("no PM-role tracker configured to record ownership", "dir", dir)
+	return pm.Provider, nil
 }
 
 // closeTicketerFunc builds the daemon's CloseTicketer closure: it stops any live
@@ -3995,16 +4032,15 @@ func resolvePMCreator(dir string, lookup config.EnvLookup, resolver *vault.Resol
 	if err != nil {
 		return nil, "", err
 	}
-	for _, inst := range instances {
-		if inst.InferRole() != "pm" {
-			continue
-		}
+	pm := tracker.ResolveTopology(instances).PM
+	if pm != nil {
+		inst := *pm
 		// tracker.Provider embeds Creator, so this assertion cannot fail
 		// today; kept for symmetry with resolvePMCommenter and as a guard
 		// should the Provider interface ever be split.
 		c, ok := inst.Provider.(tracker.Creator)
 		if !ok {
-			continue
+			return nil, "", errNoPMTracker(dir)
 		}
 		target := inst.FilingTarget()
 		if target == "" {
@@ -4027,13 +4063,16 @@ func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 	if err != nil {
 		return nil, err
 	}
-	for _, inst := range instances {
-		if inst.InferRole() != "pm" {
-			continue
-		}
-		if ed, ok := inst.Provider.(tracker.Editor); ok {
-			return ed, nil
-		}
+	// The PM tracker is a property of the SET, not of any one instance: an
+	// explicit role: pm wins, and failing that a lone non-engineering tracker
+	// is it, whatever backend it runs on. Asking each instance what it is was
+	// how only Shortcut ever answered "pm" (SC-4120).
+	pm := tracker.ResolveTopology(instances).PM
+	if pm == nil {
+		return nil, errNoPMTracker(dir)
+	}
+	if ed, ok := pm.Provider.(tracker.Editor); ok {
+		return ed, nil
 	}
 	return nil, errors.WithDetails("no PM-role tracker with edit support configured", "dir", dir)
 }

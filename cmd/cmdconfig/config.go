@@ -170,7 +170,7 @@ func RunMigrate(out io.Writer, dir string, dryRun, unify bool) error {
 	// was in fact someone's issue tracker they need the line that says so.
 	if len(result.Moved) > 0 {
 		if _, err := fmt.Fprintln(out,
-			"If GitHub is where your issues live, add a githubs: entry with role: pm — a GitHub tracker has always needed it to reach the board."); err != nil {
+			"If GitHub is where your issues live, add a githubs: entry for it — a lone tracker reaches the board on any backend, and role: pm is needed only to pick between several."); err != nil {
 			return err
 		}
 	}

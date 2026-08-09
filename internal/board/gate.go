@@ -38,13 +38,19 @@ func FirstPMResult(results []daemon.TrackerIssuesResult) (daemon.TrackerIssuesRe
 
 // PMRoleNotice explains an empty board that carries no PM-role tracker, so the
 // UI can show why nothing renders instead of five silently empty columns — the
-// SC-1655 defect, where a correctly configured non-Shortcut tracker returns
-// issues that the board discards for lacking the pm role. Only Shortcut infers
-// the pm role for free (see tracker.Instance.InferRole); every other kind needs
-// an explicit `role: pm` in .humanconfig. When trackers were fetched but none
-// carries the role, the message names them so the user knows which entry to
-// annotate; with no trackers at all it gives the generic setup hint. An empty
-// string means a PM-role result exists and the board renders normally.
+// SC-1655 defect, where a correctly configured tracker returns issues the board
+// discards for lacking the pm role.
+//
+// No backend earns the role by being itself. A single configured tracker is the
+// PM tracker whatever it is (tracker.ResolveTopology), so the common case needs
+// no role: line at all; this notice is what SEVERAL undeclared trackers get,
+// because there the machine genuinely cannot tell which board it is looking at
+// and guessing would scope the board silently and wrongly (SC-4120).
+//
+// When trackers were fetched but none carries the role the message names them,
+// so the user knows which entry to annotate; with no trackers at all it gives the
+// generic setup hint. An empty string means a PM-role result exists and the board
+// renders normally.
 func PMRoleNotice(results []daemon.TrackerIssuesResult) string {
 	if _, ok := FirstPMResult(results); ok {
 		return ""
@@ -67,9 +73,9 @@ func PMRoleNotice(results []daemon.TrackerIssuesResult) string {
 		if anyFailed(results) {
 			return ""
 		}
-		return "No PM-role tracker configured. Add role: pm to a tracker in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\")."
+		return "No tracker configured. Add one to .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\")."
 	}
-	return fmt.Sprintf("No PM-role tracker configured. Found %s, but none has role: pm — add role: pm to one in .humanconfig so its issues appear on the board (see CLAUDE.md, \"Board rendering\").", strings.Join(found, ", "))
+	return fmt.Sprintf("More than one tracker is configured and none says which board this is. Found %s — add role: pm to the one whose issues belong here (see CLAUDE.md, \"Board rendering\").", strings.Join(found, ", "))
 }
 
 // ErrorBanner is every failure in a fetch, joined into the one line the board

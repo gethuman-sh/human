@@ -70,17 +70,26 @@ ticket; stage says what is working on it; kind says where it lives.
 
 # Board rendering
 
-The desktop workflow board renders the issues of the **PM-role tracker only**. A tracker resolves to the pm role through an explicit `role: pm` in `.humanconfig` 
-It needs an explicit `role: pm` to appear on the board:
+The desktop workflow board renders the issues of the **PM-role tracker only**. Which tracker that is is a property of the **set** of configured trackers, not of any one backend — `tracker.ResolveTopology` answers it, and it names no kind:
+
+1. A tracker with an explicit `role: pm` is the PM tracker.
+2. Failing that, a lone non-engineering tracker is the PM tracker, **whatever backend it is**. Single-tracker is the default topology and there the one ticket is the PM ticket, so the common case needs no `role:` line at all.
+3. With several undeclared trackers none is chosen — the board says so instead of guessing.
+
+**No backend is privileged.** `role: pm` is only needed to disambiguate:
 
 ```yaml
 trackers:
   - kind: linear
     name: work
-    role: pm            # required for non-Shortcut PM trackers to render on the board
+    role: pm            # only needed when several trackers are configured
+  - kind: github
+    name: issues
 ```
 
-When a tracker resolves but none of them carries the pm role — or no tracker is configured at all — the board shows an explicit "No PM-role tracker configured" notice (naming the trackers it did find) instead of five silently empty columns, so the misconfiguration is visible rather than mistaken for "no work yet". A tracker that *failed to load* is a different fault and gets a different message: its failure is reported through the board's error banner (`board.ErrorBanner`), and the role notice stays silent, because telling a user whose secret store was unreachable to add `role: pm` sends them to edit a `.humanconfig` that needs no editing. 
+The engineering role is **never** inferred. Split topology turns on only where a tracker carries an explicit `role: engineering` (SC-254/SC-660).
+
+When several trackers resolve and none declares the role, the board shows a notice naming them instead of five silently empty columns, so the misconfiguration is visible rather than mistaken for "no work yet". A tracker that *failed to load* is a different fault: it is reported through the board's error banner (`board.ErrorBanner`) and the role notice stays silent, because telling a user whose secret store was unreachable to add `role: pm` sends them to edit a `.humanconfig` that needs no editing (SC-3554).
 
 # Review handoff
 

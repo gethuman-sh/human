@@ -682,21 +682,28 @@ func (inst Instance) FilingTarget() string {
 	return ""
 }
 
-// InferRole returns the instance's role. An explicit role always wins. With no
-// explicit role, only the pm role is inferred (for Shortcut boards) so read-side
-// board scanning keeps working out of the box; the engineering role is never
-// inferred. Engineering (split) topology is opt-in: it turns on only when a
-// tracker carries an explicit role: engineering in .humanconfig. Inferring
-// engineering from the Linear kind silently flipped single-tracker setups back
-// into split topology and minted unwanted engineering tickets ([SC-254]).
+// InferRole returns the role this instance DECLARES. It infers nothing from the
+// backend: a kind carries no role, and an instance with no role: line has none.
+//
+// It used to name Shortcut — a Shortcut tracker got the pm role for free and
+// every other kind resolved to no role at all — so a correctly configured Jira,
+// Linear or GitHub board returned issues and rendered nothing, and the remedy was
+// a role: pm line the config had no reason to say. A rule that has to name one
+// backend is a rule that is wrong for the others.
+//
+// Which tracker is the PM tracker is not a property of an instance anyway; it is
+// a property of the SET, and ResolveTopology already answers it without naming a
+// kind: an explicit pm wins, and failing that a lone non-engineering tracker is
+// the PM one, whatever backend it is. Two undeclared candidates stay ambiguous
+// rather than being guessed at. Callers choosing a PM tracker must go through
+// ResolveTopology; this method answers only "what did this instance declare?".
+//
+// The engineering role was never inferred and still is not. Split topology stays
+// opt-in, because inferring engineering from the Linear kind is what silently
+// flipped single-tracker setups back into split topology and minted unwanted
+// engineering tickets ([SC-254]).
 func (inst Instance) InferRole() string {
-	if inst.Role != "" {
-		return inst.Role
-	}
-	if inst.Kind == "shortcut" {
-		return "pm"
-	}
-	return ""
+	return inst.Role
 }
 
 // ValidateTopology reports a divergence between the topology a config DECLARES
