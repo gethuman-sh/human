@@ -822,7 +822,7 @@
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:pr-review-failed]",
-      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read.",
+      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read. What does NOT fire it: a substrate failure mid-run. The hook reports a model API error as StopFailure and Claude Code retries through it, so the run carries on — driving the loop there read a verdict the reviewer had not written yet and reddened a review that went on to approve (SC-4026). Such an event is consumed and ignored; a run that genuinely dies on one is recovered by the durable re-drive, on the machine that owns the stage. It also fires at most once per dead round: one run can raise both a StopFailure and a Stop, and an escalation with nothing changed since the last one is not restated.",
       "where": "internal/daemon/board_transition.go AdvancePRLoop — prEscalationReason names which of the three it was"
     },
     {

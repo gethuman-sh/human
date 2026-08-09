@@ -1046,6 +1046,14 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 	if _, open := openOptionsBlock(comments); open {
 		return nil
 	}
+	// Already escalated and nothing has moved since: say it once. A single run can
+	// produce two events that both look like its exit — the hook fires StopFailure
+	// on an API error and Stop when the turn ends, and the parser's own contract
+	// is that a Stop may follow a StopFailure — which drove this twice sixteen
+	// seconds apart on SC-3613 and posted the identical marker both times.
+	if _, latest := latestStateInStage(comments, BoardDoneStage); strings.HasPrefix(strings.TrimSpace(latest.Body), PRReviewFailedHeader) {
+		return nil
+	}
 	stage := latestPRLoopStage(comments)
 	if stage == PRStageFix && outcome.FixExit != PRFixDone {
 		var b strings.Builder

@@ -393,17 +393,46 @@ func handoffSearchNote(stage BoardStage, header string) string {
 }
 
 // drivePRLoopExit routes a PR review/fix loop agent's exit to the loop driver
-// instead of the generic stage-failure path, reclaiming its worktree first (the
-// reviewer is read-only, the fixer already pushed its work). It reports whether
-// the exit was a loop step and thus fully handled here. A non-loop stage returns
-// false so the caller falls through to the stage-failure handling.
+// instead of the generic stage-failure path. It reports whether the exit was a
+// loop step and thus fully handled here. A non-loop stage returns false so the
+// caller falls through to the stage-failure handling.
 //
 // The exiting run's identity travels with the call: a step that dies before
 // recording its outcome can only be explained from its artifacts, and dropping
 // the name here is what left the loop's escalation with nothing to say (SC-1892).
+//
+// A SUBSTRATE FAILURE IS NOT AN EXIT (SC-4026). The hook fires StopFailure on a
+// model API error, and Claude Code retries through it — the run carries on. The
+// loop used to drive on that event regardless, read a verdict the reviewer had
+// not written yet, and red the card while the review was still working: measured
+// on SC-3613, a server_error at 08:42:16 escalated at 08:42:25, and the reviewer
+// went on to record `approved` at 08:43:39 and exit 0 at 08:44:06.
+//
+// Liveness cannot decide this. The hook runs inside the claude process, so asking
+// the container whether claude is alive races the process's own exit and answers
+// "yes" for a clean finish as readily as for a retry. The error type is the fact
+// that is actually available, and classifyUnavailability already knows how to
+// read it — the loop simply never consulted it, because this function returns
+// long before the generic path's classification (board_failure.go, below).
+//
+// A run that genuinely dies on a substrate failure is not stranded: the durable
+// reconcile pass re-drives a loop card whose half-agent is gone, on the machine
+// that owns it. Waiting for that is strictly better than escalating a review that
+// is still running, because the reconcile answer is right in both cases.
+//
+// The worktree handoff moved inside the exit branch for the same reason. It flips
+// the flag that authorizes removing the run's worktree, and the FIXER's
+// deliverable is an unpushed local commit by design — waiving that protection on
+// an error the run then recovers from is how the commit would be lost.
 func drivePRLoopExit(pmKey string, stage BoardStage, agentName, errorType string, advancePRLoop func(pmKey, agentName, errorType string) error, onHandoff func(agentName string), logger zerolog.Logger) bool {
 	if stage != prReviewAgentStage && stage != prFixAgentStage {
 		return false
+	}
+	if kind, reason := classifyErrorType(errorType); kind == endingPaused {
+		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("agent", agentName).
+			Str("reason", reason).
+			Msg("board PR loop: substrate failure mid-run, not treating it as the step's exit")
+		return true
 	}
 	if onHandoff != nil {
 		onHandoff(agentName)
