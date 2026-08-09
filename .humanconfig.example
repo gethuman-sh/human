@@ -1,31 +1,41 @@
-jiras:
-  - name: myorg
+# Issue trackers, in one list. Each entry says what it is with kind:, so the
+# section describes a capability rather than a vendor — the same shape forges:
+# has below. Env var names are unchanged: they key off the kind and the instance
+# name, e.g. JIRA_MYORG_KEY, SHORTCUT_BOARD_TOKEN.
+trackers:
+  - kind: jira
+    name: myorg
     url: https://yourorg.atlassian.net
     user: you@example.com
     description: "Product backlog and sprint planning for the main product"
     safe: true  # block destructive operations (deletes) for this instance
     # key comes from env: export JIRA_MYORG_KEY=your-api-token
 
-githubs:
-  - name: personal
+  - kind: github
+    name: personal
     description: "Open-source side projects and personal repos"
     # url: https://api.github.com  # optional, this is the default
     # token comes from env: export GITHUB_PERSONAL_TOKEN=ghp_xxx
     # role: pm    # optional: pm or engineering, for split topology
+    # projects:   # on GitHub, name the repos: an unscoped listing searches
+    #   - acme/web  # every issue the token can see and is refused on a schedule
 
 # Code hosts: the backends that open pull requests. This is a separate section
-# because a code host is a separate thing — a githubs: entry above configures an
-# issue tracker and nothing else, even on GitHub, which is both products under
-# one login. `human forge list` shows what you have; `human pr create` needs one.
+# because a code host is a separate thing — a GitHub entry above configures an
+# issue tracker and nothing else, even though GitHub is both products under one
+# login. `human forge list` shows what you have; `human pr create` needs one.
 #
 # If your config predates this split, `human config migrate` writes this section
-# from your existing githubs: entry.
+# from your existing GitHub entry.
 forges:
   - name: prs
     # kind: github                 # optional, this is the default
     # url: https://api.github.com  # optional, this is the default
     # token comes from env: export FORGE_PRS_TOKEN=ghp_xxx
 
+# The per-vendor sections below are the older shape. They are still read, and
+# will be — a working config never has to be rewritten. `human config migrate
+# --group` folds them into the trackers: list above when you want it.
 gitlabs:
   - name: work
     description: "Internal engineering projects and CI/CD pipelines"
