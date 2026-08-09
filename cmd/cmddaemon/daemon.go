@@ -156,6 +156,14 @@ func buildDaemonStartCmd(cmdFactory func() *cobra.Command, version string) *cobr
 }
 
 // daemonState holds initialized daemon components before the main event loop.
+// boardRuns is this daemon process's record of the board runs it launched: the
+// launch side writes it (boardTransitionDepsFor) and the hook side consumes it
+// (RunBoardFailureWatch), and they are wired from different places. One per
+// process is the correct scope — a run belongs to the daemon that started it —
+// so it is a package var rather than threaded through boardTransitionDepsFor's
+// eight call sites, which carry only process-scoped values already.
+var boardRuns = daemon.NewRunRegistry()
+
 type daemonState struct {
 	srv           *daemon.Server
 	ctx           context.Context
@@ -851,7 +859,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			decStageRetries(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage)
 		},
 	}
-	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents,
+	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents, boardRuns,
 		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		liveChainReview, liveBoardAgents, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.modelSink.LatestClass, ds.daemonID, logger)
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
@@ -2439,7 +2447,7 @@ type dockerAgentLauncher struct {
 	agentIPs *daemon.AgentIPRegistry
 }
 
-func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace, configDir string) error {
+func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace, configDir, runID string) error {
 	docker, err := devcontainer.NewDockerClient()
 	if err != nil {
 		return errors.WrapWithDetails(err, "connecting to Docker for board agent", "agent", name)
@@ -2454,6 +2462,7 @@ func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace
 		Workspace: workspace,
 		ConfigDir: configDir,
 		DaemonID:  l.daemonID,
+		RunID:     runID,
 	})
 	if err == nil {
 		l.registerAgentIP(ctx, docker, meta.ContainerID, name)
@@ -3397,6 +3406,7 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 	return daemon.BoardTransitionDeps{
 		Commenter: commenter,
 		Getter:    getter,
+		Runs:      boardRuns,
 		Launcher:  dockerAgentLauncher{daemonID: daemonID, agentIPs: agentIPs},
 		Deployer:  forgeDeployer{resolver: resolver, lookup: lookup},
 		CloseTicket: func(pmKey string) error {
@@ -3595,7 +3605,7 @@ func relateLauncherFunc(reg *daemon.ProjectRegistry, daemonID string) func(daemo
 			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), name)
 			_ = docker.Close()
 		}
-		return dockerAgentLauncher{daemonID: daemonID}.Launch(context.Background(), name, "/human-relate "+req.PMKey, entry.Dir, entry.Dir)
+		return dockerAgentLauncher{daemonID: daemonID}.Launch(context.Background(), name, "/human-relate "+req.PMKey, entry.Dir, entry.Dir, "")
 	}
 }
 
@@ -3616,7 +3626,7 @@ func featuresGeneratorFunc(reg *daemon.ProjectRegistry) func() error {
 			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), "features")
 			_ = docker.Close()
 		}
-		return dockerAgentLauncher{}.Launch(context.Background(), "features", "/human-features", entry.Dir, entry.Dir)
+		return dockerAgentLauncher{}.Launch(context.Background(), "features", "/human-features", entry.Dir, entry.Dir, "")
 	}
 }
 
@@ -3638,7 +3648,7 @@ func findbugsRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), "findbugs")
 			_ = docker.Close()
 		}
-		return dockerAgentLauncher{}.Launch(context.Background(), "findbugs", "/human-findbugs", entry.Dir, entry.Dir)
+		return dockerAgentLauncher{}.Launch(context.Background(), "findbugs", "/human-findbugs", entry.Dir, entry.Dir, "")
 	}
 }
 
@@ -3660,7 +3670,7 @@ func securityRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), "findsecurity")
 			_ = docker.Close()
 		}
-		return dockerAgentLauncher{}.Launch(context.Background(), "findsecurity", "/human-security", entry.Dir, entry.Dir)
+		return dockerAgentLauncher{}.Launch(context.Background(), "findsecurity", "/human-security", entry.Dir, entry.Dir, "")
 	}
 }
 
@@ -3696,7 +3706,7 @@ func mockupsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateMocksRequ
 		if req.Description != "" {
 			prompt += "\n\nTicket context:\n" + req.Description
 		}
-		if err := (dockerAgentLauncher{}).Launch(context.Background(), agentName, prompt, entry.Dir, entry.Dir); err != nil {
+		if err := (dockerAgentLauncher{}).Launch(context.Background(), agentName, prompt, entry.Dir, entry.Dir, ""); err != nil {
 			_ = store.Delete(req.PMKey)
 			return err
 		}
@@ -3812,7 +3822,7 @@ func variationsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateVariat
 			"\n  source file: mockups/" + req.ParentSlug + "/" + req.ParentFile +
 			"\nWrite the new group to: mockups/" + childSlug + "/" +
 			"\nChange instructions:\n" + req.Instructions
-		if err := (dockerAgentLauncher{}).Launch(context.Background(), agentName, prompt, entry.Dir, entry.Dir); err != nil {
+		if err := (dockerAgentLauncher{}).Launch(context.Background(), agentName, prompt, entry.Dir, entry.Dir, ""); err != nil {
 			_ = os.RemoveAll(childDir)
 			return err
 		}

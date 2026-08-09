@@ -58,6 +58,15 @@ type StartOpts struct {
 	// the container as HUMAN_DAEMON_ID so agent-posted markers (ready-for-review,
 	// plan-ready) can be attributed to the machine's bot like daemon-posted ones.
 	DaemonID string
+	// RunID identifies THIS launch. It reaches the container as HUMAN_RUN_ID and
+	// comes back on every hook event the run fires, which is what lets the daemon
+	// act on runs it actually started instead of on whatever a hook event claims
+	// to be (SC-4082). Unlike Name it is per-launch, so it also tells two runs of
+	// the same stage apart — board agents reuse one deterministic name for every
+	// rebuild, and a name-keyed identity is what dropped every re-run's exit in
+	// SC-201. Empty leaves the run unregistered and the old name-based path in
+	// charge.
+	RunID string
 }
 
 // Manager orchestrates agent lifecycle using devcontainers.
@@ -225,6 +234,9 @@ func (m *Manager) execClaudeDetached(ctx context.Context, containerID, remoteUse
 	// subagent is waited for indefinitely rather than silently killed at 10
 	// minutes and misreported as "finished without posting the handoff" (SC-3284).
 	env := []string{"HUMAN_AGENT_NAME=" + opts.Name, "HUMAN_DAEMON_ID=" + opts.DaemonID, "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0"}
+	if opts.RunID != "" {
+		env = append(env, "HUMAN_RUN_ID="+opts.RunID)
+	}
 	// Attribute the agent's commits to the bot so authorship alone separates
 	// agent work from developer work (SC-371). A config read failure must never
 	// fail the launch — fall back to the default identity.

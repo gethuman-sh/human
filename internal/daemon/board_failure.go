@@ -69,7 +69,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // resolved marker). It is the success signal that authorizes reclaiming the
 // run's private worktree — every other exit KEEPS the worktree so uncommitted
 // work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, liveAgents LiveAgentLister, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, runs *RunRegistry, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, liveAgents LiveAgentLister, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -99,10 +99,54 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
 					continue
 				}
-				go handleBoardAgentExit(ctx, evt.AgentName, evt.ErrorType, evt.EventName, commenterFor, chainReview, liveAgents, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, latestClass, daemonID, logger)
+				go handleBoardAgentExit(ctx, runs, evt.RunID, evt.AgentName, evt.ErrorType, evt.EventName, commenterFor, chainReview, liveAgents, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, latestClass, daemonID, logger)
 			}
 		}
 	}
+}
+
+// claimExit decides whether this event is one this daemon may act on, and what
+// work it is for. It answers from the daemon's OWN launch record rather than from
+// the event, and consumes the record so only the first exit of a run acts.
+//
+// The event is not a trustworthy statement of what it is. Its agent name is
+// filled from HUMAN_AGENT_NAME inside a container and forwarded over a route
+// authenticated only by the shared daemon token — which every agent container
+// holds — and the ticket key was then parsed straight out of that name. Anything
+// able to send one hook event could red a ticket and relaunch its stage (SC-4082).
+// A run id the registry does not hold is, by construction, not a run this daemon
+// started.
+//
+// It is also the exactly-once gate. One run can raise several events that all
+// look like its exit — a StopFailure on an API error and a Stop when the turn
+// ends, and a Stop may follow a StopFailure by contract — which drove the loop
+// twice and posted the same escalation twice on SC-3613. Claim removes the
+// record, so every later event for that run finds nothing.
+//
+// A run with NO id predates the registry: it was launched by a daemon without
+// this code, so its exit falls back to the name-derived identity rather than
+// being dropped. That window is one daemon restart wide and closes itself; the
+// alternative — dropping those exits — would strand every in-flight card across
+// an upgrade for the sake of a case that resolves in minutes.
+func claimExit(runs *RunRegistry, runID, agentName string, logger zerolog.Logger) (string, BoardStage, bool) {
+	if runID == "" {
+		pmKey, stage, ok := parseAgentName(agentName)
+		if ok && runs != nil {
+			logger.Debug().Str("agent", agentName).
+				Msg("board exit: no run id on the event; falling back to the name (a run launched before this daemon started)")
+		}
+		return pmKey, stage, ok
+	}
+	rec, ok := runs.Claim(runID)
+	if !ok {
+		// Loud on purpose: this is either a second event for a run already
+		// handled, or an event naming work this daemon never launched. Both are
+		// worth seeing, and neither may move a ticket.
+		logger.Info().Str("agent", agentName).
+			Msg("board exit: ignoring an event for a run this daemon did not launch, or has already handled")
+		return "", "", false
+	}
+	return rec.PMKey, rec.Stage, true
 }
 
 // handleBoardAgentExit posts the stage's *-failed marker unless the stage's
@@ -116,8 +160,8 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, commenterF
 // is used to derive cleanExit, which in turn guards against misreading a
 // clean finish that merely raced its own review-complete propagation as a
 // mid-review crash (SC-2133).
-func handleBoardAgentExit(ctx context.Context, agentName, errorType, eventName string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, liveAgents LiveAgentLister, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
-	pmKey, stage, ok := parseAgentName(agentName)
+func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, runID, agentName, errorType, eventName string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, liveAgents LiveAgentLister, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
+	pmKey, stage, ok := claimExit(runs, runID, agentName, logger)
 	if !ok {
 		return
 	}

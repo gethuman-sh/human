@@ -32,7 +32,11 @@ var ErrAgentAlreadyRunning = stderrors.New("agent already running")
 // implementation returns ErrAgentAlreadyRunning when the stage's agent is
 // already running so the caller can treat the racing retry as a no-op.
 type AgentLauncher interface {
-	Launch(ctx context.Context, name, prompt, workspace, configDir string) error
+	// runID is the token the daemon minted for this launch; the implementation
+	// injects it into the container so every hook event the run fires carries it
+	// back and the daemon can recognise its own work (SC-4082). Empty means the
+	// launch was not registered and the run reports no id.
+	Launch(ctx context.Context, name, prompt, workspace, configDir, runID string) error
 }
 
 // Deployer executes the forge side of the deploy pipeline: push + PR, the CI
@@ -180,6 +184,10 @@ type BoardTransitionDeps struct {
 	// Empty leaves markers un-signed (the signer's empty-machine no-op), so an
 	// un-provisioned daemon still functions.
 	DaemonID string
+	// Runs is the daemon's record of the runs it launched, so the hook path can
+	// act on its own work rather than on whatever an event names (SC-4082). nil
+	// leaves runs unregistered and the exit path on its pre-registry behaviour.
+	Runs *RunRegistry
 	// MergeDraftPR authorizes the deploy gate to un-draft a pull request the
 	// machine review loop is still holding, and ship it. It is a person saying "I
 	// have judged this reviewed enough", so it is set only from an explicit
@@ -617,7 +625,15 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 // rediscovering the rule. A benign single-flight refusal claims nothing: an
 // agent is already on it, so the existing claim is the accurate one.
 func (d BoardTransitionDeps) launchAgent(ctx context.Context, pmKey, name, prompt string) error {
-	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir); err != nil {
+	// Registered BEFORE the launch: the run can fire its first hook event the
+	// moment the container starts, and an id minted afterwards would arrive too
+	// late to recognise it.
+	_, stage, _ := parseAgentName(name)
+	runID := d.Runs.Register(name, pmKey, stage)
+	if err := d.Launcher.Launch(ctx, name, prompt, d.WorkspaceDir, d.ConfigDir, runID); err != nil {
+		// Nothing will ever arrive for a run that did not start, and a single-flight
+		// refusal means another launch owns the work — either way the id is dead.
+		d.Runs.Forget(runID)
 		if stderrors.Is(err, ErrAgentAlreadyRunning) {
 			return nil
 		}

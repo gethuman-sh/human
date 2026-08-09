@@ -51,12 +51,16 @@ type fakeLauncher struct {
 	prompt string
 	err    error
 	calls  int
+	// runID records the token the daemon minted for the launch, so a test can
+	// assert the run was registered and that the container is told which run it is.
+	runID string
 }
 
-func (f *fakeLauncher) Launch(_ context.Context, name, prompt, _, _ string) error {
+func (f *fakeLauncher) Launch(_ context.Context, name, prompt, _, _, runID string) error {
 	f.calls++
 	f.name = name
 	f.prompt = prompt
+	f.runID = runID
 	return f.err
 }
 
