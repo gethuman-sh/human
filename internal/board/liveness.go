@@ -13,7 +13,17 @@ import (
 // BEFORE launchAgent returns (board_transition.go:620-624), and a devcontainer
 // can take tens of seconds to come up, so without this window every launch
 // would flash a false "agent not running" on the card that just started.
-const agentLaunchGrace = 2 * time.Minute
+//
+// It is derived from the daemon's own recovery window rather than set to a
+// number of its own, because the machine must get its turn before the person
+// is asked for theirs. A dead verdict paints the amber --turn-person register
+// and says "Retry the stage" (livenessBadge, board-queue.ts); reaching that
+// while reconcileQueuedLaunch is still due to relaunch the card by itself
+// demands a person for work the machine is already fixing — the SC-1830 rule
+// badgeInfo states in its own comment. Two independent constants that merely
+// happened to be equal put the two exactly in step, so the board asked for a
+// retry at the same instant the daemon started one.
+const agentLaunchGrace = daemon.QueuedLaunchGrace + time.Minute
 
 // LiveAgents is what ONE machine can see about running board agents at the
 // moment the overlay is applied.

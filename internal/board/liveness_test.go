@@ -78,6 +78,15 @@ func TestMarkAgentLiveness_graceBoundary(t *testing.T) {
 	assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness)
 }
 
+// The board must not ask a person to retry a card the daemon is still due to
+// relaunch on its own: reconcileQueuedLaunch recovers a queued card after
+// QueuedLaunchGrace, and a dead verdict paints the amber --turn-person badge.
+// Equal windows put the two exactly in step, so the grace has to outlast it.
+func TestAgentLaunchGrace_outlastsTheDaemonsOwnRecovery(t *testing.T) {
+	assert.Greater(t, agentLaunchGrace, daemon.QueuedLaunchGrace,
+		"a card must never read as needing a person while the machine's own relaunch pass is still due")
+}
+
 func TestMarkAgentLiveness_unparseableTimestampIsNeverDead(t *testing.T) {
 	cards := []daemon.BoardViewCard{{
 		Key: "SC-1", Stage: string(daemon.BoardImplementation), State: string(daemon.BoardRunning),
