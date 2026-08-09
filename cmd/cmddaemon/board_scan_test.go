@@ -153,3 +153,75 @@ func TestFetchTrackerIssuesLiteFunc_EmptyRegistry(t *testing.T) {
 func (s *stubProvider) UnlinkIssues(context.Context, string, string) error {
 	return nil
 }
+
+// projectsOf names the (instance, project) pairs a listing would fetch, so a
+// test can assert what the daemon asks for rather than how it asks.
+func projectsOf(jobs []fetchJob) []string {
+	out := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, j.inst.Kind+":"+j.project)
+	}
+	return out
+}
+
+// The defect this pins: a githubs: entry with no role is the forge's
+// credentials, but it registers as a tracker, so every board refresh asked it
+// for a ticket listing. GitHub answers that by searching every issue the token
+// can see — a rate-limited endpoint — and the board then discards the result,
+// because only pm and engineering results are ever read. The one thing the
+// fetch could contribute was its failure, and a 403 rate-limit banner is what
+// the user saw, spread across a board whose real tracker was healthy.
+func TestListingJobs_SkipsARolelessGitHubEntry(t *testing.T) {
+	jobs := listingJobs([]tracker.Instance{
+		{Name: "human", Kind: "github"},   // credentials for the forge
+		{Name: "human", Kind: "shortcut"}, // the PM tracker (role inferred)
+	}, "/proj")
+
+	assert.Equal(t, []string{"shortcut:"}, projectsOf(jobs),
+		"only a backend that holds tickets is worth a request")
+}
+
+// A team whose tracker IS GitHub declares role: pm, and must be listed exactly
+// as before — the rule is about a declared role, not about the vendor.
+func TestListingJobs_KeepsADeclaredGitHubTracker(t *testing.T) {
+	jobs := listingJobs([]tracker.Instance{
+		{Name: "work", Kind: "github", Role: "pm", Projects: []string{"acme/web"}},
+	}, "/proj")
+
+	assert.Equal(t, []string{"github:acme/web"}, projectsOf(jobs))
+}
+
+// Only Shortcut infers a role for free, so a Linear or Jira tracker configured
+// without one is the ordinary case, not a forge in disguise. Skipping it would
+// empty the board of the very work it exists to show.
+func TestListingJobs_KeepsARolelessNonForgeTracker(t *testing.T) {
+	jobs := listingJobs([]tracker.Instance{
+		{Name: "work", Kind: "linear"},
+		{Name: "ops", Kind: "jira"},
+	}, "/proj")
+
+	assert.Equal(t, []string{"linear:", "jira:"}, projectsOf(jobs))
+}
+
+// An entry that declares itself a forge carries a nil Provider, so listing it
+// would not merely waste a request — it would dereference nothing ([SC-1671]).
+func TestListingJobs_SkipsADeclaredForge(t *testing.T) {
+	jobs := listingJobs([]tracker.Instance{
+		{Name: "human", Kind: "github", Role: tracker.RoleForge},
+	}, "/proj")
+
+	assert.Empty(t, jobs)
+}
+
+// One job per configured project, each carrying the project dir so a later
+// comment scan can route the ticket back to the project that owns it.
+func TestListingJobs_OneJobPerProjectCarryingTheDir(t *testing.T) {
+	jobs := listingJobs([]tracker.Instance{
+		{Name: "work", Kind: "shortcut", Projects: []string{"team-a", "team-b"}},
+	}, "/proj")
+
+	assert.Equal(t, []string{"shortcut:team-a", "shortcut:team-b"}, projectsOf(jobs))
+	for _, j := range jobs {
+		assert.Equal(t, "/proj", j.dir)
+	}
+}

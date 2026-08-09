@@ -85,34 +85,43 @@ func recallSyncLoop(ctx context.Context, interval time.Duration, fullEvery int, 
 	}
 }
 
-// ticketSources keeps the instances that actually hold this project's tickets.
+// isTicketSource reports whether an unattended pass may ask this instance for a
+// ticket listing.
 //
 // A configured GitHub entry is not automatically a ticket source: it may exist
 // purely for pull requests, and it answers a ticket listing by searching every
-// issue the token can see — expensive, unrelated to the record, and rate
-// limited. Observed live: the scheduled sync tripped GitHub's secondary rate
-// limit every pass while contributing nothing (SC-2132).
+// issue the token can see — expensive, unrelated to this project, and rate
+// limited on a quota of its own. Observed live: the scheduled sync tripped
+// GitHub's secondary rate limit every pass while contributing nothing (SC-2132),
+// and the board's own listing then spent the search quota on a result no column
+// renders, surfacing only as a red rate-limit banner over healthy cards.
 //
 // An entry that DECLARES itself a forge is already excluded further in, where
-// recall.Sync drops everything that is not a tracker (SC-1671). What is left is
-// the legacy shape that split predates: a bare githubs: entry with no role,
-// which still registers as a tracker and looks like one to every caller. A role
-// is what tells the two apart, so a roleless GitHub entry stays out of the
-// unattended pass. A team whose tracker IS GitHub sets role: pm and is indexed
+// tracker.IsTracker drops everything carrying role: forge (SC-1671). What is
+// left is the legacy shape that split predates: a bare githubs: entry with no
+// role, which still registers as a tracker and looks like one to every caller. A
+// role is what tells the two apart, so a roleless GitHub entry stays out of the
+// unattended passes. A team whose tracker IS GitHub sets role: pm and is listed
 // exactly as before.
 //
 // Confined to GitHub on purpose. Every other backend is configured because
 // someone keeps tickets in it, and only Shortcut infers a role for free — so
 // skipping roleless trackers in general would keep a Linear or Jira backlog out
-// of the record entirely, which is the failure this work exists to remove.
+// of the record, and off the board, entirely.
 //
 // The manual `human index` is deliberately left alone: someone running it by
 // hand has said what they want indexed, and may well want a roleless tracker in
-// their record. Only the unattended pass is conservative.
+// their record. Only the unattended passes are conservative.
+func isTicketSource(inst tracker.Instance) bool {
+	rolelessForgeCredentials := inst.Kind == "github" && inst.InferRole() == ""
+	return !rolelessForgeCredentials
+}
+
+// ticketSources keeps the instances that actually hold this project's tickets.
 func ticketSources(instances []tracker.Instance) []tracker.Instance {
 	out := instances[:0:0]
 	for _, inst := range instances {
-		if inst.Kind == "github" && inst.InferRole() == "" {
+		if !isTicketSource(inst) {
 			continue
 		}
 		out = append(out, inst)
