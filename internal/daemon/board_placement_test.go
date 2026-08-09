@@ -25,10 +25,18 @@ import (
 // vocabulary and collects every (stage, state) placement that comes out, then
 // checks each against the placements the states claim.
 //
-// It is a LOWER BOUND, deliberately and permanently. Threads of one and two
-// markers cannot reach a placement that needs three, so an unclaimed placement
-// found here is real while the absence of one proves nothing. Every count this
-// project has produced from real evidence has had the same shape.
+// It is a LOWER BOUND — an unclaimed placement found here is real, while the
+// absence of one proves nothing. Every count this project has produced from real
+// evidence has had the same shape.
+//
+// What that bound is NOT limited by any more is thread DEPTH. This used to
+// enumerate pairs and disclaim placements needing three; measured, the set
+// saturates at two — threes add none, and a one-off probe to four added none
+// either. Threes are enumerated anyway, cheaply, so the depth the caveat used to
+// worry about is covered by the guard rather than argued about in a comment.
+// What still bounds it is marker SHAPE: each header is seeded with one body, and
+// the options block with one stage-and-count, so a placement that needs a
+// particular body cannot appear.
 
 // boardPlacement is one place a card can be.
 type boardPlacement struct {
@@ -61,9 +69,12 @@ func producibleBoardPlacements() map[boardPlacement][]string {
 	record("an idea-labelled ticket", nil, tracker.CategoryUnstarted, true)
 	record("a closed ticket", []tracker.Comment{{Body: DeployedHeader, Created: at(0)}}, tracker.CategoryDone, false)
 
-	// Every marker alone, then every ordered pair. The pairs are what reach the
-	// override chain — a decision retiring a running marker, a failure retired by
-	// a later start — which is where the synthesized placements live.
+	// Every marker alone, then every ordered pair, then every ordered triple. The
+	// pairs are what reach the override chain — a decision retiring a running
+	// marker, a failure retired by a later start — which is where the synthesized
+	// placements live. The triples reach nothing further today; they are here so
+	// that a change which makes a third marker matter fails this test instead of
+	// quietly widening what the enumeration cannot see.
 	headers := make([]string, 0, len(orderedMarkerSpecs))
 	for _, spec := range orderedMarkerSpecs {
 		headers = append(headers, spec.Header)
@@ -84,6 +95,14 @@ func producibleBoardPlacements() map[boardPlacement][]string {
 				{Body: body(first), Created: at(1)},
 				{Body: body(second), Created: at(2)},
 			}, tracker.CategoryUnstarted, false)
+			for _, third := range headers {
+				record(placementHow(first)+" then "+placementHow(second)+" then "+placementHow(third),
+					[]tracker.Comment{
+						{Body: body(first), Created: at(1)},
+						{Body: body(second), Created: at(2)},
+						{Body: body(third), Created: at(3)},
+					}, tracker.CategoryUnstarted, false)
+			}
 		}
 	}
 	return found
