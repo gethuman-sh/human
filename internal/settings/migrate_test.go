@@ -129,6 +129,39 @@ func TestMigrateForges_leavesADeclaredTrackerAlone(t *testing.T) {
 	assert.True(t, result.Empty())
 }
 
+// The state every early migration left behind: the first version of this
+// command copied, so the forges: entry exists AND the githubs: entry is still
+// standing as a tracker — which is the board searching GitHub for issues again.
+// A rerun has to finish the job rather than see a name it recognises and stop.
+func TestMigrateForges_finishesAHalfDoneMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := writeCfg(t, dir,
+		"githubs:\n  - name: human\n    token: gh://token\nforges:\n  - name: human\n    token: gh://token\n")
+
+	result, err := MigrateForges(dir, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"human"}, result.Moved)
+	assert.Empty(t, result.Added, "the forge is already there — only the tracker had to go")
+
+	out := readCfg(t, path)
+	assert.NotContains(t, sectionKeys(out), "githubs")
+	assert.Contains(t, out, "forges:")
+	assert.Contains(t, out, "gh://token")
+}
+
+// The same shape with a DECLARED tracker is not a half-done migration: someone
+// runs GitHub issues and GitHub pull requests under one name, deliberately.
+func TestMigrateForges_leavesADeclaredTrackerThatSharesAForgeName(t *testing.T) {
+	dir := t.TempDir()
+	path := writeCfg(t, dir,
+		"githubs:\n  - name: human\n    token: ghp_x\n    role: pm\nforges:\n  - name: human\n    token: ghp_x\n")
+
+	result, err := MigrateForges(dir, false)
+	require.NoError(t, err)
+	assert.True(t, result.Empty())
+	assert.Contains(t, sectionKeys(readCfg(t, path)), "githubs")
+}
+
 func TestMigrateForges_isIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := writeCfg(t, dir, "githubs:\n  - name: human\n    token: gh://token\n")
