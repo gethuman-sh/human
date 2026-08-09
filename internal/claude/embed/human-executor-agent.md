@@ -154,6 +154,8 @@ Infrastructure trouble is never a real attempt — it is a `retryable` ending, n
 
 <!-- human:include stage-lease stage=implementation -->
 
+<!-- human:include fsm -->
+
 <!-- human:include exit-contract -->
 
 ## Completion invariant

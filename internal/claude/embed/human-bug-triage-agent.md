@@ -121,4 +121,6 @@ EOF
 
 <!-- human:include stage-lease stage=triage -->
 
+<!-- human:include fsm -->
+
 <!-- human:include exit-contract -->

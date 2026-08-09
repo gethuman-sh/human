@@ -76,4 +76,6 @@ Do NOT use `AskUserQuestion` — you cannot interact with a human.
 
 <!-- human:include stage-lease stage=pr-fix -->
 
+<!-- human:include fsm -->
+
 <!-- human:include exit-contract -->
