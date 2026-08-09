@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -185,6 +186,10 @@ var TrackerSections = map[string]string{
 // does not appear above ([SC-3876]).
 const ForgeSection = "forges"
 
+// UnifiedTrackerSection is the list where a backend is declared by what it is,
+// with the vendor as a kind: field — the shape forges: already had ([SC-3874]).
+const UnifiedTrackerSection = "trackers"
+
 // Tracker is one configured issue tracker, as the file declares it.
 //
 // It is a read-only view: changing a field changes nothing until it is handed
@@ -223,18 +228,43 @@ func (d *Document) Trackers() []Tracker {
 	var out []Tracker
 	for _, section := range sections {
 		for _, entry := range d.entries(section) {
-			out = append(out, Tracker{
-				Section:  section,
-				Kind:     TrackerSections[section],
-				Name:     scalarAt(entry, "name"),
-				Role:     scalarAt(entry, "role"),
-				Token:    scalarAt(entry, "token"),
-				URL:      scalarAt(entry, "url"),
-				Projects: stringsAt(entry, "projects"),
-			})
+			out = append(out, trackerFrom(entry, section, TrackerSections[section]))
 		}
 	}
+	// The unified list last, so a legacy entry keeps its position in a config
+	// that carries both — mirroring the loaders, where the per-vendor section is
+	// read first.
+	for _, entry := range d.entries(UnifiedTrackerSection) {
+		out = append(out, trackerFrom(entry, UnifiedTrackerSection, scalarAt(entry, "kind")))
+	}
 	return out
+}
+
+func trackerFrom(entry *yaml.Node, section, kind string) Tracker {
+	return Tracker{
+		Section:  section,
+		Kind:     kind,
+		Name:     scalarAt(entry, "name"),
+		Role:     scalarAt(entry, "role"),
+		Token:    scalarAt(entry, "token"),
+		URL:      scalarAt(entry, "url"),
+		Projects: stringsAt(entry, "projects"),
+	}
+}
+
+// Shape reports how this file declares its trackers: the unified list, the
+// per-vendor sections, or neither. A document writes in the shape it already
+// uses, so an edit never silently converts someone's file ([SC-3874]).
+func (d *Document) Shape() string {
+	if len(d.entries(UnifiedTrackerSection)) > 0 {
+		return UnifiedTrackerSection
+	}
+	for section := range TrackerSections {
+		if len(d.entries(section)) > 0 {
+			return "vendor"
+		}
+	}
+	return ""
 }
 
 // Forges returns every configured code host, in file order.
@@ -262,22 +292,29 @@ func (d *Document) Forges() []Forge {
 // two entries of one kind sharing a name make every by-name resolution
 // ambiguous, and silently replacing someone's entry is not an addition.
 func (d *Document) AddTracker(t Tracker) error {
+	if sectionForKind(t.Kind) == "" {
+		return errors.WithDetails("unknown tracker kind", "kind", t.Kind)
+	}
 	section := t.Section
 	if section == "" {
-		section = sectionForKind(t.Kind)
-	}
-	if section == "" {
-		return errors.WithDetails("unknown tracker kind", "kind", t.Kind)
+		section = d.sectionToWriteTo(t.Kind)
 	}
 	if t.Name == "" {
 		return errors.WithDetails("a tracker needs a name", "section", section)
 	}
-	for _, existing := range d.entries(section) {
-		if scalarAt(existing, "name") == t.Name {
-			return errors.WithDetails("tracker already configured", "section", section, "name", t.Name)
+	// A name is ambiguous per kind, not per section: two entries of one kind
+	// sharing a name break --tracker=<name> whichever shape they are written in.
+	for _, existing := range d.Trackers() {
+		if existing.Kind == t.Kind && existing.Name == t.Name {
+			return errors.WithDetails("tracker already configured", "kind", t.Kind, "name", t.Name)
 		}
 	}
 	entry := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	if section == UnifiedTrackerSection {
+		// The kind leads: in this shape it is what the entry IS, and reading it
+		// first is how the list stays legible.
+		setScalar(entry, "kind", t.Kind)
+	}
 	setScalar(entry, "name", t.Name)
 	setScalar(entry, "url", t.URL)
 	setScalar(entry, "token", t.Token)
@@ -308,10 +345,57 @@ func (d *Document) AddForge(f Forge) error {
 	return nil
 }
 
+// sectionToWriteTo picks where a new tracker goes: the shape this file already
+// uses, and the unified list for a file that has no trackers yet.
+//
+// A fresh config gets the shape we mean people to write; an existing one is
+// left in the shape its author chose, because converting a file as a side
+// effect of adding one entry is not what "add" means. `human config migrate`
+// converts, deliberately and visibly.
+func (d *Document) sectionToWriteTo(kind string) string {
+	if d.Shape() == "vendor" {
+		return sectionForKind(kind)
+	}
+	return UnifiedTrackerSection
+}
+
 // RemoveTracker drops a tracker, reporting whether it was there. An emptied
 // section is removed with it: an empty list reads as "configured, but broken".
+//
+// It looks in both shapes: a caller asking to remove a tracker means the
+// tracker, not the entry in one particular list.
 func (d *Document) RemoveTracker(kind, name string) bool {
+	if d.removeUnifiedEntry(kind, name) {
+		return true
+	}
 	return d.removeEntry(sectionForKind(kind), name)
+}
+
+// removeUnifiedEntry drops a trackers: entry matching both kind and name.
+func (d *Document) removeUnifiedEntry(kind, name string) bool {
+	node := mapValue(d.mapping(), UnifiedTrackerSection)
+	if node == nil || node.Kind != yaml.SequenceNode {
+		return false
+	}
+	var kept []*yaml.Node
+	removed := false
+	for _, entry := range node.Content {
+		match := entry.Kind == yaml.MappingNode &&
+			scalarAt(entry, "name") == name && scalarAt(entry, "kind") == kind
+		if match && !removed {
+			removed = true
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	if !removed {
+		return false
+	}
+	node.Content = kept
+	if len(kept) == 0 {
+		removeKey(d.mapping(), UnifiedTrackerSection)
+	}
+	return true
 }
 
 // RemoveForge drops a code host, reporting whether it was there.
@@ -333,13 +417,16 @@ func (d *Document) MoveTrackerToForge(kind, name string) (bool, error) {
 	}
 	entry := d.findEntry(section, name)
 	if entry == nil {
+		entry = d.findUnifiedEntry(kind, name)
+	}
+	if entry == nil {
 		return false, nil
 	}
 	for _, existing := range d.entries(ForgeSection) {
 		if scalarAt(existing, "name") == name {
 			// The credentials are already carried across, so the tracker entry is
 			// a leftover and removing it deletes nothing ([SC-3887]).
-			d.removeEntry(section, name)
+			d.RemoveTracker(kind, name)
 			return true, nil
 		}
 	}
@@ -351,9 +438,89 @@ func (d *Document) MoveTrackerToForge(kind, name string) (bool, error) {
 		}
 	}
 	entry.Content = content
-	d.removeEntry(section, name)
+	d.RemoveTracker(kind, name)
 	d.appendEntry(ForgeSection, entry)
 	return true, nil
+}
+
+// UnifyTrackers rewrites the per-vendor sections into the single trackers:
+// list, moving each entry's node so comments and field order survive and
+// stamping it with the kind its section used to imply.
+//
+// It reports the kinds it moved, empty when there was nothing to do. A config
+// already using the unified list, or using no trackers at all, is left alone.
+//
+// The vendor sections keep being READ afterwards, and will for a long time —
+// nobody should have to rewrite a working config to keep it working. This is
+// for someone who wants the new shape, not a toll on staying put ([SC-3874]).
+func (d *Document) UnifyTrackers() []string {
+	sections := make([]string, 0, len(TrackerSections))
+	for section := range TrackerSections {
+		sections = append(sections, section)
+	}
+	sort.Strings(sections)
+
+	var moved []string
+	var orphanedComments []string
+	for _, section := range sections {
+		entries := d.entries(section)
+		if len(entries) == 0 {
+			continue
+		}
+		// A comment sitting above a section key belongs to the reader, not to
+		// the key: yaml attaches a file's opening lines to whatever comes first.
+		// Removing the key would take those lines with it, so they are carried
+		// to the list that replaces them.
+		if c := keyComment(d.mapping(), section); c != "" {
+			orphanedComments = append(orphanedComments, c)
+		}
+		kind := TrackerSections[section]
+		for _, entry := range entries {
+			// The kind leads the entry, because in this shape it is what the
+			// entry IS; prepending rather than appending keeps that true of
+			// entries that already carry other fields.
+			entry.Content = append([]*yaml.Node{
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kind"},
+				{Kind: yaml.ScalarNode, Tag: "!!str", Value: kind},
+			}, entry.Content...)
+			d.appendEntry(UnifiedTrackerSection, entry)
+			moved = append(moved, kind)
+		}
+		removeKey(d.mapping(), section)
+	}
+	if len(moved) > 0 {
+		adoptComments(d.mapping(), UnifiedTrackerSection, orphanedComments)
+	}
+	return moved
+}
+
+// keyComment returns the comment written above a section key.
+func keyComment(mapping *yaml.Node, key string) string {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i].HeadComment
+		}
+	}
+	return ""
+}
+
+// adoptComments attaches comments orphaned by a removed key to the key that
+// replaced it, keeping whatever that key already said first.
+func adoptComments(mapping *yaml.Node, key string, comments []string) {
+	if len(comments) == 0 {
+		return
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value != key {
+			continue
+		}
+		parts := comments
+		if existing := mapping.Content[i].HeadComment; existing != "" {
+			parts = append([]string{existing}, comments...)
+		}
+		mapping.Content[i].HeadComment = strings.Join(parts, "\n")
+		return
+	}
 }
 
 // --- node plumbing -------------------------------------------------------
@@ -383,6 +550,16 @@ func (d *Document) entries(section string) []*yaml.Node {
 		}
 	}
 	return out
+}
+
+// findUnifiedEntry finds a trackers: entry by kind and name.
+func (d *Document) findUnifiedEntry(kind, name string) *yaml.Node {
+	for _, entry := range d.entries(UnifiedTrackerSection) {
+		if scalarAt(entry, "kind") == kind && scalarAt(entry, "name") == name {
+			return entry
+		}
+	}
+	return nil
 }
 
 func (d *Document) findEntry(section, name string) *yaml.Node {

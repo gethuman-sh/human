@@ -54,8 +54,19 @@ const RetiredForgeRole = "forge"
 // were separate strings, which is precisely how a rule and its enforcement
 // drift ([SC-3889]).
 func RetiredForgeRoleMessage(name string) string {
-	return "githubs: entry " + name + " declares role: forge, but a githubs: entry is an issue tracker. " +
+	return "GitHub tracker " + name + " declares role: forge, but a tracker entry is an issue tracker. " +
 		"A code host is configured in the forges: section — run `human config migrate` to move it."
+}
+
+// Describe names one tracker entry the way its file spells it, so a message
+// points at something the reader can find. The same backend can be declared in
+// the unified list or a per-vendor section ([SC-3874]), and a message naming the
+// wrong one sends someone looking through the wrong part of their config.
+func (t Tracker) Describe() string {
+	if t.Section == UnifiedTrackerSection {
+		return fmt.Sprintf("trackers: entry %q (kind: %s)", t.Name, t.Kind)
+	}
+	return fmt.Sprintf("%s: entry %q", t.Section, t.Name)
 }
 
 // Validate reports everything wrong with this configuration that can be known
@@ -133,8 +144,8 @@ func leftoverTrackers(trackers []Tracker, forges []Forge) []Problem {
 		out = append(out, Problem{
 			Severity: Error, Rule: "half-migrated-github",
 			Section: t.Section, Instance: t.Name,
-			Message: fmt.Sprintf("githubs: entry %q sits beside a forges: entry of the same name, so an earlier migration was left half done. "+
-				"It declares no role, so it is an issue tracker: the board will ask GitHub for issues and get a rate-limited search across everything the token can see.", t.Name),
+			Message: fmt.Sprintf("%s sits beside a forges: entry of the same name, so an earlier migration was left half done. "+
+				"It declares no role, so it is an issue tracker: the board will ask GitHub for issues and get a rate-limited search across everything the token can see.", t.Describe()),
 			Fix: "human config migrate",
 		})
 	}
@@ -159,8 +170,8 @@ func unscopedGitHubTrackers(trackers []Tracker) []Problem {
 		out = append(out, Problem{
 			Severity: Warning, Rule: "unscoped-github-tracker",
 			Section: t.Section, Instance: t.Name,
-			Message: fmt.Sprintf("githubs: entry %q configures no projects, so listing it searches every issue the token can see "+
-				"on GitHub's rate-limited search endpoint, once per board refresh.", t.Name),
+			Message: fmt.Sprintf("%s configures no projects, so listing it searches every issue the token can see "+
+				"on GitHub's rate-limited search endpoint, once per board refresh.", t.Describe()),
 			Fix: "add projects: [owner/repo], or move the entry to forges: if it only opens pull requests",
 		})
 	}
@@ -173,15 +184,18 @@ func unscopedGitHubTrackers(trackers []Tracker) []Problem {
 // from different lists — so only collisions within one list are reported.
 func duplicateNames(trackers []Tracker, forges []Forge) []Problem {
 	var out []Problem
+	// Keyed by kind rather than by section: the same backend declared twice
+	// under one name is ambiguous however the two entries are spelled, and a
+	// config part-way through a migration is exactly where that happens.
 	seen := map[string]bool{}
 	for _, t := range trackers {
-		key := t.Section + "/" + t.Name
+		key := t.Kind + "/" + t.Name
 		if seen[key] {
 			out = append(out, Problem{
 				Severity: Error, Rule: "duplicate-name",
 				Section: t.Section, Instance: t.Name,
-				Message: fmt.Sprintf("%s has two entries named %q, so --tracker=%s cannot say which one it means.", t.Section, t.Name, t.Name),
-				Fix:     "rename one of them",
+				Message: fmt.Sprintf("%s is configured twice as %q, so --tracker=%s cannot say which one it means.", t.Kind, t.Name, t.Name),
+				Fix:     "rename one of them, or remove the entry the migration left behind",
 			})
 		}
 		seen[key] = true
