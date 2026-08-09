@@ -126,8 +126,11 @@ interface Card {
   // desktop overlay (applyLocal → board.MarkAgentLiveness), never by the daemon.
   agentLiveness?: string;
   // Machine id signed onto the card's deciding stage marker. Consumed by the Go
-  // overlay to decide agentLiveness; nothing in the frontend reads it.
-  stageDaemonID?: string;
+  // overlay to decide agentLiveness; nothing in the frontend reads it. Field
+  // name matches the wire tag exactly (protocol.go's BoardViewCard.StageDaemonID
+  // is `json:"stageDaemonId"`, lowercase d) since this is a stored format read
+  // by name, not by position.
+  stageDaemonId?: string;
   // Idea-space sub-column (0 loosest … 4 most concrete) for Ideas-stage cards.
   // Locally persisted preference; absent means leftmost.
   ideaColumn?: number;

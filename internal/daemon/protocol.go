@@ -281,13 +281,6 @@ type BoardViewCard struct {
 	// the card is the viewer's own, has no owner, or identity is unknown: those
 	// all render at full opacity (dimming is a hint, never applied on a guess).
 	NotMine bool `json:"notMine,omitempty"`
-	// StageDaemonID is the machine id signed onto the card's deciding stage
-	// marker (BoardCard.StageDaemonID, read via ParseDaemonID). It exists on the
-	// wire so a VIEWER can tell "no agent HERE" from "no agent anywhere": on a
-	// board several daemons drive, a stage another machine owns is invisible to
-	// this host's container list, and reporting that silence as death is the
-	// mistake this field prevents (SC-3569). Empty for an unsigned marker.
-	StageDaemonID string `json:"stageDaemonID,omitempty"`
 	// AgentLiveness answers "is an agent actually working this card right now":
 	// AgentLive, AgentDead, AgentElsewhere, or "" for unknown. A viewer-local
 	// field like NotMine — filled by the desktop overlay (applyLocal via
