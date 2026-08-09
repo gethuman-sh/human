@@ -31,6 +31,7 @@ func LoadConfigs(dir string) ([]Config, error) {
 // instanceSpec defines how Shortcut configs are loaded and built.
 var instanceSpec = config.InstanceSpec[Config, tracker.Instance]{
 	Section:    "shortcuts",
+	Kind:       "shortcut",
 	EnvPrefix:  "SHORTCUT_",
 	DefaultURL: "https://api.app.shortcut.com",
 	EnvFields: []config.EnvField[Config]{
