@@ -19,7 +19,7 @@
     "kinds": {
       "deployed@filed": {
         "count": 15,
-        "why": "human deploy <KEY> --branch merges without the ticket entering the state machine at all: no started marker, no review, no PR loop. The card goes Backlog to Done and nothing describes the move. RunDeploy reads a branch straight from the flag and calls deployEngine (cmd/cmddeploy/deploy.go).",
+        "why": "human deploy <KEY> --branch merges without the ticket entering the state machine at all: no started marker, no review, no PR loop. The card goes Backlog to Done and nothing describes the move. RunDeploy reads a branch straight from the flag and calls deployEngine (cmd/cmddeploy/deploy.go). FIXED by SC-3852: the CLI now enters through internal/daemon.StartDeploy (deploy_entry.go), which posts [human:deploy-started] before the engine, so filed → deploying → merged is a described route. These histories predate that and stay here as the evidence that produced it — the machine still refuses the move they made.",
         "ticket": "SC-3852",
         "evidence": [
           "SC-3282"
@@ -27,7 +27,7 @@
       },
       "deployed@stopped": {
         "count": 2,
-        "why": "The same bypass, onto a card that had already failed.",
+        "why": "The same bypass, onto a card that had already failed. FIXED by SC-3852 (same entry point).",
         "evidence": [
           "SC-2804"
         ],
@@ -35,13 +35,13 @@
       },
       "deployed@planned": {
         "count": 1,
-        "why": "The same bypass, onto a card holding an unstarted plan.",
+        "why": "The same bypass, onto a card holding an unstarted plan. FIXED by SC-3852 (same entry point).",
         "ticket": "SC-3852",
         "evidence": []
       },
       "deploy-failed@filed": {
         "count": 1,
-        "why": "The same bypass, failing.",
+        "why": "The same bypass, failing. FIXED by SC-3852 (same entry point).",
         "ticket": "SC-3852",
         "evidence": [
           "SC-3497"
@@ -49,7 +49,7 @@
       },
       "deployed@awaiting-decision": {
         "count": 1,
-        "why": "Merged while an options block was open — the one state nothing is allowed to move, because the machine has explicitly said only a person can answer.",
+        "why": "Merged while an options block was open — the one state nothing is allowed to move, because the machine has explicitly said only a person can answer. FIXED by SC-3852: the entry point refuses a deploy while an open decision waits, and an explicit --override-decision flag ships past it, recording what it walked past on the ticket.",
         "evidence": [
           "SC-3295"
         ],
