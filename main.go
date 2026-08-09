@@ -30,6 +30,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmddeploy"
 	"github.com/gethuman-sh/human/cmd/cmddoctor"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
+	"github.com/gethuman-sh/human/cmd/cmdfsm"
 	"github.com/gethuman-sh/human/cmd/cmdhandoff"
 	"github.com/gethuman-sh/human/cmd/cmdindex"
 	"github.com/gethuman-sh/human/cmd/cmdinit"
@@ -384,6 +385,10 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	codenavCmd.GroupID = "utility"
 	rootCmd.AddCommand(codenavCmd)
 
+	fsmCmd := cmdfsm.BuildFSMCmd()
+	fsmCmd.GroupID = "utility"
+	rootCmd.AddCommand(fsmCmd)
+
 	agentContextCmd := cmdagentcontext.BuildAgentContextCmd()
 	agentContextCmd.GroupID = "utility"
 	rootCmd.AddCommand(agentContextCmd)
@@ -596,6 +601,12 @@ var localSubcommands = map[string]bool{
 	// Describes the caller's own checkout and environment — the one thing the
 	// daemon cannot see on its behalf.
 	"capabilities": true,
+	// Answers from the machine compiled into THIS binary. Forwarding it would
+	// make the one caller it exists for — an agent in a container, on a project
+	// whose daemon it cannot reach — unable to ask, and would answer from the
+	// daemon's build rather than the asker's, so two binaries at different
+	// versions would silently disagree about which document they quoted.
+	"fsm": true,
 	// bug/security create call the daemon's bug-create/security-create route
 	// directly (like the desktop board buttons); they must not be forwarded, or
 	// the RunE would open a reentrant connection back into the daemon.

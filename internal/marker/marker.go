@@ -147,6 +147,24 @@ func KnownTypes() []string {
 	return types
 }
 
+// RequiredFields lists the field lines a marker type must carry, sorted. Empty
+// for a type with no contract and for an unknown one, which is the same answer
+// Validate gives them.
+//
+// Exported so something telling a caller HOW to post a marker can read the
+// contract instead of restating it. A second list of required fields would be
+// wrong the first time a field is added here, and wrong silently: the caller
+// would build a command that post-time validation then rejects.
+func RequiredFields(markerType string) []string {
+	s, known := specs[markerType]
+	if !known || len(s.required) == 0 {
+		return nil
+	}
+	out := append([]string(nil), s.required...)
+	sort.Strings(out)
+	return out
+}
+
 // Validate checks m against its type's contract. Unknown types pass — only a
 // syntactically valid type name is required.
 func Validate(m Marker) error {
