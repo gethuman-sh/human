@@ -182,9 +182,11 @@ type Server struct {
 	Listener net.Listener
 
 	// blockingOps counts in-flight requests a self-restart must not interrupt
-	// (a deploy waiting on CI, an autonomous launch). The binary watcher
-	// postpones its handover while this is non-zero rather than killing the
-	// work mid-flight. Streaming/read routes are deliberately excluded.
+	// (a deploy waiting on CI, an autonomous launch, any forwarded command).
+	// The binary watcher postpones its handover while this is non-zero rather
+	// than handing over with the work still running in the outgoing process,
+	// and `human daemon stop` reads it to say what it is waiting for instead of
+	// timing out with no reason. Streaming/polling routes are excluded.
 	blockingOps atomic.Int64
 
 	wg sync.WaitGroup // tracks in-flight handler goroutines for graceful shutdown
@@ -262,8 +264,9 @@ func (s *Server) BlockingOps() int {
 
 // withBlockingOp runs fn while counting it as a restart-blocking operation, so
 // a concurrent binary-change handover postpones itself instead of interrupting
-// fn. Wrap only the heavy, must-not-interrupt route handlers with it; leave
-// read and streaming routes uncounted.
+// fn. Every forwarded command is counted, plus the heavy route handlers; only
+// the board's own polling routes and the streaming ones are left out, because a
+// handover that waits for those would never find a quiet moment to commit in.
 func (s *Server) withBlockingOp(fn func()) {
 	s.blockingOps.Add(1)
 	defer s.blockingOps.Add(-1)
@@ -342,8 +345,14 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 
-	// Apply client environment variables and execute the command.
-	s.executeCommand(conn, req, projectDir)
+	// A forwarded command executes IN this process, so a restart takes it with
+	// it — and the longest of them is `human deploy`, which sits for minutes on
+	// a CI gate with nothing written down. Counting it keeps a rebuild's
+	// handover from committing while a deploy is mid-flight, so the work is
+	// never owned by a process that has already handed its identity away.
+	s.withBlockingOp(func() {
+		s.executeCommand(conn, req, projectDir)
+	})
 }
 
 // executeCommand applies env vars (including safe mode) and runs the CLI command.

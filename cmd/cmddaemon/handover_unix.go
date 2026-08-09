@@ -328,7 +328,10 @@ func reexecChild(ctx context.Context, c *handoverCoordinator) error {
 // left, or the drain deadline elapses. Daemon command handlers are drained
 // separately by the server's own graceful shutdown (s.wg), and long-running
 // board/deploy work never reaches here because a handover is postponed while it
-// is in flight — so this only waits on proxied agent egress.
+// is in flight — which is true of a forwarded `human deploy` only because
+// executeCommand counts itself as a blocking op (server.go handleConn); before
+// that, a rebuild could commit the handover while the outgoing process was
+// still holding a deploy on its CI gate.
 func (c *handoverCoordinator) drainInflight(ctx context.Context) {
 	if c.activeConns == nil {
 		return
