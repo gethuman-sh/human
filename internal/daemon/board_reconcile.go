@@ -192,6 +192,14 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate
 	if n := reconcileStuckRunning(ctx, gate.forTakeover(cards), liveAgents, postFailed, retry, progress, stopAgent, daemonID, time.Now(), logger); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
 	}
+	// After the stuck pass, because a queued card is the one thing that pass is
+	// built NOT to touch: BoardQueued exists so a just-decided card is not redded
+	// (SC-1320), which left it watched by nothing at all (SC-3865). It takes the
+	// same forTakeover gate as the other relaunching passes — starting the stage a
+	// decision queued takes that stage over on this machine.
+	if n := reconcileQueuedLaunch(ctx, gate.forTakeover(cards), liveAgents, retry, daemonID, time.Now(), logger); n > 0 {
+		logger.Info().Int("launched", n).Msg("board reconcile: started stages left queued by an answered decision")
+	}
 	// Last: the passes above all act on cards that are still ON the board, while
 	// this one reaches the runs whose card has left it — the orphan the close
 	// gate cannot cover because the ticket was closed outside the board (1698).

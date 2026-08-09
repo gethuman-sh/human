@@ -386,8 +386,8 @@
         "user",
         "daemon"
       ],
-      "stale_when": "Not by any measure the machine takes. Recording the choice and launching the stage are the two halves of one ApplyOption call, in that order, so the ordinary window is microseconds — but nothing times it, and nothing distinguishes a launch that is about to happen from one that never will.",
-      "if_nothing_happens": "Nothing, and here that is a defect rather than a design — tracked as SC-3865. No reconcile pass looks at a queued card: the stuck-running and PR-loop passes need a running card, the outage pass needs an outage, the orphaned-handoff pass needs an implementation-stage handoff, the orphan sweep keys on live containers. This state exists so the stuck-running sweep will not red a card whose decision was just answered (SC-1320), and it achieves that by being a state no sweep looks at — the same property, read as protection from one side and as a hole from the other. Measured over the 59 replayed histories, all 13 decisions were followed by a later marker and none was left here, so the window is narrow rather than closed."
+      "stale_when": "Past QueuedLaunchGrace (2m) with no live agent for the stage. Recording the choice and launching the stage are the two halves of one ApplyOption call, in that order, so the ordinary window is microseconds; the grace exists only so a reconcile tick landing inside it does not race a launch already on its way.",
+      "if_nothing_happens": "reconcileQueuedLaunch starts the stage the decision named, on the next tick past the grace. It relaunches through the CHARGED, capped path (DefaultStageRetries), so a stage that cannot be launched is tried twice and then left for a person rather than forever — and a refusal that starts nothing, the plan gate, is not charged at all and routes the card itself to needs-planning. It deliberately does not go through the ordinary retry classifier: that reads the stage's last recorded exit, which here is the ExitNeedsInput of the stage that RAISED the decision, and would classify the card as one to leave for a human — refusing to start exactly the cards this pass exists for. Until SC-3865 nothing watched this state at all: it exists so the stuck-running sweep will not red a card whose decision was just answered (SC-1320), and it achieved that by being a state no sweep looked at — one property, protection from one side and a hole from the other."
     },
     {
       "name": "stopped",
@@ -1151,6 +1151,7 @@
     "constants": {
       "BoardReconcileInterval": "2m, jittered ±50% — how often the durable pass re-scans open cards (internal/daemon/board_reconcile.go)",
       "StuckRunningGrace": "15m — how long a running card is left alone before liveness is judged",
+    "QueuedLaunchGrace": "2m — how long a card whose decision was answered may sit unstarted before the machine starts it (internal/daemon/board_reconcile_queued.go). Short because the launch is the same call that recorded the choice; it exists only so a tick landing inside that call does not race it.",
       "DefaultStageRetries": "2 — automatic in-place relaunches of one stage (internal/daemon/board_retry.go)",
       "DefaultPRReviewRounds": "3 — review→fix rounds before the loop escalates (internal/daemon/pr_review_loop.go)",
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
