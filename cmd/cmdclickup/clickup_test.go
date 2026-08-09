@@ -31,7 +31,6 @@ func testDeps(srv *httptest.Server, teamID string) cmdutil.Deps {
 				},
 			}, nil
 		},
-		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },
 	}
 }
 

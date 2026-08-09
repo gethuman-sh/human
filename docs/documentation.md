@@ -95,10 +95,15 @@ human tracker list
 
 Each setting is resolved in priority order (highest wins):
 
-1. **CLI flags** (e.g. `--jira-url`)
-2. **Global env vars** (e.g. `JIRA_URL`)
-3. **Per-instance env vars** (e.g. `JIRA_WORK_URL` — name uppercased)
-4. **`.humanconfig.yaml`** — selected entry fills remaining gaps
+1. **Global env vars** (e.g. `JIRA_URL`)
+2. **Per-instance env vars** (e.g. `JIRA_WORK_URL` — name uppercased)
+3. **`.humanconfig.yaml`** — selected entry fills remaining gaps
+
+There are no per-tracker credential flags. Credentials arrive through the env
+convention above or `.humanconfig.yaml` (which can hold `1pw://` and `gh://`
+vault references) — one mechanism that works for every tracker, so adding a
+tracker never means adding flags. Use `--tracker <name>` to pick between
+configured instances.
 
 | Tracker | Env prefix | Settings | Default URL |
 |---------|-----------|----------|-------------|

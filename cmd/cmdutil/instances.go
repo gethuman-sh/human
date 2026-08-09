@@ -6,11 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/internal/config"
-	"github.com/gethuman-sh/human/internal/forge"
-	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/knowledge/notion"
 	"github.com/gethuman-sh/human/internal/recall"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -148,96 +145,6 @@ func LoadAllInstancesTolerant(dir string, lookup config.EnvLookup, resolver *vau
 		all = append(all, instances...)
 	}
 	return all, failures
-}
-
-// InstanceFromFlags builds a tracker instance from root persistent flags,
-// returning nil when insufficient flags are provided.
-func InstanceFromFlags(cmd *cobra.Command) *tracker.Instance {
-	getFlag := func(name string) string {
-		v, _ := cmd.Root().PersistentFlags().GetString(name)
-		return v
-	}
-
-	if inst := instanceFromJiraFlags(getFlag); inst != nil {
-		return inst
-	}
-	if inst := instanceFromAzureFlags(getFlag); inst != nil {
-		return inst
-	}
-
-	// Simple token-based providers: token flag, url flag, default URL, kind,
-	// tracker constructor, and an optional forge constructor for backends that
-	// also host pull requests (GitHub).
-	type simpleProvider struct {
-		tokenFlag  string
-		urlFlag    string
-		defaultURL string
-		kind       string
-		newClient  func(url, token string) tracker.Provider
-		newForge   func(url, token string) forge.Forge
-	}
-	simpleProviders := []simpleProvider{
-		{"github-token", "github-url", "https://api.github.com", "github", func(u, t string) tracker.Provider { return github.New(u, t) }, func(u, t string) forge.Forge { return forgegithub.New(u, t) }},
-		{"gitlab-token", "gitlab-url", "https://gitlab.com", "gitlab", func(u, t string) tracker.Provider { return gitlab.New(u, t) }, nil},
-		{"linear-token", "linear-url", "https://api.linear.app", "linear", func(u, t string) tracker.Provider { return linear.New(u, t) }, nil},
-		{"shortcut-token", "shortcut-url", "https://api.app.shortcut.com", "shortcut", func(u, t string) tracker.Provider { return shortcut.New(u, t) }, nil},
-		{"clickup-token", "clickup-url", "https://api.clickup.com", "clickup", func(u, t string) tracker.Provider { return clickup.New(u, t, "") }, nil},
-	}
-	for _, sp := range simpleProviders {
-		token := getFlag(sp.tokenFlag)
-		if token == "" {
-			continue
-		}
-		url := getFlag(sp.urlFlag)
-		if url == "" {
-			url = sp.defaultURL
-		}
-		inst := &tracker.Instance{
-			Kind:     sp.kind,
-			URL:      url,
-			Provider: sp.newClient(url, token),
-		}
-		if sp.newForge != nil {
-			inst.Forge = sp.newForge(url, token)
-		}
-		return inst
-	}
-
-	return nil
-}
-
-// instanceFromJiraFlags builds a Jira instance from flags, or returns nil.
-func instanceFromJiraFlags(getFlag func(string) string) *tracker.Instance {
-	jiraURL := getFlag("jira-url")
-	jiraUser := getFlag("jira-user")
-	jiraKey := getFlag("jira-key")
-	if jiraURL == "" || jiraUser == "" || jiraKey == "" {
-		return nil
-	}
-	return &tracker.Instance{
-		Kind:     "jira",
-		URL:      jiraURL,
-		User:     jiraUser,
-		Provider: jira.New(jiraURL, jiraUser, jiraKey),
-	}
-}
-
-// instanceFromAzureFlags builds an Azure DevOps instance from flags, or returns nil.
-func instanceFromAzureFlags(getFlag func(string) string) *tracker.Instance {
-	azureToken := getFlag("azure-token")
-	azureOrg := getFlag("azure-org")
-	if azureToken == "" || azureOrg == "" {
-		return nil
-	}
-	url := getFlag("azure-url")
-	if url == "" {
-		url = "https://dev.azure.com"
-	}
-	return &tracker.Instance{
-		Kind:     "azuredevops",
-		URL:      url,
-		Provider: azuredevops.New(url, azureOrg, azureToken),
-	}
 }
 
 // LoadNotionIndexInstances loads Notion instances and converts them

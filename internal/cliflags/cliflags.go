@@ -12,21 +12,5 @@ package cliflags
 //
 // Keep this in sync with PersistentFlags() in newRootCmd.
 var ValueFlags = map[string]bool{
-	"--tracker":        true,
-	"--jira-key":       true,
-	"--jira-url":       true,
-	"--jira-user":      true,
-	"--github-token":   true,
-	"--github-url":     true,
-	"--gitlab-token":   true,
-	"--gitlab-url":     true,
-	"--linear-token":   true,
-	"--linear-url":     true,
-	"--azure-token":    true,
-	"--azure-url":      true,
-	"--azure-org":      true,
-	"--shortcut-token": true,
-	"--shortcut-url":   true,
-	"--clickup-token":  true,
-	"--clickup-url":    true,
+	"--tracker": true,
 }

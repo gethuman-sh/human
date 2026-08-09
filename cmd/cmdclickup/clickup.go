@@ -38,10 +38,6 @@ func resolveClickUpClient(cmd *cobra.Command, deps cmdutil.Deps) (*clickup.Clien
 		return nil, err
 	}
 
-	if inst := deps.InstanceFromFlags(cmd); inst != nil {
-		instances = append(instances, *inst)
-	}
-
 	trackerName, _ := cmd.Root().PersistentFlags().GetString("tracker")
 	instance, err := tracker.ResolveByKind("clickup", instances, trackerName)
 	if err != nil {

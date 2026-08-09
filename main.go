@@ -165,29 +165,13 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	pf.Bool("yes", false, "Skip interactive confirmation for destructive operations")
 	_ = pf.MarkHidden("yes")
 
-	// Credential flags — functional but hidden from help (use env vars or .humanconfig).
-	credFlags := []struct{ name, env, help string }{
-		{"jira-key", "JIRA_KEY", "Jira API token"},
-		{"jira-url", "JIRA_URL", "Jira base URL"},
-		{"jira-user", "JIRA_USER", "Jira user email"},
-		{"github-token", "GITHUB_TOKEN", "GitHub personal access token"},
-		{"github-url", "GITHUB_URL", "GitHub API base URL"},
-		{"gitlab-token", "GITLAB_TOKEN", "GitLab private token"},
-		{"gitlab-url", "GITLAB_URL", "GitLab base URL"},
-		{"linear-token", "LINEAR_TOKEN", "Linear API key"},
-		{"linear-url", "LINEAR_URL", "Linear API base URL"},
-		{"azure-token", "AZURE_TOKEN", "Azure DevOps PAT token"},
-		{"azure-url", "AZURE_URL", "Azure DevOps base URL"},
-		{"azure-org", "AZURE_ORG", "Azure DevOps organization"},
-		{"shortcut-token", "SHORTCUT_TOKEN", "Shortcut API token"},
-		{"shortcut-url", "SHORTCUT_URL", "Shortcut API base URL"},
-		{"clickup-token", "CLICKUP_TOKEN", "ClickUp personal API token"},
-		{"clickup-url", "CLICKUP_URL", "ClickUp API base URL"},
-	}
-	for _, f := range credFlags {
-		pf.String(f.name, os.Getenv(f.env), f.help)
-		_ = pf.MarkHidden(f.name)
-	}
+	// Credentials come from .humanconfig (with vault refs) or the
+	// <KIND>_<NAME>_TOKEN env convention the config loaders already read — one
+	// mechanism that needs no per-provider code. The hidden per-tracker
+	// --<kind>-token/--<kind>-url flags that used to sit here were a second,
+	// provider-specific implementation of the same thing, and a URL flag paired
+	// with a credential is a redirection primitive the daemon should not accept
+	// over its socket at all. Adding a tracker must not mean adding flags.
 
 	// --- Command groups ---
 	rootCmd.AddGroup(

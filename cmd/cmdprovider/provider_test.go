@@ -1061,8 +1061,7 @@ func TestPRCreate_DefaultsRepoFromOrigin(t *testing.T) {
 				Forge:    forgegithub.New(srv.URL, "t"),
 			}}, nil
 		},
-		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },
-		AuditLogPath:      func() string { return "" },
+		AuditLogPath: func() string { return "" },
 	}
 
 	root := &cobra.Command{Use: "human"}
@@ -1100,8 +1099,7 @@ func newTestRoot(mp *mockProvider) (*cobra.Command, cmdutil.Deps) {
 				{Name: "test", Kind: "jira", Provider: mp},
 			}, nil
 		},
-		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },
-		AuditLogPath:      func() string { return "" },
+		AuditLogPath: func() string { return "" },
 	}
 
 	root := &cobra.Command{Use: "human"}
@@ -1408,8 +1406,7 @@ func TestCmd_LoadInstancesError(t *testing.T) {
 		LoadInstances: func(_ string) ([]tracker.Instance, error) {
 			return nil, errors.WithDetails("config error")
 		},
-		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },
-		AuditLogPath:      func() string { return "" },
+		AuditLogPath: func() string { return "" },
 	}
 
 	root := &cobra.Command{Use: "human"}

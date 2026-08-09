@@ -33,8 +33,7 @@ func githubDeps() Deps {
 				Forge:    forgegithub.New("https://api.github.com", "t"),
 			}}, nil
 		},
-		InstanceFromFlags: func(_ *cobra.Command) *tracker.Instance { return nil },
-		AuditLogPath:      func() string { return "" },
+		AuditLogPath: func() string { return "" },
 	}
 }
 

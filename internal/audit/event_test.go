@@ -50,6 +50,23 @@ func TestDecisionFromEnv(t *testing.T) {
 	assert.Equal(t, "implementing the plan", dc.Rationale)
 }
 
+// Redaction keys on the flag NAME SHAPE, not on a list of flags the CLI
+// declares, so a credential-shaped flag nobody enumerated is still kept out of
+// the audit trail. --made-up-token is deliberately not a real flag.
+func TestBuildEventStripsUndeclaredCredentialFlags(t *testing.T) {
+	args := []string{"jira", "issue", "delete", "KAN-1", "--made-up-token", "SECRET", "--other-password=TOPSECRET"}
+	op := MutatingOp{Operation: "delete", TrackerKind: "jira", Key: "KAN-1"}
+	e, err := BuildEvent(time.Now(), op, OutcomeSuccess, DecisionContext{}, args)
+	require.NoError(t, err)
+
+	for _, a := range e.Data.Args {
+		assert.NotContains(t, a, "SECRET")
+		assert.NotContains(t, a, "TOPSECRET")
+	}
+	assert.Contains(t, e.Data.Args, "delete")
+	assert.Contains(t, e.Data.Args, "KAN-1")
+}
+
 func TestBuildEventStripsCredentials(t *testing.T) {
 	args := []string{"jira", "issue", "delete", "KAN-1", "--jira-key", "SECRET", "--linear-token=TOPSECRET"}
 	op := MutatingOp{Operation: "delete", TrackerKind: "jira", Key: "KAN-1"}
