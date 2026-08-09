@@ -1,13 +1,10 @@
 package claude
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 
-	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/botidentity"
 )
 
@@ -41,20 +38,9 @@ func InstallGitIdentity(w io.Writer, fw FileWriter) error {
 }
 
 func mergeGitIdentityIntoSettings(w io.Writer, fw FileWriter, path string, id botidentity.Identity) error {
-	settings := make(map[string]any)
-
-	data, err := fw.ReadFile(path)
-	if err == nil {
-		if jsonErr := json.Unmarshal(data, &settings); jsonErr != nil {
-			return errors.WrapWithDetails(jsonErr, "parsing settings.json", "path", path)
-		}
-	} else if !os.IsNotExist(err) {
-		return errors.WrapWithDetails(err, "reading settings.json", "path", path)
-	}
-
-	envMap, _ := settings["env"].(map[string]any)
-	if envMap == nil {
-		envMap = make(map[string]any)
+	settings, err := LoadSettings(fw, path)
+	if err != nil {
+		return err
 	}
 
 	desired := map[string]string{
@@ -63,30 +49,18 @@ func mergeGitIdentityIntoSettings(w io.Writer, fw FileWriter, path string, id bo
 		"GIT_COMMITTER_NAME":  id.Name,
 		"GIT_COMMITTER_EMAIL": id.Email,
 	}
-
-	changed := false
 	for _, k := range gitIdentityEnvKeys {
-		if cur, _ := envMap[k].(string); cur != desired[k] {
-			envMap[k] = desired[k]
-			changed = true
+		if err := settings.SetEnv(k, desired[k]); err != nil {
+			return err
 		}
 	}
 
-	if !changed {
+	if !settings.Changed() {
 		_, _ = fmt.Fprintf(w, "  unchanged %s (bot git identity already set)\n", path)
 		return nil
 	}
-
-	settings["env"] = envMap
-
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return errors.WrapWithDetails(err, "marshaling settings.json")
-	}
-	out = append(out, '\n')
-
-	if err := fw.WriteFile(path, out, 0o644); err != nil {
-		return errors.WrapWithDetails(err, "writing settings.json", "path", path)
+	if err := settings.Save(); err != nil {
+		return err
 	}
 
 	_, _ = fmt.Fprintf(w, "  updated %s (bot git identity set)\n", path)

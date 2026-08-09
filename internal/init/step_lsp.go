@@ -257,39 +257,19 @@ func enableLspTool(w io.Writer, fw claude.FileWriter) error {
 	}
 
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	settings := make(map[string]any)
-
-	data, err := fw.ReadFile(settingsPath)
-	if err == nil {
-		if jsonErr := json.Unmarshal(data, &settings); jsonErr != nil {
-			return errors.WrapWithDetails(jsonErr, "parsing settings.json", "path", settingsPath)
-		}
-	} else if !os.IsNotExist(err) {
-		return errors.WrapWithDetails(err, "reading settings.json", "path", settingsPath)
+	settings, err := claude.LoadSettings(fw, settingsPath)
+	if err != nil {
+		return err
 	}
-
-	// Merge into the existing env map.
-	envMap, _ := settings["env"].(map[string]any)
-	if envMap == nil {
-		envMap = make(map[string]any)
+	if err := settings.SetEnv("ENABLE_LSP_TOOL", "1"); err != nil {
+		return err
 	}
-
-	if envMap["ENABLE_LSP_TOOL"] == "1" {
+	if !settings.Changed() {
 		_, _ = fmt.Fprintf(w, "  ENABLE_LSP_TOOL already set in %s\n", settingsPath)
 		return nil
 	}
-
-	envMap["ENABLE_LSP_TOOL"] = "1"
-	settings["env"] = envMap
-
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return errors.WrapWithDetails(err, "marshaling settings.json")
-	}
-	out = append(out, '\n')
-
-	if err := fw.WriteFile(settingsPath, out, 0o644); err != nil {
-		return errors.WrapWithDetails(err, "writing settings.json", "path", settingsPath)
+	if err := settings.Save(); err != nil {
+		return err
 	}
 
 	_, _ = fmt.Fprintf(w, "  Enabled ENABLE_LSP_TOOL in %s\n", settingsPath)

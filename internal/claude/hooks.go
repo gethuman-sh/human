@@ -1,10 +1,8 @@
 package claude
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 
 	"github.com/gethuman-sh/human/errors"
@@ -54,93 +52,30 @@ func InstallHooks(w io.Writer, fw FileWriter) error {
 }
 
 func mergeHooksIntoSettings(w io.Writer, fw FileWriter, path string) error {
-	settings := make(map[string]any)
-
-	data, err := fw.ReadFile(path)
-	if err == nil {
-		if jsonErr := json.Unmarshal(data, &settings); jsonErr != nil {
-			return errors.WrapWithDetails(jsonErr, "parsing settings.json", "path", path)
-		}
-	} else if !os.IsNotExist(err) {
-		// Anything other than "not found" — permission denied, NFS stall,
-		// I/O error — must propagate so we never overwrite a settings file
-		// the user can't currently read with a fresh empty one.
-		return errors.WrapWithDetails(err, "reading settings.json", "path", path)
+	settings, err := LoadSettings(fw, path)
+	if err != nil {
+		return err
 	}
 
-	hooks, _ := settings["hooks"].(map[string]any)
-	if hooks == nil {
-		hooks = make(map[string]any)
-	}
-
-	changed := false
 	for _, evt := range hookEvents {
-		if addHookCommand(hooks, evt.name, hookCommand, evt.async, evt.matcher) {
-			changed = true
+		if err := settings.AddHook(evt.name, hookCommand, evt.async, evt.matcher); err != nil {
+			return err
 		}
 	}
 	// SessionStart also injects the agent-context guidance. It runs synchronously
 	// (not async) so Claude Code reads its additionalContext output as context.
-	if addHookCommand(hooks, "SessionStart", agentContextHookCommand, false, "") {
-		changed = true
+	if err := settings.AddHook("SessionStart", agentContextHookCommand, false, ""); err != nil {
+		return err
 	}
 
-	if !changed {
+	if !settings.Changed() {
 		_, _ = fmt.Fprintf(w, "  unchanged %s (hooks already registered)\n", path)
 		return nil
 	}
-
-	settings["hooks"] = hooks
-
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return errors.WrapWithDetails(err, "marshaling settings.json")
-	}
-	out = append(out, '\n')
-
-	if err := fw.WriteFile(path, out, 0o644); err != nil {
-		return errors.WrapWithDetails(err, "writing settings.json", "path", path)
+	if err := settings.Save(); err != nil {
+		return err
 	}
 
 	_, _ = fmt.Fprintf(w, "  updated %s (hooks registered)\n", path)
 	return nil
-}
-
-// addHookCommand registers a command for an event if that exact command is not
-// already present. Returns true if a new matcher was added.
-func addHookCommand(hooks map[string]any, eventName, command string, async bool, matcher string) bool {
-	matchers, _ := hooks[eventName].([]any)
-
-	// Check if this command is already registered for the event.
-	for _, m := range matchers {
-		matcherObj, ok := m.(map[string]any)
-		if !ok {
-			continue
-		}
-		hookList, _ := matcherObj["hooks"].([]any)
-		for _, h := range hookList {
-			hookDef, ok := h.(map[string]any)
-			if !ok {
-				continue
-			}
-			if cmd, _ := hookDef["command"].(string); cmd == command {
-				return false // already registered
-			}
-		}
-	}
-
-	hookDef := map[string]any{
-		"type":    "command",
-		"command": command,
-	}
-	if async {
-		hookDef["async"] = true
-	}
-
-	newMatcher := map[string]any{
-		"matcher": matcher,
-		"hooks":   []any{hookDef},
-	}
-	hooks[eventName] = append(matchers, newMatcher)
-	return true
 }
