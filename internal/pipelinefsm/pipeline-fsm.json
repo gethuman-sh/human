@@ -374,6 +374,22 @@
       "if_nothing_happens": "Nothing. This is the one state the machine may not resolve for itself, which is the whole point of raising a fork rather than guessing."
     },
     {
+      "name": "queued",
+      "doc": "A decision is answered and names a stage to run; nothing has started it yet.",
+      "board": {
+        "stage": "any",
+        "state": "queued",
+        "note": "Only the three stages an options block may relaunch — planning, implementation, verification (optionStages) — so backlog and done never carry it. Synthesized by optionChosenQueued when [human:option-chosen] is the newest board-relevant signal; any classified marker newer than the choice supersedes it."
+      },
+      "holds": "The newest board-relevant marker is an [human:option-chosen] whose block names a resumable stage, and that stage's started marker has not been posted.",
+      "who_may_act": [
+        "user",
+        "daemon"
+      ],
+      "stale_when": "Not by any measure the machine takes. Recording the choice and launching the stage are the two halves of one ApplyOption call, in that order, so the ordinary window is microseconds — but nothing times it, and nothing distinguishes a launch that is about to happen from one that never will.",
+      "if_nothing_happens": "Nothing, and here that is a defect rather than a design — tracked as SC-3865. No reconcile pass looks at a queued card: the stuck-running and PR-loop passes need a running card, the outage pass needs an outage, the orphaned-handoff pass needs an implementation-stage handoff, the orphan sweep keys on live containers. This state exists so the stuck-running sweep will not red a card whose decision was just answered (SC-1320), and it achieves that by being a state no sweep looks at — the same property, read as protection from one side and as a hole from the other. Measured over the 59 replayed histories, all 13 decisions were followed by a later marker and none was left here, so the window is narrow rather than closed."
+    },
+    {
       "name": "stopped",
       "doc": "A stage gave up and said why: a spent budget, an unreviewable change, a failed deploy. Needs a human.",
       "board": {
@@ -459,7 +475,8 @@
         "ticket-reviewed",
         "planned",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "queued"
       ],
       "dst": "planning",
       "actor": "user",
@@ -512,7 +529,8 @@
         "filed",
         "ticket-reviewed",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "queued"
       ],
       "dst": "preflight",
       "actor": "user",
@@ -655,7 +673,8 @@
         "planned",
         "reviewed",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "queued"
       ],
       "dst": "implementing",
       "actor": "user",
@@ -704,7 +723,8 @@
       "src": [
         "handed-off",
         "stopped",
-        "substrate-down"
+        "substrate-down",
+        "queued"
       ],
       "dst": "in-review",
       "actor": "daemon",
@@ -899,12 +919,12 @@
       "src": [
         "awaiting-decision"
       ],
-      "dst": "planning",
+      "dst": "queued",
       "actor": "user",
       "marker": "[human:option-chosen]",
-      "where": "board_state.go optionChosenQueued",
-      "doc": "A human picked an answer; the run relaunches with the choice in hand. dst is the stage the block NAMES, not the stage the item sits in — planning is the common case. A PR-loop escalation deliberately names implementation even though the item is in the deploy stage: the fixer raised a question only a code change can answer, so the choice rebuilds, and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named.",
-      "dst_is_derived": true
+      "where": "board_options.go ApplyOption — records the choice, then starts the stage; board_state.go optionChosenQueued reads the window between the two",
+      "doc": "A human picked an answer. This records it and nothing more: ApplyOption posts the choice comment and only then calls startAgentStage, so the item is queued for a stage before it is running in one. The stage that gets queued is the one the block NAMES, not the one the item sits in — planning is the common case, while a PR-loop escalation deliberately names implementation even though the item is in the deploy stage, because the fixer raised a question only a code change can answer and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named. The stage is derived; the state is not — every answered decision lands here first.",
+      "dst_is_derived": false
     },
     {
       "name": "substrate-unreachable",
@@ -928,7 +948,8 @@
       "name": "launch-refused-no-plan",
       "src": [
         "implementing",
-        "stopped"
+        "stopped",
+        "queued"
       ],
       "dst": "stopped",
       "actor": "daemon",

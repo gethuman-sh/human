@@ -136,7 +136,7 @@
     "doc": "Markers that fit several edges leading to different states. Not defects — the header genuinely does not say which move was made, and the answer is in the marker BODY the corpus deliberately does not carry. A NEW ambiguity should fail; these should not.",
     "kinds": {
       "bug-verdict@preflight": 14,
-      "implementation-started@(derived)": 5,
+      "implementation-started@queued": 5,
       "implementation-started@stopped": 32,
       "implementation-started@substrate-down": 2
     }
