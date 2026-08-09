@@ -50,6 +50,7 @@ import (
 	"github.com/gethuman-sh/human/internal/stats"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
+	"github.com/gethuman-sh/human/internal/vieweridentity"
 )
 
 const daemonChildEnv = "_HUMAN_DAEMON_CHILD"
@@ -886,7 +887,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		// A nil participation predicate means "participate in every visible
 		// project" — the backward-compatible default. A machine that opts into a
 		// narrower set supplies a predicate here (SC-2047 opt-in participation).
-		branchReachable, boardParticipation(ds.srv.Projects), commitsPresent, prMerged, postDeployed,
+		branchReachable, boardParticipation(ds.srv.Projects), boardTicketIdentity(ds.srv.Projects), commitsPresent, prMerged, postDeployed,
 		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		closedTicketProbeFunc(ds.srv.Projects, ds.vaultResolver),
 		// The durable re-drive has no exiting agent to attribute — the run it is
@@ -2535,6 +2536,36 @@ func boardParticipation(projects *daemon.ProjectRegistry) daemon.ProjectParticip
 	}
 }
 
+// boardTicketIdentity returns the resolver the reconcile gate consults to decide
+// whether a ticket belongs to this machine's person (SC-4063). It routes the PM
+// key to its registered project and reads that project's "me" section, so a
+// daemon serving several projects applies each project's declared identity to its
+// own tickets rather than one project's identity to all of them.
+//
+// An unroutable key resolves to NO identity, which leaves the arm disabled for
+// that card rather than refusing it. That is deliberately the opposite
+// disposition from boardParticipation, which refuses an unroutable key: refusing
+// there withholds work from a project this machine may not have opted into, while
+// refusing here would withhold a person's own work on the strength of a routing
+// failure — and a routing failure says nothing about who owns the ticket. The
+// participation arm still refuses the same card, so nothing is loosened.
+func boardTicketIdentity(projects *daemon.ProjectRegistry) daemon.TicketIdentity {
+	if projects == nil {
+		return nil
+	}
+	return func(pmKey string) daemon.OwnerIdentity {
+		entry, err := projects.EntryForKey(pmKey)
+		if err != nil {
+			return nil
+		}
+		identity, err := vieweridentity.Load(entry.Dir)
+		if err != nil {
+			return nil
+		}
+		return identity
+	}
+}
+
 // boardBranchReachable reports whether a handoff branch resolves on this machine
 // (local ref or origin) — a board-context fix leaves its branch local on the
 // machine that produced it (SC-652). A 15s timeout bounds the git probe. The
@@ -4102,7 +4133,12 @@ func boardReconcileListerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resol
 					continue
 				}
 				wg.Add(1)
-				go func(c tracker.Commenter, key string) {
+				// assignee/reporter ride along from the listing the fan-out has
+				// already fetched: they are what the work gate reads to refuse a
+				// ticket belonging to someone else (SC-4063), and re-reading the
+				// issue per card would double the tick's tracker traffic for facts
+				// this loop is already holding.
+				go func(c tracker.Commenter, key, assignee, reporter string) {
 					defer wg.Done()
 					fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 					defer cancel()
@@ -4116,9 +4152,11 @@ func boardReconcileListerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resol
 						return
 					}
 					mu.Lock()
-					cards = append(cards, daemon.ReconcileCard{Key: key, Comments: comments})
+					cards = append(cards, daemon.ReconcileCard{
+						Key: key, Comments: comments, Assignee: assignee, Reporter: reporter,
+					})
 					mu.Unlock()
-				}(commenter, issue.Key)
+				}(commenter, issue.Key, issue.Assignee, issue.Reporter)
 			}
 		}
 		wg.Wait()

@@ -1064,8 +1064,9 @@
     }
   ],
   "ownership": {
-    "doc": "Which machine may fire a transition. A stage is stamped with the daemon that posted its deciding marker (BoardCard.StageDaemonID, from the marker's machine: field).",
+    "doc": "Who may fire a transition, on two axes. Whose TICKET it is: the assignee, or the reporter when unassigned (daemon.OwnerOf), compared against the machine's declared identity (the .humanconfig `me:` section). Which MACHINE holds a running stage: the daemon that posted the stage's deciding marker (BoardCard.StageDaemonID, from the marker's machine: field). The ticket axis decides whether this machine touches the item at all; the machine axis decides who may take over a stage already running.",
     "rules": [
+      "A machine does autonomous work only on tickets its own person owns: WorkGate.mineToWork in internal/daemon/board_reconcile_gate.go, checked before any intent, so every reconcile pass that writes to a ticket inherits it. Two absences both mean carry on rather than refuse — no identity declared (an install that never said whose work this machine does keeps working as before) and no owner resolvable on the card (an empty owner is unknown, not someone else's, and a tracker that fails to resolve a member name returns exactly that). Only a resolved owner who is demonstrably not this machine's person refuses.",
       "The machine acting on its own initiative — the reconcile takeover pass — refuses a stage another daemon stamped: WorkGate.ownedHereOrUnowned in internal/daemon/board_reconcile_gate.go. An unstamped stage (single-daemon, or a thread written before stamping) is takeable by anyone.",
       "A human gesture is NOT restricted by ownership. Racing a live foreign run is prevented instead by idempotency: a running card refuses every drop (isDuplicateDrop), whichever machine started it.",
       "Ownership is carried to the board as stageDaemonId so a reader can tell a stage owned elsewhere from an unowned one. It is the missing input for liveness across machines: no agent running HERE means dead only if this machine owns the stage."
