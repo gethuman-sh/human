@@ -110,6 +110,13 @@ type Server struct {
 	// BugCreator files a defect ticket on the PM tracker for the Bugs pane's
 	// + dialog. nil disables the bug-create route.
 	BugCreator func(req BugCreateRequest) (BugCreateResponse, error)
+	// WhereComments loads one ticket's thread for the fsm-where route. nil
+	// disables it.
+	WhereComments WhereCommentReader
+	// WhereAttempts reads how many automatic relaunches a stage has already
+	// spent, for the same route. It must READ ONLY: StageRetry.Attempts
+	// increments, and a question must never spend the budget it asks about.
+	WhereAttempts func(pmKey string, stage BoardStage) (int, error)
 	// SecurityCreator files a security ticket on the PM tracker for the Security
 	// section's + dialog. nil disables the security-create route.
 	SecurityCreator func(req SecurityCreateRequest) (SecurityCreateResponse, error)
@@ -528,6 +535,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"ideation-status":    func() { s.handleIdeationStatus(conn) },
 		"idea-create":        func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
 		"bug-create":         func() { s.withBlockingOp(func() { s.handleBugCreate(conn, args[1:]) }) },
+		"fsm-where":          func() { s.handleFSMWhere(conn, args[1:]) },
 		"security-create":    func() { s.withBlockingOp(func() { s.handleSecurityCreate(conn, args[1:]) }) },
 		"features-generate":  func() { s.withBlockingOp(func() { s.handleFeaturesGenerate(conn) }) },
 		"findbugs-start":     func() { s.withBlockingOp(func() { s.handleFindbugsStart(conn) }) },

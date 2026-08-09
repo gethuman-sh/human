@@ -3,6 +3,8 @@ package cmddaemon
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -126,4 +128,27 @@ func decStageRetries(ctx context.Context, project, pmKey string, stage daemon.Bo
 			agentstate.Meta{Agent: "daemon-board-retry"})
 		return err
 	})
+}
+
+// readStageRetries reports how many automatic relaunches a stage has already
+// spent, WITHOUT bumping the counter.
+//
+// It exists because bumpStageRetries — the only other reader — increments as it
+// reads. That is correct for the retry path and catastrophic for a question:
+// `human fsm where` would spend a ticket's budget every time an agent asked
+// where it was, and the budget would run out because someone looked at it. An
+// absent or unparseable counter reads as zero, the same as never retried.
+func readStageRetries(ctx context.Context, project, pmKey string, stage daemon.BoardStage) (int, error) {
+	var n int
+	err := withStateStore(func(store agentstate.Store) error {
+		entry, err := store.Get(ctx, project, pmKey, retryCounterName(stage))
+		if err != nil {
+			return err
+		}
+		if parsed, convErr := strconv.Atoi(strings.TrimSpace(entry.Value)); convErr == nil {
+			n = parsed
+		}
+		return nil
+	})
+	return n, err
 }

@@ -54,6 +54,21 @@ var outcomeNotMechanismFragment []byte
 //go:embed embed/shared/dependents.md
 var dependentsFragment []byte
 
+// The machine an agent runs inside was written down and invisible to it: no
+// prompt mentioned it, so every agent decided what to post, and whether it was
+// stuck, from its own prompt alone. This fragment is the half of `human fsm`
+// that changes behaviour — the commands only make asking possible.
+//
+// It takes NO argument, and that is the design rather than an omission. An
+// earlier draft bound each prompt to the state its agent normally occupies, so
+// the agent could ask about that state. Wrong premise: an agent knows its ticket
+// key and not its state — the state is what it is asking — and a prompt-bound
+// state is stale the moment a run moves on, which the fix run does five times.
+// `where <KEY>` asks with the fact the agent actually holds.
+//
+//go:embed embed/shared/fsm.md
+var fsmFragment []byte
+
 // sharedFragments are prompt blocks that must read identically in every skill
 // and agent that carries them. Keeping one copy here and substituting it at
 // install time is what stops twenty prompts from drifting apart, which is how
@@ -65,6 +80,7 @@ var sharedFragments = map[string][]byte{
 	"build-gate":            buildGateFragment,
 	"outcome-not-mechanism": outcomeNotMechanismFragment,
 	"dependents":            dependentsFragment,
+	"fsm":                   fsmFragment,
 }
 
 // fragmentArgs names the arguments each shared fragment requires. A fragment
