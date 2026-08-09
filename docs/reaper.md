@@ -275,6 +275,41 @@ which does not, so a stage stopped by § 5 records `reason: "completed"` even
 though the machine killed it. The card's marker still says silence reap; the
 run's `outcome.json` does not.
 
+## The daemon's own exit is not a reap, and ends work anyway
+
+Everything above is the machine ending an agent on purpose. The other way work
+ends is the daemon process going away underneath it — and the work that dies
+there is not in a container at all. A forwarded command executes **inside** the
+daemon (`Server.executeCommand`), and the long one is `human deploy`, which can
+sit up to `deployTimeout` = **45 minutes** on its CI gate. It leaves no
+container, no execution log and no marker, so an interrupted deploy is
+afterwards indistinguishable from one that never started.
+
+Three things keep that from happening silently:
+
+- **A rebuild postpones.** The self-restart watcher hands over only when
+  `BlockingOps()` is zero, and a forwarded command counts itself, so a handover
+  never commits while a deploy is on its gate. (`handoverCoordinator.watch`,
+  `cmd/cmddaemon/handover_unix.go`.)
+- **A stop names what it is waiting for.** `human daemon stop` reads the
+  in-flight count *before* signalling — a shutting-down daemon has closed the
+  listener the question travels over — and past a **5s** grace it either reports
+  a daemon stuck with nothing in flight, or says how many operations it is
+  finishing and waits `--wait` (default `stopDrainDefault` = **30s**; the desktop
+  close flow shells out to this command, so the default stays short). Outlasting
+  the wait is not a failure: the daemon exits on its own when the work is done.
+  `--force` ends it now, abandoning the work.
+- **The gate says what it is doing.** `DeployBranch` logs queued → started → PR
+  open → CI verdict → merged → done, with a "CI still running" heartbeat every
+  `deployWaitHeartbeat` = **10 polls** (~5 minutes). A deploy that stops
+  mid-trail is what an interruption looks like in the log.
+
+What none of this can cover is `SIGKILL`: it cannot be caught, the deploy dies
+with the process, and nothing is recorded. This is why `--force` signals one pid
+and why killing by name is the wrong reach — every `human` process on the
+machine answers to that name, including the CLI half of the deploy someone is
+waiting on.
+
 ## Timings and constants, in one place
 
 | Constant | Value | Where |
@@ -297,6 +332,10 @@ run's `outcome.json` does not.
 | `DefaultStageRetries` | 2 | `internal/daemon/board_retry.go` |
 | `OutageWaitBound` | 6h | `internal/daemon/board_outage.go` |
 | `execRetentionDays` | 90 | `internal/agent/agentlog.go` |
+| `deployTimeout` | 45m | `internal/daemon/board_transition.go` |
+| `deployWaitHeartbeat` | 10 polls (~5m) | same |
+| `stopGrace` | 5s | `cmd/cmddaemon/daemon.go` |
+| `stopDrainDefault` | 30s (`--wait`) | same |
 
 ## Why a single reap can never stall the sweep
 

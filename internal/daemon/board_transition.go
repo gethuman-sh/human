@@ -99,6 +99,11 @@ type PRResult struct {
 	Number int
 }
 
+// deployWaitHeartbeat is how many CI polls pass between "still running" log
+// lines — five minutes at the default interval. Often enough that a live deploy
+// is visibly live, rare enough that a 45-minute wait does not bury the log.
+const deployWaitHeartbeat = 10
+
 // Deploy pacing. Package vars so tests can run the CI gate without real time.
 var (
 	deployCheckInterval = 30 * time.Second
@@ -169,8 +174,11 @@ type BoardTransitionDeps struct {
 	// un-provisioned daemon still functions.
 	DaemonID string
 	// Logger records best-effort post-merge failures (e.g. a failed automated
-	// close). The zero value is a safe no-op writer, so an un-wired path stays
-	// valid without a logger.
+	// close) and the deploy gate's progress. The zero value is a safe no-op
+	// writer, so an un-wired path stays valid without a logger — but wire one
+	// for any path that can deploy: a gate that sits ten minutes on CI and is
+	// then interrupted leaves no other evidence it ever ran, which is exactly
+	// the state that has to be reconstructed from merge timestamps afterwards.
 	Logger zerolog.Logger
 	// Diagnose distills why a dead run died, so a loop step that escalated
 	// without recording an outcome reports the real cause instead of a generic
@@ -1239,10 +1247,16 @@ func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequ
 // posted as deploy-failed markers (the board's channel) and returned (the CLI's
 // channel).
 func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prBody, branch string) error {
+	// The queue is part of the story: a deploy that waited behind another one
+	// has not started yet, and only the log can say which of the two a stalled
+	// operator is looking at.
+	logger := d.Logger.With().Str("pm", pmKey).Str("branch", branch).Logger()
+	logger.Info().Msg("deploy: queued")
 	deployGate.Lock()
 	defer deployGate.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, deployTimeout)
 	defer cancel()
+	logger.Info().Dur("timeout", deployTimeout).Msg("deploy: started")
 
 	// Already-merged carve-out: a re-run Deploy on a card whose branch is already
 	// on the base has nothing to ship. Opening a PR would draw the forge's 422
@@ -1251,6 +1265,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// This mirrors the "already done, stop cleanly" carve-outs Planning and
 	// Implementation already carry (SC-911).
 	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
+		logger.Info().Msg("deploy: branch is already on the base; nothing to ship")
 		_, _ = d.Commenter.AddComment(ctx, pmKey,
 			DeployedHeader+"\nalready merged into the base branch; no new PR opened")
 		d.closeTicketBestEffort(pmKey)
@@ -1271,6 +1286,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 			"could not push "+branch+" and open its pull request — check the branch and forge access, then re-run Deploy",
 			err))
 	}
+	logger.Info().Int("pr", res.Number).Str("url", res.URL).Msg("deploy: pull request open")
 	if err := d.waitForChecks(ctx, res); err != nil {
 		if ciFailureFixable(err) {
 			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
@@ -1306,6 +1322,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		}
 	}
 	if rebased {
+		logger.Info().Int("pr", res.Number).Msg("deploy: branch was stale; rebased onto the base, re-gating CI")
 		// The freshness force-push rewrote the head and re-triggered CI on it.
 		// Merging while that fresh run is still in_progress is exactly the
 		// SC-1184 race: GitHub reports mergeable_state unstable and 405s the
@@ -1338,10 +1355,22 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// recorded-and-surfaced, not silent: a failed close leaves the card in the
 	// board's Fix column (the frontend only drops a card once the ticket leaves
 	// the tracker's open list), so the operator must see it and close by hand.
+	logger.Info().Int("pr", res.Number).Str("url", res.URL).Msg("deploy: merged")
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, branch)
 	_, _ = d.Commenter.AddComment(ctx, pmKey, DeployedHeader+"\npr: "+res.URL)
 	d.closeTicketBestEffort(pmKey)
+	logger.Info().Msg("deploy: done")
 	return nil
+}
+
+// headlineOf takes the actionable first line of a marker body — the same line
+// the card's badge shows — so a log line carries the verdict without the cause
+// chain's newlines running through it.
+func headlineOf(reason string) string {
+	if i := strings.IndexByte(reason, '\n'); i >= 0 {
+		return reason[:i]
+	}
+	return reason
 }
 
 // failureReason renders a deploy-failed marker body per the marker-body
@@ -1577,6 +1606,12 @@ func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
 func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) error {
 	ticker := time.NewTicker(deployCheckInterval)
 	defer ticker.Stop()
+	// This wait is the deploy's long silence — minutes with nothing written
+	// down, which is what makes an interrupted deploy indistinguishable
+	// afterwards from one that never started. A heartbeat every few minutes is
+	// enough to tell the two apart without a line per poll.
+	d.Logger.Info().Int("pr", res.Number).Msg("deploy: waiting for CI checks")
+	polls := 0
 	for {
 		state, err := d.Deployer.PullRequestChecks(ctx, d.WorkspaceDir, res.Number)
 		if err != nil {
@@ -1587,10 +1622,18 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 		}
 		switch state {
 		case forge.ChecksPassing:
+			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Msg("deploy: CI checks passed")
 			return nil
 		case forge.ChecksFailing:
+			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Msg("deploy: CI checks failed")
 			return errors.WithDetails("CI checks failed", "pr", res.URL,
 				deployFailingChecksDetail, d.checkNames(res.Number, forge.ChecksFailing))
+		}
+		polls++
+		if polls%deployWaitHeartbeat == 0 {
+			d.Logger.Info().Int("pr", res.Number).
+				Dur("waited", time.Duration(polls)*deployCheckInterval).
+				Msg("deploy: CI still running")
 		}
 		select {
 		case <-ctx.Done():
@@ -1629,6 +1672,8 @@ func (d BoardTransitionDeps) checkNames(number int, want forge.ChecksState) stri
 // deployFailed posts the failure marker on its own context: the pipeline's
 // context may already be cancelled (timeout), and the marker must still land.
 func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
+	d.Logger.Warn().Str("pm", pmKey).Str("pr", prURL).
+		Str("reason", headlineOf(reason)).Msg("deploy: failed")
 	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	body := DeployFailedHeader + "\n" + reason
