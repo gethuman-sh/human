@@ -20,6 +20,7 @@ const (
 	RuleDescribed    Rule = "described"     // a transition says what it means and where it lives
 	RuleInvariant    Rule = "invariant"     // a state says what holds, who may act, and what happens if nobody does
 	RuleDualRole     Rule = "dual-role"     // a marker that both moves an item and records content says so on purpose
+	RuleObserver     Rule = "observer"      // a transition describes the item moving, not the view of it changing
 )
 
 // Severity separates a machine that does not hold together from one that holds
@@ -77,6 +78,7 @@ func Validate(doc Document) []Finding {
 	findings = append(findings, checkDescribed(doc)...)
 	findings = append(findings, checkInvariants(doc)...)
 	findings = append(findings, checkDualRole(doc)...)
+	findings = append(findings, checkObserver(doc)...)
 
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Severity != findings[j].Severity {
@@ -494,4 +496,45 @@ func splitMarkers(field string) []string {
 		}
 	}
 	return out
+}
+
+// renderingLayers are the packages that decide how an item is DISPLAYED. A
+// transition implemented in one of them is describing the view, not the item.
+var renderingLayers = []string{"internal/board/", "desktop/", "frontend/"}
+
+// checkObserver rejects a transition whose implementation lives in the
+// rendering layer.
+//
+// The failure it catches is a category error the document made twice and would
+// have made a third time. A state is a place the ITEM is, and the test is
+// whether you could tell by reading its ticket. When the board cannot see an
+// item — the tracker failed to load — nothing about the ticket changed; the
+// observer failed. That was modelled as a state (`unknown`) reached from 26
+// others, and it disagreed with the code, which keeps the card's last-known
+// placement and renders it locked in place rather than moving it.
+//
+// The same error was proposed for a closed ticket, whose board stage is
+// literally the instruction "not shown". Both are cheap to argue about and
+// expensive to leave in: an item that "moves" when only the viewer changed
+// makes every count of how items move wrong.
+//
+// where: is the reliable signal because it is already required. A real
+// transition is implemented by an agent prompt or by the daemon's transition
+// code; nothing in the rendering layer can move an item, only draw it.
+func checkObserver(doc Document) []Finding {
+	var findings []Finding
+	for _, e := range doc.Events {
+		for _, layer := range renderingLayers {
+			if !strings.Contains(e.Where, layer) {
+				continue
+			}
+			findings = append(findings, Finding{
+				RuleObserver, SeverityError, e.Name,
+				"is implemented in " + layer + ", which draws items rather than moving them — " +
+					"a change only the viewer can see is not a transition (see not_states)",
+			})
+			break
+		}
+	}
+	return findings
 }

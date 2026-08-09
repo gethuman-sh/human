@@ -418,21 +418,6 @@
       ],
       "stale_when": "The outage has lasted past OutageWaitBound (6 hours). An outage that never ends looks exactly like one that will return, until someone measures how long it has run.",
       "if_nothing_happens": "Each reconcile tick relaunches the stage WITHOUT charging DefaultStageRetries, until the substrate returns and a *-started marker supersedes the outage. Past OutageWaitBound the card is handed to a person instead — still charging nothing."
-    },
-    {
-      "name": "unknown",
-      "doc": "The item's own state is unchanged, but the tracker that carries it failed to load, so nothing can be observed about it. It is the only state not derived from the item's markers — it says the board could not look, not that the item moved. Every item on that tracker enters and leaves it together, and it resolves by itself on the next fetch that reads the source.",
-      "board": {
-        "stage": "none",
-        "state": "none",
-        "note": "Not a placement at all. A card whose thread could not be read is marked Degraded and keeps its last-known stage and state, so the board shows an error banner rather than moving it anywhere."
-      },
-      "holds": "Nothing about the ITEM is known. Its own state is unchanged; the tracker carrying it failed to load, so every item on that tracker enters and leaves this state together.",
-      "who_may_act": [
-        "daemon"
-      ],
-      "stale_when": "Not applicable — this is a property of the fetch, not of the item.",
-      "if_nothing_happens": "The next fetch that reads the source re-derives the item's real state from its markers. It returns to whatever they say, not to where it started."
     }
   ],
   "events": [
@@ -958,54 +943,6 @@
       "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one. A relaunch attempted on a card that already failed meets the same gate, so the refusal is also a move a stopped card makes onto itself: the plan is still missing, and the card stays exactly as red as it was."
     },
     {
-      "name": "source-unreadable",
-      "src": [
-        "filed",
-        "ticket-review",
-        "ticket-reviewed",
-        "planning",
-        "planned",
-        "nothing-to-do",
-        "preflight",
-        "triaging",
-        "challenging",
-        "resolved-no-fix",
-        "fix-planning",
-        "fixing",
-        "verifying",
-        "implementing",
-        "handed-off",
-        "in-review",
-        "reviewed",
-        "deploying",
-        "pr-review",
-        "pr-fix",
-        "ci-gate",
-        "deploy-fixing",
-        "merged",
-        "awaiting-decision",
-        "stopped",
-        "substrate-down"
-      ],
-      "dst": "unknown",
-      "actor": "daemon",
-      "where": "internal/board/gate.go PMRoleNotice; internal/board/compose.go",
-      "doc": "The tracker instance failed to load — an unreachable credential store, a config error. Every item it carries becomes unobservable at once, so this is a property of the fetch rather than of any one ticket. It resolves by itself when the source is reachable again; nothing about the item changed.",
-      "moves_item": false
-    },
-    {
-      "name": "source-readable-again",
-      "src": [
-        "unknown"
-      ],
-      "dst": "filed",
-      "actor": "daemon",
-      "where": "internal/board/compose.go — the next fetch that resolves a PM-role result",
-      "doc": "The source came back and the item's real state is re-derived from its markers — it returns to whatever they say, not to `filed`. The single dst here is a topological placeholder: this machine has one destination per transition and the true one is computed. Nothing about the item changed while it was unobservable.",
-      "dst_is_derived": true,
-      "moves_item": false
-    },
-    {
       "name": "reopen-planning",
       "src": [
         "nothing-to-do"
@@ -1151,7 +1088,7 @@
     "constants": {
       "BoardReconcileInterval": "2m, jittered ±50% — how often the durable pass re-scans open cards (internal/daemon/board_reconcile.go)",
       "StuckRunningGrace": "15m — how long a running card is left alone before liveness is judged",
-    "QueuedLaunchGrace": "2m — how long a card whose decision was answered may sit unstarted before the machine starts it (internal/daemon/board_reconcile_queued.go). Short because the launch is the same call that recorded the choice; it exists only so a tick landing inside that call does not race it.",
+      "QueuedLaunchGrace": "2m — how long a card whose decision was answered may sit unstarted before the machine starts it (internal/daemon/board_reconcile_queued.go). Short because the launch is the same call that recorded the choice; it exists only so a tick landing inside that call does not race it.",
       "DefaultStageRetries": "2 — automatic in-place relaunches of one stage (internal/daemon/board_retry.go)",
       "DefaultPRReviewRounds": "3 — review→fix rounds before the loop escalates (internal/daemon/pr_review_loop.go)",
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
@@ -1183,5 +1120,11 @@
         "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by DefaultPRReviewRounds (3); past it the loop escalates rather than merging on a state it cannot read."
       }
     }
+  },
+  "not_states": {
+    "doc": "Things that look like places an item can be, and are not. Each was proposed as a state at least once; each fails the same test — you cannot tell an item is there by reading its ticket, because nothing about the ticket changed. Recorded so the argument is made once rather than rediscovered, and so removing one does not read as an oversight.",
+    "an unreadable source": "The tracker failed to load, so the board cannot see the item. It WAS a declared state (`unknown`, with `source-unreadable` from 26 states and `source-readable-again` back to `filed`) and it was wrong three ways. The code disagrees: BoardCard.Degraded keeps the card's last-known Stage/State so the board renders it locked in place rather than demoting it (SC-1700) — the item does not move. Its own edges were implemented in internal/board/gate.go and internal/board/compose.go, the only two transitions in this document whose where: was the rendering layer. And its exit landed on `filed`, which said a recovered fetch resets every item to the initial state. The item's own doc string already admitted it: `it says the board could not look, not that the item moved`.",
+    "a closed ticket": "Closing takes an item OUT of the pipeline rather than moving it within, so there is no state to name and no edge to add. The one real effect — the ticket's agents are stopped — is a container's story, and docs/reaper.md owns it as `close is cancellation` with its code owner. The board renders it by removing the card (BoardHidden), which is the board's business, not the machine's.",
+    "an idea": "An idea-labelled ticket is before the machine, not inside it: the initial state is `filed`, membership is the label alone (DeriveBoardCard returns the Ideas stage before reading a single comment), and promotion is a label edit that posts no marker. Nothing about it is derived from the item's markers."
   }
 }
