@@ -531,3 +531,37 @@ func TestValidate_ANoteWithNothingToAddToIsFlagged(t *testing.T) {
 	f := requireFinding(t, validate(t, machine), pipelinefsm.RuleInvariant, "filed")
 	assert.Contains(t, f.Message, "inherits nothing")
 }
+
+// The category error the document made twice: a change only the viewer can see
+// is not a transition. The signal is where: — nothing in the rendering layer can
+// move an item, only draw it.
+func TestObserver_ATransitionImplementedInTheRenderingLayerIsRejected(t *testing.T) {
+	for _, layer := range []string{"internal/board/compose.go", "desktop/app.go", "frontend/board.ts"} {
+		doc := pipelinefsm.Document{
+			Version: 1, Initial: "filed",
+			Actors: map[string]string{"daemon": "the host process"},
+			States: []pipelinefsm.State{
+				{Name: "filed", Doc: "d", Holds: "h", WhoMayAct: []string{"daemon"}, StaleWhen: "n", IfNothingHappens: "n"},
+				{Name: "unseen", Doc: "d", Holds: "h", WhoMayAct: []string{"daemon"}, StaleWhen: "n", IfNothingHappens: "n", Terminal: true},
+			},
+			Events: []pipelinefsm.Event{{
+				Name: "source-unreadable", Src: []string{"filed"}, Dst: "unseen",
+				Actor: "daemon", Doc: "the tracker failed to load", Where: layer,
+			}},
+		}
+
+		requireFinding(t, pipelinefsm.Validate(doc), pipelinefsm.RuleObserver, "source-unreadable")
+	}
+}
+
+// A real transition is implemented by an agent prompt or by the daemon's
+// transition code. The shipped machine must trip nothing.
+func TestObserver_TheShippedMachineHasNoRenderingLayerEdge(t *testing.T) {
+	doc, err := pipelinefsm.Load()
+	require.NoError(t, err)
+
+	for _, f := range pipelinefsm.Validate(doc) {
+		assert.NotEqual(t, pipelinefsm.RuleObserver, f.Rule,
+			"%s: %s", f.Subject, f.Message)
+	}
+}
