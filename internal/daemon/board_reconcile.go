@@ -187,7 +187,7 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate
 	// The PR-loop re-drive runs BEFORE the stuck-running pass so a loop card
 	// stranded by a restart is re-driven rather than reddened — the stuck pass
 	// also skips it (doneStageLoopActive), but ordering makes the ownership clear.
-	if n := reconcilePRLoops(ctx, gate.forReview(cards), liveAgents, driveLoop, logger); n > 0 {
+	if n := reconcilePRLoops(ctx, gate.forTakeover(cards), liveAgents, driveLoop, logger); n > 0 {
 		logger.Info().Int("redriven", n).Msg("board reconcile: re-drove stalled PR review→fix loops")
 	}
 	// An outage card is re-driven BEFORE the stuck-running pass: it is not a hang
@@ -252,12 +252,26 @@ func doneStageLoopActive(comments []tracker.Comment) bool {
 // idempotently (AdvancePRLoop's escalate no-ops on an already-open options
 // block, and the alive-guard prevents racing a second launch). nil deps disable it.
 //
-// It receives DrivableCards from the forReview gate, so it only ever sees loop
-// cards whose branch this machine can obtain: a loop re-drive walks the producing
-// machine's branch toward the credentialed Deploy that publishes it, and a daemon
-// that cannot reach that branch is not handed the card at all (SC-2047). This is
-// the by-construction replacement for the per-path reachability check the loop
-// re-drive was missing — the gate is now the only way a card reaches this pass.
+// It receives DrivableCards from the forTAKEOVER gate, not forReview. A
+// mid-flight review→fix loop is a RUNNING stage, and the gate's two intents split
+// exactly there: forTakeover governs a still-running stage, forReview governs work
+// its owner has finished and handed off. Being on the wrong side of that line is
+// what let a peer daemon red a review it was not running (SC-4025).
+//
+// The peer cannot help itself. The outcome this pass reads — the reviewer's
+// verdict in stage.pr-review — lives in the agent state store, which is local to
+// the daemon host and never posted to the tracker. A machine that did not launch
+// the reviewer reads its own empty store, concludes the step recorded nothing, and
+// escalates: on SC-3613 and SC-3569 that happened 21 to 117 seconds into rounds
+// that went on to finish and approve. Reachability could not have stopped it,
+// because the loop pushes its branch before opening the draft PR, so origin
+// resolves the branch on every peer.
+//
+// forTakeover carries the reachability arm too, so the SC-2047 property this pass
+// had before is unchanged; what it adds is the ownership arm, and the loop's
+// started marker carries the machine: stamp that arm reads. The daemon id is
+// persisted across restarts (LoadOrCreateDaemonID), so the restart-orphan case
+// this pass exists for still matches its own stamp and is still re-driven.
 func reconcilePRLoops(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, driveLoop func(pmKey string) error, logger zerolog.Logger) int {
 	if driveLoop == nil || liveAgents == nil {
 		return 0

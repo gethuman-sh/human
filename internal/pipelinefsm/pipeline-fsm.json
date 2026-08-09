@@ -1117,7 +1117,7 @@
         "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:deploy-failed] and relaunches in place. TWO budgets bound that, and which one is spent depends on how the stage died. A vanished agent is an unexplained death and is charged: DefaultStageRetries (2). An agent this pass judged hung and stopped itself is NOT charged — the work did not fail, a judgement about it did — but repetition is bounded separately by MaxSilenceReaps (3), past which the machine stops relaunching and says a person is needed."
       },
       "pr-loop": {
-        "stale_when": "No loop half-agent alive on this machine. The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so a loop is recovered by re-driving rather than by redding.",
+        "stale_when": "No loop half-agent alive on the machine that owns the stage — the same ownership qualifier the other stage rules carry, and the one this rule was missing. A loop's outcome lives in the owning host's agent state store and is never posted to the tracker, so 'no agent alive HERE' is evidence only on the machine that started it; read as a fleet-wide fact it made a peer red a review that was still running and went on to approve (SC-4025). The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so a loop is recovered by re-driving rather than by redding.",
         "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by DefaultPRReviewRounds (3); past it the loop escalates rather than merging on a state it cannot read."
       }
     }

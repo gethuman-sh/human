@@ -134,3 +134,40 @@ func TestReconcileShippedFailures_ClearsEvenWhenTheBranchIsGone(t *testing.T) {
 	assert.Equal(t, 1, n)
 	assert.True(t, posted, "an unreachable branch must not hide a shipped PR")
 }
+
+// SC-4025. A mid-flight PR review loop is a RUNNING stage, so the re-drive pass
+// takes the takeover gate: a loop whose started marker was stamped by another
+// daemon is that machine's to finish. The peer cannot judge it — the verdict it
+// would read lives in the owning host's state store, so an empty read there says
+// nothing about the review, and acting on it reddens a review still in flight.
+//
+// Driven through reconcileOnce rather than the pass directly, because the defect
+// was the pass being handed the wrong gate, not the pass's own logic.
+func TestReconcileOnce_PRLoopStartedElsewhereIsNotRedriven(t *testing.T) {
+	loopCard := func(machine string) []ReconcileCard {
+		return []ReconcileCard{{
+			Key:      "SC-1",
+			Assignee: "Alice",
+			Comments: []tracker.Comment{
+				cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+				cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x")+"\nmachine: "+machine, time.Unix(2, 0)),
+			},
+		}}
+	}
+	drive := func(cards []ReconcileCard) []string {
+		var driven []string
+		lister := func(context.Context) ([]ReconcileCard, error) { return cards, nil }
+		reconcileOnce(context.Background(), lister,
+			WorkGate{reachable: alwaysReachable, daemonID: "d1", identityFor: asPerson("Alice")},
+			nil, nil, nil, liveAgents(), nil, nil,
+			func(string) error { return nil },
+			func(k string) error { driven = append(driven, k); return nil },
+			StageRetry{}, nil, nil, "d1", zerolog.Nop())
+		return driven
+	}
+
+	assert.Empty(t, drive(loopCard("d2")), "a peer's running loop is not this machine's to judge")
+	// The restart-orphan this pass exists for is unaffected: the daemon id is
+	// persisted, so a restarted daemon still matches its own stamp.
+	assert.Equal(t, []string{"SC-1"}, drive(loopCard("d1")), "this machine still re-drives its own stalled loop")
+}
