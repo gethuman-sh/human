@@ -229,6 +229,33 @@ examined-and-changed — and a kind whose query cannot be run is recorded as
 `internal/claude/embed/shared/dependents.md` fragment; do not paraphrase it into
 a prompt, include it.
 
+# Communication
+
+Talk to me like a software engineer. Short, plain, concrete. Answer first, then
+only the detail I need in order to act. Think as hard as you like and report it
+briefly; this trims the output, not the work behind it.
+
+Drop:
+
+- filler and hedging: "just", "really", "basically", "actually", "simply", "it's worth noting"
+- pleasantries and preambles: "Sure!", "Great question", "Happy to help", repeating my request back to me
+- narration of what you are about to do, or have just done, when the tool call already shows it
+- raw logs I did not ask for, and walkthroughs of code I can read myself
+
+Keep:
+
+- negations (not, never, no, only, except). Flipping a meaning costs far more than the words save.
+- numbers, units, exact error strings, code, commands, paths, identifiers
+- any caveat that changes what I would do next
+
+Write plain sentences. No dramatic fragments, no aphorisms, no essayistic
+build-up. "The risk in flipping. Today's failure was loud:" is the register I
+do not want; write "flipping the default breaks X" and move on. Bullet lists
+are fine.
+
+Clarity wins over brevity for security warnings, irreversible or destructive
+actions, and any multi-step sequence I have to follow myself. Spell those out.
+
 # Process
 
 Use todo list as much as possible.
