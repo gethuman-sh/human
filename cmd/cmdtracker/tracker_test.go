@@ -10,10 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/errors"
-	"github.com/gethuman-sh/human/internal/forge"
-	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/tracker"
-	trackergithub "github.com/gethuman-sh/human/internal/tracker/github"
 )
 
 // --- helpers ---
@@ -120,26 +117,6 @@ func TestRunTrackerList_TableEmpty(t *testing.T) {
 	err := RunTrackerList(&buf, ".", true, loaderOK(nil))
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "No trackers configured in .humanconfig")
-}
-
-// TestRunTrackerList_ExcludesForgeOnly is the SC-1671 regression: a
-// forge-only entry (role: forge, or a forges: entry) opens pull requests but
-// is not a tracker, so `human tracker list` must not surface it — matching
-// the same guarantee already enforced for resolution, counting, and
-// DiagnoseTrackers.
-func TestRunTrackerList_ExcludesForgeOnly(t *testing.T) {
-	instances := []tracker.Instance{
-		{Name: "work", Kind: "jira", URL: "https://jira.example.com", User: "alice", Description: "Work JIRA"},
-		{Name: "prs", Kind: "github", Role: tracker.RoleForge, Description: "PR forge"},
-	}
-	var buf bytes.Buffer
-
-	err := RunTrackerList(&buf, ".", false, loaderOK(instances))
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, `"name": "work"`)
-	assert.NotContains(t, out, `"name": "prs"`)
 }
 
 // --- PrintTrackerJSON tests ---
@@ -594,71 +571,4 @@ func TestRunTrackerTopology_LoaderError(t *testing.T) {
 	var buf bytes.Buffer
 	err := RunTrackerTopology(&buf, ".", false, loaderErr(errors.WithDetails("load failed", "reason", "boom")))
 	require.Error(t, err)
-}
-
-// --- Forge visibility (SC-3871) ---
-
-// forgeClient is a real forge client rather than a stub: constructing one opens
-// no connection, and using the shipped type keeps the test honest about what a
-// loaded instance carries.
-func forgeClient() forge.Forge { return forgegithub.New("https://api.github.com", "t") }
-
-// trackerClient is likewise the shipped GitHub tracker client, constructed but
-// never called: what matters here is only that the capability is present.
-func trackerClient() tracker.Provider { return trackergithub.New("https://api.github.com", "t") }
-
-// A declared forge appears in the topology view. It is deliberately absent from
-// `human tracker list` ([SC-1671]) so no agent picks it as a write target, which
-// left it reported nowhere.
-func TestRunTrackerTopology_ReportsADeclaredForge(t *testing.T) {
-	instances := []tracker.Instance{
-		{Name: "board", Kind: "shortcut"},
-		{Name: "prs", Kind: "github", Role: tracker.RoleForge, Forge: forgeClient()},
-	}
-	var buf bytes.Buffer
-	require.NoError(t, RunTrackerTopology(&buf, ".", false, loaderOK(instances)))
-
-	out := buf.String()
-	assert.Contains(t, out, `"forges"`)
-	assert.Contains(t, out, `"name": "prs"`)
-	assert.Contains(t, out, `"also_tracker": false`)
-	assert.NotContains(t, out, `"notes"`, "a config that declared its intent has nothing to explain")
-}
-
-// The ambiguous entry: no role, so it is tracker and forge at once, and the
-// config that produced it says neither.
-func TestRunTrackerTopology_NotesTheUndeclaredGitHubEntry(t *testing.T) {
-	instances := []tracker.Instance{
-		{Name: "human", Kind: "github", Provider: trackerClient(), Forge: forgeClient()},
-	}
-	var buf bytes.Buffer
-	require.NoError(t, RunTrackerTopology(&buf, ".", false, loaderOK(instances)))
-
-	out := buf.String()
-	assert.Contains(t, out, `"also_tracker": true`)
-	assert.Contains(t, out, "declares no role")
-	assert.Contains(t, out, "never ask it for tickets")
-}
-
-func TestRunTrackerTopology_TableShowsForgesAndNotes(t *testing.T) {
-	instances := []tracker.Instance{
-		{Name: "human", Kind: "github", Provider: trackerClient(), Forge: forgeClient()},
-	}
-	var buf bytes.Buffer
-	require.NoError(t, RunTrackerTopology(&buf, ".", true, loaderOK(instances)))
-
-	out := buf.String()
-	assert.Contains(t, out, "FORGE")
-	assert.Contains(t, out, "human (github) — also a tracker (no role: declared)")
-	assert.Contains(t, out, "NOTE")
-}
-
-// The gap in the other direction: role: pm takes the forge away with the
-// ambiguity, and nothing said so until a pipeline reached the PR step.
-func TestRunTrackerTopology_NotesAConfigWithNoForge(t *testing.T) {
-	instances := []tracker.Instance{{Name: "board", Kind: "shortcut", Provider: trackerClient()}}
-	var buf bytes.Buffer
-	require.NoError(t, RunTrackerTopology(&buf, ".", true, loaderOK(instances)))
-
-	assert.Contains(t, buf.String(), "No forge configured")
 }

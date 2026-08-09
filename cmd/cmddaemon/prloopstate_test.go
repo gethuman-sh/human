@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/internal/agentstate"
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // shrinkPRLoopReadBackoff points the PR loop's state-store settle backoff at a
@@ -161,7 +162,7 @@ func TestReadDeployFixExit_readsField(t *testing.T) {
 	writeRawReport(t, "SC-1", "stage.deploy-fix", `{"exit":"done"}`)
 
 	exit := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
-	assert.Equal(t, "done", exit)
+	assert.Equal(t, daemon.ExitDone, exit)
 }
 
 // A missing deploy-fix report reads as "" — the driver treats a non-done exit,

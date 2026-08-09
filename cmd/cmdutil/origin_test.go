@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/forge"
 	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -30,7 +31,16 @@ func githubDeps() Deps {
 				Kind:     "github",
 				URL:      "https://api.github.com",
 				Provider: github.New("https://api.github.com", "t"),
-				Forge:    forgegithub.New("https://api.github.com", "t"),
+			}}, nil
+		},
+		// The code host is its own list now, so a test that opens a pull request
+		// configures a forge — not a tracker that happens to carry one ([SC-3876]).
+		LoadForges: func(_ string) ([]forge.Instance, error) {
+			return []forge.Instance{{
+				Name:  "gh",
+				Kind:  "github",
+				URL:   "https://api.github.com",
+				Forge: forgegithub.New("https://api.github.com", "t"),
 			}}, nil
 		},
 		AuditLogPath: func() string { return "" },

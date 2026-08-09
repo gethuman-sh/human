@@ -2003,15 +2003,11 @@ func logReportableLoadFailures(failures []error, dir, subsystem string) {
 // to a board listing — the decision of what the daemon asks a tracker for, kept
 // apart from the fetching so it can be checked without a tracker or a disk.
 //
-// Two entries are skipped, for the same underlying reason: they hold no tickets,
-// so asking them costs a request and answers nothing.
-//   - A forge-only entry (role: forge) owns no projects and no issues ([SC-1671]).
-//   - A GitHub entry that never declared a role is credentials for the forge, not
-//     a ticket source (isTicketSource). Asked anyway it searches every issue its
-//     token can see, on a rate-limited endpoint, and the board discards the
-//     answer — only pm and engineering results are ever read. The one thing such
-//     a fetch can contribute is its error, and that is what reached the user: a
-//     403 rate-limit banner across a board whose real tracker was healthy.
+// Every instance is asked. There is no longer anything here that might not hold
+// tickets: forges are a separate list of a separate type, so the guards this
+// function used to carry — one for a declared forge, one for a GitHub entry that
+// declared nothing — have no subject ([SC-3876]). Between them those two guards
+// took SC-1671, SC-2132 and SC-3868 to get right.
 //
 // An instance with no configured projects still yields one job, with an empty
 // project, because most trackers read that as "everything I can see" — which is
@@ -2019,9 +2015,6 @@ func logReportableLoadFailures(failures []error, dir, subsystem string) {
 func listingJobs(instances []tracker.Instance, dir string) []fetchJob {
 	var jobs []fetchJob
 	for _, inst := range instances {
-		if !inst.IsTracker() || !isTicketSource(inst) {
-			continue
-		}
 		projects := inst.Projects
 		if len(projects) == 0 {
 			projects = []string{""}
@@ -2852,25 +2845,25 @@ func (p forgeDeployer) BranchMerged(ctx context.Context, workspaceDir, branch st
 	return gitrepo.IsAncestor(ctx, workspaceDir, branch, "origin/"+base)
 }
 
-// resolveForge finds the configured instance that carries a forge capability
-// for the workspace and resolves the "owner/repo" from origin.
+// resolveForge finds the workspace's configured code host and resolves the
+// "owner/repo" from origin.
+//
+// It reads the forge list. The old version walked the tracker list looking for
+// entries that happened to carry a forge client, with a kind test beside it
+// doing the same job by another route — both artefacts of one list holding two
+// kinds of thing ([SC-3876]).
 func resolveForge(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (forge.Creator, string, error) {
-	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
+	forges, err := cmdutil.LoadAllForges(dir, lookup, resolver)
 	if err != nil {
 		return nil, "", err
 	}
-	var creator forge.Creator
-	for _, inst := range instances {
-		if inst.Forge != nil || forge.IsForgeKind(inst.Kind) {
-			if inst.Forge != nil {
-				creator = inst.Forge
-				break
-			}
-		}
+	if len(forges) == 0 {
+		// The deploy path is where this failure lands for most people, so it
+		// carries the same instructions as the CLI error rather than a terse
+		// "not configured" that reads like a bug in the deployer.
+		return nil, "", errors.WithDetails(forge.NoForgeConfigured("github"), "dir", dir)
 	}
-	if creator == nil {
-		return nil, "", errors.WithDetails("no forge configured for workspace", "dir", dir)
-	}
+	creator := forges[0].Forge
 
 	raw, err := gitrepo.OriginURL(context.Background(), dir)
 	if err != nil {

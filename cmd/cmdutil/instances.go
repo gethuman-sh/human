@@ -29,9 +29,6 @@ type instanceLoaderWithResolver func(dir string, lookup config.EnvLookup, resolv
 var allLoadersWithResolver = []instanceLoaderWithResolver{
 	jira.LoadInstancesWithResolver,
 	github.LoadInstancesWithResolver,
-	// The forges: section builds forge-only instances (nil Provider) so GitHub can
-	// serve pull requests without registering as a second tracker ([SC-1671]).
-	github.LoadForgeInstancesWithResolver,
 	gitlab.LoadInstancesWithResolver,
 	linear.LoadInstancesWithResolver,
 	azuredevops.LoadInstancesWithResolver,

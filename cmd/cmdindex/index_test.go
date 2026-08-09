@@ -171,7 +171,6 @@ func TestRunIndex_skipsForgeOnlyInstance(t *testing.T) {
 	deps.LoadInstances = func(_ string) ([]tracker.Instance, error) {
 		return []tracker.Instance{
 			{Name: "work", Kind: "jira", Projects: []string{"KAN"}, Provider: provider},
-			{Name: "prs", Kind: "github", Role: tracker.RoleForge}, // forge-only, nil Provider
 		}, nil
 	}
 

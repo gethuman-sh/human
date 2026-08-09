@@ -131,9 +131,9 @@ func TestRegistryHasAForgesSection(t *testing.T) {
 	assert.Equal(t, TypeSecret, token.Type)
 }
 
-// Declaring intent must be possible from the settings screen, not only by hand
-// editing YAML — and only for the backend where it means anything.
-func TestRegistryOffersTheForgeRoleOnGitHubAlone(t *testing.T) {
+// The forge role is gone from every tracker section: a githubs: entry is an
+// issue tracker, and a code host is a forges: entry ([SC-3876]).
+func TestRegistryOffersNoForgeRoleOnAnyTracker(t *testing.T) {
 	for _, sec := range Registry() {
 		if sec.Key != "trackers" {
 			continue
@@ -143,13 +143,8 @@ func TestRegistryOffersTheForgeRoleOnGitHubAlone(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if g.Section == "githubs" {
-				assert.Contains(t, role.Enum, "forge",
-					"GitHub is the only tracker that can also be a forge, so it is the only one that can declare it")
-				continue
-			}
 			assert.NotContains(t, role.Enum, "forge",
-				"%s cannot open pull requests, so offering the role would describe something impossible", g.Section)
+				"%s configures a tracker; a code host is configured under forges:", g.Section)
 		}
 	}
 }

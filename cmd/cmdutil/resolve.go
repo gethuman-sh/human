@@ -35,8 +35,13 @@ import (
 // DestructiveNotifier — daemon paths set it so per-request notifier
 // configuration is read from the request's env, not the daemon process.
 type Deps struct {
-	LoadInstances       func(dir string) ([]tracker.Instance, error)
-	LoadInstancesCtx    func(ctx context.Context, dir string) ([]tracker.Instance, error)
+	LoadInstances    func(dir string) ([]tracker.Instance, error)
+	LoadInstancesCtx func(ctx context.Context, dir string) ([]tracker.Instance, error)
+	// LoadForges is the code-host list. Separate from the tracker loaders
+	// because a forge is a separate kind of thing, loaded from its own section
+	// into its own type ([SC-3876]).
+	LoadForges          func(dir string) ([]forge.Instance, error)
+	LoadForgesCtx       func(ctx context.Context, dir string) ([]forge.Instance, error)
 	AuditLogPath        func() string
 	DestructiveLogPath  func() string
 	DestructiveNotifier func(ctx context.Context) tracker.DestructiveNotifier // returns nil if no notification configured; ctx carries per-request env
@@ -47,6 +52,8 @@ func DefaultDeps() Deps {
 	return Deps{
 		LoadInstances:       LoadAllInstances,
 		LoadInstancesCtx:    LoadAllInstancesCtx,
+		LoadForges:          LoadForges,
+		LoadForgesCtx:       LoadForgesCtx,
 		AuditLogPath:        AuditLogPath,
 		DestructiveLogPath:  DestructiveLogPath,
 		DestructiveNotifier: loadDestructiveNotifier,
@@ -100,31 +107,26 @@ func ResolveProvider(cmd *cobra.Command, kind string, deps Deps) (tracker.Provid
 	return p, func() { dpCleanup(); auditCleanup() }, nil
 }
 
-// ResolveForge resolves the configured instance for the given kind and returns
-// it as a forge.Forge (code-host) capability. Forge operations (opening a PR)
-// are intentionally not wrapped by the tracker decorator chain: they do not
-// mutate tracker data and have no audit/policy semantics. A clear error is
-// returned when the resolved backend is not a forge (e.g. a pure issue tracker).
+// ResolveForge resolves the configured code host of the given kind.
+//
+// It reads the forge list, not the tracker list. Forge operations are
+// deliberately not wrapped by the tracker decorator chain: they do not mutate
+// tracker data and have no audit or policy semantics — which is one more sign
+// they were never the same kind of thing ([SC-3876]).
 func ResolveForge(cmd *cobra.Command, kind string, deps Deps) (forge.Forge, error) {
 	ctx := cmdContext(cmd)
-	instances, err := loadInstancesCtx(ctx, deps)
+	forges, err := loadForgesCtx(ctx, deps)
 	if err != nil {
 		return nil, err
 	}
 
-	trackerName, _ := cmd.Root().PersistentFlags().GetString("tracker")
+	// The --tracker flag names an instance, and a forge entry has a name too, so
+	// it still selects between several configured code hosts.
+	name, _ := cmd.Root().PersistentFlags().GetString("tracker")
 
-	// Resolve on the forge capability, not the tracker Provider: a forge-only
-	// entry (role: forge or a forges: section) carries a nil Provider and would
-	// be invisible to ResolveByKind, yet it is exactly the entry that can open a
-	// pull request ([SC-1671]).
-	instance, err := tracker.ResolveForgeByKind(kind, instances, trackerName)
+	instance, err := forge.Resolve(kind, forges, name)
 	if err != nil {
 		return nil, err
-	}
-
-	if instance.Forge == nil {
-		return nil, errors.WithDetails("pull requests not supported by this tracker", "kind", kind)
 	}
 	return instance.Forge, nil
 }
@@ -357,6 +359,16 @@ func cmdContext(cmd *cobra.Command) context.Context {
 // per-request env map. Existing Deps users keep working unchanged: when
 // the daemon installs a context-aware loader the env flows through;
 // otherwise the legacy LoadAllInstances falls through to os.Getenv.
+func loadForgesCtx(ctx context.Context, deps Deps) ([]forge.Instance, error) {
+	if deps.LoadForgesCtx != nil {
+		return deps.LoadForgesCtx(ctx, config.DirProject)
+	}
+	if deps.LoadForges != nil {
+		return deps.LoadForges(config.DirProject)
+	}
+	return LoadForgesCtx(ctx, config.DirProject)
+}
+
 func loadInstancesCtx(ctx context.Context, deps Deps) ([]tracker.Instance, error) {
 	if deps.LoadInstancesCtx != nil {
 		return deps.LoadInstancesCtx(ctx, config.DirProject)

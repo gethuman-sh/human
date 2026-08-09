@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
+	"github.com/gethuman-sh/human/internal/forge"
 	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -60,7 +61,11 @@ func TestBuildAutoPRCreateCmd_run(t *testing.T) {
 				Kind:     "github",
 				URL:      srv.URL,
 				Provider: github.New(srv.URL, "t"),
-				Forge:    forgegithub.New(srv.URL, "t"),
+			}}, nil
+		},
+		LoadForges: func(_ string) ([]forge.Instance, error) {
+			return []forge.Instance{{
+				Name: "gh", Kind: "github", URL: srv.URL, Forge: forgegithub.New(srv.URL, "t"),
 			}}, nil
 		},
 		AuditLogPath: func() string { return "" },

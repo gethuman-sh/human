@@ -84,11 +84,6 @@ func RunTrackerList(out io.Writer, dir string, table bool, loader func(string) (
 	if err != nil {
 		return err
 	}
-	// A forge-only entry (role: forge, or a forges: entry) opens pull
-	// requests but is not a tracker — it must stay out of this view exactly
-	// as it stays out of tracker resolution and counting ([SC-1671]).
-	instances = tracker.TrackerInstances(instances)
-
 	entries := make([]TrackerEntry, len(instances))
 	for i, inst := range instances {
 		entries[i] = TrackerEntry{Name: inst.Name, Type: inst.Kind, URL: inst.URL, User: inst.User, Role: inst.InferRole(), Description: inst.Description}
@@ -105,24 +100,6 @@ type TopologyResult struct {
 	Topology    string        `json:"topology"`
 	PM          *TrackerEntry `json:"pm,omitempty"`
 	Engineering *TrackerEntry `json:"engineering,omitempty"`
-	// Forges and Notes are additive: existing readers address pm and
-	// engineering by name, and every shipped prompt that parses this output
-	// reads those two fields.
-	Forges []ForgeEntry `json:"forges,omitempty"`
-	Notes  []string     `json:"notes,omitempty"`
-}
-
-// ForgeEntry is one configured code-host in the topology view. It is a
-// separate shape from TrackerEntry because the interesting field is a
-// different one: not which role it plays, but whether it is ALSO a tracker —
-// the ambiguity that made a roleless GitHub entry behave two ways at once.
-type ForgeEntry struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	URL  string `json:"url,omitempty"`
-	// AlsoTracker reports that this entry carries an issue-tracker capability
-	// too, which only happens when it declared no role at all.
-	AlsoTracker bool `json:"also_tracker"`
 }
 
 // RunTrackerTopology resolves and prints the tracker topology so agents stop
@@ -137,13 +114,7 @@ func RunTrackerTopology(out io.Writer, dir string, table bool, loader func(strin
 	}
 
 	top := tracker.ResolveTopology(instances)
-	result := TopologyResult{
-		Topology:    top.Mode,
-		PM:          toEntry(top.PM),
-		Engineering: toEntry(top.Engineering),
-		Forges:      toForgeEntries(top.Forges),
-		Notes:       top.Notes,
-	}
+	result := TopologyResult{Topology: top.Mode, PM: toEntry(top.PM), Engineering: toEntry(top.Engineering)}
 
 	if table {
 		return PrintTopologyTable(out, result)
@@ -160,22 +131,6 @@ func toEntry(inst *tracker.Instance) *TrackerEntry {
 	return &TrackerEntry{Name: inst.Name, Type: inst.Kind, URL: inst.URL, User: inst.User, Role: inst.InferRole(), Project: inst.FilingTarget(), Description: inst.Description}
 }
 
-// toForgeEntries renders the code-hosts that can open pull requests. An entry
-// that is also a tracker is the ambiguous one, so that is what the shape says.
-func toForgeEntries(forges []*tracker.Instance) []ForgeEntry {
-	if len(forges) == 0 {
-		return nil
-	}
-	entries := make([]ForgeEntry, 0, len(forges))
-	for _, inst := range forges {
-		entries = append(entries, ForgeEntry{
-			Name: inst.Name, Type: inst.Kind, URL: inst.URL,
-			AlsoTracker: inst.Provider != nil,
-		})
-	}
-	return entries
-}
-
 // PrintTopologyTable prints a topology result as a table.
 func PrintTopologyTable(out io.Writer, result TopologyResult) error {
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
@@ -187,18 +142,6 @@ func PrintTopologyTable(out io.Writer, result TopologyResult) error {
 	}
 	if result.Engineering != nil {
 		_, _ = fmt.Fprintf(w, "ENGINEERING\t%s (%s)\n", result.Engineering.Name, result.Engineering.Type)
-	}
-	for _, f := range result.Forges {
-		suffix := ""
-		if f.AlsoTracker {
-			suffix = " — also a tracker (no role: declared)"
-		}
-		_, _ = fmt.Fprintf(w, "FORGE\t%s (%s)%s\n", f.Name, f.Type, suffix)
-	}
-	// Notes last, and one per line: they are the part a reader is meant to act
-	// on, and burying them between table rows is how an explanation goes unread.
-	for _, n := range result.Notes {
-		_, _ = fmt.Fprintf(w, "NOTE\t%s\n", n)
 	}
 	return w.Flush()
 }

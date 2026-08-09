@@ -101,7 +101,7 @@ func TestStageExitClass_SettlesOnDelayedReport(t *testing.T) {
 	<-written
 
 	require.True(t, found, "the presence-settle backoff must pick up the delayed report")
-	require.Equal(t, "done", exit)
+	require.Equal(t, daemon.ExitDone, exit)
 }
 
 func TestBumpAndClearStageRetries(t *testing.T) {
