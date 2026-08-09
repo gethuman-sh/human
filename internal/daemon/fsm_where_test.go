@@ -181,3 +181,97 @@ func TestWhere_AnswersWithoutTheOptionalSections(t *testing.T) {
 	assert.Nil(t, report.Agent)
 	assert.Nil(t, report.Budget)
 }
+
+// A marker IS a comment, so when it was posted is when the item moved. That is
+// the only record of pipeline timing anywhere in the tool — `human marker list`
+// reports type and fields and no times at all.
+func TestWhere_EnteredComesFromTheMarkerComment(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	arrived := now.Add(-90 * time.Minute)
+	report := BuildWhere(whereDoc(t), "SC-1", []tracker.Comment{
+		cmt(PlanningStartedHeader, arrived.Add(-time.Hour)),
+		cmt(PlanReadyHeader, arrived),
+	}, tracker.CategoryUnstarted, false, "user", WhereDeps{Now: now})
+
+	require.NotNil(t, report.Entered)
+	assert.Equal(t, arrived.UTC().Format(time.RFC3339), report.Entered.At)
+	assert.Equal(t, 5400, report.Entered.Seconds, "how long the ITEM has sat here, not how idle an agent is")
+	assert.Equal(t, PlanReadyHeader, report.Entered.Via)
+}
+
+// History is where the item has BEEN, in states, and stops before where it is
+// now — a trail whose last entry might or might not be "now" is the confusing
+// shape this avoids.
+func TestWhere_HistoryIsStatesAndStopsBeforeNow(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	report := BuildWhere(whereDoc(t), "SC-1", []tracker.Comment{
+		cmt(PlanningStartedHeader, now.Add(-3*time.Hour)),
+		cmt(PlanReadyHeader, now.Add(-2*time.Hour)),
+		cmt(ImplementationStartedHeader, now.Add(-time.Hour)),
+	}, tracker.CategoryUnstarted, false, "skill", WhereDeps{Now: now})
+
+	require.Len(t, report.History, 2, "the newest marker is the current position, not history")
+	assert.Equal(t, "planning", report.History[0].State, "oldest first")
+	assert.Equal(t, "planned", report.History[1].State)
+	assert.Equal(t, 10800, report.History[0].SecondsAgo)
+	assert.Equal(t, ImplementationStartedHeader, report.Entered.Via,
+		"and the newest one is reported as where it is now")
+}
+
+// A marker several transitions record cannot be turned into one state. The entry
+// stays legible via its marker rather than carrying a plausible guess an agent
+// would then reason from.
+func TestWhere_HistoryLeavesAnAmbiguousStateBlank(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	report := BuildWhere(whereDoc(t), "SC-1", []tracker.Comment{
+		cmt(ImplementationStartedHeader, now.Add(-2*time.Hour)),
+		cmt(ReadyForReviewHeader, now.Add(-time.Hour)),
+	}, tracker.CategoryUnstarted, false, "skill", WhereDeps{Now: now})
+
+	require.Len(t, report.History, 1)
+	assert.Equal(t, ImplementationStartedHeader, report.History[0].Marker,
+		"the marker is always there even when the state cannot be named")
+	assert.Empty(t, report.History[0].State,
+		"implementation-started leads to both preflight and implementing, so neither is claimed")
+}
+
+// Bounded, so a long-running ticket does not hand an agent its whole life story.
+func TestWhere_HistoryIsBounded(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	var comments []tracker.Comment
+	for i := range 30 {
+		comments = append(comments, cmt(PlanningStartedHeader, now.Add(-time.Duration(30-i)*time.Hour)))
+	}
+	report := BuildWhere(whereDoc(t), "SC-1", comments, tracker.CategoryUnstarted, false, "skill",
+		WhereDeps{Now: now, HistoryLimit: 4})
+
+	assert.Len(t, report.History, 4, "the most recent, not the first")
+	assert.Equal(t, DefaultWhereHistory, 10, "and the default covers a full PR review→fix loop")
+}
+
+// A caller that only wants the position can say so.
+func TestWhere_HistoryCanBeSuppressed(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	report := BuildWhere(whereDoc(t), "SC-1", []tracker.Comment{
+		cmt(PlanningStartedHeader, now.Add(-2*time.Hour)),
+		cmt(PlanReadyHeader, now.Add(-time.Hour)),
+	}, tracker.CategoryUnstarted, false, "user", WhereDeps{Now: now, HistoryLimit: -1})
+
+	assert.Empty(t, report.History)
+	assert.NotNil(t, report.Entered, "but where it is now still answers")
+}
+
+// No comment bodies ride along. A full thread invites an agent to re-derive its
+// own view of where the item is and disagree with the machine.
+func TestWhere_HistoryCarriesNoCommentBodies(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	secret := PlanReadyHeader + "\nbody: something an agent might re-derive from"
+	report := BuildWhere(whereDoc(t), "SC-1", []tracker.Comment{
+		cmt(secret, now.Add(-2*time.Hour)),
+		cmt(ImplementationStartedHeader, now.Add(-time.Hour)),
+	}, tracker.CategoryUnstarted, false, "skill", WhereDeps{Now: now})
+
+	require.Len(t, report.History, 1)
+	assert.Equal(t, PlanReadyHeader, report.History[0].Marker)
+	assert.NotContains(t, report.History[0].Marker, "re-derive")
+}

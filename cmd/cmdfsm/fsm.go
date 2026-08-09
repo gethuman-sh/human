@@ -68,7 +68,10 @@ func load() (pipelinefsm.Document, error) {
 }
 
 func buildWhereCmd() *cobra.Command {
-	var actor string
+	var (
+		actor   string
+		history int
+	)
 	cmd := &cobra.Command{
 		Use:   "where KEY",
 		Short: "Where an item is, what holds there, and which ways out are yours",
@@ -84,7 +87,7 @@ func buildWhereCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			report, err := daemon.FSMWhere(addr, token, daemon.WhereRequest{Key: args[0], Actor: actor})
+			report, err := daemon.FSMWhere(addr, token, daemon.WhereRequest{Key: args[0], Actor: actor, History: history})
 			if err != nil {
 				return err
 			}
@@ -92,6 +95,7 @@ func buildWhereCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&actor, "actor", defaultActor, "Who is asking (user, daemon, skill) — only this actor's ways out carry a command")
+	cmd.Flags().IntVar(&history, "history", 0, "How many past positions to include (0 = default, -1 = none)")
 	return cmd
 }
 

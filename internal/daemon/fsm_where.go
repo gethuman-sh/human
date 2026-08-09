@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,25 @@ type WhereReport struct {
 	State      string       `json:"state,omitempty"`
 	Candidates []WhereState `json:"candidates,omitempty"`
 	Why        string       `json:"why,omitempty"`
+
+	// Entered is when the item arrived where it is, and what recorded that.
+	//
+	// Without it stale_when cannot be evaluated by the thing reading it: the rule
+	// says "past StuckRunningGrace with no live agent", and an asker that knows
+	// only its agent's idle time cannot tell a card parked for a minute from one
+	// parked for three days. The agent's liveness and the item's age are
+	// different clocks and only one of them was being reported.
+	Entered *WhereEntered `json:"entered,omitempty"`
+
+	// History is where the item has BEEN, oldest first, ending before where it is
+	// now. In states rather than markers, because the asker already thinks in
+	// states — that is the vocabulary the rest of this answer uses, and making it
+	// translate marker names into positions is how it gets one wrong.
+	//
+	// It deliberately stops short of the current position, which lives in State
+	// and Entered. A trail whose last entry might or might not be "now" is the
+	// confusing shape.
+	History []WhereEvent `json:"history,omitempty"`
 
 	// Agent is the liveness of the stage's agent, read from the daemon's own
 	// records rather than recomputed. A second implementation of "is it alive"
@@ -71,6 +91,36 @@ type WhereAgent struct {
 	Blocked         bool   `json:"blocked,omitempty"`
 }
 
+// WhereEntered is when the item arrived where it is.
+type WhereEntered struct {
+	At      string `json:"at"`
+	Seconds int    `json:"seconds"`
+	Via     string `json:"via"`
+}
+
+// WhereEvent is one position the item held, and when it got there.
+type WhereEvent struct {
+	// State is where the marker took it, when the machine names exactly one
+	// destination for that marker. Empty when it names several or none — an
+	// honest blank beats a plausible guess in a trail an agent reasons from.
+	State string `json:"state,omitempty"`
+	// Marker is always present, so an entry whose state could not be named is
+	// still legible.
+	Marker     string `json:"marker"`
+	At         string `json:"at"`
+	SecondsAgo int    `json:"seconds_ago"`
+}
+
+// DefaultWhereHistory is how many past markers ride along by default.
+//
+// Ten covers a full PR review→fix loop (DefaultPRReviewRounds is 3, two markers
+// a round) plus what preceded it, which is the question history actually
+// answers: not "what happened" — the ticket has that — but "is this my first
+// pass or my third", because a card round the loop twice needs a different move
+// from one on its first attempt, and the retry budget counts stage relaunches
+// rather than loop rounds.
+const DefaultWhereHistory = 10
+
 // WhereBudget is the automatic-relaunch budget for the item's current stage.
 type WhereBudget struct {
 	Kind  string `json:"kind"`
@@ -91,6 +141,9 @@ type WhereDeps struct {
 	Attempts func(pmKey string, stage BoardStage) (int, error)
 	// MaxAttempts is the cap those attempts are counted against.
 	MaxAttempts int
+	// HistoryLimit bounds the trail. Zero means DefaultWhereHistory; negative
+	// means no history at all, for a caller that only wants the position.
+	HistoryLimit int
 	// Now is injected so the staleness answer is testable.
 	Now time.Time
 }
@@ -121,6 +174,8 @@ func BuildWhere(doc pipelinefsm.Document, key string, comments []tracker.Comment
 		report.State = states[0].Name
 	}
 
+	report.Entered = whereEntered(doc, comments, deps.Now)
+	report.History = whereHistory(doc, comments, deps.HistoryLimit, deps.Now)
 	report.Agent = whereAgent(key, card, deps)
 	report.Budget = whereBudget(key, card, deps)
 	return report
@@ -187,6 +242,79 @@ func statesFor(doc pipelinefsm.Document, card BoardCard, comments []tracker.Comm
 	}
 	return narrowed, "the newest " + string(card.Stage) + " marker (" + header +
 		") is posted by more than one phase, so the ones it could be are listed"
+}
+
+// classifiedMarkers returns the pipeline markers in the thread, oldest first,
+// paired with the times their comments were posted.
+//
+// The times come from the comments themselves — a marker IS a comment, so when
+// it was posted is when the item moved. Nothing else in the tool records that:
+// `human marker list` reports type and fields only, so before this an asker
+// could see what had happened and never when.
+func classifiedMarkers(comments []tracker.Comment) []tracker.Comment {
+	var out []tracker.Comment
+	for _, c := range comments {
+		if _, _, ok := ClassifyMarker(c.Body); ok {
+			out = append(out, c)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
+	return out
+}
+
+// whereEntered reports when the item reached where it is, from the newest
+// classified marker: the one that put it there.
+func whereEntered(doc pipelinefsm.Document, comments []tracker.Comment, now time.Time) *WhereEntered {
+	trail := classifiedMarkers(comments)
+	if len(trail) == 0 {
+		return nil
+	}
+	latest := trail[len(trail)-1]
+	return &WhereEntered{
+		At:      latest.Created.UTC().Format(time.RFC3339),
+		Seconds: int(now.Sub(latest.Created).Seconds()),
+		Via:     markerHeaderOf(latest.Body),
+	}
+}
+
+// whereHistory is where the item has BEEN, oldest first, stopping before where
+// it is now — the newest marker is the current position and is reported by
+// State and Entered instead.
+//
+// Bounded, and carrying no comment bodies. The bound is token cost; the missing
+// bodies are the real rule. A full thread invites an asker to re-derive its own
+// view of where the item is, which is a second implementation of the derivation
+// — the defect class this machine's document exists to prevent. `human marker
+// show` has the bodies for the rare case that genuinely needs one.
+func whereHistory(doc pipelinefsm.Document, comments []tracker.Comment, limit int, now time.Time) []WhereEvent {
+	if limit < 0 {
+		return nil
+	}
+	if limit == 0 {
+		limit = DefaultWhereHistory
+	}
+	trail := classifiedMarkers(comments)
+	if len(trail) <= 1 {
+		return nil
+	}
+	past := trail[:len(trail)-1]
+	if limit > 0 && len(past) > limit {
+		past = past[len(past)-limit:]
+	}
+	out := make([]WhereEvent, 0, len(past))
+	for _, c := range past {
+		header := markerHeaderOf(c.Body)
+		event := WhereEvent{
+			Marker:     header,
+			At:         c.Created.UTC().Format(time.RFC3339),
+			SecondsAgo: int(now.Sub(c.Created).Seconds()),
+		}
+		if entered := doc.StatesEnteredBy(header); len(entered) == 1 {
+			event.State = entered[0].Name
+		}
+		out = append(out, event)
+	}
+	return out
 }
 
 // markerHeaderOf extracts the [human:…] header from a comment body.

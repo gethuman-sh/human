@@ -18,6 +18,9 @@ type WhereRequest struct {
 	// guessing it withholds a command rather than offering one the caller may not
 	// use.
 	Actor string `json:"actor,omitempty"`
+	// History bounds the trail of past positions. Zero means the default;
+	// negative means none, for a caller that only wants the position.
+	History int `json:"history,omitempty"`
 }
 
 // WhereCommentReader loads one ticket's comment thread and status. Injected so
@@ -67,9 +70,10 @@ func (s *Server) handleFSMWhere(conn net.Conn, args []string) {
 	}
 
 	report := BuildWhere(doc, req.Key, comments, status, isIdea, actor, WhereDeps{
-		Progress: s.whereProgress(),
-		Attempts: s.WhereAttempts,
-		Now:      time.Now(),
+		Progress:     s.whereProgress(),
+		Attempts:     s.WhereAttempts,
+		HistoryLimit: req.History,
+		Now:          time.Now(),
 	})
 	data, err := json.Marshal(report)
 	if err != nil {
