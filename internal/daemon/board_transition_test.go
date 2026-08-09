@@ -14,7 +14,6 @@ import (
 
 	humanerrors "github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/forge"
-	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
 )
@@ -887,7 +886,7 @@ func TestApplyTransitionDeployEnsureMergeableConflict(t *testing.T) {
 	require.NotEmpty(t, failed)
 	// The marker's first line is the card badge: it must tell the user the next
 	// step, with the raw cause following in the detail block.
-	headline := firstLine(marker.Prose(failed))
+	headline := failureReason(failed)
 	assert.Contains(t, headline, "resolve the conflict on feat/x")
 	assert.Contains(t, headline, "re-run Deploy")
 	assert.Contains(t, failed, "rebase hit a conflict")
@@ -1597,7 +1596,7 @@ func TestApplyTransitionDeployRecomputeStaysUnmergeable(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, failed)
-	headline := firstLine(marker.Prose(failed))
+	headline := failureReason(failed)
 	assert.Contains(t, headline, "open the PR to see why")
 	assert.Contains(t, headline, "re-run Deploy")
 }
@@ -1700,7 +1699,7 @@ func TestApplyTransitionDeployTransientMergeRefusalTimesOut(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, failed)
-	headline := firstLine(marker.Prose(failed))
+	headline := failureReason(failed)
 	assert.Contains(t, headline, "the forge refused the merge")
 	assert.Contains(t, headline, "re-run Deploy")
 }
@@ -1728,7 +1727,7 @@ func TestApplyTransitionDeployCIFailureHeadline(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, failed)
-	headline := firstLine(marker.Prose(failed))
+	headline := failureReason(failed)
 	assert.Contains(t, headline, "fix the failing checks")
 	assert.Contains(t, headline, "re-run Deploy")
 }
@@ -1839,7 +1838,7 @@ func TestDeployBranch_SecretStoreAuthFailure_NotFixable(t *testing.T) {
 	}
 	require.NotEmpty(t, failed, "the failure must red the card with a deploy-failed marker")
 	assert.Empty(t, started, "no deploy-fix must be started")
-	headline := firstLine(marker.Prose(failed))
+	headline := failureReason(failed)
 	assert.Contains(t, strings.ToLower(headline), "authenticat",
 		"the headline must state authentication is the problem")
 	assert.NotContains(t, headline, "CI checks failed",
@@ -1865,7 +1864,7 @@ func TestDeployBranch_SecretStoreAuthFailure_PushPath(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, failed)
-	headline := firstLine(marker.Prose(failed))
+	headline := failureReason(failed)
 	assert.Contains(t, strings.ToLower(headline), "authenticat")
 	assert.NotContains(t, headline, "check the branch and forge access")
 }

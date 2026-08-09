@@ -7,6 +7,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -16,7 +17,7 @@ import (
 // orderedMarkerSpecs, so ClassifyMarker never sees it and it never moves a card.
 // Its body carries the eligibility anchor, the measured wait, and the cause, so a
 // wait is attributable and distinguishable from a stall by reading the ticket.
-const StageWaitHeader = "[human:stage-wait]"
+const StageWaitHeader = "[human:" + MarkerStageWait + "]"
 
 // Body-line prefixes for a stage-wait marker, following the `key: value`
 // convention of ClaimStagePrefix / the pr:/branch: handoff lines.
@@ -82,15 +83,19 @@ func eligibleAnchor(comments []tracker.Comment) (time.Time, bool) {
 	return newest.Created, true
 }
 
-// composeStageWait builds the marker body (without the daemon stamp).
+// composeStageWait builds the marker body (without the daemon stamp). The field
+// order is the wire format its readers already parse by prefix, so it is stated
+// explicitly rather than left to the map's iteration order.
 func composeStageWait(stage BoardStage, eligibleAt, startedAt time.Time, cause WaitCause) string {
-	var b strings.Builder
-	b.WriteString(StageWaitHeader + "\n")
-	b.WriteString(StageWaitStagePrefix + " " + string(stage) + "\n")
-	b.WriteString(StageWaitEligiblePrefix + " " + eligibleAt.UTC().Format(time.RFC3339) + "\n")
-	b.WriteString(StageWaitWaitedPrefix + " " + startedAt.Sub(eligibleAt).Round(time.Second).String() + "\n")
-	b.WriteString(StageWaitCausePrefix + " " + string(cause))
-	return b.String()
+	return markerBody(marker.Marker{
+		Type: MarkerStageWait,
+		Fields: fields(
+			"stage", string(stage),
+			"eligible", eligibleAt.UTC().Format(time.RFC3339),
+			"waited", startedAt.Sub(eligibleAt).Round(time.Second).String(),
+			"cause", string(cause),
+		),
+	}, "stage", "eligible", "waited", "cause")
 }
 
 // recordStageWait posts a [human:stage-wait] marker when the gap between the

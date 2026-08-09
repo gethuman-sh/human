@@ -381,10 +381,22 @@ func failureBody(body string) string {
 	// separates the field block from the prose, so ask it.
 	trimmed := strings.TrimSpace(body)
 	if m, ok := marker.ParseBody(trimmed); ok {
-		if rest := strings.TrimSpace(m.Body); rest != "" {
+		// The headline lives in `reason` (the field the *-failed specs require)
+		// and the detail in the prose body — failureMarker splits them there, so
+		// this is where they are put back together. Either half alone is still a
+		// diagnosis: a marker posted before the field existed carries prose only,
+		// and a one-line failure carries a reason only.
+		reason := strings.TrimSpace(m.Fields["reason"])
+		rest := strings.TrimSpace(m.Body)
+		switch {
+		case reason != "" && rest != "":
+			return reason + "\n\n" + rest
+		case reason != "":
+			return reason
+		case rest != "":
 			return rest
 		}
-		// A marker carrying only fields has no diagnosis to give: show the header.
+		// A marker carrying neither has no diagnosis to give: show the header.
 		return firstLine(trimmed)
 	}
 	// Not a marker at all: there is no field block to skip and no prose to find,

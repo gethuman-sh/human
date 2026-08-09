@@ -39,7 +39,11 @@ func TestMarker_ReportsWhereItMovesAnItem(t *testing.T) {
 	assert.Equal(t, "[human:deployed]", got["marker"])
 	assert.Equal(t, true, got["moves_an_item"])
 	assert.NotEmpty(t, got["moves"])
-	assert.Contains(t, got["required_fields"], "pr", "the caller is told what the marker requires")
+	// deployed must say HOW the work shipped, and either field answers it, so
+	// the contract is a one-of rather than a required list. The caller is told
+	// both ways out — otherwise an already-merged branch has no postable marker.
+	assert.Contains(t, got["any_of_fields"], "pr", "the caller is told what the marker requires")
+	assert.Contains(t, got["any_of_fields"], "merged")
 }
 
 // Either form answers: a caller says a marker the way it posts it, and the

@@ -77,5 +77,12 @@ func CommandFor(e Event, key string) string {
 	for _, f := range marker.RequiredFields(markerType) {
 		cmd += " --field " + f + "=<" + f + ">"
 	}
+	// A one-of contract still has to produce ONE runnable command, so it names
+	// the contract's preferred field. The alternatives are reported by
+	// `human fsm marker`, which is where a caller looks when the default is not
+	// the case they are in.
+	if anyOf := marker.AnyOfFields(markerType); len(anyOf) > 0 {
+		cmd += " --field " + anyOf[0] + "=<" + anyOf[0] + ">"
+	}
 	return cmd
 }

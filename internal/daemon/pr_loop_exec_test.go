@@ -272,7 +272,9 @@ func TestOpenDraftPRAndReview_alreadyMerged_shortCircuits(t *testing.T) {
 
 	deployed, ok := posted(c, DeployedHeader)
 	require.True(t, ok, "an already-merged branch ends deployed, not reviewed")
-	assert.Contains(t, deployed, "already merged")
+	// The marker must name HOW the work shipped: no PR was opened, so `merged:`
+	// carries it. A bare header is a deployed marker the protocol rejects.
+	assert.Contains(t, deployed, "merged: already in the base branch")
 	assert.Equal(t, "SC-1", closed)
 	assert.Zero(t, p.call, "no PR must be opened for already-merged work")
 	assert.Zero(t, l.calls, "no reviewer must be launched for already-merged work")

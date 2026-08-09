@@ -134,6 +134,7 @@ func buildMarkerCmd() *cobra.Command {
 				"marker":           pipelinefsm.MarkerHeader(name),
 				"type":             name,
 				"required_fields":  marker.RequiredFields(name),
+				"any_of_fields":    marker.AnyOfFields(name),
 				"moves_an_item":    len(uses) > 0,
 				"moves":            moves,
 				"records_content":  listed,

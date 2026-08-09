@@ -35,10 +35,17 @@ type Marker struct {
 // known types enforce their required fields and head enums so a malformed
 // handoff fails at post time, not at the reader.
 type spec struct {
-	required  []string
+	required []string
+	// anyOf names fields of which AT LEAST ONE must be present — a contract
+	// `required` cannot express. It is data rather than a closure so that
+	// everything telling a caller how to post the marker can read it: a
+	// hand-written validator satisfies Validate and leaves RequiredFields
+	// answering "nothing required", which hands an agent a command that posts a
+	// marker this package then rejects.
+	anyOf     []string
 	headEnum  []string
 	needsHead bool
-	// validate carries a contract the required/head fields cannot express.
+	// validate carries a contract the field lists cannot express.
 	validate func(Marker) error
 }
 
@@ -102,10 +109,17 @@ var specs = map[string]spec{
 	"nothing-to-do":         {required: []string{"evidence"}},
 	"deploy-started":        {},
 	"deploy-failed":         {required: []string{"reason"}},
-	"deployed":              {required: []string{"pr"}},
-	"bug-verdict":           {needsHead: true, headEnum: []string{"confirmed", "not-a-bug", "undetermined"}},
-	"bug-verify":            {needsHead: true, headEnum: []string{"DONE", "NOT DONE"}},
-	"options":               {required: []string{"stage"}, validate: validateOptions},
+	// A deployed marker must say HOW the work shipped, and there are two honest
+	// answers: through a pull request, or by a branch that was already in the
+	// base when the deploy ran. Requiring pr outright made the second case
+	// unpostable, so the daemon posted a bare header instead — a marker its own
+	// protocol rejects, which is what routing every writer through this
+	// validator surfaced. pr comes first because it is the ordinary shipping
+	// path, and something that must name one field names that one.
+	"deployed":    {anyOf: []string{"pr", "merged"}},
+	"bug-verdict": {needsHead: true, headEnum: []string{"confirmed", "not-a-bug", "undetermined"}},
+	"bug-verify":  {needsHead: true, headEnum: []string{"DONE", "NOT DONE"}},
+	"options":     {required: []string{"stage"}, validate: validateOptions},
 	// The ticket-review gate's verdict. The head carries the outcome so a reader
 	// can classify it without parsing the body, exactly as bug-verdict does; the
 	// gate ACTS on every outcome, so these name what it did, not what it asks for.
@@ -165,6 +179,21 @@ func RequiredFields(markerType string) []string {
 	return out
 }
 
+// AnyOfFields lists the fields a marker type must carry AT LEAST ONE of, in the
+// order the contract prefers them — so a caller that has to name exactly one
+// names the first. Empty when the type has no such contract.
+//
+// Exported for the same reason as RequiredFields: `human fsm next` builds the
+// runnable `human marker post` command from these lists, and a contract it
+// cannot read is a command that posts a marker Validate then rejects.
+func AnyOfFields(markerType string) []string {
+	s, known := specs[markerType]
+	if !known || len(s.anyOf) == 0 {
+		return nil
+	}
+	return append([]string(nil), s.anyOf...)
+}
+
 // Validate checks m against its type's contract. Unknown types pass — only a
 // syntactically valid type name is required.
 func Validate(m Marker) error {
@@ -179,6 +208,12 @@ func Validate(m Marker) error {
 		if strings.TrimSpace(m.Fields[req]) == "" {
 			return errors.WithDetails("marker is missing a required field", "type", m.Type, "field", req)
 		}
+	}
+	if len(s.anyOf) > 0 && !slices.ContainsFunc(s.anyOf, func(f string) bool {
+		return strings.TrimSpace(m.Fields[f]) != ""
+	}) {
+		return errors.WithDetails("marker must carry one of these fields", "type", m.Type,
+			"one of", strings.Join(s.anyOf, "|"))
 	}
 	if s.needsHead && strings.TrimSpace(m.Head) == "" {
 		return errors.WithDetails("marker requires a head token", "type", m.Type, "allowed", strings.Join(s.headEnum, "|"))

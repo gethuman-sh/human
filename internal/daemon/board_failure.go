@@ -221,8 +221,8 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, runID, agentNa
 	if handleSilenceReapExit(ctx, pmKey, stage, agentName, errorType, comments, commenter, retry, logger) {
 		return
 	}
-	body := failedHeaderFor(stage) + "\n" + appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
-	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+	diagnosis := appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
+	if err := postMarker(ctx, commenter, pmKey, failureMarker(failedTypeFor(stage), diagnosis)); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
 		// Without the failed marker the card does not derive to a failed state,
 		// which is precisely what every in-place retry transition requires — so
@@ -333,8 +333,9 @@ func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType
 			if verificationAgentAlive(pmKey, liveAgents, logger) {
 				return
 			}
-			body := ReviewFailedHeader + "\n" + failureMarkerBody(diagnose, agentName, errorType) +
-				"\n\n" + handoffSearchNote(BoardVerification, ReviewCompleteHeader)
+			failed := failureMarker(MarkerReviewFailed, failureMarkerBody(diagnose, agentName, errorType))
+			failed.Body = strings.TrimSpace(failed.Body + "\n\n" + handoffSearchNote(BoardVerification, ReviewCompleteHeader))
+			body := markerBody(failed)
 			if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
 				logger.Warn().Err(err).Str("pm", pmKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
 			}
@@ -354,12 +355,11 @@ func handleNeedsPersonExit(ctx context.Context, pmKey string, stage BoardStage, 
 	if kind != endingNeedsPerson {
 		return false
 	}
-	header := failedHeaderFor(stage)
-	if header == "" {
+	failedType := failedTypeFor(stage)
+	if failedType == "" {
 		return false
 	}
-	body := header + "\n" + needsPersonReason(reason)
-	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+	if err := postMarker(ctx, commenter, pmKey, failureMarker(failedType, needsPersonReason(reason))); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post needs-person marker")
 	}
 	return true
@@ -379,8 +379,8 @@ func handleSilenceReapExit(ctx context.Context, pmKey string, stage BoardStage, 
 	if !ok || !retry.enabled() {
 		return false
 	}
-	header := failedHeaderFor(stage)
-	if header == "" {
+	failedType := failedTypeFor(stage)
+	if failedType == "" {
 		return false
 	}
 	if silenceReapGaveUp(comments, stage) {
@@ -388,14 +388,13 @@ func handleSilenceReapExit(ctx context.Context, pmKey string, stage BoardStage, 
 	}
 	stops := silenceReapCount(comments, stage) + 1
 	if stops > MaxSilenceReaps {
-		body := header + "\n" + silenceReapGiveUpReason(stage, stops)
-		if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+		giveUp := failureMarker(failedType, silenceReapGiveUpReason(stage, stops))
+		if err := postMarker(ctx, commenter, pmKey, giveUp); err != nil {
 			logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap give-up marker")
 		}
 		return true
 	}
-	body := header + "\n" + silenceReapReason(idle)
-	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+	if err := postMarker(ctx, commenter, pmKey, failureMarker(failedType, silenceReapReason(idle))); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap marker")
 		return true
 	}
@@ -579,9 +578,9 @@ func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker
 	case ProbeAbsent:
 		// A definite phantom-commit handoff (a retry that never pushed its work) —
 		// the loud failure the ticket wants: red the card, do not review nothing.
-		body := ImplementationFailedHeader +
-			"\nhandoff names commits absent from branch " + branch + " on this machine — re-run the fix"
-		if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+		phantom := failureMarker(MarkerImplementationFailed,
+			"handoff names commits absent from branch "+branch+" on this machine — re-run the fix")
+		if err := postMarker(ctx, commenter, pmKey, phantom); err != nil {
 			logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post phantom-commit failure")
 		}
 		return
@@ -602,10 +601,12 @@ func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker
 // state, so the durable reconcile pass retries the check — an unreadable probe
 // is left/retried, never treated as evidence of missing work (SC-2403).
 func postHandoffCheckUnreadable(ctx context.Context, pmKey, branch, detail string, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) {
-	body := HandoffCheckUnreadableHeader +
-		"\ncould not verify the handoff for branch " + branch + " on this machine — " + detail +
-		"\nleaving the card for a daemon that can complete the check; it will be retried."
-	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
+	unreadable := marker.Marker{
+		Type: MarkerHandoffCheckUnreadable,
+		Body: "could not verify the handoff for branch " + branch + " on this machine — " + detail +
+			"\nleaving the card for a daemon that can complete the check; it will be retried.",
+	}
+	if err := postMarker(ctx, commenter, pmKey, unreadable); err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post handoff-check-unreadable diagnostic")
 	}
 }
