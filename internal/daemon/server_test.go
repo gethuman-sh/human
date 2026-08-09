@@ -1680,6 +1680,78 @@ func TestServer_HandleToolStats_EmptyDB(t *testing.T) {
 	assert.Equal(t, 0, ts.TotalEvents)
 }
 
+// --- handleSubagentStats tests (SC-3582) ---
+
+func TestServer_HandleSubagentStats_NilStore(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.StatsStore = nil
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"subagent-stats"}})
+	assert.Equal(t, 0, resp.ExitCode)
+	assert.Equal(t, "[]\n", resp.Stdout)
+}
+
+func TestServer_HandleSubagentStats_WithData(t *testing.T) {
+	token := "test-token"
+
+	store, err := stats.NewStatsStore(":memory:")
+	require.NoError(t, err)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	require.NoError(t, store.InsertEvent(ctx, hookevents.Event{
+		SessionID: "sess-1", EventName: "PreToolUse", ToolName: "Agent", Cwd: "/tmp",
+		Timestamp: time.Now().UTC().Add(-time.Minute), SubagentType: "human-planner", Model: "opus",
+	}))
+
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.StatsStore = store
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"subagent-stats"}})
+	assert.Equal(t, 0, resp.ExitCode)
+
+	var counts []stats.SubagentModelCount
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &counts))
+	require.Len(t, counts, 1)
+	assert.Equal(t, stats.SubagentModelCount{SubagentType: "human-planner", Model: "opus", Count: 1}, counts[0])
+}
+
+// Pins that the route applies the requested window rather than always using the
+// default one — a range that silently did nothing would answer the wrong question.
+func TestServer_HandleSubagentStats_HonoursRange(t *testing.T) {
+	token := "test-token"
+
+	store, err := stats.NewStatsStore(":memory:")
+	require.NoError(t, err)
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	require.NoError(t, store.InsertEvent(ctx, hookevents.Event{
+		SessionID: "sess-1", EventName: "PreToolUse", ToolName: "Agent", Cwd: "/tmp",
+		Timestamp: time.Now().UTC().Add(-72 * time.Hour), SubagentType: "human-planner", Model: "opus",
+	}))
+
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.StatsStore = store
+	})
+
+	day := sendRequest(t, addr, Request{Token: token, Args: []string{"subagent-stats", "--range", "24h"}})
+	assert.Equal(t, 0, day.ExitCode)
+	var dayCounts []stats.SubagentModelCount
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(day.Stdout)), &dayCounts))
+	assert.Empty(t, dayCounts, "a 3-day-old spawn is outside the 24h window")
+
+	week := sendRequest(t, addr, Request{Token: token, Args: []string{"subagent-stats", "--range", "7d"}})
+	assert.Equal(t, 0, week.ExitCode)
+	var weekCounts []stats.SubagentModelCount
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(week.Stdout)), &weekCounts))
+	require.Len(t, weekCounts, 1)
+	assert.Equal(t, 1, weekCounts[0].Count)
+}
+
 // --- routeIntercept tests ---
 
 func TestServer_RouteIntercept_EmptyArgs(t *testing.T) {

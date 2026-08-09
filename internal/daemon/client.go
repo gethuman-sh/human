@@ -790,6 +790,20 @@ func (c *Client) GetStatsOverview(rng string) (*StatsOverview, error) {
 	return &ov, nil
 }
 
+// QuerySubagentModels fetches sub-agent-type × model spawn counts from the
+// daemon for a range ("24h" | "7d" | "30d").
+func (c *Client) QuerySubagentModels(rng string) ([]stats.SubagentModelCount, error) {
+	out, err := c.RunRemoteCapture([]string{"subagent-stats", "--range", rng})
+	if err != nil {
+		return nil, err
+	}
+	var counts []stats.SubagentModelCount
+	if err := json.Unmarshal(out, &counts); err != nil {
+		return nil, errors.WrapWithDetails(err, "invalid subagent stats JSON")
+	}
+	return counts, nil
+}
+
 // GetTicketCost fetches the durable per-ticket cost/time rollup from the daemon.
 func (c *Client) GetTicketCost(key string) (costledger.TicketCost, error) {
 	out, err := c.RunRemoteCapture([]string{"ticket-cost", key})

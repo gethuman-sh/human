@@ -527,6 +527,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"confirm-status":      func() { s.handleConfirmStatus(conn, args[1:]) },
 		"tool-stats":          func() { s.handleToolStats(conn) },
 		"stats-overview":      func() { s.handleStatsOverview(conn, args[1:]) },
+		"subagent-stats":      func() { s.handleSubagentStats(conn, args[1:]) },
 		"audit-query":         func() { s.handleAuditQuery(conn, args[1:]) },
 		"agent-stop-async":    func() { s.handleAgentStopAsync(conn, args[1:]) },
 		"subscribe":           func() { s.handleSubscribe(conn) },
@@ -1203,6 +1204,34 @@ func (s *Server) handleStatsOverview(conn net.Conn, args []string) {
 		return
 	}
 	resp := Response{Stdout: string(data) + "\n"}
+	enc := json.NewEncoder(conn)
+	_ = enc.Encode(resp)
+}
+
+// handleSubagentStats returns sub-agent-type × model spawn counts for the
+// requested range as JSON. An unset stats store yields an empty array rather
+// than an error, the same degrade-to-empty contract the other read routes use.
+func (s *Server) handleSubagentStats(conn net.Conn, args []string) {
+	out := "[]\n"
+	if s.StatsStore != nil {
+		now := time.Now().UTC()
+		counts, err := s.StatsStore.QuerySubagentModels(
+			context.Background(), rangeSince(parseRangeArg(args), now), now)
+		if err != nil {
+			s.writeError(conn, err.Error(), 1)
+			return
+		}
+		if counts == nil {
+			counts = []stats.SubagentModelCount{} // an empty window marshals as [], not null
+		}
+		data, err := json.Marshal(counts)
+		if err != nil {
+			s.writeError(conn, err.Error(), 1)
+			return
+		}
+		out = string(data) + "\n"
+	}
+	resp := Response{Stdout: out}
 	enc := json.NewEncoder(conn)
 	_ = enc.Encode(resp)
 }
