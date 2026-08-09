@@ -2068,6 +2068,13 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 				// truncation is visible and never silently discards saved state.
 				MaxResults: 200,
 				IncludeAll: false,
+				// The board's refresh is a poll loop, so a backend may refuse a
+				// listing it cannot answer cheaply. GitHub refuses an unscoped
+				// one: it is a search across every issue the token can see, on
+				// the search endpoint's own quota ([SC-3888]). The refusal lands
+				// in this result's Err and reaches the board's banner, which is
+				// where the missing tickets would have been.
+				Unattended: true,
 			})
 			label := job.project
 			if label == "" {

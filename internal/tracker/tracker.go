@@ -531,6 +531,20 @@ type ListOptions struct {
 	MaxResults   int
 	IncludeAll   bool      // when false, only open/active issues are returned
 	UpdatedSince time.Time // when non-zero, only return issues updated after this time
+	// Unattended says this listing is a poll loop rather than a person waiting
+	// for an answer: the board's refresh, the reconcile sweep, the record sync.
+	//
+	// It exists because "everything I can see" costs wildly different things on
+	// different backends. An unscoped Shortcut listing is one cheap call; an
+	// unscoped GitHub listing is a search across every issue the token can see,
+	// on an endpoint with its own quota, which a loop exhausts in minutes
+	// ([SC-3888]). The caller knows whether it is a loop; only the backend knows
+	// what the request costs. So the caller declares the former and the backend
+	// decides the latter, rather than either guessing about the other.
+	//
+	// A hand-run command leaves this false: someone who typed `human list` is
+	// waiting for the answer and may have whatever they asked for.
+	Unattended bool
 }
 
 // Read interfaces (implemented now).

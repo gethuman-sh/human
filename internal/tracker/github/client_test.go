@@ -1329,3 +1329,54 @@ func TestListIssuesPage_searchTruncated(t *testing.T) {
 	assert.Equal(t, "octocat/hello-world#1", page.Issues[0].Key)
 	assert.True(t, page.Truncated)
 }
+
+// --- Unscoped listing on a schedule (SC-3888) ---
+
+// A poll loop asking for "everything" is refused before a request is made. An
+// unscoped GitHub listing is a search across every issue the token can see, on
+// the search endpoint's own quota — cheap to write in a config, expensive to
+// repeat every ninety seconds forever.
+func TestListIssuesPage_refusesAnUnscopedUnattendedListing(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer srv.Close()
+
+	_, err := New(srv.URL, "t").ListIssuesPage(context.Background(),
+		tracker.ListOptions{MaxResults: 50, Unattended: true})
+
+	require.Error(t, err)
+	assert.False(t, called, "the refusal must cost no request at all")
+	assert.Contains(t, err.Error(), "projects:", "the refusal has to carry the one line that fixes it")
+	assert.Contains(t, err.Error(), "forges:", "and the other answer, for an entry that only opens pull requests")
+}
+
+// The same listing, asked for by a person, is answered. Someone who typed the
+// command is waiting for it and may have what they asked for; the rule is about
+// timers, not about GitHub being off limits.
+func TestListIssuesPage_answersAnUnscopedListingForAPerson(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/search/issues", r.URL.Path)
+		_, _ = fmt.Fprint(w, `{"items": []}`)
+	}))
+	defer srv.Close()
+
+	_, err := New(srv.URL, "t").ListIssuesPage(context.Background(),
+		tracker.ListOptions{MaxResults: 50})
+	require.NoError(t, err)
+}
+
+// A scoped listing is cheap on any schedule: it is the repo issues endpoint,
+// not the search one, so the rule must not touch it.
+func TestListIssuesPage_scopedListingIsFineUnattended(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/repos/acme/web/issues", r.URL.Path)
+		_, _ = fmt.Fprint(w, `[]`)
+	}))
+	defer srv.Close()
+
+	_, err := New(srv.URL, "t").ListIssuesPage(context.Background(),
+		tracker.ListOptions{Project: "acme/web", MaxResults: 50, Unattended: true})
+	require.NoError(t, err)
+}

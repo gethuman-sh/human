@@ -212,3 +212,32 @@ func TestListingJobs_OneJobPerProjectCarryingTheDir(t *testing.T) {
 		assert.Equal(t, "/proj", j.dir)
 	}
 }
+
+// The board's listing declares itself a poll loop, so a backend can refuse work
+// it cannot answer cheaply. GitHub refuses an unscoped listing, and the refusal
+// arrives as this result's Err — which reaches the board's error banner, in the
+// place the missing tickets would have been ([SC-3888]).
+func TestListTrackerIssues_boardListingIsUnattended(t *testing.T) {
+	var got tracker.ListOptions
+	prov := &optionsCapturingProvider{seen: &got}
+
+	page, err := tracker.ListIssuesPage(context.Background(), prov, tracker.ListOptions{
+		MaxResults: 200,
+		Unattended: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, page.Issues)
+	assert.True(t, got.Unattended,
+		"a listing that does not say it is a loop cannot be protected from being one")
+}
+
+// optionsCapturingProvider records the ListOptions it was handed.
+type optionsCapturingProvider struct {
+	stubProvider
+	seen *tracker.ListOptions
+}
+
+func (p *optionsCapturingProvider) ListIssues(_ context.Context, opts tracker.ListOptions) ([]tracker.Issue, error) {
+	*p.seen = opts
+	return nil, nil
+}
