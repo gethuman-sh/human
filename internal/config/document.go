@@ -54,6 +54,10 @@ type Document struct {
 	path   string
 	exists bool
 	root   *yaml.Node
+	// inherited are the errors this file already had when it was read. They are
+	// remembered so a write can refuse what this change broke without holding
+	// an unrelated edit hostage to a fault that was already there — see Write.
+	inherited map[string]bool
 }
 
 // Load reads the config file dir resolves to. A missing file is not an error:
@@ -68,6 +72,7 @@ func Load(dir string) (*Document, error) {
 	doc := &Document{path: path, exists: exists}
 	if !exists {
 		doc.root = emptyRoot()
+		doc.rememberInheritedErrors()
 		return doc, nil
 	}
 	data, err := os.ReadFile(path) // #nosec G304 -- path resolved from the project's own config dir
@@ -79,6 +84,7 @@ func Load(dir string) (*Document, error) {
 		return nil, err
 	}
 	doc.root = root
+	doc.rememberInheritedErrors()
 	return doc, nil
 }
 
@@ -89,7 +95,9 @@ func Parse(data []byte, path string) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Document{path: path, exists: true, root: root}, nil
+	doc := &Document{path: path, exists: true, root: root}
+	doc.rememberInheritedErrors()
+	return doc, nil
 }
 
 func parseTree(data []byte, path string) (*yaml.Node, error) {
@@ -130,13 +138,54 @@ func (d *Document) Bytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Write saves the document atomically, keeping the file's existing permissions.
+// Write saves the document atomically, refusing to persist a fault this change
+// introduced.
 //
-// It deliberately does NOT validate first. A caller repairing a broken config
-// has to be able to save an intermediate state, and a writer that refuses
-// anything it disapproves of turns every rule into a wall. Validate is a
-// separate question, asked by whoever wants the answer.
+// This is what makes the rules invariants rather than opinions: a check that
+// only reports leaves the broken state reachable, and every broken state this
+// codebase actually produced was written by this tool — a migration that left a
+// tracker standing beside its own replacement, an entry carrying a role nothing
+// understands. Refusing at the write catches all of them, whatever wrote them.
+//
+// It refuses only what is NEW. A fault the file already had is not this edit's
+// doing, and holding someone's unrelated change hostage to it would turn every
+// rule into a wall — nobody should be unable to fix their Slack channel because
+// their GitHub entry is half migrated. That is also the honest reading of what
+// an invariant on a hand-written file can mean: this object cannot promise the
+// file was always sound, only that it did not make it worse.
+//
+// Warnings never block. A configuration that works and costs more than its
+// author meant is theirs to keep.
 func (d *Document) Write() error {
+	for _, p := range d.Validate() {
+		if p.Severity != Error || d.inherited[problemKey(p)] {
+			continue
+		}
+		return errors.WithDetails("refusing to write a change that breaks the configuration: "+p.Message,
+			"file", d.path, "rule", p.Rule)
+	}
+	return d.WriteAllowingErrors()
+}
+
+// problemKey identifies a problem across edits, so "the same fault as before"
+// can be told from a new one.
+func problemKey(p Problem) string {
+	return p.Rule + "\x00" + p.Section + "\x00" + p.Instance
+}
+
+// rememberInheritedErrors records what was already wrong when the file was read.
+func (d *Document) rememberInheritedErrors() {
+	d.inherited = map[string]bool{}
+	for _, p := range d.Validate() {
+		if p.Severity == Error {
+			d.inherited[problemKey(p)] = true
+		}
+	}
+}
+
+// WriteAllowingErrors saves without asking whether the result is sound. Use it
+// when the caller is mid-repair and knows the state it is passing through.
+func (d *Document) WriteAllowingErrors() error {
 	data, err := d.Bytes()
 	if err != nil {
 		return err
@@ -167,6 +216,9 @@ func (d *Document) Write() error {
 		return errors.WrapWithDetails(err, "replacing config file", "file", d.path)
 	}
 	d.exists = true
+	// A writer that leaves a stale parse behind for the next reader has made the
+	// cache a bug rather than an optimisation.
+	InvalidateCache(filepath.Dir(d.path))
 	return nil
 }
 
@@ -197,12 +249,17 @@ const UnifiedTrackerSection = "trackers"
 // view that pretended otherwise would be a second model of the same file, which
 // is the problem this type exists to end.
 type Tracker struct {
-	Section  string
-	Kind     string
-	Name     string
-	Role     string
-	Token    string
-	URL      string
+	Section string
+	Kind    string
+	Name    string
+	Role    string
+	Token   string
+	URL     string
+	// User is Jira's account email; Org is Azure DevOps' organization. Carried
+	// because a tracker cannot be written without them and a caller adding one
+	// should not have to reach past this type to say so.
+	User     string
+	Org      string
 	Projects []string
 }
 
@@ -248,6 +305,8 @@ func trackerFrom(entry *yaml.Node, section, kind string) Tracker {
 		Role:     scalarAt(entry, "role"),
 		Token:    scalarAt(entry, "token"),
 		URL:      scalarAt(entry, "url"),
+		User:     scalarAt(entry, "user"),
+		Org:      scalarAt(entry, "org"),
 		Projects: stringsAt(entry, "projects"),
 	}
 }
@@ -317,6 +376,8 @@ func (d *Document) AddTracker(t Tracker) error {
 	}
 	setScalar(entry, "name", t.Name)
 	setScalar(entry, "url", t.URL)
+	setScalar(entry, "user", t.User)
+	setScalar(entry, "org", t.Org)
 	setScalar(entry, "token", t.Token)
 	setScalar(entry, "role", t.Role)
 	setStrings(entry, "projects", t.Projects)
