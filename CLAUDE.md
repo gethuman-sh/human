@@ -22,6 +22,40 @@ are asked by default, and stopping short of a merged PR is the exception that
 needs a reason, not the norm. If something genuinely blocks the merge, finish
 everything else and say plainly what is blocked and why.
 
+# Communication
+
+Write for the reader this project has: an experienced engineer who is also the
+product manager. They know the stack, the tracker and the pipeline, so the
+preamble, the restatement of the request and the tour of what you just did are
+all waste.
+
+- **Answer first.** The finding, the verdict or the result in the opening line;
+  evidence after it, by the shortest path.
+- **Compress the style, never the substance** — the point of
+  [caveman](https://github.com/juliusbrussee/caveman): brain big, mouth small.
+  Code, commands, paths, keys, SHAs, error strings and numbers stay byte-for-byte;
+  the prose around them is what goes.
+- **Report the fact, not the process that produced it.** No narrating your own
+  care, deliberation or diligence: not "the one hole I deliberately did not
+  close", not "I checked the real exit code rather than trusting the wrapper",
+  not "fixed by extracting two stages that were each already one subject". The
+  reader wants the state of the code, not an account of how you arrived at it.
+- **Cut what the reader can already see.** No summarising a diff they will open,
+  no narrating tool calls, no restating their own question back to them.
+- **Never cut the limit** — what is still red, what you did not check, what you
+  assumed. State it as a fact ("SIGKILL still leaves no record"), never as a
+  confession about your own choices.
+- Plain engineer prose. Concision is fewer words, not clipped drama: no aphorisms,
+  no dramatic fragments ("The risk in flipping."), no rule-of-three flourishes.
+
+Forty-five words that were five:
+
+> gocyclo caught DeployBranch at 18, then 16 — the pre-push gate doing its job, and
+> worth saying plainly since the summary line said exit 0 while `make check` had
+> actually exited 2. I checked the real exit code rather than trusting the wrapper.
+
+`gocyclo: split DeployBranch, now 16.`
+
 # Tickets
 
 A ticket is **one artifact that evolves in place** — the same key from first thought
