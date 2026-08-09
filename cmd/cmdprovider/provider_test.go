@@ -1058,7 +1058,11 @@ func TestPRCreate_DefaultsRepoFromOrigin(t *testing.T) {
 			return []tracker.Instance{{
 				Name: "gh", Kind: "github", URL: srv.URL,
 				Provider: github.New(srv.URL, "t"),
-				Forge:    forgegithub.New(srv.URL, "t"),
+			}}, nil
+		},
+		LoadForges: func(_ string) ([]forge.Instance, error) {
+			return []forge.Instance{{
+				Name: "gh", Kind: "github", URL: srv.URL, Forge: forgegithub.New(srv.URL, "t"),
 			}}, nil
 		},
 		AuditLogPath: func() string { return "" },

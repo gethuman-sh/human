@@ -292,10 +292,12 @@ func TestFormatMissingCreds(t *testing.T) {
 	assert.Contains(t, msg, "https://example.com/tokens")
 }
 
-// TestDiagnoseTrackers_skipsForgeOnly locks the SC-1671 rule that a role: forge
-// githubs entry is not a tracker: it must not appear in the diagnosis that backs
-// `human tracker list` and tracker counting.
-func TestDiagnoseTrackers_skipsForgeOnly(t *testing.T) {
+// Diagnosis is about credentials, and every githubs: entry is a tracker whose
+// credentials can be diagnosed. It used to filter by role, because the section
+// could hold something that was not a tracker at all; forges live in their own
+// section now, so there is nothing here to filter ([SC-3876]). A stale
+// role: forge entry is rejected where it is loaded, not silently dropped here.
+func TestDiagnoseTrackers_diagnosesEveryGitHubEntry(t *testing.T) {
 	unmarshal := func(_, section string, target any) error {
 		if section == "githubs" {
 			entries := target.(*[]diagnoseEntry)
@@ -310,9 +312,13 @@ func TestDiagnoseTrackers_skipsForgeOnly(t *testing.T) {
 
 	statuses := DiagnoseTrackers(".", unmarshal, getenv)
 
+	names := make([]string, 0, len(statuses))
 	for _, s := range statuses {
-		assert.NotEqual(t, "prs", s.Name, "forge-only entry must be excluded from tracker diagnosis")
+		names = append(names, s.Name)
 	}
+	assert.Contains(t, names, "prs")
+	assert.Contains(t, names, "issues")
+
 	var tracker *TrackerStatus
 	for i := range statuses {
 		if statuses[i].Name == "issues" {

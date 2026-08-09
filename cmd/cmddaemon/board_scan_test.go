@@ -164,21 +164,18 @@ func projectsOf(jobs []fetchJob) []string {
 	return out
 }
 
-// The defect this pins: a githubs: entry with no role is the forge's
-// credentials, but it registers as a tracker, so every board refresh asked it
-// for a ticket listing. GitHub answers that by searching every issue the token
-// can see — a rate-limited endpoint — and the board then discards the result,
-// because only pm and engineering results are ever read. The one thing the
-// fetch could contribute was its failure, and a 403 rate-limit banner is what
-// the user saw, spread across a board whose real tracker was healthy.
-func TestListingJobs_SkipsARolelessGitHubEntry(t *testing.T) {
+// A GitHub entry is a tracker and is listed like one. It took SC-1671, SC-2132
+// and SC-3868 to decide when it was not — every one of those a symptom of the
+// section holding something that was not a tracker at all. The forge lives in
+// its own section now, so this list is trackers and the question is gone
+// ([SC-3876]).
+func TestListingJobs_ListsEveryConfiguredTracker(t *testing.T) {
 	jobs := listingJobs([]tracker.Instance{
-		{Name: "human", Kind: "github"},   // credentials for the forge
-		{Name: "human", Kind: "shortcut"}, // the PM tracker (role inferred)
+		{Name: "human", Kind: "github"},
+		{Name: "human", Kind: "shortcut"},
 	}, "/proj")
 
-	assert.Equal(t, []string{"shortcut:"}, projectsOf(jobs),
-		"only a backend that holds tickets is worth a request")
+	assert.Equal(t, []string{"github:", "shortcut:"}, projectsOf(jobs))
 }
 
 // A team whose tracker IS GitHub declares role: pm, and must be listed exactly
@@ -201,16 +198,6 @@ func TestListingJobs_KeepsARolelessNonForgeTracker(t *testing.T) {
 	}, "/proj")
 
 	assert.Equal(t, []string{"linear:", "jira:"}, projectsOf(jobs))
-}
-
-// An entry that declares itself a forge carries a nil Provider, so listing it
-// would not merely waste a request — it would dereference nothing ([SC-1671]).
-func TestListingJobs_SkipsADeclaredForge(t *testing.T) {
-	jobs := listingJobs([]tracker.Instance{
-		{Name: "human", Kind: "github", Role: tracker.RoleForge},
-	}, "/proj")
-
-	assert.Empty(t, jobs)
 }
 
 // One job per configured project, each carrying the project dir so a later

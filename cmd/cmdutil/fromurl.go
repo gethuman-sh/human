@@ -1,7 +1,6 @@
 package cmdutil
 
 import (
-	forgegithub "github.com/gethuman-sh/human/internal/forge/github"
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/tracker/azuredevops"
 	"github.com/gethuman-sh/human/internal/tracker/github"
@@ -54,8 +53,6 @@ func buildInstanceFromCreds(parsed *tracker.ParsedURL, creds tracker.CredResult)
 			Kind:     "github",
 			URL:      parsed.BaseURL,
 			Provider: github.New(parsed.BaseURL, creds.Available["TOKEN"]),
-			// GitHub is also a code forge — expose PR creation.
-			Forge: forgegithub.New(parsed.BaseURL, creds.Available["TOKEN"]),
 		}
 	case "gitlab":
 		return &tracker.Instance{

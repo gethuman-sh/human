@@ -389,7 +389,6 @@ func TestCanonicalCommitKey(t *testing.T) {
 func TestCommitKind(t *testing.T) {
 	shortcutInst := Instance{Name: "work", Kind: "shortcut"}
 	clickupInst := Instance{Name: "work", Kind: "clickup"}
-	forgeOnlyShortcut := Instance{Name: "forge", Kind: "shortcut", Role: RoleForge}
 
 	tests := []struct {
 		name      string
@@ -402,9 +401,6 @@ func TestCommitKind(t *testing.T) {
 		{name: "no instances", key: "90210", instances: nil, want: ""},
 		{name: "shortcut numeric", key: "1117", instances: []Instance{shortcutInst}, want: "shortcut"},
 		{name: "non-numeric key never attributed", key: "KAN-42", instances: []Instance{shortcutInst}, want: ""},
-		// A forge-only entry (Role: RoleForge) does not count as a configured
-		// Shortcut tracker for canonicalization purposes.
-		{name: "forge-only shortcut ignored", key: "90210", instances: []Instance{forgeOnlyShortcut}, want: ""},
 	}
 
 	for _, tt := range tests {

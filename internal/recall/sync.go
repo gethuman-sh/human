@@ -29,15 +29,8 @@ type SyncResult struct {
 func Sync(ctx context.Context, store Store, instances []tracker.Instance, fullSync bool, logger io.Writer) (*SyncResult, error) {
 	result := &SyncResult{}
 
-	// Forge-only entries (role: forge, or any forges: entry) carry a nil
-	// Provider — they exist only to open pull requests, not to list issues.
-	// Filter them out here rather than trust every caller to pre-filter, so a
-	// forge-only instance never reaches inst.Provider.ListIssues and panics
-	// ([SC-1671]).
-	trackers := tracker.TrackerInstances(instances)
-
-	for i := range trackers {
-		inst := &trackers[i]
+	for i := range instances {
+		inst := &instances[i]
 		if err := syncInstance(ctx, store, inst, fullSync, logger, result); err != nil {
 			_, _ = fmt.Fprintf(logger, "Error syncing %s (%s): %v\n", inst.Name, inst.Kind, err)
 			result.Errors++

@@ -10,7 +10,6 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/recall"
-	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/gethuman-sh/human/internal/vault"
 )
 
@@ -85,50 +84,6 @@ func recallSyncLoop(ctx context.Context, interval time.Duration, fullEvery int, 
 	}
 }
 
-// isTicketSource reports whether an unattended pass may ask this instance for a
-// ticket listing.
-//
-// A configured GitHub entry is not automatically a ticket source: it may exist
-// purely for pull requests, and it answers a ticket listing by searching every
-// issue the token can see — expensive, unrelated to this project, and rate
-// limited on a quota of its own. Observed live: the scheduled sync tripped
-// GitHub's secondary rate limit every pass while contributing nothing (SC-2132),
-// and the board's own listing then spent the search quota on a result no column
-// renders, surfacing only as a red rate-limit banner over healthy cards.
-//
-// An entry that DECLARES itself a forge is already excluded further in, where
-// tracker.IsTracker drops everything carrying role: forge (SC-1671). What is
-// left is the legacy shape that split predates: a bare githubs: entry with no
-// role, which still registers as a tracker and looks like one to every caller. A
-// role is what tells the two apart, so a roleless GitHub entry stays out of the
-// unattended passes. A team whose tracker IS GitHub sets role: pm and is listed
-// exactly as before.
-//
-// Confined to GitHub on purpose. Every other backend is configured because
-// someone keeps tickets in it, and only Shortcut infers a role for free — so
-// skipping roleless trackers in general would keep a Linear or Jira backlog out
-// of the record, and off the board, entirely.
-//
-// The manual `human index` is deliberately left alone: someone running it by
-// hand has said what they want indexed, and may well want a roleless tracker in
-// their record. Only the unattended passes are conservative.
-func isTicketSource(inst tracker.Instance) bool {
-	rolelessForgeCredentials := inst.Kind == "github" && inst.InferRole() == ""
-	return !rolelessForgeCredentials
-}
-
-// ticketSources keeps the instances that actually hold this project's tickets.
-func ticketSources(instances []tracker.Instance) []tracker.Instance {
-	out := instances[:0:0]
-	for _, inst := range instances {
-		if !isTicketSource(inst) {
-			continue
-		}
-		out = append(out, inst)
-	}
-	return out
-}
-
 // recallSyncOnce refreshes the record for every registered project. A failure
 // for one project or one tracker never stops the others: a stale record is
 // recoverable, a loop that died is not.
@@ -147,7 +102,6 @@ func recallSyncOnce(ctx context.Context, reg *daemon.ProjectRegistry, resolver *
 		// standing outage does not re-log on every 10m sync (SC-3322).
 		instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
 		logReportableLoadFailures(failures, entry.Dir, "recall sync")
-		instances = ticketSources(instances)
 		if len(instances) == 0 {
 			continue
 		}

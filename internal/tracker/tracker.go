@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
-	"github.com/gethuman-sh/human/internal/forge"
 )
 
 // githubIssueRe matches GitHub issue keys like "owner/repo#123".
@@ -97,9 +96,7 @@ func numericOffersShortcut(configuredKinds []string) bool {
 func instanceKinds(instances []Instance) []string {
 	kinds := make([]string, 0, len(instances))
 	for _, inst := range instances {
-		if inst.IsTracker() {
-			kinds = append(kinds, inst.Kind)
-		}
+		kinds = append(kinds, inst.Kind)
 	}
 	return kinds
 }
@@ -177,7 +174,7 @@ func CommitKind(key string, instances []Instance) string {
 		return ""
 	}
 	for _, inst := range instances {
-		if inst.Kind == "shortcut" && inst.IsTracker() {
+		if inst.Kind == "shortcut" {
 			return "shortcut"
 		}
 	}
@@ -213,9 +210,7 @@ func FindTracker(ctx context.Context, key string, instances []Instance) (*FindRe
 	var matching []Instance
 	seenKinds := make(map[string]bool)
 	for _, inst := range instances {
-		// A forge-only entry has no Provider to probe with GetIssue and owns no
-		// keys, so it must never be a candidate owner of a ticket key ([SC-1671]).
-		if candidateSet[inst.Kind] && inst.IsTracker() {
+		if candidateSet[inst.Kind] {
 			matching = append(matching, inst)
 			seenKinds[inst.Kind] = true
 		}
@@ -655,31 +650,7 @@ type Instance struct {
 	// (CreateIn set) — SC-1959.
 	CreateIn string
 	Provider Provider
-	// Forge is the optional code-host capability of this backend. It is set
-	// only for backends that also host pull requests (e.g. GitHub); pure issue
-	// trackers leave it nil. Kept separate from Provider so the tracker and
-	// forge clients can be built and evolve independently.
-	Forge forge.Forge
 }
-
-// RoleForge marks a config entry that carries only a code-forge capability
-// (opening pull requests) and no issue tracker. A forge-only entry — a githubs:
-// entry with role: forge, or any forges: entry — builds a tracker.Instance whose
-// Provider is nil, so it stays invisible to tracker resolution, kind counting and
-// issue listing while still serving `human pr create`. Without this split a
-// GitHub backend used purely as a forge counted as a second configured tracker
-// and broke keyless resolution on a project with exactly one real tracker
-// ([SC-1671]).
-const RoleForge = "forge"
-
-// IsTracker reports whether this instance exposes an issue-tracker capability.
-// It keys off the reserved forge role rather than a nil Provider: forge-only is a
-// declared intent (role: forge, or a forges: entry), and tracker resolution,
-// kind counting and issue listing all filter on it so a code-forge-only GitHub
-// entry is never mistaken for a second configured tracker ([SC-1671]). A
-// forge-only entry also carries a nil Provider, so the same guard keeps tracker
-// calls from dereferencing it.
-func (inst Instance) IsTracker() bool { return inst.Role != RoleForge }
 
 // FilingTarget returns where new tickets should be filed for this instance.
 // An explicit CreateIn always wins; otherwise it falls back to the first
@@ -694,20 +665,6 @@ func (inst Instance) FilingTarget() string {
 		return inst.Projects[0]
 	}
 	return ""
-}
-
-// TrackerInstances returns only the entries that expose a tracker capability,
-// dropping forge-only entries. Tracker resolution and counting run on this
-// filtered view so a code-forge-only GitHub entry is never mistaken for a second
-// configured tracker ([SC-1671]).
-func TrackerInstances(instances []Instance) []Instance {
-	filtered := make([]Instance, 0, len(instances))
-	for _, inst := range instances {
-		if inst.IsTracker() {
-			filtered = append(filtered, inst)
-		}
-	}
-	return filtered
 }
 
 // InferRole returns the instance's role. An explicit role always wins. With no
@@ -928,14 +885,13 @@ func Resolve(name string, instances []Instance, keyHint string) (*Instance, erro
 }
 
 // ResolveByKind returns the first tracker instance matching the given kind.
-// When name is non-empty, it further filters to that named instance. Forge-only
-// entries of the same kind are skipped — they carry no tracker Provider, so a
-// tracker command must never resolve onto one ([SC-1671]); forge resolution has
-// its own ResolveForgeByKind.
+// When name is non-empty, it further filters to that named instance. Forges of
+// the same kind are not here to be skipped: they are a separate domain with a
+// separate list and their own forge.Resolve ([SC-3876]).
 func ResolveByKind(kind string, instances []Instance, name string) (*Instance, error) {
 	var filtered []Instance
 	for _, inst := range instances {
-		if inst.Kind == kind && inst.IsTracker() {
+		if inst.Kind == kind {
 			filtered = append(filtered, inst)
 		}
 	}
@@ -956,35 +912,6 @@ func ResolveByKind(kind string, instances []Instance, name string) (*Instance, e
 	return &filtered[0], nil
 }
 
-// ResolveForgeByKind returns the instance of the given kind that carries a
-// code-forge capability. It selects on the Forge client rather than the tracker
-// Provider, so a forge-only entry (role: forge, nil Provider) resolves here while
-// a tracker-only entry of the same kind does not — the two capabilities can live
-// in separate config entries ([SC-1671]). When name is non-empty it further
-// filters to that named entry.
-func ResolveForgeByKind(kind string, instances []Instance, name string) (*Instance, error) {
-	var filtered []Instance
-	for _, inst := range instances {
-		if inst.Kind == kind && inst.Forge != nil {
-			filtered = append(filtered, inst)
-		}
-	}
-	if len(filtered) == 0 {
-		return nil, errors.WithDetails(
-			fmt.Sprintf("no %s forge configured, add a forges: entry or a githubs: entry to .humanconfig", kind),
-			"kind", kind)
-	}
-	if name != "" {
-		for i := range filtered {
-			if filtered[i].Name == name {
-				return &filtered[i], nil
-			}
-		}
-		return nil, errors.WithDetails("forge name not found for kind", "name", name, "kind", kind)
-	}
-	return &filtered[0], nil
-}
-
 // envHintForKind returns an example env var for the given tracker kind.
 func envHintForKind(kind string) string {
 	prefix := strings.ToUpper(kind)
@@ -998,13 +925,13 @@ func envHintForKind(kind string) string {
 	return prefix + "_<NAME>_" + suffix
 }
 
-// resolveByName finds exactly one tracker instance with the given name.
-// Forge-only entries are ignored: --tracker=<name> addresses a tracker, and a
-// name shared with a forge-only entry must still resolve the tracker ([SC-1671]).
+// resolveByName finds exactly one tracker instance with the given name. A forge
+// may share the name without colliding: --tracker=<name> addresses a tracker,
+// and forges are not in this list at all ([SC-3876]).
 func resolveByName(name string, instances []Instance) (*Instance, error) {
 	var matches []*Instance
 	for i := range instances {
-		if instances[i].Name == name && instances[i].IsTracker() {
+		if instances[i].Name == name {
 			matches = append(matches, &instances[i])
 		}
 	}
@@ -1022,10 +949,6 @@ func resolveByName(name string, instances []Instance) (*Instance, error) {
 // allows detecting a specific kind, instances are filtered to that kind first.
 // If multiple kinds remain an error is returned asking the user to specify --tracker.
 func resolveAutoDetect(instances []Instance, keyHint string) (*Instance, error) {
-	// Forge-only entries carry no tracker Provider, so they must not count toward
-	// auto-detection — a lone real tracker beside a forge-only GitHub entry must
-	// still resolve without --tracker ([SC-1671]).
-	instances = TrackerInstances(instances)
 	if len(instances) == 0 {
 		return nil, errors.WithDetails("no tracker configured, add jiras:, githubs:, gitlabs:, linears:, shortcuts:, or clickups: to .humanconfig.yaml")
 	}
