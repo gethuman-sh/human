@@ -2,16 +2,12 @@
 
 'human' enables AI to act as human developers.
 
-Phase 1: Interact with issue trackers with product management issues and create implementation tickets with an implementation plan.
-
 # Done Done
 
 The status of 'done done' means not only things are done,
 but nothing more needs to be done, e.g. change documentation,
 website, configuration and the project is in the state for 
 a new release.
-
-Whatever you do, the new state needs to be 'done done'.
 
 **Shipping is part of 'done done'.** Do not stop at a local branch and report the
 work as finished — a commit nobody can see is not done. Once `make check` is
@@ -237,6 +233,20 @@ Is it about interacting with JSON? use 'jq'
 Use 'sd' instead of 'sed'
 Is it about interacting with YAML or XML? use 'yq'
 For accessing Github **ALWAYS** use 'gh'
+
+# Worktrees
+
+**Working in the CLI (interactive Claude Code in this repo): ALWAYS work in a git worktree.**
+Several Claude Code sessions and pipeline agents run against this checkout at the same time,
+so the shared checkout is never yours alone. Editing, committing, stashing or checking out a
+branch there means changing files under another run — and its `git status` picks up your
+work as if it were its own.
+
+- `git worktree add <path> -b <branch>` before the first edit, one per change.
+- `git worktree lock <path>` right after creating it — another session's prune unregisters
+  an unlocked worktree mid-run and takes its git metadata with it.
+- Never `git add -A` on a directory; stage the files the change actually touches.
+- The shared checkout is for reading and for `git pull` only.
 
 # Commit
 
