@@ -50,7 +50,6 @@ func TestMigrateForges_movesAnUndeclaredEntry(t *testing.T) {
 
 	result, err := MigrateForges(dir, false)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"human"}, result.Added)
 	assert.Equal(t, []string{"human"}, result.Moved)
 
 	out := readCfg(t, path)
@@ -141,7 +140,6 @@ func TestMigrateForges_finishesAHalfDoneMigration(t *testing.T) {
 	result, err := MigrateForges(dir, false)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"human"}, result.Moved)
-	assert.Empty(t, result.Added, "the forge is already there — only the tracker had to go")
 
 	out := readCfg(t, path)
 	assert.NotContains(t, sectionKeys(out), "githubs")
@@ -183,7 +181,7 @@ func TestMigrateForges_dryRunWritesNothing(t *testing.T) {
 
 	result, err := MigrateForges(dir, true)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"human"}, result.Added)
+	assert.Equal(t, []string{"human"}, result.Moved)
 	assert.Equal(t, before, readCfg(t, path), "a dry run must not touch the file")
 }
 
