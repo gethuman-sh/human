@@ -130,11 +130,11 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	// (the board's own Close action, or a teammate on the tracker) can still
 	// arrive here via an in-flight fetch — it must never render as open work.
 	if statusType == tracker.CategoryDone || statusType == tracker.CategoryClosed {
-		return BoardCard{Stage: BoardHidden}
+		return cardAt(atStage(BoardHidden))
 	}
 
 	if isIdea {
-		return BoardCard{Stage: BoardIdeas}
+		return cardAt(atStage(BoardIdeas))
 	}
 
 	furthest := BoardBacklog
@@ -143,46 +143,52 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 
 	// First pass: find the furthest stage that any marker reaches.
 	for _, c := range comments {
-		stage, _, ok := ClassifyMarker(c.Body)
+		p, ok := fromMarker(c.Body)
 		if !ok {
 			continue
 		}
 		anyMarker = true
-		if r := stageRank[stage]; r > furthestRank {
+		if r := stageRank[p.Stage()]; r > furthestRank {
 			furthestRank = r
-			furthest = stage
+			furthest = p.Stage()
 		}
 	}
 
 	_, hasPlan := latestPlanComment(comments)
 	hasRelated := hasCompletedRelatedRecord(comments)
 
-	var state BoardState
+	placed := atStage(furthest)
 	var latest tracker.Comment
 	if anyMarker {
 		// Second pass: within the furthest stage, the latest marker decides state.
+		var state BoardState
 		state, latest = latestStateInStage(comments, furthest)
+		placed = placed.inStage(state)
 
 		// A furthest-stage failure is authoritative only while it is the ticket's
 		// newest marker. A strictly-newer marker anywhere — a re-implementation
 		// restarting from an earlier stage (ticket 881) or a later deploy — retires
 		// the stale red; the card follows the ticket's current activity rather than a
 		// terminal failure the pipeline already moved past (SC-910).
-		if supersededByNewerMarker(state, furthest, comments) {
-			if newest, newestStage, newestState, ok := latestMarkerOverall(comments); ok && commentNewer(newest, latest) {
-				furthest, state, latest = newestStage, newestState, newest
+		if supersededByNewerMarker(placed, comments) {
+			if newest, ok := latestMarkerOverall(comments); ok && commentNewer(newest.comment, latest) {
+				placed, latest = placed.supersededBy(newest.placement), newest.comment
 			}
 		}
 	}
 
-	furthest, state, latest, anyMarker = applyStateOverrides(comments, furthest, state, latest, anyMarker)
+	placed, latest, anyMarker = applyStateOverrides(comments, placed, latest, anyMarker)
 
 	if !anyMarker {
 		// No pipeline activity yet: the open ticket waits in Backlog.
-		return BoardCard{Stage: BoardBacklog, HasPlan: hasPlan, HasRelatedRecord: hasRelated}
+		card := cardAt(atStage(BoardBacklog))
+		card.HasPlan, card.HasRelatedRecord = hasPlan, hasRelated
+		return card
 	}
 
-	card := BoardCard{Stage: furthest, State: state, HasPlan: hasPlan, HasRelatedRecord: hasRelated, StageEnteredAt: latest.Created, StageDaemonID: ParseDaemonID(latest.Body)}
+	card := cardAt(placed)
+	card.HasPlan, card.HasRelatedRecord = hasPlan, hasRelated
+	card.StageEnteredAt, card.StageDaemonID = latest.Created, ParseDaemonID(latest.Body)
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
@@ -192,7 +198,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		card.ShippedPartial = true
 		card.ShippedPartialFollowOn = followOn
 	}
-	attachFailureAndResume(&card, state, latest)
+	attachFailureAndResume(&card, card.placement().State(), latest)
 	card.DeployPhase = deployPhaseFor(card, comments)
 	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
 	attachOpenOptions(&card, comments)
@@ -238,7 +244,7 @@ func ticketReviewStop(deciding tracker.Comment) (decision, linked, reasoning str
 // parent's (SC-2596 pushed DeriveBoardCard over the gocyclo threshold;
 // extracting keeps the override chain readable in one place without
 // re-flattening it into the main derivation).
-func applyStateOverrides(comments []tracker.Comment, furthest BoardStage, state BoardState, latest tracker.Comment, anyMarker bool) (BoardStage, BoardState, tracker.Comment, bool) {
+func applyStateOverrides(comments []tracker.Comment, placed Placement, latest tracker.Comment, anyMarker bool) (Placement, tracker.Comment, bool) {
 	// A recorded decision ([human:option-chosen]) that no started/terminal marker
 	// has yet superseded: the chosen stage is (re)queued while the relaunch's
 	// started marker is pending or its launch was deferred to a healthy daemon.
@@ -246,10 +252,12 @@ func applyStateOverrides(comments []tracker.Comment, furthest BoardStage, state 
 	// stuck-running pass falsely reds it (SC-1320). Placed after the SC-910
 	// supersede so a decision strictly newer than a stale failure still wins.
 	if qStage, qChosen, ok := optionChosenQueued(comments); ok {
-		furthest, state, latest, anyMarker = qStage, BoardQueued, qChosen, true
+		placed, latest, anyMarker = queuedAt(qStage), qChosen, true
 	}
 
-	state = pauseOnOpenOptions(state, furthest, comments)
+	if stagePausedOnOptions(comments, placed.Stage()) {
+		placed = placed.pausedOnDecision()
+	}
 
 	// A terminal determination is the last word about the whole ticket: the work
 	// is already merged, no fix is warranted, a gate stopped the ticket, or the
@@ -263,38 +271,11 @@ func applyStateOverrides(comments []tracker.Comment, furthest BoardStage, state 
 	// carrying the stop decision for a gate's rejection. Placed after the
 	// decision-queue override so a determination strictly newer than a stale
 	// option-chosen still wins.
-	if t, tStage, tState, ok := newestTerminalDetermination(comments); ok {
-		furthest, state, latest, anyMarker = tStage, tState, t, true
+	if terminal, ok := newestTerminalDetermination(comments); ok {
+		placed, latest, anyMarker = placed.determinedBy(terminal.placement), terminal.comment, true
 	}
 
-	return furthest, state, latest, anyMarker
-}
-
-// pauseOnOpenOptions turns a running OR failed state into a waiting-on-human
-// state when an open [human:options] block names the card's own stage or an
-// earlier stage the answer would rework: the card is not working, and it is
-// not dead either — it is waiting for a human. Server-side twin of the
-// client's decision-badge branch. Uses the same at-or-before stage-rank
-// predicate as the failure watcher and reconcile pass (stagePausedOnOptions),
-// so a block naming a stage the card has not yet reached — a stale or
-// target-relaunch block — never clears an active run (SC-1669).
-//
-// Accepting BoardFailed alongside BoardRunning is the residual safety net
-// (SC-1957): a card can reach this point already reddened by a *-failed
-// marker posted before the recovery machinery's own relaunch consumed the
-// question (openOptionsBlock only treats a later BoardRunning marker or an
-// option-chosen as consumption — a *-failed marker does not). Surfacing that
-// combination as waiting-on-human rather than a plain failure is exactly what
-// makes an otherwise-erased question visible. This also subsumes the former
-// SC-1857 done-stage PR-loop escalation special case: the escalation's block
-// names the implementation stage while the card's furthest stage is done, so
-// the general at-or-before rank rule (rank 3 <= rank 5) pauses it the same way
-// the former bespoke escalation check used to.
-func pauseOnOpenOptions(state BoardState, furthest BoardStage, comments []tracker.Comment) BoardState {
-	if (state == BoardRunning || state == BoardFailed) && stagePausedOnOptions(comments, furthest) {
-		return BoardIdle
-	}
-	return state
+	return placed, latest, anyMarker
 }
 
 // supersededByNewerMarker reports whether the furthest-stage marker may be
@@ -303,13 +284,13 @@ func pauseOnOpenOptions(state BoardState, furthest BoardStage, comments []tracke
 // chosen rebuild has restarted from an earlier stage — its strictly-newer
 // implementation-started marker retires the loop marker so the card leaves the
 // done lane back to Building.
-func supersededByNewerMarker(state BoardState, furthest BoardStage, comments []tracker.Comment) bool {
+func supersededByNewerMarker(placed Placement, comments []tracker.Comment) bool {
 	// An outage marker is transient — a newer *-started marker from the reconcile
 	// relaunch retires it, exactly like a stale failure (SC-2307). Without this
 	// the card would sit on "machine down" even after the substrate returned and
 	// the relaunched agent posted its started marker.
-	return state == BoardFailed || state == BoardOutage ||
-		(furthest == BoardDoneStage && doneStageLoopActive(comments))
+	return placed.State() == BoardFailed || placed.State() == BoardOutage ||
+		(placed.Stage() == BoardDoneStage && doneStageLoopActive(comments))
 }
 
 // deployPhaseFor names the done-stage sub-phase of a running card: "pr-review"
@@ -411,39 +392,37 @@ func latestStateInStage(comments []tracker.Comment, stage BoardStage) (BoardStat
 	var haveLatest bool
 	var latest tracker.Comment
 	for _, c := range comments {
-		s, st, ok := ClassifyMarker(c.Body)
-		if !ok || s != stage {
+		p, ok := fromMarker(c.Body)
+		if !ok || p.Stage() != stage {
 			continue
 		}
 		if !haveLatest || commentNewer(c, latest) {
 			latest = c
 			haveLatest = true
-			state = st
+			state = p.State()
 		}
 	}
 	return state, latest
 }
 
-// latestMarkerOverall returns the newest board marker across ALL stages — its
-// comment, stage, and state — and whether any marker exists. Recency is global
-// (by Created), so a re-implementation restarted in an earlier stage or a later
-// deploy is seen even when the furthest stage's own newest marker is a stale
-// failure (SC-910).
-func latestMarkerOverall(comments []tracker.Comment) (tracker.Comment, BoardStage, BoardState, bool) {
-	var latest tracker.Comment
-	var stage BoardStage
-	var state BoardState
+// latestMarkerOverall returns the newest board marker across ALL stages — the
+// placement it classifies to and the comment carrying it — and whether any
+// marker exists. Recency is global (by Created), so a re-implementation
+// restarted in an earlier stage or a later deploy is seen even when the
+// furthest stage's own newest marker is a stale failure (SC-910).
+func latestMarkerOverall(comments []tracker.Comment) (markerPlacement, bool) {
+	var latest markerPlacement
 	var have bool
 	for _, c := range comments {
-		st, s, ok := ClassifyMarker(c.Body)
+		p, ok := fromMarker(c.Body)
 		if !ok {
 			continue
 		}
-		if !have || commentNewer(c, latest) {
-			latest, stage, state, have = c, st, s, true
+		if !have || commentNewer(c, latest.comment) {
+			latest, have = markerPlacement{placement: p, comment: c}, true
 		}
 	}
-	return latest, stage, state, have
+	return latest, have
 }
 
 // hasPlanEvidence reports whether the ticket has been planned. Two proofs, one
@@ -475,12 +454,12 @@ func hasPlanEvidence(comments []tracker.Comment) bool {
 // card's deciding `latest`, so the reason, the posting daemon, the stage-entered
 // time and a gate's StopDecision/StopReasoning all come off the determination
 // instead of the phantom.
-func newestTerminalDetermination(comments []tracker.Comment) (tracker.Comment, BoardStage, BoardState, bool) {
-	newest, stage, state, ok := latestMarkerOverall(comments)
-	if !ok || !isTerminalResolution(newest.Body) {
-		return tracker.Comment{}, "", "", false
+func newestTerminalDetermination(comments []tracker.Comment) (markerPlacement, bool) {
+	newest, ok := latestMarkerOverall(comments)
+	if !ok || !isTerminalResolution(newest.comment.Body) {
+		return markerPlacement{}, false
 	}
-	return newest, stage, state, true
+	return newest, true
 }
 
 // latestPlanComment returns the body of the newest [human:plan] comment with
