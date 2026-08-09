@@ -96,16 +96,32 @@ function fmtDuration(ms) {
     const h = Math.floor(m / 60);
     return `${h}h ${m % 60}m`;
 }
+// elapsedLabel names what the current-stage clock actually measures once the
+// card's lifecycle state says it is running. "running" is a claim about a
+// live process: when the viewer can see there is none — the agent died, or
+// the stage belongs to another machine — the same number must be labelled
+// honestly, or a card whose agent has been dead for fourteen hours reads as
+// the busiest one on the board (SC-3569). Unknown liveness keeps today's
+// word, because absence of a signal is not proof.
+function elapsedLabel(agentLiveness) {
+    if (agentLiveness === "dead")
+        return "since last activity";
+    if (agentLiveness === "elsewhere")
+        return "— on another machine";
+    return "running";
+}
 // stageClockLine phrases the current-stage clock for the state the card is
 // actually in. Only a running card is running; every other state gets the same
 // measurement stated as what it is — when the stage was entered — so the number
-// stops asserting work is in progress behind it. An absent state (a payload
-// from a daemon predating the field) keeps the original wording.
-function stageClockLine(stage, state, elapsedMs) {
+// stops asserting work is in progress behind it (SC-4151 B3). A card whose
+// lifecycle state says "running" may still have no live agent behind it —
+// agentLiveness refines the word for that case (SC-3569). An absent state (a
+// payload from a daemon predating the field) keeps the original wording.
+function stageClockLine(stage, state, agentLiveness, elapsedMs) {
     const elapsed = escapeText(fmtDuration(Math.max(0, elapsedMs)));
     const named = escapeText(stage ?? "");
     if (state === undefined || state === "running") {
-        return `Current stage (${named}): ${elapsed} running`;
+        return `Current stage (${named}): ${elapsed} ${elapsedLabel(agentLiveness)}`;
     }
     return `Stage (${named}): entered ${elapsed} ago`;
 }
@@ -113,8 +129,9 @@ function stageClockLine(stage, state, elapsedMs) {
 // split) and elapsed time (per-stage plus the live current-stage clock). A ticket
 // with no recorded spend says so plainly rather than showing $0.00 (SC-2847
 // criterion 5). currentStage/stageEnteredAt come from the open card; nowMs is
-// injected for tests.
-export function buildCostSection(c, currentStage, stageEnteredAt, nowMs, currentState) {
+// injected for tests. agentLiveness comes from the open card's viewer-side
+// overlay; absent means unknown and keeps the pre-SC-3569 wording.
+export function buildCostSection(c, currentStage, stageEnteredAt, nowMs, currentState, agentLiveness) {
     if (!c || !c.hasSpend) {
         // "No spend" is a claim about the TICKET and may only be made when the
         // ledger was actually read. An older daemon (no ledgerRead field) still
@@ -149,7 +166,7 @@ export function buildCostSection(c, currentStage, stageEnteredAt, nowMs, current
     // more impressive its number (SC-4151 B3). The clock stays; only the state
     // that earns the word "running" keeps it.
     const curElapsed = stageEnteredAt
-        ? `<div class="detail-cost-current">${stageClockLine(currentStage, currentState, nowMs - Date.parse(stageEnteredAt))}</div>`
+        ? `<div class="detail-cost-current">${stageClockLine(currentStage, currentState, agentLiveness, nowMs - Date.parse(stageEnteredAt))}</div>`
         : "";
     // The per-stage rows carry the same honesty as the total: with nothing
     // measured anywhere, a stage's "$0.0000" is the same false claim in smaller
