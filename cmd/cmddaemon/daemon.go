@@ -1992,6 +1992,40 @@ func logReportableLoadFailures(failures []error, dir, subsystem string) {
 	}
 }
 
+// listingJobs is the (instance, project) work one registered project contributes
+// to a board listing — the decision of what the daemon asks a tracker for, kept
+// apart from the fetching so it can be checked without a tracker or a disk.
+//
+// Two entries are skipped, for the same underlying reason: they hold no tickets,
+// so asking them costs a request and answers nothing.
+//   - A forge-only entry (role: forge) owns no projects and no issues ([SC-1671]).
+//   - A GitHub entry that never declared a role is credentials for the forge, not
+//     a ticket source (isTicketSource). Asked anyway it searches every issue its
+//     token can see, on a rate-limited endpoint, and the board discards the
+//     answer — only pm and engineering results are ever read. The one thing such
+//     a fetch can contribute is its error, and that is what reached the user: a
+//     403 rate-limit banner across a board whose real tracker was healthy.
+//
+// An instance with no configured projects still yields one job, with an empty
+// project, because most trackers read that as "everything I can see" — which is
+// the whole listing for a single-project backend.
+func listingJobs(instances []tracker.Instance, dir string) []fetchJob {
+	var jobs []fetchJob
+	for _, inst := range instances {
+		if !inst.IsTracker() || !isTicketSource(inst) {
+			continue
+		}
+		projects := inst.Projects
+		if len(projects) == 0 {
+			projects = []string{""}
+		}
+		for _, p := range projects {
+			jobs = append(jobs, fetchJob{inst: inst, project: p, dir: dir})
+		}
+	}
+	return jobs
+}
+
 // listTrackerIssues collects every (instance, project) pair from the registry and
 // fetches their open issues in parallel (Phase 1). It returns the jobs aligned 1:1
 // with the results so a later comment scan can recover each result's provider
@@ -2010,21 +2044,7 @@ func listTrackerIssues(reg *daemon.ProjectRegistry, resolver *vault.Resolver) ([
 		instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
 		logReportableLoadFailures(failures, entry.Dir, "board listing")
 		loadFailures = append(loadFailures, failures...)
-		for _, inst := range instances {
-			// A forge-only entry owns no projects and no issues; querying it with
-			// an empty project on every refresh does work whose result is
-			// meaningless, so it is never listed ([SC-1671]).
-			if !inst.IsTracker() {
-				continue
-			}
-			projects := inst.Projects
-			if len(projects) == 0 {
-				projects = []string{""}
-			}
-			for _, p := range projects {
-				jobs = append(jobs, fetchJob{inst: inst, project: p, dir: entry.Dir})
-			}
-		}
+		jobs = append(jobs, listingJobs(instances, entry.Dir)...)
 	}
 
 	// Fetch all tracker/project combinations in parallel.
