@@ -416,6 +416,15 @@ func deployEngineRunning(comments []tracker.Comment) bool {
 // marker would otherwise have caused (SC-3852). Bounded, not exempt: past the
 // engine's own timeout plus the ordinary grace, a deploy that never returned is
 // as dead as any other stage and is redded as usual.
+//
+// Known gap, not closed here: [human:deploy-started] is posted (StartDeploy,
+// deploy_entry.go) BEFORE DeployBranch's own "queued" log and its
+// deployGate.Lock() — so the ticket's StageEnteredAt and deployTimeout's clock
+// do not start together. A deploy queued behind another for long enough can
+// still exceed this grace while perfectly healthy and be falsely reddened.
+// Closing it precisely needs DeployBranch to signal back when it actually
+// leaves the queue, which means touching its sequence — reserved for SC-4027,
+// which lands beside this ticket rather than in it (SC-3852 review).
 func stuckGraceFor(derived BoardCard, comments []tracker.Comment) time.Duration {
 	if derived.Stage == BoardDoneStage && deployEngineRunning(comments) {
 		return deployTimeout + StuckRunningGrace
