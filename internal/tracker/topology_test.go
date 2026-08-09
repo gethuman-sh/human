@@ -60,6 +60,9 @@ func TestResolveTopology_splitOnExplicitEngineering(t *testing.T) {
 	assert.Equal(t, "eng", top.Engineering.Name)
 }
 
+// Two undeclared trackers are ambiguous whatever they are. A Shortcut among them
+// used to win by kind, which is exactly the privilege this rule no longer grants:
+// the board says it cannot tell rather than picking one and being quietly wrong.
 func TestResolveTopology_singleWithoutEngineeringRole(t *testing.T) {
 	instances := []Instance{
 		{Name: "board", Kind: "shortcut"},
@@ -67,9 +70,23 @@ func TestResolveTopology_singleWithoutEngineeringRole(t *testing.T) {
 	}
 	top := ResolveTopology(instances)
 	assert.Equal(t, "single", top.Mode)
-	require.NotNil(t, top.PM)
-	assert.Equal(t, "board", top.PM.Name)
+	assert.Nil(t, top.PM, "neither declared pm, and neither kind earns it")
 	assert.Nil(t, top.Engineering)
+}
+
+// Declaring resolves it, on any backend — which is the whole remedy the board
+// notice points at.
+func TestResolveTopology_declaredPMWinsOnAnyKind(t *testing.T) {
+	for _, kind := range []string{"shortcut", "jira", "linear", "github", "gitlab", "azuredevops", "clickup"} {
+		t.Run(kind, func(t *testing.T) {
+			top := ResolveTopology([]Instance{
+				{Name: "board", Kind: kind, Role: "pm"},
+				{Name: "other", Kind: "linear"},
+			})
+			require.NotNil(t, top.PM)
+			assert.Equal(t, "board", top.PM.Name)
+		})
+	}
 }
 
 func TestResolveTopology_pmFallbackToSoleTracker(t *testing.T) {
@@ -92,8 +109,8 @@ func TestResolveTopology_pmAmbiguousStaysNil(t *testing.T) {
 
 func TestResolveTopology_firstRoleWins(t *testing.T) {
 	instances := []Instance{
-		{Name: "pm1", Kind: "shortcut"},
-		{Name: "pm2", Kind: "shortcut"},
+		{Name: "pm1", Kind: "shortcut", Role: "pm"},
+		{Name: "pm2", Kind: "shortcut", Role: "pm"},
 		{Name: "eng1", Kind: "linear", Role: "engineering"},
 		{Name: "eng2", Kind: "github", Role: "engineering"},
 	}
