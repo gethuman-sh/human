@@ -79,7 +79,7 @@ func TestRunDeploy_derivesBranchAndTitleFromHandoffAndTicket(t *testing.T) {
 	}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "")
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
 	call := (*calls)[0]
@@ -96,7 +96,7 @@ func TestRunDeploy_explicitFlagsSkipDerivation(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "Custom title")
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "Custom title", false)
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
 	assert.Equal(t, "release/x", (*calls)[0].branch)
@@ -108,7 +108,7 @@ func TestRunDeploy_noHandoffNoBranchFails(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "")
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no review handoff")
 	assert.Empty(t, *calls)
@@ -122,7 +122,7 @@ func TestRunDeploy_handoffWithoutBranchFails(t *testing.T) {
 	}}}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "")
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no branch")
 	assert.Empty(t, *calls)
@@ -133,7 +133,7 @@ func TestRunDeploy_engineErrorPropagates(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T")
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false)
 	require.Error(t, err)
 	assert.NotContains(t, buf.String(), "Deployed")
 }

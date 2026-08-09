@@ -97,6 +97,13 @@ type PRRequest struct {
 type PRResult struct {
 	URL    string
 	Number int
+	// Draft reports that the pull request the gate is about to ship is in the
+	// forge's draft state. It is carried out of PR creation/adoption because the
+	// deploy gate cannot otherwise know: the review loop opens its PR draft on
+	// purpose, and an adopted PR is returned as-is, so a deploy driven by anything
+	// other than the loop's own approval reaches the merge with no idea the change
+	// is still held for review (SC-4027).
+	Draft bool
 }
 
 // deployWaitHeartbeat is how many CI polls pass between "still running" log
@@ -173,6 +180,13 @@ type BoardTransitionDeps struct {
 	// Empty leaves markers un-signed (the signer's empty-machine no-op), so an
 	// un-provisioned daemon still functions.
 	DaemonID string
+	// MergeDraftPR authorizes the deploy gate to un-draft a pull request the
+	// machine review loop is still holding, and ship it. It is a person saying "I
+	// have judged this reviewed enough", so it is set only from an explicit
+	// gesture (`human deploy --ready`) and never by an automatic path: the draft is
+	// the interlock that stops a half-reviewed change merging when the daemon's own
+	// gate fails, and a machine that could clear its own interlock has none.
+	MergeDraftPR bool
 	// Logger records best-effort post-merge failures (e.g. a failed automated
 	// close) and the deploy gate's progress. The zero value is a safe no-op
 	// writer, so an un-wired path stays valid without a logger — but wire one
@@ -1295,6 +1309,25 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 			err))
 	}
 	logger.Info().Int("pr", res.Number).Str("url", res.URL).Msg("deploy: pull request open")
+	// A draft is decided before the CI gate, not at the merge. The review loop
+	// opens its PR draft so a half-reviewed change cannot be merged even if the
+	// daemon's own gate failed, and only the loop's approval un-drafts it — so a
+	// deploy arriving by any other route (the CLI, the board's Deploy, a deploy-fix
+	// re-run) would spend the whole CI gate and then be refused by the forge with a
+	// 405 that named nothing about drafts (SC-4027). Say what is holding the
+	// change, and where the interlock is deliberately overridden, say that instead.
+	if res.Draft {
+		if !d.MergeDraftPR {
+			return d.deployFailed(pmKey, res.URL, deployReason(
+				"this pull request is held in draft by the machine review loop, so the forge will not merge it — it un-drafts itself when the review approves; to ship it without that, re-run the deploy with --ready",
+				nil))
+		}
+		logger.Info().Int("pr", res.Number).Msg("deploy: un-drafting the reviewed PR on explicit instruction")
+		if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, res.Number); err != nil {
+			return d.deployFailed(pmKey, res.URL, deployReason(
+				"the pull request could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
+		}
+	}
 	if err := d.waitForChecks(ctx, res); err != nil {
 		if ciFailureFixable(err) {
 			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
@@ -1558,6 +1591,12 @@ func isTransientMergeRefusal(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+	// A draft refusal is also a 405, and it is the opposite of transient: nothing
+	// about the branch changes while it is retried, so matching it here spent the
+	// full retry window on a refusal that was never going to lift (SC-4027).
+	if strings.Contains(msg, "still a draft") {
+		return false
+	}
 	return strings.Contains(msg, "not mergeable") || strings.Contains(msg, "405")
 }
 

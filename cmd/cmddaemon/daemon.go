@@ -2655,7 +2655,10 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 	if err != nil {
 		return daemon.PRResult{}, errors.WrapWithDetails(err, "opening pull request", "repo", repo, "head", req.Branch)
 	}
-	return daemon.PRResult{URL: pr.URL, Number: pr.Number}, nil
+	// pr.Draft is the ADOPTED PR's state, not the requested one: an existing open
+	// PR is returned as-is, so a draft opened by the review loop stays draft here
+	// and the deploy gate needs to know before it reaches the merge (SC-4027).
+	return daemon.PRResult{URL: pr.URL, Number: pr.Number, Draft: pr.Draft}, nil
 }
 
 // pushBranch pushes branch to origin, lease-pushing against the current remote

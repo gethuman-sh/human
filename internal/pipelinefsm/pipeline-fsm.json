@@ -810,7 +810,7 @@
       "dst": "ci-gate",
       "actor": "daemon",
       "where": "board_transition.go AdvancePRLoop",
-      "doc": "The reviewer approved. The draft is un-drafted and the item goes to the CI gate. Recorded as a marker like every other outcome of the loop — success used to be the only transition here that left no trace, so a reader could not tell an approved review whose merge is running from a review still in flight. It also retires the loop sub-phase, so the badge stops reading 'PR review…' through the CI gate, rebase and merge.",
+      "doc": "The reviewer approved. The draft is un-drafted and the item goes to the CI gate. This is the approval route, and it is not the only way in: the deploy gate itself now refuses a pull request it finds still in draft, before the CI wait rather than at the merge, and says the review loop is holding it — a person who has judged it reviewed enough overrides that with `human deploy --ready`, which un-drafts and ships (SC-4027). No automatic path clears the interlock, because a machine that can clear its own interlock has none. Recorded as a marker like every other outcome of the loop — success used to be the only transition here that left no trace, so a reader could not tell an approved review whose merge is running from a review still in flight. It also retires the loop sub-phase, so the badge stops reading 'PR review…' through the CI gate, rebase and merge.",
       "marker": "[human:pr-review-passed]"
     },
     {
