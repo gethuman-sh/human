@@ -483,8 +483,9 @@ func IsSecurityType(s string) bool {
 	return isSecurityToken(s)
 }
 
-// IdeaLabel is the canonical label marking a ticket as a raw idea — the first
-// maturity stage of the evolving-ticket lifecycle. It is namespaced so it
+// IdeaLabel is the canonical label marking a ticket as a raw idea — the first of
+// the three forms an evolving ticket takes (idea, pm, planned). "Stage" is not
+// the word for it: that is what the board is running. It is namespaced so it
 // cannot collide with a team's existing labels; classification additionally
 // accepts the bare token (see IsIdea) so existing "idea" conventions count.
 const IdeaLabel = "human/idea"

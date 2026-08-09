@@ -24,11 +24,18 @@ everything else and say plainly what is blocked and why.
 
 # Tickets
 
-A ticket is **one artifact that evolves in place** through maturity stages (kinds):
+A ticket is **one artifact that evolves in place** — the same key from first thought
+to merge. It matures through three forms:
 
 1. **idea** — a raw thought, captured as a real ticket carrying the `human/idea` label (bare `idea` also classifies). Title-only is fine.
 2. **pm** — promotion: the ideation agent rewrites title/description into product language and removes the idea label. Same key forever; PM ticket descriptions stay product language, no implementation detail.
 3. **planned** — the engineering plan attaches to the ticket as a `[human:plan]` marker comment (full markdown; attach with `human marker post <KEY> plan --body-file -`, read it back with `human plan show <KEY>`). Re-planning posts a new plan comment; the latest wins.
+
+Those three are the ticket's **maturity**, and two neighbouring words are not it: a
+tracker's **kind** is its provider (`shortcut`, `linear`, `jira` — the `.humanconfig`
+section and `tracker.Instance.Kind`), and a **stage** is what the board is running
+(planning, implementation, review, deploy). Maturity says what is attached to the
+ticket; stage says what is working on it; kind says where it lives.
 
 **Topology rule:** whether planning ALSO creates a separate engineering ticket depends on the tracker config. Single-tracker is the default: unless a tracker carries an **explicit** `role: engineering` in `.humanconfig`, there is no second ticket — the plan comment on the ticket is the plan, and commits reference the one key. Split topology is opt-in: give a tracker an explicit `role: engineering` and planning then creates an engineering ticket on it whose description is the plan, with traceability running PM ticket → engineering ticket → git commits (reference the PM ticket in the engineering ticket, and both in commit messages). Role is never inferred from the tracker kind for the engineering side — a bare `linears:` entry with no `role:` stays single-tracker.
 
