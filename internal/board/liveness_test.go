@@ -87,6 +87,20 @@ func TestAgentLaunchGrace_outlastsTheDaemonsOwnRecovery(t *testing.T) {
 		"a card must never read as needing a person while the machine's own relaunch pass is still due")
 }
 
+// The relation above is only worth pinning for what it renders, so pin that
+// too: a queued card measured from the very timestamp reconcileQueuedLaunch
+// measures (both read the option-chosen comment's Created time) must still not
+// read dead at the moment that pass becomes due, nor while it is running.
+func TestMarkAgentLiveness_queuedCardIsNotDeadWhileTheRelaunchIsDue(t *testing.T) {
+	for _, ago := range []time.Duration{daemon.QueuedLaunchGrace, daemon.QueuedLaunchGrace + 30*time.Second} {
+		c := card("SC-1", string(daemon.BoardImplementation), string(daemon.BoardQueued), "d1", ago, livenessNow)
+		cards := []daemon.BoardViewCard{c}
+		MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+		assert.Empty(t, cards[0].AgentLiveness,
+			"at %s the daemon's own relaunch is due or under way — the card must not send the reader to retry it", ago)
+	}
+}
+
 func TestMarkAgentLiveness_unparseableTimestampIsNeverDead(t *testing.T) {
 	cards := []daemon.BoardViewCard{{
 		Key: "SC-1", Stage: string(daemon.BoardImplementation), State: string(daemon.BoardRunning),
