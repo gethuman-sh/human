@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -52,7 +53,7 @@ func (d BoardTransitionDeps) winClaim(ctx context.Context, pmKey string, stage B
 	if strings.TrimSpace(d.DaemonID) == "" {
 		return true, nil
 	}
-	body := ClaimHeader + "\n" + ClaimStagePrefix + " " + string(stage)
+	body := markerBody(marker.Marker{Type: MarkerClaim, Fields: fields("stage", string(stage))})
 	posted, err := d.Commenter.AddComment(ctx, pmKey, body)
 	if err != nil {
 		return false, errors.WrapWithDetails(err, "posting stage claim", "pm", pmKey, "stage", string(stage))

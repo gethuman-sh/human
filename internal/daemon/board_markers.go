@@ -88,11 +88,38 @@ const (
 	// downstream readers key off this const rather than a bare literal.
 	TicketReviewMarkerType = "ticket-review"
 
+	// The marker TYPE names the daemon posts, and the headers derived from them.
+	//
+	// Derived rather than written twice: a header and its type name are the same
+	// fact spelled two ways, and the protocol's writer takes the type while the
+	// board's readers match the header. Two literals would be one edit away from
+	// disagreeing.
+	MarkerDeployed               = "deployed"
+	MarkerDeployFailed           = "deploy-failed"
+	MarkerNeedsPlanning          = "needs-planning"
+	MarkerPRReviewFailed         = "pr-review-failed"
+	MarkerReviewFailed           = "review-failed"
+	MarkerPipeline               = "pipeline"
+	MarkerOptions                = "options"
+	MarkerOptionChosen           = "option-chosen"
+	MarkerStageWait              = "stage-wait"
+	MarkerClaim                  = "claim"
+	MarkerCloseFailed            = "close-failed"
+	MarkerPlanningFailed         = "planning-failed"
+	MarkerImplementationFailed   = "implementation-failed"
+	MarkerPlanningOutage         = "planning-outage"
+	MarkerImplementationOutage   = "implementation-outage"
+	MarkerReviewOutage           = "review-outage"
+	MarkerDeployOutage           = "deploy-outage"
+	MarkerPRReviewStarted        = "pr-review-started"
+	MarkerDeployFixStarted       = "deploy-fix-started"
+	MarkerHandoffCheckUnreadable = "handoff-check-unreadable"
+
 	PlanningStartedHeader       = "[human:planning-started]"
 	PlanReadyHeader             = "[human:plan-ready]"
-	PlanningFailedHeader        = "[human:planning-failed]"
+	PlanningFailedHeader        = "[human:" + MarkerPlanningFailed + "]"
 	ImplementationStartedHeader = "[human:implementation-started]"
-	ImplementationFailedHeader  = "[human:implementation-failed]"
+	ImplementationFailedHeader  = "[human:" + MarkerImplementationFailed + "]"
 	// NeedsPlanningHeader is the implementation launch's refuse-and-surface
 	// marker: the stage that exists only to carry out a plan was launched on a
 	// ticket that has none, so the launch is refused before any agent claims the
@@ -102,7 +129,7 @@ const (
 	// as a crash. DeriveBoardCard promotes it over the phantom implementation
 	// markers it refused (newestTerminalDetermination — it is one of the
 	// registered terminalResolutions).
-	NeedsPlanningHeader = "[human:needs-planning]"
+	NeedsPlanningHeader = "[human:" + MarkerNeedsPlanning + "]"
 	// NoFixNeededHeader is the autofix pipeline's second clean terminal marker:
 	// triage concluded the reported bug warrants no code change (not-a-bug or
 	// undetermined). It carries no [human:ready-for-review] handoff, so the
@@ -119,7 +146,7 @@ const (
 	// terminal with the implementation stage's [human:no-fix-needed].
 	NothingToDoHeader   = "[human:nothing-to-do]"
 	ReviewStartedHeader = "[human:review-started]"
-	ReviewFailedHeader  = "[human:review-failed]"
+	ReviewFailedHeader  = "[human:" + MarkerReviewFailed + "]"
 	PRStartedHeader     = "[human:pr-started]"
 	PRPushedHeader      = "[human:pr-pushed]"
 	PRFailedHeader      = "[human:pr-failed]"
@@ -129,8 +156,8 @@ const (
 	// lifecycle is "deploying", not "opening a PR". The PR markers stay
 	// recognized so threads written before the deploy pipeline still derive.
 	DeployStartedHeader = "[human:deploy-started]"
-	DeployedHeader      = "[human:deployed]"
-	DeployFailedHeader  = "[human:deploy-failed]"
+	DeployedHeader      = "[human:" + MarkerDeployed + "]"
+	DeployFailedHeader  = "[human:" + MarkerDeployFailed + "]"
 
 	// PR review→fix loop markers (SC-1387): the pre-merge sub-phase of the
 	// deploy (done) stage where the machine reviewer and fixer alternate on the
@@ -139,9 +166,9 @@ const (
 	// review) reds it like any other deploy-phase failure. They deliberately
 	// live in the done stage rather than a new pipeline stage, so the
 	// verification→done transition adjacency (board_transition.go) is unchanged.
-	PRReviewStartedHeader = "[human:pr-review-started]"
+	PRReviewStartedHeader = "[human:" + MarkerPRReviewStarted + "]"
 	PRFixStartedHeader    = "[human:pr-fix-started]"
-	PRReviewFailedHeader  = "[human:pr-review-failed]"
+	PRReviewFailedHeader  = "[human:" + MarkerPRReviewFailed + "]"
 	// PRReviewPassedHeader records the loop CONVERGING: the reviewer approved and
 	// the card proceeds to the CI gate and merge. Every other outcome of the loop
 	// already left a marker — both launches and the escalation — so success was
@@ -157,7 +184,7 @@ const (
 	// (SC-1557): a CI failure or rebase conflict at the deploy gate dispatches the
 	// human-deploy-fixer instead of redding, so this reads as the done stage running.
 	// Each occurrence is one deploy-fix round — the budget counts them (deployFixRounds).
-	DeployFixStartedHeader = "[human:deploy-fix-started]"
+	DeployFixStartedHeader = "[human:" + MarkerDeployFixStarted + "]"
 
 	// Outage markers are the NON-failing transient twin of the *-failed headers,
 	// one per relaunchable stage. A stage that reported the substrate it needs was
@@ -166,10 +193,10 @@ const (
 	// durable reconcile pass relaunches it each interval without charging the
 	// retry budget (SC-2307). `-outage` never prefixes another header, so
 	// ClassifyMarker's prefix match stays unambiguous.
-	PlanningOutageHeader       = "[human:planning-outage]"
-	ImplementationOutageHeader = "[human:implementation-outage]"
-	ReviewOutageHeader         = "[human:review-outage]"
-	DeployOutageHeader         = "[human:deploy-outage]"
+	PlanningOutageHeader       = "[human:" + MarkerPlanningOutage + "]"
+	ImplementationOutageHeader = "[human:" + MarkerImplementationOutage + "]"
+	ReviewOutageHeader         = "[human:" + MarkerReviewOutage + "]"
+	DeployOutageHeader         = "[human:" + MarkerDeployOutage + "]"
 )
 
 // PlanCommentHeader marks a comment whose body IS the engineering plan for
@@ -186,7 +213,7 @@ const PlanCommentHeader = "[human:plan]"
 // orderedMarkerSpecs, so ClassifyMarker never classifies it and the card
 // stays green (deployed) while still carrying a visible "close this manually"
 // flag. Best-effort close means recorded-and-surfaced, never red, never silent.
-const CloseFailedHeader = "[human:close-failed]"
+const CloseFailedHeader = "[human:" + MarkerCloseFailed + "]"
 
 // RelatedStartedHeader / RelatedHeader bracket the filing-time related-work
 // triage (SC-2405). Both are deliberately kept OUT of orderedMarkerSpecs, like
@@ -281,7 +308,7 @@ func hasBugVerdict(comments []tracker.Comment) bool {
 // restarted after a crash is restarted as a fix and never refused for having no
 // plan (SC-2989). A plan executor writes none: its identity is the absence of
 // this marker plus the ticket kind.
-const PipelineStartedHeader = "[human:pipeline]"
+const PipelineStartedHeader = "[human:" + MarkerPipeline + "]"
 
 // recordedPipeline reports the pipeline identity a run wrote at start, or fixNone
 // when the ticket carries no [human:pipeline] marker (a plan executor, or a run
@@ -319,7 +346,35 @@ func recordedPipeline(comments []tracker.Comment) fixPipeline {
 // classifies it and the card keeps its current (implementation-done) state,
 // leaving the durable reconcile pass to retry the check rather than reddening
 // good work on an answer that was never given (SC-2403).
-const HandoffCheckUnreadableHeader = "[human:handoff-check-unreadable]"
+const HandoffCheckUnreadableHeader = "[human:" + MarkerHandoffCheckUnreadable + "]"
+
+// daemonMarkerTypes is every marker type the daemon itself writes. It is the
+// completeness list TestDaemonPostedMarkersSatisfyTheirContract walks: a type
+// added here with no case in that test fails the build, which is what keeps a
+// new daemon marker from shipping without anyone checking it against the
+// protocol's own validator.
+var daemonMarkerTypes = []string{
+	MarkerDeployed,
+	MarkerDeployFailed,
+	MarkerNeedsPlanning,
+	MarkerPRReviewFailed,
+	MarkerReviewFailed,
+	MarkerPipeline,
+	MarkerOptions,
+	MarkerOptionChosen,
+	MarkerStageWait,
+	MarkerClaim,
+	MarkerCloseFailed,
+	MarkerPlanningFailed,
+	MarkerImplementationFailed,
+	MarkerPlanningOutage,
+	MarkerImplementationOutage,
+	MarkerReviewOutage,
+	MarkerDeployOutage,
+	MarkerPRReviewStarted,
+	MarkerDeployFixStarted,
+	MarkerHandoffCheckUnreadable,
+}
 
 // markerSpec maps a marker header to the (stage, state) it represents.
 type markerSpec struct {

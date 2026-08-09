@@ -59,7 +59,7 @@
         "daemon"
       ],
       "stale_when": "Past StuckRunningGrace with no live agent, like any running stage.",
-      "if_nothing_happens": "The agent's death is recorded as a PLANNING failure, because planning is the stage it runs under. Note the gap: the backlog stage has no *-failed marker of its own (failedHeaderFor returns none for it), so neither the live watcher nor the durable pass can red a card derived at backlog/running directly — recovery here depends entirely on the enclosing planning dispatch."
+      "if_nothing_happens": "The agent's death is recorded as a PLANNING failure, because planning is the stage it runs under. Note the gap: the backlog stage has no *-failed marker of its own (failedTypeFor returns none for it), so neither the live watcher nor the durable pass can red a card derived at backlog/running directly — recovery here depends entirely on the enclosing planning dispatch."
     },
     {
       "name": "ticket-reviewed",
@@ -701,7 +701,7 @@
       "actor": "daemon",
       "marker": "[human:implementation-failed]",
       "where": "board_failure.go",
-      "doc": "The daemon's failure watcher classifies an agent that exited without posting its handoff. It fires for the implementation stage as a whole — failedHeaderFor(BoardImplementation) knows the stage, never which phase the run had reached — so every state of the stage leads here."
+      "doc": "The daemon's failure watcher classifies an agent that exited without posting its handoff. It fires for the implementation stage as a whole — failedTypeFor(BoardImplementation) knows the stage, never which phase the run had reached — so every state of the stage leads here."
     },
     {
       "name": "start-review",
@@ -749,7 +749,7 @@
         "reason"
       ],
       "doc": "The review stage itself failed — a binding gate such as a missing branch or unreachable commits — not a failing verdict.",
-      "where": "internal/daemon/board_failure.go — the failure watcher, via failedHeaderFor(BoardVerification)"
+      "where": "internal/daemon/board_failure.go — the failure watcher, via failedTypeFor(BoardVerification)"
     },
     {
       "name": "start-deploy",

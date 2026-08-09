@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -497,8 +498,8 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	if !stuckCardIsOursToRed(derived, card) {
 		return false
 	}
-	header := failedHeaderFor(derived.Stage)
-	if header == "" {
+	failedType := failedTypeFor(derived.Stage)
+	if failedType == "" {
 		return false
 	}
 	if now.Sub(derived.StageEnteredAt) < StuckRunningGrace {
@@ -525,17 +526,18 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	// relaunching and says a person is needed, naming the count once; skip
 	// is set when the give-up marker is already on the thread, so a second
 	// daemon reaching the same cap posts nothing more.
-	body, givingUp, skip := stuckRunningSilenceBody(header, derived.Stage, card.Comments, silenced, idleReason)
+	failed, givingUp, skip := stuckRunningSilenceBody(failedType, derived.Stage, card.Comments, silenced, idleReason)
 	if skip {
 		return false
 	}
 	// If this stage was preceded by a recorded inter-stage wait, name that
 	// cause in the red so a stall that followed a long wait is attributable
-	// rather than judged from silence (SC-2462).
+	// rather than judged from silence (SC-2462). It joins the detail prose, not
+	// the field block: it qualifies the diagnosis rather than being read back.
 	if cause := latestStageWaitCause(card.Comments); cause != "" {
-		body += "\nafter wait cause: " + cause
+		failed.Body = strings.TrimSpace(failed.Body + "\nafter wait cause: " + cause)
 	}
-	if err := postFailed(ctx, card.Key, body); err != nil {
+	if err := postFailed(ctx, card.Key, markerBody(failed)); err != nil {
 		logger.Warn().Err(err).Str("pm", card.Key).
 			Msg("board reconcile: cannot red stuck-running card")
 		return false
@@ -570,18 +572,18 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 // (skip — the dedup that keeps two daemons from both posting it). Split out
 // of reconcileStuckRunning so that function's branching stays inside the
 // complexity gate.
-func stuckRunningSilenceBody(header string, stage BoardStage, comments []tracker.Comment, silenced bool, idleReason string) (body string, givingUp, skip bool) {
+func stuckRunningSilenceBody(failedType string, stage BoardStage, comments []tracker.Comment, silenced bool, idleReason string) (m marker.Marker, givingUp, skip bool) {
 	if !silenced {
-		return header + "\n" + stuckRunningReason(stage), false, false
+		return failureMarker(failedType, stuckRunningReason(stage)), false, false
 	}
 	if silenceReapGaveUp(comments, stage) {
-		return "", false, true
+		return marker.Marker{}, false, true
 	}
 	stops := silenceReapCount(comments, stage) + 1
 	if stops > MaxSilenceReaps {
-		return header + "\n" + silenceReapGiveUpReason(stage, stops), true, false
+		return failureMarker(failedType, silenceReapGiveUpReason(stage, stops)), true, false
 	}
-	return header + "\n" + silenceReapReason(idleReason), false, false
+	return failureMarker(failedType, silenceReapReason(idleReason)), false, false
 }
 
 // cardPausedOnOpenOptions reports whether a card carries an open

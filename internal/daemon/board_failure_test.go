@@ -958,7 +958,7 @@ func TestHandleBoardAgentExit_UsesDiagnoserHeadlineAndDetail(t *testing.T) {
 	defer c.mu.Unlock()
 	require.Len(t, c.added, 1)
 	body := c.added[0]
-	want := ImplementationFailedHeader + "\nclaude exited with code 1: API Error\n\nagent: board-SC-1-implementation\n\nlast output:\n~~~\nboom\n~~~"
+	want := ImplementationFailedHeader + "\nreason: claude exited with code 1: API Error\n\nagent: board-SC-1-implementation\n\nlast output:\n~~~\nboom\n~~~"
 	assert.Equal(t, want, body)
 	// Contract pin: the card's one-line error is exactly the headline.
 	assert.Equal(t, "claude exited with code 1: API Error", failureReason(body))
@@ -976,7 +976,7 @@ func TestHandleBoardAgentExit_NilDiagnoserFallsBackToGeneric(t *testing.T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	require.Len(t, c.added, 1)
-	assert.Equal(t, PlanningFailedHeader+"\n"+genericStageFailure, c.added[0])
+	assert.Equal(t, PlanningFailedHeader+"\nreason: "+genericStageFailure, c.added[0])
 }
 
 // SC-2555 step 5b: a recorded failing model-call class is appended to the failed
@@ -1036,7 +1036,7 @@ func TestHandleBoardAgentExit_ModelOutcomeAdditiveWhenOKOrAbsent(t *testing.T) {
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			require.Len(t, c.added, 1)
-			assert.Equal(t, PlanningFailedHeader+"\n"+genericStageFailure, c.added[0],
+			assert.Equal(t, PlanningFailedHeader+"\nreason: "+genericStageFailure, c.added[0],
 				"the marker must be byte-for-byte unchanged when no failing outcome is recorded")
 		})
 	}
@@ -1055,7 +1055,7 @@ func TestHandleBoardAgentExit_EmptyHeadlineFallsBackToGeneric(t *testing.T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	require.Len(t, c.added, 1)
-	assert.Equal(t, PlanningFailedHeader+"\n"+genericStageFailure, c.added[0])
+	assert.Equal(t, PlanningFailedHeader+"\nreason: "+genericStageFailure, c.added[0])
 }
 
 // The watch loop must hand the hook event's error type to the diagnoser —

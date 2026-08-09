@@ -875,8 +875,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		if err != nil {
 			return err
 		}
-		_, err = commenter.AddComment(postCtx, pmKey,
-			daemon.DeployedHeader+"\npr: "+prURL)
+		_, err = commenter.AddComment(postCtx, pmKey, daemon.DeployedBody(prURL))
 		return err
 	}
 	// A live container is not a working agent. The hook stream is the progress

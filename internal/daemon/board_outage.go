@@ -75,17 +75,17 @@ func newerThan(comments []tracker.Comment, cutoff tracker.Comment) []tracker.Com
 // ever coming back. The first body line is the headline the card badge reads
 // (failureReason), so the card itself says why it needs attention.
 func outageHandoverBody(stage BoardStage, reason string, waited time.Duration, since time.Time) string {
-	header := failedHeaderFor(stage)
-	if header == "" {
+	failedType := failedTypeFor(stage)
+	if failedType == "" {
 		return ""
 	}
 	what := strings.TrimSpace(reason)
 	if what == "" {
 		what = "the substrate it depends on"
 	}
-	return header + "\n" +
-		"waited " + waited.Round(time.Minute).String() + " for the substrate to come back and it never did — this needs a person: " + what + "\n" +
-		"unreachable since " + since.UTC().Format(time.RFC3339) + ". No retry budget was spent on the wait, so a Retry has every attempt available once the substrate is back."
+	return markerBody(failureMarker(failedType,
+		"waited "+waited.Round(time.Minute).String()+" for the substrate to come back and it never did — this needs a person: "+what+"\n"+
+			"unreachable since "+since.UTC().Format(time.RFC3339)+". No retry budget was spent on the wait, so a Retry has every attempt available once the substrate is back."))
 }
 
 // handOverOutage reds a card whose outage outlived OutageWaitBound so a person
@@ -124,11 +124,11 @@ func handOverOutage(ctx context.Context, pmKey string, derived BoardCard, postFa
 // Split out of handleBoardAgentExit so the say-once guard costs this function's
 // complexity budget rather than that one's.
 func handleOutageExit(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, comments []tracker.Comment, commenter tracker.Commenter, diagnose BoardFailureDiagnoser, retry StageRetry, kind endingKind, reason string, daemonID string, logger zerolog.Logger) bool {
-	header := outageHeaderFor(stage)
-	if header == "" || (!retry.recordedOutage(pmKey, stage) && kind != endingPaused) {
+	outageType := outageTypeFor(stage)
+	if outageType == "" || (!retry.recordedOutage(pmKey, stage) && kind != endingPaused) {
 		return false
 	}
-	body := header + "\n" + pausedOutageBody(diagnose, agentName, errorType, reason)
+	body := markerBody(pausedOutageMarker(outageType, diagnose, agentName, errorType, reason))
 	// Say it once and leave it standing: every relaunch that re-hits the same
 	// outage lands here, so re-posting an identical marker would spam the ticket
 	// for as long as the substrate stays down (SC-2851). The standing marker also
@@ -145,24 +145,28 @@ func handleOutageExit(ctx context.Context, pmKey string, stage BoardStage, agent
 	return true
 }
 
-// pausedOutageBody composes the house-style paused statement: the substrate
-// reason, an optional machine-readable resume: line (when the diagnosis names
+// pausedOutageMarker composes the house-style paused statement: the substrate
+// reason, an optional machine-readable resume field (when the diagnosis names
 // a stated recovery time), and the do-nothing reassurance. reason defaults to
 // "the substrate it depends on" when empty — the recorded-outage case with no
 // classified signal reason.
-func pausedOutageBody(diagnose BoardFailureDiagnoser, agentName, errorType, reason string) string {
+func pausedOutageMarker(outageType string, diagnose BoardFailureDiagnoser, agentName, errorType, reason string) marker.Marker {
 	what := strings.TrimSpace(reason)
 	if what == "" {
 		what = "the substrate it depends on"
 	}
-	var b strings.Builder
-	b.WriteString("paused — " + what)
-	if resume, ok := resumeTimeFromDiagnosis(diagnose, agentName, errorType); ok {
-		b.WriteString("\nresume: " + resume.Format(time.RFC3339))
+	m := marker.Marker{
+		Type: outageType,
+		Body: "paused — " + what + "\nThe work is written and safe on the ticket. It continues automatically when " +
+			what + " clears. Nothing to do.",
 	}
-	b.WriteString("\nThe work is written and safe on the ticket. It continues automatically when " +
-		what + " clears. Nothing to do.")
-	return b.String()
+	// A stated recovery time is the one machine-readable fact in this marker
+	// (parseResumeLine reads it back to bound the wait), so it is a field rather
+	// than a line of the prose it used to sit in the middle of.
+	if resume, ok := resumeTimeFromDiagnosis(diagnose, agentName, errorType); ok {
+		m.Fields = fields("resume", resume.Format(time.RFC3339))
+	}
+	return m
 }
 
 // resumeTimeFromDiagnosis runs the diagnoser (when wired) and scans its

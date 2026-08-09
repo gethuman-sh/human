@@ -249,8 +249,10 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 		return errors.WithDetails("unknown option id", "pm", req.PMKey, "option", req.OptionID)
 	}
 
-	if _, err := d.Commenter.AddComment(ctx, req.PMKey,
-		OptionChosenHeader+" "+chosen.ID+": "+chosen.Label); err != nil {
+	// The pick rides in the head token, where the readers already look for it
+	// (parseOptionChosen splits id from label on the header line).
+	chosenMarker := marker.Marker{Type: MarkerOptionChosen, Head: chosen.ID + ": " + chosen.Label}
+	if err := postMarker(ctx, d.Commenter, req.PMKey, chosenMarker); err != nil {
 		return errors.WrapWithDetails(err, "recording option choice", "pm", req.PMKey)
 	}
 

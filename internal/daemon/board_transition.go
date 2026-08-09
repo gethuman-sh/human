@@ -559,7 +559,9 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 		// Record which pipeline this run is, durably on the ticket, so a later
 		// recovery relaunch restarts the FIX pipeline even if the ticket-kind
 		// fetch blips and no verdict has been posted yet (SC-2989).
-		_, _ = d.Commenter.AddComment(ctx, req.PMKey, PipelineStartedHeader+"\nkind: fix")
+		_ = postMarker(ctx, d.Commenter, req.PMKey, marker.Marker{
+			Type: MarkerPipeline, Fields: fields("kind", "fix"),
+		})
 	}
 	return err
 }
@@ -599,7 +601,9 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 		// Durable pipeline identity, mirroring ApplyFix: a recovery relaunch reads
 		// this first and restarts the security-fix pipeline rather than refusing the
 		// run for having no plan (SC-2989).
-		_, _ = d.Commenter.AddComment(ctx, req.PMKey, PipelineStartedHeader+"\nkind: security")
+		_ = postMarker(ctx, d.Commenter, req.PMKey, marker.Marker{
+			Type: MarkerPipeline, Fields: fields("kind", "security"),
+		})
 	}
 	return err
 }
@@ -719,8 +723,7 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	}
 	name := agentNameFor(pmKey, stage)
 	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
-		failBody := failedHeaderFor(stage) + "\n" + errors.CauseChain(err)
-		_, _ = d.Commenter.AddComment(ctx, pmKey, failBody)
+		_ = postMarker(ctx, d.Commenter, pmKey, failureMarker(failedTypeFor(stage), errors.CauseChain(err)))
 		return false, errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
 	}
 	return true, nil
@@ -860,7 +863,7 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	// when, rather than looping forever between planning and implementation.
 	if drives := countPlanRefusals(comments); drives >= PlanRedriveBound {
 		since, _ := oldestNeedsPlanning(comments)
-		body := NeedsPlanningHeader + "\n" + planStuckReason(drives, since)
+		body := markerBody(failureMarker(MarkerNeedsPlanning, planStuckReason(drives, since)))
 		if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
 			return true, errors.WrapWithDetails(err, "posting plan-stuck escalation marker", "pm", pmKey)
 		}
@@ -873,7 +876,7 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	// spam the thread — then drive the card into planning so a person never
 	// has to notice the refusal by hand.
 	if !newestIsRefusal {
-		body := NeedsPlanningHeader + "\n" + needsPlanningReason
+		body := markerBody(failureMarker(MarkerNeedsPlanning, needsPlanningReason))
 		if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
 			return true, errors.WrapWithDetails(err, "posting needs-planning marker", "pm", pmKey)
 		}
@@ -901,8 +904,10 @@ var startDeploy = func(d BoardTransitionDeps, req BoardTransitionRequest, card B
 // unchanged — a handoff with no branch has nothing to open.
 func (d BoardTransitionDeps) runDoneStage(_ context.Context, req BoardTransitionRequest, card BoardCard) error {
 	if card.Branch == "" {
-		body := DeployFailedHeader + "\nno branch recorded on ready-for-review handoff"
-		_, _ = d.Commenter.AddComment(context.Background(), req.PMKey, body)
+		_ = postMarker(context.Background(), d.Commenter, req.PMKey, marker.Marker{
+			Type:   MarkerDeployFailed,
+			Fields: fields("reason", "no branch recorded on ready-for-review handoff"),
+		})
 		return errors.WithDetails("no branch recorded for deploy", "pm", req.PMKey)
 	}
 	startPRReview(d, req, card)
@@ -923,8 +928,10 @@ var startPRReview = func(d BoardTransitionDeps, req BoardTransitionRequest, card
 // work) it short-circuits to the terminal success path exactly like DeployBranch.
 func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey string, card BoardCard) error {
 	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, card.Branch) {
-		_, _ = d.Commenter.AddComment(ctx, pmKey,
-			DeployedHeader+"\nalready merged into the base branch; no new PR opened")
+		_ = postMarker(ctx, d.Commenter, pmKey, marker.Marker{
+			Type:   MarkerDeployed,
+			Fields: fields("merged", "already in the base branch; no new PR opened"),
+		})
 		d.closeTicketBestEffort(pmKey)
 		return nil
 	}
@@ -952,10 +959,10 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 // prReviewStartedBody carries the loop's PR binding on the started marker so the
 // Stop-hook driver can recover (url, number, branch) without a forge lookup.
 func prReviewStartedBody(url string, number int, branch string) string {
-	return PRReviewStartedHeader +
-		"\npr: " + url +
-		"\nnumber: " + strconv.Itoa(number) +
-		"\nbranch: " + branch
+	return markerBody(marker.Marker{
+		Type:   MarkerPRReviewStarted,
+		Fields: fields("pr", url, "number", strconv.Itoa(number), "branch", branch),
+	}, "pr", "number", "branch")
 }
 
 func prReviewDispatch(pmKey string, number int, branch string) string {
@@ -996,7 +1003,7 @@ func deployFixRounds(comments []tracker.Comment) int {
 func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string, stage BoardStage, prompt string) error {
 	name := agentNameFor(pmKey, stage)
 	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
-		body := PRReviewFailedHeader + "\ncould not launch the PR " + string(stage) + " agent — " + errors.CauseChain(err)
+		body := markerBody(failureMarker(MarkerPRReviewFailed, "could not launch the PR "+string(stage)+" agent — "+errors.CauseChain(err)))
 		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
 		return errors.WrapWithDetails(err, "launching PR loop agent", "pm", pmKey, "stage", string(stage))
 	}
@@ -1086,27 +1093,29 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 	}
 	stage := latestPRLoopStage(comments)
 	if stage == PRStageFix && outcome.FixExit != PRFixDone {
-		var b strings.Builder
-		b.WriteString(OptionsHeader + "\nstage: " + string(BoardImplementation) + "\n")
 		ctxLine := outcome.FixSummary
 		if ctxLine == "" {
 			ctxLine = "the PR review→fix loop needs a decision the fixer could not make"
 		}
-		b.WriteString("context: " + ctxLine + "\n")
 		opts := outcome.FixOptions
 		if len(opts) == 0 {
-			// A generic single option keeps the block valid (parseOptionsBlock needs
-			// ≥1) so the human can always move the card off the loop.
-			opts = []BoardOption{{ID: "1", Label: "Rebuild the branch to resolve the decision the fixer raised"}}
+			// The fallback offers the two answers a human actually has here.
+			// It used to offer one, with a comment explaining that one was
+			// enough to keep the block parseable — but the protocol forbids a
+			// single-answer block on purpose: it parks the card until someone
+			// clicks the only thing on offer, which is a dead end dressed as a
+			// choice (marker.MinDecisionOptions). Posting it anyway meant the
+			// daemon wrote the exact shape `human marker post` rejects.
+			opts = []BoardOption{
+				{ID: "1", Label: "Rebuild the branch to resolve the decision the fixer raised"},
+				{ID: "2", Label: "Take it over by hand — stop the loop and leave the branch as it is"},
+			}
 		}
-		for _, o := range opts {
-			b.WriteString(o.ID + ": " + o.Label + "\n")
-		}
-		_, err := d.Commenter.AddComment(ctx, pmKey, b.String())
-		return err
+		m, order := optionsMarker(BoardImplementation, ctxLine, opts)
+		return postMarker(ctx, d.Commenter, pmKey, m, order...)
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
-		PRReviewFailedHeader+"\n"+prEscalationReason(stage, outcome, d.Diagnose))
+		markerBody(failureMarker(MarkerPRReviewFailed, prEscalationReason(stage, outcome, d.Diagnose))))
 	return nil
 }
 
@@ -1203,7 +1212,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
-		DeployFailedHeader+"\n"+deployFixEscalationReason(fixExit, dispatchedFailure(comments)))
+		markerBody(failureMarker(MarkerDeployFailed, deployFixEscalationReason(fixExit, dispatchedFailure(comments)))))
 	return nil
 }
 
@@ -1371,7 +1380,10 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	if d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
 		logger.Info().Msg("deploy: branch is already on the base; nothing to ship")
 		_, _ = d.Commenter.AddComment(ctx, pmKey,
-			DeployedHeader+"\nalready merged into the base branch; no new PR opened")
+			markerBody(marker.Marker{
+				Type:   MarkerDeployed,
+				Fields: fields("merged", "already in the base branch; no new PR opened"),
+			}))
 		d.closeTicketBestEffort(pmKey)
 		return nil
 	}
@@ -1443,7 +1455,9 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// the tracker's open list), so the operator must see it and close by hand.
 	logger.Info().Int("pr", res.Number).Str("url", res.URL).Msg("deploy: merged")
 	_ = d.Deployer.DeleteRemoteBranch(ctx, d.WorkspaceDir, branch)
-	_, _ = d.Commenter.AddComment(ctx, pmKey, DeployedHeader+"\npr: "+res.URL)
+	_ = postMarker(ctx, d.Commenter, pmKey, marker.Marker{
+		Type: MarkerDeployed, Fields: fields("pr", res.URL),
+	})
 	d.closeTicketBestEffort(pmKey)
 	logger.Info().Msg("deploy: done")
 	return nil
@@ -1688,9 +1702,9 @@ func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
 
 	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	body := CloseFailedHeader + "\ndeployed, but the automated close of " + pmKey +
-		" failed: " + errors.CauseChain(err) + "\nclose this ticket manually to clear the card."
-	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
+	closeFailed := failureMarker(MarkerCloseFailed, "the automated close of "+pmKey+" failed: "+errors.CauseChain(err))
+	closeFailed.Body = strings.TrimSpace("Close this ticket manually to clear the card.\n\n" + closeFailed.Body)
+	_ = postMarker(postCtx, d.Commenter, pmKey, closeFailed)
 }
 
 // waitForChecks blocks until the PR's CI verdict is conclusive. Passing
@@ -1768,11 +1782,11 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
 		Str("reason", headlineOf(reason)).Msg("deploy: failed")
 	postCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	body := DeployFailedHeader + "\n" + reason
+	m := failureMarker(MarkerDeployFailed, reason)
 	if prURL != "" {
-		body += "\npr: " + prURL
+		m.Fields["pr"] = prURL
 	}
-	_, _ = d.Commenter.AddComment(postCtx, pmKey, body)
+	_ = postMarker(postCtx, d.Commenter, pmKey, m, "reason", "pr")
 	return errors.WithDetails("deploy failed: "+reason, "pm", pmKey, "pr", prURL)
 }
 
@@ -1795,12 +1809,12 @@ func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pm
 // failure headline and the PR binding for the trail) and launches the fixer. The
 // marker keeps the card spinning rather than red while the fixer works.
 func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string) error {
-	body := DeployFixStartedHeader +
-		"\n" + headline +
-		"\npr: " + res.URL +
-		"\nnumber: " + strconv.Itoa(res.Number) +
-		"\nbranch: " + branch
-	if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
+	m := marker.Marker{
+		Type:   MarkerDeployFixStarted,
+		Fields: fields("pr", res.URL, "number", strconv.Itoa(res.Number), "branch", branch),
+		Body:   headline,
+	}
+	if err := postMarker(ctx, d.Commenter, pmKey, m, "pr", "number", "branch"); err != nil {
 		return errors.WrapWithDetails(err, "posting deploy-fix-started marker", "pm", pmKey)
 	}
 	return d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
@@ -1812,7 +1826,7 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) error {
 	name := agentNameFor(pmKey, deployFixAgentStage)
 	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
-		body := DeployFailedHeader + "\ncould not launch the deploy fixer — " + errors.CauseChain(err)
+		body := markerBody(failureMarker(MarkerDeployFailed, "could not launch the deploy fixer — "+errors.CauseChain(err)))
 		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
 		return errors.WrapWithDetails(err, "launching deploy fixer", "pm", pmKey)
 	}
@@ -2035,37 +2049,59 @@ func doneBody(pmKey string, card BoardCard) string {
 	return b.String()
 }
 
-// failedHeaderFor returns the *-failed marker header for a stage.
-func failedHeaderFor(stage BoardStage) string {
+// failedTypeFor returns the *-failed marker TYPE for a stage — what a writer
+// needs. Empty for a stage that has no failed marker.
+func failedTypeFor(stage BoardStage) string {
 	switch stage {
 	case BoardPlanning:
-		return PlanningFailedHeader
+		return MarkerPlanningFailed
 	case BoardImplementation:
-		return ImplementationFailedHeader
+		return MarkerImplementationFailed
 	case BoardVerification:
-		return ReviewFailedHeader
+		return MarkerReviewFailed
 	case BoardDoneStage:
-		return DeployFailedHeader
+		return MarkerDeployFailed
 	default:
 		return ""
 	}
 }
 
-// outageHeaderFor returns the *-outage marker header for a stage, mirroring
-// failedHeaderFor. Empty for a stage that has no relaunch path (SC-2307).
-func outageHeaderFor(stage BoardStage) string {
+// failedHeaderFor returns the *-failed marker header for a stage — what a
+// reader matches on. Derived from failedTypeFor so the two cannot disagree.
+func failedHeaderFor(stage BoardStage) string {
+	return headerForType(failedTypeFor(stage))
+}
+
+// outageTypeFor returns the *-outage marker TYPE for a stage, mirroring
+// failedTypeFor. Empty for a stage that has no relaunch path (SC-2307).
+func outageTypeFor(stage BoardStage) string {
 	switch stage {
 	case BoardPlanning:
-		return PlanningOutageHeader
+		return MarkerPlanningOutage
 	case BoardImplementation:
-		return ImplementationOutageHeader
+		return MarkerImplementationOutage
 	case BoardVerification:
-		return ReviewOutageHeader
+		return MarkerReviewOutage
 	case BoardDoneStage:
-		return DeployOutageHeader
+		return MarkerDeployOutage
 	default:
 		return ""
 	}
+}
+
+// outageHeaderFor returns the *-outage marker header for a stage.
+func outageHeaderFor(stage BoardStage) string {
+	return headerForType(outageTypeFor(stage))
+}
+
+// headerForType renders a marker type as the header its readers match, and
+// keeps "no marker for this stage" spelled the same on both sides: an empty
+// type is an empty header, never "[human:]".
+func headerForType(markerType string) string {
+	if markerType == "" {
+		return ""
+	}
+	return "[human:" + markerType + "]"
 }
 
 // latestStageState returns the latest marker's state within a given stage,
