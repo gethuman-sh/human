@@ -2244,6 +2244,10 @@ func serveLastGoodView(cache *boardcache.Store, project string, cause error, log
 	}
 	logger.Warn().Err(cause).Msg("board view: refresh failed, serving the last good board marked stale")
 	view.Error = staleBoardBanner(view.CachedAt, time.Now(), cause)
+	// The cards are old, so any flow claim computed from them is a statement
+	// about a moment that has passed. Dropping it asserts neither idle nor
+	// stalled; the staleness banner above already says the board is not current.
+	view.Flow = nil
 	return view, nil
 }
 
