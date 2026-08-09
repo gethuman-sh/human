@@ -1,6 +1,6 @@
 {
   "doc": "Places a card can sit that no state in internal/pipelinefsm/pipeline-fsm.json describes. Found by driving the real DeriveBoardCard over the real marker vocabulary and comparing what comes out against what the machine claims. Recorded rather than fixed: what to do about each is a separate question, and answering it here — by widening the document until nothing is left over — is the move that would make the machine agree with anything.",
-  "bound": "A LOWER BOUND, permanently. The enumeration builds threads of one and two markers, so a placement reachable only from three cannot appear. An entry here is real; an absence proves nothing.",
+  "bound": "A LOWER BOUND. An entry here is real; an absence proves nothing. What no longer bounds it is thread DEPTH: this said a placement reachable only from three markers could not appear, and that was an assumption. Measured 2026-08-09 — the placement set saturates at two. All 36^3 ordered triples yield the same 27 placements pairs do, and a one-off probe of all 36^4 quadruples added none either; triples are now enumerated by the shipped check so a change that makes a third marker matter fails it. What still bounds it is marker SHAPE: every header is seeded with one body and the options block with one stage-and-count, so a placement that needs a particular body cannot appear.",
   "unclaimed": {
     "planning/queued": {
       "reached_by": "[human:options] stage: planning, then [human:option-chosen]",
@@ -26,7 +26,9 @@
     },
     "ideas/": {
       "reached_by": "a ticket carrying the idea label",
-      "note": "The machine's initial state is `filed`, and idea-to-PM promotion is a label swap rather than a marker, so an idea is arguably before the machine rather than missing from it. Recorded because the enumeration cannot tell 'deliberately outside' from 'left out' — only a person can."
+      "note": "The machine's initial state is `filed`, and idea-to-PM promotion is a label swap rather than a marker, so an idea is arguably before the machine rather than missing from it. Recorded because the enumeration cannot tell 'deliberately outside' from 'left out' — only a person can.",
+      "known": "Read in code 2026-08-09, three facts. (1) Promotion posts NO marker: RunIdeaPromote (cmd/cmdauto/semantic.go) is one EditIssue with RemoveLabels and nothing else, so ideas -> filed is invisible to the marker bus in exactly the way close is — which is why replaying markers can never see this edge, and why it took a state-space enumeration to surface it. (2) Membership is the label and only the label: DeriveBoardCard returns the Ideas stage before it looks at a single comment, deliberately (board_state.go), so an idea-labelled ticket that somehow carries pipeline markers renders as an idea and its real pipeline position is hidden. (3) The word `idea` appears NOWHERE in pipeline-fsm.json, while `filed` claims board (backlog, \"\") unconditionally — so for an idea-labelled ticket that state's `holds` is satisfied and its `board` is wrong.",
+      "not_known": "How often (2) actually happens — whether any idea-labelled ticket carries pipeline markers, which is the number that would say if the hiding is theoretical or real. It needs the label on every ticket, which the local replay corpus does not record (it stores key and markers only) and the tracker was vault-locked when this was written. This is the one of the three still unmeasured against real tickets."
     }
   }
 }
