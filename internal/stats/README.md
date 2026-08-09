@@ -9,3 +9,4 @@ Keeps a rolling record of what AI agents do through `human`, so you can look bac
 - Drops events under load instead of stalling
 - Stores everything locally in SQLite
 - Splits a range's tool calls into ok vs error counts for the board's stats headline (`QueryToolOutcomes`), feeding the daemon's consolidated `stats-overview` aggregation
+- Answers which sub-agent types ran on which model over a time range (`QuerySubagentModels`), surfaced as `human stats subagents`
