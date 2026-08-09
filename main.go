@@ -26,10 +26,12 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdclickup"
 	"github.com/gethuman-sh/human/cmd/cmdcodenav"
 	"github.com/gethuman-sh/human/cmd/cmdcommits"
+	"github.com/gethuman-sh/human/cmd/cmdconfig"
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
 	"github.com/gethuman-sh/human/cmd/cmddeploy"
 	"github.com/gethuman-sh/human/cmd/cmddoctor"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
+	"github.com/gethuman-sh/human/cmd/cmdforge"
 	"github.com/gethuman-sh/human/cmd/cmdfsm"
 	"github.com/gethuman-sh/human/cmd/cmdhandoff"
 	"github.com/gethuman-sh/human/cmd/cmdindex"
@@ -329,6 +331,17 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	trackerCmd := cmdtracker.BuildTrackerCmd(cmdutil.LoadAllInstances)
 	trackerCmd.GroupID = "utility"
 	rootCmd.AddCommand(trackerCmd)
+
+	// A sibling of tracker, not a subcommand of it: code hosts and issue
+	// trackers are separate domains with separate config and separate types
+	// ([SC-3876]).
+	forgeCmd := cmdforge.BuildForgeCmd(cmdutil.LoadForges)
+	forgeCmd.GroupID = "utility"
+	rootCmd.AddCommand(forgeCmd)
+
+	configCmd := cmdconfig.BuildConfigCmd()
+	configCmd.GroupID = "utility"
+	rootCmd.AddCommand(configCmd)
 
 	installCmd := buildInstallCmd()
 	installCmd.GroupID = "utility"
