@@ -33,14 +33,55 @@ func (r *AgentIPRegistry) Register(ip, agentName string) {
 	r.byIP[ip] = agentName
 }
 
-// Unregister drops the mapping for ip. Safe on a nil registry and on an unknown ip.
-func (r *AgentIPRegistry) Unregister(ip string) {
-	if r == nil || ip == "" {
+// Mapped reports whether any address resolves to agentName. It is the question
+// the liveness probe must ask before reading an in-flight count: a count of
+// zero for an agent nobody can name means "nobody could ask", not "nothing is
+// open" (SC-3853). Nil-safe; the map is small (one entry per live agent), so
+// the scan costs nothing at a 5-second tick.
+func (r *AgentIPRegistry) Mapped(agentName string) bool {
+	if r == nil || agentName == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, name := range r.byIP {
+		if name == agentName {
+			return true
+		}
+	}
+	return false
+}
+
+// Retain drops every mapping whose agent is not in live. Teardown happens on
+// several paths (a reap, a cleanup, a close-cancel, a person running
+// `human agent stop`), and a per-path Unregister is one a new path forgets —
+// so the repair pass prunes from the running set instead. Without it a
+// recycled Docker bridge IP attributes a new agent's calls, and its in-flight
+// marks, to a dead agent's name. Nil-safe; an empty live set is honoured, so
+// callers must skip the call when they could not list agents.
+func (r *AgentIPRegistry) Retain(live map[string]struct{}) {
+	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.byIP, ip)
+	for ip, name := range r.byIP {
+		if _, ok := live[name]; !ok {
+			delete(r.byIP, ip)
+		}
+	}
+}
+
+// hostOnly strips the port from a remote address, matching the key every
+// method on this registry uses. Connections arrive as ip:port; the registry
+// (and PendingModelRequests, which shares its key space) is keyed by the bare
+// host, so an address that fails to parse is used as-is rather than dropped —
+// callers already treat "not found" as the safe default.
+func hostOnly(remoteAddr string) string {
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return h
+	}
+	return remoteAddr
 }
 
 // Attribute resolves a connection's remote address to the ticket and stage that
@@ -53,10 +94,7 @@ func (r *AgentIPRegistry) Attribute(remoteAddr string) (ticket, stage string, ok
 	if r == nil {
 		return "", "", false
 	}
-	host := remoteAddr
-	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
-		host = h
-	}
+	host := hostOnly(remoteAddr)
 	r.mu.RLock()
 	name, found := r.byIP[host]
 	r.mu.RUnlock()
@@ -79,10 +117,7 @@ func (r *AgentIPRegistry) AgentFor(remoteAddr string) (agentName string, ok bool
 	if r == nil {
 		return "", false
 	}
-	host := remoteAddr
-	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
-		host = h
-	}
+	host := hostOnly(remoteAddr)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	name, found := r.byIP[host]

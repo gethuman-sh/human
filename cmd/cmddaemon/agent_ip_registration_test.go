@@ -22,7 +22,7 @@ func (f fakeInspector) ContainerInspect(context.Context, string) (devcontainer.C
 
 func TestRegisterAgentIP_MapsIPToAgent(t *testing.T) {
 	reg := daemon.NewAgentIPRegistry()
-	l := dockerAgentLauncher{agentIPs: reg}
+	l := dockerAgentLauncher{agentIPs: agentIPWiring{registry: reg}}
 	insp := fakeInspector{resp: devcontainer.ContainerInspectResponse{IPAddress: "172.17.0.9"}}
 
 	l.registerAgentIP(context.Background(), insp, "cid", "board-SC-2555-implementation")
@@ -42,7 +42,7 @@ func TestRegisterAgentIP_NilRegistryNoOp(t *testing.T) {
 
 func TestRegisterAgentIP_InspectErrorLeavesUnattributed(t *testing.T) {
 	reg := daemon.NewAgentIPRegistry()
-	l := dockerAgentLauncher{agentIPs: reg}
+	l := dockerAgentLauncher{agentIPs: agentIPWiring{registry: reg}}
 	insp := fakeInspector{err: errors.New("inspect failed")}
 
 	l.registerAgentIP(context.Background(), insp, "cid", "board-SC-1-implementation")
@@ -53,9 +53,29 @@ func TestRegisterAgentIP_InspectErrorLeavesUnattributed(t *testing.T) {
 
 func TestRegisterAgentIP_EmptyContainerIDNoOp(t *testing.T) {
 	reg := daemon.NewAgentIPRegistry()
-	l := dockerAgentLauncher{agentIPs: reg}
+	l := dockerAgentLauncher{agentIPs: agentIPWiring{registry: reg}}
 	// An empty container ID means there is nothing to inspect: no mapping is planted.
 	l.registerAgentIP(context.Background(), fakeInspector{resp: devcontainer.ContainerInspectResponse{IPAddress: "172.17.0.9"}}, "", "board-SC-1-implementation")
 	_, _, ok := reg.Attribute("172.17.0.9:5")
 	assert.False(t, ok)
+}
+
+// A proxy connection can arrive at the daemon before the launcher's own
+// registration does — the same daemon-restart-hole shape review round 1 found
+// for the repair pass's Register call, reproduced at the SECOND Register call
+// site (SC-3853). registerAgentIP must replay a mark held for this host, not
+// only the repair pass.
+func TestRegisterAgentIP_ReplaysAPendingRequestOpenedBeforeTheMapping(t *testing.T) {
+	reg := daemon.NewAgentIPRegistry()
+	pending := daemon.NewPendingModelRequests()
+	inflight := daemon.NewInflightModelRequests()
+	name := "board-SC-1-implementation"
+
+	pending.Hold("172.17.0.9", 1)
+
+	l := dockerAgentLauncher{agentIPs: agentIPWiring{registry: reg, pending: pending, inflight: inflight}}
+	insp := fakeInspector{resp: devcontainer.ContainerInspectResponse{IPAddress: "172.17.0.9"}}
+	l.registerAgentIP(context.Background(), insp, "cid", name)
+
+	assert.True(t, inflight.Outstanding(name), "the mark held before the mapping existed must be replayed onto it")
 }

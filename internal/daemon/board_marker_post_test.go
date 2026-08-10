@@ -74,6 +74,8 @@ func TestDaemonPostedMarkersSatisfyTheirContract(t *testing.T) {
 			Type: MarkerHandoffCheckUnreadable,
 			Body: "could not verify the handoff for branch feat/x on this machine — git timed out",
 		})},
+		{MarkerDeployed, ShippedOutOfBandDeployedBody("https://example/pr/7")},
+		{MarkerLateResultReconciled, LateResultReconciledBody("review", BoardVerification, eligible, eligible.Add(4*time.Minute))},
 	}
 
 	// A decision block only validates when its field order is the one the real

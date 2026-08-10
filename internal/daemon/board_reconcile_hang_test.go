@@ -20,9 +20,11 @@ func runningCard(now time.Time) []ReconcileCard {
 	}}
 }
 
+// The proxy answered: nothing open. These fixtures are about hook silence, so
+// they must not accidentally test the unknown case (SC-3853).
 func progressAt(last time.Time, insideTool, blocked bool) AgentProgressProbe {
 	return func(string) (AgentProgress, bool) {
-		return AgentProgress{LastEventAt: last, InsideTool: insideTool, Blocked: blocked}, true
+		return AgentProgress{LastEventAt: last, InsideTool: insideTool, Blocked: blocked, ModelRequest: ModelRequestNone}, true
 	}
 }
 

@@ -33,7 +33,9 @@ func TestAgentProgress_InsideToolUsesTheLongBudget(t *testing.T) {
 	require.Greater(t, idle, WorkingIdleGrace)
 }
 
-// Between tool calls a model acts within seconds, so silence is abnormal fast.
+// Between tool calls a model acts within seconds, so silence is abnormal
+// fast — but only when the daemon can actually see that nothing is open
+// (SC-3853).
 func TestAgentProgress_ThinkingUsesTheShortBudget(t *testing.T) {
 	progress := map[string]AgentProgress{}
 	start := time.Unix(1000, 0)
@@ -41,6 +43,7 @@ func TestAgentProgress_ThinkingUsesTheShortBudget(t *testing.T) {
 	trackProgress(progress, evt("PostToolUse", "a", "Bash", start.Add(time.Minute)))
 
 	p := progress["a"]
+	p.ModelRequest = ModelRequestNone // the proxy could answer: nothing is open
 	require.False(t, p.InsideTool, "the tool finished")
 	require.Equal(t, IdleGrace, p.IdleBudget())
 
@@ -71,9 +74,9 @@ func TestAgentProgress_LongRunningButActiveIsNeverStalled(t *testing.T) {
 func TestAgentProgress_OutstandingModelRequestIsNeverStalled(t *testing.T) {
 	now := time.Unix(100_000, 0)
 	p := AgentProgress{
-		LastEventAt:             now.Add(-4 * time.Minute),
-		InsideTool:              false,
-		OutstandingModelRequest: true,
+		LastEventAt:  now.Add(-4 * time.Minute),
+		InsideTool:   false,
+		ModelRequest: ModelRequestOpen,
 	}
 	require.Equal(t, WorkingIdleGrace, p.IdleBudget())
 	stalled, _ := p.Stalled(now)
@@ -82,16 +85,42 @@ func TestAgentProgress_OutstandingModelRequestIsNeverStalled(t *testing.T) {
 
 // With NEITHER a hook event NOR outstanding work of any kind for longer than
 // IdleGrace, the agent really has gone silent and must still be caught — the
-// short budget still bounds total silence.
+// short budget still bounds total silence. ModelRequest is explicitly none
+// here: the proxy could answer and did, so this pins genuine idleness rather
+// than the unknown case below.
 func TestAgentProgress_NoOutstandingWorkIsStalled(t *testing.T) {
 	now := time.Unix(100_000, 0)
 	p := AgentProgress{
-		LastEventAt: now.Add(-4 * time.Minute),
+		LastEventAt:  now.Add(-4 * time.Minute),
+		ModelRequest: ModelRequestNone,
 	}
 
 	stalled, idle := p.Stalled(now)
 	require.True(t, stalled, "total silence past the budget is still a hang")
 	require.Greater(t, idle, IdleGrace)
+}
+
+// The zero value is UNKNOWN, not none: absent evidence about the model-request
+// signal must never be read as "nothing is open", or the daemon kills live
+// work on a bookkeeping failure — the one direction this must never fail in
+// (SC-3853).
+func TestAgentProgress_UnknownModelRequestUsesTheLongBudget(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	p := AgentProgress{LastEventAt: now.Add(-4 * time.Minute)}
+
+	require.Equal(t, ModelRequestUnknown, p.ModelRequest, "the zero value is unknown")
+	require.Equal(t, WorkingIdleGrace, p.IdleBudget())
+	stalled, _ := p.Stalled(now)
+	require.False(t, stalled, "unknown gets the generous budget, not the short one")
+}
+
+// String renders all three states plus an out-of-range value, which
+// //exhaustive:enforce's default case must still answer safely.
+func TestAgentProgress_ModelRequestStateString(t *testing.T) {
+	require.Equal(t, "unknown", ModelRequestUnknown.String())
+	require.Equal(t, "none", ModelRequestNone.String())
+	require.Equal(t, "open", ModelRequestOpen.String())
+	require.Equal(t, "unknown", ModelRequestState(9).String())
 }
 
 // An agent waiting on a permission prompt needs an answer, not a relaunch —

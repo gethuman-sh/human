@@ -154,6 +154,44 @@ func TestWhere_ReportsLivenessFromTheDaemonsOwnRecord(t *testing.T) {
 	assert.False(t, report.Agent.Stalled, "an agent waiting on a person is not hung")
 }
 
+// The model-request tri-state rides the report alongside the boolean it used
+// to be: unknown means the daemon could not resolve this agent's connections,
+// so it never claims a request is open or that nothing is (SC-3853).
+func TestWhereAgent_ReportsModelRequestState(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	deps := WhereDeps{
+		Now: now,
+		Progress: func(string) (AgentProgress, bool) {
+			return AgentProgress{LastEventAt: now.Add(-4 * time.Minute), ModelRequest: ModelRequestUnknown}, true
+		},
+	}
+	report := BuildWhere(whereDoc(t), "SC-1",
+		[]tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1000, 0))},
+		tracker.CategoryUnstarted, false, "skill", deps)
+
+	require.NotNil(t, report.Agent)
+	assert.Equal(t, "unknown", report.Agent.ModelRequest)
+	assert.False(t, report.Agent.OutstandingCall)
+	assert.False(t, report.Agent.Stalled, "unknown gets the generous budget")
+}
+
+func TestWhereAgent_ReportsOpenCall(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	deps := WhereDeps{
+		Now: now,
+		Progress: func(string) (AgentProgress, bool) {
+			return AgentProgress{LastEventAt: now.Add(-4 * time.Minute), ModelRequest: ModelRequestOpen}, true
+		},
+	}
+	report := BuildWhere(whereDoc(t), "SC-1",
+		[]tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1000, 0))},
+		tracker.CategoryUnstarted, false, "skill", deps)
+
+	require.NotNil(t, report.Agent)
+	assert.Equal(t, "open", report.Agent.ModelRequest)
+	assert.True(t, report.Agent.OutstandingCall)
+}
+
 // An unknown agent is reported as unknown rather than as dead: absent evidence
 // and evidence of absence lead to opposite actions.
 func TestWhere_DistinguishesNoRecordFromNotAlive(t *testing.T) {

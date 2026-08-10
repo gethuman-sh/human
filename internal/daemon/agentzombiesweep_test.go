@@ -2,12 +2,15 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 )
 
 type mockSweeper struct {
@@ -359,7 +362,7 @@ func TestSweepZombieAgents_ReapsHungBoardAgent(t *testing.T) {
 	}
 	sweep := newZombieSweep()
 	sweep.progress = func(agentName string) (AgentProgress, bool) {
-		return AgentProgress{LastEventAt: time.Now().Add(-40 * time.Minute)}, true
+		return AgentProgress{LastEventAt: time.Now().Add(-40 * time.Minute), ModelRequest: ModelRequestNone}, true
 	}
 
 	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
@@ -369,8 +372,8 @@ func TestSweepZombieAgents_ReapsHungBoardAgent(t *testing.T) {
 
 // SC-3074: hook silence alone is not the whole story. A hook-idle agent with
 // a request outstanding to the model is thinking, not hung — the progress
-// probe's OutstandingModelRequest must be enough to spare it, exactly like a
-// live TestSweepZombieAgents_SparesWorkingBoardAgent case.
+// probe's ModelRequest must be enough to spare it, exactly like a live
+// TestSweepZombieAgents_SparesWorkingBoardAgent case.
 func TestSweepZombieAgents_OutstandingModelRequestSparesHungLookingAgent(t *testing.T) {
 	now := time.Now()
 	s := &mockSweeper{
@@ -383,7 +386,7 @@ func TestSweepZombieAgents_OutstandingModelRequestSparesHungLookingAgent(t *test
 	sweep.progress = func(agentName string) (AgentProgress, bool) {
 		// hook-idle past IdleGrace but within WorkingIdleGrace, with a model
 		// request still outstanding.
-		return AgentProgress{LastEventAt: now.Add(-10 * time.Minute), OutstandingModelRequest: true}, true
+		return AgentProgress{LastEventAt: now.Add(-10 * time.Minute), ModelRequest: ModelRequestOpen}, true
 	}
 
 	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
@@ -402,7 +405,7 @@ func TestSweepZombieAgents_SparesWorkingBoardAgent(t *testing.T) {
 	}
 	sweep := newZombieSweep()
 	sweep.progress = func(agentName string) (AgentProgress, bool) {
-		return AgentProgress{LastEventAt: time.Now().Add(-30 * time.Second)}, true
+		return AgentProgress{LastEventAt: time.Now().Add(-30 * time.Second), ModelRequest: ModelRequestNone}, true
 	}
 
 	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
@@ -422,7 +425,7 @@ func TestSweepZombieAgents_SparesHungNonBoardAgentWithLiveClaude(t *testing.T) {
 	}
 	sweep := newZombieSweep()
 	sweep.progress = func(agentName string) (AgentProgress, bool) {
-		return AgentProgress{LastEventAt: time.Now().Add(-40 * time.Minute)}, true
+		return AgentProgress{LastEventAt: time.Now().Add(-40 * time.Minute), ModelRequest: ModelRequestNone}, true
 	}
 
 	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
@@ -497,4 +500,100 @@ func TestSweepZombieAgents_HungReapDoesNotStarveNextTick(t *testing.T) {
 	}
 
 	assert.Contains(t, s.deletedNames(), "agent-ok", "next tick must reap a different dead agent")
+}
+
+// SC-3853: the outstanding-model-request signal is best-effort, and every way it
+// fails returns the same false a genuinely idle agent returns. An agent with no
+// entry in the AgentIPRegistry — a daemon restarted under a running agent, a
+// launch whose inspect returned no address, a warm-container relaunch — is one
+// the daemon CANNOT ask about. Reaping it at the 3-minute line kills live work
+// on absent evidence, the one failure the reaper must never risk.
+func TestSweepZombieAgents_UnresolvableAgentIsNotReaped(t *testing.T) {
+	now := time.Now()
+	const name = "board-SC-3853-implementation"
+
+	// The proxy sees this agent's model request open and cannot attribute it:
+	// the registry has no mapping for its address, so the mark is held rather
+	// than dropped, but the registry still cannot answer "mapped?" for it.
+	reg := NewAgentIPRegistry()
+	inflight := NewInflightModelRequests()
+	pending := NewPendingModelRequests()
+	NewInflightMarker(inflight, reg, pending)("172.17.0.5:52344", 1)
+
+	// Its last hook event is 5 minutes old — past IdleGrace (3m), inside
+	// WorkingIdleGrace (30m) — and it is not inside a tool call.
+	hooks := NewHookEventStore()
+	hooks.Append(hookevents.Event{
+		EventName: "PostToolUse",
+		AgentName: name,
+		ToolName:  "Bash",
+		Timestamp: now.Add(-5 * time.Minute),
+	})
+
+	s := &mockSweeper{
+		agents:    []AgentInfo{{Name: name, ContainerID: "c1", CreatedAt: now.Add(-3 * time.Hour)}},
+		processUp: map[string]bool{"c1": true},
+	}
+	sweep := newZombieSweep()
+	sweep.progress = NewAgentProgressProbe(hooks, inflight, reg)
+
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+
+	assert.Empty(t, s.deleted, "an agent the daemon cannot resolve is unknown, not idle")
+}
+
+// The counterpart: an agent the registry CAN resolve, with nothing open, is
+// still reaped at the short budget — the fix must not widen the grace for
+// every agent, only for ones the daemon cannot ask about.
+func TestSweepZombieAgents_ResolvableIdleAgentIsStillReaped(t *testing.T) {
+	now := time.Now()
+	const name = "board-SC-3853-implementation"
+
+	reg := NewAgentIPRegistry()
+	reg.Register("172.17.0.5", name)
+	inflight := NewInflightModelRequests()
+	pending := NewPendingModelRequests()
+	mark := NewInflightMarker(inflight, reg, pending)
+	mark("172.17.0.5:52344", 1)
+	mark("172.17.0.5:52344", -1)
+
+	hooks := NewHookEventStore()
+	hooks.Append(hookevents.Event{
+		EventName: "PostToolUse",
+		AgentName: name,
+		ToolName:  "Bash",
+		Timestamp: now.Add(-5 * time.Minute),
+	})
+
+	s := &mockSweeper{
+		agents:    []AgentInfo{{Name: name, ContainerID: "c1", CreatedAt: now.Add(-3 * time.Hour)}},
+		processUp: map[string]bool{"c1": true},
+	}
+	sweep := newZombieSweep()
+	sweep.progress = NewAgentProgressProbe(hooks, inflight, reg)
+
+	sweep.sweepZombieAgents(context.Background(), s, nil, zerolog.Nop())
+
+	assert.Equal(t, []string{name}, s.deleted, "resolvable and genuinely idle is still reaped past IdleGrace")
+}
+
+// The reap log names which model-request answer it acted on — the
+// diagnosability half of the fix (SC-3853).
+func TestSweepZombieAgents_ReapLogNamesModelRequestState(t *testing.T) {
+	s := &mockSweeper{
+		agents: []AgentInfo{
+			{Name: "board-1557-implementation", ContainerID: "c1", CreatedAt: time.Now().Add(-3 * time.Hour)},
+		},
+		processUp: map[string]bool{"c1": true},
+	}
+	sweep := newZombieSweep()
+	sweep.progress = func(agentName string) (AgentProgress, bool) {
+		return AgentProgress{LastEventAt: time.Now().Add(-40 * time.Minute), ModelRequest: ModelRequestNone}, true
+	}
+
+	var buf strings.Builder
+	logger := zerolog.New(&buf)
+	sweep.sweepZombieAgents(context.Background(), s, nil, logger)
+
+	assert.Contains(t, buf.String(), `"model_request":"none"`)
 }

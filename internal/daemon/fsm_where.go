@@ -88,7 +88,12 @@ type WhereAgent struct {
 	Stalled         bool   `json:"stalled"`
 	InsideTool      bool   `json:"inside_tool,omitempty"`
 	OutstandingCall bool   `json:"outstanding_model_request,omitempty"`
-	Blocked         bool   `json:"blocked,omitempty"`
+	// ModelRequest is the same signal with its third answer visible: "open",
+	// "none", or "unknown" — the daemon could not resolve this agent's
+	// connections and so cannot say. Reported because a run reaped while
+	// working left nothing behind naming which of the two it was (SC-3853).
+	ModelRequest string `json:"model_request,omitempty"`
+	Blocked      bool   `json:"blocked,omitempty"`
 }
 
 // WhereEntered is when the item arrived where it is.
@@ -382,7 +387,8 @@ func whereAgent(key string, card BoardCard, deps WhereDeps) *WhereAgent {
 		IdleSeconds:     int(idle.Seconds()),
 		Stalled:         stalled,
 		InsideTool:      p.InsideTool,
-		OutstandingCall: p.OutstandingModelRequest,
+		OutstandingCall: p.ModelRequest == ModelRequestOpen,
+		ModelRequest:    p.ModelRequest.String(),
 		Blocked:         p.Blocked,
 	}
 }

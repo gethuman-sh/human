@@ -22,6 +22,7 @@
       "related",
       "shipped-partial",
       "handoff-check-unreadable",
+      "late-result-reconciled",
       "fix-summary",
       "claim",
       "stage-wait"
@@ -1123,6 +1124,8 @@
     "constants": {
       "BoardReconcileInterval": "2m, jittered ±50% — how often the durable pass re-scans open cards (internal/daemon/board_reconcile.go)",
       "StuckRunningGrace": "15m — how long a running card is left alone before liveness is judged",
+      "IdleGrace": "3m — how long an agent with NO outstanding work may stay silent before the reap (internal/daemon/agentprogress.go)",
+      "WorkingIdleGrace": "30m — how long an agent with outstanding work may stay silent: inside a tool call, a model request open, OR the model-request state unknown. Unknown takes the generous bound on purpose — the machine must not kill live work because it lost its own bookkeeping (SC-3853).",
       "QueuedLaunchGrace": "2m — how long a card whose decision was answered may sit unstarted before the machine starts it (internal/daemon/board_reconcile_queued.go). Short because the launch is the same call that recorded the choice; it exists only so a tick landing inside that call does not race it.",
       "DefaultStageRetries": "2 — automatic in-place relaunches of one stage (internal/daemon/board_retry.go)",
       "DefaultPRReviewRounds": "3 — review→fix rounds before the loop escalates (internal/daemon/pr_review_loop.go)",
