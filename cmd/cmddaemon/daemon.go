@@ -2052,8 +2052,35 @@ func serveLastGoodView(cache *boardcache.Store, project string, cause error, log
 		return daemon.BoardView{}, cause
 	}
 	logger.Warn().Err(cause).Msg("board view: refresh failed, serving the last good board marked stale")
-	view.Error = "showing the last board that loaded — this refresh failed: " + cause.Error()
+	view.Error = staleBoardBanner(view.CachedAt, time.Now(), cause)
 	return view, nil
+}
+
+// staleBoardBanner says which board is being shown and HOW OLD it is. Without
+// the age the sentence is the same one whether the snapshot is a minute or a
+// week old, while its cards go on showing spinners for agents that finished
+// long ago (SC-4151). A snapshot with no stamp — written before it was kept —
+// reads exactly as it did.
+func staleBoardBanner(cachedAt string, now time.Time, cause error) string {
+	banner := "showing the last board that loaded"
+	if t, err := time.Parse(time.RFC3339, cachedAt); err == nil {
+		banner += " (" + humanizeAge(now.Sub(t)) + " old)"
+	}
+	return banner + " — this refresh failed: " + cause.Error()
+}
+
+// humanizeAge renders a duration in the board's compact house form.
+func humanizeAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 // rememberBoardView keeps the last board that actually carried work, so a later
@@ -2064,6 +2091,10 @@ func rememberBoardView(cache *boardcache.Store, project string, view daemon.Boar
 	if len(view.Cards) == 0 {
 		return
 	}
+	// Stamped on the stored copy only: the live board is current by definition,
+	// and a served board carrying a compose time would invite the frontend to
+	// treat every refresh as dated.
+	view.CachedAt = time.Now().UTC().Format(time.RFC3339)
 	raw, err := json.Marshal(view)
 	if err != nil {
 		return

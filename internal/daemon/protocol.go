@@ -327,4 +327,11 @@ type BoardView struct {
 	// the wire, so a project that configured nothing ships exactly today's
 	// payload and the frontend leaves the stylesheet's :root fallback alone.
 	DimPercent int `json:"dimPercent,omitempty"`
+	// CachedAt is when this board was composed, stamped only on the copy kept as
+	// the last-good snapshot. A refresh that fails serves that snapshot with a
+	// banner saying so — but "the last board that loaded" carries no age, so a
+	// snapshot minutes old and one days old read identically while the cards
+	// keep their spinners (SC-4151). Empty on every live board and on snapshots
+	// written before this existed, which then read exactly as they did.
+	CachedAt string `json:"cachedAt,omitempty"`
 }
