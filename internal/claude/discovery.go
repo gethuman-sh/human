@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -482,6 +483,20 @@ type DockerFinder struct {
 	Client   DockerClient
 	CacheTTL time.Duration // TTL for container data cache; defaults to 2s
 
+	// SessionForContainer names the transcript session belonging to one
+	// container, given its container name. Board agents mount ONE shared
+	// transcript directory as ~/.claude, so a container's own transcripts cannot
+	// be told from its siblings' by looking inside it — usage and session state
+	// both end up read from whichever file was written last, by whichever agent
+	// (SC-4151 C6). The daemon's own hook trail already pairs agent with session,
+	// so the answer is injected rather than probed: internal/agent owns both the
+	// trail and the container-name prefix, and it imports this package's
+	// hookevents, so depending on it here would close a cycle.
+	//
+	// nil, or a container it cannot resolve, leaves that container unnarrowed —
+	// today's behaviour exactly, per the package's "nil disables" convention.
+	SessionForContainer func(containerName string) string
+
 	mu    sync.Mutex
 	cache map[string]*dockerCacheEntry
 }
@@ -552,7 +567,7 @@ func (d *DockerFinder) buildContainerInstance(ctx context.Context, ctr Container
 
 	data := d.getCached(ctr.ID, ttl)
 	if data == nil {
-		data = d.fetchContainerData(ctx, ctr.ID)
+		data = d.fetchContainerData(ctx, ctr.ID, d.sessionFor(ctr.Name))
 		if data == nil {
 			return Instance{}, false
 		}
@@ -596,9 +611,38 @@ func (d *DockerFinder) buildContainerInstance(ctx context.Context, ctr Container
 // (currently active) session for code-navigation discovery.
 const transcriptStatCommand = `find /root/.claude/projects /home -maxdepth 6 -name '*.jsonl' -exec stat -c '%Y %n' {} + 2>/dev/null`
 
-func (d *DockerFinder) fetchContainerData(ctx context.Context, containerID string) []byte {
+// sessionIDPattern is what may be interpolated into the container-side find.
+// The ids come from our own hook trail, but a value reaching a shell must be
+// constrained by shape rather than by where it was supposed to have come from.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
+
+// sessionFor resolves the transcript session for one container, or "" when the
+// question cannot be answered — see DockerFinder.SessionForContainer.
+func (d *DockerFinder) sessionFor(containerName string) string {
+	if d.SessionForContainer == nil {
+		return ""
+	}
+	id := strings.TrimSpace(d.SessionForContainer(containerName))
+	if !sessionIDPattern.MatchString(id) {
+		return ""
+	}
+	return id
+}
+
+// transcriptStatFor narrows the transcript listing to one session's file when
+// the caller could name it. Every agent container sees every agent's
+// transcripts through the shared mount, so without the narrowing this returns
+// the whole fleet's history for each container in turn.
+func transcriptStatFor(sessionID string) string {
+	if sessionID == "" {
+		return transcriptStatCommand
+	}
+	return `find /root/.claude/projects /home -maxdepth 6 -name '` + sessionID + `.jsonl' -exec stat -c '%Y %n' {} + 2>/dev/null`
+}
+
+func (d *DockerFinder) fetchContainerData(ctx context.Context, containerID, sessionID string) []byte {
 	// List JSONL files with modification times from the container.
-	_, listReader, err := d.Client.Exec(ctx, containerID, []string{"sh", "-c", transcriptStatCommand})
+	_, listReader, err := d.Client.Exec(ctx, containerID, []string{"sh", "-c", transcriptStatFor(sessionID)})
 	if err != nil {
 		return nil
 	}

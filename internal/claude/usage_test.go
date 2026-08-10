@@ -4,9 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // must returns v unchanged, failing the test when it is nil. Centralizing the
@@ -767,5 +773,61 @@ func TestScanTokens_byModel_empty(t *testing.T) {
 	}
 	if len(scan.ByModel) != 0 {
 		t.Errorf("ByModel = %+v, want empty", scan.ByModel)
+	}
+}
+
+// TestUsageScope_PrefersTheInstancesOwnTranscript covers SC-4151 C6: Root is the
+// whole project transcript tree, shared by every agent with the same cwd, so
+// scanning it reports the project's tokens once per row.
+func TestUsageScope_PrefersTheInstancesOwnTranscript(t *testing.T) {
+	own := Instance{Root: "/home/u/.claude/projects/proj", FilePath: "/home/u/.claude/projects/proj/sess.jsonl"}
+	assert.Equal(t, own.FilePath, usageScope(own), "an instance that knows its own transcript is scoped to it")
+
+	shared := Instance{Root: "/home/u/.claude/projects/proj"}
+	assert.Equal(t, shared.Root, usageScope(shared), "without one, the tree is all there is")
+}
+
+// TestCollectInstanceUsage_ScopesPerInstance is the regression the measured bug
+// left: two instances rooted in the same tree must not report the same tokens.
+func TestCollectInstanceUsage_ScopesPerInstance(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	ts := now.Format(time.RFC3339Nano)
+	write := func(name string, out int) string {
+		p := filepath.Join(dir, name)
+		line := fmt.Sprintf(`{"type":"assistant","timestamp":%q,"message":{"model":"claude-opus-4-8","usage":{"input_tokens":1,"output_tokens":%d}}}`, ts, out)
+		require.NoError(t, os.WriteFile(p, []byte(line+"\n"), 0o600))
+		return p
+	}
+	a := write("a.jsonl", 10)
+	b := write("b.jsonl", 200)
+
+	got := CollectInstanceUsage([]Instance{
+		{Walker: OSDirWalker{}, Root: dir, FilePath: a},
+		{Walker: OSDirWalker{}, Root: dir, FilePath: b},
+	}, now)
+	require.Len(t, got, 2)
+	assert.Equal(t, 10, got[0].Summary.Models["opus 4.8"].OutputTokens)
+	assert.Equal(t, 200, got[1].Summary.Models["opus 4.8"].OutputTokens)
+}
+
+func TestTranscriptStatFor(t *testing.T) {
+	assert.Equal(t, transcriptStatCommand, transcriptStatFor(""), "unnarrowed when no session is known")
+	narrowed := transcriptStatFor("c2848539-5efe-4fe2-b60d-9c73807417ff")
+	assert.Contains(t, narrowed, "-name 'c2848539-5efe-4fe2-b60d-9c73807417ff.jsonl'")
+	assert.NotContains(t, narrowed, "'*.jsonl'")
+}
+
+func TestDockerFinder_SessionFor(t *testing.T) {
+	var d DockerFinder
+	assert.Empty(t, d.sessionFor("human-agent-x"), "nil resolver disables narrowing")
+
+	d.SessionForContainer = func(string) string { return "c2848539-5efe-4fe2-b60d-9c73807417ff" }
+	assert.Equal(t, "c2848539-5efe-4fe2-b60d-9c73807417ff", d.sessionFor("human-agent-x"))
+
+	// A value of the wrong shape never reaches the container-side shell.
+	for _, bad := range []string{"", "a", "sess id", "x'; rm -rf /;'", "../../etc/passwd"} {
+		d.SessionForContainer = func(string) string { return bad }
+		assert.Empty(t, d.sessionFor("human-agent-x"), bad)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/claude/logparser"
 	"github.com/gethuman-sh/human/internal/claude/monitor"
@@ -101,7 +102,7 @@ func buildInstanceFinder() (claude.InstanceFinder, claude.DockerClient) {
 	var dc claude.DockerClient
 	if client, dcErr := claude.NewEngineDockerClient(); dcErr == nil {
 		dc = client
-		finders = append(finders, &claude.DockerFinder{Client: dc})
+		finders = append(finders, &claude.DockerFinder{Client: dc, SessionForContainer: agent.SessionForContainer})
 	}
 	return &claude.CombinedFinder{Finders: finders}, dc
 }

@@ -15,7 +15,17 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/gitrepo"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// withTempLogs redirects the execution-log root at the package-level override,
+// the same way the stream and regression tests do.
+func withTempLogs(t *testing.T) {
+	t.Helper()
+	agentLogsDirOverride = t.TempDir()
+	t.Cleanup(func() { agentLogsDirOverride = "" })
+}
 
 // stderrFrame wraps payload in a Docker stdcopy multiplexed stderr frame.
 func stderrFrame(payload string) []byte {
@@ -401,4 +411,34 @@ func TestHookEventSink_AppendsJSONL(t *testing.T) {
 
 	// Empty agent name is a no-op (no panic, nothing written).
 	HookEventSink(hookevents.Event{EventName: "Stop", Timestamp: time.Now()})
+}
+
+// TestLatestSessionID covers the join SC-4151 C6 needs: every agent container
+// mounts the SAME transcript directory as ~/.claude, so the only record of
+// which session belongs to which agent is the run's own hook trail.
+func TestLatestSessionID(t *testing.T) {
+	withTempLogs(t)
+
+	assert.Empty(t, LatestSessionID("never-ran"), "an agent with no runs names no session")
+
+	exe, err := NewExecution(LaunchRecord{ID: "e1", Agent: "board-SC-1-implementation", StartedAt: time.Now()})
+	require.NoError(t, err)
+	assert.Empty(t, LatestSessionID("board-SC-1-implementation"), "a run with no hook trail yet names no session")
+
+	HookEventSink(hookevents.Event{EventName: "SessionStart", AgentName: "board-SC-1-implementation", SessionID: "c2848539-5efe-4fe2-b60d-9c73807417ff"})
+	assert.Equal(t, "c2848539-5efe-4fe2-b60d-9c73807417ff", LatestSessionID("board-SC-1-implementation"))
+	assert.DirExists(t, exe.Dir())
+}
+
+func TestSessionForContainer(t *testing.T) {
+	withTempLogs(t)
+	_, err := NewExecution(LaunchRecord{ID: "e1", Agent: "board-SC-1-prreview", StartedAt: time.Now()})
+	require.NoError(t, err)
+	HookEventSink(hookevents.Event{EventName: "SessionStart", AgentName: "board-SC-1-prreview", SessionID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"})
+
+	assert.Equal(t, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", SessionForContainer(ContainerPrefix+"board-SC-1-prreview"))
+	// Anything this package did not name is not a managed agent.
+	assert.Empty(t, SessionForContainer("some-other-container"))
+	assert.Empty(t, SessionForContainer(ContainerPrefix))
+	assert.Empty(t, SessionForContainer(""))
 }

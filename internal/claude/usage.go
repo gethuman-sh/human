@@ -530,16 +530,38 @@ type InstanceUsage struct {
 }
 
 // CollectInstanceUsage calculates usage for each instance and returns results.
+//
+// Per instance means per instance. Root is the whole project transcript tree
+// (~/.claude/projects/<project>), which every agent with the same cwd shares, so
+// scanning it attributes the PROJECT's tokens to each row: three host agents on
+// this repo all printed `in: 1.3K out: 413K`, the same figure three times, as if
+// each had spent it (SC-4151 C6). usageScope prefers the instance's own resolved
+// transcript, and only an instance that has none falls back to the tree.
 func CollectInstanceUsage(instances []Instance, now time.Time) []InstanceUsage {
 	var results []InstanceUsage
 	for _, inst := range instances {
-		summary, err := CalculateUsage(inst.Walker, inst.Root, now)
+		summary, err := CalculateUsage(inst.Walker, usageScope(inst), now)
 		if err != nil {
 			continue
 		}
 		results = append(results, InstanceUsage{Instance: inst, Summary: summary, State: StateUnknown})
 	}
 	return results
+}
+
+// usageScope names what one instance's usage is calculated over: its own
+// session transcript when discovery resolved one (host instances carry FilePath
+// for exactly this file — the one fsnotify watches), otherwise Root.
+//
+// Passing a file to a DirWalker is safe by construction: OSDirWalker walks it
+// with filepath.Walk, which yields a plain file once, and ByteWalker ignores the
+// path entirely — a container's usage comes from the bytes it was given, so
+// naming a path could not narrow it anyway.
+func usageScope(inst Instance) string {
+	if inst.FilePath != "" {
+		return inst.FilePath
+	}
+	return inst.Root
 }
 
 // MergeUsage adds all model usage from src into dst.
