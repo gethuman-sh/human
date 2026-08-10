@@ -446,7 +446,39 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	}
 	rootCmd.AddCommand(hookEventCmd)
 
+	rejectUnknownSubcommands(rootCmd)
+
 	return rootCmd
+}
+
+// rejectUnknownSubcommands makes a mistyped or non-existent subcommand fail.
+//
+// A command group holds subcommands and does no work of its own, and cobra's
+// default for one is to accept any positional argument, print the group's help
+// on stdout and exit 0. So `human fsm next` — a command that has never existed
+// — reads as a success carrying a wall of plausible text. Callers that check
+// the exit code see nothing wrong, and an agent acting on a stale instruction
+// proceeds believing it consulted the tool. Only the root command rejected the
+// unknown word; every group below it swallowed one.
+//
+// cobra.NoArgs alone does not fix it: cobra returns ErrHelp for a command that
+// is not runnable before it ever validates the arguments, so the check would
+// never run. The group is therefore given a RunE that prints its help — which
+// is what running a group bare should do anyway — and that makes it runnable,
+// which is what lets NoArgs report `unknown command "next" for "human fsm"`
+// and exit non-zero.
+//
+// A group that already declares Args or a Run has decided the question for
+// itself and is left alone.
+func rejectUnknownSubcommands(cmd *cobra.Command) {
+	for _, child := range cmd.Commands() {
+		rejectUnknownSubcommands(child)
+	}
+	if cmd.Runnable() || !cmd.HasSubCommands() || cmd.Args != nil {
+		return
+	}
+	cmd.Args = cobra.NoArgs
+	cmd.RunE = func(c *cobra.Command, _ []string) error { return c.Help() }
 }
 
 func buildInstallCmd() *cobra.Command {
