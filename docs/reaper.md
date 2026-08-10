@@ -173,10 +173,16 @@ posts nothing, relaunches nothing, and spends no budget (SC-3857): the exit
 dispatcher's `stageAlreadyFailed` check reads the stage's own newest marker
 before any of §§ 4–6 can post their own, so a second, unrelated exit event for a
 run already declared dead is absorbed rather than re-told. The one case this does
-NOT absorb is a genuine reap **after a relaunch** — every relaunch posts the
-stage's own `*-started` marker before the agent that follows it can exit, which
-flips the guard back off, so a repeated hang past `MaxSilenceReaps` still
-escalates exactly as below.
+NOT absorb is a genuine reap **after a relaunch that actually started an agent** —
+such a relaunch posts the stage's own `*-started` marker before the agent that
+follows it can exit, which flips the guard back off, so a repeated hang past
+`MaxSilenceReaps` still escalates exactly as below. A relaunch the launcher
+**refused** because an agent for `(key, stage)` is already running on this machine
+posts no marker at all (SC-4244): the guard stays on, deliberately, because the
+run it would re-tell about is the one still going — and, for the same reason, that
+refusal does not re-date `StageEnteredAt`, so § 5's grace is measured from the
+start of the run that is actually running rather than from the last attempt to
+replace it.
 
 The same `stageAlreadyFailed` check also sits ahead of a genuine death (§ 2,
 § 3, § 6), but there it is narrower: it suppresses only the repeat POST of an
@@ -214,7 +220,7 @@ container. All of these must hold:
 - it carries no open `[human:options]` block for its own stage or an earlier one
   (that is a deliberate human pause, not a hang);
 - its stage has a `*-failed` marker header available;
-- it has sat past its grace — `StuckRunningGrace` = **15 minutes** for every stage except a card recorded as *deploying*, whose newest done-stage marker is `[human:deploy-started]`: that one is left alone for `deployTimeout + StuckRunningGrace` = **60 minutes**, because a deploy has no agent to probe and its CI gate legitimately blocks for 45 (`stuckPastGrace`, `internal/daemon/board_reconcile.go`), and measured from the ENGINE's clock rather than the marker post: `DeployBranch` records the instant it leaves the unbounded `deployGate`, and while a run is still queued the clock is the last time the queue moved — so a deploy waiting behind another is spared while the queue advances and judged once it has stopped (SC-4150). The marker clock is the fallback, used where this machine is not the one running the deploy (a peer daemon, a restart that lost the record), so the pass stays bounded rather than exempt. The rule is keyed by the in-flight run, not by which marker is newest, so the approve-branch (`[human:pr-review-passed]`) and deploy-fixer (`[human:deploy-fix-started]`) routes get the same clock as `[human:deploy-started]`;
+- it has sat past its grace — `StuckRunningGrace` = **15 minutes** for every stage except a card recorded as *deploying*, whose newest done-stage marker is `[human:deploy-started]`: that one is left alone for `deployTimeout + StuckRunningGrace` = **60 minutes**, because a deploy has no agent to probe and its CI gate legitimately blocks for 45 (`stuckPastGrace`, `internal/daemon/board_reconcile.go`), and measured from the ENGINE's clock rather than the marker post: `DeployBranch` records the instant it leaves the unbounded `deployGate`, and while a run is still queued the clock is the last time the queue moved — so a deploy waiting behind another is spared while the queue advances and judged once it has stopped (SC-4150). The marker clock is the fallback, used where this machine is not the one running the deploy (a peer daemon, a restart that lost the record), so the pass stays bounded rather than exempt. The rule is keyed by the in-flight run, not by which marker is newest, so the approve-branch (`[human:pr-review-passed]`) and deploy-fixer (`[human:deploy-fix-started]`) routes get the same clock as `[human:deploy-started]`. Where the clock is the marker, it is the stage's newest *classified* marker — and a relaunch refused because an agent is already running posts none, so refused relaunches no longer refresh it and the grace runs from the start of the run that is actually running (SC-4244);
 - it passed the `forTakeover` ownership gate — this machine participates in the
   project, no peer daemon owns the stage, and the branch resolves here (SC-2047);
 - and the stage agent, which *is* alive on this machine, reports stalled.

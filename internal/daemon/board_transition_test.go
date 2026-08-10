@@ -26,7 +26,11 @@ type fakeCommenter struct {
 	comments []tracker.Comment
 	added    []string
 	addErr   error
-	nextID   int
+	// addErrFor narrows addErr to the posts whose body contains it, so a test can
+	// fail one marker without failing every comment the path writes — the only way
+	// to reach "the agent started but its started marker could not be posted".
+	addErrFor string
+	nextID    int
 }
 
 func (f *fakeCommenter) ListComments(_ context.Context, _ string) ([]tracker.Comment, error) {
@@ -34,7 +38,7 @@ func (f *fakeCommenter) ListComments(_ context.Context, _ string) ([]tracker.Com
 }
 
 func (f *fakeCommenter) AddComment(_ context.Context, _ string, body string) (*tracker.Comment, error) {
-	if f.addErr != nil {
+	if f.addErr != nil && (f.addErrFor == "" || strings.Contains(body, f.addErrFor)) {
 		return nil, f.addErr
 	}
 	f.added = append(f.added, body)
@@ -1001,35 +1005,34 @@ func TestStartAgentStageLaunchFails(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
 	require.Error(t, err)
-	// started marker posted, then failed marker posted on launch error.
-	require.Len(t, c.added, 2)
-	assert.Equal(t, PlanningStartedHeader, c.added[0])
-	assert.Contains(t, c.added[1], PlanningFailedHeader)
+	// A launch that never started posts only the failed marker: the started one
+	// now follows the launch, so there is nothing to claim (SC-4244).
+	require.Len(t, c.added, 1)
+	assert.Contains(t, c.added[0], PlanningFailedHeader)
 }
 
 func TestStartAgentStageAlreadyRunningIsNoOp(t *testing.T) {
 	// A retry that races the daemon's agent cleanup hits the manager's
 	// single-flight guard, which refuses the second launch with
-	// ErrAgentAlreadyRunning. That benign refusal must leave the card running:
-	// no [human:*-failed] marker, nil return (SC-1419).
+	// ErrAgentAlreadyRunning. That benign refusal must leave the running agent's
+	// record standing: no [human:*-failed] marker, nil return (SC-1419) — and no
+	// started marker either, since nothing started (SC-4244).
 	c := &fakeCommenter{}
 	l := &fakeLauncher{err: ErrAgentAlreadyRunning}
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
 	require.NoError(t, err)
-	// exactly the started marker, and no failed marker.
-	require.Len(t, c.added, 1)
-	assert.Equal(t, PlanningStartedHeader, c.added[0])
-	for _, body := range c.added {
-		assert.NotContains(t, body, PlanningFailedHeader)
-	}
+	require.Equal(t, 1, l.calls, "the launch must have been attempted")
+	assert.Empty(t, c.added, "a refusal records neither a start nor a failure")
 }
 
 func TestDispatchDeployFixerAlreadyRunningIsNoOp(t *testing.T) {
 	// The deploy gate racing its own repair hits the single-flight guard, which
 	// refuses the second launch with ErrAgentAlreadyRunning. That benign refusal
-	// must leave the card spinning on the deploy-fix-started marker: no
-	// [human:deploy-failed] marker, nil return (SC-2603, mirrors SC-1419).
+	// must leave the running fixer's deploy-fix-started marker standing: no
+	// [human:deploy-failed] marker, nil return (SC-2603, mirrors SC-1419) — and no
+	// second deploy-fix-started marker, which would spend a round nobody ran
+	// (SC-4244).
 	c := &fakeCommenter{}
 	l := &fakeLauncher{err: ErrAgentAlreadyRunning}
 	deps := newDeps(c, l, &fakeDeployer{})
@@ -1037,12 +1040,7 @@ func TestDispatchDeployFixerAlreadyRunningIsNoOp(t *testing.T) {
 		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed")
 	require.NoError(t, err)
 	require.Equal(t, 1, l.calls, "the launch must have been attempted")
-	// exactly the running deploy-fix-started marker, and no deploy-failed marker.
-	require.Len(t, c.added, 1)
-	assert.True(t, strings.HasPrefix(c.added[0], DeployFixStartedHeader))
-	for _, body := range c.added {
-		assert.NotContains(t, body, DeployFailedHeader)
-	}
+	assert.Empty(t, c.added, "a refusal records neither a fresh round nor a failure")
 }
 
 func TestLaunchPRLoopAgentAlreadyRunningIsNoOp(t *testing.T) {
@@ -1052,8 +1050,10 @@ func TestLaunchPRLoopAgentAlreadyRunningIsNoOp(t *testing.T) {
 	c := &fakeCommenter{}
 	l := &fakeLauncher{err: ErrAgentAlreadyRunning}
 	deps := newDeps(c, l, &fakeDeployer{})
-	err := deps.launchPRLoopAgent(context.Background(), "SC-1", prReviewAgentStage, "/human-pr-review SC-1")
+	launched, err := deps.launchPRLoopAgent(context.Background(), "SC-1", prReviewAgentStage,
+		"/human-pr-review SC-1", prReviewStartedBody("https://example/pr/7", 7, "feat/x"))
 	require.NoError(t, err)
+	assert.False(t, launched, "nothing started, and the caller must be able to tell")
 	require.Equal(t, 1, l.calls, "the launch must have been attempted")
 	assert.Empty(t, c.added, "a benign single-flight refusal posts no marker")
 	for _, body := range c.added {
@@ -1098,13 +1098,17 @@ func TestApplyTransitionListCommentsError(t *testing.T) {
 }
 
 func TestStartAgentStageStartedMarkerError(t *testing.T) {
-	// AddComment failing on the started marker aborts before launch.
-	c := &fakeCommenter{addErr: errors.New("comment api down")}
+	// The marker follows the launch now, so a failing AddComment can no longer
+	// abort it: the agent IS running and the error surfaces alongside
+	// launched=true, because reporting otherwise would re-create SC-4244 with the
+	// sign flipped and hand the retry path a rollback for a run that happened.
+	c := &fakeCommenter{addErr: errors.New("comment api down"), addErrFor: PlanningStartedHeader}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
-	require.Error(t, err)
-	assert.Zero(t, l.calls)
+	launched, err := deps.ApplyRetryTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", To: BoardPlanning})
+	require.ErrorContains(t, err, "posting started marker")
+	assert.True(t, launched, "the agent is running; the lost marker does not un-run it")
+	assert.Equal(t, 1, l.calls)
 }
 
 func TestFailedHeaderFor(t *testing.T) {
@@ -1409,9 +1413,9 @@ func TestApplyFixLaunchFailurePostsFailedMarker(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.ApplyFix(context.Background(), BoardFixRequest{PMKey: "SC-9"})
 	require.Error(t, err)
-	require.Len(t, c.added, 2)
-	assert.Equal(t, ImplementationStartedHeader, c.added[0])
-	assert.True(t, strings.HasPrefix(c.added[1], ImplementationFailedHeader))
+	// Only the failed marker: a launch that never started claims no start (SC-4244).
+	require.Len(t, c.added, 1)
+	assert.True(t, strings.HasPrefix(c.added[0], ImplementationFailedHeader))
 }
 
 func TestApplySecurityFixLaunchesSecurityFix(t *testing.T) {
@@ -1983,18 +1987,17 @@ func TestDeployBranch_FixerLaunchError_Reds(t *testing.T) {
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.Error(t, err)
 
-	var startedIdx, failedIdx = -1, -1
-	for i, b := range c.added {
+	var sawStarted, sawFailed bool
+	for _, b := range c.added {
 		if strings.HasPrefix(b, DeployFixStartedHeader) {
-			startedIdx = i
+			sawStarted = true
 		}
 		if strings.HasPrefix(b, DeployFailedHeader) {
-			failedIdx = i
+			sawFailed = true
 		}
 	}
-	require.GreaterOrEqual(t, startedIdx, 0, "the fixer dispatch is attempted before the launch fails")
-	require.GreaterOrEqual(t, failedIdx, 0, "the launch failure reds the card")
-	assert.Greater(t, failedIdx, startedIdx, "the deploy-failed marker follows the deploy-fix-started marker")
+	assert.False(t, sawStarted, "a fixer that never launched posts no deploy-fix-started marker (SC-4244)")
+	assert.True(t, sawFailed, "the launch failure reds the card")
 }
 
 // On the fixer's `done` exit the deploy re-runs end to end — the fixer rebased

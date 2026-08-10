@@ -110,10 +110,13 @@ func readDeployFixExit(ctx context.Context, project, pmKey string, notBefore tim
 // finds cannot yet be confirmed as belonging to the round in progress.
 //
 // notBefore is the round's own started-marker time (SC-2378/AD2): the daemon
-// posts a fresh started-marker at the beginning of every round and the
-// reviewer/fixer writes its report only as the very last thing it does, so
-// this round's write always has UpdatedAt >= notBefore, while a prior round's
-// still-present record has UpdatedAt < notBefore. A zero notBefore (no anchor
+// posts a fresh started-marker immediately after the round's agent is launched
+// and the reviewer/fixer writes its report only as the very last thing it does,
+// so this round's write always has UpdatedAt >= notBefore, while a prior round's
+// still-present record has UpdatedAt < notBefore. A launch REFUSED because an
+// agent already owns the step posts no started marker at all (SC-4244), so
+// notBefore stays at the previous round's marker and the running round's report
+// is judged against that older anchor — never stale. A zero notBefore (no anchor
 // available) treats any record found as fresh, matching the old unconditional
 // behaviour.
 //

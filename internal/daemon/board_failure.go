@@ -894,12 +894,15 @@ func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
 
 // Reports whether the stage's own newest marker is already its *-failed
 // header — the card was already declared dead in this stage, with no relaunch
-// since (SC-3857). This is NOT a global dedup: every relaunch posts the
-// stage's *-started marker before the agent that follows it can exit
-// (startAgentStage posts it before launchAgent; relaunchBounded and
-// relaunchSilenceReap both go through it), so a *-started marker newer than
-// the failure flips this back to false and a genuine second failure still
-// posts and re-dates the card (AD4). Reads the stage's OWN failed header —
+// since (SC-3857). This is NOT a global dedup: every relaunch that actually
+// started an agent posts the stage's *-started marker before the agent that
+// follows it can exit (startAgentStage posts it after launchAgent reports one
+// started; relaunchBounded and relaunchSilenceReap both go through it), so a
+// *-started marker newer than the failure still flips this back to false and a
+// genuine second failure still posts and re-dates the card (AD4). A relaunch
+// REFUSED because an agent is already running on this machine posts nothing and
+// deliberately leaves the guard on, because the run it would re-tell about is
+// the one still going (SC-4244). Reads the stage's OWN failed header —
 // never the classified BoardFailed state — because a marker can classify into
 // (stage, BoardFailed) without being that stage's own ending: [human:needs-
 // planning] classifies as (BoardPlanning, BoardFailed) though it is posted by
