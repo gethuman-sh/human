@@ -438,40 +438,48 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		return len(leases) > 0, nil
 	}
 
+	// One store for both board routes: the live composer remembers the board it
+	// built, the cached route serves it back.
+	boardCache := boardcache.NewStore(boardcache.DefaultPath())
+
 	srv := &daemon.Server{
-		Addr:               addr,
-		Token:              token,
-		SafeMode:           safe,
-		DaemonStartedAt:    time.Now().UTC(),
-		CmdFactory:         cmdFactory,
-		Logger:             logger,
-		ConnectedPIDs:      connTracker,
-		HookEvents:         hookStore,
-		NetworkEvents:      networkStore,
-		ModelOutcomes:      modelSink,
-		CostLedger:         costStore,
-		CostLedgerProject:  resolveProject,
-		IssueFetcher:       issueFetcher,
-		LiteIssueFetcher:   fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
-		BoardViewFetcher:   boardViewFunc(issueFetcher, doctor, projectRegistry, boardcache.NewStore(boardcache.DefaultPath()), logger),
-		IssueGetter:        daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
-		CurrentUserFetcher: currentUserFunc(projectRegistry, vaultResolver),
-		TrackerDiagnoser:   trackerDiagnoserFunc(projectRegistry, vaultResolver),
-		Doctor:             doctor,
-		Projects:           projectRegistry,
-		PendingConfirms:    confirmStore,
-		StatsWriter:        statsWriter,
-		StatsStore:         statsStore,
-		AuditSink:          auditWriter,
-		AuditStore:         auditStore,
-		AgentCleaner:       &dockerAgentCleaner{},
-		VaultResolver:      vaultResolver,
-		BoardTransitioner:  boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
-		BoardFixer:         boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
-		BoardSecurityFixer: securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
-		BoardOptioner:      boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
-		BugCreator:         bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID)),
-		WhereComments:      whereCommentsFunc(projectRegistry, vaultResolver),
+		Addr:              addr,
+		Token:             token,
+		SafeMode:          safe,
+		DaemonStartedAt:   time.Now().UTC(),
+		CmdFactory:        cmdFactory,
+		Logger:            logger,
+		ConnectedPIDs:     connTracker,
+		HookEvents:        hookStore,
+		NetworkEvents:     networkStore,
+		ModelOutcomes:     modelSink,
+		CostLedger:        costStore,
+		CostLedgerProject: resolveProject,
+		IssueFetcher:      issueFetcher,
+		LiteIssueFetcher:  fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
+		BoardViewFetcher:  boardViewFunc(issueFetcher, doctor, projectRegistry, boardCache, logger),
+		// Shares the store the live composer writes to, rather than opening a
+		// second one on the same path: the store serializes its own
+		// read-modify-write, and two of them would each hold half a lock.
+		CachedBoardViewFetcher: cachedBoardViewFunc(projectRegistry, boardCache),
+		IssueGetter:            daemon.NewCachedIssueGetter(issueGetterFunc(projectRegistry, vaultResolver)),
+		CurrentUserFetcher:     currentUserFunc(projectRegistry, vaultResolver),
+		TrackerDiagnoser:       trackerDiagnoserFunc(projectRegistry, vaultResolver),
+		Doctor:                 doctor,
+		Projects:               projectRegistry,
+		PendingConfirms:        confirmStore,
+		StatsWriter:            statsWriter,
+		StatsStore:             statsStore,
+		AuditSink:              auditWriter,
+		AuditStore:             auditStore,
+		AgentCleaner:           &dockerAgentCleaner{},
+		VaultResolver:          vaultResolver,
+		BoardTransitioner:      boardTransitionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
+		BoardFixer:             boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
+		BoardSecurityFixer:     securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
+		BoardOptioner:          boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, agentIPs),
+		BugCreator:             bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID)),
+		WhereComments:          whereCommentsFunc(projectRegistry, vaultResolver),
 		WhereAttempts: func(pmKey string, stage daemon.BoardStage) (int, error) {
 			// The READ-ONLY twin of the retry path's counter. bumpStageRetries
 			// increments as it reads, so wiring it here would spend a ticket's
@@ -2068,17 +2076,48 @@ func boardProjectKey(reg *daemon.ProjectRegistry) string {
 //
 // Nothing remembered means nothing truer to show than the failure itself.
 func serveLastGoodView(cache *boardcache.Store, project string, cause error, logger zerolog.Logger) (daemon.BoardView, error) {
-	raw, ok := cache.Load(project)
+	view, ok := loadBoardSnapshot(cache, project)
 	if !ok {
-		return daemon.BoardView{}, cause
-	}
-	var view daemon.BoardView
-	if err := json.Unmarshal(raw, &view); err != nil {
 		return daemon.BoardView{}, cause
 	}
 	logger.Warn().Err(cause).Msg("board view: refresh failed, serving the last good board marked stale")
 	view.Error = staleBoardBanner(view.CachedAt, time.Now(), cause)
 	return view, nil
+}
+
+// loadBoardSnapshot decodes the remembered board for a project. Held once
+// because two callers want it for opposite reasons — one to survive a failure,
+// one to speed up a success — and a snapshot that decodes differently on the two
+// paths would put a card in two places.
+//
+// A miss and an undecodable snapshot are the same answer: nothing remembered.
+func loadBoardSnapshot(cache *boardcache.Store, project string) (daemon.BoardView, bool) {
+	raw, ok := cache.Load(project)
+	if !ok {
+		return daemon.BoardView{}, false
+	}
+	var view daemon.BoardView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return daemon.BoardView{}, false
+	}
+	return view, true
+}
+
+// cachedBoardViewFunc builds the fetcher behind the board-view-cached route: the
+// remembered board, served with no tracker call and no comment scan.
+//
+// It carries no staleness banner, unlike serveLastGoodView. The reader of this
+// board is not being shown it INSTEAD of a fresh one — a live fetch is already
+// running behind it, and every card renders with a resolving spinner until that
+// lands, which is the whole of what the reader needs to know.
+func cachedBoardViewFunc(reg *daemon.ProjectRegistry, cache *boardcache.Store) func() daemon.BoardView {
+	return func() daemon.BoardView {
+		view, ok := loadBoardSnapshot(cache, boardProjectKey(reg))
+		if !ok {
+			return daemon.BoardView{}
+		}
+		return view
+	}
 }
 
 // staleBoardBanner says which board is being shown and HOW OLD it is. Without
