@@ -331,6 +331,23 @@ test("a queued card shows no red error subtitle (SC-1320)", () => {
   assert.equal(cardError({ stage: "planning", state: "queued", error: "Stuck in planning" }), "");
 });
 
+// A card held by a sequencing answer is queued in order NOT to run: the badge
+// must be the do-nothing register naming what it waits for, never a spinner
+// over "picked up" work that nobody started.
+test("a held queued card names the ticket it waits for and does not spin", () => {
+  const info = badgeInfo({ stage: "implementation", state: "queued", waitsFor: "SC-4245" });
+  assert.equal(info.cls, "paused");
+  assert.match(info.text, /waiting for SC-4245/);
+  assert.ok(!info.spinner);
+});
+
+// The hold reads off the record, not off liveness: there is no agent to be
+// missing, so the dead-agent variant must not be applied to it.
+test("a held queued card is not reported as an agent that never started", () => {
+  const info = badgeInfo({ stage: "planning", state: "queued", waitsFor: "SC-4245", agentLiveness: "dead" });
+  assert.match(info.text, /waiting for SC-4245/);
+});
+
 // SC-624: columns render in the user's hand-sorted order; cards without a
 // saved slot keep fetch order after the sorted ones.
 test("sortByHandOrder: listed keys first in saved order, rest stable after", () => {

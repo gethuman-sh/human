@@ -164,6 +164,11 @@ type BoardViewCard struct {
 	// when the refusal stated one. The frontend formats it in the reader's own
 	// timezone. Empty when unknown — the card then reads "paused" with no time.
 	ResumeAt string `json:"resumeAt,omitempty"`
+	// WaitsFor is the ticket a queued card was told to go second to, when the
+	// answer a human picked was a sequencing one. It is what turns the queued
+	// badge from "picked up" — a spinner over work nobody started — into the
+	// do-nothing register naming what the card is waiting for.
+	WaitsFor string `json:"waitsFor,omitempty"`
 	// Verdict is the latest review's verdict line; a failing verdict pins the
 	// card in the Code lane with a warning instead of letting it advance.
 	Verdict string `json:"verdict,omitempty"`

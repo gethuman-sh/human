@@ -63,6 +63,7 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			PRURL:          card.PRURL,
 			Error:          card.Error,
 			ResumeAt:       card.ResumeAt,
+			WaitsFor:       card.WaitsFor,
 			Verdict:        card.Verdict,
 			VerdictFailed:  daemon.VerdictFailed(card.Verdict),
 			// The deciding marker's machine id. Compose stays host-agnostic by
