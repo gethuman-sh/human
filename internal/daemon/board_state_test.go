@@ -505,22 +505,6 @@ func TestDeriveBoardCard_DeployPhasePRReview(t *testing.T) {
 	assert.Equal(t, "pr-review", card.DeployPhase)
 }
 
-// The observed SC-3322 case: the newest done-stage marker is pr-fix-started and
-// the live agent is board-SC-3322-prfix running human-pr-fixer, yet the badge
-// read "PR review…". The phase must name the half that is actually running, or
-// the card sends a reader to the wrong log (SC-3569).
-func TestDeriveBoardCard_DeployPhasePRFix(t *testing.T) {
-	comments := []tracker.Comment{
-		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
-		cmt(PRFixStartedHeader, time.Unix(3, 0)),
-	}
-	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-
-	assert.Equal(t, BoardDoneStage, card.Stage)
-	assert.Equal(t, BoardRunning, card.State)
-	assert.Equal(t, "pr-fix", card.DeployPhase)
-}
-
 // doneStageLoopActive answers the COARSER question — is the review→fix loop
 // mid-flight at all — for the re-drive pass (board_reconcile.go:262) and the
 // stuck-running guard (:370). Splitting the phase out must not narrow it: both
@@ -934,10 +918,11 @@ func TestDispatchedFailure_TakesTheNewestDispatch(t *testing.T) {
 	assert.Empty(t, dispatchedFailure(nil), "no dispatch recorded means nothing to quote")
 }
 
-// TestDeriveBoardCard_DeployPhasePRFix covers SC-4151 F15: the loop's two halves
-// are separate agents in separate containers everywhere else, and the badge
-// called both of them the review — so a card whose live container was -prfix
-// running the PR fixer read "PR review…" for the whole loop.
+// TestDeriveBoardCard_DeployPhasePRFix covers SC-4151 F15 and the observed
+// SC-3322/SC-3569 case: the loop's two halves are separate agents in separate
+// containers everywhere else, and the badge called both of them the review —
+// so a card whose live container was board-SC-3322-prfix running human-pr-fixer
+// read "PR review…" for the whole loop, sending a reader to the wrong log.
 func TestDeriveBoardCard_DeployPhasePRFix(t *testing.T) {
 	comments := []tracker.Comment{
 		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
