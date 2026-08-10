@@ -42,7 +42,7 @@ type spec struct {
 	// hand-written validator satisfies Validate and leaves RequiredFields
 	// answering "nothing required", which hands an agent a command that posts a
 	// marker this package then rejects.
-	anyOf     []string
+	anyOf []string
 	// optional names fields a marker MAY carry that mean something to a
 	// reader. Validate never consults it — an optional field cannot make a
 	// marker invalid — but declaring it is what keeps a machine-read
@@ -163,15 +163,15 @@ var specs = map[string]spec{
 	// refusal, and the plan-stuck escalation raised once PlanRedriveBound is
 	// spent. Which one a comment is, is the escalation field — optional
 	// because an ordinary refusal legitimately has none (SC-4245).
-	"needs-planning": {optional: []string{EscalationField}},
-	"ready-for-review":      {required: []string{"branch", "commits"}},
-	"review-started":        {},
-	"review-complete":       {required: []string{"verdict"}},
-	"review-failed":         {required: []string{"reason"}},
-	"no-fix-needed":         {required: []string{"verdict"}},
-	"nothing-to-do":         {required: []string{"evidence"}},
-	"deploy-started":        {},
-	"deploy-failed":         {required: []string{"reason"}},
+	"needs-planning":   {optional: []string{EscalationField}},
+	"ready-for-review": {required: []string{"branch", "commits"}},
+	"review-started":   {},
+	"review-complete":  {required: []string{"verdict"}},
+	"review-failed":    {required: []string{"reason"}},
+	"no-fix-needed":    {required: []string{"verdict"}},
+	"nothing-to-do":    {required: []string{"evidence"}},
+	"deploy-started":   {},
+	"deploy-failed":    {required: []string{"reason"}},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case
