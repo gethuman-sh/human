@@ -147,7 +147,8 @@ func TestHookEventStore_PerSessionCapProtectsOtherSessions(t *testing.T) {
 
 	store.mu.Lock()
 	var legitCount int
-	for _, e := range store.events {
+	for _, se := range store.events {
+		e := se.evt
 		if e.SessionID == "legit" {
 			legitCount++
 		}
