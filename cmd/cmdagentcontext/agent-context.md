@@ -6,11 +6,11 @@ The `human` CLI is available here. Prefer its tools over ad-hoc approaches.
 When a `human` daemon is running it serves a shared, always-fresh code index — no `index` step, works the same on the host, in any worktree, and inside any agent container. Just query:
 - `human codenav def <name>` — go-to-definition (`--outline` for signature + location only)
 - `human codenav refs <name>` — find references (with enclosing symbol + line)
-- `human codenav callers <qname>` / `callees <qname>` — call graph
+- `human codenav callers <qname>` / `human codenav callees <qname>` — call graph
 - `human codenav callpath --from A --to B` — concrete call paths
 - `human codenav impact <qname>` (or `--diff`) — blast radius of a change
 - `human codenav search <query>` — full-text search (`--symbols` for names)
-- `human codenav overview` / `outline <file>` — cold-start a codebase
+- `human codenav overview` / `human codenav outline <file>` — cold-start a codebase
 
 If a codenav query says the repo is not indexed, the daemon is still building the shared index — retry shortly (or, with no daemon, run `human codenav index .`); do not fall back to grep.
 
@@ -25,15 +25,16 @@ If a codenav query says the repo is not indexed, the daemon is still building th
 
 ## Pipeline protocol — use these instead of hand-building comments or git incantations
 - `human marker post|show|list <KEY> [TYPE]` — post/read the structured `[human:*]` handoff comments (plan, review verdicts, deploy results); validated, latest-wins
-- `human handoff post <KEY>` / `handoff show <KEY>` — the ready-for-review handoff; post derives branch/commits/daemon and verifies the commits are pushed
+- `human handoff post <KEY>` / `human handoff show <KEY>` — the ready-for-review handoff; post derives branch/commits/daemon and verifies the commits are pushed
 - `human commits for <KEY>` — the commits referencing a ticket; `human commits prefix <PM> [<ENG>]` — the canonical commit-subject prefix
 
 ## Ask the pipeline what to do next — before you stop and ask a person
-The pipeline is a state machine compiled into `human`, so these answer with no daemon and no credentials:
-- `human fsm next <state>` — every way out of a state: what records it, who causes it, and which are **yours**. Only your own carry a runnable `command`; the rest are listed so you know who you are waiting for. Posting another actor's marker does not advance the item, it puts it somewhere nothing drove it to
-- `human fsm show <state>` — what must hold there, who may act, and `if_nothing_happens` — read that before concluding you are stuck, because most states are recovered by the daemon on a timer
-- `human fsm marker <name>` — what a marker means, where it moves an item, and the fields it requires
-- `human fsm states` / `human fsm constants` — the whole machine; the real budgets (retries, graces, bounds)
+The pipeline is a state machine, and `human` answers questions about it:
+- `human fsm where <KEY>` — where a ticket is, what must hold there, who may move it, `if_nothing_happens` if nobody does, and every way out. Read `if_nothing_happens` before concluding you are stuck: most states are recovered by the daemon on a timer. Only a way out marked `"yours": true` carries a runnable `command`; the rest are listed so you know who you are waiting for. Posting another actor's marker does not advance the item, it puts it somewhere nothing drove it to
+- `human fsm marker <name>` — what a marker records, where posting it moves an item, and the fields it requires
+- `human fsm constants` — the real budgets: retries, graces, bounds
+
+Ask with the ticket key you already hold — you do not need to know which state you are in, because that is what `where` tells you. It needs the running daemon, since where an item is depends on its agents' liveness and its spent retries; `marker` and `constants` read the machine compiled into the binary and answer with no daemon and no credentials.
 
 ## Pull product context
 - `human notion search "<query>"` — docs, specs, notes
