@@ -5,6 +5,12 @@ a private git worktree, and an execution log directory. Something has to end
 that run. This document lists **every condition under which the machine ends an
 agent**, what it spares, what it costs the ticket, and what it leaves behind.
 
+The container's PID 1 is `sleep infinity` — claude runs as an exec beside it, so
+the container survives its agent by design and the rules below are what end it.
+Docker's init runs in front of that `sleep` for the one thing a plain command
+cannot do: reap the processes an exiting agent orphans, which otherwise stay
+defunct for as long as the container lives (SC-4281).
+
 It describes the system **as it is**. Its companion is
 [`pipeline-fsm.json`](pipeline-fsm.json): that document follows one *ticket*
 through its states; this one follows one *container*. They meet at the marker a

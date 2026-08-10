@@ -369,9 +369,13 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 	labels := ManagedLabels(projectDir, containerName, hash)
 
 	opts := ContainerCreateOptions{
-		Name:        containerName,
-		Image:       imageName,
-		Cmd:         []string{"sleep", "infinity"},
+		Name:  containerName,
+		Image: imageName,
+		Cmd:   []string{"sleep", "infinity"},
+		// `sleep` is PID 1 here and reaps nothing, so an agent that exits leaves
+		// its children — the git and human processes it spawned — defunct until
+		// the container is removed. An init reaps them as they die (SC-4281).
+		Init:        true,
 		Env:         env,
 		Labels:      labels,
 		WorkingDir:  workspaceDir,
