@@ -57,6 +57,22 @@ func DeployedBody(prURL string) string {
 	return markerBody(marker.Marker{Type: MarkerDeployed, Fields: fields("pr", prURL)})
 }
 
+// RunCancelledBody renders the [human:run-cancelled] marker: closing the ticket
+// stopped work that was still running on it.
+//
+// It names the stage and the agent rather than only the fact, because the reader
+// this exists for is looking at a closed ticket months later asking what
+// happened to a run that left commits, a worktree, or nothing at all. The stop
+// is not a failure — a person called the work off — so this is a record, never
+// a red.
+func RunCancelledBody(stage BoardStage, agentName string) string {
+	return markerBody(marker.Marker{
+		Type:   MarkerRunCancelled,
+		Fields: fields("stage", string(stage), "agent", agentName),
+		Body:   "the ticket was closed while this stage was running, so its agent was stopped",
+	}, "stage", "agent")
+}
+
 // optionsMarker composes a decision block — the stage that resumes once it is
 // answered, the context that raised it, and one field per answer — and returns
 // the field order alongside it.

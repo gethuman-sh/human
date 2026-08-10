@@ -180,6 +180,16 @@ an open card is dismissed without a tracker call. Every uncertainty resolves to
 absent from the open list rather than confirmed closed. Absence is not proof; a
 flaky per-ticket fetch looks the same.
 
+**What it leaves behind.** Each stop posts a `[human:run-cancelled]` marker
+naming the stage and the agent. Closing fires from outside the marker bus, so a
+card used to go from running to gone with nothing on the thread saying work had
+been interrupted: of every closed PM ticket on this board (382, measured
+2026-08-08), 60 were closed out of a non-terminal state and 4 out of a running
+one. The record is posted **after** the stop and is best-effort — the stop is the
+property this pass exists for, and a tracker that will not take a comment, which
+a just-closed ticket may well refuse, must never leave an agent running against
+called-off work.
+
 ### 8. Close is cancellation
 
 **Owner:** `StopAgentsForPMKey` (`internal/daemon/close_cancel.go`), called from

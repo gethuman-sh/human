@@ -30,7 +30,7 @@ type ClosedTicketProbe func(ctx context.Context, pmKey string) (bool, error)
 // uncertainty resolves to "leave it running" — an unparseable name, a probe
 // error, or a ticket that is merely absent rather than confirmed closed — because
 // killing live work on absent evidence is the one failure this must never risk.
-func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, closed ClosedTicketProbe, stopAgent func(agentName string) error, logger zerolog.Logger) int {
+func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, closed ClosedTicketProbe, stopAgent func(agentName string) error, postRecord FailedMarkerPoster, logger zerolog.Logger) int {
 	if liveAgents == nil || closed == nil || stopAgent == nil {
 		return 0
 	}
@@ -67,6 +67,7 @@ func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, liveAge
 			}
 			logger.Info().Str("pm", key).Str("agent", name).
 				Msg("board reconcile: stopped agent orphaned on a closed ticket")
+			recordCancelledRun(ctx, key, name, postRecord, logger)
 			stopped++
 		}
 	}
@@ -95,4 +96,28 @@ func orphanCandidates(names []string, open map[string]struct{}) (map[string][]st
 		candidates[key] = append(candidates[key], name)
 	}
 	return candidates, order
+}
+
+// recordCancelledRun leaves the trace the stop never left. Closing a ticket
+// kills its agents and fires from outside the marker bus, so a card could go
+// from running to gone with nothing on the thread saying work had been
+// interrupted — 4 of the 382 closed PM tickets measured on this board were
+// closed out of a running state exactly that way (SC-4151 E10).
+//
+// Best-effort by contract, and deliberately AFTER the stop: the stop is the
+// safety property this pass exists for, and a tracker that will not take a
+// comment — which a just-closed ticket may well refuse — must never leave an
+// agent running against called-off work.
+func recordCancelledRun(ctx context.Context, pmKey, agentName string, postRecord FailedMarkerPoster, logger zerolog.Logger) {
+	if postRecord == nil {
+		return
+	}
+	_, stage, ok := parseAgentName(agentName)
+	if !ok {
+		return
+	}
+	if err := postRecord(ctx, pmKey, RunCancelledBody(stage, agentName)); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Str("agent", agentName).
+			Msg("board reconcile: stopped the orphaned agent but could not record the cancellation")
+	}
 }

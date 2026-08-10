@@ -57,6 +57,7 @@ func TestDaemonPostedMarkersSatisfyTheirContract(t *testing.T) {
 		{MarkerStageWait, composeStageWait(BoardPlanning, eligible, eligible.Add(31*time.Minute), WaitCausePollBoundary)},
 		{MarkerClaim, markerBody(marker.Marker{Type: MarkerClaim, Fields: fields("stage", string(BoardPlanning))})},
 		{MarkerCloseFailed, markerBody(failureMarker(MarkerCloseFailed, "the automated close of SC-1 failed: tracker unreachable"))},
+		{MarkerRunCancelled, RunCancelledBody(BoardImplementation, "board-SC-1-implementation")},
 		{MarkerPlanningFailed, markerBody(failureMarker(failedTypeFor(BoardPlanning), genericStageFailure))},
 		{MarkerImplementationFailed, markerBody(failureMarker(failedTypeFor(BoardImplementation), genericStageFailure))},
 		{MarkerPlanningOutage, markerBody(pausedOutageMarker(outageTypeFor(BoardPlanning), nil, "", "", "the secret store"))},
