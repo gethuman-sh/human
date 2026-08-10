@@ -94,7 +94,7 @@ test("badgeInfo preserves prior classifications", () => {
   assert.equal(badgeInfo({ stage: "planning", state: "resolved" }).text, "already shipped");
   assert.equal(
     badgeInfo({ stage: "verification", state: "done", verdict: "fail", branch: "b" }).cls,
-    "fixing",
+    "warning",
   );
   assert.equal(
     badgeInfo({ stage: "verification", state: "done", verdict: "pass", branch: "b" }),
@@ -144,19 +144,45 @@ test("STOP_DECISION_LABELS covers the three stop heads (SC-2699)", () => {
   assert.equal(STOP_DECISION_LABELS.rejected.text, "not a real problem");
 });
 
-// SC-1830 regression: a failed review verdict is machine work (the daemon
-// auto-launches a fixer), NOT a demand on the user. Its badge must read as
-// in-flight — a dedicated machine-working class, the running spinner, and copy
-// that says what is happening ("fixing…") — never the amber `warning`/`decision`
-// register with a ⚠ glyph that means "your turn".
-test("failed review verdict badges as in-flight machine work, not a warning (SC-1830)", () => {
+// SC-4281: a failed review verdict is the USER's move. SC-1830 badged it as
+// machine work on the premise that the daemon auto-launches a fixer — true of
+// the done-stage PR review→fix loop, false here: no code acts on the verdict,
+// and pipeline-fsm.json's `reviewed` state says it "waits for a rework the board
+// must offer", reachable only by the user's start-implementation. Badging it as
+// in-flight left cards spinning at "fixing…" for days with nothing running and
+// nobody asked, because the machine register deliberately never asks.
+test("failed review verdict asks the user, since nothing reworks it (SC-4281)", () => {
   const info = badgeInfo({ stage: "verification", state: "done", verdict: "fail", branch: "b" });
   assert.notEqual(info, null);
-  assert.equal(info.cls, "fixing", "failed verdict must use the machine-working class, not amber `warning`");
-  assert.notEqual(info.cls, "decision", "must not share the needs-a-human decision class");
-  assert.equal(info.spinner, true, "must carry the running spinner so it reads as in-flight");
-  assert.match(info.text, /fixing…/, "copy must say what is happening, not hand a verdict to the user");
-  assert.doesNotMatch(info.text, /⚠/, "the alarm glyph belongs to needs-a-human states only");
+  assert.equal(info.cls, "warning", "nothing runs this rework, so it belongs in the needs-a-person register");
+  assert.notEqual(info.spinner, true, "no process is behind it — a spinner would be a claim of work");
+  assert.match(info.text, /rework/, "the copy must name the move the user has to make");
+  assert.match(info.title, /Drag the card onto Code/, "and the title must name the gesture that makes it");
+});
+
+// The spinner survives for exactly one case: a rework already dropped, whose
+// implementation-started marker has not landed yet, so an agent IS found behind
+// a card still reading verification/done.
+test("a failed verdict with a live agent still reads as in-flight (SC-4281)", () => {
+  const info = badgeInfo({ stage: "verification", state: "done", verdict: "fail", branch: "b", agentLiveness: "live" });
+  assert.equal(info.cls, "fixing");
+  assert.equal(info.spinner, true);
+  assert.match(info.text, /fixing…/);
+});
+
+// A peer machine's rework is neither this machine's work nor the user's move
+// here — it says so instead of spinning or demanding (SC-3569 precedent).
+test("a failed verdict reworked elsewhere says so (SC-4281)", () => {
+  const info = badgeInfo({
+    stage: "verification",
+    state: "done",
+    verdict: "fail",
+    branch: "b",
+    agentLiveness: "elsewhere",
+  });
+  assert.equal(info.cls, "elsewhere");
+  assert.notEqual(info.spinner, true);
+  assert.match(info.text, /another machine/);
 });
 
 // 1290: an open decision block must outrank a `failed` state too, not just the
@@ -188,8 +214,8 @@ test("open options render a decision-needed badge over the review warning", () =
   const info = badgeInfo(card);
   assert.equal(info.cls, "decision");
   assert.match(info.text, /decision needed/);
-  // Without options the same card falls back to the fixing badge.
-  assert.equal(badgeInfo({ ...card, options: [] }).cls, "fixing");
+  // Without options the same card falls back to the needs-rework badge.
+  assert.equal(badgeInfo({ ...card, options: [] }).cls, "warning");
 });
 
 // SC-1669: a card parked on an open decision whose state is still "running"
@@ -728,11 +754,14 @@ test("a recovering agent stays in the machine register, never the person's (SC-3
 test("queued and fixing badges also drop the spinner for a dead agent (SC-3569)", () => {
   const queued = badgeInfo({ stage: "implementation", state: "queued", agentLiveness: "dead" });
   assert.equal(queued.spinner, false);
+  // A dead agent and an unknown one now read alike on a failed verdict, because
+  // they mean the same thing there — nothing is reworking it (SC-4281). What
+  // SC-3569 asked of this badge is unchanged: no spinner without a process.
   const fixing = badgeInfo({
     stage: "verification", state: "done", verdict: "fail", branch: "b", agentLiveness: "dead",
   });
   assert.equal(fixing.spinner, false);
-  assert.match(fixing.text, /no fixer running/);
+  assert.match(fixing.text, /needs rework/);
 });
 
 // --- A red card whose agent is working says so (SC-4151 A1) ---

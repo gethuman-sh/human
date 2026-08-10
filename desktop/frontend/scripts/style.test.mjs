@@ -170,7 +170,7 @@ test("board exposes a persistent horizontal scroll affordance (SC-1451)", () => 
 // SC-1830 regression: badge colour answers "whose turn is it?", not severity.
 // The machine-working failed-verdict badge must not wear the same amber as the
 // needs-a-human decision badge.
-test("failed-verdict badge uses the machine-working colour, not the decision amber (SC-1830)", () => {
+test("the machine-working badge keeps its own colour, never the decision amber (SC-1830)", () => {
   const fixing = ruleBody(".badge.fixing");
   const decision = ruleBody(".badge.decision");
   assert.match(fixing, /color:\s*var\(--turn-machine\)/, ".badge.fixing must use the gray machine-working token");
