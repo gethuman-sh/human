@@ -22,6 +22,7 @@
       "related",
       "shipped-partial",
       "handoff-check-unreadable",
+      "late-result-reconciled",
       "fix-summary",
       "claim",
       "stage-wait"

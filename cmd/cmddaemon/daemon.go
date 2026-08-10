@@ -785,6 +785,11 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// and was never rebuilt. This keeps it true to the running agent set and
 	// says out loud when it cannot (SC-3853).
 	go daemon.RunAgentIPRepair(ctx, &dockerAgentSweeper{}, containerBridgeIP, ds.agentIPs, pendingModelRequests, inflight, logger)
+	// Reconciles history, not liveness: a stage marked failed and then the same
+	// run's result arriving later with no relaunch in between is recorded once
+	// via [human:late-result-reconciled] so the ticket's own history explains
+	// the contradiction (SC-3853).
+	go daemon.RunLateResultReconcile(ctx, boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver, logger), boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID), logger)
 	startSleepInhibitor(ctx, out, logger)
 	// The auto-review chain runs through the same launch gate: a daemon that
 	// cannot serve a review must leave the ready-for-review handoff unclaimed for
@@ -894,6 +899,10 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// (SC-430).
 	// Confirm-shipped probe (SC-910): a done-stage deploy-failure whose PR the
 	// forge reports merged is cleared by posting a [human:deployed] marker.
+	// It is posted through ShippedOutOfBandDeployedBody, not DeployedBody: the
+	// body carries a pinned sentinel so the late-result reconciler (SC-3853)
+	// never mistakes this repair pass's own post for a genuinely late deploy
+	// result arriving after a silence reap.
 	prMerged := func(probeCtx context.Context, prURL string) (bool, error) {
 		return boardPRMerged(probeCtx, ds.srv.Projects, ds.vaultResolver, prURL)
 	}
@@ -902,7 +911,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		if err != nil {
 			return err
 		}
-		_, err = commenter.AddComment(postCtx, pmKey, daemon.DeployedBody(prURL))
+		_, err = commenter.AddComment(postCtx, pmKey, daemon.ShippedOutOfBandDeployedBody(prURL))
 		return err
 	}
 	// A hung agent still holds its container and workspace; it must be stopped

@@ -115,6 +115,12 @@ const (
 	MarkerPRReviewStarted        = "pr-review-started"
 	MarkerDeployFixStarted       = "deploy-fix-started"
 	MarkerHandoffCheckUnreadable = "handoff-check-unreadable"
+	// MarkerLateResultReconciled records that a stage's result arrived after the
+	// stage had already been marked failed, with no relaunch marker between the
+	// two — the reaper (or an equivalent silence classifier) declared a still-
+	// working agent dead (SC-3853). Informational only: it decorates the
+	// ticket's history and never moves the card (see LateResultReconciledBody).
+	MarkerLateResultReconciled = "late-result-reconciled"
 
 	PlanningStartedHeader       = "[human:planning-started]"
 	PlanReadyHeader             = "[human:plan-ready]"
@@ -358,6 +364,12 @@ func recordedPipeline(comments []tracker.Comment) fixPipeline {
 // good work on an answer that was never given (SC-2403).
 const HandoffCheckUnreadableHeader = "[human:" + MarkerHandoffCheckUnreadable + "]"
 
+// LateResultReconciledHeader marks the informational record described at
+// MarkerLateResultReconciled. Like HandoffCheckUnreadableHeader it is
+// deliberately kept OUT of orderedMarkerSpecs: it explains a contradiction
+// already resolved by SC-910 supersession, never moves the card.
+const LateResultReconciledHeader = "[human:" + MarkerLateResultReconciled + "]"
+
 // daemonMarkerTypes is every marker type the daemon itself writes. It is the
 // completeness list TestDaemonPostedMarkersSatisfyTheirContract walks: a type
 // added here with no case in that test fails the build, which is what keeps a
@@ -385,6 +397,7 @@ var daemonMarkerTypes = []string{
 	MarkerPRReviewStarted,
 	MarkerDeployFixStarted,
 	MarkerHandoffCheckUnreadable,
+	MarkerLateResultReconciled,
 }
 
 // markerSpec maps a marker header to the (stage, state) it represents.

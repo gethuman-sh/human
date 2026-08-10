@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -55,6 +56,47 @@ func markerBody(m marker.Marker, fieldOrder ...string) string {
 // one that owns it.
 func DeployedBody(prURL string) string {
 	return markerBody(marker.Marker{Type: MarkerDeployed, Fields: fields("pr", prURL)})
+}
+
+// shippedOutOfBandSentinel is pinned so board_latereconcile.go can recognize
+// this repair pass's own [human:deployed] post and never mistake it for a
+// genuinely late deploy result arriving after a silence reap (SC-3853, review
+// round 2's blocking finding: rule 2 of the ticket's counting rules needs a
+// discriminator, not a comment).
+const shippedOutOfBandSentinel = "merged with no marker recording it"
+
+// ShippedOutOfBandDeployedBody renders the [human:deployed] marker the
+// confirm-shipped repair pass (reconcileShippedFailures) posts when the forge
+// reports a PR merged that carries no deployed marker on the ticket — a human
+// merged it manually, or a marker post was lost. It looks, structurally,
+// exactly like a deploy agent finishing after being marked failed: a
+// deploy-failed marker followed by a deployed marker with no relaunch between
+// them. It is not that — the repair pass discovered an ALREADY-merged PR, it
+// did not observe a run complete — so its post carries a sentinel the
+// late-result reconciler pins on to exclude it (SC-3853).
+func ShippedOutOfBandDeployedBody(prURL string) string {
+	return markerBody(marker.Marker{Type: MarkerDeployed, Fields: fields("pr", prURL), Body: shippedOutOfBandSentinel})
+}
+
+// LateResultReconciledBody records that a stage's result arrived after the
+// stage had already been marked failed, with no relaunch marker between the
+// two — the reaper (or an equivalent silence classifier) declared the agent
+// dead while it was still working (SC-3853). Purely informational: the card's
+// placement already follows the newer marker (SC-910 supersession), so this
+// never moves the card. It exists so the ticket's own history explains the
+// contradiction instead of leaving a failure and a success on the record with
+// nothing saying they are the same run (acceptance criteria 2 and 4).
+func LateResultReconciledBody(pair string, stage BoardStage, failedAt, successAt time.Time) string {
+	return markerBody(marker.Marker{
+		Type: MarkerLateResultReconciled,
+		Fields: fields(
+			"stage", string(stage),
+			"pair", pair,
+			"failed_at", failedAt.UTC().Format(time.RFC3339),
+			"success_at", successAt.UTC().Format(time.RFC3339),
+		),
+		Body: "the stage's result arrived after it had already been marked failed, with no relaunch in between — the run was alive the whole time",
+	}, "stage", "pair", "failed_at", "success_at")
 }
 
 // RunCancelledBody renders the [human:run-cancelled] marker: closing the ticket
