@@ -126,6 +126,11 @@ interface Card {
   // while the fixer runs, absent for a plain deploy. badgeInfo reads it so the
   // badge names the half that is actually running instead of "deploying…".
   deployPhase?: string;
+  // On a FAILED card only: another stage of the same ticket still showing a
+  // start. The Go overlay joins it into the liveness question and badgeInfo
+  // names it, so a red card with a live agent behind it says which stage is
+  // working instead of asking a person to intervene (SC-4406).
+  runningStage?: string;
   // What this viewer's machine could see of the agent behind the card:
   // "live" | "dead" | "recovering" | "elsewhere", absent when unknown (SC-3569).
   // "recovering" is dead-but-not-yet-the-person's-turn: the daemon's own
