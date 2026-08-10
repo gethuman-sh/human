@@ -164,6 +164,16 @@ export const RUNNING_LABELS: Record<string, string> = {
   done: "deploying…",
 };
 
+// The badge word per half of the pre-merge review→fix loop. Both halves used to
+// read "PR review…", so a card whose live container was -prfix running the PR
+// fixer said the reviewer was working (SC-4151 F15). The daemon carries the
+// datum (BoardViewCard.deployPhase); the copy lives here, as with
+// STOP_DECISION_LABELS.
+export const DEPLOY_PHASE_LABELS: Record<string, string> = {
+  "pr-review": "PR review…",
+  "pr-fix": "fixing PR findings…",
+};
+
 // The verb per chosen stage for a card a recorded decision has (re)queued but
 // whose fresh agent has not yet posted its started marker (SC-1320).
 export const QUEUED_LABELS: Record<string, string> = {
@@ -257,8 +267,8 @@ export function badgeInfo(card: QueueCard, nowMs: number = Date.now()): BadgeInf
   }
   if (card.state === "running") {
     const stageText =
-      card.stage === "done" && card.deployPhase === "pr-review"
-        ? "PR review…"
+      card.stage === "done" && card.deployPhase
+        ? (DEPLOY_PHASE_LABELS[card.deployPhase] ?? "PR review…")
         : (RUNNING_LABELS[card.stage] ?? "working…");
     // The run's own phase, when it recorded one. Without it the badge says the
     // same word for the whole of a fix run — triage, the challenge, the plan,
@@ -538,12 +548,19 @@ export interface DeployControlView {
 // when nothing is ready, enabled with a "ship every…" tooltip otherwise.
 export function deployControlView(cards: QueueCard[], side: DeploySide): DeployControlView {
   const count = deployableCards(cards, side).length;
+  // queueOf sends every done-stage card to the deploy lane whatever its state,
+  // while isReadyToDeploy takes only a reviewed verification/done card with a
+  // branch. So the lane can hold cards the control refuses, and it said "none to
+  // deploy yet" with those cards visible beside it — a flat contradiction the
+  // reader has to resolve by guessing (SC-4151 F16). Counting them lets the
+  // empty state say which of the two things is true.
+  const waiting = cards.filter((c) => deployMatches(deploySideOf(c), side) && inDeployLaneNotReady(c)).length;
   if (side === "defects") {
     return {
       count,
       disabled: count === 0,
       label: `Deploy${count ? ` (${count})` : ""}`,
-      tooltip: count === 0 ? "No fixed bugs or vulnerabilities to deploy yet" : "Ship every fixed bug and vulnerability",
+      tooltip: count === 0 ? emptyTooltip(waiting, "fixed bugs or vulnerabilities") : "Ship every fixed bug and vulnerability",
     };
   }
   const noun =
@@ -552,8 +569,23 @@ export function deployControlView(cards: QueueCard[], side: DeploySide): DeployC
     count,
     disabled: count === 0,
     label: `Deploy${count ? ` (${count})` : ""}`,
-    tooltip: count === 0 ? `No ${noun}s to deploy yet` : `Ship every ${noun}`,
+    tooltip: count === 0 ? emptyTooltip(waiting, `${noun}s`) : `Ship every ${noun}`,
   };
+}
+
+// inDeployLaneNotReady reports a card sitting in the deploy lane that the Deploy
+// control will not take — still shipping, or stopped on the way.
+function inDeployLaneNotReady(card: QueueCard): boolean {
+  return queueOf(card) === "deploy" && !isReadyToDeploy(card);
+}
+
+// emptyTooltip explains a disabled Deploy control. "Nothing to deploy yet" is
+// true only when the lane is empty; with cards in it the control is disabled
+// because those cards are not ready, which is a different sentence. plural is
+// the already-pluralised noun phrase, so each caller keeps its own wording.
+function emptyTooltip(waiting: number, plural: string): string {
+  if (waiting === 0) return `No ${plural} to deploy yet`;
+  return `${waiting} card${waiting === 1 ? "" : "s"} here ${waiting === 1 ? "is" : "are"} still finishing or stopped — none is ready to ship`;
 }
 
 // safetyPollShouldReconcile decides whether the 90s safety poll runs its
@@ -579,7 +611,10 @@ export function safetyReconcileError<C>(
   if (prev.cards.length > 0) {
     return { ...prev, error: `Board may be stale — ${message}` };
   }
-  return { cards: [], dockerAvailable: false, error: message };
+  // Docker was not what failed and was not probed, so the last known answer
+  // stands. Reporting it unavailable here disabled every agent-launching
+  // gesture with the tooltip "Docker required" (SC-4151 G17).
+  return { cards: [], dockerAvailable: prev.dockerAvailable, error: message };
 }
 
 // isReopenable reports a card the pipeline RESOLVED: it concluded there is

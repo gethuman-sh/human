@@ -241,9 +241,28 @@ func stageStalled(progress AgentProgressProbe, agentName string, now time.Time) 
 // deploy. Used to hand loop cards to the re-drive pass, to keep the generic
 // stuck-running pass from redding them, and (board_state.go) to badge the loop.
 func doneStageLoopActive(comments []tracker.Comment) bool {
+	return doneStageLoopHalf(comments) != ""
+}
+
+// doneStageLoopHalf names WHICH half of the review→fix loop the card's newest
+// done-stage marker started: "pr-review", "pr-fix", or "" when the newest marker
+// is not a loop-started marker at all.
+//
+// The distinction exists everywhere else — prReviewAgentStage and
+// prFixAgentStage are separate agents in separate containers — and the badge
+// alone collapsed it, so a card whose live container was -prfix running the PR
+// fixer read "PR review…" for the whole loop (SC-4151 F15).
+func doneStageLoopHalf(comments []tracker.Comment) string {
 	_, latest := latestStateInStage(comments, BoardDoneStage)
 	t := strings.TrimSpace(latest.Body)
-	return strings.HasPrefix(t, PRReviewStartedHeader) || strings.HasPrefix(t, PRFixStartedHeader)
+	switch {
+	case strings.HasPrefix(t, PRReviewStartedHeader):
+		return DeployPhasePRReview
+	case strings.HasPrefix(t, PRFixStartedHeader):
+		return DeployPhasePRFix
+	default:
+		return ""
+	}
 }
 
 // reconcilePRLoops re-drives a loop card the live exit hook missed: a

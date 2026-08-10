@@ -903,3 +903,30 @@ func TestDispatchedFailure_TakesTheNewestDispatch(t *testing.T) {
 	assert.Equal(t, "the second failure", dispatchedFailure(comments))
 	assert.Empty(t, dispatchedFailure(nil), "no dispatch recorded means nothing to quote")
 }
+
+// TestDeriveBoardCard_DeployPhasePRFix covers SC-4151 F15: the loop's two halves
+// are separate agents in separate containers everywhere else, and the badge
+// called both of them the review — so a card whose live container was -prfix
+// running the PR fixer read "PR review…" for the whole loop.
+func TestDeriveBoardCard_DeployPhasePRFix(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Equal(t, DeployPhasePRFix, card.DeployPhase)
+}
+
+// The loop swinging back to a second review round names the review again.
+func TestDeriveBoardCard_DeployPhaseFollowsTheNewestHalf(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(4, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, DeployPhasePRReview, card.DeployPhase)
+}
