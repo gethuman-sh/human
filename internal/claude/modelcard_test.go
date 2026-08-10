@@ -217,8 +217,8 @@ func TestModelCard_tierFragmentTaskExamplesUseKnownAliases(t *testing.T) {
 	require.Positivef(t, found, "embed/shared/model-tiers.md no longer contains a Task(… model=…) example — if the examples moved, move this check with them")
 }
 
-// The tier table below the sentence names the same families. Matching is trim
-// plus lowercase so a transcript's whitespace or case variant is still caught.
+// Matching is trim plus lowercase, so a transcript's whitespace or case variant
+// of a non-model is still excluded rather than charted as its own row.
 func TestModelCard_ignoredEntriesAreRecognised(t *testing.T) {
 	assert.True(t, isIgnoredModel("<synthetic>"))
 	assert.True(t, isIgnoredModel(" <SYNTHETIC> "))

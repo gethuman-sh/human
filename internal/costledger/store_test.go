@@ -229,9 +229,6 @@ func TestTopTicketSpend_ranksByCostAndHonoursTheWindow(t *testing.T) {
 		"the split must account for the whole cost")
 }
 
-// A ticket whose rows carry no tokens — every row written before the proxy read
-// usage off a compressed body (SC-3440) — still ranks, at zero. Dropping it
-// would hide that the work ran at all.
 // The ledger stores raw vendor ids. A ticket that ran on sonnet must cost the
 // sonnet rate, not the opus ceiling — the overstatement the ticket removes, on
 // the surface a human reads per ticket.
@@ -286,6 +283,9 @@ func TestTopTicketSpend_ranksBySonnetRateNotOpusCeiling(t *testing.T) {
 	assert.InDelta(t, 2.00+10.00, got[1].CostUSD, 1e-9)
 }
 
+// A ticket whose rows carry no tokens — every row written before the proxy read
+// usage off a compressed body (SC-3440) — still ranks, at zero. Dropping it
+// would hide that the work ran at all.
 func TestTopTicketSpend_keepsUnpricedTickets(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
