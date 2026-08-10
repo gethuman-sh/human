@@ -118,6 +118,9 @@ func (e *engineClient) ContainerCreate(ctx context.Context, opts ContainerCreate
 	if opts.NetworkMode != "" {
 		hostConfig.NetworkMode = container.NetworkMode(opts.NetworkMode)
 	}
+	if opts.Init {
+		hostConfig.Init = &opts.Init
+	}
 
 	resp, err := e.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:     config,

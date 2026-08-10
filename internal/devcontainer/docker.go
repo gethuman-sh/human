@@ -93,6 +93,11 @@ type ContainerCreateOptions struct {
 	Privileged  bool
 	NetworkMode string
 	ShmSize     int64
+	// Init runs an init process as PID 1 that forwards signals and reaps
+	// orphans. A container whose PID 1 is a plain command reaps nothing, so
+	// every process orphaned inside it — the children an exited agent leaves
+	// behind — stays a zombie for as long as the container lives (SC-4281).
+	Init bool
 }
 
 // ContainerRemoveOptions configures container removal.
