@@ -120,3 +120,14 @@ jobs:
           name: human-board-${{ matrix.os }}
           path: desktop/build/bin/
           if-no-files-found: warn
+
+      # The wailsapp tag that keeps desktop/ out of ci.yml's `go list ./...`
+      # also keeps its *_test.go files from running anywhere — this is the
+      # same "green and unexecuted test file" gap SC-637's banner-clobber
+      # guard fell into at a new call site (see frontend-test above), now on
+      # the Go side (SC-3603). Placed after the upload, not merely after the
+      # build: a failing step aborts the job, so running it any earlier would
+      # withhold the artifact that is most wanted precisely when a test fails.
+      - name: Test desktop backend
+        run: go test -tags "${{ matrix.tags }}" ./desktop/...
+        working-directory: .
