@@ -305,7 +305,7 @@ func TestParseRunArgs(t *testing.T) {
 func TestParseMountString_BindMount(t *testing.T) {
 	tests := []struct {
 		input string
-		want  string
+		want  string // Mount.String(), or "" when the mount is not expressible
 	}{
 		// Standard devcontainer.json mount format.
 		{"source=/host/path,target=/container/path,type=bind", "/host/path:/container/path"},
@@ -317,7 +317,7 @@ func TestParseMountString_BindMount(t *testing.T) {
 		// Already in Binds format (passthrough).
 		{"/host:/container", "/host:/container"},
 		{"/host:/container:ro", "/host:/container:ro"},
-		// Non-bind mount type (volume) should return empty.
+		// Non-bind mount type (volume) should not be expressible.
 		{"source=myvolume,target=/data,type=volume", ""},
 		// Missing source or target.
 		{"target=/container/path,type=bind", ""},
@@ -326,7 +326,11 @@ func TestParseMountString_BindMount(t *testing.T) {
 		{"source=/host/path,target=/container/path", "/host/path:/container/path"},
 	}
 	for _, tt := range tests {
-		got := parseMountString(tt.input)
+		m, ok := parseMountString(tt.input)
+		got := ""
+		if ok {
+			got = m.String()
+		}
 		if got != tt.want {
 			t.Errorf("parseMountString(%q) = %q, want %q", tt.input, got, tt.want)
 		}
@@ -334,30 +338,27 @@ func TestParseMountString_BindMount(t *testing.T) {
 }
 
 func TestParseMountString_WithSpaces(t *testing.T) {
-	input := "source=/host/path , target=/container/path , type=bind"
-	got := parseMountString(input)
-	if got != "/host/path:/container/path" {
-		t.Errorf("parseMountString with spaces = %q, want %q", got, "/host/path:/container/path")
+	m, ok := parseMountString("source=/host/path , target=/container/path , type=bind")
+	if !ok || m.String() != "/host/path:/container/path" {
+		t.Errorf("parseMountString with spaces = %q (ok=%v), want %q", m.String(), ok, "/host/path:/container/path")
 	}
 }
 
-func TestDeduplicateBinds(t *testing.T) {
-	binds := []string{
-		"/first:/target-a",
-		"/second:/target-b",
-		"/third:/target-a", // duplicate target, should replace /first
-	}
-	got := deduplicateBinds(binds)
+func TestDedupeMounts(t *testing.T) {
+	got := dedupeMounts([]Mount{
+		Bind("/first", "/target-a"),
+		Bind("/second", "/target-b"),
+		Bind("/third", "/target-a"), // duplicate target, should replace /first
+	})
 	if len(got) != 2 {
-		t.Fatalf("expected 2 deduped binds, got %d: %v", len(got), got)
+		t.Fatalf("expected 2 deduped mounts, got %d: %v", len(got), got)
 	}
-	// The last entry for /target-a should win.
 	foundA := false
-	for _, b := range got {
-		if strings.Contains(b, "/target-a") {
+	for _, m := range got {
+		if m.Target == "/target-a" {
 			foundA = true
-			if !strings.HasPrefix(b, "/third:") {
-				t.Errorf("expected /third:/target-a to win, got %q", b)
+			if m.Source != "/third" {
+				t.Errorf("expected /third to win /target-a, got %q", m.Source)
 			}
 		}
 	}
@@ -366,29 +367,23 @@ func TestDeduplicateBinds(t *testing.T) {
 	}
 }
 
-func TestDeduplicateBinds_NoConflicts(t *testing.T) {
-	binds := []string{
-		"/a:/x",
-		"/b:/y",
-		"/c:/z",
-	}
-	got := deduplicateBinds(binds)
+func TestDedupeMounts_NoConflicts(t *testing.T) {
+	got := dedupeMounts([]Mount{Bind("/a", "/x"), Bind("/b", "/y"), Bind("/c", "/z")})
 	if len(got) != 3 {
-		t.Errorf("expected 3 binds, got %d", len(got))
+		t.Errorf("expected 3 mounts, got %d", len(got))
 	}
 }
 
-func TestDeduplicateBinds_WithOptions(t *testing.T) {
-	binds := []string{
-		"/first:/target:ro",
-		"/second:/target:rw", // same target, should replace
-	}
-	got := deduplicateBinds(binds)
+func TestDedupeMounts_WithOptions(t *testing.T) {
+	got := dedupeMounts([]Mount{
+		Bind("/first", "/target", "ro"),
+		Bind("/second", "/target", "rw"), // same target, should replace
+	})
 	if len(got) != 1 {
-		t.Fatalf("expected 1 bind, got %d: %v", len(got), got)
+		t.Fatalf("expected 1 mount, got %d: %v", len(got), got)
 	}
-	if got[0] != "/second:/target:rw" {
-		t.Errorf("expected /second:/target:rw, got %q", got[0])
+	if got[0].String() != "/second:/target:rw" {
+		t.Errorf("expected /second:/target:rw, got %q", got[0].String())
 	}
 }
 
@@ -588,7 +583,7 @@ func TestManager_Up_WithMounts(t *testing.T) {
 	if len(mock.createCalls) != 1 {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
-	binds := mock.createCalls[0].Binds
+	binds := bindStrings(mock.createCalls[0].Binds)
 	foundData := false
 	foundConfigRO := false
 	for _, b := range binds {
@@ -630,10 +625,10 @@ func TestManager_Up_WorktreeGitDirBind(t *testing.T) {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
 	want := gitDir + ":" + gitDir
-	if slices.Contains(mock.createCalls[0].Binds, want) {
+	if slices.Contains(bindStrings(mock.createCalls[0].Binds), want) {
 		return
 	}
-	t.Errorf("missing parent-repo git bind %q in binds: %v", want, mock.createCalls[0].Binds)
+	t.Errorf("missing parent-repo git bind %q in binds: %v", want, bindStrings(mock.createCalls[0].Binds))
 }
 
 // Without a GitDir (shared-checkout mount, non-git workspace) no extra bind
@@ -649,7 +644,7 @@ func TestManager_Up_NoGitDirNoExtraBind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, b := range mock.createCalls[0].Binds {
+	for _, b := range bindStrings(mock.createCalls[0].Binds) {
 		if strings.Contains(b, ".git:") {
 			t.Errorf("unexpected .git bind %q without GitDir", b)
 		}
@@ -676,7 +671,7 @@ func TestManager_Up_WithCACert(t *testing.T) {
 	if len(mock.createCalls) != 1 {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
-	binds := mock.createCalls[0].Binds
+	binds := bindStrings(mock.createCalls[0].Binds)
 	foundCACert := false
 	for _, b := range binds {
 		if strings.Contains(b, "ca.crt") && strings.HasSuffix(b, ":ro") {
@@ -712,9 +707,9 @@ func TestManager_Up_CACertIsDirectory_NoMount(t *testing.T) {
 	if len(mock.createCalls) != 1 {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
-	for _, b := range mock.createCalls[0].Binds {
+	for _, b := range bindStrings(mock.createCalls[0].Binds) {
 		if strings.Contains(b, "/.human/ca.crt") {
-			t.Errorf("ca.crt directory must not be mounted, but found bind: %q in %v", b, mock.createCalls[0].Binds)
+			t.Errorf("ca.crt directory must not be mounted, but found bind: %q in %v", b, bindStrings(mock.createCalls[0].Binds))
 		}
 	}
 }
@@ -744,9 +739,9 @@ func TestManager_Up_CACertEmpty_NoMount(t *testing.T) {
 	if len(mock.createCalls) != 1 {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
-	for _, b := range mock.createCalls[0].Binds {
+	for _, b := range bindStrings(mock.createCalls[0].Binds) {
 		if strings.Contains(b, "/.human/ca.crt") {
-			t.Errorf("empty ca.crt must not be mounted, but found bind: %q in %v", b, mock.createCalls[0].Binds)
+			t.Errorf("empty ca.crt must not be mounted, but found bind: %q in %v", b, bindStrings(mock.createCalls[0].Binds))
 		}
 	}
 }
@@ -773,7 +768,7 @@ func TestManager_Up_WithClaudeDir(t *testing.T) {
 	if len(mock.createCalls) != 1 {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
-	binds := mock.createCalls[0].Binds
+	binds := bindStrings(mock.createCalls[0].Binds)
 	foundClaude := false
 	for _, b := range binds {
 		if strings.Contains(b, ".claude") && !strings.Contains(b, ".claude.json") {
@@ -855,7 +850,7 @@ func TestManager_Up_SourceDir(t *testing.T) {
 		t.Fatalf("expected 1 create call, got %d", len(mock.createCalls))
 	}
 	// The bind mounts should use sourceDir, not projectDir.
-	binds := mock.createCalls[0].Binds
+	binds := bindStrings(mock.createCalls[0].Binds)
 	foundSource := false
 	for _, b := range binds {
 		if strings.HasPrefix(b, sourceDir+":") {
@@ -1045,7 +1040,7 @@ func TestManager_Up_CacheVolumes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	binds := mock.createCalls[0].Binds
+	binds := bindStrings(mock.createCalls[0].Binds)
 	for _, want := range []string{
 		"human-cache-go-build:/home/vscode/.cache/go-build",
 		"human-cache-go-mod:/go/pkg/mod",
@@ -1082,8 +1077,8 @@ func TestManager_Up_CacheVolumes_RootUserSkipsChown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(mock.createCalls[0].Binds, "human-cache-go-mod:/go/pkg/mod") {
-		t.Fatalf("volume bind missing: %v", mock.createCalls[0].Binds)
+	if !slices.Contains(bindStrings(mock.createCalls[0].Binds), "human-cache-go-mod:/go/pkg/mod") {
+		t.Fatalf("volume bind missing: %v", bindStrings(mock.createCalls[0].Binds))
 	}
 	for _, c := range mock.execCalls {
 		if len(c.Cmd) > 0 && c.Cmd[0] == "chown" {
@@ -1109,7 +1104,7 @@ func TestManager_Up_CacheVolumes_InvalidSkippedWithWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binds := mock.createCalls[0].Binds
+	binds := bindStrings(mock.createCalls[0].Binds)
 	if !slices.Contains(binds, "human-cache-good:/data") {
 		t.Errorf("valid entry missing: %v", binds)
 	}
@@ -1136,7 +1131,7 @@ func TestManager_Up_NoCachesNoExtraExecs(t *testing.T) {
 			t.Errorf("no caches declared but ownership exec ran: %+v", c)
 		}
 	}
-	for _, b := range mock.createCalls[0].Binds {
+	for _, b := range bindStrings(mock.createCalls[0].Binds) {
 		if strings.HasPrefix(b, "human-cache-") {
 			t.Errorf("unexpected cache bind: %v", b)
 		}
