@@ -1072,11 +1072,24 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	}
 }
 
-// escalatePRLoop routes a non-converging loop to the right surface: a fixer
-// needs-input is a DECISION, posted as a [human:options] block whose stage is
-// implementation so choosing rebuilds through the normal chain (which re-adopts
-// the still-open draft PR); everything else — a spent round budget, an
-// unreviewable PR, an outcome the daemon cannot classify — reds the done stage.
+// escalatePRLoop routes a non-converging loop to the right surface, and what
+// decides the surface is what the fixer actually named:
+//
+//   - two or more directions — a genuine fork. It becomes a [human:options]
+//     block naming the implementation stage, so choosing rebuilds through the
+//     normal chain and re-adopts the still-open draft PR.
+//   - exactly one direction — not a fork. The daemon pursues it (SC-3630).
+//   - none — not a decision either. The fixer stopped without naming a way
+//     forward, which is a failure with a reason, and reds the done stage.
+//
+// Everything else — a spent round budget, an unreviewable PR, an outcome the
+// daemon cannot classify — reds the done stage as before.
+//
+// The card used to ask in all three cases, filling an empty block with invented
+// answers so it stayed well-formed. Nothing about the real problem survived
+// that, and the user was left clicking a fabricated button to re-run a loop
+// with no new information.
+//
 // Idempotent: a durable re-drive must never re-post the block, so an already-open
 // options block short-circuits.
 func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) error {
@@ -1093,30 +1106,46 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 	}
 	stage := latestPRLoopStage(comments)
 	if stage == PRStageFix && outcome.FixExit != PRFixDone {
-		ctxLine := outcome.FixSummary
-		if ctxLine == "" {
-			ctxLine = "the PR review→fix loop needs a decision the fixer could not make"
+		switch opts := outcome.FixOptions; {
+		case len(opts) >= marker.MinDecisionOptions:
+			m, order := optionsMarker(BoardImplementation, decisionContext(outcome), opts)
+			return postMarker(ctx, d.Commenter, pmKey, m, order...)
+		case len(opts) == 1 && prReviewRounds(comments) < DefaultPRReviewRounds:
+			return d.pursueSoleDirection(ctx, pmKey, comments, opts[0])
 		}
-		opts := outcome.FixOptions
-		if len(opts) == 0 {
-			// The fallback offers the two answers a human actually has here.
-			// It used to offer one, with a comment explaining that one was
-			// enough to keep the block parseable — but the protocol forbids a
-			// single-answer block on purpose: it parks the card until someone
-			// clicks the only thing on offer, which is a dead end dressed as a
-			// choice (marker.MinDecisionOptions). Posting it anyway meant the
-			// daemon wrote the exact shape `human marker post` rejects.
-			opts = []BoardOption{
-				{ID: "1", Label: "Rebuild the branch to resolve the decision the fixer raised"},
-				{ID: "2", Label: "Take it over by hand — stop the loop and leave the branch as it is"},
-			}
-		}
-		m, order := optionsMarker(BoardImplementation, ctxLine, opts)
-		return postMarker(ctx, d.Commenter, pmKey, m, order...)
+		// No directions — or one the round budget can no longer afford to
+		// pursue. Both fall through to the failed marker, which says what the
+		// fixer reported and offers the retry the card already knows how to run.
 	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
 		markerBody(failureMarker(MarkerPRReviewFailed, prEscalationReason(stage, outcome, d.Diagnose))))
 	return nil
+}
+
+// decisionContext is the line the block leads with: what the fixer said it was
+// stuck on. It has a generic fallback only because a fork with real answers and
+// no summary is still answerable — unlike an empty block, whose generic context
+// described nothing at all.
+func decisionContext(outcome PRLoopOutcome) string {
+	if outcome.FixSummary != "" {
+		return outcome.FixSummary
+	}
+	return "the PR fixer stopped on a decision and named the directions below"
+}
+
+// pursueSoleDirection takes the only answer on offer instead of asking for it.
+//
+// A choice between one thing is not a choice — it is a continue button dressed
+// as a fork, and it stops the board on something no human judgment can improve.
+// The protocol already refuses to POST such a block (marker.MinDecisionOptions);
+// this is the other half, so the loop does not merely avoid writing a dead end
+// but actually moves.
+//
+// It records the choice exactly as a human's click records it — same
+// [human:option-chosen] marker, same relaunch — so the trail reads the same
+// whoever made the call, and the card is never resumed without a record.
+func (d BoardTransitionDeps) pursueSoleDirection(ctx context.Context, pmKey string, comments []tracker.Comment, only BoardOption) error {
+	return d.pursueDecision(ctx, pmKey, comments, BoardImplementation, only)
 }
 
 // prEscalationReason renders the actionable headline the failed marker's badge
@@ -1137,7 +1166,7 @@ func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Board
 	case stage == PRStageFix && outcome.FixExit == PRFixDone && outcome.headStalled():
 		return "the PR fixer recorded done but added no commit — the reviewed head is unchanged, so another review would loop; check the fixer's log and the PR, then re-run Deploy"
 	case outcome.FixExit == string(ExitNeedsInput):
-		return "the PR fixer needs a human decision — read the PR review comments, decide, then re-run Deploy"
+		return needsInputReason(outcome)
 	case outcome.ReviewVerdict == PRVerdictChanges:
 		return "the machine review did not converge within the round budget — review the PR yourself, then re-run Deploy"
 	case outcome.ReviewVerdict == PRVerdictUnreviewable:
@@ -1147,6 +1176,23 @@ func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Board
 	default:
 		return "the PR review→fix loop stopped on an outcome it could not classify — check the PR and its review, then re-run Deploy"
 	}
+}
+
+// needsInputReason explains a fixer that stopped for a decision without naming
+// one (SC-3630). It reaches the failed marker only when the fixer listed no
+// directions — with directions the loop asks instead, and with exactly one it
+// pursues it — so the card's job here is to say what the fixer reported, not to
+// invent a question out of the fact that it reported nothing.
+//
+// The fixer's own summary leads when it wrote one. Without it the line says the
+// step ended without naming what it was stuck on, which is the honest reading:
+// sending a human to "read the review comments and decide" implies a question
+// was recorded there, and none was.
+func needsInputReason(outcome PRLoopOutcome) string {
+	if s := strings.TrimSpace(outcome.FixSummary); s != "" {
+		return "the PR fixer stopped for a decision it could not make: " + s + " — decide, then re-run Deploy"
+	}
+	return "the PR fixer stopped for a decision but named neither the question nor a way forward — read the PR review comments and the fixer's log, then re-run Deploy"
 }
 
 // staleStepReason names the record the loop could not confirm was current

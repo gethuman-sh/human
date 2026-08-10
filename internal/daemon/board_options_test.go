@@ -126,7 +126,8 @@ func TestApplyOptionPostsChoiceAndRelaunches(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, c.added, 2)
-	assert.Equal(t, OptionChosenHeader+" 2: Remove the Retry plan menu item and defer criterion 3", c.added[0])
+	assert.Equal(t, OptionChosenHeader+" 2: Remove the Retry plan menu item and defer criterion 3\nstage: implementation", c.added[0],
+		"the record names the stage it resumes, so a reader never has to find the block it came from")
 	assert.Equal(t, ImplementationStartedHeader, c.added[1])
 	assert.Equal(t, 1, l.calls)
 	assert.Equal(t, "board-SC-9-implementation", l.name)
@@ -265,7 +266,8 @@ func TestApplyOptionTicketReviewResumesGate(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, c.added, 2)
-	assert.Equal(t, OptionChosenHeader+" 2: fix the cause", c.added[0])
+	assert.Equal(t, OptionChosenHeader+" 2: fix the cause\nstage: planning", c.added[0],
+		"the alias is resolved before it is recorded — the record names the stage the board resumes")
 	assert.Equal(t, PlanningStartedHeader, c.added[1], "resuming the gate re-runs the planning dispatch")
 	assert.Equal(t, "board-SC-9-planning", l.name)
 	assert.Contains(t, l.prompt, "/human-ticket-review SC-9", "the relaunch re-runs the gate")
@@ -328,6 +330,37 @@ func TestOptionChosenQueued_UnresumableStageNotQueued(t *testing.T) {
 	}
 	_, _, ok := optionChosenQueued(comments)
 	assert.False(t, ok, "an unresumable chosen stage has no queued placement to synthesize")
+}
+
+// SC-3630: the loop pursues a sole direction without ever posting a block, so
+// the choice it records stands alone. The record names its own stage — without
+// that, the window between recording the choice and the stage's started marker
+// (and any launch that fails inside it) would place the card as if no decision
+// had been taken.
+func TestOptionChosenQueued_NoBlock_ReadsTheStageFromTheRecord(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	comments := []tracker.Comment{
+		optComment(PRFixStartedHeader, base),
+		optComment(OptionChosenHeader+" 1: Rebuild without the cache layer\nstage: implementation", base.Add(time.Minute)),
+	}
+
+	stage, _, ok := optionChosenQueued(comments)
+	require.True(t, ok, "a choice with no block in front of it is still a choice")
+	assert.Equal(t, BoardImplementation, stage)
+}
+
+// A choice recorded before the stage field existed still reads, from the block
+// it consumed.
+func TestOptionChosenQueued_NoStageField_FallsBackToTheBlock(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	comments := []tracker.Comment{
+		optComment("[human:options]\nstage: planning\n1: a\n2: b", base),
+		optComment(OptionChosenHeader+" 1: a", base.Add(time.Minute)),
+	}
+
+	stage, _, ok := optionChosenQueued(comments)
+	require.True(t, ok)
+	assert.Equal(t, BoardPlanning, stage)
 }
 
 // SC-2137: the ticket-review gate's own decision is a genuine pause of the

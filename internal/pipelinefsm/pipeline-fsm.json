@@ -822,7 +822,7 @@
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:pr-review-failed]",
-      "doc": "Budget spent, unreviewable, or an outcome it cannot parse. It never merges on a state it cannot read. What does NOT fire it: a substrate failure mid-run. The hook reports a model API error as StopFailure and Claude Code retries through it, so the run carries on — driving the loop there read a verdict the reviewer had not written yet and reddened a review that went on to approve (SC-4026). Such an event is consumed and ignored; a run that genuinely dies on one is recovered by the durable re-drive, on the machine that owns the stage. It also fires at most once per dead round: one run can raise both a StopFailure and a Stop, and an escalation with nothing changed since the last one is not restated.",
+      "doc": "Budget spent, unreviewable, an outcome it cannot parse, or a fixer that stopped for a decision without naming one. That last case used to be raised as a question instead, assembled out of placeholders; a step that reports it is stuck and names neither the question nor a way forward has failed, and the reason carries the fixer's own summary so the card says what actually happened (SC-3630). It never merges on a state it cannot read. What does NOT fire it: a substrate failure mid-run. The hook reports a model API error as StopFailure and Claude Code retries through it, so the run carries on — driving the loop there read a verdict the reviewer had not written yet and reddened a review that went on to approve (SC-4026). Such an event is consumed and ignored; a run that genuinely dies on one is recovered by the durable re-drive, on the machine that owns the stage. It also fires at most once per dead round: one run can raise both a StopFailure and a Stop, and an escalation with nothing changed since the last one is not restated.",
       "where": "internal/daemon/board_transition.go AdvancePRLoop — prEscalationReason names which of the three it was"
     },
     {
@@ -907,8 +907,8 @@
       "dst": "queued",
       "actor": "user",
       "marker": "[human:option-chosen]",
-      "where": "board_options.go ApplyOption — records the choice, then starts the stage; board_state.go optionChosenQueued reads the window between the two",
-      "doc": "A human picked an answer. This records it and nothing more: ApplyOption posts the choice comment and only then calls startAgentStage, so the item is queued for a stage before it is running in one. The stage that gets queued is the one the block NAMES, not the one the item sits in — planning is the common case, while a PR-loop escalation deliberately names implementation even though the item is in the deploy stage, because the fixer raised a question only a code change can answer and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named. The stage is derived; the state is not — every answered decision lands here first.",
+      "where": "board_options.go ApplyOption → pursueDecision — records the choice, then starts the stage; board_state.go optionChosenQueued reads the window between the two",
+      "doc": "A human picked an answer. This records it and nothing more: pursueDecision posts the choice comment and only then calls startAgentStage, so the item is queued for a stage before it is running in one. The stage that gets queued is the one the RECORD names — written onto the option-chosen marker itself, with the block read only for choices recorded before that field existed — not the one the item sits in — planning is the common case, while a PR-loop escalation deliberately names implementation even though the item is in the deploy stage, because the fixer raised a question only a code change can answer and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named. The stage is derived; the state is not — every answered decision lands here first.",
       "dst_is_derived": false
     },
     {
@@ -1059,8 +1059,21 @@
       "dst": "awaiting-decision",
       "actor": "daemon",
       "marker": "[human:options]",
+      "guard": "the fixer named two or more directions",
       "where": "internal/daemon/board_transition.go escalatePRLoop — a fixer that ends needing input becomes a decision rather than a red card",
-      "doc": "The PR fixer hit something only a person can settle. Unlike every other stage-asks, the daemon raises this one rather than the agent: the fixer records its need on exit and the loop turns that into the block, naming the implementation stage so choosing rebuilds through the normal chain and re-adopts the still-open draft PR."
+      "doc": "The PR fixer hit something only a person can settle. Unlike every other stage-asks, the daemon raises this one rather than the agent: the fixer records its need on exit and the loop turns that into the block, naming the implementation stage so choosing rebuilds through the normal chain and re-adopts the still-open draft PR. The guard is the whole of what makes this a fork: the block carries the fixer's own directions and nothing else. It used to fire on every needs-input exit, filling an empty block with invented answers so it stayed well-formed — which asked a question no one had raised and parked the item on it (SC-3630). A needs-input naming one direction fires pr-fix-takes-sole-direction instead, and one naming none fires pr-loop-escalates."
+    },
+    {
+      "name": "pr-fix-takes-sole-direction",
+      "src": [
+        "pr-fix"
+      ],
+      "dst": "queued",
+      "actor": "daemon",
+      "marker": "[human:option-chosen]",
+      "guard": "the fixer named exactly one direction, and the review round budget is not spent",
+      "where": "internal/daemon/board_transition.go escalatePRLoop → pursueSoleDirection, which shares board_options.go pursueDecision with the human path",
+      "doc": "The fixer named one way forward, so there is nothing to decide and the daemon pursues it. A choice between one thing is not a choice — it is a continue button dressed as a fork, and awaiting-decision is the one state the machine may not resolve for itself, so the item must never enter it on a single answer (SC-3630). The choice is recorded with the same marker a human's click records, which is why this lands in queued exactly like decision-made: the record is the audit trail and the consumption signal both, and the item is queued for the implementation stage before it is running in one. Bounded by the loop's own review-round budget — past it the direction is reported through pr-loop-escalates rather than taken, so this can never drive an unbounded rebuild loop."
     }
   ],
   "ownership": {

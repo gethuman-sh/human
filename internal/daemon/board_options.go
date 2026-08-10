@@ -153,18 +153,35 @@ func optionChosenQueued(comments []tracker.Comment) (BoardStage, tracker.Comment
 	if hasLaterMarker(comments, chosen) {
 		return "", tracker.Comment{}, false
 	}
-	block, ok := latestOptionsBlockAtOrBefore(comments, chosen)
-	if !ok {
-		return "", tracker.Comment{}, false
-	}
-	stage, _, opts := parseOptionsBlock(block.Body)
+	stage, ok := chosenStage(comments, chosen)
 	// Only a resumable stage synthesizes a queued placement — an unrecognized
 	// stage cannot be relaunched, so there is no pending relaunch to represent
 	// (it surfaces as a card error instead, SC-2137).
-	if len(opts) == 0 || !optionStages[stage] {
+	if !ok || !optionStages[stage] {
 		return "", tracker.Comment{}, false
 	}
 	return stage, chosen, true
+}
+
+// chosenStage reports which stage a recorded choice resumes.
+//
+// The record says so itself: pursueDecision writes the stage onto the
+// option-chosen marker, so a choice is readable without its neighbours. The
+// block is still consulted for choices recorded before that field existed, and
+// for those the block remains the only source (SC-3630).
+func chosenStage(comments []tracker.Comment, chosen tracker.Comment) (BoardStage, bool) {
+	if s := parsePrefixedLine(chosen.Body, "stage:"); s != "" {
+		return BoardStage(s), true
+	}
+	block, ok := latestOptionsBlockAtOrBefore(comments, chosen)
+	if !ok {
+		return "", false
+	}
+	stage, _, opts := parseOptionsBlock(block.Body)
+	if len(opts) == 0 {
+		return "", false
+	}
+	return stage, true
 }
 
 // latestOptionChosen returns the newest [human:option-chosen] comment.
@@ -248,16 +265,33 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 	if !ok {
 		return errors.WithDetails("unknown option id", "pm", req.PMKey, "option", req.OptionID)
 	}
+	return d.pursueDecision(ctx, req.PMKey, comments, stage, chosen)
+}
 
+// pursueDecision records one answer and relaunches its stage with the direction
+// injected. Shared with the loop's sole-direction path (SC-3630) so that a
+// decision the daemon takes for itself leaves the same trail as one a human
+// clicks: the record is the audit AND the consumption signal, and a second
+// caller writing its own variant of it is how a resumed card ends up with no
+// record of why.
+func (d BoardTransitionDeps) pursueDecision(ctx context.Context, pmKey string, comments []tracker.Comment, stage BoardStage, chosen BoardOption) error {
 	// The pick rides in the head token, where the readers already look for it
-	// (parseOptionChosen splits id from label on the header line).
-	chosenMarker := marker.Marker{Type: MarkerOptionChosen, Head: chosen.ID + ": " + chosen.Label}
-	if err := postMarker(ctx, d.Commenter, req.PMKey, chosenMarker); err != nil {
-		return errors.WrapWithDetails(err, "recording option choice", "pm", req.PMKey)
+	// (parseOptionChosen splits id from label on the header line). The stage
+	// rides in a field because the record has to stand on its own: the loop's
+	// sole-direction path records a choice with no block in front of it at all,
+	// so a reader that recovers the stage from the neighbouring block would find
+	// nothing and place the card as if no decision had been taken.
+	chosenMarker := marker.Marker{
+		Type:   MarkerOptionChosen,
+		Head:   chosen.ID + ": " + chosen.Label,
+		Fields: fields("stage", string(stage)),
+	}
+	if err := postMarker(ctx, d.Commenter, pmKey, chosenMarker, "stage"); err != nil {
+		return errors.WrapWithDetails(err, "recording option choice", "pm", pmKey)
 	}
 
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	prompt := stagePrompt(stage, req.PMKey, card) +
+	prompt := stagePrompt(stage, pmKey, card) +
 		" — a decision was made on this ticket: pursue the direction in the latest " +
 		OptionChosenHeader + " comment (" + chosen.Label + ")"
 	// A decision click is human-initiated, like the Fix/Retry entry points: the
@@ -265,7 +299,7 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 	// not a pipeline wait, so it is suppressed (empty cause, SC-2462). Resuming an
 	// implementation-stage decision still executes a plan, so it is plan-gated
 	// like any other implementation launch (SC-2596).
-	_, err = d.startAgentStage(ctx, req.PMKey, stage, startedHeaderFor(stage), prompt, WaitCause(""), stage == BoardImplementation)
+	_, err := d.startAgentStage(ctx, pmKey, stage, startedHeaderFor(stage), prompt, WaitCause(""), stage == BoardImplementation)
 	return err
 }
 
