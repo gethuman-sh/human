@@ -282,7 +282,11 @@ function activityAge(at: string | undefined, nowMs: number): string {
   return `(${sinceText(at, nowMs)})`;
 }
 
-export function badgeInfo(card: QueueCard, nowMs: number = Date.now()): BadgeInfo | null {
+export function badgeInfo(
+  card: QueueCard,
+  nowMs: number = Date.now(),
+  runningLabels: Record<string, string> = RUNNING_LABELS,
+): BadgeInfo | null {
   // An open decision block outranks EVERY other classification, including a
   // stale failed marker: a card parked on a deliberate human fork must never
   // paint red, even if a *-failed marker also landed on it (the daemon's twin
@@ -316,7 +320,7 @@ export function badgeInfo(card: QueueCard, nowMs: number = Date.now()): BadgeInf
     const stageText =
       card.stage === "done" && card.deployPhase
         ? (DEPLOY_PHASE_LABELS[card.deployPhase] ?? "PR review…")
-        : (RUNNING_LABELS[card.stage] ?? "working…");
+        : (runningLabels[card.stage] ?? "working…");
     // The run's own phase, when it recorded one. Without it the badge says the
     // same word for the whole of a fix run — triage, the challenge, the plan,
     // the fix, verification — so it reads identically at thirty seconds and at

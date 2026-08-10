@@ -651,7 +651,7 @@ const BUG_RUNNING_LABELS = { ...RUNNING_LABELS, implementation: "fixing…" };
 function renderBugCard(card) {
     const el = renderCard(card);
     if (card.state === "running" && card.stage === "implementation") {
-        const info = badgeInfo(card, BUG_RUNNING_LABELS);
+        const info = badgeInfo(card, Date.now(), BUG_RUNNING_LABELS);
         // badge() rendered the same info.cls, so this finds the badge the board just
         // produced whether it is running, stalled or elsewhere.
         const b = info ? el.querySelector(`.badge.${info.cls}`) : null;
