@@ -21,10 +21,20 @@ const OptionsHeader = "[human:options]"
 // consumption signal that removes the block from the card.
 const OptionChosenHeader = "[human:option-chosen]"
 
+// WaitsForField is the option-chosen marker's record of the ticket a sequencing
+// answer deferred to — the field the card face and the release pass read.
+const WaitsForField = "waits-for"
+
 // BoardOption is one selectable direction from an options block.
 type BoardOption struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+	// WaitsFor is the ticket this answer defers to, from the block's
+	// `waits-for-<id>:` line. Non-empty makes it a SEQUENCING answer: picking it
+	// records the decision and holds this ticket until that one is finished,
+	// where every other answer starts the stage. Empty on every ordinary answer,
+	// so a block that declares no wait behaves exactly as it always did.
+	WaitsFor string `json:"waits_for,omitempty"`
 }
 
 // optionStages are the stages an options block may relaunch — exactly the
@@ -57,6 +67,7 @@ var optionStageAliases = map[BoardStage]BoardStage{
 //	stage: implementation
 //	context: review found a blocking design gap
 //	1: <option label>
+//	waits-for-1: <ticket key>   (optional: picking 1 defers to that ticket)
 //	2: <option label>
 //
 // The returned stage is CANONICAL: a gate alias (optionStageAliases, e.g.
@@ -70,6 +81,7 @@ func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
 	var raw BoardStage
 	var context string
 	var opts []BoardOption
+	waits := map[string]string{}
 	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
@@ -79,18 +91,18 @@ func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
 			raw = BoardStage(strings.TrimSpace(strings.TrimPrefix(line, "stage:")))
 		case strings.HasPrefix(line, "context:"):
 			context = strings.TrimSpace(strings.TrimPrefix(line, "context:"))
+		case strings.HasPrefix(line, marker.WaitsForPrefix):
+			if id, key, ok := parseWaitLine(line); ok {
+				waits[id] = key
+			}
 		case strings.HasPrefix(line, DaemonLinePrefix):
 			// Provenance, not a choice. Every marker body carries this stamp, and
 			// `daemon: <id>` matches the id:label shape below exactly — so without
 			// this case the board offered the daemon id as a selectable answer,
 			// and counted it toward the number of answers a block appears to have.
 		default:
-			id, label, ok := strings.Cut(line, ":")
-			if !ok || strings.TrimSpace(id) == "" || strings.ContainsAny(id, " \t") {
-				continue
-			}
-			if label = strings.TrimSpace(label); label != "" {
-				opts = append(opts, BoardOption{ID: strings.TrimSpace(id), Label: label})
+			if opt, ok := parseAnswerLine(line); ok {
+				opts = append(opts, opt)
 			}
 		}
 	}
@@ -100,11 +112,43 @@ func parseOptionsBlock(body string) (BoardStage, string, []BoardOption) {
 	if raw == "" || len(opts) == 0 {
 		return "", "", nil
 	}
+	// A wait naming no offered answer is dropped rather than kept as a phantom:
+	// posting rejects it (marker.validateOptions), so one reaching here is a
+	// block written before the check existed, and there is no answer for it to
+	// qualify.
+	for i, opt := range opts {
+		opts[i].WaitsFor = waits[opt.ID]
+	}
 	stage := raw
 	if canon, ok := optionStageAliases[raw]; ok {
 		stage = canon
 	}
 	return stage, context, opts
+}
+
+// parseWaitLine reads a `waits-for-<id>: <KEY>` line: the ticket answer <id>
+// defers to. It is metadata about an answer, not an answer — it shares the
+// `id: value` shape of one, so a parser that did not recognise it would offer
+// "waits-for-1" as a third direction a human could pick.
+func parseWaitLine(line string) (id, key string, ok bool) {
+	rest, ok := strings.CutPrefix(line, marker.WaitsForPrefix)
+	if !ok {
+		return "", "", false
+	}
+	id, key, ok = strings.Cut(rest, ":")
+	id, key = strings.TrimSpace(id), strings.TrimSpace(key)
+	return id, key, ok && id != "" && key != ""
+}
+
+// parseAnswerLine reads an `<id>: <label>` answer line. An id carrying
+// whitespace is prose that happens to contain a colon, not an answer.
+func parseAnswerLine(line string) (BoardOption, bool) {
+	id, label, ok := strings.Cut(line, ":")
+	id, label = strings.TrimSpace(id), strings.TrimSpace(label)
+	if !ok || id == "" || label == "" || strings.ContainsAny(id, " \t") {
+		return BoardOption{}, false
+	}
+	return BoardOption{ID: id, Label: label}, true
 }
 
 // openOptionsBlock returns the latest options block that is still awaiting a
@@ -265,42 +309,66 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 	if !ok {
 		return errors.WithDetails("unknown option id", "pm", req.PMKey, "option", req.OptionID)
 	}
+	// A ticket cannot wait for itself: recording that would hold the work behind
+	// a ticket that only finishes by doing it. Refuse the click loudly and leave
+	// the block open — the stage wrote a question that cannot be answered, and
+	// silently treating it as an ordinary answer would start the very work the
+	// answer was picked to defer.
+	if chosen.WaitsFor == req.PMKey {
+		return errors.WithDetails("this answer makes the ticket wait for itself, which nothing can clear",
+			"pm", req.PMKey, "option", req.OptionID)
+	}
 	return d.pursueDecision(ctx, req.PMKey, comments, stage, chosen)
 }
 
-// pursueDecision records one answer and relaunches its stage with the direction
-// injected. Shared with the loop's sole-direction path (SC-3630) so that a
-// decision the daemon takes for itself leaves the same trail as one a human
-// clicks: the record is the audit AND the consumption signal, and a second
-// caller writing its own variant of it is how a resumed card ends up with no
-// record of why.
+// pursueDecision records one answer and, unless the answer was to wait, starts
+// its stage with the direction injected. Shared with the loop's sole-direction
+// path (SC-3630) so that a decision the daemon takes for itself leaves the same
+// trail as one a human clicks: the record is the audit AND the consumption
+// signal, and a second caller writing its own variant of it is how a resumed
+// card ends up with no record of why.
 func (d BoardTransitionDeps) pursueDecision(ctx context.Context, pmKey string, comments []tracker.Comment, stage BoardStage, chosen BoardOption) error {
 	// The pick rides in the head token, where the readers already look for it
-	// (parseOptionChosen splits id from label on the header line). The stage
-	// rides in a field because the record has to stand on its own: the loop's
-	// sole-direction path records a choice with no block in front of it at all,
-	// so a reader that recovers the stage from the neighbouring block would find
-	// nothing and place the card as if no decision had been taken.
+	// (choiceLabel splits id from label on the header line). The stage rides in a
+	// field because the record has to stand on its own: the loop's sole-direction
+	// path records a choice with no block in front of it at all, so a reader that
+	// recovers the stage from the neighbouring block would find nothing and place
+	// the card as if no decision had been taken. A sequencing answer's wait rides
+	// there for the same reason: it is what every later reader — the card face,
+	// the pass that releases the hold — asks the record for.
 	chosenMarker := marker.Marker{
 		Type:   MarkerOptionChosen,
 		Head:   chosen.ID + ": " + chosen.Label,
 		Fields: fields("stage", string(stage)),
 	}
-	if err := postMarker(ctx, d.Commenter, pmKey, chosenMarker, "stage"); err != nil {
+	if chosen.WaitsFor != "" {
+		chosenMarker.Fields[WaitsForField] = chosen.WaitsFor
+	}
+	if err := postMarker(ctx, d.Commenter, pmKey, chosenMarker, "stage", WaitsForField); err != nil {
 		return errors.WrapWithDetails(err, "recording option choice", "pm", pmKey)
 	}
 
+	// A sequencing answer is the one answer whose content is "do not start this
+	// yet". Starting the stage anyway is doing the thing the person just chose to
+	// do second, and it was the only behaviour the machine had: every answer took
+	// the launch path because nothing in an answer could say otherwise. The card
+	// stays queued for the stage, named on the record — reconcileQueuedLaunch
+	// releases it when the ticket it defers to is finished.
+	if chosen.WaitsFor != "" {
+		d.Logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("waits for", chosen.WaitsFor).
+			Msg("board decision: the answer defers this work; holding the stage until the named ticket is done")
+		return nil
+	}
+
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	prompt := stagePrompt(stage, pmKey, card) +
-		" — a decision was made on this ticket: pursue the direction in the latest " +
-		OptionChosenHeader + " comment (" + chosen.Label + ")"
-	// A decision click is human-initiated, like the Fix/Retry entry points: the
-	// interval since the decision became available is the human's think-time,
-	// not a pipeline wait, so it is suppressed (empty cause, SC-2462). Resuming an
-	// implementation-stage decision still executes a plan, so it is plan-gated
-	// like any other implementation launch (SC-2596).
-	_, err := d.startAgentStage(ctx, pmKey, stage, startedHeaderFor(stage), prompt, WaitCause(""), stage == BoardImplementation)
+	_, err := d.launchDecidedStage(ctx, pmKey, stage, card, comments, chosen.Label)
 	return err
+}
+
+// waitsForOf reads the ticket a recorded choice deferred to. Empty for every
+// ordinary answer.
+func waitsForOf(chosen tracker.Comment) string {
+	return parsePrefixedLine(chosen.Body, WaitsForField+":")
 }
 
 func findOption(opts []BoardOption, id string) (BoardOption, bool) {

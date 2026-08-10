@@ -66,33 +66,75 @@ var reservedOptionKeys = map[string]bool{
 	MachineField: true, BuildField: true,
 }
 
-// validateOptions counts the answers a decision block actually offers. They
-// arrive as numbered fields when posted and as body lines when read back, so
-// both are counted.
+// WaitsForPrefix marks the option-block line that says an answer DEFERS the
+// work rather than directing it: `waits-for-<id>: <KEY>` means picking <id>
+// holds this ticket until <KEY> is finished. It is the one thing about an
+// answer the machine cannot read out of its prose — "SC-1 goes first" and "do
+// it this way" are the same sentence to a parser — and without it every answer
+// took the one path the machine knows, which is to start the work.
+//
+// Exported so the daemon's own block parser reserves the same prefix; two
+// spellings of it would mean a line counted as an answer on one side and as
+// metadata on the other.
+const WaitsForPrefix = "waits-for-"
+
+// isReservedOptionKey reports an option-block line that is metadata rather than
+// an answer. Prefix membership as well as exact membership: the wait a
+// sequencing answer declares is per-answer, so its key carries the answer's id.
+func isReservedOptionKey(id string) bool {
+	return reservedOptionKeys[id] || strings.HasPrefix(id, WaitsForPrefix)
+}
+
+// validateOptions counts the answers a decision block actually offers, and
+// checks that every wait it declares belongs to one of them. They arrive as
+// numbered fields when posted and as body lines when read back, so both are
+// counted.
 func validateOptions(m Marker) error {
 	ids := map[string]bool{}
+	waits := map[string]string{}
 	for key, value := range m.Fields {
-		if !reservedOptionKeys[key] && strings.TrimSpace(value) != "" {
-			ids[key] = true
-		}
+		collectOption(ids, waits, key, value)
 	}
 	for _, line := range strings.Split(m.Body, "\n") {
-		line = strings.TrimSpace(line)
-		id, label, ok := strings.Cut(line, ":")
-		id = strings.TrimSpace(id)
-		if !ok || id == "" || strings.ContainsAny(id, " \t") || reservedOptionKeys[id] {
+		id, label, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
 			continue
 		}
-		if strings.TrimSpace(label) != "" {
-			ids[id] = true
-		}
+		collectOption(ids, waits, strings.TrimSpace(id), label)
 	}
 	if len(ids) < MinDecisionOptions {
 		return errors.WithDetails(
 			"a decision block must offer at least two answers",
 			"type", m.Type, "answers", len(ids), "minimum", MinDecisionOptions)
 	}
+	// A wait naming no answer holds nothing: the block would render as an
+	// ordinary fork and the ticket it was meant to wait for would be started over
+	// anyway. Rejecting it at post time is the only moment anyone is watching.
+	for id, key := range waits {
+		if !ids[id] {
+			return errors.WithDetails(
+				"a decision block declares a wait for an answer it does not offer",
+				"type", m.Type, "answer", id, "waits for", key)
+		}
+	}
 	return nil
+}
+
+// collectOption sorts one `key: value` pair of a decision block into the
+// answers it offers or the waits it declares. Shared by the posted-fields and
+// read-back-body passes so the two cannot disagree about what an answer is.
+func collectOption(ids map[string]bool, waits map[string]string, id, value string) {
+	value = strings.TrimSpace(value)
+	if id == "" || strings.ContainsAny(id, " \t") || value == "" {
+		return
+	}
+	if answer, ok := strings.CutPrefix(id, WaitsForPrefix); ok {
+		waits[answer] = value
+		return
+	}
+	if !isReservedOptionKey(id) {
+		ids[id] = true
+	}
 }
 
 var specs = map[string]spec{

@@ -35,6 +35,13 @@ func AgentNamesForCard(card BoardViewCard) []string {
 	stage := BoardStage(card.Stage)
 	state := BoardState(card.State)
 	switch {
+	case card.WaitsFor != "":
+		// A card held by a sequencing answer has no agent to miss: the decision
+		// deliberately started nothing, and it stays that way until the ticket it
+		// waits for is done. Without this it reads exactly like a queued card whose
+		// launch died — the viewer paints "agent not running" over work that is
+		// doing precisely what a person told it to.
+		return nil
 	case stage == BoardDoneStage:
 		// A done-stage card has an agent only while the pre-merge review→fix loop
 		// is mid-flight; DeployPhase is the marker-derived signal that it is. Both

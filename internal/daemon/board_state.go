@@ -29,6 +29,12 @@ type BoardCard struct {
 	// the outage carries no stated recovery time, in which case the wait falls
 	// back to the reconcile pass's own backoff exactly as before (SC-3024).
 	ResumeAt string `json:"resume_at,omitempty"`
+	// WaitsFor is the ticket a queued card was told to wait for: the `waits-for`
+	// field of the [human:option-chosen] marker that queued it, written when the
+	// answer a human picked was a sequencing one. Empty on every other card,
+	// including a queued one whose answer was an ordinary direction — that card is
+	// waiting for a launch, not for other work.
+	WaitsFor string `json:"waits_for,omitempty"`
 	// HasPlan reports a [human:plan] comment on the ticket — the plan lives
 	// here instead of on a separate engineering ticket (single-tracker
 	// topology).
@@ -200,6 +206,13 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		card.ShippedPartialFollowOn = followOn
 	}
 	attachFailureAndResume(&card, card.placement().State(), latest)
+	// Only a queued card can be held: the record that holds it is the same
+	// option-chosen marker the queued placement was synthesized from, so the
+	// moment a started marker supersedes the choice the card stops claiming to
+	// wait for anything.
+	if card.placement().State() == BoardQueued {
+		card.WaitsFor = waitsForOf(latest)
+	}
 	card.DeployPhase = deployPhaseFor(card, comments)
 	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
 	attachOpenOptions(&card, comments)
