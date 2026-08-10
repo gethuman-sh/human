@@ -48,9 +48,8 @@ type ModelOutcomeSink struct {
 	ch      chan proxy.ModelCallOutcome
 	dropped atomic.Int64
 
-	mu          sync.Mutex
-	byKey       map[outcomeKey][]proxy.ModelCallOutcome
-	latestClass map[outcomeKey]string
+	mu    sync.Mutex
+	byKey map[outcomeKey][]proxy.ModelCallOutcome
 
 	// ledger persists attributed outcomes durably per ticket; nil keeps the sink
 	// memory-only. resolveProject maps a ticket key to its project identity so two
@@ -76,9 +75,8 @@ func (s *ModelOutcomeSink) WithLedger(ledger costLedger, resolveProject func(tic
 // until ctx is cancelled.
 func NewModelOutcomeSink(ctx context.Context) *ModelOutcomeSink {
 	s := &ModelOutcomeSink{
-		ch:          make(chan proxy.ModelCallOutcome, modelOutcomeChanCap),
-		byKey:       make(map[outcomeKey][]proxy.ModelCallOutcome),
-		latestClass: make(map[outcomeKey]string),
+		ch:    make(chan proxy.ModelCallOutcome, modelOutcomeChanCap),
+		byKey: make(map[outcomeKey][]proxy.ModelCallOutcome),
 	}
 	go s.run(ctx)
 	return s
@@ -109,8 +107,8 @@ func (s *ModelOutcomeSink) run(ctx context.Context) {
 	}
 }
 
-// store appends an outcome to its per-key history (bounded to the newest
-// maxOutcomesPerKey) and records the key's latest class.
+// store appends an outcome to its per-key history, bounded to the newest
+// maxOutcomesPerKey.
 func (s *ModelOutcomeSink) store(o proxy.ModelCallOutcome) {
 	k := outcomeKey{ticket: o.Ticket, stage: o.Stage}
 	s.mu.Lock()
@@ -120,7 +118,6 @@ func (s *ModelOutcomeSink) store(o proxy.ModelCallOutcome) {
 		hist = hist[len(hist)-maxOutcomesPerKey:]
 	}
 	s.byKey[k] = hist
-	s.latestClass[k] = o.Class
 	s.mu.Unlock()
 
 	// Persist attributed outcomes durably (SC-2847). An unattributed outcome
@@ -177,12 +174,21 @@ func (s *ModelOutcomeSink) Outcomes() []proxy.ModelCallOutcome {
 // whether one has been recorded. This is the seam a failure marker can read to
 // state why a run failed — an auth lapse, an overload, a spend problem — from
 // the live boundary rather than after the fact.
+//
+// It reads the history's newest entry rather than a summary kept beside it. A
+// stored copy is a second thing to update on every write, and the one question
+// it raises — which of the two did this path forget — has no answer a reader
+// can check. The bound in store() drops the OLDEST, so the newest entry is
+// always the newest outcome.
 func (s *ModelOutcomeSink) LatestClass(ticket, stage string) (string, bool) {
 	if s == nil {
 		return "", false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c, ok := s.latestClass[outcomeKey{ticket: ticket, stage: stage}]
-	return c, ok
+	hist := s.byKey[outcomeKey{ticket: ticket, stage: stage}]
+	if len(hist) == 0 {
+		return "", false
+	}
+	return hist[len(hist)-1].Class, true
 }

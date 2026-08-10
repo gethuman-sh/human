@@ -112,9 +112,8 @@ func TestModelOutcomeSink_DropsWhenFull(t *testing.T) {
 	// A sink whose drain goroutine never runs: the channel fills and further
 	// records drop rather than block (constraint: recording must not slow a call).
 	s := &ModelOutcomeSink{
-		ch:          make(chan proxy.ModelCallOutcome, 2),
-		byKey:       map[outcomeKey][]proxy.ModelCallOutcome{},
-		latestClass: map[outcomeKey]string{},
+		ch:    make(chan proxy.ModelCallOutcome, 2),
+		byKey: map[outcomeKey][]proxy.ModelCallOutcome{},
 	}
 	for i := 0; i < 5; i++ {
 		s.Record(proxy.ModelCallOutcome{Ticket: "SC-1"})
@@ -124,8 +123,7 @@ func TestModelOutcomeSink_DropsWhenFull(t *testing.T) {
 
 func TestModelOutcomeSink_BoundsPerKeyHistory(t *testing.T) {
 	s := &ModelOutcomeSink{
-		byKey:       map[outcomeKey][]proxy.ModelCallOutcome{},
-		latestClass: map[outcomeKey]string{},
+		byKey: map[outcomeKey][]proxy.ModelCallOutcome{},
 	}
 	for i := 0; i < maxOutcomesPerKey+50; i++ {
 		s.store(proxy.ModelCallOutcome{Ticket: "SC-1", Stage: "impl", StatusCode: i})
@@ -137,10 +135,26 @@ func TestModelOutcomeSink_BoundsPerKeyHistory(t *testing.T) {
 	assert.Equal(t, maxOutcomesPerKey+49, got[len(got)-1].StatusCode)
 }
 
+// LatestClass is derived from the history rather than kept beside it, so the
+// eviction that bounds the history must not be able to change what it answers:
+// the bound drops the OLDEST, and the newest outcome is the one it reports.
+func TestModelOutcomeSink_LatestClassSurvivesEviction(t *testing.T) {
+	s := &ModelOutcomeSink{
+		byKey: map[outcomeKey][]proxy.ModelCallOutcome{},
+	}
+	for i := 0; i < maxOutcomesPerKey+50; i++ {
+		s.store(proxy.ModelCallOutcome{Ticket: "SC-1", Stage: "impl", Class: proxy.ClassOK})
+	}
+	s.store(proxy.ModelCallOutcome{Ticket: "SC-1", Stage: "impl", Class: proxy.ClassRateLimit})
+
+	c, ok := s.LatestClass("SC-1", "impl")
+	assert.True(t, ok)
+	assert.Equal(t, proxy.ClassRateLimit, c, "the newest outcome's class, not one an eviction left behind")
+}
+
 func TestModelOutcomeSink_UnattributedGroupsSeparately(t *testing.T) {
 	s := &ModelOutcomeSink{
-		byKey:       map[outcomeKey][]proxy.ModelCallOutcome{},
-		latestClass: map[outcomeKey]string{},
+		byKey: map[outcomeKey][]proxy.ModelCallOutcome{},
 	}
 	s.store(proxy.ModelCallOutcome{Class: proxy.ClassNetwork})
 	c, ok := s.LatestClass("", "")
