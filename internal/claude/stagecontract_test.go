@@ -120,8 +120,21 @@ var (
 	// The Task tool accepts model aliases, never full model ids. Verified
 	// against the Claude Code 2.1.218 input schema:
 	//   model: z.enum(["sonnet","opus","haiku","fable"]).optional()
-	validTaskModels = map[string]bool{"opus": true, "sonnet": true, "haiku": true, "fable": true}
+	//
+	// The set is read from the model card rather than restated here: it used to
+	// be a third hand-written copy of the same vocabulary (the rate card and
+	// embed/shared/model-tiers.md held the other two), and three copies of a
+	// closed set is three chances to disagree (SC-3580).
+	validTaskModels = taskModelAliasSet()
 )
+
+func taskModelAliasSet() map[string]bool {
+	set := map[string]bool{}
+	for _, alias := range taskModelAliases() {
+		set[alias] = true
+	}
+	return set
+}
 
 // A model override is only honoured if it is one of the tool's aliases. Writing
 // a real model id ("claude-opus-4-8") is the natural mistake and would be
