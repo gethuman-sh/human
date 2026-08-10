@@ -30,12 +30,21 @@ every rule below is built from them:
 | --- | --- | --- |
 | **Process liveness** | `pgrep -x claude` inside the container, every 5s | The process exists. A *hung* agent looks perfectly healthy here. |
 | **Hook events** | The agent's Claude hooks POST to the daemon (`PreToolUse`, `PostToolUse`, `Notification`, `Stop`, `SessionEnd`) | The agent did something observable, and when. |
-| **Outstanding model request** | The daemon's own proxy: a request sent and not yet answered (`internal/daemon/inflight.go`) | The agent is thinking. No cooperation from the agent required. |
+| **Outstanding model request** | The daemon's own proxy: a request sent and not yet answered (`internal/daemon/inflight.go`) | The agent is thinking — or, when the daemon cannot resolve the agent's connections, that it cannot tell. Three answers, not two (`internal/daemon/agentprogress.go`, `ModelRequestState`). |
 
 The third exists because the first two together still misjudge a thinking agent:
 extended reasoning emits no hook event and streams no output. Transcript mtime
 and streamed-output heartbeats were both tried and disproven; the proxy's own
 in-flight state replaced them (SC-3074).
+
+The third signal is best-effort and the mapping it needs goes missing silently
+— a daemon replaced under a running agent, an inspect returning no address, a
+warm relaunch. Every one of those used to answer "no request open", the same
+value a genuinely idle agent gives, so the reaper killed live work at the
+three-minute line (SC-3853). "Unknown" is now a value the signal can carry, and
+`RunAgentIPRepair` (`internal/daemon/agentiprepair.go`) rebuilds the mapping
+every 30 seconds for any running agent that has none — logging once per agent
+when it still cannot.
 
 Progress is tracked per agent in its own map (`internal/daemon/agentprogress.go`),
 not derived from the event ring — the ring evicts under load and is empty after a
@@ -49,7 +58,7 @@ definition of "hung", and it is two numbers, not one:
 | Condition | Budget | Constant |
 | --- | --- | --- |
 | No outstanding work at all | **3 minutes** of silence | `IdleGrace` |
-| Inside a tool call **or** a model request in flight | **30 minutes** of silence | `WorkingIdleGrace` |
+| Inside a tool call **or** a model request in flight **or** the model-request state unknown | **30 minutes** of silence | `WorkingIdleGrace` |
 | Waiting on a human (`Notification` — a permission prompt) | **never stalls** | `Blocked` |
 
 Waiting on a local tool call and waiting on the model are the same thing from
@@ -57,6 +66,10 @@ the outside — outstanding work, from two sources — so either earns the gener
 bound. Genuine idleness, with neither, gets the short one. A single fixed
 timeout was wrong in both directions at once: it killed running test suites and
 still made real hangs wait.
+
+Unknown takes the generous bound deliberately. The machine must never kill live
+work because it lost its own bookkeeping — the same rule reconcile already
+states for an agent its progress probe does not know about.
 
 ## Every condition that ends an agent
 
@@ -143,6 +156,12 @@ It applies **only to board stage agents** — names of the form
 `board-<KEY>-<stage>`. An interactive agent is deliberately excluded: a human
 thinking between turns looks identical to a hang, and reaping it discards live
 work.
+
+It also requires an answer, not the absence of one. An agent whose
+model-request state is unknown gets `WorkingIdleGrace` (30 minutes) exactly
+like one with outstanding work — it is reaped later, not never, if it stays
+silent that long. The reap log carries `model_request` so a reap that did
+happen names which answer it acted on.
 
 The reap carries its reason out as a sentinel: the synthesized `StopFailure`
 event's `ErrorType` is `reaped-silent:<idle>` (`ReapSilenceErrorType`), which
@@ -283,6 +302,11 @@ Collected in one place, because the spares are the load-bearing part:
   running claude.
 - **An agent the progress probe does not know about** — a restarted daemon, or an
   agent that has not emitted its first event. Unknown is never read as hung.
+- **An agent whose model-request state is unknown is never reaped on the SHORT
+  budget** — the daemon could not resolve its connections to a name, so its
+  in-flight count means nothing. Absent evidence still gets `WorkingIdleGrace`
+  (30 minutes), not `IdleGrace` (3); it is reaped later on continued silence,
+  never on the short budget (SC-3853).
 - **A card with an open `[human:options]` block** for its own or an earlier stage.
 - **A card in an active PR review→fix loop**, whose half-agents legitimately come
   and go between rounds.
@@ -332,6 +356,13 @@ The teardown choke point is `Manager.stopLocked` (`internal/agent/manager.go`):
    an existing `outcome.json`, so it cannot clobber a `reaped` classification.
 6. **Execution directories are pruned after 90 days** (`execRetentionDays`,
    `PruneExecutions`).
+7. **A late-arriving result is reconciled, not left contradicting the reap.**
+   `RunLateResultReconcile` (`internal/daemon/board_latereconcile.go`) scans
+   open cards for a stage marked failed followed by that same stage's success
+   with no relaunch in between, and records it with a
+   `[human:late-result-reconciled]` marker — so a ticket whose reap turned out
+   wrong carries an explanation instead of a failure and a success that
+   silently disagree (SC-3853).
 
 One asymmetry worth knowing when reading artifacts: the zombie sweep marks the
 meta `StatusFailed` before teardown, so its runs record `reason: "reaped"`. The
@@ -393,6 +424,7 @@ waiting on.
 | delete timeout inside a reap | 30s | same |
 | `IdleGrace` | 3m | `internal/daemon/agentprogress.go` |
 | `WorkingIdleGrace` | 30m | same |
+| `agentIPRepairInterval` | 30s | `internal/daemon/agentiprepair.go` |
 | `BoardReconcileInterval` | 2m ± 50% jitter | `internal/daemon/board_reconcile.go` |
 | `StuckRunningGrace` | 15m | same |
 | deploy-card grace (`stuckGraceFor`, not a named constant) | 60m (`deployTimeout` + `StuckRunningGrace`) | `internal/daemon/board_reconcile.go` |
@@ -404,6 +436,7 @@ waiting on.
 | `execRetentionDays` | 90 | `internal/agent/agentlog.go` |
 | `deployTimeout` | 45m | `internal/daemon/board_transition.go` |
 | `deployWaitHeartbeat` | 10 polls (~5m) | same |
+| `LateResultReconcileInterval` | 5m | `internal/daemon/board_latereconcile.go` |
 | `stopGrace` | 5s | `cmd/cmddaemon/daemon.go` |
 | `stopDrainDefault` | 30s (`--wait`) | same |
 

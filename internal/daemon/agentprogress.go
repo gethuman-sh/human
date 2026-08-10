@@ -28,6 +28,45 @@ var (
 	WorkingIdleGrace = 30 * time.Minute
 )
 
+// ModelRequestState is what the daemon knows about an agent's traffic to the
+// model, and it has three values because the daemon has three answers. The
+// signal is best-effort: it needs the connection's IP to resolve to an agent
+// name, and that mapping goes missing silently (a daemon replaced under a
+// running agent, an inspect that returned no address, a warm relaunch). A
+// boolean forced every one of those to answer "no" — the same value a
+// genuinely idle agent gives — so losing the bookkeeping promoted the most
+// destructive action available, killing live work after three minutes, to the
+// default (SC-3853).
+//
+// The zero value is deliberately ModelRequestUnknown: anything that did not
+// consult the proxy says so, and gets the generous budget.
+type ModelRequestState int
+
+const (
+	// ModelRequestUnknown means the daemon could not answer — the agent's
+	// connections resolve to no name, so its in-flight count means nothing.
+	ModelRequestUnknown ModelRequestState = iota
+	// ModelRequestNone means the daemon COULD answer and nothing is open.
+	ModelRequestNone
+	// ModelRequestOpen means a request is open: the agent is thinking.
+	ModelRequestOpen
+)
+
+// String renders the state for logs and the fsm-where report.
+//
+//exhaustive:enforce
+func (s ModelRequestState) String() string {
+	switch s {
+	case ModelRequestNone:
+		return "none"
+	case ModelRequestOpen:
+		return "open"
+	case ModelRequestUnknown:
+		return "unknown"
+	}
+	return "unknown"
+}
+
 // AgentProgress is the last observed sign of life from one agent.
 //
 // It is progress, not existence. A crashed agent and a hung agent both stop
@@ -44,14 +83,13 @@ type AgentProgress struct {
 	// InsideTool reports a PreToolUse with no matching PostToolUse yet: the
 	// agent is waiting on a command, not idle.
 	InsideTool bool
-	// OutstandingModelRequest reports a request sent to the model through the
-	// daemon's own proxy that has not yet completed. This is a positive sign
-	// of life the daemon holds directly — no decryption, no watching bytes,
-	// no cooperation from the agent required — and it is what tells a
+	// ModelRequest is what the daemon's own proxy knows about this agent's
+	// traffic to the model — open, none, or unknown. It is what tells a
 	// thinking agent (which emits no hook event and streams no transcript
-	// output during extended reasoning) apart from a genuinely hung one. It
-	// replaces the disproven transcript-mtime heartbeat (SC-3074).
-	OutstandingModelRequest bool
+	// output during extended reasoning) apart from a genuinely hung one, and
+	// it replaces the disproven transcript-mtime heartbeat (SC-3074). Unknown
+	// is a real answer, not a missing one (SC-3853).
+	ModelRequest ModelRequestState
 	// Blocked reports the agent is waiting on a human (a permission prompt).
 	// That is neither progress nor a hang — it needs an answer, not a retry.
 	Blocked bool
@@ -59,10 +97,14 @@ type AgentProgress struct {
 
 // hasOutstandingWork reports whether the agent has work in flight of either
 // kind — a local tool call or a request to the model — that no event can
-// arrive to signal until it completes. The two are the same thing from the
-// outside: outstanding work, from two sources (SC-3074).
+// arrive to signal until it completes (SC-3074).
+//
+// An UNKNOWN model-request state counts as work in flight. That is the same
+// rule stageStalled states for the other input: absent evidence is never read
+// as evidence of death, because killing live work on a bookkeeping failure is
+// the one direction this must never fail in (SC-3853).
 func (p AgentProgress) hasOutstandingWork() bool {
-	return p.InsideTool || p.OutstandingModelRequest
+	return p.InsideTool || p.ModelRequest != ModelRequestNone
 }
 
 // IdleBudget is how long this agent may stay silent before it counts as hung.
@@ -113,6 +155,9 @@ func trackProgress(progress map[string]AgentProgress, evt hookevents.Event) {
 		at = time.Now()
 	}
 	p := progress[evt.AgentName]
+	// ModelRequest is left at its zero value (unknown) on purpose: the hook
+	// stream cannot see the proxy, and only the probe that consults it may
+	// claim "none" (SC-3853).
 	p.LastEventAt = at
 	p.LastEvent = evt.EventName
 

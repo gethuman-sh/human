@@ -124,6 +124,11 @@ type Server struct {
 	// spent, for the same route. It must READ ONLY: StageRetry.Attempts
 	// increments, and a question must never spend the budget it asks about.
 	WhereAttempts func(pmKey string, stage BoardStage) (int, error)
+	// AgentProgress is the daemon's single liveness probe: the hook stream
+	// folded with the proxy's outstanding-model-request state. Injected by the
+	// daemon wiring, which owns the in-flight counter and the IP registry. nil
+	// leaves the fsm-where report without a liveness section.
+	AgentProgress AgentProgressProbe
 	// SecurityCreator files a security ticket on the PM tracker for the Security
 	// section's + dialog. nil disables the security-create route.
 	SecurityCreator func(req SecurityCreateRequest) (SecurityCreateResponse, error)

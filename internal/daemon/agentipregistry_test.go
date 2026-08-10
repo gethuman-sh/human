@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAgentIPRegistry_AttributeKnownIP(t *testing.T) {
@@ -39,13 +40,39 @@ func TestAgentIPRegistry_NonAgentNameUnattributed(t *testing.T) {
 	assert.False(t, ok, "a name parseAgentName cannot decode is unattributed")
 }
 
-func TestAgentIPRegistry_Unregister(t *testing.T) {
+// Mapped answers the question the liveness probe must ask before trusting an
+// in-flight count of zero (SC-3853).
+func TestAgentIPRegistry_Mapped(t *testing.T) {
 	r := NewAgentIPRegistry()
-	name := agentNameFor("SC-7", BoardImplementation)
-	r.Register("172.17.0.7", name)
-	r.Unregister("172.17.0.7")
-	_, _, ok := r.Attribute("172.17.0.7:2")
+	name := agentNameFor("SC-1", BoardImplementation)
+	r.Register("1.2.3.4", name)
+
+	assert.True(t, r.Mapped(name))
+	assert.False(t, r.Mapped(agentNameFor("SC-2", BoardPlanning)))
+	assert.False(t, r.Mapped(""))
+
+	var nilReg *AgentIPRegistry
+	assert.False(t, nilReg.Mapped(name))
+}
+
+// Retain drops mappings whose agent fell out of the running set, which is what
+// stops a recycled bridge IP from attributing a new agent's traffic to a dead
+// one (SC-3853).
+func TestAgentIPRegistry_RetainDropsDeadAgents(t *testing.T) {
+	r := NewAgentIPRegistry()
+	a := agentNameFor("SC-1", BoardImplementation)
+	b := agentNameFor("SC-2", BoardPlanning)
+	r.Register("1.2.3.4", a)
+	r.Register("5.6.7.8", b)
+
+	r.Retain(map[string]struct{}{a: {}})
+
+	name, ok := r.AgentFor("1.2.3.4")
+	require.True(t, ok)
+	assert.Equal(t, a, name)
+	_, ok = r.AgentFor("5.6.7.8")
 	assert.False(t, ok)
+	assert.False(t, r.Mapped(b))
 }
 
 // AgentFor resolves the raw agent name — the key InflightModelRequests uses —
@@ -81,7 +108,8 @@ func TestAgentIPRegistry_NilAndEmptySafe(t *testing.T) {
 	var r *AgentIPRegistry
 	assert.NotPanics(t, func() {
 		r.Register("1.2.3.4", "board-x-y")
-		r.Unregister("1.2.3.4")
+		r.Retain(nil)
+		r.Mapped("board-x-y")
 	})
 	_, _, ok := r.Attribute("1.2.3.4:5")
 	assert.False(t, ok)

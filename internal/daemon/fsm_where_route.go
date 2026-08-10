@@ -84,12 +84,13 @@ func (s *Server) handleFSMWhere(conn net.Conn, args []string) {
 	_ = json.NewEncoder(conn).Encode(resp)
 }
 
-// whereProgress adapts the hook store to the probe the report wants, and is nil
-// when nothing is recorded — an answer without a liveness section beats an
-// answer that invents one.
+// whereProgress hands back the daemon's ONE progress probe — the same value the
+// zombie sweep and the reconcile pass judge liveness with. It used to hand back
+// the raw hook-store probe, which folds in nothing from the proxy, so
+// `human fsm where` reported outstanding_model_request: false for every agent
+// alive and computed `stalled` on the 3-minute budget for a working one
+// (SC-3853). nil when nothing is wired: an answer without a liveness section
+// beats an answer that invents one.
 func (s *Server) whereProgress() AgentProgressProbe {
-	if s.HookEvents == nil {
-		return nil
-	}
-	return s.HookEvents.AgentProgress
+	return s.AgentProgress
 }
