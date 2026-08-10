@@ -1241,6 +1241,16 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		}
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
 	}
+	// SC-3857: the done stage was already declared dead by an earlier escalation
+	// with no relaunch since (dispatchDeployFixer always posts
+	// [human:deploy-fix-started] before the fixer can exit, so a fresh dispatch
+	// flips this back to false) — posting again would only re-date the card.
+	// deployFailed above is deliberately NOT guarded the same way (AD5): it can
+	// fire before any running done-stage marker exists at all, and a guard there
+	// would swallow a genuine new failure on a board Deploy re-drop.
+	if stageAlreadyFailed(comments, BoardDoneStage) {
+		return nil
+	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey,
 		markerBody(failureMarker(MarkerDeployFailed, deployFixEscalationReason(fixExit, dispatchedFailure(comments)))))
 	return nil

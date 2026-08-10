@@ -308,7 +308,28 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, evt hookevents
 	if handleOutageExit(ctx, exit, commenter, deps, kind, reason) {
 		return
 	}
-	if handleNeedsPersonExit(ctx, exit, kind, reason, commenter, logger) {
+	// The stage's own newest marker may already be its *-failed header (SC-3857):
+	// re-posting an identical marker would re-date an hour-old corpse as freshly
+	// broken. This is NOT a signal that the relaunch decision below is stale —
+	// the ordinary, prompt-instructed ending IS a skill posting its own *-failed
+	// marker and recording its own stage.<stage> outcome before it exits
+	// (human-review-skill.md, human-autofix-skill.md, human-security-fix-
+	// skill.md, human-pickup-review-skill.md all do this), so by the time this
+	// exit event is processed the marker this very ending posted is already the
+	// newest one — indistinguishable, from marker history alone, from a stale
+	// duplicate. Narrowed to suppress only the POST (and, inside the two
+	// branches below, the budget/relaunch that rides on THEIR OWN post): the
+	// generic path's relaunch is instead decided from deps.Retry.Outcome, a
+	// signal independent of the marker thread, so a genuine retryable ending
+	// still gets its bounded relaunch even when its own marker cannot be
+	// re-posted. Checked after the outage branch (an *-outage exit posts no
+	// marker before this and must not be muted).
+	alreadyFailed := stageAlreadyFailed(exit.Comments, exit.Stage)
+	if alreadyFailed {
+		logger.Info().Str("pm", exit.PMKey).Str("stage", string(exit.Stage)).Str("agent", exit.AgentName).
+			Msg("board failure: stage already failed; not re-posting its terminal marker")
+	}
+	if handleNeedsPersonExit(ctx, exit, kind, reason, commenter, logger, alreadyFailed) {
 		return
 	}
 	// A silence reap (the zombie sweep reaping an agent that went quiet — no
@@ -318,20 +339,26 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, evt hookevents
 	// the trail must say plainly what was observed and why (SC-2447/SC-3074).
 	// Checked before the generic failure path so the sentinel never falls
 	// through to the charged branch below.
-	if handleSilenceReapExit(ctx, exit, commenter, deps) {
+	if handleSilenceReapExit(ctx, exit, commenter, deps, alreadyFailed) {
 		return
 	}
-	diagnosis := appendModelOutcomeNote(failureMarkerBody(deps.Diagnose, exit.AgentName, exit.ErrorType), deps.LatestClass, exit.PMKey, string(exit.Stage))
-	if err := postMarker(ctx, commenter, exit.PMKey, failureMarker(failedTypeFor(exit.Stage), diagnosis)); err != nil {
-		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post failed marker")
-		// Without the failed marker the card does not derive to a failed state,
-		// which is precisely what every in-place retry transition requires — so
-		// an automatic relaunch would be rejected. Leave it for a human.
-		return
+	if !alreadyFailed {
+		diagnosis := appendModelOutcomeNote(failureMarkerBody(deps.Diagnose, exit.AgentName, exit.ErrorType), deps.LatestClass, exit.PMKey, string(exit.Stage))
+		if err := postMarker(ctx, commenter, exit.PMKey, failureMarker(failedTypeFor(exit.Stage), diagnosis)); err != nil {
+			logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post failed marker")
+			// Without the failed marker the card does not derive to a failed state,
+			// which is precisely what every in-place retry transition requires — so
+			// an automatic relaunch would be rejected. Leave it for a human.
+			return
+		}
 	}
 	// A stage that failed for a reason another attempt could fix — a flake, a
 	// dead container — is relaunched here rather than waiting for someone to
-	// click Retry. The failure stays on the record either way.
+	// click Retry. The failure stays on the record either way. Reached even
+	// when the marker above was suppressed: tryRelaunch reads deps.Retry.Outcome,
+	// the stage's own recorded exit class, not the tracker thread, so the
+	// decision is unaffected by whether this ending's own marker needed
+	// suppressing.
 	deps.Retry.tryRelaunch(ctx, exit.PMKey, exit.Stage, commenter, deps.DaemonID, logger)
 }
 
@@ -449,14 +476,20 @@ func chainReviewAfterCleanBuild(ctx context.Context, exit RunExit, commenter tra
 // charge the retry budget or auto-relaunch — the next attempt would hit the
 // exact same wall. Reports whether it handled the exit. Split out of
 // handleBoardAgentExit so this branch's complexity costs its own function
-// rather than the dispatcher's (SC-3024).
-func handleNeedsPersonExit(ctx context.Context, exit RunExit, kind endingKind, reason string, commenter tracker.Commenter, logger zerolog.Logger) bool {
+// rather than the dispatcher's (SC-3024). alreadyFailed (SC-3857) suppresses
+// only the re-post of an identical wall marker — there is no relaunch on this
+// path to preserve either way, so narrowing it further than "do not post" is
+// a no-op.
+func handleNeedsPersonExit(ctx context.Context, exit RunExit, kind endingKind, reason string, commenter tracker.Commenter, logger zerolog.Logger, alreadyFailed bool) bool {
 	if kind != endingNeedsPerson {
 		return false
 	}
 	failedType := failedTypeFor(exit.Stage)
 	if failedType == "" {
 		return false
+	}
+	if alreadyFailed {
+		return true
 	}
 	if err := postMarker(ctx, commenter, exit.PMKey, failureMarker(failedType, needsPersonReason(reason))); err != nil {
 		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post needs-person marker")
@@ -473,7 +506,15 @@ func handleNeedsPersonExit(ctx context.Context, exit RunExit, kind endingKind, r
 // relaunching, naming the count once — silenceReapGaveUp dedups a second
 // daemon reaching the same cap. Split out of handleBoardAgentExit so this
 // branch's complexity costs its own function rather than the dispatcher's.
-func handleSilenceReapExit(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps) bool {
+//
+// alreadyFailed (SC-3857) short-circuits BOTH the post and the relaunch here,
+// unlike the generic path: this function posts its marker and decides its
+// relaunch in the same synchronous call, so a marker that already predates
+// this call can only be a fully-completed EARLIER reap cycle — never this same
+// ending's own self-post (the daemon, not a skill, posts this marker) — and
+// re-relaunching would double-launch atop whatever the earlier cycle already
+// started or refused.
+func handleSilenceReapExit(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps, alreadyFailed bool) bool {
 	logger := deps.Logger
 	idle, ok := silenceReapIdle(exit.ErrorType)
 	if !ok || !deps.Retry.enabled() {
@@ -483,7 +524,7 @@ func handleSilenceReapExit(ctx context.Context, exit RunExit, commenter tracker.
 	if failedType == "" {
 		return false
 	}
-	if silenceReapGaveUp(exit.Comments, exit.Stage) {
+	if alreadyFailed || silenceReapGaveUp(exit.Comments, exit.Stage) {
 		return true
 	}
 	stops := silenceReapCount(exit.Comments, exit.Stage) + 1
@@ -849,6 +890,28 @@ func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
 		return false
 	}
 	return true
+}
+
+// Reports whether the stage's own newest marker is already its *-failed
+// header — the card was already declared dead in this stage, with no relaunch
+// since (SC-3857). This is NOT a global dedup: every relaunch posts the
+// stage's *-started marker before the agent that follows it can exit
+// (startAgentStage posts it before launchAgent; relaunchBounded and
+// relaunchSilenceReap both go through it), so a *-started marker newer than
+// the failure flips this back to false and a genuine second failure still
+// posts and re-dates the card (AD4). Reads the stage's OWN failed header —
+// never the classified BoardFailed state — because a marker can classify into
+// (stage, BoardFailed) without being that stage's own ending: [human:needs-
+// planning] classifies as (BoardPlanning, BoardFailed) though it is posted by
+// a refused implementation launch, not by the planning stage ending (AD3). A
+// stage with no failed header (e.g. BoardBacklog) never matches.
+func stageAlreadyFailed(comments []tracker.Comment, stage BoardStage) bool {
+	header := failedHeaderFor(stage)
+	if header == "" {
+		return false
+	}
+	_, latest := latestStateInStage(comments, stage)
+	return strings.HasPrefix(strings.TrimSpace(latest.Body), header)
 }
 
 // verificationInFlight reports whether the verification stage's latest marker

@@ -1225,8 +1225,16 @@ func TestHandleBoardAgentExit_SilenceReapDoesNotChargeRetry(t *testing.T) {
 // count — not repeat the relaunch forever.
 func TestHandleBoardAgentExit_SilenceReapGivesUpAfterCap(t *testing.T) {
 	comments := []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))}
+	// Every relaunch (including relaunchSilenceReap) posts the stage's own
+	// *-started marker before the agent that follows it can exit — so each
+	// prior reap in this history is followed by one, leaving the latest marker
+	// a *-started one and the new SC-3857 already-failed guard unblocked for
+	// the reap this test then fires (AD4). Real history, not just the cap
+	// count, is what silenceReapCount still reads correctly either way.
 	for i := 0; i < MaxSilenceReaps; i++ {
-		comments = append(comments, cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), time.Unix(int64(2+i), 0)))
+		comments = append(comments,
+			cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), time.Unix(int64(10+2*i), 0)),
+			cmt(ImplementationStartedHeader, time.Unix(int64(11+2*i), 0)))
 	}
 	c := &syncCommenter{comments: comments}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
@@ -1249,12 +1257,25 @@ func TestHandleBoardAgentExit_SilenceReapGivesUpAfterCap(t *testing.T) {
 	assert.Contains(t, c.added[0], "needs a person")
 }
 
-// A second daemon reaching the same cap for the same stage must post nothing
-// more once the give-up marker is already on the thread (SC-3074 dedup).
+// Once a stage has given up, the dedup holds even across a manual retry: a
+// person can restart a given-up stage (that is the "needs a person" the
+// give-up marker asks for), and a fresh silence reap on that restarted run
+// must still post nothing, because silenceReapGaveUp scans the whole thread
+// for the give-up sentinel, not just since the latest *-started marker
+// (SC-3074 dedup). Without the trailing *-started marker this thread's
+// newest comment IS the give-up marker itself, which the SC-3857
+// stageAlreadyFailed check (handleBoardAgentExit) now also recognizes and
+// short-circuits handleSilenceReapExit on before silenceReapGaveUp is ever
+// consulted — collapsing this test into a duplicate of that check instead of
+// the silenceReapGaveUp dedup it names. The *-started marker keeps the
+// thread realistic (a give-up marker is never followed by one UNLESS a
+// person restarts it) and routes past the check so the case this test names
+// is still exercised live.
 func TestHandleBoardAgentExit_SilenceReapGiveUpDedup(t *testing.T) {
 	comments := []tracker.Comment{
 		cmt(ImplementationStartedHeader, time.Unix(1, 0)),
 		cmt(ImplementationFailedHeader+"\n"+silenceReapGiveUpReason(BoardImplementation, MaxSilenceReaps+1), time.Unix(2, 0)),
+		cmt(ImplementationStartedHeader, time.Unix(3, 0)), // a person manually retried after the give-up
 	}
 	c := &syncCommenter{comments: comments}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
@@ -1277,8 +1298,14 @@ func TestHandleBoardAgentExit_SilenceReapGiveUpDedup(t *testing.T) {
 // charged retry counter is never touched by a silence reap.
 func TestHandleBoardAgentExit_SilenceReapRelaunchesUnderCap(t *testing.T) {
 	comments := []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))}
+	// See TestHandleBoardAgentExit_SilenceReapGivesUpAfterCap: each prior reap
+	// is followed by the *-started marker its own relaunch posts, so the
+	// latest marker stays a *-started one and the SC-3857 already-failed guard
+	// does not block the reap this test fires.
 	for i := 0; i < MaxSilenceReaps-1; i++ {
-		comments = append(comments, cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), time.Unix(int64(2+i), 0)))
+		comments = append(comments,
+			cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), time.Unix(int64(10+2*i), 0)),
+			cmt(ImplementationStartedHeader, time.Unix(int64(11+2*i), 0)))
 	}
 	c := &syncCommenter{comments: comments}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }
