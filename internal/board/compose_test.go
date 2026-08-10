@@ -302,7 +302,8 @@ func TestCompose_CarriesTicketAndRunFacts(t *testing.T) {
 			Branch: "autofix/sc-1", PRURL: "https://example/pr/1",
 			EngineeringKey: "HUM-1", Verdict: "pass", DeployPhase: "pr-review",
 			StageEnteredAt: entered, StageDaemonID: "d1",
-			Options: []daemon.BoardOption{{ID: "1", Label: "A"}}, OptionsContext: "why",
+			RunningStage: daemon.BoardVerification,
+			Options:      []daemon.BoardOption{{ID: "1", Label: "A"}}, OptionsContext: "why",
 		}},
 	)}, true)
 
@@ -327,6 +328,10 @@ func TestCompose_CarriesTicketAndRunFacts(t *testing.T) {
 	// viewer cannot tell "no agent here" from "no agent anywhere", and a card a
 	// peer daemon is working would render as dead (SC-3569).
 	assert.Equal(t, "d1", c.StageDaemonID)
+	// The other stage still showing a start must survive too: it is the name the
+	// viewer joins a container against before it renders a failure as final, and
+	// without it a red card goes back to hiding a live run (SC-4406).
+	assert.Equal(t, "verification", c.RunningStage)
 }
 
 // Liveness is a property of the machine LOOKING at the board, not of the
