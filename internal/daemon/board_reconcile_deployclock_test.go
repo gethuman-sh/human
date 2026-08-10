@@ -164,13 +164,71 @@ func TestStuckGrace_coversEveryDeployEntryRoute(t *testing.T) {
 
 // The registry itself: a run must be visible as queued while behind the gate,
 // dequeued once past it, and gone entirely once DeployBranch returns.
+// blockingDeployer wraps fakeDeployer to pause DeployBranch's engine call —
+// BranchMerged is the first thing the engine calls once past the gate — so a
+// test can probe the registry from INSIDE a running call, not just before or
+// after it.
+type blockingDeployer struct {
+	*fakeDeployer
+	entered chan struct{}
+	unblock chan struct{}
+}
+
+func (b *blockingDeployer) BranchMerged(ctx context.Context, workspaceDir, branch string) bool {
+	close(b.entered)
+	<-b.unblock
+	return b.fakeDeployer.BranchMerged(ctx, workspaceDir, branch)
+}
+
+// Pins all three properties the plan's test-case table asks for: DeployRunSince
+// reports ok with a non-zero DEQUEUE instant while the run is past the gate and
+// still executing, and ok == false once the call has returned. Held loosely
+// ("ok while running") this would already pass with deployRunDequeued deleted —
+// queuedAt alone still makes the probe answer ok. The assertion is anchored to
+// the moment the gate was actually released, which only the dequeue signal at
+// board_transition.go can produce; without it "since" stays pinned at queuedAt
+// regardless of how long the run then waited behind the gate.
 func TestDeployBranch_registersAndClearsTheRun(t *testing.T) {
 	resetDeployRunsForTest(t)
-	p := &fakeDeployer{alreadyMerged: true}
-	deps := newDeps(&fakeCommenter{}, nil, p)
+	deployGate.Lock() // hold the gate so this run is genuinely queued, not instantly dequeued
 
-	require.NoError(t, deps.DeployBranch(context.Background(), "SC-1", "t", "b", "feat/x"))
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	p := &blockingDeployer{fakeDeployer: &fakeDeployer{alreadyMerged: true}, entered: entered, unblock: unblock}
+	deps := BoardTransitionDeps{Commenter: &fakeCommenter{}, Deployer: p, WorkspaceDir: "/ws", ConfigDir: "/ws"}
 
-	_, ok := DeployRunSince("SC-1")
+	queuedAt := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		done <- deps.DeployBranch(context.Background(), "SC-1", "t", "b", "feat/x")
+	}()
+
+	require.Eventually(t, func() bool { _, ok := DeployRunSince("SC-1"); return ok },
+		2*time.Second, time.Millisecond, "the run must register as queued before the gate ever opens")
+
+	// Keep the run queued for a measurable interval before releasing the gate,
+	// so a probe pinned at queuedAt is distinguishable from one that tracks the
+	// actual dequeue.
+	time.Sleep(30 * time.Millisecond)
+	releasedAt := time.Now()
+	deployGate.Unlock()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("DeployBranch never reached the engine call past the gate")
+	}
+
+	since, ok := DeployRunSince("SC-1")
+	require.True(t, ok, "the registry must still answer ok while the run is past the gate and executing")
+	assert.False(t, since.Before(releasedAt),
+		"since must track the moment the run actually left the gate, not the moment it joined the queue")
+	assert.GreaterOrEqual(t, since.Sub(queuedAt), 25*time.Millisecond,
+		"since must reflect the real time spent queued behind the gate — pinned to queuedAt is the bug SC-4150 half-reintroduces")
+
+	close(unblock)
+	require.NoError(t, <-done)
+
+	_, ok = DeployRunSince("SC-1")
 	assert.False(t, ok, "the defer clears the registry once the call returns")
 }
