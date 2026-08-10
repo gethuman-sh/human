@@ -140,6 +140,16 @@ func CalculateUsage(walker DirWalker, root string, now time.Time) (*UsageSummary
 		if entry.Type != "assistant" || entry.Message.Usage == nil {
 			return nil
 		}
+		// Not every model field names a model: Claude Code writes <synthetic>
+		// when it composes an assistant message locally with no API call. It is
+		// dropped from the scan itself rather than hidden at render time,
+		// because a row filtered late still contributes to the headline while
+		// disappearing from the panel (SC-3580). Each of the three scan paths
+		// classifies independently, so each must drop it — excluding it in one
+		// leaves it charted by the others.
+		if isIgnoredModel(entry.Message.Model) {
+			return nil
+		}
 		if entry.Timestamp.Before(winStart) || !entry.Timestamp.Before(winEnd) {
 			return nil
 		}
@@ -234,6 +244,9 @@ func TokensByHour(walker DirWalker, root string, since, until time.Time) ([]Toke
 		if entry.Type != "assistant" || entry.Message.Usage == nil {
 			return nil
 		}
+		if isIgnoredModel(entry.Message.Model) {
+			return nil
+		}
 		if entry.Timestamp.Before(since) || entry.Timestamp.After(until) {
 			return nil
 		}
@@ -300,6 +313,9 @@ func ScanTokens(walker DirWalker, root string, since, until, now time.Time) (Tok
 			return nil // skip malformed lines
 		}
 		if entry.Type != "assistant" || entry.Message.Usage == nil {
+			return nil
+		}
+		if isIgnoredModel(entry.Message.Model) {
 			return nil
 		}
 		u := entry.Message.Usage

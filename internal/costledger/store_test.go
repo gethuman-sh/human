@@ -17,6 +17,13 @@ import (
 // asserting on pricing rather than on a zero.
 const testModel = "claude-opus-4-8"
 
+// testSonnetModel is the shape the proxy actually stores: a raw vendor id with
+// a date stamp and no space. It is here because the ledger priced exactly this
+// shape at the opus fallback while the stats panel — which stores a classified
+// name — priced it correctly, so a test using only a family word would have
+// passed against the bug (SC-3580).
+const testSonnetModel = "claude-sonnet-4-5-20250929"
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := NewStore(":memory:")
@@ -220,6 +227,60 @@ func TestTopTicketSpend_ranksByCostAndHonoursTheWindow(t *testing.T) {
 	assert.Equal(t, 2000, got[0].OutputTokens)
 	assert.InDelta(t, got[0].CostUSD, got[0].ContextCostUSD+got[0].AnswersCostUSD, 1e-9,
 		"the split must account for the whole cost")
+}
+
+// The ledger stores raw vendor ids. A ticket that ran on sonnet must cost the
+// sonnet rate, not the opus ceiling — the overstatement the ticket removes, on
+// the surface a human reads per ticket.
+func TestTicketCost_rawSonnetIdPricesAtSonnetNotOpus(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.InsertCall(ctx, CallRecord{
+		Project: "p", Ticket: "SC-SONNET", Stage: "implementation", Model: testSonnetModel,
+		InputTokens: 1_000_000, OutputTokens: 1_000_000, DurationMs: 1000,
+	}))
+
+	rollup, err := s.TicketCost(ctx, "p", "SC-SONNET")
+	require.NoError(t, err)
+	require.True(t, rollup.HasSpend)
+
+	// Stated as literals rather than via claude.CostUSD, so the test asserts on
+	// the rate itself: a card edit that reverts sonnet to the opus row goes red.
+	assert.InDelta(t, 3.00+15.00, rollup.TotalCostUSD, 1e-9,
+		"a raw sonnet id must price at the sonnet row, not the opus ceiling")
+	assert.InDelta(t, 3.00, rollup.ContextCostUSD, 1e-9)
+	assert.InDelta(t, 15.00, rollup.AnswersCostUSD, 1e-9)
+
+	opusCost := claude.CostUSD(testModel, 1_000_000, 1_000_000, 0, 0)
+	assert.Less(t, rollup.TotalCostUSD, opusCost,
+		"sonnet must cost strictly less than opus for identical tokens, or the fix did not land")
+}
+
+// The cost-by-ticket ranking prices the same raw ids, so it needs the same
+// check: identical token counts on different families must rank by family.
+func TestTopTicketSpend_ranksBySonnetRateNotOpusCeiling(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, s.InsertCall(ctx, CallRecord{
+		Project: "p", Ticket: "SC-SONNET", Stage: "implementation", Model: testSonnetModel,
+		InputTokens: 1_000_000, OutputTokens: 1_000_000, DurationMs: 1000, StartedAt: now.Add(-time.Hour),
+	}))
+	require.NoError(t, s.InsertCall(ctx, CallRecord{
+		Project: "p", Ticket: "SC-OPUS", Stage: "implementation", Model: testModel,
+		InputTokens: 1_000_000, OutputTokens: 1_000_000, DurationMs: 1000, StartedAt: now.Add(-time.Hour),
+	}))
+
+	got, err := s.TopTicketSpend(ctx, "p", now.Add(-24*time.Hour), now, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	assert.Equal(t, "SC-OPUS", got[0].Ticket,
+		"identical tokens on opus must outrank sonnet; equal costs mean both are still priced at the ceiling")
+	assert.Equal(t, "SC-SONNET", got[1].Ticket)
+	assert.InDelta(t, 3.00+15.00, got[1].CostUSD, 1e-9)
 }
 
 // A ticket whose rows carry no tokens — every row written before the proxy read

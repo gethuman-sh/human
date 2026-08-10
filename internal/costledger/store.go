@@ -246,10 +246,12 @@ type TicketSpend struct {
 // reason TicketCost prices at read time: the rate card can change, and a stored
 // dollar figure would silently keep the old rate.
 //
-// Rows the pricing cannot value — a model the rate card does not know, or the
-// zero-token rows written before the proxy read usage off a compressed body
-// (SC-3440) — still rank, at zero. They are part of the truth about a ticket:
-// it ran, and what it cost is not known.
+// A row the rate card does not recognise is not unpriced: an unknown family
+// prices at the card's fallback — the most expensive row — so it ranks high
+// rather than at zero (internal/claude/models.json). What does rank at zero is
+// a zero-token row: those written before the proxy read usage off a compressed
+// body (SC-3440) carry no tokens to price. They still rank, because they are
+// part of the truth about a ticket: it ran, and what it cost is not known.
 func (s *Store) TopTicketSpend(ctx context.Context, project string, since, until time.Time, limit int) ([]TicketSpend, error) {
 	if limit <= 0 {
 		limit = 10

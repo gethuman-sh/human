@@ -10,6 +10,9 @@
 - Show live status: working, idle, blocked, or errored
 - See the current tool, subagents, and task list
 - Report token usage for the current window across every transcript root on the host — the operator's own sessions and each registered project's agent container
+- Price token usage from one embedded rate card
+
+`internal/claude/models.json` is the source of record for model identity: per family a display name and the four separately-priced token rates, the `Task` alias vocabulary, and the entries that appear in a transcript's model field but are not models (`<synthetic>`). Correcting a rate, adding a family, or excluding a new non-model entry is an edit to that file. A family the card does not name prices at the fallback — the most expensive row — so an unrecognised model is never understated, and a rate may carry a `valid_until` date that fails the build once its window lapses.
 
 Agent containers keep their Claude state in the project (`<project>/.devcontainer/claude`) rather than in the operator's home directory, so usage and cost read both trees; only each root's `projects/` subtree is walked, never the credential store beside it.
 

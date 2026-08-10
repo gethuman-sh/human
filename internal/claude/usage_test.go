@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -829,5 +830,95 @@ func TestDockerFinder_SessionFor(t *testing.T) {
 	for _, bad := range []string{"", "a", "sess id", "x'; rm -rf /;'", "../../etc/passwd"} {
 		d.SessionForContainer = func(string) string { return bad }
 		assert.Empty(t, d.sessionFor("human-agent-x"), bad)
+	}
+}
+
+// <synthetic> is what Claude Code writes for a locally composed message with no
+// API call. It must be dropped by the SCAN, not by a renderer: each of the three
+// scan paths classifies independently, so a fix in one leaves it charted by the
+// others. Non-zero tokens are used deliberately — with zeros the assertion would
+// pass whether or not the entry was excluded.
+func TestCalculateUsage_dropsIgnoredEntries(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	inWindow := WindowStart(now).Add(time.Hour)
+
+	lines := [][]byte{
+		makeLine(t, "assistant", "claude-opus-4-8", inWindow, 100, 200, 50, 30),
+		makeLine(t, "assistant", "<synthetic>", inWindow, 999, 999, 999, 999),
+	}
+
+	summary, err := CalculateUsage(fakeWalker{lines: lines}, "/fake", now)
+	if err != nil {
+		t.Fatalf("CalculateUsage: %v", err)
+	}
+	if len(summary.Models) != 1 {
+		t.Fatalf("Models = %+v, want only the opus entry", summary.Models)
+	}
+	if _, charted := summary.Models["<synthetic>"]; charted {
+		t.Error("<synthetic> took a row on the tokens-by-model breakdown")
+	}
+	opus := summary.Models["opus 4.8"]
+	if opus == nil {
+		t.Fatalf("Models = %+v, want an 'opus 4.8' entry", summary.Models)
+	}
+	if opus.InputTokens != 100 || opus.OutputTokens != 200 || opus.CacheCreate != 50 || opus.CacheRead != 30 {
+		t.Errorf("opus totals = %+v, want the real line alone", *opus)
+	}
+}
+
+func TestTokensByHour_dropsIgnoredEntries(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-24 * time.Hour)
+	inRange := now.Add(-2 * time.Hour)
+
+	lines := [][]byte{
+		makeLine(t, "assistant", "claude-opus-4-8", inRange, 100, 200, 50, 30),
+		makeLine(t, "assistant", "<synthetic>", inRange, 999, 999, 999, 999),
+	}
+
+	buckets, err := TokensByHour(fakeWalker{lines: lines}, "/fake", since, now)
+	if err != nil {
+		t.Fatalf("TokensByHour: %v", err)
+	}
+	if len(buckets) != 1 {
+		t.Fatalf("buckets = %+v, want exactly one hour", buckets)
+	}
+	b := buckets[0]
+	if b.Input != 100 || b.Output != 200 || b.CacheCreate != 50 || b.CacheRead != 30 {
+		t.Errorf("bucket = %+v, want the real line alone", b)
+	}
+	wantCost := CostUSD("opus 4.8", 100, 200, 50, 30)
+	if math.Abs(b.CostUSD-wantCost) > 1e-9 {
+		t.Errorf("bucket cost = %v, want %v — a non-model still contributed to the headline", b.CostUSD, wantCost)
+	}
+}
+
+func TestScanTokens_dropsIgnoredEntries(t *testing.T) {
+	now := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	since := now.Add(-24 * time.Hour)
+	inWindow := WindowStart(now).Add(time.Hour) // in the 5h window and the range
+
+	lines := [][]byte{
+		makeLine(t, "assistant", "claude-opus-4-8", inWindow, 100, 200, 50, 30),
+		makeLine(t, "assistant", "<synthetic>", inWindow, 999, 999, 999, 999),
+	}
+
+	scan, err := ScanTokens(fakeWalker{lines: lines}, "/fake", since, now, now)
+	if err != nil {
+		t.Fatalf("ScanTokens: %v", err)
+	}
+	if len(scan.ByModel) != 1 {
+		t.Fatalf("ByModel = %+v, want only the opus row", scan.ByModel)
+	}
+	if scan.ByModel[0].Model != "opus 4.8" {
+		t.Errorf("ByModel[0].Model = %q, want %q", scan.ByModel[0].Model, "opus 4.8")
+	}
+	if scan.WindowInput != 100 || scan.WindowOutput != 200 || scan.WindowCacheCreate != 50 || scan.WindowCacheRead != 30 {
+		t.Errorf("window totals = %d/%d/%d/%d, want the real line alone",
+			scan.WindowInput, scan.WindowOutput, scan.WindowCacheCreate, scan.WindowCacheRead)
+	}
+	wantCost := CostUSD("opus 4.8", 100, 200, 50, 30)
+	if math.Abs(scan.WindowCostUSD-wantCost) > 1e-9 {
+		t.Errorf("WindowCostUSD = %v, want %v — a non-model still contributed to the headline", scan.WindowCostUSD, wantCost)
 	}
 }

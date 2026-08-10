@@ -1,0 +1,49 @@
+{
+  "doc": "The single source of record for model identity, price and what is not a model. Correcting a rate, adding a family, or excluding a new non-model entry is an edit to THIS FILE and nothing else (SC-3580). Rates are USD per 1,000,000 tokens. cache_create_per_m is the ONE-HOUR cache-write rate (2x input), not the five-minute rate (1.25x input): Claude Code writes 1h caches the overwhelming majority of the time, and the measured opus row below is a 1h figure — mixing the two tiers in one card understates every cache write. A family absent from `families` prices at `fallback_family` — the most expensive row — so an unrecognised model is never understated. Lookup is by family word, and internal/claude/modelcard.go normalises whatever a caller holds (a raw vendor id, a short display name, a bare family) onto it, because the cost ledger stores raw ids while the transcript scan stores classified names.",
+  "fallback_family": "fable",
+  "families": [
+    {
+      "family": "opus",
+      "display": "Opus",
+      "input_per_m": 5.00,
+      "output_per_m": 25.00,
+      "cache_create_per_m": 10.00,
+      "cache_read_per_m": 0.50,
+      "provenance": "Measured from observed billing (SC-2549), and since corroborated by the published card: output 105231 tok -> $2.63 => $25/M; cache-write 614446 -> $6.14 => $10/M (the 1h tier, 2x input — the 5m tier is $6.25/M); cache-read 7849469 -> $3.92 => $0.50/M; input = 10x cache-read => $5/M."
+    },
+    {
+      "family": "sonnet",
+      "display": "Sonnet",
+      "input_per_m": 3.00,
+      "output_per_m": 15.00,
+      "cache_create_per_m": 6.00,
+      "cache_read_per_m": 0.30,
+      "provenance": "Standard Sonnet 5 pricing, confirmed by the 7-day measured billing behind SC-3580: opus/sonnet is a uniform 5/3 = 1.6667x ratio on every class, and $633 reported vs $380 actually spent (1.67x) matches that ratio to 0.05% -- the introductory rate (2/10/4/0.20, ratio 2.5x) does not reconcile. Cache-write is the 1h tier (2x input); the 5m tier is 3.75."
+    },
+    {
+      "family": "haiku",
+      "display": "Haiku",
+      "input_per_m": 1.00,
+      "output_per_m": 5.00,
+      "cache_create_per_m": 2.00,
+      "cache_read_per_m": 0.10,
+      "provenance": "Published list price for Haiku 4.5. Cache-write is the 1h tier (2x input); the 5m tier is 1.25. No expiry announced."
+    },
+    {
+      "family": "fable",
+      "display": "Fable",
+      "input_per_m": 10.00,
+      "output_per_m": 50.00,
+      "cache_create_per_m": 20.00,
+      "cache_read_per_m": 1.00,
+      "provenance": "Published list price for Claude Fable 5. It is twice the opus rate on every class, which is why fallback_family is `fable` and not `opus` — an unrecognised model priced at the opus row would be understated by 2x, the exact failure criterion 2 forbids. Cache-write is the 1h tier (2x input); the 5m tier is 12.50. No expiry announced."
+    }
+  ],
+  "task_aliases": ["opus", "sonnet", "haiku", "fable"],
+  "ignored": [
+    {
+      "id": "<synthetic>",
+      "reason": "What Claude Code writes when it composes an assistant message locally with no API call — \"No response requested\", an API error, a rate-limit notice. It always has zero tokens and it is not a model, so it must not take a row on the tokens-by-model panel (SC-3580)."
+    }
+  ]
+}

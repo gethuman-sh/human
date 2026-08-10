@@ -6,17 +6,32 @@ import (
 )
 
 func TestPriceFor(t *testing.T) {
+	opus := modelCard.byFamily["opus"].prices()
+	sonnet := modelCard.byFamily["sonnet"].prices()
+	haiku := modelCard.byFamily["haiku"].prices()
+	fallback := modelCard.fallback.prices()
+
 	tests := []struct {
 		model string
 		want  TokenPrices
 	}{
-		{"opus 4.8", modelPrices["opus"]},
-		{"opus", modelPrices["opus"]},
-		// Unknown families fall back to Opus so cost is never understated.
-		{"sonnet 4.5", opusFallback},
-		{"haiku 3.5", opusFallback},
-		{"some-unknown-model", opusFallback},
-		{"", opusFallback},
+		{"opus 4.8", opus},
+		{"opus", opus},
+		{"haiku 3.5", haiku},
+		// Every shape a caller actually holds resolves to the same row. The raw
+		// vendor id is the one that matters most: it is what the cost ledger
+		// stores, and keying only on the classified name is what left per-ticket
+		// cost billed at opus while the stats panel looked fixed (SC-3580).
+		{"claude-sonnet-4-5-20250929", sonnet},
+		{"sonnet 4.5", sonnet},
+		{"sonnet", sonnet},
+		{"us.anthropic.claude-sonnet-4-5-v1:0", sonnet},
+		{"claude-3-5-sonnet-20241022", sonnet},
+		{"CLAUDE-SONNET-4-5-20250929", sonnet},
+		// An unrecognised family prices at the most expensive row, never free.
+		{"some-unknown-model", fallback},
+		{"gpt-4o", fallback},
+		{"", fallback},
 	}
 	for _, tt := range tests {
 		got := PriceFor(tt.model)
@@ -43,10 +58,12 @@ func TestCostUSD_zero(t *testing.T) {
 	}
 }
 
-func TestCostUSD_unknownModelFallsBackToOpus(t *testing.T) {
+// The fallback row is read off the card rather than hard-coded, so this test
+// keeps asserting "the most expensive row" when the ceiling family changes.
+func TestCostUSD_unknownModelFallsBackToFallbackRow(t *testing.T) {
 	got := CostUSD("some-unknown-model", 1_000_000, 0, 0, 0)
-	want := opusFallback.InputPerM
+	want := modelCard.fallback.InputPerM
 	if math.Abs(got-want) > 1e-9 {
-		t.Errorf("CostUSD(unknown model) = %v, want %v (opus fallback rate)", got, want)
+		t.Errorf("CostUSD(unknown model) = %v, want %v (the %s fallback rate)", got, want, modelCard.fallback.Family)
 	}
 }
