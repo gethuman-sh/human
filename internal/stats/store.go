@@ -267,6 +267,53 @@ func (s *StatsStore) QueryToolOutcomes(ctx context.Context, since, until time.Ti
 	return ToolOutcomeCounts{OK: int(ok.Int64), Error: int(errCount.Int64)}, nil
 }
 
+// SubagentModelCount is one sub-agent type paired with the model it was
+// dispatched on, and how often that pairing occurred in the window.
+type SubagentModelCount struct {
+	SubagentType string `json:"subagent_type"`
+	Model        string `json:"model"`
+	Count        int    `json:"count"`
+}
+
+// QuerySubagentModels answers "which sub-agent types ran on which model" over
+// [since, until] (SC-3582).
+//
+// Only PreToolUse is counted, because it is the event that dispatches a spawn.
+// Four registered events carry tool_input — PreToolUse, PostToolUse,
+// PostToolUseFailure and PermissionRequest — and each would contribute a second
+// row for the same spawn, so an allow-list of the dispatching event is what
+// makes the count one per spawn, and keeps it so if a further tool_input-bearing
+// event is ever added.
+//
+// Rows without a recorded sub-agent type are left out rather than grouped under
+// an empty name — an event that carried no attribution is not a spawn with an
+// unknown one, which is what lets pre-fix history read as absent, not as an error.
+func (s *StatsStore) QuerySubagentModels(ctx context.Context, since, until time.Time) ([]SubagentModelCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT subagent_type, model, COUNT(*) as cnt
+		FROM tool_events
+		WHERE timestamp >= ? AND timestamp <= ?
+		  AND subagent_type != ''
+		  AND event_name = 'PreToolUse'
+		GROUP BY subagent_type, model
+		ORDER BY cnt DESC, subagent_type ASC, model ASC
+	`, since.UTC().Format("2006-01-02 15:04:05"), until.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "query subagent models")
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result []SubagentModelCount
+	for rows.Next() {
+		var c SubagentModelCount
+		if err := rows.Scan(&c.SubagentType, &c.Model, &c.Count); err != nil {
+			return nil, errors.WrapWithDetails(err, "scan subagent model count")
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
 // QueryTotal returns the total event count for the given time range.
 func (s *StatsStore) QueryTotal(ctx context.Context, since, until time.Time) (int, error) {
 	var count int

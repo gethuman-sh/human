@@ -245,3 +245,96 @@ func TestQueryToolOutcomes_emptyRange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ToolOutcomeCounts{OK: 0, Error: 0}, got)
 }
+
+// spawnEvent builds one Agent-dispatch row for the SC-3582 attribution query.
+func spawnEvent(eventName, subagentType, model string, ts time.Time) hookevents.Event {
+	return hookevents.Event{
+		SessionID:    "s1",
+		EventName:    eventName,
+		ToolName:     "Agent",
+		Cwd:          "/proj",
+		Timestamp:    ts,
+		SubagentType: subagentType,
+		Model:        model,
+	}
+}
+
+func TestQuerySubagentModels_groupsByTypeAndModel(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, s.InsertEvent(ctx, spawnEvent("PreToolUse", "human-planner", "opus", now)))
+	require.NoError(t, s.InsertEvent(ctx, spawnEvent("PreToolUse", "human-planner", "opus", now)))
+	require.NoError(t, s.InsertEvent(ctx, spawnEvent("PreToolUse", "human-executor", "sonnet", now)))
+
+	got, err := s.QuerySubagentModels(ctx, now.Add(-time.Hour), now.Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, SubagentModelCount{SubagentType: "human-planner", Model: "opus", Count: 2}, got[0])
+	assert.Equal(t, SubagentModelCount{SubagentType: "human-executor", Model: "sonnet", Count: 1}, got[1])
+}
+
+// A single spawn produces up to four tool_input-bearing rows. The allow-list on
+// the dispatching event is what keeps it one spawn; a deny-list of the two Post
+// events would still double-count a permission-gated one.
+func TestQuerySubagentModels_countsEachSpawnOnce(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	for _, ev := range []string{"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"} {
+		require.NoError(t, s.InsertEvent(ctx, spawnEvent(ev, "human-planner", "opus", now)))
+	}
+
+	got, err := s.QuerySubagentModels(ctx, now.Add(-time.Hour), now.Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, 1, got[0].Count)
+}
+
+// Pre-SC-3582 history carries neither field; it must read as absent, not as a
+// spawn of unknown type.
+func TestQuerySubagentModels_skipsRowsWithoutSubagentType(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, s.InsertEvent(ctx, spawnEvent("PreToolUse", "", "", now)))
+	require.NoError(t, s.InsertEvent(ctx, spawnEvent("PreToolUse", "", "", now)))
+
+	got, err := s.QuerySubagentModels(ctx, now.Add(-time.Hour), now.Add(time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// "Ran on the parent's model" and "no model was ever captured" are different
+// answers and must not collapse into one group.
+func TestQuerySubagentModels_inheritedIsDistinctFromNotCaptured(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, s.InsertEvent(ctx, spawnEvent("PreToolUse", "human-executor", hookevents.ModelInherited, now)))
+	require.NoError(t, s.InsertEvent(ctx, spawnEvent("PreToolUse", "human-executor", "", now)))
+
+	got, err := s.QuerySubagentModels(ctx, now.Add(-time.Hour), now.Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+
+	models := []string{got[0].Model, got[1].Model}
+	assert.Contains(t, models, hookevents.ModelInherited)
+	assert.Contains(t, models, "")
+}
+
+func TestQuerySubagentModels_emptyRange(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	require.NoError(t, s.InsertEvent(ctx, spawnEvent("PreToolUse", "human-planner", "opus", now)))
+
+	got, err := s.QuerySubagentModels(ctx, now.Add(-2*time.Hour), now.Add(-time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
