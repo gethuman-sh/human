@@ -122,13 +122,6 @@ export const QUEUED_LABELS = {
     implementation: "rebuild",
     verification: "re-review",
 };
-// Badge text per done-stage sub-phase. The fix half names itself: a card that
-// says "PR review…" while board-<key>-prfix runs the fixer points its reader at
-// the wrong container (SC-3569).
-export const DEPLOY_PHASE_LABELS = {
-    "pr-review": "PR review…",
-    "pr-fix": "fixing PR review findings…",
-};
 // Human phrasing for each pre-planning stop verdict — the card must say WHICH
 // decision was reached in these terms, never the internal head token (SC-2699).
 export const STOP_DECISION_LABELS = {

@@ -369,6 +369,7 @@ test("a recovering card's elapsed time reads the same as a dead one (SC-3569)", 
     "implementation",
     new Date(now - 300_000).toISOString(), // 5m ago
     now,
+    undefined,
     "recovering",
   );
   assert.match(html, /5m 0s/);
