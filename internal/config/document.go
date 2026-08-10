@@ -57,7 +57,7 @@ type Document struct {
 	// inherited are the errors this file already had when it was read. They are
 	// remembered so a write can refuse what this change broke without holding
 	// an unrelated edit hostage to a fault that was already there — see Write.
-	inherited map[string]bool
+	inherited map[problemID]bool
 }
 
 // Load reads the config file dir resolves to. A missing file is not an error:
@@ -167,15 +167,26 @@ func (d *Document) Write() error {
 	return d.WriteAllowingErrors()
 }
 
-// problemKey identifies a problem across edits, so "the same fault as before"
-// can be told from a new one.
-func problemKey(p Problem) string {
-	return p.Rule + "\x00" + p.Section + "\x00" + p.Instance
+// problemID identifies a problem across edits, so "the same fault as before"
+// can be told from a new one. It is the identifying subset of Problem — the
+// message and the fix may be reworded without making it a different fault.
+//
+// A struct, not the three fields joined by a separator: Go compares struct keys
+// field by field, so there is no separator to choose and no way for a section
+// name carrying it to collide with a different problem.
+type problemID struct {
+	Rule     string
+	Section  string
+	Instance string
+}
+
+func problemKey(p Problem) problemID {
+	return problemID{Rule: p.Rule, Section: p.Section, Instance: p.Instance}
 }
 
 // rememberInheritedErrors records what was already wrong when the file was read.
 func (d *Document) rememberInheritedErrors() {
-	d.inherited = map[string]bool{}
+	d.inherited = map[problemID]bool{}
 	for _, p := range d.Validate() {
 		if p.Severity == Error {
 			d.inherited[problemKey(p)] = true
