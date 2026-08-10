@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, isReworkable, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
+import { queueOf, isReworkable, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
 import { DAEMON_FORWARDED_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -566,4 +566,50 @@ test("a running badge shows the recorded phase when there is one", () => {
 test("a run that recorded no phase keeps the stage word", () => {
   const badge = badgeInfo({ stage: "implementation", state: "running" });
   assert.equal(badge.text, "building…", "no invented phase — absence stays absent");
+});
+
+// --- The phase badge carries its own age (SC-4151 B4) ---
+
+test("a fresh phase reads as it always did, with no age", () => {
+  const now = Date.parse("2026-08-10T12:00:00Z");
+  const info = badgeInfo(
+    { stage: "implementation", state: "running", activity: "triaging", activityAt: "2026-08-10T11:58:00Z" },
+    now,
+  );
+  assert.equal(info.text, "triaging…");
+  assert.match(info.title, /Agent running — triaging, last recorded 2m ago/);
+});
+
+test("a phase that has stood too long says how long", () => {
+  const now = Date.parse("2026-08-10T12:00:00Z");
+  const info = badgeInfo(
+    { stage: "implementation", state: "running", activity: "triaging", activityAt: "2026-08-10T06:00:00Z" },
+    now,
+  );
+  assert.equal(info.text, "triaging… (6h ago)");
+  assert.equal(info.spinner, true, "still running — the age is information, not a verdict");
+});
+
+test("an unreadable or absent activity time prints no age", () => {
+  const now = Date.parse("2026-08-10T12:00:00Z");
+  assert.equal(badgeInfo({ stage: "implementation", state: "running", activity: "fixing" }, now).text, "fixing…");
+  assert.equal(
+    badgeInfo({ stage: "implementation", state: "running", activity: "fixing", activityAt: "not-a-time" }, now).text,
+    "fixing…",
+  );
+});
+
+test("a running card with no recorded phase is unchanged", () => {
+  const now = Date.parse("2026-08-10T12:00:00Z");
+  const info = badgeInfo({ stage: "implementation", state: "running", activityAt: "2026-08-10T06:00:00Z" }, now);
+  assert.equal(info.text, "building…");
+  assert.equal(info.title, "Agent running");
+});
+
+test("sinceText refuses to render an age it could not read", () => {
+  const now = Date.parse("2026-08-10T12:00:00Z");
+  assert.equal(sinceText(undefined, now), "");
+  assert.equal(sinceText("nonsense", now), "");
+  assert.equal(sinceText("2026-08-10T11:59:30Z", now), "30s ago");
+  assert.equal(sinceText("2026-08-08T12:00:00Z", now), "2d ago");
 });

@@ -39,26 +39,33 @@ type SubagentInfo struct {
 // are mapped; the discovery types carry a DirWalker interface and pointer memory
 // info that do not round-trip through JSON.
 type AgentInstance struct {
-	Label           string         `json:"label"`
-	Source          string         `json:"source"` // "host" or "container"
-	Status          string         `json:"status"` // ready|working|blocked|waiting|error|ended, "" when no session
-	HasActivity     bool           `json:"hasActivity"`
-	Slug            string         `json:"slug,omitempty"`
-	PID             int            `json:"pid"`
-	ContainerID     string         `json:"containerID,omitempty"`
-	Cwd             string         `json:"cwd,omitempty"`
-	Memory          string         `json:"memory,omitempty"`
-	CurrentTool     string         `json:"currentTool,omitempty"`
-	BlockedTool     string         `json:"blockedTool,omitempty"`
-	ErrorType       string         `json:"errorType,omitempty"`
-	StartedAtUnix   int64          `json:"startedAtUnix"`
-	DaemonConnected bool           `json:"daemonConnected"`
-	ProxyConfigured bool           `json:"proxyConfigured"`
-	Models          []ModelUsage   `json:"models"`
-	TasksPending    int            `json:"tasksPending"`
-	TasksInProgress int            `json:"tasksInProgress"`
-	TasksDone       int            `json:"tasksDone"`
-	Subagents       []SubagentInfo `json:"subagents"`
+	Label         string `json:"label"`
+	Source        string `json:"source"` // "host" or "container"
+	Status        string `json:"status"` // ready|working|blocked|waiting|error|ended, "" when no session
+	HasActivity   bool   `json:"hasActivity"`
+	Slug          string `json:"slug,omitempty"`
+	PID           int    `json:"pid"`
+	ContainerID   string `json:"containerID,omitempty"`
+	Cwd           string `json:"cwd,omitempty"`
+	Memory        string `json:"memory,omitempty"`
+	CurrentTool   string `json:"currentTool,omitempty"`
+	BlockedTool   string `json:"blockedTool,omitempty"`
+	ErrorType     string `json:"errorType,omitempty"`
+	StartedAtUnix int64  `json:"startedAtUnix"`
+	// LastActivityUnix is when this session last produced anything at all. The
+	// status is read off the last transcript entry's stop_reason with no
+	// staleness rule, so a hung agent reports "working" for as long as it hangs
+	// and the panel spins for it (SC-4151 B5). Carrying the instant lets the
+	// view say how long ago "working" was last true; 0 means unknown, which is
+	// rendered as no claim rather than as "just now".
+	LastActivityUnix int64          `json:"lastActivityUnix"`
+	DaemonConnected  bool           `json:"daemonConnected"`
+	ProxyConfigured  bool           `json:"proxyConfigured"`
+	Models           []ModelUsage   `json:"models"`
+	TasksPending     int            `json:"tasksPending"`
+	TasksInProgress  int            `json:"tasksInProgress"`
+	TasksDone        int            `json:"tasksDone"`
+	Subagents        []SubagentInfo `json:"subagents"`
 }
 
 // InstancesData is the payload the Agents view renders: the instance list plus an
@@ -135,6 +142,9 @@ func applySessionFields(ai *AgentInstance, sess *logparser.SessionState) {
 	}
 	ai.Status = statusString(sess.Status)
 	ai.HasActivity = !sess.LastActivity.IsZero()
+	if !sess.LastActivity.IsZero() {
+		ai.LastActivityUnix = sess.LastActivity.Unix()
+	}
 	ai.Slug = sess.Slug
 	ai.CurrentTool = sess.CurrentTool
 	ai.BlockedTool = sess.BlockedTool

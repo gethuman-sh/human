@@ -134,7 +134,42 @@ export const STOP_DECISION_LABELS = {
 // completion. A review that found problems is machine-fixing work, not a demand
 // on the user: the daemon auto-launches a fixer, so it reads as in-flight
 // (gray + spinner), never the amber "your turn" register (SC-1830).
-export function badgeInfo(card) {
+// activityStaleAfterMs is how long a recorded phase may stand before the badge
+// starts saying how old it is. Short enough that a stall shows within a coffee
+// break; long enough that an ordinary phase — a plan, a build, a review — is
+// not decorated with an age for merely taking its normal time.
+const activityStaleAfterMs = 10 * 60 * 1000;
+// sinceText renders how long ago an RFC3339 instant was, in the board's compact
+// house form. An absent or unparseable timestamp yields "" — an age the board
+// could not read must never be printed as an age of zero.
+export function sinceText(at, nowMs) {
+    if (!at)
+        return "";
+    const t = Date.parse(at);
+    if (Number.isNaN(t))
+        return "";
+    const secs = Math.max(0, Math.floor((nowMs - t) / 1000));
+    if (secs < 60)
+        return `${secs}s ago`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60)
+        return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24)
+        return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+}
+// activityAge is the parenthesised age the badge carries, and only once the
+// phase is old enough to be worth reading.
+function activityAge(at, nowMs) {
+    if (!at)
+        return "";
+    const t = Date.parse(at);
+    if (Number.isNaN(t) || nowMs - t < activityStaleAfterMs)
+        return "";
+    return `(${sinceText(at, nowMs)})`;
+}
+export function badgeInfo(card, nowMs = Date.now()) {
     // An open decision block outranks EVERY other classification, including a
     // stale failed marker: a card parked on a deliberate human fork must never
     // paint red, even if a *-failed marker also landed on it (the daemon's twin
@@ -173,13 +208,18 @@ export function badgeInfo(card) {
         // the fix, verification — so it reads identically at thirty seconds and at
         // fourteen hours, and identically again when the agent behind it is dead.
         // The phase changing is the only thing on the card that shows movement.
-        const text = card.activity ? `${card.activity}…` : stageText;
-        return {
-            cls: "running",
-            text,
-            title: card.activity ? `Agent running — ${card.activity}` : "Agent running",
-            spinner: true,
-        };
+        //
+        // Its changing was still the only signal: a phase that STOPPED changing read
+        // exactly like one that never had to. The daemon has always sent the
+        // timestamp beside the phase and the card dropped it on the floor
+        // (SC-4151 B4), so a badge could say "triaging…" over a record six hours
+        // old. The age now rides the badge once it is old enough to mean something.
+        const age = activityAge(card.activityAt, nowMs);
+        const text = card.activity ? `${card.activity}…${age !== "" ? ` ${age}` : ""}` : stageText;
+        const title = card.activity
+            ? `Agent running — ${card.activity}${card.activityAt ? `, last recorded ${sinceText(card.activityAt, nowMs)}` : ""}`
+            : "Agent running";
+        return { cls: "running", text, title, spinner: true };
     }
     // A recorded decision has (re)queued the chosen stage but the relaunched
     // agent has not posted its started marker yet — or the launch was deferred to

@@ -2098,6 +2098,13 @@ body {
 .agent-dot.error {
   color: var(--failed);
 }
+/* A session still reporting "working" that has produced nothing for a while.
+   Not an error — nothing has failed and it may yet continue — so it takes the
+   muted register rather than the failure red, and simply stops spinning
+   (SC-4151 B5). */
+.agent-dot.silent {
+  color: var(--muted);
+}
 
 .agent-label {
   font-weight: 600;
