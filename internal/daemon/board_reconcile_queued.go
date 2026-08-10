@@ -62,6 +62,17 @@ func reconcileQueuedLaunch(ctx context.Context, drivable DrivableCards, deps Rec
 		if now.Sub(choice.Created) < QueuedLaunchGrace {
 			continue
 		}
+		// A sequencing answer queued this stage precisely so it would NOT run yet.
+		// The grace above is about a launch in flight; this is about one nobody
+		// asked for. Nothing is charged while it waits — the card is doing exactly
+		// what it was told to.
+		if waitsFor := waitsForOf(choice); waitsFor != "" {
+			if !deps.waitCleared(ctx, card.Key, waitsFor) {
+				continue
+			}
+			logger.Info().Str("pm", card.Key).Str("waited for", waitsFor).
+				Msg("board reconcile: the ticket this work waited for is done; releasing the stage")
+		}
 		// A live agent for the stage means the launch did happen and simply has
 		// not posted its started marker yet — the same alive-guard every other
 		// pass uses, and the difference between a slow launch and a missing one.
@@ -77,4 +88,26 @@ func reconcileQueuedLaunch(ctx context.Context, drivable DrivableCards, deps Rec
 		}
 	}
 	return launched
+}
+
+// waitCleared reports whether the ticket a sequencing answer deferred to has
+// finished, so the stage it held may start.
+//
+// An answer that cannot be checked reports false — no probe wired, a tracker
+// that could not be reached, a key that does not resolve. Holding is the
+// direction that cannot undo the decision: starting the work early is the one
+// outcome the person ruled out, and there is no bound on how long a deliberate
+// wait may last, so an unreadable blocker is not a reason to give up on it. The
+// card says what it waits for, and a person can start it by hand at any time.
+func (d ReconcileDeps) waitCleared(ctx context.Context, pmKey, waitsFor string) bool {
+	if d.ClosedProbe == nil {
+		return false
+	}
+	closed, err := d.ClosedProbe(ctx, waitsFor)
+	if err != nil {
+		d.Logger.Warn().Err(err).Str("pm", pmKey).Str("waits for", waitsFor).
+			Msg("board reconcile: cannot read the ticket this work waits for; keeping it held")
+		return false
+	}
+	return closed
 }

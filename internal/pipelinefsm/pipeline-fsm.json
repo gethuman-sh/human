@@ -384,13 +384,13 @@
         "state": "queued",
         "note": "Only the three stages an options block may relaunch — planning, implementation, verification (optionStages) — so backlog and done never carry it. Synthesized by optionChosenQueued when [human:option-chosen] is the newest board-relevant signal; any classified marker newer than the choice supersedes it."
       },
-      "holds": "The newest board-relevant marker is an [human:option-chosen] whose block names a resumable stage, and that stage's started marker has not been posted.",
+      "holds": "The newest board-relevant marker is an [human:option-chosen] whose block names a resumable stage, and that stage's started marker has not been posted. TWO different situations hold here and the record tells them apart: an ordinary answer is queued for a launch that is on its way, while an answer carrying a `waits-for` field is HELD — it named a ticket that goes first, and the stage must not start until that ticket is done.",
       "who_may_act": [
         "user",
         "daemon"
       ],
-      "stale_when": "Past QueuedLaunchGrace (2m) with no live agent for the stage. Recording the choice and launching the stage are the two halves of one ApplyOption call, in that order, so the ordinary window is microseconds; the grace exists only so a reconcile tick landing inside it does not race a launch already on its way.",
-      "if_nothing_happens": "reconcileQueuedLaunch starts the stage the decision named, on the next tick past the grace. It relaunches through the CHARGED, capped path (DefaultStageRetries), so a stage that cannot be launched is tried twice and then left for a person rather than forever — and a refusal that starts nothing, the plan gate, is not charged at all and routes the card itself to needs-planning. It deliberately does not go through the ordinary retry classifier: that reads the stage's last recorded exit, which here is the ExitNeedsInput of the stage that RAISED the decision, and would classify the card as one to leave for a human — refusing to start exactly the cards this pass exists for. Until SC-3865 nothing watched this state at all: it exists so the stuck-running sweep will not red a card whose decision was just answered (SC-1320), and it achieved that by being a state no sweep looked at — one property, protection from one side and a hole from the other."
+      "stale_when": "Past QueuedLaunchGrace (2m) with no live agent for the stage. Recording the choice and launching the stage are the two halves of one ApplyOption call, in that order, so the ordinary window is microseconds; the grace exists only so a reconcile tick landing inside it does not race a launch already on its way. A HELD card is never stale by time: it is doing exactly what a person told it to, for as long as the ticket it waits for takes.",
+      "if_nothing_happens": "reconcileQueuedLaunch starts the stage the decision named, on the next tick past the grace — unless the answer was a sequencing one, in which case that same pass HOLDS the card and starts it on the first tick after the ticket it named is done or closed. A held card whose blocker cannot be read stays held: starting the work is the one outcome the person's answer ruled out, and a deliberate wait has no time bound to give up at, so the way out of an unreadable one is a person dropping the card on its own column. Otherwise it relaunches through the CHARGED, capped path (DefaultStageRetries), so a stage that cannot be launched is tried twice and then left for a person rather than forever — and a refusal that starts nothing, the plan gate, is not charged at all and routes the card itself to needs-planning; a hold is charged nothing either, because nothing was attempted. It deliberately does not go through the ordinary retry classifier: that reads the stage's last recorded exit, which here is the ExitNeedsInput of the stage that RAISED the decision, and would classify the card as one to leave for a human — refusing to start exactly the cards this pass exists for. Until SC-3865 nothing watched this state at all: it exists so the stuck-running sweep will not red a card whose decision was just answered (SC-1320), and it achieved that by being a state no sweep looked at — one property, protection from one side and a hole from the other. The pass could not in fact start anything until the transition that admits a queued card existed: every re-drive was rejected as a non-advance by the forward-only rule and charged for the refusal."
     },
     {
       "name": "stopped",
@@ -470,7 +470,7 @@
       "actor": "user",
       "runs": "human-planner",
       "marker": "[human:planning-started]",
-      "where": "board_transition.go launchForwardStage / isPlanningRetry",
+      "where": "board_transition.go launchForwardStage / isPlanningRetry / isQueuedLaunch",
       "doc": "A drop on Planning. From planned it is a replan; from stopped or substrate-down it is a retry in place."
     },
     {
@@ -524,7 +524,7 @@
       "actor": "user",
       "runs": "human-autofix",
       "marker": "[human:implementation-started]",
-      "where": "board_transition.go ApplyFix",
+      "where": "board_transition.go ApplyFix; board_options.go launchDecidedStage \u2192 launchFixPipeline when the stage was queued by a decision",
       "doc": "Dropping a bug on Fix. The run is self-planning — it produces its own plan rather than requiring one."
     },
     {
@@ -668,7 +668,7 @@
       "actor": "user",
       "runs": "human-executor",
       "marker": "[human:implementation-started]",
-      "where": "board_transition.go launchForwardStage / isReworkTransition / isBuildRetry",
+      "where": "board_transition.go launchForwardStage / isReworkTransition / isBuildRetry / isQueuedLaunch",
       "doc": "The plan-executing path. From reviewed it is the rework loop — a failing review verdict sends the item back to be rebuilt with the findings."
     },
     {
@@ -927,8 +927,8 @@
       "dst": "queued",
       "actor": "user",
       "marker": "[human:option-chosen]",
-      "where": "board_options.go ApplyOption → pursueDecision — records the choice, then starts the stage; board_state.go optionChosenQueued reads the window between the two",
-      "doc": "A human picked an answer. This records it and nothing more: pursueDecision posts the choice comment and only then calls startAgentStage, so the item is queued for a stage before it is running in one. The stage that gets queued is the one the RECORD names — written onto the option-chosen marker itself, with the block read only for choices recorded before that field existed — not the one the item sits in — planning is the common case, while a PR-loop escalation deliberately names implementation even though the item is in the deploy stage, because the fixer raised a question only a code change can answer and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named. The stage is derived; the state is not — every answered decision lands here first.",
+      "where": "board_options.go ApplyOption → pursueDecision — records the choice, then starts the stage unless the answer was to wait; board_state.go optionChosenQueued reads the window between the two",
+      "doc": "A human picked an answer. This records it and nothing more: pursueDecision posts the choice comment and only then calls startAgentStage, so the item is queued for a stage before it is running in one. ONE answer stops there: an option carrying a `waits-for-<id>` line means this ticket goes second, so the choice is recorded with that ticket named on it and no stage is started at all. Starting it is the exact opposite of what was chosen, and it was the machine's only move on any answer until an answer could say otherwise — nothing in an option's prose distinguishes \"SC-1 goes first\" from \"do it this way\". The stage that gets queued is the one the RECORD names — written onto the option-chosen marker itself, with the block read only for choices recorded before that field existed — not the one the item sits in — planning is the common case, while a PR-loop escalation deliberately names implementation even though the item is in the deploy stage, because the fixer raised a question only a code change can answer and the rebuild re-adopts the still-open draft PR. The item pauses correctly meanwhile, because an open block pauses every card whose own stage ranks at or after the one named. The stage is derived; the state is not — every answered decision lands here first.",
       "dst_is_derived": false
     },
     {

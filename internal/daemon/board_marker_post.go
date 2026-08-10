@@ -93,6 +93,13 @@ func optionsMarker(stage BoardStage, context string, opts []BoardOption) (marker
 	for _, o := range opts {
 		m.Fields[o.ID] = o.Label
 		order = append(order, o.ID)
+		// A wait an answer declares is part of the answer. Rendering the label
+		// without it would post a block whose sequencing answer reads as an
+		// ordinary direction, and picking it would start the work it defers.
+		if o.WaitsFor != "" {
+			m.Fields[marker.WaitsForPrefix+o.ID] = o.WaitsFor
+			order = append(order, marker.WaitsForPrefix+o.ID)
+		}
 	}
 	return m, order
 }

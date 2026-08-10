@@ -115,6 +115,10 @@ interface Card {
   // Absent when no time was stated — the badge then reads "paused" with no
   // time and the reconcile pass falls back to its own backoff.
   resumeAt?: string;
+  // The ticket a queued card was told to go second to — the `waits-for` field
+  // of the [human:option-chosen] marker that queued it. Absent unless the answer
+  // a human picked was a sequencing one.
+  waitsFor?: string;
   // RFC3339 time the newest marker of the card's current stage landed; feeds
   // the Engineering-backlog age badge.
   stageEnteredAt?: string;

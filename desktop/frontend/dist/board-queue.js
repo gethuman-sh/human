@@ -354,6 +354,18 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
     // a healthy daemon. An in-progress, non-failing signal: never red, never a
     // blank card, so the user always sees the choice re-queued the work (SC-1320).
     if (card.state === "queued") {
+        // A sequencing answer — "<KEY> goes first" — queued this stage in order NOT
+        // to run it yet. It is the do-nothing register, like a paused outage: no
+        // spinner over work nobody started, no liveness reading (there is no agent
+        // to miss), and the card names the ticket it was told to go second to.
+        if (card.waitsFor) {
+            return {
+                cls: "paused",
+                text: `waiting for ${card.waitsFor}`,
+                title: `Held by your decision: ${card.waitsFor} goes first. This starts on its own once ${card.waitsFor} is done — or drop the card on its own column to start it now.`,
+                spinner: false,
+            };
+        }
         const verb = QUEUED_LABELS[card.stage] ?? "work";
         return livenessBadge({
             cls: "queued",
