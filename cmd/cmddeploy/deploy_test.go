@@ -3,14 +3,18 @@ package cmddeploy
 import (
 	"bytes"
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -51,21 +55,159 @@ func (s *stubProvider) ListStatuses(context.Context, string) ([]tracker.Status, 
 
 type engineCall struct {
 	pmKey, title, prBody, branch string
+	overrideDecision             bool
 }
 
+// stubEngine swaps deployEntry rather than the engine underneath it: the seam
+// this route now calls first is the pre-deploy prelude (StartDeploy), so a
+// test exercising RunDeploy's derivation stubs at that boundary.
 func stubEngine(t *testing.T, err error) *[]engineCall {
 	t.Helper()
 	var calls []engineCall
-	prevEngine, prevDeps := deployEngine, newTransitionDeps
-	deployEngine = func(_ context.Context, _ daemon.BoardTransitionDeps, pmKey, title, prBody, branch string) error {
-		calls = append(calls, engineCall{pmKey, title, prBody, branch})
+	prevEntry, prevDeps := deployEntry, newTransitionDeps
+	deployEntry = func(_ context.Context, _ daemon.BoardTransitionDeps, req daemon.StartDeployRequest) error {
+		calls = append(calls, engineCall{req.PMKey, req.Title, req.PRBody, req.Branch, req.OverrideDecision})
 		return err
 	}
 	newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
 		return daemon.BoardTransitionDeps{}
 	}
-	t.Cleanup(func() { deployEngine, newTransitionDeps = prevEngine, prevDeps })
+	t.Cleanup(func() { deployEntry, newTransitionDeps = prevEntry, prevDeps })
 	return &calls
+}
+
+// recordingProvider records the ORDER of what the deploy route does to the
+// ticket, which is the whole question: a start recorded after the merge is not
+// a record of the work starting.
+type recordingProvider struct {
+	stubProvider
+	mu     sync.Mutex
+	posted []string // marker bodies, in the order they were posted
+	events *[]string
+}
+
+func (r *recordingProvider) AddComment(_ context.Context, _ string, body string) (*tracker.Comment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.posted = append(r.posted, body)
+	*r.events = append(*r.events, "comment:"+strings.SplitN(body, "\n", 2)[0])
+	return &tracker.Comment{Body: body}, nil
+}
+
+// stubDeployer implements daemon.Deployer; every method returns zero values
+// except BranchMerged (the engine's first Deployer call, so it is the probe
+// for "the engine ran") and PushAndCreatePR (belt and braces).
+type stubDeployer struct {
+	events *[]string
+}
+
+func (s *stubDeployer) PushAndCreatePR(context.Context, daemon.PRRequest) (daemon.PRResult, error) {
+	*s.events = append(*s.events, "engine")
+	return daemon.PRResult{Number: 1, URL: "pr"}, nil
+}
+func (s *stubDeployer) PullRequestChecks(context.Context, string, int) (forge.ChecksState, error) {
+	return "", nil
+}
+func (s *stubDeployer) ReadPullRequest(context.Context, string, int) (*forge.PullRequestState, error) {
+	return nil, nil
+}
+func (s *stubDeployer) EnsureMergeable(context.Context, daemon.PRRequest) (bool, error) {
+	return false, nil
+}
+func (s *stubDeployer) PullRequestMergeable(context.Context, string, int) (bool, error) {
+	return true, nil
+}
+func (s *stubDeployer) MergePullRequest(context.Context, string, int) error { return nil }
+func (s *stubDeployer) DeleteRemoteBranch(context.Context, string, string) error {
+	return nil
+}
+func (s *stubDeployer) BranchMerged(context.Context, string, string) bool {
+	*s.events = append(*s.events, "engine")
+	return true
+}
+func (s *stubDeployer) MarkReadyForReview(context.Context, string, int) error { return nil }
+func (s *stubDeployer) PublishResolvedBranch(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+// realRoute leaves deployEntry ALONE — the point is to drive production wiring
+// with only the forge replaced.
+func realRoute(t *testing.T, comments []tracker.Comment) (*recordingProvider, *[]string) {
+	t.Helper()
+	events := &[]string{}
+	p := &recordingProvider{stubProvider: stubProvider{comments: comments,
+		issue: &tracker.Issue{Key: "SC-1", Title: "T"}}, events: events}
+	prev := newTransitionDeps
+	newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
+		return daemon.BoardTransitionDeps{Commenter: p, Deployer: &stubDeployer{events: events}, Logger: zerolog.Nop(), WorkspaceDir: "."}
+	}
+	t.Cleanup(func() { newTransitionDeps = prev })
+	return p, events
+}
+
+// A ticket paused on an open decision is the one state nothing may move. The CLI
+// deploy ships it today, which is the bug.
+func TestRunDeploy_refusesWhileADecisionIsOpen(t *testing.T) {
+	p, events := realRoute(t, []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x\ncommits: abc", Created: time.Now()},
+		{Body: "[human:options]\nstage: implementation\ncontext: c\n1: a\n2: b", Created: time.Now()},
+	})
+	var buf bytes.Buffer
+
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "deploy refused")
+	assert.NotContains(t, *events, "engine", "nothing may be shipped while a decision is open")
+	assert.Empty(t, p.posted, "a refusal is not a failure: it posts no marker at all")
+	assert.NotContains(t, buf.String(), "Deployed")
+}
+
+// The ticket's own record of a CLI deploy must begin before the merge.
+func TestRunDeploy_recordsTheStartBeforeTheMerge(t *testing.T) {
+	p, events := realRoute(t, []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x\ncommits: abc", Created: time.Now()},
+	})
+	var buf bytes.Buffer
+
+	require.NoError(t, RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false))
+
+	require.NotEmpty(t, *events)
+	assert.Equal(t, "comment:[human:deploy-started]", (*events)[0],
+		"the start is recorded on the ticket before the engine touches the forge")
+	assert.Contains(t, p.posted[0], "branch: feat/x")
+}
+
+// A person may decide to ship past their own open question. --override-decision
+// is that explicit decision — it must still record the start and still run the
+// engine, it just skips the refusal.
+func TestRunDeploy_overrideShipsWhileADecisionIsOpen(t *testing.T) {
+	p, events := realRoute(t, []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x\ncommits: abc", Created: time.Now()},
+		{Body: "[human:options]\nstage: implementation\ncontext: c\n1: a\n2: b", Created: time.Now()},
+	})
+	var buf bytes.Buffer
+
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, true)
+
+	require.NoError(t, err)
+	assert.Contains(t, *events, "engine")
+	require.NotEmpty(t, p.posted)
+	assert.Contains(t, p.posted[0], "[human:deploy-started]")
+}
+
+// RunDeploy's own job is derivation; whether to override is the caller's flag,
+// passed straight through to the entry point untouched.
+func TestRunDeploy_passesTheOverrideThroughToTheEntryPoint(t *testing.T) {
+	calls := stubEngine(t, nil)
+	p := &stubProvider{}
+	var buf bytes.Buffer
+
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false, true)
+
+	require.NoError(t, err)
+	require.Len(t, *calls, 1)
+	assert.True(t, (*calls)[0].overrideDecision)
 }
 
 func TestRunDeploy_derivesBranchAndTitleFromHandoffAndTicket(t *testing.T) {
@@ -79,7 +221,7 @@ func TestRunDeploy_derivesBranchAndTitleFromHandoffAndTicket(t *testing.T) {
 	}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
 	call := (*calls)[0]
@@ -96,7 +238,7 @@ func TestRunDeploy_explicitFlagsSkipDerivation(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "Custom title", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "Custom title", false, false)
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
 	assert.Equal(t, "release/x", (*calls)[0].branch)
@@ -108,7 +250,7 @@ func TestRunDeploy_noHandoffNoBranchFails(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no review handoff")
 	assert.Empty(t, *calls)
@@ -122,7 +264,7 @@ func TestRunDeploy_handoffWithoutBranchFails(t *testing.T) {
 	}}}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no branch")
 	assert.Empty(t, *calls)
@@ -133,7 +275,7 @@ func TestRunDeploy_engineErrorPropagates(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false, false)
 	require.Error(t, err)
 	assert.NotContains(t, buf.String(), "Deployed")
 }
@@ -147,4 +289,34 @@ func TestPRBody_singleTrackerOmitsEngineering(t *testing.T) {
 
 func (s *stubProvider) UnlinkIssues(context.Context, string, string) error {
 	return nil
+}
+
+// --ready (the review loop's draft interlock, SC-4027) and --override-decision
+// (the open-decision refusal, SC-3852) are independent gestures that reach the
+// engine by different carriers: the draft override rides on the deps, the
+// decision override on the request. Routing the CLI through StartDeploy moved
+// the call that carries the deps, so pin that --ready still arrives.
+func TestRunDeploy_readyCarriesTheDraftOverrideThroughThePrelude(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ready bool
+	}{{"ready un-drafts", true}, {"default leaves the interlock", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got daemon.BoardTransitionDeps
+			prevEntry, prevDeps := deployEntry, newTransitionDeps
+			deployEntry = func(_ context.Context, d daemon.BoardTransitionDeps, _ daemon.StartDeployRequest) error {
+				got = d
+				return nil
+			}
+			newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
+				return daemon.BoardTransitionDeps{}
+			}
+			t.Cleanup(func() { deployEntry, newTransitionDeps = prevEntry, prevDeps })
+
+			var buf bytes.Buffer
+			require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf,
+				"SC-1", "release/x", "T", tc.ready, false))
+			assert.Equal(t, tc.ready, got.MergeDraftPR)
+		})
+	}
 }

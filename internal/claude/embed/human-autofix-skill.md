@@ -362,16 +362,19 @@ REVIEW_EOF
 
 Only after a passing review. This is the board's deploy pipeline (push → PR → CI gate → merge → close) driven from the skill:
 
-1. Post the started marker: `human marker post <BUG_KEY> deploy-started` (`human deploy` does not post this itself).
-2. Run the deploy gate:
+1. Run the deploy gate:
 
    ```bash
    human deploy <BUG_KEY> --branch autofix/<work-key> --title "[<BUG_KEY>] [<ENG_KEY>] <short summary>"
    ```
 
-   (single-tracker: only `[<BUG_KEY>]` in the title; `--branch` defaults to the ticket's newest review-handoff branch and `--title` to the ticket title). The command owns the whole gate: push + PR, the CI wait (blocks up to 45 minutes), rebase-if-stale with a lease push, merge, remote-branch cleanup, the `[human:deployed]` marker with its `pr:` line, and the ticket close. A branch already merged into the base is a clean success. It runs a recovery ladder internally: a racy merge refusal (the PR is mergeable but the forge is still reconciling fresh checks) is waited out and retried, and it only posts `[human:deploy-failed]` — with the specific unresolved blocker named — once that ladder is exhausted, exiting non-zero. A `[human:deploy-failed]` is therefore an honest needs-human end state, not a first-failure stop: do NOT merge by hand and do NOT re-implement the already-reviewed work; the PR stays open for a human with the named blocker. The one thing you must never do is end the run with the card in a non-terminal state and no live agent — the only acceptable ends are deployed/closed or a `[human:deploy-failed]` naming the blocker.
-3. In split topology, close `<ENG_KEY>` as well: `human done <ENG_KEY>`.
-4. For the Step 9 report, read `<PR_URL>` from the deployed marker if needed: `human marker show <BUG_KEY> deployed`.
+   (single-tracker: only `[<BUG_KEY>]` in the title; `--branch` defaults to the ticket's newest review-handoff branch and `--title` to the ticket title). The command owns the whole gate: push + PR, the CI wait (blocks up to 45 minutes), rebase-if-stale with a lease push, merge, remote-branch cleanup, the `[human:deployed]` marker with its `pr:` line, and the ticket close. A branch already merged into the base is a clean success. It runs a recovery ladder internally: a racy merge refusal (the PR is mergeable but the forge is still reconciling fresh checks) is waited out and retried, and it only posts `[human:deploy-failed]` — with the specific unresolved blocker named — once that ladder is exhausted, exiting non-zero. A `[human:deploy-failed]` is therefore an honest needs-human end state, not a first-failure stop: do NOT merge by hand and do NOT re-implement the already-reviewed work; the PR stays open for a human with the named blocker. The one thing you must never do is end the run with the card in a non-terminal state and no live agent — the only acceptable ends are (a) deployed/closed, (b) a `[human:deploy-failed]` naming the blocker, or (c) a deploy refused because an open `[human:options]` decision is waiting: report it as `needs-input` and leave the card paused — it is neither a failure nor a card to force.
+
+   `human deploy` records the start on the ticket itself (`[human:deploy-started]`) before it touches the forge — do **not** post that marker by hand.
+
+   One outcome is neither success nor failure: if the command exits with **`deploy refused: this ticket is waiting on a decision`**, an open `[human:options]` block is waiting on a person. That is not a crash and not a deploy failure — no `[human:deploy-failed]` is posted and the card is not red. Do **not** re-run with `--override-decision` (only a person may decide to ship past their own open question) and do **not** merge by hand. Post the Step 9 run summary, record the stage outcome as `needs-input` (per "Recording the board stage outcome"), and STOP, leaving the card paused where it is.
+2. In split topology, close `<ENG_KEY>` as well: `human done <ENG_KEY>`.
+3. For the Step 9 report, read `<PR_URL>` from the deployed marker if needed: `human marker show <BUG_KEY> deployed`.
 
 ## Step 9 — Run summary: ticket comment, then report
 

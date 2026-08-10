@@ -213,6 +213,13 @@ type Event struct {
 	// needs no annotation. It is why a terminal state can carry an outgoing edge
 	// without being a contradiction.
 	MovesItem *bool `json:"moves_item"`
+
+	// Command is what an asker actually runs to take this edge, when posting the
+	// marker by hand is the WRONG way to take it. An edge whose marker a command
+	// posts as part of its own work would otherwise be advertised as a hand-post,
+	// and following that advice posts the marker twice (SC-3852). "<KEY>" in the
+	// value is replaced with the item's key.
+	Command string `json:"command"`
 }
 
 // Moves reports whether the transition changes the item's place in the pipeline.

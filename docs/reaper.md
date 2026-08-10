@@ -144,7 +144,7 @@ container. All of these must hold:
 - it carries no open `[human:options]` block for its own stage or an earlier one
   (that is a deliberate human pause, not a hang);
 - its stage has a `*-failed` marker header available;
-- it has sat past `StuckRunningGrace` = **15 minutes**;
+- it has sat past its grace — `StuckRunningGrace` = **15 minutes** for every stage except a card recorded as *deploying*, whose newest done-stage marker is `[human:deploy-started]`: that one is left alone for `deployTimeout + StuckRunningGrace` = **60 minutes**, because a deploy has no agent to probe and its CI gate legitimately blocks for 45 (`stuckGraceFor`, `internal/daemon/board_reconcile.go`). Residual gap: the 60-minute clock starts at the `[human:deploy-started]` post, not at `DeployBranch`'s own dequeue past `deployGate.Lock()` — a deploy queued behind another for long enough can still exceed the grace while healthy and be falsely reddened (SC-4150);
 - it passed the `forTakeover` ownership gate — this machine participates in the
   project, no peer daemon owns the stage, and the branch resolves here (SC-2047);
 - and the stage agent, which *is* alive on this machine, reports stalled.
@@ -164,6 +164,10 @@ Nothing is reaped here — the container is already gone. This is the fallback f
 a death the live failure watcher missed (a daemon restart, a dropped event), and
 unlike § 5 it is a genuine unexplained death, so it reds the card and relaunches
 on the **charged** path.
+
+The deploy grace above applies here too — a `human deploy` on its CI gate has
+*no* agent by construction, so a vanished agent is not evidence a deploy is dead
+until its own timeout has passed.
 
 ### 7. Reconcile — orphaned on a closed ticket
 
@@ -292,8 +296,11 @@ ends is the daemon process going away underneath it — and the work that dies
 there is not in a container at all. A forwarded command executes **inside** the
 daemon (`Server.executeCommand`), and the long one is `human deploy`, which can
 sit up to `deployTimeout` = **45 minutes** on its CI gate. It leaves no
-container, no execution log and no marker, so an interrupted deploy is
-afterwards indistinguishable from one that never started.
+container and no execution log; since SC-3852 it does leave a marker — the
+entry point (`internal/daemon.StartDeploy`) posts `[human:deploy-started]`
+before anything is pushed — so an interrupted deploy is now visible on the
+ticket as a done-stage card that started and never finished, rather than being
+indistinguishable from one that never started.
 
 Three things keep that from happening silently:
 
@@ -336,6 +343,7 @@ waiting on.
 | `WorkingIdleGrace` | 30m | same |
 | `BoardReconcileInterval` | 2m ± 50% jitter | `internal/daemon/board_reconcile.go` |
 | `StuckRunningGrace` | 15m | same |
+| deploy-card grace (`stuckGraceFor`, not a named constant) | 60m (`deployTimeout` + `StuckRunningGrace`) | `internal/daemon/board_reconcile.go` |
 | hung-agent stop timeout | 60s | `cmd/cmddaemon/daemon.go` |
 | close-cancel stop budget | 90s | same |
 | `MaxSilenceReaps` | 3 | `internal/daemon/board_failure.go` |

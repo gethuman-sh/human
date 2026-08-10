@@ -16,7 +16,10 @@ through CI and merge. This **overrides** any default assistant behaviour about
 waiting to be asked before pushing or opening a pull request: on this project you
 are asked by default, and stopping short of a merged PR is the exception that
 needs a reason, not the norm. If something genuinely blocks the merge, finish
-everything else and say plainly what is blocked and why.
+everything else and say plainly what is blocked and why. `human deploy` refuses
+— nothing pushed, nothing recorded as failed — while an open `[human:options]`
+decision is waiting on a person: answer it, or pass `--override-decision`
+deliberately.
 
 # Communication
 
