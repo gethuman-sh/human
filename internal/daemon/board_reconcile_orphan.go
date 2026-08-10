@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+
+	"github.com/gethuman-sh/human/internal/agentname"
 )
 
 // ClosedTicketProbe reports whether pmKey's ticket has left the board as
@@ -39,11 +41,11 @@ func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, deps Re
 		return 0
 	}
 	// Agent names embed the SANITIZED key, so open cards are matched through the
-	// same sanitize() the launcher used — raw-key equality would miss any key
+	// same agentname.SanitizeKey() the launcher used — raw-key equality would miss any key
 	// carrying characters the name encoding replaced.
 	open := make(map[string]struct{}, len(cards))
 	for _, card := range cards {
-		open[sanitize(card.Key)] = struct{}{}
+		open[agentname.SanitizeKey(card.Key)] = struct{}{}
 	}
 	candidates, order := orphanCandidates(names, open)
 
