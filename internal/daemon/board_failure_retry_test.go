@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -33,8 +34,7 @@ func TestHandleBoardAgentExit_RetryableFailureRelaunchesTheStage(t *testing.T) {
 	var relaunched, resets []BoardStage
 	policy := retryPolicyFor(ExitRetryable, true, &relaunched, &resets)
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-planning", "", "", commenterFor,
-		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-planning"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Equal(t, []BoardStage{BoardPlanning}, relaunched)
 
@@ -59,8 +59,7 @@ func TestHandleBoardAgentExit_OutagePostsOutageMarkerAndDoesNotRelaunch(t *testi
 	var relaunched, resets []BoardStage
 	policy := retryPolicyFor(ExitOutage, true, &relaunched, &resets)
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "", commenterFor,
-		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Empty(t, relaunched, "the live path must not relaunch an outage — the reconcile backoff does")
 
@@ -88,8 +87,7 @@ func TestHandleBoardAgentExit_CrashStillFailsBounded(t *testing.T) {
 	var relaunched, resets []BoardStage
 	policy := retryPolicyFor(ExitRetryable, true, &relaunched, &resets)
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "", commenterFor,
-		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
 	var sawFailed, sawOutage bool
@@ -116,8 +114,7 @@ func TestHandleBoardAgentExit_TerminalFailureIsNotRelaunched(t *testing.T) {
 	var relaunched, resets []BoardStage
 	policy := retryPolicyFor(ExitNeedsHumanWork, true, &relaunched, &resets)
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-planning", "", "", commenterFor,
-		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-planning"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Empty(t, relaunched)
 }
@@ -132,8 +129,7 @@ func TestHandleBoardAgentExit_CleanFinishResetsTheRetryBudget(t *testing.T) {
 	var relaunched, resets []BoardStage
 	policy := retryPolicyFor(ExitDone, true, &relaunched, &resets)
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-planning", "", "", commenterFor,
-		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-planning"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Equal(t, []BoardStage{BoardPlanning}, resets)
 	require.Empty(t, relaunched, "a clean finish is not a failure to retry")

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -51,8 +52,7 @@ func TestHandleBoardAgentExit_stampsFailedMarker(t *testing.T) {
 	signing := marker.NewSigningCommenter(c, "d1", "rev1")
 	commenterFor := func() (tracker.Commenter, error) { return signing, nil }
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "",
-		commenterFor, nil, nil, nil, nil, alwaysReachable, nil, nil, nil, StageRetry{}, nil, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Len(t, c.added, 1)
 	assert.Contains(t, c.added[0], ImplementationFailedHeader)

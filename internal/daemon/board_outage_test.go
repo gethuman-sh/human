@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -50,8 +51,7 @@ func TestHandleBoardAgentExit_OutageIsStatedOnce(t *testing.T) {
 	policy := retryPolicyFor(ExitOutage, true, &relaunched, &resets)
 
 	for range 3 {
-		handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "", commenterFor,
-			nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+		handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 	}
 
 	require.Len(t, c.added, 1, "the card says the substrate is down once, not once per attempt")

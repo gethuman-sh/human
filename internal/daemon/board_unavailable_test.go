@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -36,8 +37,7 @@ func TestHandleBoardAgentExit_RateLimitHookRoutesToOutageAndSpendsNoBudget(t *te
 	var attemptCalls int
 	policy := countingPolicy("", false, &relaunched, &resets, &attemptCalls)
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "rate_limit", "StopFailure", commenterFor,
-		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation", ErrorType: "rate_limit", EventName: "StopFailure"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Empty(t, relaunched, "the live path never relaunches an outage — reconcile owns the backoff")
 	require.Zero(t, attemptCalls, "an unavailability signal must never be charged against the retry budget")
@@ -68,8 +68,7 @@ func TestHandleBoardAgentExit_RateLimitModelClassRoutesToOutage(t *testing.T) {
 	policy := countingPolicy("", false, &relaunched, &resets, &attemptCalls)
 	latestClass := func(string, string) (string, bool) { return proxy.ClassRateLimit, true }
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "StopFailure", commenterFor,
-		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, latestClass, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation", EventName: "StopFailure"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, LatestClass: latestClass, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Empty(t, relaunched)
 	require.Zero(t, attemptCalls)
@@ -100,8 +99,7 @@ func TestHandleBoardAgentExit_AuthRoutesToUnchargedRed(t *testing.T) {
 	var attemptCalls int
 	policy := countingPolicy("", false, &relaunched, &resets, &attemptCalls)
 
-	handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "authentication_error", "StopFailure", commenterFor,
-		nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation", ErrorType: "authentication_error", EventName: "StopFailure"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 
 	require.Empty(t, relaunched, "an auth wall must never be auto-relaunched")
 	require.Zero(t, attemptCalls, "and must never charge the retry budget")

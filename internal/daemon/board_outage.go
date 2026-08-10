@@ -123,24 +123,25 @@ func handOverOutage(ctx context.Context, pmKey string, derived BoardCard, postFa
 //
 // Split out of handleBoardAgentExit so the say-once guard costs this function's
 // complexity budget rather than that one's.
-func handleOutageExit(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, comments []tracker.Comment, commenter tracker.Commenter, diagnose BoardFailureDiagnoser, retry StageRetry, kind endingKind, reason string, daemonID string, logger zerolog.Logger) bool {
-	outageType := outageTypeFor(stage)
-	if outageType == "" || (!retry.recordedOutage(pmKey, stage) && kind != endingPaused) {
+func handleOutageExit(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps, kind endingKind, reason string) bool {
+	logger := deps.Logger
+	outageType := outageTypeFor(exit.Stage)
+	if outageType == "" || (!deps.Retry.recordedOutage(exit.PMKey, exit.Stage) && kind != endingPaused) {
 		return false
 	}
-	body := markerBody(pausedOutageMarker(outageType, diagnose, agentName, errorType, reason))
+	body := markerBody(pausedOutageMarker(outageType, deps.Diagnose, exit.AgentName, exit.ErrorType, reason))
 	// Say it once and leave it standing: every relaunch that re-hits the same
 	// outage lands here, so re-posting an identical marker would spam the ticket
 	// for as long as the substrate stays down (SC-2851). The standing marker also
 	// anchors how long the wait has lasted (outageRunSince), so leaving it in
 	// place is what makes the wait measurable at all.
-	if outageAlreadyStated(comments, stage, body) {
-		logger.Info().Str("agent", agentName).Str("pm", pmKey).
+	if outageAlreadyStated(exit.Comments, exit.Stage, body) {
+		logger.Info().Str("agent", exit.AgentName).Str("pm", exit.PMKey).
 			Msg("board failure: the card already says the substrate is down, not repeating it")
 		return true
 	}
-	if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
-		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post outage marker")
+	if _, err := commenter.AddComment(ctx, exit.PMKey, body); err != nil {
+		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post outage marker")
 	}
 	return true
 }

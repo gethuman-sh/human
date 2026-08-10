@@ -859,9 +859,21 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			decStageRetries(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage)
 		},
 	}
-	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents, boardRuns,
-		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
-		liveChainReview, liveBoardAgents, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.modelSink.LatestClass, ds.daemonID, logger)
+	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents, boardRuns, daemon.FailureDeps{
+		CommenterFor:     boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
+		ChainReview:      liveChainReview,
+		LiveAgents:       liveBoardAgents,
+		AdvancePRLoop:    advancePRLoop,
+		AdvanceDeployFix: advanceDeployFix,
+		Reachable:        branchReachable,
+		CommitsPresent:   commitsPresent,
+		Diagnose:         diagnoseFailure,
+		OnHandoff:        onHandoff,
+		Retry:            stageRetry,
+		LatestClass:      ds.modelSink.LatestClass,
+		DaemonID:         ds.daemonID,
+		Logger:           logger,
+	})
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
