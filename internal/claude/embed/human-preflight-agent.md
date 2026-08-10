@@ -27,7 +27,8 @@ human underway <PM_KEY>
 human search --file <path> --json --limit 10   # tickets whose plans name this exact file
 human search "<terms from the title>" --json --limit 10
 
-# Ordering, once a human has chosen it (BLOCKER first — it must finish first)
+# Ordering is decided by the fork below (`waits-for-<id>`), and the machine holds the
+# work itself. A link is for a dependency you are RECORDING, not for one being decided:
 human link <BLOCKER_KEY> <PM_KEY> --blocks
 
 # What this run may do
@@ -76,17 +77,11 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
    A decision recorded here is **final**. Never re-surface it as a new fork.
 
-   One kind of answer does more than fill state. A fork settled as *"<KEY> goes first"* is a sequencing
-   decision, so put it where the pipeline can act on it and then stop — this work must not start while
-   that ticket is open:
-
-   ```bash
-   human link <BLOCKER_KEY> <PM_KEY> --blocks
-   ```
-
-   Then end the run `needs-human-work`, naming the ticket being waited for. The link is what holds the
-   work; stopping is what keeps this run from doing the thing the human just said to do second. The card
-   shows what it waits for, and the ticket is picked up again once the blocker is done.
+   A fork settled as *"<KEY> goes first"* needs nothing further from you. The machine holds the work
+   itself: that answer is recorded with the ticket it defers to, no stage is started, and this run is
+   the one the pipeline began after that ticket finished. Mirror it into `decisions` like any other
+   settled fork and **carry on** — re-applying it as a reason to stop is how a released ticket halts
+   again the moment it is picked up.
 
 5. **Read everything that could answer a question before you ask it** — the ticket description and comments, the attached plan, `.humanconfig`, `CLAUDE.md`, and the actual code. Most apparent ambiguity is answered by the codebase.
 
@@ -111,7 +106,7 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
    human search "<an error string or symptom involved>" --json --limit 20
    ```
 
-   A hit is only a reason to act when the **other ticket has real open work**. For a candidate that looks like the same problem or touches the same file, confirm it against the forge: run `human underway <OTHER_KEY>`. Only if that is `underway` does the ordering fork apply — the two may need merging, this run may need to stop, or one may simply go first. Which goes first is a judgement about intent, and an agent silently reordering someone's backlog is worse than one that asks: use the verdict below and **propose, never create** — the link is written only after a human has chosen it (step 4). **A ticket that merely overlaps in wording, with nothing open against it, is recorded as a hint in `assumptions` and does not stop the run** — record its key, status, and the shared file(s), so the plan is built to accommodate the coming work instead of the run halting to ask about it. A closed ticket may be the *reason* this one exists; read what you find.
+   A hit is only a reason to act when the **other ticket has real open work**. For a candidate that looks like the same problem or touches the same file, confirm it against the forge: run `human underway <OTHER_KEY>`. Only if that is `underway` does the ordering fork apply — the two may need merging, this run may need to stop, or one may simply go first. Which goes first is a judgement about intent, and an agent silently reordering someone's backlog is worse than one that asks: use the verdict below and **propose, never create** — the ordering is settled by the human's answer, and the machine holds the work from that answer alone (step 4). **A ticket that merely overlaps in wording, with nothing open against it, is recorded as a hint in `assumptions` and does not stop the run** — record its key, status, and the shared file(s), so the plan is built to accommodate the coming work instead of the run halting to ask about it. A closed ticket may be the *reason* this one exists; read what you find.
 
    The forge cannot see a run that has started but has not branched yet, so one text signal still counts: a `[human:claim]` or `[human:implementation-started]` marker in the other ticket's comments means a run holds it right now. Treat that exactly as `underway` — it is the same fact, arriving before there is a branch to find. A **status** alone is not that fact and does not order anything.
 
@@ -135,7 +130,9 @@ Ask about **scope forks and product intent**. Never about implementation choices
 
 Ordering is admissible on the same terms, but only when the other ticket is **actively in progress**: two
 live runs aimed at the same code are a fork about which one the product wants first, and the options read
-as *"<TICKET_KEY> goes first"* / *"this goes first"* / *"they do not overlap — run both"*. An open ticket
+as *"<TICKET_KEY> goes first"* / *"this goes first"* / *"they do not overlap — run both"*. An option that
+defers to another ticket carries a `waits-for-<id>` line naming it (see the Verdict below) — without one
+the machine reads it as an ordinary direction and starts the work the answer put second. An open ticket
 that has **not started** is never an ordering fork — record it in the verdict below, do not ask about it.
 
 If you cannot name what you searched, you have not earned the question. Go read more.
@@ -161,7 +158,26 @@ DECISION REQUIRED: <one line: what must be decided and why>
 2: <second option, one line>
 ```
 
-(add `3:`, `4:` … for more options), and record:
+(add `3:`, `4:` … for more options).
+
+An option that means **this ticket goes second** must say so in a form the machine
+can act on, because "<OTHER_KEY> goes first" and "do it this way" are the same sentence
+to a parser — and the machine's one move on an answer is to start the work. Name the ticket
+being waited for on its own line under the option:
+
+```
+DECISION REQUIRED: <OTHER_KEY> has an open branch on the same files — which goes first?
+1: <OTHER_KEY> goes first
+waits-for-1: <OTHER_KEY>
+2: this goes first — supersede the open work on <OTHER_KEY>
+```
+
+The orchestrator passes that line through to the `[human:options]` block. Picking such
+an answer records the decision and **holds this ticket**: no stage is started, the card
+says what it waits for, and the work resumes on its own once that ticket is done. Never
+declare a wait on the ticket you are running — nothing could ever clear it.
+
+Then record:
 
 ```bash
 human state set <PM_KEY> stage.preflight --json --body-file - <<'EOF'

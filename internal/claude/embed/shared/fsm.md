@@ -42,6 +42,12 @@ Three rules follow, and none of them is style:
   block stops the pipeline and waits for a person, so it is the escape hatch, not
   a way of being careful. Raise it only for a genuine fork — something the
   evidence cannot settle and that you are not entitled to choose.
+- **An answer that means "wait for another ticket" must say which one.** The
+  machine's move on an answer is to start the work, and it cannot read intent out
+  of an answer's prose. Give such an option a `waits-for-<id>: <KEY>` line in the
+  block (`--field waits-for-1=<KEY>` when posting): picking it then records the
+  decision, holds this ticket, and releases it when `<KEY>` is done. Without the
+  line the answer starts the very work it was picked to defer.
 
 If `where` reports `candidates` rather than a single `state`, it could not tell
 which phase you are in from the ticket alone. Pick the one whose `holds`

@@ -94,7 +94,9 @@ human state get <BUG_KEY> stage.preflight --field question    # the fork, when r
     --field 2="<second option>"
   ```
 
-  The board renders this as "Decision needed" and the card waits without being mistaken for a crash. When the human picks, the daemon records `[human:option-chosen]` and relaunches this run with the choice in hand; preflight then mirrors it into `decisions` and returns `ready: yes`. Do **not** invent a `needs-input` marker — this loop already exists and a second one would split the trail. In board context, alongside the options post, record the stage outcome (`stage.implementation`, exit `needs-input`, per "Recording the board stage outcome") so the daemon reads the awaited decision rather than the generic diagnose line.
+  Pass through every `waits-for-<id>:` line preflight emitted, as a field of the same name (`--field waits-for-1=<KEY>`). That line is what makes an answer meaning *"<KEY> goes first"* hold this ticket instead of starting it — dropping it turns the answer into its opposite.
+
+  The board renders this as "Decision needed" and the card waits without being mistaken for a crash. When the human picks, the daemon records `[human:option-chosen]` and relaunches this run with the choice in hand; preflight then mirrors it into `decisions` and returns `ready: yes`. An answer that declared a wait is the exception: the daemon records it and starts nothing, and the relaunch comes later, once the ticket it deferred to is done. Do **not** invent a `needs-input` marker — this loop already exists and a second one would split the trail. In board context, alongside the options post, record the stage outcome (`stage.implementation`, exit `needs-input`, per "Recording the board stage outcome") so the daemon reads the awaited decision rather than the generic diagnose line.
 
 Preflight records the capability set, so it is available to every later stage:
 
