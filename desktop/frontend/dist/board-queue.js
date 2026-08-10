@@ -202,6 +202,49 @@ function livenessBadge(base, liveness, deadText, deadTitle) {
     }
     return base;
 }
+// reworkBadge is the badge for a card whose review returned a failing verdict.
+//
+// Nothing in the daemon launches this rework. The machine's own description of
+// the state says so — pipeline-fsm.json, `reviewed`: "a failing or incomplete
+// one waits for a rework the board must offer", whose only way out is the
+// user's start-implementation — and no code path acts on the failed verdict
+// either. SC-1830 badged this as in-flight machine work on the premise that a
+// fixer is launched automatically; that premise holds for the done-stage PR
+// review→fix loop (EvaluatePRLoop), not for the verification stage, and applying
+// it here left cards spinning at "fixing…" for days with no process behind them
+// and no ask to the user, because the machine register deliberately never asks
+// (SC-4281 measured two: five days and twenty-eight hours).
+//
+// So unknown liveness resolves the opposite way here than it does for a running
+// stage: there the machine launched an agent and silence is inconclusive, while
+// here it launched nothing and there is nothing to have gone quiet. A spinner
+// survives only for an agent actually found — the rework a user has already
+// dropped, whose implementation-started marker has not yet landed.
+function reworkBadge(card) {
+    const verdict = card.verdict ?? "";
+    if (card.agentLiveness === "live") {
+        return {
+            cls: "fixing",
+            text: "review found problems — fixing…",
+            title: `Review found problems — a fixer is reworking the code (verdict: ${verdict})`,
+            spinner: true,
+        };
+    }
+    if (card.agentLiveness === "elsewhere") {
+        return {
+            cls: "elsewhere",
+            text: "review found problems — fixing on another machine",
+            title: "Another machine's daemon owns this rework — its agent cannot be seen from here.",
+            spinner: false,
+        };
+    }
+    return {
+        cls: "warning",
+        text: "⚠ review found problems — needs rework",
+        title: `Review found problems and nothing reworks it on its own (verdict: ${verdict}). Drag the card onto Code to run the rework — the findings are in the latest [human:review-complete] comment on the ticket.`,
+        spinner: false,
+    };
+}
 // badgeInfo classifies a card's live state into a badge descriptor, or null
 // when the card rests and needs none — its queue position IS the statement of
 // completion. A review that found problems is machine-fixing work, not a demand
@@ -337,19 +380,8 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
         // (ticket 405).
         return { cls: "resolved", text: "no fix needed", title: "Triage concluded no fix is warranted" };
     }
-    // A failed review verdict is machine work, not a demand on the user: the
-    // daemon auto-launches a fixer (internal/daemon/board_failure.go →
-    // pr_review_loop.go). It must read as in-flight — the gray machine-working
-    // `fixing` badge with the running spinner and copy that says what is
-    // happening — never the amber `warning`/`decision` "your turn" register with
-    // a ⚠ glyph (SC-1830).
     if (card.stage === "verification" && card.state === "done" && verdictFailed(card)) {
-        return livenessBadge({
-            cls: "fixing",
-            text: "review found problems — fixing…",
-            title: `Review found problems — a fixer is reworking the code automatically (verdict: ${card.verdict ?? ""})`,
-            spinner: true,
-        }, card.agentLiveness, "review found problems — no fixer running", `Review found problems and no fixer is running on this machine (verdict: ${card.verdict ?? ""}). Drop the card on the build stage to rework it.`);
+        return reworkBadge(card);
     }
     // A passed review with no recorded branch is a BROKEN HANDOFF that genuinely
     // needs a person: nothing can ship, so it keeps the needs-a-human `warning`
