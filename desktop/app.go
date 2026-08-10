@@ -40,10 +40,9 @@ import (
 
 // App is the Go backend bound into the webview via options.App.Bind. Every
 // method here is callable from the TypeScript frontend. The app talks ONLY to
-// the daemon client (daemon.GetTrackerIssues / daemon.BoardTransition /
-// daemon.Subscribe) — never directly to a tracker or forge — so all credential
-// handling, role resolution and the destructive-confirm bypass stay in the
-// daemon.
+// the daemon, through a daemon.Client — never directly to a tracker or forge —
+// so all credential handling, role resolution and the destructive-confirm
+// bypass stay in the daemon.
 //
 // The one exception is Instances() (instances.go), which discovers running
 // Claude Code processes in-process via the monitor package. That path needs no
@@ -91,8 +90,8 @@ type App struct {
 	currentUserResolved bool
 	// currentUserFetch is the actual IPC call, indirected so viewerIdentity's
 	// memoize-only-on-success retry logic can be exercised in a test without a
-	// running daemon. Always daemon.GetCurrentUserName outside tests.
-	currentUserFetch func(addr, token string) (string, error)
+	// running daemon. Always Client.GetCurrentUserName outside tests.
+	currentUserFetch func(c *daemon.Client) (string, error)
 	// viewerConfig reads the declared "me" identity for a project directory,
 	// indirected for the same testing reason. Always vieweridentity.Load.
 	viewerConfig func(dir string) (vieweridentity.Identity, error)
@@ -110,10 +109,37 @@ func NewApp() *App {
 		recents:          recentprojects.NewStore(recentprojects.DefaultPath()),
 		prefs:            boardprefs.NewStore(boardprefs.DefaultPath()),
 		session:          appsession.NewStore(appsession.DefaultPath()),
-		currentUserFetch: daemon.GetCurrentUserName,
+		currentUserFetch: (*daemon.Client).GetCurrentUserName,
 		viewerConfig:     vieweridentity.Load,
 		appearanceConfig: appearance.Load,
 	}
+}
+
+// daemonClient reads the running daemon's endpoint and wraps it. Every board
+// action goes through it, so the protocol gate is applied once per call instead
+// of nowhere: the desktop app used to reach the daemon with two loose strings
+// and no way to ask whether it could speak to it at all.
+func (a *App) daemonClient() (*daemon.Client, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return nil, err
+	}
+	return daemon.NewClient(info)
+}
+
+// daemonClientInfo is daemonClient for the callers that also need the rest of
+// the info — the registered project, the viewer identity — and would otherwise
+// read daemon.json twice for one action.
+func (a *App) daemonClientInfo() (*daemon.Client, daemon.DaemonInfo, error) {
+	info, err := daemon.ReadInfo()
+	if err != nil {
+		return nil, daemon.DaemonInfo{}, err
+	}
+	c, err := daemon.NewClient(info)
+	if err != nil {
+		return nil, daemon.DaemonInfo{}, err
+	}
+	return c, info, nil
 }
 
 // Card and BoardData are the frontend-facing board shapes. They are ALIASES of
@@ -131,17 +157,17 @@ type BoardData = daemon.BoardView
 // error is surfaced to the frontend rather than dropped, so the user sees a
 // banner instead of an empty board.
 func (a *App) Cards() (BoardData, error) {
-	info, err := daemon.ReadInfo()
+	client, info, err := a.daemonClientInfo()
 	if err != nil {
 		return BoardData{}, err
 	}
 
-	view, results, err := a.boardView(info)
+	view, results, err := a.boardView(client)
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info), a.boardAppearance(info))
+	data := applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(client, info), a.boardAppearance(info))
 	// The keep sets come from `results` — the same fetch CanPrune judges — not
 	// from the composed view, which is a separate request that can answer with
 	// an empty board while this one is healthy (SC-2400).
@@ -189,11 +215,11 @@ type IssueDetail struct {
 // return slim payloads without descriptions, so the card's own description
 // can be empty even for a ticket that has one.
 func (a *App) GetIssueDetail(trackerKind, trackerName, key string) (IssueDetail, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return IssueDetail{}, err
 	}
-	issue, err := daemon.GetTrackerIssue(info.Addr, info.Token, trackerKind, trackerName, key)
+	issue, err := client.GetTrackerIssue(trackerKind, trackerName, key)
 	if err != nil {
 		return IssueDetail{}, daemonCause(err)
 	}
@@ -213,11 +239,11 @@ func (a *App) GetIssueDetail(trackerKind, trackerName, key string) (IssueDetail,
 // interface (this repo uses no generated Wails bindings), so the Go signature
 // here and the TS declaration in board.ts must agree on shape by hand.
 func (a *App) TicketCost(key string) (costledger.TicketCost, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return costledger.TicketCost{}, err
 	}
-	r, err := daemon.GetTicketCost(info.Addr, info.Token, key)
+	r, err := client.GetTicketCost(key)
 	if err != nil {
 		return costledger.TicketCost{}, daemonCause(err)
 	}
@@ -261,17 +287,17 @@ func (a *App) SetCardHidden(pmKey string, hidden bool) error {
 // availability is assumed here (the real value arrives with Cards()) so the quick
 // path never blocks on a Docker round-trip.
 func (a *App) CardsQuick() (BoardData, error) {
-	info, err := daemon.ReadInfo()
+	client, info, err := a.daemonClientInfo()
 	if err != nil {
 		return BoardData{}, err
 	}
 
-	results, err := daemon.GetTrackerIssuesLite(info.Addr, info.Token)
+	results, err := client.GetTrackerIssuesLite()
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
 	project := projectKeyOf(info)
-	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(info), a.boardAppearance(info)), nil
+	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(client, info), a.boardAppearance(info)), nil
 }
 
 // viewerIdentity returns the names that mean "me" for the board's ownership
@@ -287,7 +313,7 @@ func (a *App) CardsQuick() (BoardData, error) {
 // daemon, no PM identity, credential blip): the board renders normally, just
 // without the mine/not-mine distinction, and because only success is memoized
 // the next call retries instead of latching the failure in for the app's life.
-func (a *App) viewerIdentity(info daemon.DaemonInfo) vieweridentity.Identity {
+func (a *App) viewerIdentity(client *daemon.Client, info daemon.DaemonInfo) vieweridentity.Identity {
 	if dir := projectKeyOf(info); dir != "" {
 		if declared, err := a.viewerConfig(dir); err == nil && declared.Known() {
 			return declared
@@ -300,7 +326,7 @@ func (a *App) viewerIdentity(info daemon.DaemonInfo) vieweridentity.Identity {
 	if a.currentUserResolved {
 		return identityOf(a.currentUser)
 	}
-	name, err := a.currentUserFetch(info.Addr, info.Token)
+	name, err := a.currentUserFetch(client)
 	if err != nil {
 		return vieweridentity.Identity{}
 	}
@@ -357,12 +383,12 @@ func projectKeyOf(info daemon.DaemonInfo) string {
 // from the same raw results. Same function, same output — only the machine doing
 // the work differs, so a version-skewed pair still renders a correct board
 // rather than nothing.
-func (a *App) boardView(info daemon.DaemonInfo) (daemon.BoardView, []daemon.TrackerIssuesResult, error) {
-	results, err := daemon.GetTrackerIssues(info.Addr, info.Token)
+func (a *App) boardView(client *daemon.Client) (daemon.BoardView, []daemon.TrackerIssuesResult, error) {
+	results, err := client.GetTrackerIssues()
 	if err != nil {
 		return daemon.BoardView{}, nil, err
 	}
-	if view, vErr := daemon.GetBoardView(info.Addr, info.Token); vErr == nil {
+	if view, vErr := client.GetBoardView(); vErr == nil {
 		return view, results, nil
 	}
 	return board.Compose(results, dockerAvailable()), results, nil
@@ -455,7 +481,11 @@ func (a *App) DaemonBusy() (bool, error) {
 			}
 		}
 	}
-	status, err := daemon.GetDaemonBusy(info.Addr, info.Token)
+	client, err := daemon.NewClient(info)
+	if err != nil {
+		return false, nil
+	}
+	status, err := client.GetDaemonBusy()
 	if err != nil {
 		// A daemon predating this route, or a transient RPC hiccup, must never
 		// block every close forever: fall back to "not busy by this signal" —
@@ -476,13 +506,16 @@ func (a *App) Doctor() daemon.DoctorData {
 			{ID: "daemon", Name: "daemon", OK: false, Detail: "not reachable — start it with 'human daemon'"},
 		}}
 	}
-	data, err := daemon.GetDoctor(info.Addr, info.Token, false)
-	if err != nil {
-		return daemon.DoctorData{Checks: []daemon.DoctorCheck{
-			{ID: "daemon", Name: "daemon", OK: false, Detail: "doctor unavailable: " + err.Error()},
-		}}
+	client, err := daemon.NewClient(info)
+	if err == nil {
+		var data daemon.DoctorData
+		if data, err = client.GetDoctor(false); err == nil {
+			return data
+		}
 	}
-	return data
+	return daemon.DoctorData{Checks: []daemon.DoctorCheck{
+		{ID: "daemon", Name: "daemon", OK: false, Detail: "doctor unavailable: " + err.Error()},
+	}}
 }
 
 // Transition advances a card one stage by delegating to the daemon's
@@ -490,11 +523,11 @@ func (a *App) Doctor() daemon.DoctorData {
 // from live comments and enforces forward-only/gated rules, so an out-of-date
 // optimistic move in the UI is corrected on the next Cards() reconcile.
 func (a *App) Transition(pmKey, pmTitle, from, to string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.BoardTransition(info.Addr, info.Token, daemon.BoardTransitionRequest{
+	return daemonCause(client.BoardTransition(daemon.BoardTransitionRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
 		From:    daemon.BoardStage(from),
@@ -509,11 +542,11 @@ func (a *App) Transition(pmKey, pmTitle, from, to string) error {
 // terminal. Without it a resolved card had no gesture at all and could be
 // recovered only by editing the tracker by hand.
 func (a *App) Reopen(pmKey, pmTitle, stage string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.BoardTransition(info.Addr, info.Token, daemon.BoardTransitionRequest{
+	return daemonCause(client.BoardTransition(daemon.BoardTransitionRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
 		From:    daemon.BoardStage(stage),
@@ -528,11 +561,11 @@ func (a *App) Reopen(pmKey, pmTitle, stage string) error {
 // credentials; the daemon guards against double-launches, so an optimistic
 // re-drop is safe.
 func (a *App) FixBug(pmKey, pmTitle string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.BoardFix(info.Addr, info.Token, daemon.BoardFixRequest{
+	return daemonCause(client.BoardFix(daemon.BoardFixRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
 	}))
@@ -544,11 +577,11 @@ func (a *App) FixBug(pmKey, pmTitle string) error {
 // the daemon's credentials; the daemon guards against double-launches, so an
 // optimistic re-drop is safe.
 func (a *App) FixSecurity(pmKey, pmTitle string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.BoardSecurityFix(info.Addr, info.Token, daemon.SecurityFixRequest{
+	return daemonCause(client.BoardSecurityFix(daemon.SecurityFixRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
 	}))
@@ -561,11 +594,11 @@ func (a *App) FixSecurity(pmKey, pmTitle string) error {
 // containerized with the daemon's credentials; the daemon tears down any prior
 // relate agent for the key, so a re-click is safe (SC-2405).
 func (a *App) FindRelatedWork(pmKey, pmTitle string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.Relate(info.Addr, info.Token, daemon.RelateRequest{
+	return daemonCause(client.Relate(daemon.RelateRequest{
 		PMKey:   pmKey,
 		PMTitle: pmTitle,
 	}))
@@ -575,11 +608,11 @@ func (a *App) FindRelatedWork(pmKey, pmTitle string) error {
 // relaunches the block's stage with the choice — the click on a choice the
 // reviewer offered is the consent, exactly like a drag is for a transition.
 func (a *App) ChooseOption(pmKey, optionID string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.SendBoardOption(info.Addr, info.Token, daemon.BoardOptionRequest{
+	return daemonCause(client.SendBoardOption(daemon.BoardOptionRequest{
 		PMKey:    pmKey,
 		OptionID: optionID,
 	}))
@@ -591,11 +624,11 @@ func (a *App) ChooseOption(pmKey, optionID string) error {
 // path a kanban stage transition uses. It returns once the agent is launched,
 // not when generation finishes; the pane polls Features() for the new file.
 func (a *App) GenerateFeatures() error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.GenerateFeatures(info.Addr, info.Token))
+	return daemonCause(client.GenerateFeatures())
 }
 
 // FindBugs asks the daemon to launch the human-findbugs sweep for the registered
@@ -604,11 +637,11 @@ func (a *App) GenerateFeatures() error {
 // credentials, and it returns once the agent is launched; surviving findings
 // surface as bug cards on the next Cards() reconcile.
 func (a *App) FindBugs() error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.StartFindbugs(info.Addr, info.Token))
+	return daemonCause(client.StartFindbugs())
 }
 
 // FindbugsHunting reports whether a findbugs sweep is currently running for any
@@ -627,11 +660,11 @@ func (a *App) FindbugsHunting() bool {
 // and returns once the agent is launched; surviving findings surface as security
 // cards on the next Cards() reconcile.
 func (a *App) FindSecurity() error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.StartFindsecurity(info.Addr, info.Token))
+	return daemonCause(client.StartFindsecurity())
 }
 
 // SecurityHunting reports whether a human-security sweep is currently running —
@@ -668,11 +701,11 @@ const findbugsHuntWindow = 60 * time.Minute
 // once the agent is launched; the card's mockupState reflects progress on the
 // next Cards() reconcile.
 func (a *App) CreateMocks(pmKey, pmTitle, description string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.CreateMocks(info.Addr, info.Token, daemon.CreateMocksRequest{
+	return daemonCause(client.CreateMocks(daemon.CreateMocksRequest{
 		PMKey:       pmKey,
 		PMTitle:     pmTitle,
 		Description: description,
@@ -684,11 +717,11 @@ func (a *App) CreateMocks(pmKey, pmTitle, description string) error {
 // The source group is never touched; the new group attaches under it in the
 // tree. Returns once the agent is launched, like CreateMocks.
 func (a *App) CreateVariations(pmKey, feature, parentSlug, parentFile, instructions string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.CreateVariations(info.Addr, info.Token, daemon.CreateVariationsRequest{
+	return daemonCause(client.CreateVariations(daemon.CreateVariationsRequest{
 		PMKey:        pmKey,
 		Feature:      feature,
 		ParentSlug:   parentSlug,
@@ -701,11 +734,11 @@ func (a *App) CreateVariations(pmKey, feature, parentSlug, parentFile, instructi
 // the current choice. Host-local state (never the tracker), consistent with the
 // mockup link.
 func (a *App) ChooseMockup(pmKey, slug, file string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.ChooseMockup(info.Addr, info.Token, daemon.ChooseMockupRequest{
+	return daemonCause(client.ChooseMockup(daemon.ChooseMockupRequest{
 		PMKey: pmKey,
 		Slug:  slug,
 		File:  file,
@@ -716,11 +749,11 @@ func (a *App) ChooseMockup(pmKey, slug, file string) error {
 // a ticket cannot be pruned. If the current winner lives in the pruned subtree
 // the daemon clears it.
 func (a *App) PruneMockup(pmKey, slug string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.PruneMockup(info.Addr, info.Token, daemon.PruneMockupRequest{
+	return daemonCause(client.PruneMockup(daemon.PruneMockupRequest{
 		PMKey: pmKey,
 		Slug:  slug,
 	}))
@@ -731,11 +764,11 @@ func (a *App) PruneMockup(pmKey, slug string) error {
 // the close is prompt-free — it never hits the interactive `issue status`
 // confirmation. The board's own drag-and-confirm dialog is the user's consent.
 func (a *App) CloseTicket(pmKey string) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemonCause(daemon.CloseTicket(info.Addr, info.Token, daemon.CloseTicketRequest{PMKey: pmKey}))
+	return daemonCause(client.CloseTicket(daemon.CloseTicketRequest{PMKey: pmKey}))
 }
 
 // IdeationMsg is the frontend-facing transcript entry.
@@ -775,11 +808,11 @@ type IdeationView struct {
 // mode: the outcome rewrites that ticket in place instead of creating one —
 // the Ideas→Backlog promotion path.
 func (a *App) StartIdeation(seed, mode string, restart bool, evolveKey string, evolveLabels []string) (IdeationView, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return IdeationView{}, err
 	}
-	st, err := daemon.IdeationStart(info.Addr, info.Token, daemon.IdeationStartRequest{
+	st, err := client.IdeationStart(daemon.IdeationStartRequest{
 		Seed:         seed,
 		Mode:         daemon.IdeationMode(mode),
 		Restart:      restart,
@@ -796,11 +829,11 @@ func (a *App) StartIdeation(seed, mode string, restart bool, evolveKey string, e
 // Returns the created ticket's key so the frontend can reconcile the
 // optimistic placeholder by key instead of title (SC-1691).
 func (a *App) CreateIdea(title string) (string, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return "", err
 	}
-	resp, err := daemon.IdeaCreate(info.Addr, info.Token, daemon.IdeaCreateRequest{Title: title})
+	resp, err := client.IdeaCreate(daemon.IdeaCreateRequest{Title: title})
 	if err != nil {
 		return "", daemonCause(err)
 	}
@@ -813,11 +846,11 @@ func (a *App) CreateIdea(title string) (string, error) {
 // the frontend can reconcile the optimistic placeholder by key instead of
 // title (SC-1691).
 func (a *App) CreateBug(title, description string) (string, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return "", err
 	}
-	resp, err := daemon.BugCreate(info.Addr, info.Token, daemon.BugCreateRequest{Title: title, Description: description})
+	resp, err := client.BugCreate(daemon.BugCreateRequest{Title: title, Description: description})
 	if err != nil {
 		return "", daemonCause(err)
 	}
@@ -829,11 +862,11 @@ func (a *App) CreateBug(title, description string) (string, error) {
 // half on every backend. Returns the created ticket's key so the frontend can
 // reconcile the optimistic placeholder by key instead of title (SC-1691).
 func (a *App) CreateSecurity(title, description string) (string, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return "", err
 	}
-	resp, err := daemon.SecurityCreate(info.Addr, info.Token, daemon.SecurityCreateRequest{Title: title, Description: description})
+	resp, err := client.SecurityCreate(daemon.SecurityCreateRequest{Title: title, Description: description})
 	if err != nil {
 		return "", daemonCause(err)
 	}
@@ -842,11 +875,11 @@ func (a *App) CreateSecurity(title, description string) (string, error) {
 
 // ReplyIdeation sends the user's answer into the running session.
 func (a *App) ReplyIdeation(sessionID, message string) (IdeationView, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return IdeationView{}, err
 	}
-	st, err := daemon.IdeationReply(info.Addr, info.Token, daemon.IdeationReplyRequest{SessionID: sessionID, Message: message})
+	st, err := client.IdeationReply(daemon.IdeationReplyRequest{SessionID: sessionID, Message: message})
 	if err != nil {
 		return IdeationView{}, daemonCause(err)
 	}
@@ -856,11 +889,11 @@ func (a *App) ReplyIdeation(sessionID, message string) (IdeationView, error) {
 // ApproveIdeation submits the user's (possibly edited) guided-mode draft for
 // ticket creation.
 func (a *App) ApproveIdeation(sessionID, title, description string) (IdeationView, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return IdeationView{}, err
 	}
-	st, err := daemon.IdeationApprove(info.Addr, info.Token, daemon.IdeationApproveRequest{
+	st, err := client.IdeationApprove(daemon.IdeationApproveRequest{
 		SessionID:   sessionID,
 		Title:       title,
 		Description: description,
@@ -876,11 +909,11 @@ func (a *App) ApproveIdeation(sessionID, title, description string) (IdeationVie
 // abandonment) is the deliberate AD-4 lifecycle: closing the panel does not
 // stop the daemon-side session, so reopening must recover the live transcript.
 func (a *App) IdeationStatus() (IdeationView, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return IdeationView{}, err
 	}
-	st, err := daemon.GetIdeationStatus(info.Addr, info.Token)
+	st, err := client.GetIdeationStatus()
 	if err != nil {
 		return IdeationView{}, daemonCause(err)
 	}

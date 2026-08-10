@@ -48,6 +48,13 @@ func startMockDaemon(t *testing.T, handler func(req Request) Response) string {
 	return ln.Addr().String()
 }
 
+// newTestClient points a Client at a mock daemon's address. It bypasses
+// NewClient because a mock advertises no protocol and the gate is exercised on
+// its own in version_gate_test.go.
+func newTestClient(addr, token string) *Client {
+	return &Client{info: DaemonInfo{Addr: addr, Token: token}, version: "dev"}
+}
+
 func TestRunRemote_Success(t *testing.T) {
 	addr := startMockDaemon(t, func(req Request) Response {
 		assert.Equal(t, "test-token", req.Token)
@@ -58,7 +65,7 @@ func TestRunRemote_Success(t *testing.T) {
 		}
 	})
 
-	exitCode, err := RunRemote(addr, "test-token", []string{"echo", "hello"}, "dev")
+	exitCode, err := newTestClient(addr, "test-token").RunRemote([]string{"echo", "hello"})
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 }
@@ -71,7 +78,7 @@ func TestRunRemote_NonZeroExit(t *testing.T) {
 		}
 	})
 
-	exitCode, err := RunRemote(addr, "tok", []string{"fail"}, "dev")
+	exitCode, err := newTestClient(addr, "tok").RunRemote([]string{"fail"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, exitCode)
 }
@@ -85,7 +92,7 @@ func TestGetNetworkEvents_Success(t *testing.T) {
 		return Response{Stdout: data}
 	})
 
-	events, err := GetNetworkEvents(addr, "tok")
+	events, err := newTestClient(addr, "tok").GetNetworkEvents()
 	require.NoError(t, err)
 	require.Len(t, events, 2)
 	assert.Equal(t, "github.com", events[0].Host)
@@ -99,7 +106,7 @@ func TestGetNetworkEvents_Empty(t *testing.T) {
 		return Response{Stdout: "[]\n"}
 	})
 
-	events, err := GetNetworkEvents(addr, "tok")
+	events, err := newTestClient(addr, "tok").GetNetworkEvents()
 	require.NoError(t, err)
 	assert.Empty(t, events)
 }
@@ -109,7 +116,7 @@ func TestGetNetworkEvents_InvalidJSON(t *testing.T) {
 		return Response{Stdout: "not json\n"}
 	})
 
-	_, err := GetNetworkEvents(addr, "tok")
+	_, err := newTestClient(addr, "tok").GetNetworkEvents()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid network events JSON")
 }
@@ -121,7 +128,7 @@ func TestGetModelOutcomes_Success(t *testing.T) {
 		return Response{Stdout: data}
 	})
 
-	outcomes, err := GetModelOutcomes(addr, "tok")
+	outcomes, err := newTestClient(addr, "tok").GetModelOutcomes()
 	require.NoError(t, err)
 	require.Len(t, outcomes, 1)
 	assert.Equal(t, "SC-2555", outcomes[0].Ticket)
@@ -134,7 +141,7 @@ func TestGetModelOutcomes_Empty(t *testing.T) {
 		return Response{Stdout: "[]\n"}
 	})
 
-	outcomes, err := GetModelOutcomes(addr, "tok")
+	outcomes, err := newTestClient(addr, "tok").GetModelOutcomes()
 	require.NoError(t, err)
 	assert.Empty(t, outcomes)
 }
@@ -144,7 +151,7 @@ func TestGetModelOutcomes_InvalidJSON(t *testing.T) {
 		return Response{Stdout: "not json\n"}
 	})
 
-	_, err := GetModelOutcomes(addr, "tok")
+	_, err := newTestClient(addr, "tok").GetModelOutcomes()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid model outcomes JSON")
 }
@@ -157,7 +164,7 @@ func TestGetTicketCost_Success(t *testing.T) {
 		return Response{Stdout: data}
 	})
 
-	rollup, err := GetTicketCost(addr, "tok", "SC-1")
+	rollup, err := newTestClient(addr, "tok").GetTicketCost("SC-1")
 	require.NoError(t, err)
 	assert.True(t, rollup.HasSpend)
 	assert.Equal(t, "SC-1", rollup.Ticket)
@@ -172,13 +179,13 @@ func TestGetTicketCost_InvalidJSON(t *testing.T) {
 		return Response{Stdout: "not json\n"}
 	})
 
-	_, err := GetTicketCost(addr, "tok", "SC-1")
+	_, err := newTestClient(addr, "tok").GetTicketCost("SC-1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decoding ticket cost")
 }
 
 func TestRunRemote_ConnectionRefused(t *testing.T) {
-	exitCode, err := RunRemote("127.0.0.1:1", "tok", []string{"echo"}, "dev")
+	exitCode, err := newTestClient("127.0.0.1:1", "tok").RunRemote([]string{"echo"})
 	require.Error(t, err)
 	assert.Equal(t, 1, exitCode)
 	assert.Contains(t, err.Error(), "cannot reach daemon")
@@ -191,7 +198,7 @@ func TestGetIdeationStatus_Success(t *testing.T) {
 		return Response{Stdout: data}
 	})
 
-	st, err := GetIdeationStatus(addr, "tok")
+	st, err := newTestClient(addr, "tok").GetIdeationStatus()
 	require.NoError(t, err)
 	assert.Equal(t, "ideation-1", st.SessionID)
 	assert.Equal(t, IdeationAwaitingReply, st.State)
@@ -202,7 +209,7 @@ func TestIdeationStart_ErrorPropagates(t *testing.T) {
 		return Response{Stderr: "ideation not available\n", ExitCode: 1}
 	})
 
-	_, err := IdeationStart(addr, "tok", IdeationStartRequest{Seed: "idea"})
+	_, err := newTestClient(addr, "tok").IdeationStart(IdeationStartRequest{Seed: "idea"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon command failed")
 }
@@ -215,7 +222,7 @@ func TestIdeationReply_Success(t *testing.T) {
 		return Response{Stdout: data}
 	})
 
-	st, err := IdeationReply(addr, "tok", IdeationReplyRequest{SessionID: "ideation-1", Message: "answer"})
+	st, err := newTestClient(addr, "tok").IdeationReply(IdeationReplyRequest{SessionID: "ideation-1", Message: "answer"})
 	require.NoError(t, err)
 	assert.Equal(t, IdeationThinking, st.State)
 }
@@ -225,7 +232,7 @@ func TestGetIdeationStatus_InvalidJSON(t *testing.T) {
 		return Response{Stdout: "not json\n"}
 	})
 
-	_, err := GetIdeationStatus(addr, "tok")
+	_, err := newTestClient(addr, "tok").GetIdeationStatus()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid ideation status JSON")
 }
@@ -236,7 +243,9 @@ func TestRunRemote_VersionForwarded(t *testing.T) {
 		return Response{ExitCode: 0}
 	})
 
-	exitCode, err := RunRemote(addr, "tok", []string{}, "1.2.3")
+	c := newTestClient(addr, "tok")
+	c.version = "1.2.3"
+	exitCode, err := c.RunRemote([]string{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 }
@@ -249,7 +258,7 @@ func TestRunRemote_EnvForwarded(t *testing.T) {
 		return Response{ExitCode: 0}
 	})
 
-	exitCode, err := RunRemote(addr, "tok", []string{}, "dev")
+	exitCode, err := newTestClient(addr, "tok").RunRemote([]string{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 }
@@ -260,7 +269,7 @@ func TestRunRemote_ClientPIDForwarded(t *testing.T) {
 		return Response{ExitCode: 0}
 	})
 
-	exitCode, err := RunRemote(addr, "tok", []string{}, "dev")
+	exitCode, err := newTestClient(addr, "tok").RunRemote([]string{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 }
@@ -271,7 +280,7 @@ func TestGetLogMode_Success(t *testing.T) {
 		return Response{Stdout: "full\n"}
 	})
 
-	mode, err := GetLogMode(addr, "tok")
+	mode, err := newTestClient(addr, "tok").GetLogMode()
 	require.NoError(t, err)
 	assert.Equal(t, "full", mode)
 }
@@ -282,7 +291,7 @@ func TestSetLogMode_Success(t *testing.T) {
 		return Response{Stdout: "off\n"}
 	})
 
-	mode, err := SetLogMode(addr, "tok", "off")
+	mode, err := newTestClient(addr, "tok").SetLogMode("off")
 	require.NoError(t, err)
 	assert.Equal(t, "off", mode)
 }
@@ -293,7 +302,7 @@ func TestGetHookSnapshot_Success(t *testing.T) {
 		return Response{Stdout: `{"session-1":{"session_id":"session-1","cwd":"/proj","status":1}}` + "\n"}
 	})
 
-	snap, err := GetHookSnapshot(addr, "tok")
+	snap, err := newTestClient(addr, "tok").GetHookSnapshot()
 	require.NoError(t, err)
 	require.Contains(t, snap, "session-1")
 	assert.Equal(t, "/proj", snap["session-1"].Cwd)
@@ -304,7 +313,7 @@ func TestGetHookSnapshot_InvalidJSON(t *testing.T) {
 		return Response{Stdout: "bad json\n"}
 	})
 
-	_, err := GetHookSnapshot(addr, "tok")
+	_, err := newTestClient(addr, "tok").GetHookSnapshot()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid hook snapshot JSON")
 }
@@ -315,7 +324,7 @@ func TestGetTrackerDiagnose_Success(t *testing.T) {
 		return Response{Stdout: `[{"name":"jira","ok":true}]` + "\n"}
 	})
 
-	statuses, err := GetTrackerDiagnose(addr, "tok")
+	statuses, err := newTestClient(addr, "tok").GetTrackerDiagnose()
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
 	assert.Equal(t, "jira", statuses[0].Name)
@@ -327,7 +336,7 @@ func TestGetTrackerIssues_Success(t *testing.T) {
 		return Response{Stdout: `[{"tracker_name":"jira","tracker_kind":"jira","project":"PROJ","issues":[]}]` + "\n"}
 	})
 
-	results, err := GetTrackerIssues(addr, "tok")
+	results, err := newTestClient(addr, "tok").GetTrackerIssues()
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "jira", results[0].TrackerName)
@@ -341,7 +350,7 @@ func TestGetTrackerIssuesLite_Success(t *testing.T) {
 		return Response{Stdout: `[{"tracker_name":"jira","tracker_kind":"jira","project":"PROJ","issues":[]}]` + "\n"}
 	})
 
-	results, err := GetTrackerIssuesLite(addr, "tok")
+	results, err := newTestClient(addr, "tok").GetTrackerIssuesLite()
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "jira", results[0].TrackerName)
@@ -353,7 +362,7 @@ func TestGetPendingConfirms_Success(t *testing.T) {
 		return Response{Stdout: `[{"id":"abc","prompt":"delete?"}]` + "\n"}
 	})
 
-	confirms, err := GetPendingConfirms(addr, "tok")
+	confirms, err := newTestClient(addr, "tok").GetPendingConfirms()
 	require.NoError(t, err)
 	require.Len(t, confirms, 1)
 	assert.Equal(t, "abc", confirms[0].ID)
@@ -365,7 +374,7 @@ func TestGetToolStats_Success(t *testing.T) {
 		return Response{Stdout: `{"total_events":5,"by_tool":[],"by_event_name":[],"by_hour":[]}` + "\n"}
 	})
 
-	ts, err := GetToolStats(addr, "tok")
+	ts, err := newTestClient(addr, "tok").GetToolStats()
 	require.NoError(t, err)
 	assert.Equal(t, 5, ts.TotalEvents)
 }
@@ -376,7 +385,7 @@ func TestSendConfirmDecision_Approved(t *testing.T) {
 		return Response{ExitCode: 0}
 	})
 
-	err := SendConfirmDecision(addr, "tok", "abc", true)
+	err := newTestClient(addr, "tok").SendConfirmDecision("abc", true)
 	require.NoError(t, err)
 }
 
@@ -386,7 +395,7 @@ func TestSendConfirmDecision_Denied(t *testing.T) {
 		return Response{ExitCode: 0}
 	})
 
-	err := SendConfirmDecision(addr, "tok", "abc", false)
+	err := newTestClient(addr, "tok").SendConfirmDecision("abc", false)
 	require.NoError(t, err)
 }
 
@@ -396,7 +405,7 @@ func TestStartFindbugs_SendsRoute(t *testing.T) {
 		return Response{ExitCode: 0, Stdout: "ok\n"}
 	})
 
-	err := StartFindbugs(addr, "tok")
+	err := newTestClient(addr, "tok").StartFindbugs()
 	require.NoError(t, err)
 }
 
@@ -405,7 +414,7 @@ func TestStartFindbugs_ErrorPropagates(t *testing.T) {
 		return Response{ExitCode: 1, Stderr: "findbugs sweep not available"}
 	})
 
-	err := StartFindbugs(addr, "tok")
+	err := newTestClient(addr, "tok").StartFindbugs()
 	require.Error(t, err)
 }
 
@@ -414,7 +423,7 @@ func TestRunRemoteCapture_DaemonError(t *testing.T) {
 		return Response{ExitCode: 1, Stderr: "some error"}
 	})
 
-	_, err := RunRemoteCapture(addr, "tok", []string{"bad-cmd"})
+	_, err := newTestClient(addr, "tok").RunRemoteCapture([]string{"bad-cmd"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon command failed")
 }
@@ -489,7 +498,7 @@ func TestRunRemote_AwaitConfirmReturnsImmediately(t *testing.T) {
 	})
 
 	start := time.Now()
-	code, err := RunRemote(addr, "tok", []string{"jira", "issue", "delete", "KAN-1"}, "dev")
+	code, err := newTestClient(addr, "tok").RunRemote([]string{"jira", "issue", "delete", "KAN-1"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, code)
 	assert.Less(t, time.Since(start), time.Second, "there is no countdown")
@@ -505,7 +514,7 @@ func TestGetConfirmStatus_Success(t *testing.T) {
 		data, _ := json.Marshal(ConfirmStatus{ID: req.Args[1], State: string(ConfirmApproved)})
 		return Response{Stdout: string(data) + "\n"}
 	})
-	st, err := GetConfirmStatus(addr, "tok", "c-9")
+	st, err := newTestClient(addr, "tok").GetConfirmStatus("c-9")
 	require.NoError(t, err)
 	assert.Equal(t, string(ConfirmApproved), st.State)
 }
@@ -525,7 +534,7 @@ func TestRunRemote_DaemonClosesImmediately(t *testing.T) {
 		}
 	}()
 
-	exitCode, err := RunRemote(ln.Addr().String(), "tok", []string{}, "dev")
+	exitCode, err := newTestClient(ln.Addr().String(), "tok").RunRemote([]string{})
 	require.Error(t, err)
 	assert.Equal(t, 1, exitCode)
 	// Depending on timing, the error may be a clean EOF or a connection reset.
@@ -552,7 +561,7 @@ func TestGetTrackerIssue_Success(t *testing.T) {
 		return Response{Stdout: `{"key":"188","title":"Building column","assignee":"Stephan","description":"Full body","description_html":"<p>Full body</p>"}` + "\n"}
 	})
 
-	issue, err := GetTrackerIssue(addr, "tok", "shortcut", "human", "188")
+	issue, err := newTestClient(addr, "tok").GetTrackerIssue("shortcut", "human", "188")
 	require.NoError(t, err)
 	assert.Equal(t, "188", issue.Key)
 	assert.Equal(t, "Stephan", issue.Assignee)
@@ -565,7 +574,7 @@ func TestGetTrackerIssue_InvalidJSON(t *testing.T) {
 		return Response{Stdout: "not json\n"}
 	})
 
-	_, err := GetTrackerIssue(addr, "tok", "shortcut", "human", "188")
+	_, err := newTestClient(addr, "tok").GetTrackerIssue("shortcut", "human", "188")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid tracker issue JSON")
 }

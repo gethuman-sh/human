@@ -45,13 +45,13 @@ func buildAuditListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List recorded audit events, newest first",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			addr, token, err := resolveDaemon(cmd.OutOrStdout())
+			client, err := connectDaemon(cmd.OutOrStdout())
 			if err != nil {
-				return nil // resolveDaemon already printed the guidance
+				return nil // connectDaemon already printed the guidance
 			}
 
 			filterArgs := buildFilterArgs(since, until, subject, tracker, limit)
-			events, err := daemon.QueryAudit(addr, token, filterArgs)
+			events, err := client.QueryAudit(filterArgs)
 			if err != nil {
 				return errors.WrapWithDetails(err, "failed to query audit trail")
 			}
@@ -77,14 +77,14 @@ func buildAuditShowCmd() *cobra.Command {
 		Short: "Show the full CloudEvents envelope for one event",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, token, err := resolveDaemon(cmd.OutOrStdout())
+			client, err := connectDaemon(cmd.OutOrStdout())
 			if err != nil {
 				return nil
 			}
 
 			// A high limit so the target event is in the returned window
 			// regardless of how many events precede it.
-			events, err := daemon.QueryAudit(addr, token, []string{"--limit", "10000"})
+			events, err := client.QueryAudit([]string{"--limit", "10000"})
 			if err != nil {
 				return errors.WrapWithDetails(err, "failed to query audit trail")
 			}
@@ -100,15 +100,15 @@ func buildAuditShowCmd() *cobra.Command {
 	}
 }
 
-// resolveDaemon reads the daemon addr+token. When the daemon is unreachable it
+// connectDaemon returns a client for the running daemon. When there is none it
 // prints guidance to out and returns an error so callers can stop early.
-func resolveDaemon(out io.Writer) (addr, token string, err error) {
-	info, err := daemon.ReadInfo()
-	if err != nil || !info.IsReachable() {
+func connectDaemon(out io.Writer) (*daemon.Client, error) {
+	c, err := daemon.Connect()
+	if err != nil {
 		_, _ = fmt.Fprintln(out, noDaemonMsg)
-		return "", "", errors.WithDetails("daemon not reachable")
+		return nil, err
 	}
-	return info.Addr, info.Token, nil
+	return c, nil
 }
 
 // buildFilterArgs converts the cobra flags into the flat token slice the

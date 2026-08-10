@@ -35,7 +35,11 @@ func BuildDoctorCmd() *cobra.Command {
 			}
 			printCheck(out, daemon.DoctorCheck{Name: "daemon", OK: true}, "reachable at "+info.Addr)
 
-			data, err := daemon.GetDoctor(info.Addr, info.Token, refresh)
+			client, err := daemon.NewClient(info)
+			if err != nil {
+				return err
+			}
+			data, err := client.GetDoctor(refresh)
 			if err != nil {
 				return errors.WrapWithDetails(err, "querying daemon doctor")
 			}

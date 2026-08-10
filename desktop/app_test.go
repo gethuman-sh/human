@@ -32,7 +32,7 @@ func TestViewerIdentityRetriesAfterFailure(t *testing.T) {
 	calls := 0
 	app := &App{
 		viewerConfig: noDeclaredIdentity,
-		currentUserFetch: func(addr, token string) (string, error) {
+		currentUserFetch: func(_ *daemon.Client) (string, error) {
 			calls++
 			if calls == 1 {
 				return "", errors.WithDetails("transient credential blip")
@@ -42,14 +42,14 @@ func TestViewerIdentityRetriesAfterFailure(t *testing.T) {
 	}
 	info := daemon.DaemonInfo{Addr: "127.0.0.1:0", Token: "t"}
 
-	if got := app.viewerIdentity(info); got.Known() {
+	if got := app.viewerIdentity(nil, info); got.Known() {
 		t.Fatalf("first call: got %v, want an unknown viewer on failure", got.Names)
 	}
 	if calls != 1 {
 		t.Fatalf("expected exactly 1 fetch after the first call, got %d", calls)
 	}
 
-	if got := app.viewerIdentity(info); !got.Matches("alice") {
+	if got := app.viewerIdentity(nil, info); !got.Matches("alice") {
 		t.Fatalf("second call: got %v, want alice — a failed fetch must not block a retry", got.Names)
 	}
 	if calls != 2 {
@@ -57,7 +57,7 @@ func TestViewerIdentityRetriesAfterFailure(t *testing.T) {
 	}
 
 	// A resolved name must stay memoized: no further IPC calls.
-	if got := app.viewerIdentity(info); !got.Matches("alice") {
+	if got := app.viewerIdentity(nil, info); !got.Matches("alice") {
 		t.Fatalf("third call: got %v, want alice from cache", got.Names)
 	}
 	if calls != 2 {
@@ -74,7 +74,7 @@ func TestViewerIdentityPrefersDeclaredNames(t *testing.T) {
 		viewerConfig: func(dir string) (vieweridentity.Identity, error) {
 			return vieweridentity.Identity{Names: []string{"Alice", "alice-gh"}}, nil
 		},
-		currentUserFetch: func(addr, token string) (string, error) {
+		currentUserFetch: func(_ *daemon.Client) (string, error) {
 			calls++
 			return "someone-else", nil
 		},
@@ -84,7 +84,7 @@ func TestViewerIdentityPrefersDeclaredNames(t *testing.T) {
 		Projects: []daemon.ProjectInfo{{Dir: "/tmp/project"}},
 	}
 
-	got := app.viewerIdentity(info)
+	got := app.viewerIdentity(nil, info)
 
 	if !got.Matches("alice-gh") {
 		t.Fatalf("declared identity must be used: got %v", got.Names)

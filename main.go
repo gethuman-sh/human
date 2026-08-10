@@ -536,15 +536,11 @@ func buildHookRunE() func(*cobra.Command, []string) error {
 
 // deliverHookEvent resolves the daemon address/token and performs the round-trip.
 func deliverHookEvent(args []string) error {
-	addr := os.Getenv("HUMAN_DAEMON_ADDR")
-	token := os.Getenv("HUMAN_DAEMON_TOKEN")
-	if addr == "" {
-		addr, token = discoverDaemon(token)
-	}
-	if addr == "" {
+	c := connectDaemon()
+	if c == nil {
 		return errors.WithDetails("no reachable daemon for hook delivery")
 	}
-	if _, err := daemon.RunRemote(addr, token, args, version); err != nil {
+	if _, err := c.RunRemote(args); err != nil {
 		return err
 	}
 	return nil
@@ -818,39 +814,32 @@ func subcmdFromBinary() string {
 	return ""
 }
 
-// discoverDaemon auto-discovers daemon address and token from the info file,
-// and propagates chrome/proxy addresses into environment variables.
-// Falls back to probing host.docker.internal for cross-container discovery.
-func discoverDaemon(token string) (string, string) {
-	info, err := daemon.ReadInfo()
-	if err == nil && info.IsReachable() {
-		return applyDaemonInfo(info, token)
-	}
-
-	// Fallback: probe host.docker.internal at well-known ports.
-	// This enables discovery inside Docker containers without env vars.
-	fallback := daemon.DaemonInfo{
-		Addr:       fmt.Sprintf("%s:%d", daemon.DockerHost, daemon.DefaultPort),
-		ChromeAddr: fmt.Sprintf("%s:%d", daemon.DockerHost, daemon.DefaultChromePort),
-		ProxyAddr:  fmt.Sprintf("%s:%d", daemon.DockerHost, daemon.DefaultProxyPort),
-	}
-	if fallback.IsReachable() {
-		// Use token from daemon.json if available (e.g. via volume mount).
-		if err == nil && token == "" {
-			fallback.Token = info.Token
+// connectDaemon locates the daemon and, when the address was discovered rather
+// than named by the caller, propagates the chrome and proxy addresses into the
+// process environment. It returns nil when there is no daemon to talk to, which
+// is not an error: the command then runs locally.
+//
+// The protocol refusal is the one failure that must not be swallowed — running
+// locally against a daemon that is merely too old is worse than stopping.
+func connectDaemon() *daemon.Client {
+	c, err := daemon.Connect()
+	if err != nil {
+		if daemon.IsProtocolError(err) {
+			errors.LogError(err).Msg("daemon too old for this client")
+			os.Exit(1)
 		}
-		return applyDaemonInfo(fallback, token)
+		return nil
 	}
-
-	return "", token
+	if os.Getenv("HUMAN_DAEMON_ADDR") == "" {
+		applyDaemonInfo(c.Info())
+	}
+	return c
 }
 
-// applyDaemonInfo propagates chrome/proxy addresses into environment variables
-// and returns the daemon address and token.
-func applyDaemonInfo(info daemon.DaemonInfo, token string) (string, string) {
-	if token == "" {
-		token = info.Token
-	}
+// applyDaemonInfo propagates the chrome and proxy addresses into environment
+// variables. The chrome bridge and the container proxy redirect read them from
+// there, so discovery is not finished until they are set.
+func applyDaemonInfo(info daemon.DaemonInfo) {
 	if os.Getenv("HUMAN_CHROME_ADDR") == "" && info.ChromeAddr != "" {
 		if err := os.Setenv("HUMAN_CHROME_ADDR", info.ChromeAddr); err != nil {
 			errors.LogError(err).Msg("failed to set HUMAN_CHROME_ADDR")
@@ -861,7 +850,6 @@ func applyDaemonInfo(info daemon.DaemonInfo, token string) (string, string) {
 			errors.LogError(err).Msg("failed to set HUMAN_PROXY_ADDR")
 		}
 	}
-	return info.Addr, token
 }
 
 func main() {
@@ -877,45 +865,22 @@ func main() {
 		args = append([]string{sub}, args...)
 	}
 
-	// Client mode: forward to daemon if configured.
-	// Skip forwarding for "daemon" subcommands — they must run locally.
-	addr := os.Getenv("HUMAN_DAEMON_ADDR")
-	token := os.Getenv("HUMAN_DAEMON_TOKEN")
-
-	// When addr is set via env but token isn't, read token from daemon.json
-	// (available inside devcontainers via the ~/.human volume mount).
-	if addr != "" && token == "" {
-		if info, infoErr := daemon.ReadInfo(); infoErr == nil {
-			token = info.Token
-		}
-	}
-
-	// Auto-discover from daemon info file when env vars are not set.
-	if addr == "" {
-		addr, token = discoverDaemon(token)
-	}
+	// Client mode: forward to the daemon when there is one. The protocol gate is
+	// applied inside connectDaemon, so a daemon too old to serve this client is
+	// refused before any request rather than after a cryptic unknown-command.
+	client := connectDaemon()
 
 	// Warn when the CLI binary and the running daemon are on different versions.
 	// Skipped silently when the daemon is unreachable or its info file is absent.
-	if addr != "" {
-		if info, infoErr := daemon.ReadInfo(); infoErr == nil {
-			printDaemonSkewWarning(version, info.Version)
-		}
+	if client != nil {
+		printDaemonSkewWarning(version, client.Info().Version)
 	}
 	// Passive update notice — fires a background goroutine then reads the cache.
 	printUpdateNotice(version)
 
-	if addr != "" && !isLocalSubcommand(args) {
-		// Symmetric half of the version gate: refuse a too-old daemon with one
-		// clear error before any request, instead of a cryptic unknown-command
-		// failure after forwarding.
-		if info, infoErr := daemon.ReadInfo(); infoErr == nil {
-			if protoErr := daemon.DaemonProtocolError(info); protoErr != nil {
-				errors.LogError(protoErr).Msg("daemon too old for this client")
-				os.Exit(1)
-			}
-		}
-		exitCode, err := daemon.RunRemote(addr, token, args, version)
+	// "daemon" subcommands must run locally.
+	if client != nil && !isLocalSubcommand(args) {
+		exitCode, err := client.RunRemote(args)
 		if err != nil {
 			errors.LogError(err).Msg("remote execution failed")
 			os.Exit(1)

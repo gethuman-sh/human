@@ -117,7 +117,7 @@ func clientSupported(version string, protocol int) bool {
 // transition.
 func DaemonProtocolError(info DaemonInfo) error {
 	if info.Protocol > 0 && info.Protocol < MinDaemonProtocol {
-		return errors.WithDetails(fmt.Sprintf(
+		return errors.WrapWithDetails(errProtocolTooOld, fmt.Sprintf(
 			"daemon speaks protocol %d but this client needs >= %d — rebuild and restart the daemon (make build && human daemon restart)",
 			info.Protocol, MinDaemonProtocol),
 			"daemon_protocol", info.Protocol, "client_min", MinDaemonProtocol)

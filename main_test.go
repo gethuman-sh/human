@@ -1169,34 +1169,6 @@ func TestRunTrackerFindWithInstances_NoMatch(t *testing.T) {
 
 // --- applyDaemonInfo tests ---
 
-func TestApplyDaemonInfo_tokenFromInfo(t *testing.T) {
-	// When caller token is empty, applyDaemonInfo should use info.Token.
-	t.Setenv("HUMAN_CHROME_ADDR", "")
-	t.Setenv("HUMAN_PROXY_ADDR", "")
-
-	info := daemon.DaemonInfo{
-		Addr:  "localhost:9999",
-		Token: "info-token",
-	}
-	addr, token := applyDaemonInfo(info, "")
-	assert.Equal(t, "localhost:9999", addr)
-	assert.Equal(t, "info-token", token)
-}
-
-func TestApplyDaemonInfo_callerTokenPreserved(t *testing.T) {
-	// When caller provides a token, it takes precedence over info.Token.
-	t.Setenv("HUMAN_CHROME_ADDR", "")
-	t.Setenv("HUMAN_PROXY_ADDR", "")
-
-	info := daemon.DaemonInfo{
-		Addr:  "localhost:9999",
-		Token: "info-token",
-	}
-	addr, token := applyDaemonInfo(info, "caller-token")
-	assert.Equal(t, "localhost:9999", addr)
-	assert.Equal(t, "caller-token", token)
-}
-
 func TestApplyDaemonInfo_setsChromeAddr(t *testing.T) {
 	// When HUMAN_CHROME_ADDR is empty and info has ChromeAddr, it should be set.
 	t.Setenv("HUMAN_CHROME_ADDR", "")
@@ -1206,7 +1178,7 @@ func TestApplyDaemonInfo_setsChromeAddr(t *testing.T) {
 		Addr:       "localhost:9999",
 		ChromeAddr: "localhost:8888",
 	}
-	applyDaemonInfo(info, "t")
+	applyDaemonInfo(info)
 	assert.Equal(t, "localhost:8888", os.Getenv("HUMAN_CHROME_ADDR"))
 }
 
@@ -1219,7 +1191,7 @@ func TestApplyDaemonInfo_setsProxyAddr(t *testing.T) {
 		Addr:      "localhost:9999",
 		ProxyAddr: "localhost:7777",
 	}
-	applyDaemonInfo(info, "t")
+	applyDaemonInfo(info)
 	assert.Equal(t, "localhost:7777", os.Getenv("HUMAN_PROXY_ADDR"))
 }
 
@@ -1232,7 +1204,7 @@ func TestApplyDaemonInfo_doesNotOverrideChromeAddr(t *testing.T) {
 		Addr:       "localhost:9999",
 		ChromeAddr: "localhost:8888",
 	}
-	applyDaemonInfo(info, "t")
+	applyDaemonInfo(info)
 	assert.Equal(t, "existing:1111", os.Getenv("HUMAN_CHROME_ADDR"))
 }
 
@@ -1245,7 +1217,7 @@ func TestApplyDaemonInfo_doesNotOverrideProxyAddr(t *testing.T) {
 		Addr:      "localhost:9999",
 		ProxyAddr: "localhost:7777",
 	}
-	applyDaemonInfo(info, "t")
+	applyDaemonInfo(info)
 	assert.Equal(t, "existing:2222", os.Getenv("HUMAN_PROXY_ADDR"))
 }
 
@@ -1258,9 +1230,7 @@ func TestApplyDaemonInfo_emptyInfoAddrs(t *testing.T) {
 		Addr:  "localhost:9999",
 		Token: "tok",
 	}
-	addr, token := applyDaemonInfo(info, "")
-	assert.Equal(t, "localhost:9999", addr)
-	assert.Equal(t, "tok", token)
+	applyDaemonInfo(info)
 	assert.Equal(t, "", os.Getenv("HUMAN_CHROME_ADDR"))
 	assert.Equal(t, "", os.Getenv("HUMAN_PROXY_ADDR"))
 }

@@ -79,12 +79,12 @@ func (a *App) subscribe(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		info, err := daemon.ReadInfo()
+		client, err := a.daemonClient()
 		if err != nil {
 			a.backoff(ctx)
 			continue
 		}
-		events, cancel, err := daemon.Subscribe(info.Addr, info.Token)
+		events, cancel, err := client.Subscribe()
 		if err != nil {
 			a.backoff(ctx)
 			continue

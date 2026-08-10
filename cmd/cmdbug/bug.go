@@ -63,11 +63,11 @@ func RunBugCreate(out io.Writer, title, description string) error {
 	if strings.TrimSpace(title) == "" {
 		return errors.WithDetails("bug title must not be empty")
 	}
-	addr, token, err := resolveDaemon()
+	client, err := connectDaemon()
 	if err != nil {
 		return err
 	}
-	resp, err := daemon.BugCreate(addr, token, daemon.BugCreateRequest{
+	resp, err := client.BugCreate(daemon.BugCreateRequest{
 		Title:       title,
 		Description: description,
 	})
@@ -83,11 +83,11 @@ func RunSecurityCreate(out io.Writer, title, description string) error {
 	if strings.TrimSpace(title) == "" {
 		return errors.WithDetails("security ticket title must not be empty")
 	}
-	addr, token, err := resolveDaemon()
+	client, err := connectDaemon()
 	if err != nil {
 		return err
 	}
-	resp, err := daemon.SecurityCreate(addr, token, daemon.SecurityCreateRequest{
+	resp, err := client.SecurityCreate(daemon.SecurityCreateRequest{
 		Title:       title,
 		Description: description,
 	})
@@ -98,14 +98,7 @@ func RunSecurityCreate(out io.Writer, title, description string) error {
 	return err
 }
 
-// dockerHostFallbackAddr is the last-resort daemon address tried from inside a
-// devcontainer, where the host's daemon is reachable via host.docker.internal.
-// A package var so tests can point it at an unreachable address.
-var dockerHostFallbackAddr = fmt.Sprintf("%s:%d", daemon.DockerHost, daemon.DefaultPort)
-
-// resolveDaemon delegates to the daemon package's discovery. Kept as a thin
-// local name so the call sites read the same, with one implementation of the
-// order behind it.
-func resolveDaemon() (addr, token string, err error) {
-	return daemon.ResolveDaemon()
-}
+// connectDaemon is swapped in tests, which is the only reason it is a var: a
+// devcontainer or CI host answers on the well-known fallback address, so a test
+// that wants the no-daemon case has to be able to say so.
+var connectDaemon = daemon.Connect

@@ -147,16 +147,14 @@ func TestRunBugCreate_creatorError(t *testing.T) {
 }
 
 func TestRunBugCreate_noDaemon(t *testing.T) {
-	// No env addr, an isolated HOME so no ambient ~/.human/daemon.json is read,
-	// and a deliberately-unreachable docker-host fallback (in CI/devcontainers a
-	// real host daemon may otherwise answer on the well-known address). With no
-	// route to any daemon, resolveDaemon yields the clear error.
-	t.Setenv("HUMAN_DAEMON_ADDR", "")
-	t.Setenv("HUMAN_DAEMON_TOKEN", "")
-	t.Setenv("HOME", t.TempDir())
-	orig := dockerHostFallbackAddr
-	dockerHostFallbackAddr = "127.0.0.1:1" // nothing listens on port 1
-	t.Cleanup(func() { dockerHostFallbackAddr = orig })
+	// Discovery is replaced outright: in CI or a devcontainer a real host daemon
+	// answers on the well-known fallback address, so the no-daemon case cannot be
+	// created by taking the environment away.
+	orig := connectDaemon
+	connectDaemon = func() (*daemon.Client, error) {
+		return nil, errors.WithDetails("human daemon not reachable — start it with `human daemon start`")
+	}
+	t.Cleanup(func() { connectDaemon = orig })
 
 	var out bytes.Buffer
 	err := RunBugCreate(&out, "title", "")
