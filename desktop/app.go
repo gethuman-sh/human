@@ -40,10 +40,9 @@ import (
 
 // App is the Go backend bound into the webview via options.App.Bind. Every
 // method here is callable from the TypeScript frontend. The app talks ONLY to
-// the daemon client (daemon.GetTrackerIssues / daemon.BoardTransition /
-// daemon.Subscribe) — never directly to a tracker or forge — so all credential
-// handling, role resolution and the destructive-confirm bypass stay in the
-// daemon.
+// the daemon, through a daemon.Client — never directly to a tracker or forge —
+// so all credential handling, role resolution and the destructive-confirm
+// bypass stay in the daemon.
 //
 // The one exception is Instances() (instances.go), which discovers running
 // Claude Code processes in-process via the monitor package. That path needs no
@@ -91,7 +90,7 @@ type App struct {
 	currentUserResolved bool
 	// currentUserFetch is the actual IPC call, indirected so viewerIdentity's
 	// memoize-only-on-success retry logic can be exercised in a test without a
-	// running daemon. Always daemon.GetCurrentUserName outside tests.
+	// running daemon. Always Client.GetCurrentUserName outside tests.
 	currentUserFetch func(c *daemon.Client) (string, error)
 	// viewerConfig reads the declared "me" identity for a project directory,
 	// indirected for the same testing reason. Always vieweridentity.Load.

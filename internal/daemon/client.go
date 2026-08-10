@@ -32,8 +32,7 @@ const dialTimeout = 5 * time.Second
 // the "dev" default keeps same-tree builds (tests, desktop app) passing.
 var ClientVersion = "dev"
 
-// RunRemote connects to the daemon at addr, sends the CLI args, and returns
-// the exit code. Stdout and stderr are written to os.Stdout and os.Stderr.
+// RunRemote sends the CLI args to the daemon and returns the exit code. Stdout and stderr are written to os.Stdout and os.Stderr.
 //
 // Destructive commands run a grant cycle with NO waiting: the daemon queues a
 // permission request and answers await_confirm; we print instructions and
@@ -221,8 +220,8 @@ func (c *Client) GetConfirmStatus(id string) (ConfirmStatus, error) {
 	return st, nil
 }
 
-// RunRemoteCapture connects to the daemon and runs args, returning stdout
-// as bytes instead of printing to os.Stdout.
+// RunRemoteCapture runs args on the daemon, returning stdout as bytes instead
+// of printing to os.Stdout.
 func (c *Client) RunRemoteCapture(args []string) ([]byte, error) {
 	conn, err := net.DialTimeout("tcp", c.info.Addr, dialTimeout)
 	if err != nil {
@@ -955,16 +954,4 @@ func (c *Client) FSMWhere(req WhereRequest) (WhereReport, error) {
 		return WhereReport{}, errors.WrapWithDetails(err, "invalid fsm-where JSON")
 	}
 	return resp, nil
-}
-
-// ResolveDaemon locates the running daemon and returns its address and token.
-//
-// Deprecated: use Connect, which returns the whole endpoint as one value and
-// applies the protocol gate. This remains only until its callers have moved.
-func ResolveDaemon() (addr, token string, err error) {
-	info, err := resolveInfo()
-	if err != nil {
-		return "", "", err
-	}
-	return info.Addr, info.Token, nil
 }

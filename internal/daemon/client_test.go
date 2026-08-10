@@ -534,7 +534,7 @@ func TestRunRemote_DaemonClosesImmediately(t *testing.T) {
 		}
 	}()
 
-	exitCode, err := RunRemote(ln.Addr().String(), "tok", []string{}, "dev")
+	exitCode, err := newTestClient(ln.Addr().String(), "tok").RunRemote([]string{})
 	require.Error(t, err)
 	assert.Equal(t, 1, exitCode)
 	// Depending on timing, the error may be a clean EOF or a connection reset.
