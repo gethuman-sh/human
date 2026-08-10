@@ -399,7 +399,7 @@
         "stage": "any",
         "state": "failed"
       },
-      "holds": "A stage gave up and the marker says why, naming the blocking condition rather than offering a gesture that cannot work.",
+      "holds": "A stage gave up and the marker says why, naming the blocking condition rather than offering a gesture that cannot work. Landing here TWICE with no relaunch in between is absorbed rather than re-told: stageAlreadyFailed (SC-3857) reads the stage's own newest marker before posting another *-failed, so a second, unrelated exit event for the same dead run does not re-date an hour-old corpse as freshly broken. The exception is a genuine second failure AFTER a relaunch — every relaunch posts the stage's own *-started marker before the agent that follows it can exit, so a *-started marker newer than the failure flips the guard back off and the new failure posts and re-dates as it always did.",
       "who_may_act": [
         "user",
         "daemon"
@@ -508,8 +508,8 @@
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:planning-failed]",
-      "where": "board_failure.go",
-      "doc": "The planning stage itself failed — a spent retry budget, an agent that died without a verdict. Distinct from the planner concluding there is nothing to do, which is a terminal rather than a fault and must never be reddened as one."
+      "where": "board_failure.go — guarded by stageAlreadyFailed (SC-3857): a stage already failed with no relaunch since posts nothing",
+      "doc": "The planning stage itself failed — a spent retry budget, an agent that died without a verdict. Distinct from the planner concluding there is nothing to do, which is a terminal rather than a fault and must never be reddened as one. Fires at most once per ending: a second exit event for the same dead run is absorbed (SC-3857)."
     },
     {
       "name": "start-fix-run",
@@ -703,8 +703,8 @@
       "dst": "stopped",
       "actor": "daemon",
       "marker": "[human:implementation-failed]",
-      "where": "board_failure.go",
-      "doc": "The daemon's failure watcher classifies an agent that exited without posting its handoff. It fires for the implementation stage as a whole — failedTypeFor(BoardImplementation) knows the stage, never which phase the run had reached — so every state of the stage leads here."
+      "where": "board_failure.go — guarded by stageAlreadyFailed (SC-3857): a stage already failed with no relaunch since posts nothing",
+      "doc": "The daemon's failure watcher classifies an agent that exited without posting its handoff. It fires for the implementation stage as a whole — failedTypeFor(BoardImplementation) knows the stage, never which phase the run had reached — so every state of the stage leads here. Fires at most once per ending: a second exit event for the same dead run is absorbed (SC-3857)."
     },
     {
       "name": "start-review",
@@ -752,7 +752,7 @@
         "reason"
       ],
       "doc": "The review stage itself failed — a binding gate such as a missing branch or unreachable commits — not a failing verdict.",
-      "where": "internal/daemon/board_failure.go — the failure watcher, via failedTypeFor(BoardVerification)"
+      "where": "internal/daemon/board_failure.go — the failure watcher, via failedTypeFor(BoardVerification), guarded by stageAlreadyFailed (SC-3857): a stage already failed with no relaunch since posts nothing"
     },
     {
       "name": "start-deploy",
@@ -897,7 +897,7 @@
         "reason"
       ],
       "doc": "The deploy gave up. The marker names the condition that is blocking — for a deploy-fixer escalation it quotes the failure the fixer was dispatched to fix, which for CI names the red checks — and it does not offer a gesture that cannot work: where re-running Deploy would hit the same failure, it says so instead of advising the retry.",
-      "where": "internal/daemon/board_transition.go deployFailed, and AdvanceDeployFix for a fixer that did not converge"
+      "where": "internal/daemon/board_transition.go deployFailed (NOT guarded by stageAlreadyFailed — it can fire before any running done-stage marker exists at all, e.g. a push failure ahead of pr-review-started, so a guard there would swallow a genuine new failure on a board Deploy re-drop, SC-3857 AD5), and AdvanceDeployFix for a fixer that did not converge (guarded by stageAlreadyFailed: dispatchDeployFixer always posts deploy-fix-started first, so the guard cannot hide a fresh dispatch's own failure)"
     },
     {
       "name": "stage-asks",

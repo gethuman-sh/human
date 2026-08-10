@@ -82,7 +82,7 @@
       },
       "implementation-failed@stopped": {
         "count": 1,
-        "why": "Two failure markers for one ending, with no relaunch between them — see planning-failed@stopped for the shared cause. Here the two posters are the skill, which posts its own terminal marker when the budget is spent, and the daemon's exit watcher, which posts one when the agent leaves.",
+        "why": "Two failure markers for one ending, with no relaunch between them — see planning-failed@stopped for the shared cause. Here the two posters are the skill, which posts its own terminal marker when the budget is spent, and the daemon's exit watcher, which posts one when the agent leaves. FIXED by SC-3857: handleBoardAgentExit's exit dispatcher now checks stageAlreadyFailed before posting — a stage already failed with no relaunch since posts nothing — for every future run; this recorded corpus history predates the guard and is kept as evidence, not re-fixed retroactively.",
         "evidence": [
           "SC-3024"
         ],
@@ -90,7 +90,7 @@
       },
       "planning-failed@stopped": {
         "count": 1,
-        "why": "The same double ending, in a second stage: a failure marker posted onto a card that had already failed, with no relaunch between them. Three stages now show it (planning, implementation, the PR loop), which is what makes it a class rather than three coincidences — every stage has two things entitled to declare it dead, and neither asks whether the other already did. It costs more than a duplicate comment: the second marker re-dates the failure, so a card that has been dead for an hour reads as freshly broken.",
+        "why": "The same double ending, in a second stage: a failure marker posted onto a card that had already failed, with no relaunch between them. Three stages now show it (planning, implementation, the PR loop), which is what makes it a class rather than three coincidences — every stage has two things entitled to declare it dead, and neither asks whether the other already did. It costs more than a duplicate comment: the second marker re-dates the failure, so a card that has been dead for an hour reads as freshly broken. FIXED by SC-3857: one guard in handleBoardAgentExit (stageAlreadyFailed) now covers planning, implementation and verification alike, checked before every branch that can post a *-failed marker; a genuine second failure after a relaunch still posts, since every relaunch posts a fresh *-started marker first.",
         "evidence": [
           "SC-3580"
         ],
@@ -98,7 +98,7 @@
       },
       "pr-review-failed@stopped": {
         "count": 1,
-        "why": "The same double ending, in the PR loop — and here both posters are visible in one file: launchPRLoopAgent posts pr-review-failed when a launch fails, and escalatePRLoop posts it when the loop gives up (internal/daemon/board_transition.go).",
+        "why": "The same double ending, in the PR loop — and here both posters are visible in one file: launchPRLoopAgent posts pr-review-failed when a launch fails, and escalatePRLoop posts it when the loop gives up (internal/daemon/board_transition.go). FIXED by SC-3857, crediting SC-4026 for the escalation half: escalatePRLoop already refuses to re-post pr-review-failed onto a done stage whose newest marker is its own failure; SC-3857 adds the matching guard to AdvanceDeployFix's escalation and to the generic exit dispatcher for planning/implementation/verification.",
         "evidence": [
           "SC-3581"
         ],

@@ -308,6 +308,18 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, evt hookevents
 	if handleOutageExit(ctx, exit, commenter, deps, kind, reason) {
 		return
 	}
+	// The stage was already declared dead, and nothing has relaunched it since
+	// (SC-3857): posting again would re-date an hour-old corpse as freshly
+	// broken and, for a silence reap or a needs-person wall, re-post without
+	// charging or paying anything either time. Checked after the outage branch
+	// (an *-outage exit posts no marker before this and must not be muted) and
+	// before every branch that can post a *-failed marker of its own, so none
+	// of them re-tell a story the thread already recorded.
+	if stageAlreadyFailed(exit.Comments, exit.Stage) {
+		logger.Info().Str("pm", exit.PMKey).Str("stage", string(exit.Stage)).Str("agent", exit.AgentName).
+			Msg("board failure: stage already failed with no relaunch since; posting nothing")
+		return
+	}
 	if handleNeedsPersonExit(ctx, exit, kind, reason, commenter, logger) {
 		return
 	}
@@ -849,6 +861,28 @@ func stageSettled(comments []tracker.Comment, stage BoardStage) bool {
 		return false
 	}
 	return true
+}
+
+// Reports whether the stage's own newest marker is already its *-failed
+// header — the card was already declared dead in this stage, with no relaunch
+// since (SC-3857). This is NOT a global dedup: every relaunch posts the
+// stage's *-started marker before the agent that follows it can exit
+// (startAgentStage posts it before launchAgent; relaunchBounded and
+// relaunchSilenceReap both go through it), so a *-started marker newer than
+// the failure flips this back to false and a genuine second failure still
+// posts and re-dates the card (AD4). Reads the stage's OWN failed header —
+// never the classified BoardFailed state — because a marker can classify into
+// (stage, BoardFailed) without being that stage's own ending: [human:needs-
+// planning] classifies as (BoardPlanning, BoardFailed) though it is posted by
+// a refused implementation launch, not by the planning stage ending (AD3). A
+// stage with no failed header (e.g. BoardBacklog) never matches.
+func stageAlreadyFailed(comments []tracker.Comment, stage BoardStage) bool {
+	header := failedHeaderFor(stage)
+	if header == "" {
+		return false
+	}
+	_, latest := latestStateInStage(comments, stage)
+	return strings.HasPrefix(strings.TrimSpace(latest.Body), header)
 }
 
 // verificationInFlight reports whether the verification stage's latest marker
