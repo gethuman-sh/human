@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -50,8 +51,7 @@ func TestHandleBoardAgentExit_OutageIsStatedOnce(t *testing.T) {
 	policy := retryPolicyFor(ExitOutage, true, &relaunched, &resets)
 
 	for range 3 {
-		handleBoardAgentExit(context.Background(), nil, "", "board-SC-1-implementation", "", "", commenterFor,
-			nil, nil, nil, nil, alwaysReachable, nil, nil, nil, policy, nil, "d1", zerolog.Nop())
+		handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation"}, FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
 	}
 
 	require.Len(t, c.added, 1, "the card says the substrate is down once, not once per attempt")
@@ -80,8 +80,7 @@ func TestReconcileOutage_HandsAnUnendingWaitToAPerson(t *testing.T) {
 	}
 	var posted []struct{ Key, Body string }
 
-	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, "d1", now, zerolog.Nop())
+	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Zero(t, redriven, "a wait past the bound is not relaunched again")
 	require.Equal(t, 1, handedOver)
@@ -116,8 +115,7 @@ func TestReconcileOutage_HandoverIsIdempotent(t *testing.T) {
 	}
 	var posted []struct{ Key, Body string }
 
-	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, "d1", now, zerolog.Nop())
+	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Zero(t, redriven)
 	require.Zero(t, handedOver)
@@ -140,8 +138,7 @@ func TestReconcileOutage_WithoutAPosterKeepsWaiting(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		nil, retry, "d1", now, zerolog.Nop())
+	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, redriven)
 	require.Zero(t, handedOver)

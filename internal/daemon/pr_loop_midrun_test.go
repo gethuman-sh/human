@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,10 +21,12 @@ func TestDrivePRLoopExit_SubstrateFailureIsNotAnExit(t *testing.T) {
 			var advanced []string
 			var reclaimed []string
 
-			handled := drivePRLoopExit("SC-1", prReviewAgentStage, "board-SC-1-prreview", errorType,
-				func(pmKey, _, _ string) error { advanced = append(advanced, pmKey); return nil },
-				func(name string) { reclaimed = append(reclaimed, name) },
-				zerolog.Nop())
+			handled := drivePRLoopExit(
+				RunExit{PMKey: "SC-1", Stage: prReviewAgentStage, AgentName: "board-SC-1-prreview", ErrorType: errorType},
+				FailureDeps{
+					AdvancePRLoop: func(pmKey, _, _ string) error { advanced = append(advanced, pmKey); return nil },
+					OnHandoff:     func(name string) { reclaimed = append(reclaimed, name) },
+				})
 
 			assert.True(t, handled, "the event belongs to the loop and is consumed here")
 			assert.Empty(t, advanced, "a run that is still retrying has not produced an outcome to act on")
@@ -45,10 +46,12 @@ func TestDrivePRLoopExit_RealExitStillDrivesTheLoop(t *testing.T) {
 			var advanced []string
 			var reclaimed []string
 
-			handled := drivePRLoopExit("SC-1", prFixAgentStage, "board-SC-1-prfix", errorType,
-				func(pmKey, _, _ string) error { advanced = append(advanced, pmKey); return nil },
-				func(name string) { reclaimed = append(reclaimed, name) },
-				zerolog.Nop())
+			handled := drivePRLoopExit(
+				RunExit{PMKey: "SC-1", Stage: prFixAgentStage, AgentName: "board-SC-1-prfix", ErrorType: errorType},
+				FailureDeps{
+					AdvancePRLoop: func(pmKey, _, _ string) error { advanced = append(advanced, pmKey); return nil },
+					OnHandoff:     func(name string) { reclaimed = append(reclaimed, name) },
+				})
 
 			assert.True(t, handled)
 			assert.Equal(t, []string{"SC-1"}, advanced)

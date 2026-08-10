@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-
-	"github.com/rs/zerolog"
 )
 
 // ClosedTicketProbe reports whether pmKey's ticket has left the board as
@@ -30,11 +28,12 @@ type ClosedTicketProbe func(ctx context.Context, pmKey string) (bool, error)
 // uncertainty resolves to "leave it running" — an unparseable name, a probe
 // error, or a ticket that is merely absent rather than confirmed closed — because
 // killing live work on absent evidence is the one failure this must never risk.
-func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, closed ClosedTicketProbe, stopAgent func(agentName string) error, postRecord FailedMarkerPoster, logger zerolog.Logger) int {
-	if liveAgents == nil || closed == nil || stopAgent == nil {
+func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, deps ReconcileDeps) int {
+	logger := deps.Logger
+	if deps.LiveAgents == nil || deps.ClosedProbe == nil || deps.StopAgent == nil {
 		return 0
 	}
-	names, err := liveAgents()
+	names, err := deps.LiveAgents()
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list live agents for orphan sweep")
 		return 0
@@ -50,7 +49,7 @@ func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, liveAge
 
 	stopped := 0
 	for _, key := range order {
-		isClosed, probeErr := closed(ctx, key)
+		isClosed, probeErr := deps.ClosedProbe(ctx, key)
 		if probeErr != nil {
 			logger.Warn().Err(probeErr).Str("pm", key).
 				Msg("board reconcile: cannot confirm ticket is closed, leaving its run alone")
@@ -60,14 +59,14 @@ func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, liveAge
 			continue
 		}
 		for _, name := range candidates[key] {
-			if err := stopAgent(name); err != nil {
+			if err := deps.StopAgent(name); err != nil {
 				logger.Warn().Err(err).Str("pm", key).Str("agent", name).
 					Msg("board reconcile: cannot stop agent orphaned on a closed ticket")
 				continue
 			}
 			logger.Info().Str("pm", key).Str("agent", name).
 				Msg("board reconcile: stopped agent orphaned on a closed ticket")
-			recordCancelledRun(ctx, key, name, postRecord, logger)
+			recordCancelledRun(ctx, key, name, deps)
 			stopped++
 		}
 	}
@@ -108,15 +107,16 @@ func orphanCandidates(names []string, open map[string]struct{}) (map[string][]st
 // safety property this pass exists for, and a tracker that will not take a
 // comment — which a just-closed ticket may well refuse — must never leave an
 // agent running against called-off work.
-func recordCancelledRun(ctx context.Context, pmKey, agentName string, postRecord FailedMarkerPoster, logger zerolog.Logger) {
-	if postRecord == nil {
+func recordCancelledRun(ctx context.Context, pmKey, agentName string, deps ReconcileDeps) {
+	logger := deps.Logger
+	if deps.PostFailed == nil {
 		return
 	}
 	_, stage, ok := parseAgentName(agentName)
 	if !ok {
 		return
 	}
-	if err := postRecord(ctx, pmKey, RunCancelledBody(stage, agentName)); err != nil {
+	if err := deps.PostFailed(ctx, pmKey, RunCancelledBody(stage, agentName)); err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).Str("agent", agentName).
 			Msg("board reconcile: stopped the orphaned agent but could not record the cancellation")
 	}

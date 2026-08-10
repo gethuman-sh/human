@@ -764,7 +764,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			errorType = daemon.ReapSilenceErrorType + ":" + reason.Idle.Round(time.Second).String()
 		}
 		hookEvents.Append(hookevents.Event{
-			EventName: "StopFailure",
+			EventName: hookevents.EventStopFailure,
 			AgentName: agentName,
 			ErrorType: errorType,
 			Timestamp: time.Now().UTC(),
@@ -859,9 +859,21 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			decStageRetries(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, stage)
 		},
 	}
-	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents, boardRuns,
-		boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
-		liveChainReview, liveBoardAgents, advancePRLoop, advanceDeployFix, branchReachable, commitsPresent, diagnoseFailure, onHandoff, stageRetry, ds.modelSink.LatestClass, ds.daemonID, logger)
+	go daemon.RunBoardFailureWatch(ctx, ds.srv.HookEvents, boardRuns, daemon.FailureDeps{
+		CommenterFor:     boardPMCommenterFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
+		ChainReview:      liveChainReview,
+		LiveAgents:       liveBoardAgents,
+		AdvancePRLoop:    advancePRLoop,
+		AdvanceDeployFix: advanceDeployFix,
+		Reachable:        branchReachable,
+		CommitsPresent:   commitsPresent,
+		Diagnose:         diagnoseFailure,
+		OnHandoff:        onHandoff,
+		Retry:            stageRetry,
+		LatestClass:      ds.modelSink.LatestClass,
+		DaemonID:         ds.daemonID,
+		Logger:           logger,
+	})
 	// The live chain fires only on the one-shot exit hook; this pass re-scans
 	// comments to recover a handoff orphaned by a daemon restart or lost hook
 	// (SC-430).
@@ -889,19 +901,32 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		defer cancel()
 		return (&dockerAgentCleaner{}).DeleteAgent(stopCtx, agentName)
 	}
-	go daemon.RunBoardReconcile(ctx,
-		boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver, logger),
+	go daemon.RunBoardReconcile(ctx, daemon.ReconcileDeps{
+		ListCards: boardReconcileListerFunc(ds.srv.Projects, ds.vaultResolver, logger),
+		Reachable: branchReachable,
 		// A nil participation predicate means "participate in every visible
 		// project" — the backward-compatible default. A machine that opts into a
 		// narrower set supplies a predicate here (SC-2047 opt-in participation).
-		branchReachable, boardParticipation(ds.srv.Projects), boardTicketIdentity(ds.srv.Projects), commitsPresent, prMerged, postDeployed,
-		liveBoardAgents, postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
-		closedTicketProbeFunc(ds.srv.Projects, ds.vaultResolver),
+		Participates:   boardParticipation(ds.srv.Projects),
+		IdentityFor:    boardTicketIdentity(ds.srv.Projects),
+		CommitsPresent: commitsPresent,
+		MergedProbe:    prMerged,
+		PostDeployed:   postDeployed,
+		LiveAgents:     liveBoardAgents,
+		PostFailed:     postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
+		ClosedProbe:    closedTicketProbeFunc(ds.srv.Projects, ds.vaultResolver),
+		ChainReview:    durableChainReview,
 		// The durable re-drive has no exiting agent to attribute — the run it is
 		// recovering from is long gone — so it drives the loop with no run identity
 		// and any escalation falls back to its generic line.
-		durableChainReview, func(pmKey string) error { return advancePRLoop(pmKey, "", "") },
-		stageRetry, agentProgress, stopHungAgent, ds.daemonID, daemon.BoardReconcileInterval, logger)
+		DriveLoop: func(pmKey string) error { return advancePRLoop(pmKey, "", "") },
+		Retry:     stageRetry,
+		Progress:  agentProgress,
+		StopAgent: stopHungAgent,
+		DaemonID:  ds.daemonID,
+		Interval:  daemon.BoardReconcileInterval,
+		Logger:    logger,
+	})
 
 	// Surface tickets created or edited outside the board (tracker web UI, CLI,
 	// another teammate or daemon) — none raise a board event — by polling the

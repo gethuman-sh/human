@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/rs/zerolog"
 )
 
@@ -79,7 +80,7 @@ func RunAgentCleanup(ctx context.Context, store *HookEventStore, cleaner AgentCl
 				if evt.AgentName == "" {
 					continue
 				}
-				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
+				if !hookevents.IsRunEnd(evt.EventName) {
 					continue
 				}
 				go cleanupAfterExit(ctx, cleaner, alive, evt.AgentName, logger)

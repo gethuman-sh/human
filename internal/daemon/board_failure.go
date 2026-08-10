@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -49,6 +50,107 @@ type LatestOutcomeClass func(ticket, stage string) (string, bool)
 // empty-handed diagnosers so the marker never posts headerless.
 const genericStageFailure = "agent exited without completing the stage"
 
+// AdvanceDeployFix re-enters the deploy after its fixer exits: the fixer is not
+// a board stage, so its exit is driven here rather than through the generic
+// stage-failure path. A nil value leaves the exit unrouted.
+//
+// It shares an underlying signature with ChainReview and DriveLoop and means
+// something else; see ChainReview for why all three are named types.
+type AdvanceDeployFix func(pmKey string) error
+
+// AdvancePRLoop advances the PR review→fix loop on a step's exit. The exiting
+// run's name and error type travel with the call because a step that died
+// before recording its outcome can only be explained from its artifacts
+// (SC-1892). A nil value leaves the exit unrouted.
+type AdvancePRLoop func(pmKey, agentName, errorType string) error
+
+// CommenterFor resolves the PM-role commenter lazily, per event, so the watcher
+// holds no tracker handle across its lifetime. The PM commenter MUST be
+// resolved by role, never by key prefix — both trackers may share a name.
+type CommenterFor func() (tracker.Commenter, error)
+
+// OnHandoff fires with an exiting agent's name the moment its stage is observed
+// to have ended cleanly. It is the success signal that authorizes reclaiming
+// the run's private worktree; every other exit KEEPS the worktree so
+// uncommitted work is never destroyed (SC-731). Best-effort and idempotent by
+// contract. A nil value skips the authorization.
+type OnHandoff func(agentName string)
+
+// RunExit is one board agent run's exit: what the hook event said, resolved to
+// the work the daemon's own launch record says it was for, plus the ticket's
+// comment thread as read after the exit.
+//
+// It exists because these values are one event with one lifetime and were
+// threaded through nine functions as separate parameters. Two of them,
+// AgentName and ErrorType, are adjacent strings in five signatures: swapping
+// them compiles, reviews clean, and posts a failure marker naming the error as
+// the agent.
+//
+// Not to be confused with StageExit (board_retry.go), which is what the agent
+// SAID on its way out — the exit class it wrote into its own stage report. This
+// is what the hook OBSERVED, and the two disagree exactly when a run dies
+// before it can report.
+type RunExit struct {
+	PMKey     string
+	Stage     BoardStage
+	AgentName string
+	// ErrorType is the exit event's own error type, "" when it carried none.
+	ErrorType string
+	// Event is the hook event's name — hookevents.EventStop, EventSessionEnd,
+	// or the zombie sweep's synthesized EventStopFailure.
+	Event string
+	// Comments is the PM ticket's thread, read once per exit and settled (see
+	// listStageSettled). Empty until withComments has run: the exits routed to
+	// the PR loop and the deploy fixer are decided before any comment is read,
+	// and making them pay for a tracker round-trip to be dispatched would be a
+	// behaviour change, not a refactor.
+	Comments []tracker.Comment
+}
+
+// CleanExit reports whether the run ended of its own accord rather than being
+// killed. A reap synthesizes StopFailure for a genuinely dead run; a clean
+// exit-0 fires Stop or SessionEnd — and both kinds carry an empty ErrorType, so
+// the event name is the only thing that tells them apart.
+//
+// It is DERIVED, never stored. The value used to be computed once and then
+// travel beside the event it came from, which let a caller pass a cleanExit
+// that contradicted its own eventName; the two could not be checked against
+// each other because only one of them was ever the source.
+func (e RunExit) CleanExit() bool { return e.Event != hookevents.EventStopFailure }
+
+// withComments returns the exit with the ticket thread attached.
+func (e RunExit) withComments(comments []tracker.Comment) RunExit {
+	e.Comments = comments
+	return e
+}
+
+// FailureDeps wires the exit path's collaborators, mirroring
+// BoardTransitionDeps in the same package. Every field follows the package's
+// "nil disables" convention.
+type FailureDeps struct {
+	CommenterFor     CommenterFor
+	ChainReview      ChainReview
+	LiveAgents       LiveAgentLister
+	AdvancePRLoop    AdvancePRLoop
+	AdvanceDeployFix AdvanceDeployFix
+	Reachable        BranchReachable
+	CommitsPresent   CommitsPresent
+	Diagnose         BoardFailureDiagnoser
+	OnHandoff        OnHandoff
+	Retry            StageRetry
+	LatestClass      LatestOutcomeClass
+	// DaemonID stamps this daemon's identity on every marker the exit path posts.
+	DaemonID string
+	Logger   zerolog.Logger
+}
+
+// handoff fires the worktree-reclaim authorization, if one is wired.
+func (d FailureDeps) handoff(agentName string) {
+	if d.OnHandoff != nil {
+		d.OnHandoff(agentName)
+	}
+}
+
 // RunBoardFailureWatch watches for SessionEnd-style hook events from board
 // agents and posts the stage's *-failed marker when an agent exits WITHOUT
 // having posted its stage's done-marker. This closes the gap where an agent
@@ -61,16 +163,11 @@ const genericStageFailure = "agent exited without completing the stage"
 // comment-scan, so pre-existing handoffs are not retroactively reviewed on
 // daemon start. nil chainReview disables chaining.
 //
-// commenterFor resolves the PM-role commenter lazily (per event) so the watcher
-// holds no tracker handle across its lifetime; the PM commenter MUST be
-// resolved by role, never by key prefix (both trackers may share a name).
-// onHandoff, when non-nil, is fired with the exiting agent's name the moment
-// its stage is observed to have ended cleanly (a done/handoff or terminal
-// resolved marker). It is the success signal that authorizes reclaiming the
-// run's private worktree — every other exit KEEPS the worktree so uncommitted
-// work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, runs *RunRegistry, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, liveAgents LiveAgentLister, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
-	if store == nil || commenterFor == nil {
+// The collaborators travel as one FailureDeps: see its doc comment, and
+// RunExit's, for why the exit and its dependencies each became a value.
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, runs *RunRegistry, deps FailureDeps) {
+	logger := deps.Logger
+	if store == nil || deps.CommenterFor == nil {
 		return
 	}
 
@@ -96,10 +193,10 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, runs *RunR
 				if !strings.HasPrefix(evt.AgentName, "board-") {
 					continue
 				}
-				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
+				if !hookevents.IsRunEnd(evt.EventName) {
 					continue
 				}
-				go handleBoardAgentExit(ctx, runs, evt.RunID, evt.AgentName, evt.ErrorType, evt.EventName, commenterFor, chainReview, liveAgents, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, latestClass, daemonID, logger)
+				go handleBoardAgentExit(ctx, runs, evt, deps)
 			}
 		}
 	}
@@ -154,61 +251,63 @@ func claimExit(runs *RunRegistry, runID, agentName string, logger zerolog.Logger
 // finished build chains into its review. Pulled out so the watch loop stays a
 // thin event dispatcher.
 //
-// eventName is the hook event's own name ("Stop", "SessionEnd", or the zombie
-// sweep's synthesized "StopFailure") — the only signal that discriminates a
-// clean exit-0 from a genuine death, since both carry an empty ErrorType. It
-// is used to derive cleanExit, which in turn guards against misreading a
-// clean finish that merely raced its own review-complete propagation as a
-// mid-review crash (SC-2133).
-func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, runID, agentName, errorType, eventName string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, liveAgents LiveAgentLister, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
-	pmKey, stage, ok := claimExit(runs, runID, agentName, logger)
+// The exit travels as one RunExit. Its CleanExit — the only signal that
+// discriminates a clean exit-0 from a genuine death, since both carry an empty
+// ErrorType — is derived from the event rather than computed here and passed
+// along beside it. It guards against misreading a clean finish that merely
+// raced its own review-complete propagation as a mid-review crash (SC-2133).
+func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, evt hookevents.Event, deps FailureDeps) {
+	logger := deps.Logger
+	pmKey, stage, ok := claimExit(runs, evt.RunID, evt.AgentName, logger)
 	if !ok {
 		return
 	}
+	exit := RunExit{
+		PMKey:     pmKey,
+		Stage:     stage,
+		AgentName: evt.AgentName,
+		ErrorType: evt.ErrorType,
+		Event:     evt.EventName,
+	}
 	// The deploy-fixer is not a board stage: its exit re-runs the deploy (on `done`)
 	// or reds the card, driven by AdvanceDeployFix — not the generic stage-failure path.
-	if driveDeployFixExit(pmKey, stage, agentName, advanceDeployFix, onHandoff, logger) {
+	if driveDeployFixExit(exit, deps) {
 		return
 	}
 	// The PR review→fix loop steps are not board stages: their exits are driven
 	// by the loop executor, not the generic stage-failure path below.
-	if drivePRLoopExit(pmKey, stage, agentName, errorType, advancePRLoop, onHandoff, logger) {
+	if drivePRLoopExit(exit, deps) {
 		return
 	}
-	commenter, err := commenterFor()
+	commenter, err := deps.CommenterFor()
 	if err != nil {
-		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot resolve PM commenter")
+		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot resolve PM commenter")
 		return
 	}
-	// A reap synthesizes "StopFailure" for a genuinely dead run; a clean exit-0
-	// fires "Stop" or "SessionEnd" — both carry an empty ErrorType, so eventName
-	// is the only thing that tells them apart. cleanExit gates the mid-review
-	// death check below: a clean exit-0 that merely raced its own
-	// review-complete propagation is never a death (SC-2133).
-	cleanExit := eventName != "StopFailure"
 	// A clean stage finish leaves the stage's done-marker as the latest marker;
 	// only treat the exit as a failure when that did NOT happen. Re-read with
 	// bounded backoff first: a reap-synthesized exit can be handled before the
 	// just-posted hand-off comment is visible on the tracker (SC-1484's
 	// read-after-write race) — polling briefly for a settled state closes that
 	// window without changing behavior for a genuinely incomplete stage.
-	comments, err := listStageSettled(ctx, commenter, pmKey, stage)
+	comments, err := listStageSettled(ctx, commenter, exit.PMKey, exit.Stage)
 	if err != nil {
-		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot list comments")
+		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot list comments")
 		return
 	}
-	if handleCleanStageEnding(ctx, pmKey, stage, agentName, errorType, cleanExit, comments, commenter, chainReview, liveAgents, reachable, commitsPresent, diagnose, onHandoff, retry, daemonID, logger) {
+	exit = exit.withComments(comments)
+	if handleCleanStageEnding(ctx, exit, commenter, deps) {
 		return
 	}
 	// A refusal that kills the agent before it records an exit (the SC-2856
 	// incident: a session-limit refusal) is classified from the hook errorType
 	// and the model-boundary class BEFORE the outage gate below, so it is
 	// recognised even when retry.recordedOutage sees nothing.
-	kind, reason := classifyUnavailability(errorType, latestClass, pmKey, string(stage))
-	if handleOutageExit(ctx, pmKey, stage, agentName, errorType, comments, commenter, diagnose, retry, kind, reason, daemonID, logger) {
+	kind, reason := classifyUnavailability(exit.ErrorType, deps.LatestClass, exit.PMKey, string(exit.Stage))
+	if handleOutageExit(ctx, exit, commenter, deps, kind, reason) {
 		return
 	}
-	if handleNeedsPersonExit(ctx, pmKey, stage, agentName, kind, reason, commenter, logger) {
+	if handleNeedsPersonExit(ctx, exit, kind, reason, commenter, logger) {
 		return
 	}
 	// A silence reap (the zombie sweep reaping an agent that went quiet — no
@@ -218,12 +317,12 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, runID, agentNa
 	// the trail must say plainly what was observed and why (SC-2447/SC-3074).
 	// Checked before the generic failure path so the sentinel never falls
 	// through to the charged branch below.
-	if handleSilenceReapExit(ctx, pmKey, stage, agentName, errorType, comments, commenter, retry, logger) {
+	if handleSilenceReapExit(ctx, exit, commenter, deps) {
 		return
 	}
-	diagnosis := appendModelOutcomeNote(failureMarkerBody(diagnose, agentName, errorType), latestClass, pmKey, string(stage))
-	if err := postMarker(ctx, commenter, pmKey, failureMarker(failedTypeFor(stage), diagnosis)); err != nil {
-		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post failed marker")
+	diagnosis := appendModelOutcomeNote(failureMarkerBody(deps.Diagnose, exit.AgentName, exit.ErrorType), deps.LatestClass, exit.PMKey, string(exit.Stage))
+	if err := postMarker(ctx, commenter, exit.PMKey, failureMarker(failedTypeFor(exit.Stage), diagnosis)); err != nil {
+		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post failed marker")
 		// Without the failed marker the card does not derive to a failed state,
 		// which is precisely what every in-place retry transition requires — so
 		// an automatic relaunch would be rejected. Leave it for a human.
@@ -232,7 +331,7 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, runID, agentNa
 	// A stage that failed for a reason another attempt could fix — a flake, a
 	// dead container — is relaunched here rather than waiting for someone to
 	// click Retry. The failure stays on the record either way.
-	retry.tryRelaunch(ctx, pmKey, stage, commenter, daemonID, logger)
+	deps.Retry.tryRelaunch(ctx, exit.PMKey, exit.Stage, commenter, deps.DaemonID, logger)
 }
 
 // handleCleanStageEnding deals with every way a stage exit is NOT a failure, and
@@ -270,23 +369,21 @@ func endedDeliberately(comments []tracker.Comment, stage BoardStage, state Board
 		deliberateStopRecorded(comments)
 }
 
-func handleCleanStageEnding(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, cleanExit bool, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, liveAgents LiveAgentLister, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) bool {
-	_, state := latestStageState(comments, stage)
+func handleCleanStageEnding(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps) bool {
+	_, state := latestStageState(exit.Comments, exit.Stage)
 	clean := state == BoardDone
-	if !clean && !endedDeliberately(comments, stage, state) {
+	if !clean && !endedDeliberately(exit.Comments, exit.Stage, state) {
 		return false
 	}
 	// A clean finish clears the automatic-retry budget: the next failure on this
 	// stage is a fresh problem and deserves its own attempts, not the remainder
 	// of an older one's.
-	retry.reset(pmKey, stage)
+	deps.Retry.reset(exit.PMKey, exit.Stage)
 	// It is also the positive success signal: authorize reclaiming the run's
 	// worktree (the work is safely committed on its branch).
-	if onHandoff != nil {
-		onHandoff(agentName)
-	}
-	if clean && stage == BoardImplementation {
-		chainReviewAfterCleanBuild(ctx, pmKey, agentName, errorType, cleanExit, comments, commenter, chainReview, liveAgents, reachable, commitsPresent, diagnose, daemonID, logger)
+	deps.handoff(exit.AgentName)
+	if clean && exit.Stage == BoardImplementation {
+		chainReviewAfterCleanBuild(ctx, exit, commenter, deps)
 	}
 	return true
 }
@@ -311,16 +408,17 @@ func handleCleanStageEnding(ctx context.Context, pmKey string, stage BoardStage,
 // own exit is the correct evidence, so this path posts nothing and lets it be.
 // Otherwise it flows into chainReviewAfterBuild's branch/commit-gated chain. A
 // nil chainReview disables chaining entirely.
-func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType string, cleanExit bool, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, liveAgents LiveAgentLister, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, daemonID string, logger zerolog.Logger) {
-	if chainReview == nil {
+func chainReviewAfterCleanBuild(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps) {
+	logger := deps.Logger
+	if deps.ChainReview == nil {
 		return
 	}
-	if vOK, vState := latestStageState(comments, BoardVerification); vOK {
+	if vOK, vState := latestStageState(exit.Comments, BoardVerification); vOK {
 		// review-complete (pass OR fail verdict) is a recorded outcome the board
 		// acts on; a review-failed marker is already retryable. Either way, do not
 		// chain a second review. Only a mid-review death — the marker still reads
 		// "running" AND the exit itself was not clean — needs a retryable marker.
-		if vState == BoardRunning && !cleanExit {
+		if vState == BoardRunning && !exit.CleanExit() {
 			// A stage is judged dead only on evidence about that stage. In the
 			// chained topology board-<key>-verification is a separate,
 			// independently-alive agent in its own container; the exiting
@@ -330,19 +428,19 @@ func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType
 			// this the SC-782 merged case, where the exiting implementation
 			// container WAS the reviewer and `agentName` therefore correctly names
 			// the run that failed the review.
-			if verificationAgentAlive(pmKey, liveAgents, logger) {
+			if verificationAgentAlive(exit.PMKey, deps.LiveAgents, logger) {
 				return
 			}
-			failed := failureMarker(MarkerReviewFailed, failureMarkerBody(diagnose, agentName, errorType))
+			failed := failureMarker(MarkerReviewFailed, failureMarkerBody(deps.Diagnose, exit.AgentName, exit.ErrorType))
 			failed.Body = strings.TrimSpace(failed.Body + "\n\n" + handoffSearchNote(BoardVerification, ReviewCompleteHeader))
 			body := markerBody(failed)
-			if _, err := commenter.AddComment(ctx, pmKey, body); err != nil {
-				logger.Warn().Err(err).Str("pm", pmKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
+			if _, err := commenter.AddComment(ctx, exit.PMKey, body); err != nil {
+				logger.Warn().Err(err).Str("pm", exit.PMKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
 			}
 		}
 		return
 	}
-	chainReviewAfterBuild(ctx, pmKey, comments, commenter, chainReview, reachable, commitsPresent, daemonID, logger)
+	chainReviewAfterBuild(ctx, exit, commenter, deps)
 }
 
 // handleNeedsPersonExit deals with a wall that does not self-heal (a revoked
@@ -351,16 +449,16 @@ func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType
 // exact same wall. Reports whether it handled the exit. Split out of
 // handleBoardAgentExit so this branch's complexity costs its own function
 // rather than the dispatcher's (SC-3024).
-func handleNeedsPersonExit(ctx context.Context, pmKey string, stage BoardStage, agentName string, kind endingKind, reason string, commenter tracker.Commenter, logger zerolog.Logger) bool {
+func handleNeedsPersonExit(ctx context.Context, exit RunExit, kind endingKind, reason string, commenter tracker.Commenter, logger zerolog.Logger) bool {
 	if kind != endingNeedsPerson {
 		return false
 	}
-	failedType := failedTypeFor(stage)
+	failedType := failedTypeFor(exit.Stage)
 	if failedType == "" {
 		return false
 	}
-	if err := postMarker(ctx, commenter, pmKey, failureMarker(failedType, needsPersonReason(reason))); err != nil {
-		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post needs-person marker")
+	if err := postMarker(ctx, commenter, exit.PMKey, failureMarker(failedType, needsPersonReason(reason))); err != nil {
+		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post needs-person marker")
 	}
 	return true
 }
@@ -374,31 +472,32 @@ func handleNeedsPersonExit(ctx context.Context, pmKey string, stage BoardStage, 
 // relaunching, naming the count once — silenceReapGaveUp dedups a second
 // daemon reaching the same cap. Split out of handleBoardAgentExit so this
 // branch's complexity costs its own function rather than the dispatcher's.
-func handleSilenceReapExit(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, comments []tracker.Comment, commenter tracker.Commenter, retry StageRetry, logger zerolog.Logger) bool {
-	idle, ok := silenceReapIdle(errorType)
-	if !ok || !retry.enabled() {
+func handleSilenceReapExit(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps) bool {
+	logger := deps.Logger
+	idle, ok := silenceReapIdle(exit.ErrorType)
+	if !ok || !deps.Retry.enabled() {
 		return false
 	}
-	failedType := failedTypeFor(stage)
+	failedType := failedTypeFor(exit.Stage)
 	if failedType == "" {
 		return false
 	}
-	if silenceReapGaveUp(comments, stage) {
+	if silenceReapGaveUp(exit.Comments, exit.Stage) {
 		return true
 	}
-	stops := silenceReapCount(comments, stage) + 1
+	stops := silenceReapCount(exit.Comments, exit.Stage) + 1
 	if stops > MaxSilenceReaps {
-		giveUp := failureMarker(failedType, silenceReapGiveUpReason(stage, stops))
-		if err := postMarker(ctx, commenter, pmKey, giveUp); err != nil {
-			logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap give-up marker")
+		giveUp := failureMarker(failedType, silenceReapGiveUpReason(exit.Stage, stops))
+		if err := postMarker(ctx, commenter, exit.PMKey, giveUp); err != nil {
+			logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post silence-reap give-up marker")
 		}
 		return true
 	}
-	if err := postMarker(ctx, commenter, pmKey, failureMarker(failedType, silenceReapReason(idle))); err != nil {
-		logger.Warn().Err(err).Str("agent", agentName).Msg("board failure: cannot post silence-reap marker")
+	if err := postMarker(ctx, commenter, exit.PMKey, failureMarker(failedType, silenceReapReason(idle))); err != nil {
+		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post silence-reap marker")
 		return true
 	}
-	retry.relaunchSilenceReap(pmKey, stage, logger)
+	deps.Retry.relaunchSilenceReap(exit.PMKey, exit.Stage, logger)
 	return true
 }
 
@@ -467,22 +566,21 @@ func handoffSearchNote(stage BoardStage, header string) string {
 // the flag that authorizes removing the run's worktree, and the FIXER's
 // deliverable is an unpushed local commit by design — waiving that protection on
 // an error the run then recovers from is how the commit would be lost.
-func drivePRLoopExit(pmKey string, stage BoardStage, agentName, errorType string, advancePRLoop func(pmKey, agentName, errorType string) error, onHandoff func(agentName string), logger zerolog.Logger) bool {
-	if stage != prReviewAgentStage && stage != prFixAgentStage {
+func drivePRLoopExit(exit RunExit, deps FailureDeps) bool {
+	logger := deps.Logger
+	if exit.Stage != prReviewAgentStage && exit.Stage != prFixAgentStage {
 		return false
 	}
-	if kind, reason := classifyErrorType(errorType); kind == endingPaused {
-		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("agent", agentName).
+	if kind, reason := classifyErrorType(exit.ErrorType); kind == endingPaused {
+		logger.Info().Str("pm", exit.PMKey).Str("stage", string(exit.Stage)).Str("agent", exit.AgentName).
 			Str("reason", reason).
 			Msg("board PR loop: substrate failure mid-run, not treating it as the step's exit")
 		return true
 	}
-	if onHandoff != nil {
-		onHandoff(agentName)
-	}
-	if advancePRLoop != nil {
-		if err := advancePRLoop(pmKey, agentName, errorType); err != nil {
-			logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).Msg("board PR loop: advance failed")
+	deps.handoff(exit.AgentName)
+	if deps.AdvancePRLoop != nil {
+		if err := deps.AdvancePRLoop(exit.PMKey, exit.AgentName, exit.ErrorType); err != nil {
+			logger.Warn().Err(err).Str("pm", exit.PMKey).Str("stage", string(exit.Stage)).Msg("board PR loop: advance failed")
 		}
 	}
 	return true
@@ -492,16 +590,14 @@ func drivePRLoopExit(pmKey string, stage BoardStage, agentName, errorType string
 // its worktree first (the fixer already pushed its work). It reports whether the
 // exit was the deploy-fix stage and thus fully handled here. A non-deployfix stage
 // returns false so the caller falls through to the PR-loop / stage-failure handling.
-func driveDeployFixExit(pmKey string, stage BoardStage, agentName string, advanceDeployFix func(pmKey string) error, onHandoff func(agentName string), logger zerolog.Logger) bool {
-	if stage != deployFixAgentStage {
+func driveDeployFixExit(exit RunExit, deps FailureDeps) bool {
+	if exit.Stage != deployFixAgentStage {
 		return false
 	}
-	if onHandoff != nil {
-		onHandoff(agentName)
-	}
-	if advanceDeployFix != nil {
-		if err := advanceDeployFix(pmKey); err != nil {
-			logger.Warn().Err(err).Str("pm", pmKey).Msg("board deploy fix: advance failed")
+	deps.handoff(exit.AgentName)
+	if deps.AdvanceDeployFix != nil {
+		if err := deps.AdvanceDeployFix(exit.PMKey); err != nil {
+			deps.Logger.Warn().Err(err).Str("pm", exit.PMKey).Msg("board deploy fix: advance failed")
 		}
 	}
 	return true
@@ -551,48 +647,49 @@ func stagePausedOnOptions(comments []tracker.Comment, stage BoardStage) bool {
 // commit gate is wired) the handoff's named commits must actually be present on
 // that branch. Pulled out of handleBoardAgentExit so the exit handler stays a
 // thin stage dispatcher and the chain's gates read as one unit.
-func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, daemonID string, logger zerolog.Logger) {
+func chainReviewAfterBuild(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps) {
+	logger := deps.Logger
 	// Only chain a review for a branch this machine can resolve; a board-context
 	// fix leaves its branch local on the machine that produced it, so a daemon
 	// elsewhere must leave the handoff for one that can reach it rather than start
 	// a review that can never check out the code (SC-652).
-	branch := latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
-	if reachable != nil {
-		switch r := reachable(branch); r.Status {
+	branch := latestPrefixedLine(exit.Comments, ReadyForReviewHeader, "branch:")
+	if deps.Reachable != nil {
+		switch r := deps.Reachable(branch); r.Status {
 		case ProbeAbsent:
 			// The branch is genuinely not on this machine — a board-context fix
 			// leaves its branch local on the machine that produced it. Leave the
 			// handoff for a daemon that can reach it (SC-652).
-			logger.Debug().Str("pm", pmKey).Str("branch", branch).
+			logger.Debug().Str("pm", exit.PMKey).Str("branch", branch).
 				Msg("board chain: handoff branch not on this machine, leaving for a daemon that can reach it")
 			return
 		case ProbeUnreadable:
 			// The reachability probe could not run (unresolvable dir, git error,
 			// timeout). Do NOT strand the work silently: surface why and leave it to
 			// be retried (SC-2403 sibling).
-			postHandoffCheckUnreadable(ctx, pmKey, branch, r.Detail, commenter, daemonID, logger)
+			postHandoffCheckUnreadable(ctx, exit.PMKey, branch, r.Detail, commenter, logger)
 			return
 		}
 	}
-	switch p := commitPresenceForHandoff(comments, branch, commitsPresent); p.Status {
+	switch p := commitPresenceForHandoff(exit.Comments, branch, deps.CommitsPresent); p.Status {
 	case ProbeAbsent:
 		// A definite phantom-commit handoff (a retry that never pushed its work) —
 		// the loud failure the ticket wants: red the card, do not review nothing.
 		phantom := failureMarker(MarkerImplementationFailed,
 			"handoff names commits absent from branch "+branch+" on this machine — re-run the fix")
-		if err := postMarker(ctx, commenter, pmKey, phantom); err != nil {
-			logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot post phantom-commit failure")
+		if err := postMarker(ctx, commenter, exit.PMKey, phantom); err != nil {
+			logger.Warn().Err(err).Str("pm", exit.PMKey).Msg("board chain: cannot post phantom-commit failure")
 		}
 		return
 	case ProbeUnreadable:
 		// The commit-presence check could not be performed. Never red good work on
 		// a check that did not complete — surface which probe and why, and leave it
 		// for reconcile to retry (SC-2403).
-		postHandoffCheckUnreadable(ctx, pmKey, branch, p.Detail, commenter, daemonID, logger)
+		postHandoffCheckUnreadable(ctx, exit.PMKey, branch, p.Detail, commenter, logger)
 		return
 	}
-	if err := chainReview(pmKey); err != nil {
-		logger.Warn().Err(err).Str("pm", pmKey).Msg("board chain: cannot start review after build")
+	if err := deps.ChainReview(exit.PMKey); err != nil {
+		logger.Warn().Err(err).Str("pm", exit.PMKey).Msg("board chain: cannot start review after build")
 	}
 }
 
@@ -600,7 +697,7 @@ func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker
 // and why, without reddening the card. The card keeps its ready-for-review
 // state, so the durable reconcile pass retries the check — an unreadable probe
 // is left/retried, never treated as evidence of missing work (SC-2403).
-func postHandoffCheckUnreadable(ctx context.Context, pmKey, branch, detail string, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) {
+func postHandoffCheckUnreadable(ctx context.Context, pmKey, branch, detail string, commenter tracker.Commenter, logger zerolog.Logger) {
 	unreadable := marker.Marker{
 		Type: MarkerHandoffCheckUnreadable,
 		Body: "could not verify the handoff for branch " + branch + " on this machine — " + detail +

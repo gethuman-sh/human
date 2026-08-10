@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -38,9 +37,7 @@ func TestReconcileStuckRunning_UnreachableBranchIsLeftToItsOwner(t *testing.T) {
 	now := time.Unix(100_000, 0)
 	var posted []struct{ Key, Body string }
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(peerCard(now), neverReachable),
-		liveAgents(), capturingPoster(&posted),
-		StageRetry{}, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(peerCard(now), neverReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), DaemonID: "d1"}, now)
 
 	require.Zero(t, n, "a card this machine cannot act on must not be reddened")
 	assert.Empty(t, posted, "no failed marker may be posted for another machine's work")
@@ -52,9 +49,7 @@ func TestReconcileStuckRunning_ReachableBranchIsStillReddened(t *testing.T) {
 	now := time.Unix(100_000, 0)
 	var posted []struct{ Key, Body string }
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(peerCard(now), alwaysReachable),
-		liveAgents(), capturingPoster(&posted),
-		StageRetry{}, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(peerCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n)
 	require.Len(t, posted, 1)
@@ -72,9 +67,7 @@ func TestReconcileStuckRunning_CardWithoutABranchIsUnaffectedByTheGate(t *testin
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, neverReachable),
-		liveAgents(), capturingPoster(&posted),
-		StageRetry{}, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, neverReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), DaemonID: "d1"}, now)
 
 	assert.Equal(t, 1, n, "a branchless card has no reachability fact and keeps the old behaviour")
 }
@@ -85,9 +78,7 @@ func TestReconcileStuckRunning_NilReachableDisablesTheGate(t *testing.T) {
 	now := time.Unix(100_000, 0)
 	var posted []struct{ Key, Body string }
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(peerCard(now), nil),
-		liveAgents(), capturingPoster(&posted),
-		StageRetry{}, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(peerCard(now), nil), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), DaemonID: "d1"}, now)
 
 	assert.Equal(t, 1, n)
 }
@@ -107,9 +98,7 @@ func TestReconcileStuckRunning_UnreachableBranchIsNeverRelaunched(t *testing.T) 
 		},
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(peerCard(now), neverReachable),
-		liveAgents(), capturingPoster(&posted),
-		retry, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(peerCard(now), neverReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	assert.Zero(t, n)
 }

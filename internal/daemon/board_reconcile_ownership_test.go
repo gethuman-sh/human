@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gethuman-sh/human/internal/marker"
@@ -30,8 +29,7 @@ func TestReconcileStuckRunning_NeverTakesOverAForeignOwnedStage(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 
-	n := reconcileStuckRunning(context.Background(), takeoverSetAs(foreign, alwaysReachable, "thisBBBB"),
-		liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSetAs(foreign, alwaysReachable, "thisBBBB"), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), DaemonID: "thisBBBB"}, now)
 
 	assert.Equal(t, 0, n, "a stage owned by a peer daemon is never reddened from a distance")
 	assert.Empty(t, posted, "no failed marker may be posted for a peer machine's running stage")
@@ -51,8 +49,7 @@ func TestReconcileStuckRunning_RedsOwnCardAtLocalGrace(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 
-	n := reconcileStuckRunning(context.Background(), takeoverSetAs(own, alwaysReachable, "thisBBBB"),
-		liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSetAs(own, alwaysReachable, "thisBBBB"), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), DaemonID: "thisBBBB"}, now)
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -72,8 +69,7 @@ func TestReconcileStuckRunning_RedsUnstampedCardAtLocalGrace(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 
-	n := reconcileStuckRunning(context.Background(), takeoverSetAs(unstamped, alwaysReachable, "thisBBBB"),
-		liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "thisBBBB", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSetAs(unstamped, alwaysReachable, "thisBBBB"), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), DaemonID: "thisBBBB"}, now)
 
 	assert.Equal(t, 1, n, "an unstamped stage has no owner and stays takeable")
 	assert.Len(t, posted, 1)

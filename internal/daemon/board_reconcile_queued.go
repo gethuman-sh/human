@@ -3,8 +3,6 @@ package daemon
 import (
 	"context"
 	"time"
-
-	"github.com/rs/zerolog"
 )
 
 // QueuedLaunchGrace is how long a decided card may sit unstarted before the
@@ -42,18 +40,14 @@ const QueuedLaunchGrace = 2 * time.Minute
 // reason: the relaunched stage's *-started marker is already the ticket-visible
 // record that work resumed, and a pass on a fixed cycle that comments each time
 // it acts is how a weekend produced hundreds of them (SC-2851).
-func reconcileQueuedLaunch(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, retry StageRetry, daemonID string, now time.Time, logger zerolog.Logger) int {
-	if liveAgents == nil || !retry.enabled() {
+func reconcileQueuedLaunch(ctx context.Context, drivable DrivableCards, deps ReconcileDeps, now time.Time) int {
+	logger := deps.Logger
+	if !deps.Retry.enabled() {
 		return 0
 	}
-	names, err := liveAgents()
-	if err != nil {
-		logger.Warn().Err(err).Msg("board reconcile: cannot list live agents for queued launches")
+	alive, ok := deps.aliveAgents("queued launches")
+	if !ok {
 		return 0
-	}
-	alive := make(map[string]struct{}, len(names))
-	for _, n := range names {
-		alive[n] = struct{}{}
 	}
 
 	launched := 0
@@ -74,9 +68,9 @@ func reconcileQueuedLaunch(ctx context.Context, drivable DrivableCards, liveAgen
 		if _, ok := alive[agentNameFor(card.Key, stage)]; ok {
 			continue
 		}
-		if retry.relaunchBounded(ctx, card.Key, stage,
+		if deps.Retry.relaunchBounded(ctx, card.Key, stage,
 			"the decision was answered but the launch never started",
-			nil, daemonID, logger) {
+			nil, deps.DaemonID, logger) {
 			logger.Info().Str("pm", card.Key).Str("stage", string(stage)).
 				Msg("board reconcile: started the stage a decision had queued")
 			launched++
