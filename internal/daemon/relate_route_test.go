@@ -123,7 +123,7 @@ func TestRelateClient_roundtrip(t *testing.T) {
 		return Response{ExitCode: 0}
 	})
 
-	err := Relate(addr, "tok", RelateRequest{PMKey: "SC-7", PMTitle: "flaky"})
+	err := newTestClient(addr, "tok").Relate(RelateRequest{PMKey: "SC-7", PMTitle: "flaky"})
 	require.NoError(t, err)
 }
 
@@ -131,6 +131,6 @@ func TestRelateClient_errorPropagates(t *testing.T) {
 	addr := startMockDaemon(t, func(_ Request) Response {
 		return Response{ExitCode: 1, Stderr: "related-work triage not available"}
 	})
-	err := Relate(addr, "tok", RelateRequest{PMKey: "SC-7"})
+	err := newTestClient(addr, "tok").Relate(RelateRequest{PMKey: "SC-7"})
 	require.Error(t, err)
 }

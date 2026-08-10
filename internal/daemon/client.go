@@ -41,8 +41,8 @@ var ClientVersion = "dev"
 // whenever, and re-running the command redeems the grant (matched by
 // operation, so a fresh process needs no remembered ID). Denials are answered
 // on the re-run with a back-off instruction.
-func RunRemote(addr, token string, args []string, version string) (int, error) {
-	code, resp, err := runRemoteOnce(addr, token, args, version, newConfirmID())
+func (c *Client) RunRemote(args []string) (int, error) {
+	code, resp, err := c.runRemoteOnce(args, newConfirmID())
 	if err != nil || !resp.AwaitConfirm {
 		return code, err
 	}
@@ -99,10 +99,10 @@ func wantsStdin(args []string) bool {
 
 // runRemoteOnce performs a single request/response round-trip. The returned
 // Response carries the await_confirm signal for RunRemote's grant cycle.
-func runRemoteOnce(addr, token string, args []string, version, confirmID string) (int, Response, error) {
-	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+func (c *Client) runRemoteOnce(args []string, confirmID string) (int, Response, error) {
+	conn, err := net.DialTimeout("tcp", c.info.Addr, dialTimeout)
 	if err != nil {
-		return 1, Response{}, errors.WrapWithDetails(err, "cannot reach daemon", "addr", addr)
+		return 1, Response{}, errors.WrapWithDetails(err, "cannot reach daemon", "addr", c.info.Addr)
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -110,9 +110,9 @@ func runRemoteOnce(addr, token string, args []string, version, confirmID string)
 	cwd, _ := os.Getwd()
 
 	req := Request{
-		Version:   version,
+		Version:   c.version,
 		Protocol:  Protocol,
-		Token:     token,
+		Token:     c.info.Token,
 		Args:      args,
 		Env:       env,
 		ClientPID: findAncestorClaude(),
@@ -209,8 +209,8 @@ func newConfirmID() string {
 
 // GetConfirmStatus fetches the decision state of a queued destructive
 // operation by ID.
-func GetConfirmStatus(addr, token, id string) (ConfirmStatus, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"confirm-status", id})
+func (c *Client) GetConfirmStatus(id string) (ConfirmStatus, error) {
+	out, err := c.RunRemoteCapture([]string{"confirm-status", id})
 	if err != nil {
 		return ConfirmStatus{}, err
 	}
@@ -223,18 +223,18 @@ func GetConfirmStatus(addr, token, id string) (ConfirmStatus, error) {
 
 // RunRemoteCapture connects to the daemon and runs args, returning stdout
 // as bytes instead of printing to os.Stdout.
-func RunRemoteCapture(addr, token string, args []string) ([]byte, error) {
-	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+func (c *Client) RunRemoteCapture(args []string) ([]byte, error) {
+	conn, err := net.DialTimeout("tcp", c.info.Addr, dialTimeout)
 	if err != nil {
-		return nil, errors.WrapWithDetails(err, "cannot reach daemon", "addr", addr)
+		return nil, errors.WrapWithDetails(err, "cannot reach daemon", "addr", c.info.Addr)
 	}
 	defer func() { _ = conn.Close() }()
 
 	cwd, _ := os.Getwd()
 	req := Request{
-		Version:   ClientVersion,
+		Version:   c.version,
 		Protocol:  Protocol,
-		Token:     token,
+		Token:     c.info.Token,
 		Args:      args,
 		ClientPID: os.Getpid(),
 		Cwd:       cwd,
@@ -266,8 +266,8 @@ func RunRemoteCapture(addr, token string, args []string) ([]byte, error) {
 // QueryAudit reads audit events from the daemon (which owns the audit DB),
 // forwarding the pre-parsed filter flags. filterArgs is the slice of
 // --since/--until/--subject/--tracker/--limit tokens.
-func QueryAudit(addr, token string, filterArgs []string) ([]audit.Event, error) {
-	out, err := RunRemoteCapture(addr, token, append([]string{"audit-query"}, filterArgs...))
+func (c *Client) QueryAudit(filterArgs []string) ([]audit.Event, error) {
+	out, err := c.RunRemoteCapture(append([]string{"audit-query"}, filterArgs...))
 	if err != nil {
 		return nil, err
 	}
@@ -279,8 +279,8 @@ func QueryAudit(addr, token string, filterArgs []string) ([]audit.Event, error) 
 }
 
 // GetLogMode fetches the current traffic log mode from the daemon.
-func GetLogMode(addr, token string) (string, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"log-mode"})
+func (c *Client) GetLogMode() (string, error) {
+	out, err := c.RunRemoteCapture([]string{"log-mode"})
 	if err != nil {
 		return "", err
 	}
@@ -288,8 +288,8 @@ func GetLogMode(addr, token string) (string, error) {
 }
 
 // SetLogMode sets the traffic log mode on the daemon. Returns the new mode.
-func SetLogMode(addr, token, mode string) (string, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"log-mode", mode})
+func (c *Client) SetLogMode(mode string) (string, error) {
+	out, err := c.RunRemoteCapture([]string{"log-mode", mode})
 	if err != nil {
 		return "", err
 	}
@@ -297,8 +297,8 @@ func SetLogMode(addr, token, mode string) (string, error) {
 }
 
 // GetHookSnapshot fetches the current per-session hook state from the daemon.
-func GetHookSnapshot(addr, token string) (map[string]hookevents.SessionSnapshot, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"hook-snapshot"})
+func (c *Client) GetHookSnapshot() (map[string]hookevents.SessionSnapshot, error) {
+	out, err := c.RunRemoteCapture([]string{"hook-snapshot"})
 	if err != nil {
 		return nil, err
 	}
@@ -312,8 +312,8 @@ func GetHookSnapshot(addr, token string) (map[string]hookevents.SessionSnapshot,
 // GetNetworkEvents fetches the current ambient network activity buffer
 // from the daemon. Returns a nil slice (not a nil error) when the daemon
 // replies with an empty list so the TUI can collapse the panel.
-func GetNetworkEvents(addr, token string) ([]NetworkEvent, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"network-events"})
+func (c *Client) GetNetworkEvents() ([]NetworkEvent, error) {
+	out, err := c.RunRemoteCapture([]string{"network-events"})
 	if err != nil {
 		return nil, err
 	}
@@ -327,8 +327,8 @@ func GetNetworkEvents(addr, token string) ([]NetworkEvent, error) {
 // GetModelOutcomes fetches the content-free model-call outcomes the proxy
 // boundary has recorded from the daemon. Returns a nil slice (not a nil error)
 // when the daemon replies with an empty list.
-func GetModelOutcomes(addr, token string) ([]proxy.ModelCallOutcome, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"model-outcomes"})
+func (c *Client) GetModelOutcomes() ([]proxy.ModelCallOutcome, error) {
+	out, err := c.RunRemoteCapture([]string{"model-outcomes"})
 	if err != nil {
 		return nil, err
 	}
@@ -340,8 +340,8 @@ func GetModelOutcomes(addr, token string) ([]proxy.ModelCallOutcome, error) {
 }
 
 // GetTrackerDiagnose fetches tracker credential status from the daemon.
-func GetTrackerDiagnose(addr, token string) ([]tracker.TrackerStatus, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"tracker-diagnose"})
+func (c *Client) GetTrackerDiagnose() ([]tracker.TrackerStatus, error) {
+	out, err := c.RunRemoteCapture([]string{"tracker-diagnose"})
 	if err != nil {
 		return nil, err
 	}
@@ -354,8 +354,8 @@ func GetTrackerDiagnose(addr, token string) ([]tracker.TrackerStatus, error) {
 
 // GetConfig fetches the masked settings snapshot for the caller's project.
 // Values arrive with vault references verbatim and literal secrets masked.
-func GetConfig(addr, token string) (settings.Doc, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"config-get"})
+func (c *Client) GetConfig() (settings.Doc, error) {
+	out, err := c.RunRemoteCapture([]string{"config-get"})
 	if err != nil {
 		return settings.Doc{}, err
 	}
@@ -368,12 +368,12 @@ func GetConfig(addr, token string) (settings.Doc, error) {
 
 // SetConfig writes one settings key and returns the refreshed snapshot so
 // callers can re-render without a second round trip.
-func SetConfig(addr, token string, req SetConfigRequest) (settings.Doc, error) {
+func (c *Client) SetConfig(req SetConfigRequest) (settings.Doc, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return settings.Doc{}, errors.WrapWithDetails(err, "marshaling config-set request")
 	}
-	out, err := RunRemoteCapture(addr, token, []string{"config-set", string(data)})
+	out, err := c.RunRemoteCapture([]string{"config-set", string(data)})
 	if err != nil {
 		return settings.Doc{}, err
 	}
@@ -385,15 +385,15 @@ func SetConfig(addr, token string, req SetConfigRequest) (settings.Doc, error) {
 }
 
 // GetTrackerIssues fetches open issues from all configured tracker projects via the daemon.
-func GetTrackerIssues(addr, token string) ([]TrackerIssuesResult, error) {
-	return getTrackerIssues(addr, token, "tracker-issues")
+func (c *Client) GetTrackerIssues() ([]TrackerIssuesResult, error) {
+	return c.getTrackerIssues("tracker-issues")
 }
 
 // GetTrackerIssuesLite fetches issue titles only, skipping the per-ticket comment
 // scan that derives board stages. It returns quickly so the board can render
 // titles before the full GetTrackerIssues reconcile completes.
-func GetTrackerIssuesLite(addr, token string) ([]TrackerIssuesResult, error) {
-	return getTrackerIssues(addr, token, "tracker-issues-lite")
+func (c *Client) GetTrackerIssuesLite() ([]TrackerIssuesResult, error) {
+	return c.getTrackerIssues("tracker-issues-lite")
 }
 
 // GetTrackerIssue fetches one full issue by key via the daemon, including the
@@ -402,12 +402,12 @@ func GetTrackerIssuesLite(addr, token string) ([]TrackerIssuesResult, error) {
 // descriptions. trackerKind+trackerName pin the instance the issue was listed
 // from: keys are ambiguous across kinds and names can repeat across provider
 // sections.
-func GetTrackerIssue(addr, token, trackerKind, trackerName, key string) (*IssueDetailResult, error) {
+func (c *Client) GetTrackerIssue(trackerKind, trackerName, key string) (*IssueDetailResult, error) {
 	data, err := json.Marshal(IssueDetailRequest{Tracker: trackerName, Kind: trackerKind, Key: key})
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "marshaling issue detail request")
 	}
-	out, err := RunRemoteCapture(addr, token, []string{"tracker-issue", string(data)})
+	out, err := c.RunRemoteCapture([]string{"tracker-issue", string(data)})
 	if err != nil {
 		return nil, err
 	}
@@ -418,8 +418,8 @@ func GetTrackerIssue(addr, token, trackerKind, trackerName, key string) (*IssueD
 	return &result, nil
 }
 
-func getTrackerIssues(addr, token, command string) ([]TrackerIssuesResult, error) {
-	out, err := RunRemoteCapture(addr, token, []string{command})
+func (c *Client) getTrackerIssues(command string) ([]TrackerIssuesResult, error) {
+	out, err := c.RunRemoteCapture([]string{command})
 	if err != nil {
 		return nil, err
 	}
@@ -443,8 +443,8 @@ func getTrackerIssues(addr, token, command string) ([]TrackerIssuesResult, error
 // Classifying the cause by matching error text was the obvious alternative and
 // is deliberately not used: the fallback path re-runs the same fetch, so a
 // genuine failure surfaces there anyway and nothing is masked by trying it.
-func GetBoardView(addr, token string) (BoardView, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"board-view"})
+func (c *Client) GetBoardView() (BoardView, error) {
+	out, err := c.RunRemoteCapture([]string{"board-view"})
 	if err != nil {
 		return BoardView{}, err
 	}
@@ -460,8 +460,8 @@ func GetBoardView(addr, token string) (BoardView, error) {
 // e.g. a daemon predating this route answering command-not-found) means the
 // caller dims nothing — the board still renders, just without the mine/not-mine
 // distinction, exactly as before this existed.
-func GetCurrentUserName(addr, token string) (string, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"current-user"})
+func (c *Client) GetCurrentUserName() (string, error) {
+	out, err := c.RunRemoteCapture([]string{"current-user"})
 	if err != nil {
 		return "", err
 	}
@@ -475,12 +475,12 @@ func GetCurrentUserName(addr, token string) (string, error) {
 // BoardTransition asks the daemon to advance a card one pipeline stage. The
 // request is sent as a single JSON arg so multi-word PM titles survive arg
 // splitting on the daemon side.
-func BoardTransition(addr, token string, req BoardTransitionRequest) error {
+func (c *Client) BoardTransition(req BoardTransitionRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling board transition request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"board-transition", string(data)})
+	_, err = c.RunRemoteCapture([]string{"board-transition", string(data)})
 	return err
 }
 
@@ -488,36 +488,36 @@ func BoardTransition(addr, token string, req BoardTransitionRequest) error {
 // (/human-autofix) on a bug ticket. The request is a single JSON arg, matching
 // BoardTransition; it returns once the agent is launched, not when the fix
 // finishes.
-func BoardFix(addr, token string, req BoardFixRequest) error {
+func (c *Client) BoardFix(req BoardFixRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling board fix request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"board-fix", string(data)})
+	_, err = c.RunRemoteCapture([]string{"board-fix", string(data)})
 	return err
 }
 
 // BoardSecurityFix asks the daemon to launch the security-fix pipeline
 // (/human-security-fix) on a security ticket. Single JSON arg, matching
 // BoardFix; it returns once the agent is launched, not when the fix finishes.
-func BoardSecurityFix(addr, token string, req SecurityFixRequest) error {
+func (c *Client) BoardSecurityFix(req SecurityFixRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling security fix request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"security-fix", string(data)})
+	_, err = c.RunRemoteCapture([]string{"security-fix", string(data)})
 	return err
 }
 
 // SendBoardOption records a chosen option from a card's open decision block and
 // relaunches the block's stage with the choice. Single JSON arg, matching
 // BoardTransition; returns once the agent is launched.
-func SendBoardOption(addr, token string, req BoardOptionRequest) error {
+func (c *Client) SendBoardOption(req BoardOptionRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling board option request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"board-option", string(data)})
+	_, err = c.RunRemoteCapture([]string{"board-option", string(data)})
 	return err
 }
 
@@ -525,8 +525,8 @@ func SendBoardOption(addr, token string, req BoardOptionRequest) error {
 // regenerates FEATURE.json for the registered project. It takes no arguments —
 // the daemon resolves the project directory itself — and returns once the agent
 // is launched, not when generation finishes.
-func GenerateFeatures(addr, token string) error {
-	_, err := RunRemoteCapture(addr, token, []string{"features-generate"})
+func (c *Client) GenerateFeatures() error {
+	_, err := c.RunRemoteCapture([]string{"features-generate"})
 	return err
 }
 
@@ -534,27 +534,27 @@ func GenerateFeatures(addr, token string) error {
 // registered project. It takes no arguments — the daemon resolves the project
 // directory itself — and returns once the agent is launched, not when the sweep
 // finishes; new bug tickets surface on the board's next card refresh.
-func StartFindbugs(addr, token string) error {
-	_, err := RunRemoteCapture(addr, token, []string{"findbugs-start"})
+func (c *Client) StartFindbugs() error {
+	_, err := c.RunRemoteCapture([]string{"findbugs-start"})
 	return err
 }
 
 // StartFindsecurity asks the daemon to launch the human-security sweep — the
 // Security pane's counterpart to StartFindbugs.
-func StartFindsecurity(addr, token string) error {
-	_, err := RunRemoteCapture(addr, token, []string{"findsecurity-start"})
+func (c *Client) StartFindsecurity() error {
+	_, err := c.RunRemoteCapture([]string{"findsecurity-start"})
 	return err
 }
 
 // CloseTicket asks the daemon to close a PM ticket (transition it to Done). The
 // request is a single JSON arg, matching BoardTransition. This is a dedicated
 // route, so it never hits the interactive `issue status` confirmation.
-func CloseTicket(addr, token string, req CloseTicketRequest) error {
+func (c *Client) CloseTicket(req CloseTicketRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling close ticket request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"close-ticket", string(data)})
+	_, err = c.RunRemoteCapture([]string{"close-ticket", string(data)})
 	return err
 }
 
@@ -563,72 +563,72 @@ func CloseTicket(addr, token string, req CloseTicketRequest) error {
 // returns once the agent is launched, not when generation finishes — the
 // board learns about the finished set from the mockup link file on the next
 // card refresh.
-func CreateMocks(addr, token string, req CreateMocksRequest) error {
+func (c *Client) CreateMocks(req CreateMocksRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling create mocks request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"create-mocks", string(data)})
+	_, err = c.RunRemoteCapture([]string{"create-mocks", string(data)})
 	return err
 }
 
 // CreateVariations asks the daemon to launch human-mockups in variation mode:
 // a new group of variations of one existing mockup. Single JSON arg, matching
 // CreateMocks; returns once the agent is launched.
-func CreateVariations(addr, token string, req CreateVariationsRequest) error {
+func (c *Client) CreateVariations(req CreateVariationsRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling create variations request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"create-variations", string(data)})
+	_, err = c.RunRemoteCapture([]string{"create-variations", string(data)})
 	return err
 }
 
 // ChooseMockup asks the daemon to record (or clear, when Slug is empty) the
 // ticket's winner mockup.
-func ChooseMockup(addr, token string, req ChooseMockupRequest) error {
+func (c *Client) ChooseMockup(req ChooseMockupRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling choose mockup request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"choose-mockup", string(data)})
+	_, err = c.RunRemoteCapture([]string{"choose-mockup", string(data)})
 	return err
 }
 
 // PruneMockup asks the daemon to archive a variation subtree.
-func PruneMockup(addr, token string, req PruneMockupRequest) error {
+func (c *Client) PruneMockup(req PruneMockupRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling prune mockup request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"prune-mockup", string(data)})
+	_, err = c.RunRemoteCapture([]string{"prune-mockup", string(data)})
 	return err
 }
 
 // IdeationStart starts (or re-attaches to) the board ideation session.
-func IdeationStart(addr, token string, req IdeationStartRequest) (IdeationStatus, error) {
-	return ideationCall(addr, token, "ideation-start", req)
+func (c *Client) IdeationStart(req IdeationStartRequest) (IdeationStatus, error) {
+	return c.ideationCall("ideation-start", req)
 }
 
 // IdeationReply sends the user's answer into the running ideation session.
-func IdeationReply(addr, token string, req IdeationReplyRequest) (IdeationStatus, error) {
-	return ideationCall(addr, token, "ideation-reply", req)
+func (c *Client) IdeationReply(req IdeationReplyRequest) (IdeationStatus, error) {
+	return c.ideationCall("ideation-reply", req)
 }
 
 // IdeationApprove submits the user's (possibly edited) guided-mode draft for
 // ticket creation.
-func IdeationApprove(addr, token string, req IdeationApproveRequest) (IdeationStatus, error) {
-	return ideationCall(addr, token, "ideation-approve", req)
+func (c *Client) IdeationApprove(req IdeationApproveRequest) (IdeationStatus, error) {
+	return c.ideationCall("ideation-approve", req)
 }
 
 // IdeaCreate quick-captures a title-only, idea-labeled ticket on the PM
 // tracker — the Ideas column's `+` button.
-func IdeaCreate(addr, token string, req IdeaCreateRequest) (IdeaCreateResponse, error) {
+func (c *Client) IdeaCreate(req IdeaCreateRequest) (IdeaCreateResponse, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return IdeaCreateResponse{}, errors.WrapWithDetails(err, "marshaling idea-create request")
 	}
-	out, err := RunRemoteCapture(addr, token, []string{"idea-create", string(data)})
+	out, err := c.RunRemoteCapture([]string{"idea-create", string(data)})
 	if err != nil {
 		return IdeaCreateResponse{}, err
 	}
@@ -641,12 +641,12 @@ func IdeaCreate(addr, token string, req IdeaCreateRequest) (IdeaCreateResponse, 
 
 // BugCreate files a defect ticket on the PM tracker — the Bugs pane's `+`
 // dialog (title plus free-text description).
-func BugCreate(addr, token string, req BugCreateRequest) (BugCreateResponse, error) {
+func (c *Client) BugCreate(req BugCreateRequest) (BugCreateResponse, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return BugCreateResponse{}, errors.WrapWithDetails(err, "marshaling bug-create request")
 	}
-	out, err := RunRemoteCapture(addr, token, []string{"bug-create", string(data)})
+	out, err := c.RunRemoteCapture([]string{"bug-create", string(data)})
 	if err != nil {
 		return BugCreateResponse{}, err
 	}
@@ -660,23 +660,23 @@ func BugCreate(addr, token string, req BugCreateRequest) (BugCreateResponse, err
 // Relate launches the filing-time related-work triage on one bug — the Bugs
 // pane's on-demand "Find related work" card action (SC-2405). It returns once
 // the agent is launched, not when the triage finishes.
-func Relate(addr, token string, req RelateRequest) error {
+func (c *Client) Relate(req RelateRequest) error {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return errors.WrapWithDetails(err, "marshaling relate request")
 	}
-	_, err = RunRemoteCapture(addr, token, []string{"relate", string(data)})
+	_, err = c.RunRemoteCapture([]string{"relate", string(data)})
 	return err
 }
 
 // SecurityCreate files a security ticket on the PM tracker — the Security
 // section's `+` dialog (title plus free-text description).
-func SecurityCreate(addr, token string, req SecurityCreateRequest) (SecurityCreateResponse, error) {
+func (c *Client) SecurityCreate(req SecurityCreateRequest) (SecurityCreateResponse, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return SecurityCreateResponse{}, errors.WrapWithDetails(err, "marshaling security-create request")
 	}
-	out, err := RunRemoteCapture(addr, token, []string{"security-create", string(data)})
+	out, err := c.RunRemoteCapture([]string{"security-create", string(data)})
 	if err != nil {
 		return SecurityCreateResponse{}, err
 	}
@@ -688,8 +688,8 @@ func SecurityCreate(addr, token string, req SecurityCreateRequest) (SecurityCrea
 }
 
 // GetIdeationStatus fetches the current ideation session snapshot.
-func GetIdeationStatus(addr, token string) (IdeationStatus, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"ideation-status"})
+func (c *Client) GetIdeationStatus() (IdeationStatus, error) {
+	out, err := c.RunRemoteCapture([]string{"ideation-status"})
 	if err != nil {
 		return IdeationStatus{}, err
 	}
@@ -702,12 +702,12 @@ func GetIdeationStatus(addr, token string) (IdeationStatus, error) {
 
 // ideationCall marshals payload as the single JSON arg and decodes the returned
 // snapshot — the same wire shape as BoardTransition, with a JSON reply.
-func ideationCall(addr, token, route string, payload any) (IdeationStatus, error) {
+func (c *Client) ideationCall(route string, payload any) (IdeationStatus, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return IdeationStatus{}, errors.WrapWithDetails(err, "marshaling "+route+" request")
 	}
-	out, err := RunRemoteCapture(addr, token, []string{route, string(data)})
+	out, err := c.RunRemoteCapture([]string{route, string(data)})
 	if err != nil {
 		return IdeationStatus{}, err
 	}
@@ -719,8 +719,8 @@ func ideationCall(addr, token, route string, payload any) (IdeationStatus, error
 }
 
 // GetPendingConfirms fetches pending destructive operation confirmations from the daemon.
-func GetPendingConfirms(addr, token string) ([]PendingConfirm, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"pending-confirms"})
+func (c *Client) GetPendingConfirms() ([]PendingConfirm, error) {
+	out, err := c.RunRemoteCapture([]string{"pending-confirms"})
 	if err != nil {
 		return nil, err
 	}
@@ -734,8 +734,8 @@ func GetPendingConfirms(addr, token string) ([]PendingConfirm, error) {
 // GetDaemonBusy asks the daemon whether any project stage currently holds a
 // live lease — the daemon-side half of the desktop close flow's busy check
 // (SC-3015); the "working instance" half is discovered client-side.
-func GetDaemonBusy(addr, token string) (DaemonBusyStatus, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"daemon-busy"})
+func (c *Client) GetDaemonBusy() (DaemonBusyStatus, error) {
+	out, err := c.RunRemoteCapture([]string{"daemon-busy"})
 	if err != nil {
 		return DaemonBusyStatus{}, err
 	}
@@ -748,12 +748,12 @@ func GetDaemonBusy(addr, token string) (DaemonBusyStatus, error) {
 
 // GetDoctor fetches the daemon's substrate health checks. refresh forces a
 // live run instead of the poller cache.
-func GetDoctor(addr, token string, refresh bool) (DoctorData, error) {
+func (c *Client) GetDoctor(refresh bool) (DoctorData, error) {
 	args := []string{"doctor"}
 	if refresh {
 		args = append(args, "refresh")
 	}
-	out, err := RunRemoteCapture(addr, token, args)
+	out, err := c.RunRemoteCapture(args)
 	if err != nil {
 		return DoctorData{}, err
 	}
@@ -765,8 +765,8 @@ func GetDoctor(addr, token string, refresh bool) (DoctorData, error) {
 }
 
 // GetToolStats fetches pre-aggregated tool call statistics from the daemon.
-func GetToolStats(addr, token string) (*stats.ToolStats, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"tool-stats"})
+func (c *Client) GetToolStats() (*stats.ToolStats, error) {
+	out, err := c.RunRemoteCapture([]string{"tool-stats"})
 	if err != nil {
 		return nil, err
 	}
@@ -779,8 +779,8 @@ func GetToolStats(addr, token string) (*stats.ToolStats, error) {
 
 // GetStatsOverview fetches the consolidated board-stats payload for a range
 // ("24h" | "7d" | "30d") from the daemon.
-func GetStatsOverview(addr, token, rng string) (*StatsOverview, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"stats-overview", "--range", rng})
+func (c *Client) GetStatsOverview(rng string) (*StatsOverview, error) {
+	out, err := c.RunRemoteCapture([]string{"stats-overview", "--range", rng})
 	if err != nil {
 		return nil, err
 	}
@@ -792,8 +792,8 @@ func GetStatsOverview(addr, token, rng string) (*StatsOverview, error) {
 }
 
 // GetTicketCost fetches the durable per-ticket cost/time rollup from the daemon.
-func GetTicketCost(addr, token, key string) (costledger.TicketCost, error) {
-	out, err := RunRemoteCapture(addr, token, []string{"ticket-cost", key})
+func (c *Client) GetTicketCost(key string) (costledger.TicketCost, error) {
+	out, err := c.RunRemoteCapture([]string{"ticket-cost", key})
 	if err != nil {
 		return costledger.TicketCost{}, err
 	}
@@ -805,12 +805,12 @@ func GetTicketCost(addr, token, key string) (costledger.TicketCost, error) {
 }
 
 // SendConfirmDecision sends a confirmation decision for a pending destructive operation.
-func SendConfirmDecision(addr, token, id string, approved bool) error {
+func (c *Client) SendConfirmDecision(id string, approved bool) error {
 	decision := "no"
 	if approved {
 		decision = "yes"
 	}
-	_, err := RunRemoteCapture(addr, token, []string{"confirm-op", id, decision})
+	_, err := c.RunRemoteCapture([]string{"confirm-op", id, decision})
 	return err
 }
 
@@ -818,17 +818,17 @@ func SendConfirmDecision(addr, token, id string, approved bool) error {
 // It returns a channel that receives a signal each time the daemon's state
 // changes, and a cleanup function that closes the connection.
 // The channel is closed when the connection drops or cleanup is called.
-func Subscribe(addr, token string) (<-chan SubscribeEvent, func(), error) {
-	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+func (c *Client) Subscribe() (<-chan SubscribeEvent, func(), error) {
+	conn, err := net.DialTimeout("tcp", c.info.Addr, dialTimeout)
 	if err != nil {
-		return nil, nil, errors.WrapWithDetails(err, "cannot reach daemon", "addr", addr)
+		return nil, nil, errors.WrapWithDetails(err, "cannot reach daemon", "addr", c.info.Addr)
 	}
 
 	cwd, _ := os.Getwd()
 	req := Request{
-		Version:   ClientVersion,
+		Version:   c.version,
 		Protocol:  Protocol,
-		Token:     token,
+		Token:     c.info.Token,
 		Args:      []string{"subscribe"},
 		ClientPID: os.Getpid(),
 		Cwd:       cwd,
@@ -941,12 +941,12 @@ func selectedEnv() map[string]string {
 // FSMWhere asks the daemon where one ticket is in the pipeline. A route rather
 // than a forwarded command because the answer needs the daemon's own liveness
 // records and retry counters, which a forwarded cobra command has no handle to.
-func FSMWhere(addr, token string, req WhereRequest) (WhereReport, error) {
+func (c *Client) FSMWhere(req WhereRequest) (WhereReport, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return WhereReport{}, errors.WrapWithDetails(err, "marshaling fsm-where request")
 	}
-	out, err := RunRemoteCapture(addr, token, []string{"fsm-where", string(data)})
+	out, err := c.RunRemoteCapture([]string{"fsm-where", string(data)})
 	if err != nil {
 		return WhereReport{}, err
 	}
@@ -957,31 +957,14 @@ func FSMWhere(addr, token string, req WhereRequest) (WhereReport, error) {
 	return resp, nil
 }
 
-// ResolveDaemon locates the running daemon: env first, then the info file, then
-// the host.docker.internal fallback so a command works from inside a
-// devcontainer.
+// ResolveDaemon locates the running daemon and returns its address and token.
 //
-// Exported and living here because more than one command needs it and the
-// daemon package is what knows how a daemon is found. A second copy in a command
-// package is how the discovery order drifts, and a command that looks in a
-// different order finds a different daemon.
+// Deprecated: use Connect, which returns the whole endpoint as one value and
+// applies the protocol gate. This remains only until its callers have moved.
 func ResolveDaemon() (addr, token string, err error) {
-	addr = os.Getenv("HUMAN_DAEMON_ADDR")
-	token = os.Getenv("HUMAN_DAEMON_TOKEN")
-
-	info, readErr := ReadInfo()
-	if token == "" && readErr == nil {
-		token = info.Token
+	info, err := resolveInfo()
+	if err != nil {
+		return "", "", err
 	}
-	if addr != "" {
-		return addr, token, nil
-	}
-	if readErr == nil && info.IsReachable() {
-		return info.Addr, token, nil
-	}
-	fallback := DaemonInfo{Addr: fmt.Sprintf("%s:%d", DockerHost, DefaultPort)}
-	if fallback.IsReachable() {
-		return fallback.Addr, token, nil
-	}
-	return "", "", errors.WithDetails("human daemon not reachable — start it with `human daemon start` (it holds the tracker credentials and resolves the configured PM group)")
+	return info.Addr, info.Token, nil
 }
