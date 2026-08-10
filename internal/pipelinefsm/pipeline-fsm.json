@@ -291,7 +291,7 @@
       "who_may_act": [
         "daemon"
       ],
-      "stale_when": "Past deployTimeout + StuckRunningGrace (60 minutes) — not the ordinary 15. A deploy reports no agent liveness at all and its CI gate legitimately blocks for the whole of deployTimeout, so the stuck-running sweep gives it its own grace (stuckGraceFor, internal/daemon/board_reconcile.go); judging it by the ordinary rule reds a healthy deploy and relaunches a second one on top of it.",
+      "stale_when": "Past deployTimeout + StuckRunningGrace (60 minutes) — not the ordinary 15 — measured from the moment the ENGINE's clock started, not from the marker post. A deploy reports no agent liveness at all and its CI gate legitimately blocks for the whole of deployTimeout, so the stuck-running sweep gives it its own grace (stuckPastGrace, internal/daemon/board_reconcile.go); judging it by the ordinary rule reds a healthy deploy and relaunches a second one on top of it. The engine's clock is the instant it left the unbounded deployGate; while it is still queued, the clock is the last time the queue moved, so a deploy waiting its turn is spared while the queue advances and judged once it has stopped. On a machine that is not running the deploy — a peer daemon, or one that restarted and lost the record — the marker clock is used instead, so the sweep is bounded rather than blind.",
       "inherits": "done"
     },
     {
@@ -1129,7 +1129,7 @@
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
       "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)",
       "MaxSilenceReaps": "3 — silence reaps of one stage before the machine stops relaunching and asks for a person (internal/daemon/board_failure.go). Uncharged against DefaultStageRetries, which is why it needs its own bound.",
-      "deploy-card grace (stuckGraceFor, not a named constant)": "60m = deployTimeout (45m) + StuckRunningGrace (15m) — how long a card recorded as deploying is left alone before the stuck-running sweep judges it (stuckGraceFor, internal/daemon/board_reconcile.go). The deploy has no agent for the sweep to probe, so time is the only evidence available."
+      "deploy-card grace (stuckGraceFor, not a named constant)": "60m = deployTimeout (45m) + StuckRunningGrace (15m) — how long a card recorded as deploying is left alone before the stuck-running sweep judges it (stuckPastGrace, internal/daemon/board_reconcile.go). The deploy registers no agent for the sweep to probe, so the evidence is the engine's own clock where this machine is running it (its dequeue past deployGate, or the last time the queue moved while it waits), and the marker clock everywhere else."
     }
   },
   "stage_defaults": {

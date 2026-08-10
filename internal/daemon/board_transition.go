@@ -1434,9 +1434,17 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// has not started yet, and only the log can say which of the two a stalled
 	// operator is looking at.
 	logger := d.Logger.With().Str("pm", pmKey).Str("branch", branch).Logger()
+	// Announce the run to the stuck-running sweep. The ticket's marker clock
+	// started before this call and cannot see the queue, so a deploy waiting its
+	// turn read as one that had died (SC-4150); the registry is the only place
+	// the engine's own progress is knowable, since a deploy runs in-process and
+	// registers no agent the sweep could list.
+	deployRunQueued(pmKey, time.Now())
+	defer deployRunFinished(pmKey)
 	logger.Info().Msg("deploy: queued")
 	deployGate.Lock()
 	defer deployGate.Unlock()
+	deployRunDequeued(pmKey, time.Now())
 	ctx, cancel := context.WithTimeout(ctx, deployTimeout)
 	defer cancel()
 	logger.Info().Dur("timeout", deployTimeout).Msg("deploy: started")
