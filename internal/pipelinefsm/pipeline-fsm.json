@@ -763,16 +763,27 @@
         "handed-off",
         "reviewed",
         "stopped",
-        "substrate-down",
-        "awaiting-decision"
+        "substrate-down"
       ],
       "dst": "deploying",
       "actor": "user",
       "marker": "[human:deploy-started]",
       "command": "human deploy <KEY>",
       "where": "cmd/cmddeploy/deploy.go RunDeploy → internal/daemon/deploy_entry.go StartDeploy — the shared pre-deploy entry that refuses on an open decision and records the start before the engine (DeployBranch) runs",
-      "guard": "no open [human:options] block on the ticket, unless --override-decision is passed",
-      "doc": "`human deploy KEY`. The one edge into deploying that a person takes, and it is taken by a command rather than by hand — posting the marker yourself posts it twice, which is why this edge carries its own command. The wide src is the honest list of where a CLI deploy starts from: a card whose handoff names the branch (handed-off, reviewed), a card whose deploy already failed (stopped, substrate-down), and a card with --branch given explicitly and no pipeline history at all (filed, ticket-reviewed, planned) — the 15 Backlog-to-Done histories in the replay corpus. awaiting-decision is a source ONLY under --override-decision: the refusal is the default, and overriding it is a person deciding to ship past their own open question. The board's Deploy drop does NOT walk this edge — it fronts the merge with the PR review loop and records pr-review-started (start-pr-review); pre-loop board histories that carry deploy-started walked it before SC-1387."
+      "doc": "`human deploy KEY`. The one edge into deploying that a person takes, and it is taken by a command rather than by hand — posting the marker yourself posts it twice, which is why this edge carries its own command. The wide src is the honest list of where a CLI deploy starts from: a card whose handoff names the branch (handed-off, reviewed), a card whose deploy already failed (stopped, substrate-down), and a card with --branch given explicitly and no pipeline history at all (filed, ticket-reviewed, planned) — the 15 Backlog-to-Done histories in the replay corpus. The board's Deploy drop does NOT walk this edge — it fronts the merge with the PR review loop and records pr-review-started (start-pr-review); pre-loop board histories that carry deploy-started walked it before SC-1387. A card in awaiting-decision walks the separate start-deploy-override edge below, not this one — its command differs and offering this one's plain `human deploy <KEY>` there would be advertising a command the runtime refuses."
+    },
+    {
+      "name": "start-deploy-override",
+      "src": [
+        "awaiting-decision"
+      ],
+      "dst": "deploying",
+      "actor": "user",
+      "marker": "[human:deploy-started]",
+      "command": "human deploy <KEY> --override-decision",
+      "where": "cmd/cmddeploy/deploy.go RunDeploy → internal/daemon/deploy_entry.go StartDeploy — the shared pre-deploy entry that refuses on an open decision and records the start before the engine (DeployBranch) runs",
+      "guard": "--override-decision passed explicitly",
+      "doc": "Split from start-deploy so the way-out an asker in awaiting-decision is handed actually runs: `human deploy <KEY>` alone is refused from this state (deploy_entry.go StartDeploy), so the command this edge advertises carries the flag. awaiting-decision is a source ONLY under this flag — the refusal is the default, and overriding it is a person deciding to ship past their own open question, never an agent's default path."
     },
     {
       "name": "pr-opened",
