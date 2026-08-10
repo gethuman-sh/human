@@ -49,7 +49,7 @@ func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployReq
 		if !req.OverrideDecision {
 			return errors.WrapWithDetails(ErrDeployAwaitingDecision,
 				"deploy refused: this ticket is waiting on a decision — answer the open [human:options] block, or re-run with --override-decision",
-				"pm", req.PMKey, "stage", string(card.Stage))
+				"pm", req.PMKey, "stage", string(card.OptionsStage))
 		}
 		// openOptionsBlock (board_options.go:127-137) retires the open block on
 		// ANY later BoardRunning-classified marker, and deploy-started is one — so
@@ -58,9 +58,19 @@ func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployReq
 		override = "\noverride: deployed with an open decision on stage " + string(card.OptionsStage) +
 			" — " + card.OptionsContext
 	}
-	// Best-effort, exactly like the PR loop's converging marker: the merge is the
-	// work, and refusing to ship over a lost sentence trades code for a comment.
 	if _, err := d.Commenter.AddComment(ctx, req.PMKey, deployStartedBody(req.Branch, override)); err != nil {
+		if req.OverrideDecision {
+			// The override line is the ONLY record that a ship walked past an open
+			// decision. Nothing has been pushed yet, so failing closed costs
+			// nothing — a lost post here would leave the board silently forgetting
+			// the question was ever asked, exactly what the comment above warns
+			// against.
+			return errors.WrapWithDetails(err, "posting the deploy-started override record; refusing to ship an unrecorded override",
+				"pm", req.PMKey)
+		}
+		// Best-effort, exactly like the PR loop's converging marker: the merge is
+		// the work, and refusing to ship over a lost sentence trades code for a
+		// comment.
 		d.Logger.Warn().Err(err).Str("pm", req.PMKey).
 			Msg("deploy: could not record the start on the ticket; continuing to the gate")
 	}
