@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
-
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -92,12 +90,13 @@ func outageHandoverBody(stage BoardStage, reason string, waited time.Duration, s
 // is finally told. It charges nothing: SC-2307's rule that an outage never
 // spends the budget a genuine failure needs is untouched by this — the wait is
 // ended, not reclassified as a failure of the work.
-func handOverOutage(ctx context.Context, pmKey string, derived BoardCard, postFailed FailedMarkerPoster, waited time.Duration, since time.Time, daemonID string, logger zerolog.Logger) bool {
+func handOverOutage(ctx context.Context, pmKey string, derived BoardCard, deps ReconcileDeps, waited time.Duration, since time.Time) bool {
+	logger := deps.Logger
 	body := outageHandoverBody(derived.Stage, derived.Error, waited, since)
 	if body == "" {
 		return false
 	}
-	if err := postFailed(ctx, pmKey, body); err != nil {
+	if err := deps.PostFailed(ctx, pmKey, body); err != nil {
 		logger.Warn().Err(err).Str("pm", pmKey).
 			Msg("board reconcile: cannot hand an unending outage to a person, leaving the card waiting")
 		return false

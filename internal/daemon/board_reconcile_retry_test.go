@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
-
 	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/stretchr/testify/require"
 )
@@ -32,8 +30,7 @@ func TestReconcileStuckRunning_RelaunchesAfterReddening(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "the card is reddened")
 	require.Len(t, posted, 1, "the failed marker is the trail record")
@@ -67,8 +64,7 @@ func TestReconcileStuckRunning_OpenSameStageOptionsIsCleanPause(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n, "an open same-stage options block is a clean pause, not a hang")
 	require.Empty(t, posted, "no failed marker for a card parked on its own decision")
@@ -103,8 +99,7 @@ func TestReconcileStuckRunning_RecordedStopVerdictIsNotAHang(t *testing.T) {
 				Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 			}
 
-			n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-				capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+			n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 			require.Equal(t, 0, n, "a recorded stop verdict is a deliberate ending, not a hang")
 			require.Empty(t, posted, "no failed marker for work a gate stopped on purpose")
@@ -135,8 +130,7 @@ func TestReconcileStuckRunning_ContinueVerdictStillReds(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "a ready verdict means the work continues, so a dead stage is still a hang")
 	require.Equal(t, []BoardStage{BoardPlanning}, relaunched)
@@ -165,8 +159,7 @@ func TestReconcileStuckRunning_OpenOptionsForEarlierStageIsCleanPause(t *testing
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n, "an open earlier-stage options block is a clean pause, not a hang")
 	require.Empty(t, posted, "no failed marker for a card parked on a question about an earlier phase")
@@ -195,8 +188,7 @@ func TestReconcileOutage_RelaunchesWhenAgentDead(t *testing.T) {
 
 	var posted []struct{ Key, Body string }
 
-	n, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, "d1", now, zerolog.Nop())
+	n, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "the outage card is re-driven")
 	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
@@ -225,7 +217,7 @@ func TestReconcileOutage_SkipsWhenAgentAlive(t *testing.T) {
 	}
 	alive := liveAgents(agentNameFor("SC-1", BoardImplementation))
 
-	n, _ := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), alive, nil, retry, "d1", now, zerolog.Nop())
+	n, _ := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: alive, Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n, "a live agent means the relaunch already happened")
 	require.Empty(t, relaunched)
@@ -255,8 +247,7 @@ func TestReconcileOutage_SignalBasedOutageRedriveDoesNotCharge(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		nil, retry, "d1", now, zerolog.Nop())
+	n, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "a signal-based outage card is still re-driven")
 	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
@@ -288,7 +279,7 @@ func TestReconcileOutage_WaitsUntilResumeTime(t *testing.T) {
 		var relaunched []BoardStage
 		r := retry
 		r.Relaunch = func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil }
-		reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), nil, r, "d1", at, zerolog.Nop())
+		reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: r, DaemonID: "d1"}, at)
 		return relaunched
 	}
 
@@ -313,7 +304,7 @@ func TestReconcileOutage_IgnoresNonOutageCards(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n, _ := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), nil, retry, "d1", now, zerolog.Nop())
+	n, _ := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n)
 	require.Empty(t, relaunched)
@@ -336,8 +327,7 @@ func TestReconcileStuckRunning_RelaunchRespectsTheBudget(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, nil, nil, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "the card is still reddened for a human")
 	require.Empty(t, relaunched, "a spent budget stops the automatic relaunch")

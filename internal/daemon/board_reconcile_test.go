@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -77,10 +76,10 @@ func TestReconcileOrphanedHandoffs_LaunchesReviewForOrphan(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0))},
 	}}
 	var chained []string
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), nil, func(pmKey string) error {
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(pmKey string) error {
 		chained = append(chained, pmKey)
 		return nil
-	}, zerolog.Nop())
+	}})
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, []string{"SC-1"}, chained)
@@ -98,7 +97,7 @@ func TestReconcileOrphanedHandoffs_SkipsWhenReviewStarted(t *testing.T) {
 		},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }})
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -115,7 +114,7 @@ func TestReconcileOrphanedHandoffs_SkipsWhenReviewComplete(t *testing.T) {
 		},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }})
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -129,7 +128,7 @@ func TestReconcileOrphanedHandoffs_SkipsRunningBuild(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", time.Unix(1, 0))},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }})
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -146,7 +145,7 @@ func TestReconcileOrphanedHandoffs_SkipsUnreachableBranch(t *testing.T) {
 	}}
 	unreachable := func(string) ProbeResult { return ProbeResult{Status: ProbeAbsent} }
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, unreachable), nil, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, unreachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }})
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -161,7 +160,7 @@ func TestReconcileOrphanedHandoffs_PassesHandoffBranchToProbe(t *testing.T) {
 	}}
 	var probed string
 	reachable := func(branch string) ProbeResult { probed = branch; return ProbeResult{Status: ProbePresent} }
-	n := reconcileOrphanedHandoffs(reviewSet(cards, reachable), nil, func(string) error { return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, reachable), ReconcileDeps{ChainReview: func(string) error { return nil }})
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, "autofix/sc-1", probed)
@@ -182,7 +181,7 @@ func TestReconcileOrphanedHandoffs_SkipsPhantomCommits(t *testing.T) {
 		return ProbeResult{Status: ProbeAbsent}
 	}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }})
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called, "a phantom-commit handoff must not chain a review")
@@ -199,7 +198,7 @@ func TestReconcileOrphanedHandoffs_ChainsWhenCommitsPresent(t *testing.T) {
 	}}
 	commitsPresent := func(string, []string) ProbeResult { return ProbeResult{Status: ProbePresent} }
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }})
 
 	assert.Equal(t, 1, n)
 	assert.True(t, called)
@@ -219,7 +218,7 @@ func TestReconcileOrphanedHandoffs_LeavesUnreadableCommits(t *testing.T) {
 		return ProbeResult{Status: ProbeUnreadable, Detail: "probe timed out"}
 	}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), commitsPresent, func(string) error { called = true; return nil }, zerolog.Nop())
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }})
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called, "an unreadable commit check must not chain a review")
@@ -242,7 +241,12 @@ func TestRunBoardReconcile_RecoversOrphanWithNoLiveEvent(t *testing.T) {
 	ctx := t.Context()
 	// A long interval proves the recovery comes from the immediate startup pass,
 	// not a ticker tick.
-	go RunBoardReconcile(ctx, lister, alwaysReachable, nil, nil, nil, nil, nil, nil, nil, nil, chain, nil, StageRetry{}, nil, nil, "", time.Hour, zerolog.Nop())
+	go RunBoardReconcile(ctx, ReconcileDeps{
+		ListCards:   lister,
+		Reachable:   alwaysReachable,
+		ChainReview: chain,
+		Interval:    time.Hour,
+	})
 
 	select {
 	case pmKey := <-chained:
@@ -269,7 +273,7 @@ func TestReconcileShippedFailures_MergedPRClearsRed(t *testing.T) {
 		postedKey, postedURL = pmKey, prURL
 		return nil
 	}
-	n := reconcileShippedFailures(context.Background(), ownWork(cards), merged, post, zerolog.Nop())
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post})
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, "SC-1", postedKey)
@@ -288,7 +292,7 @@ func TestReconcileShippedFailures_UnmergedPRLeftRed(t *testing.T) {
 	posted := false
 	merged := func(_ context.Context, _ string) (bool, error) { return false, nil }
 	post := func(_ context.Context, _, _ string) error { posted = true; return nil }
-	n := reconcileShippedFailures(context.Background(), ownWork(cards), merged, post, zerolog.Nop())
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post})
 
 	assert.Equal(t, 0, n)
 	assert.False(t, posted)
@@ -304,7 +308,7 @@ func TestReconcileShippedFailures_NoPRURLSkipped(t *testing.T) {
 	probed := false
 	merged := func(_ context.Context, _ string) (bool, error) { probed = true; return true, nil }
 	post := func(_ context.Context, _, _ string) error { return nil }
-	n := reconcileShippedFailures(context.Background(), ownWork(cards), merged, post, zerolog.Nop())
+	n := reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post})
 
 	assert.Equal(t, 0, n)
 	assert.False(t, probed)
@@ -314,7 +318,7 @@ func TestReconcileShippedFailures_NoPRURLSkipped(t *testing.T) {
 func TestReconcileShippedFailures_NilDepsDisabled(t *testing.T) {
 	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
 		cmt("[human:deploy-failed]\nx\npr: https://github.com/o/r/pull/7", time.Unix(1, 0))}}}
-	assert.Equal(t, 0, reconcileShippedFailures(context.Background(), ownWork(cards), nil, nil, zerolog.Nop()))
+	assert.Equal(t, 0, reconcileShippedFailures(context.Background(), ownWork(cards), ReconcileDeps{}))
 }
 
 // liveAgents is the test lister: the set of board agent names currently running
@@ -345,7 +349,7 @@ func TestReconcileStuckRunning_FailsAgedRunningOrphanWithNoAgent(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -363,7 +367,7 @@ func TestReconcileStuckRunning_SkipsWithinGrace(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -379,7 +383,7 @@ func TestReconcileStuckRunning_SkipsWhenAgentAlive(t *testing.T) {
 	}}
 	var posted []struct{ Key, Body string }
 	live := liveAgents(agentNameFor("SC-1", BoardImplementation))
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), live, capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: live, PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -397,7 +401,7 @@ func TestReconcileStuckRunning_SkipsNonRunning(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -412,7 +416,7 @@ func TestReconcileStuckRunning_CoversVerificationStage(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:review-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 1, n)
 	assert.Len(t, posted, 1)
@@ -428,7 +432,7 @@ func TestReconcileStuckRunning_NilListerDisables(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-StuckRunningGrace-time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), nil, capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, posted)
@@ -450,7 +454,7 @@ func TestReconcileStuckRunning_SkipsJustDecidedCard(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 0, n, "a just-decided card must never be reddened")
 	assert.Empty(t, posted)
@@ -470,7 +474,7 @@ func TestReconcilePRLoop_RedrivesStalled(t *testing.T) {
 	var driven []string
 	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
 
-	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), liveAgents(), drive, zerolog.Nop())
+	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), DriveLoop: drive})
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, []string{"SC-1"}, driven)
@@ -490,7 +494,7 @@ func TestReconcilePRLoop_SkipsWhenAgentAlive(t *testing.T) {
 	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
 	live := liveAgents(agentNameFor("SC-1", prReviewAgentStage))
 
-	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), live, drive, zerolog.Nop())
+	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: live, DriveLoop: drive})
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, driven)
@@ -506,7 +510,7 @@ func TestReconcilePRLoop_SkipsPlainDeploy(t *testing.T) {
 	var driven []string
 	drive := func(pmKey string) error { driven = append(driven, pmKey); return nil }
 
-	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), liveAgents(), drive, zerolog.Nop())
+	n := reconcilePRLoops(context.Background(), reviewSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), DriveLoop: drive})
 
 	assert.Equal(t, 0, n)
 	assert.Empty(t, driven)
@@ -525,7 +529,7 @@ func TestReconcileStuckRunning_SkipsActiveLoop(t *testing.T) {
 		},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 0, n, "a mid-flight PR loop must never be reddened by the stuck pass")
 	assert.Empty(t, posted)

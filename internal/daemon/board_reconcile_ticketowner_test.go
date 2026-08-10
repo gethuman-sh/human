@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -95,16 +94,18 @@ func TestReconcileOnce_AnotherPersonsWorkIsUntouchedAcrossEveryPass(t *testing.T
 	var chained, driven []string
 	var posted []struct{ Key, Body string }
 	cleared := 0
-	gate := WorkGate{reachable: alwaysReachable, daemonID: "d1", identityFor: asPerson("Alice")}
-
-	reconcileOnce(context.Background(), lister, gate,
-		nil,
-		func(context.Context, string) (bool, error) { return true, nil },
-		func(context.Context, string, string) error { cleared++; return nil },
-		liveAgents(), capturingPoster(&posted), nil,
-		func(k string) error { chained = append(chained, k); return nil },
-		func(k string) error { driven = append(driven, k); return nil },
-		StageRetry{}, nil, nil, "d1", zerolog.Nop())
+	reconcileOnce(context.Background(), ReconcileDeps{
+		ListCards:    lister,
+		Reachable:    alwaysReachable,
+		IdentityFor:  asPerson("Alice"),
+		MergedProbe:  func(context.Context, string) (bool, error) { return true, nil },
+		PostDeployed: func(context.Context, string, string) error { cleared++; return nil },
+		LiveAgents:   liveAgents(),
+		PostFailed:   capturingPoster(&posted),
+		ChainReview:  func(k string) error { chained = append(chained, k); return nil },
+		DriveLoop:    func(k string) error { driven = append(driven, k); return nil },
+		DaemonID:     "d1",
+	})
 
 	assert.Empty(t, chained, "another person's handoff is not reviewed")
 	assert.Empty(t, driven, "another person's loop is not re-driven")
@@ -129,7 +130,7 @@ func TestReconcileShippedFailures_ClearsEvenWhenTheBranchIsGone(t *testing.T) {
 	merged := func(context.Context, string) (bool, error) { return true, nil }
 	post := func(context.Context, string, string) error { posted = true; return nil }
 
-	n := reconcileShippedFailures(context.Background(), gate.forOwnWork(cards), merged, post, zerolog.Nop())
+	n := reconcileShippedFailures(context.Background(), gate.forOwnWork(cards), ReconcileDeps{MergedProbe: merged, PostDeployed: post})
 
 	assert.Equal(t, 1, n)
 	assert.True(t, posted, "an unreachable branch must not hide a shipped PR")
@@ -157,12 +158,15 @@ func TestReconcileOnce_PRLoopStartedElsewhereIsNotRedriven(t *testing.T) {
 	drive := func(cards []ReconcileCard) []string {
 		var driven []string
 		lister := func(context.Context) ([]ReconcileCard, error) { return cards, nil }
-		reconcileOnce(context.Background(), lister,
-			WorkGate{reachable: alwaysReachable, daemonID: "d1", identityFor: asPerson("Alice")},
-			nil, nil, nil, liveAgents(), nil, nil,
-			func(string) error { return nil },
-			func(k string) error { driven = append(driven, k); return nil },
-			StageRetry{}, nil, nil, "d1", zerolog.Nop())
+		reconcileOnce(context.Background(), ReconcileDeps{
+			ListCards:   lister,
+			Reachable:   alwaysReachable,
+			IdentityFor: asPerson("Alice"),
+			LiveAgents:  liveAgents(),
+			ChainReview: func(string) error { return nil },
+			DriveLoop:   func(k string) error { driven = append(driven, k); return nil },
+			DaemonID:    "d1",
+		})
 		return driven
 	}
 

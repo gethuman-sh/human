@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gethuman-sh/human/internal/marker"
@@ -124,13 +123,15 @@ func TestReconcileOnce_UnreachableWorkIsUntouchedAcrossEveryPass(t *testing.T) {
 	}
 	var chained, driven []string
 	var posted []struct{ Key, Body string }
-	gate := WorkGate{reachable: neverReachable, daemonID: "d1"}
-
-	reconcileOnce(context.Background(), lister, gate,
-		nil, nil, nil, liveAgents(), capturingPoster(&posted), nil,
-		func(k string) error { chained = append(chained, k); return nil },
-		func(k string) error { driven = append(driven, k); return nil },
-		StageRetry{}, nil, nil, "d1", zerolog.Nop())
+	reconcileOnce(context.Background(), ReconcileDeps{
+		ListCards:   lister,
+		Reachable:   neverReachable,
+		LiveAgents:  liveAgents(),
+		PostFailed:  capturingPoster(&posted),
+		ChainReview: func(k string) error { chained = append(chained, k); return nil },
+		DriveLoop:   func(k string) error { driven = append(driven, k); return nil },
+		DaemonID:    "d1",
+	})
 
 	assert.Empty(t, chained, "an unreachable handoff is not reviewed")
 	assert.Empty(t, driven, "an unreachable loop is not re-driven")

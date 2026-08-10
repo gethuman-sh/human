@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -44,8 +43,7 @@ func TestReconcileQueuedLaunch_StartsAStageThatNeverLaunched(t *testing.T) {
 	var relaunched []BoardStage
 	attempts := 0
 
-	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		queuedRetry(&relaunched, &attempts), "d1", now, zerolog.Nop())
+	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: queuedRetry(&relaunched, &attempts), DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "the decided card is started")
 	require.Equal(t, []BoardStage{BoardImplementation}, relaunched, "and started at the stage the block named")
@@ -66,8 +64,7 @@ func TestReconcileQueuedLaunch_StartsDespiteANeedsInputExit(t *testing.T) {
 	require.Equal(t, relaunchNone, classifyRelaunch(ExitNeedsInput, true),
 		"precondition: this exit is the one tryRelaunch refuses to act on")
 
-	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		retry, "d1", now, zerolog.Nop())
+	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "the answered decision supersedes the exit that asked the question")
 	require.Equal(t, []BoardStage{BoardPlanning}, relaunched)
@@ -81,8 +78,7 @@ func TestReconcileQueuedLaunch_LeavesALaunchStillInFlight(t *testing.T) {
 	var relaunched []BoardStage
 	attempts := 0
 
-	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		queuedRetry(&relaunched, &attempts), "d1", now, zerolog.Nop())
+	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: queuedRetry(&relaunched, &attempts), DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n, "inside the grace the launch is presumed on its way")
 	require.Empty(t, relaunched)
@@ -97,9 +93,7 @@ func TestReconcileQueuedLaunch_SkipsWhenTheStageAgentIsAlive(t *testing.T) {
 	var relaunched []BoardStage
 	attempts := 0
 
-	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable),
-		liveAgents(agentNameFor("SC-1", BoardImplementation)),
-		queuedRetry(&relaunched, &attempts), "d1", now, zerolog.Nop())
+	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(agentNameFor("SC-1", BoardImplementation)), Retry: queuedRetry(&relaunched, &attempts), DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n, "a live agent means the launch is not missing")
 	require.Empty(t, relaunched)
@@ -114,8 +108,7 @@ func TestReconcileQueuedLaunch_StopsAtTheAttemptCap(t *testing.T) {
 	retry := queuedRetry(&relaunched, &attempts)
 
 	for range 4 {
-		reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-			retry, "d1", now, zerolog.Nop())
+		reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
 	}
 
 	require.Len(t, relaunched, 2, "DefaultStageRetries bounds it — the card is left for a person after that")
@@ -136,8 +129,7 @@ func TestReconcileQueuedLaunch_DoesNotChargeARefusedLaunch(t *testing.T) {
 		Uncount:  func(string, BoardStage) { uncounted++ },
 	}
 
-	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		retry, "d1", now, zerolog.Nop())
+	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n, "nothing started, so nothing was recovered")
 	require.Equal(t, 1, uncounted, "and the charged attempt is rolled back")
@@ -158,8 +150,7 @@ func TestReconcileQueuedLaunch_IgnoresCardsThatAreNotQueued(t *testing.T) {
 	var relaunched []BoardStage
 	attempts := 0
 
-	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		queuedRetry(&relaunched, &attempts), "d1", now, zerolog.Nop())
+	n := reconcileQueuedLaunch(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: queuedRetry(&relaunched, &attempts), DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n)
 	require.Empty(t, relaunched)

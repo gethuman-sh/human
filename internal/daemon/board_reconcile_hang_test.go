@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -64,11 +63,7 @@ func TestReconcileStuckRunning_HungAgentIsStoppedReddenedAndRelaunched(t *testin
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
-		progressAt(now.Add(-IdleGrace-time.Minute), false, false),
-		func(name string) error { stopped = append(stopped, name); return nil },
-		"d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), Retry: retry, Progress: progressAt(now.Add(-IdleGrace-time.Minute), false, false), StopAgent: func(name string) error { stopped = append(stopped, name); return nil }, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "the hung card is reddened")
 	require.Equal(t, []string{"board-SC-1-implementation"}, stopped,
@@ -96,11 +91,7 @@ func TestReconcileStuckRunning_DeadNoAgentStillCharges(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
-		liveAgents(), capturingPoster(&posted), retry,
-		progressAt(now.Add(-time.Hour), false, false),
-		func(string) error { t.Fatal("no live agent to stop"); return nil },
-		"d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, Progress: progressAt(now.Add(-time.Hour), false, false), StopAgent: func(string) error { t.Fatal("no live agent to stop"); return nil }, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "the dead-end card is still reddened")
 	require.True(t, attemptsCalled, "a vanished agent is a genuine death and stays charged")
@@ -117,11 +108,7 @@ func TestReconcileStuckRunning_ActiveAgentIsLeftAlone(t *testing.T) {
 	var posted []struct{ Key, Body string }
 	var stopped []string
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
-		progressAt(now.Add(-10*time.Second), false, false),
-		func(name string) error { stopped = append(stopped, name); return nil },
-		"d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), Progress: progressAt(now.Add(-10*time.Second), false, false), StopAgent: func(name string) error { stopped = append(stopped, name); return nil }, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n)
 	require.Empty(t, posted)
@@ -135,11 +122,8 @@ func TestReconcileStuckRunning_LongToolCallIsNotAHang(t *testing.T) {
 	var posted []struct{ Key, Body string }
 	var stopped []string
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
-		progressAt(now.Add(-10*time.Minute), true, false), // inside a tool call
-		func(name string) error { stopped = append(stopped, name); return nil },
-		"d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), Progress: progressAt(now.Add(-10*time.Minute), true, false), StopAgent: // inside a tool call
+	func(name string) error { stopped = append(stopped, name); return nil }, DaemonID:                                                                                                                                                                                                "d1"}, now)
 
 	require.Equal(t, 0, n, "a running suite must not be killed")
 	require.Empty(t, stopped)
@@ -151,11 +135,8 @@ func TestReconcileStuckRunning_BlockedAgentIsNotHung(t *testing.T) {
 	var posted []struct{ Key, Body string }
 	var stopped []string
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
-		progressAt(now.Add(-time.Hour), false, true), // blocked on a human
-		func(name string) error { stopped = append(stopped, name); return nil },
-		"d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), Progress: progressAt(now.Add(-time.Hour), false, true), StopAgent: // blocked on a human
+	func(name string) error { stopped = append(stopped, name); return nil }, DaemonID:                                                                                                                                                                                           "d1"}, now)
 
 	require.Equal(t, 0, n)
 	require.Empty(t, stopped)
@@ -168,16 +149,12 @@ func TestReconcileStuckRunning_UnknownProgressLeavesLiveWorkAlone(t *testing.T) 
 	var posted []struct{ Key, Body string }
 
 	unknown := func(string) (AgentProgress, bool) { return AgentProgress{}, false }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
-		unknown, func(string) error { return nil }, "d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), Progress: unknown, StopAgent: func(string) error { return nil }, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n)
 
 	// Same when no probe is wired at all — previous behaviour, unchanged.
-	n = reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), StageRetry{},
-		nil, nil, "d1", now, zerolog.Nop())
+	n = reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), DaemonID: "d1"}, now)
 	require.Equal(t, 0, n)
 }
 
@@ -196,11 +173,7 @@ func TestReconcileStuckRunning_SilenceReapGivesUpAfterCap(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCardWithPriorReaps(now, MaxSilenceReaps), alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
-		progressAt(now.Add(-IdleGrace-time.Minute), false, false),
-		func(name string) error { stopped = append(stopped, name); return nil },
-		"d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCardWithPriorReaps(now, MaxSilenceReaps), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), Retry: retry, Progress: progressAt(now.Add(-IdleGrace-time.Minute), false, false), StopAgent: func(name string) error { stopped = append(stopped, name); return nil }, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, n, "the card is still reddened with the give-up marker")
 	require.Empty(t, relaunched, "the cap is spent — the stage must not be relaunched again")
@@ -224,11 +197,7 @@ func TestReconcileStuckRunning_SilenceReapGiveUpDedup(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
-		progressAt(now.Add(-IdleGrace-time.Minute), false, false),
-		func(string) error { return nil },
-		"d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), Retry: retry, Progress: progressAt(now.Add(-IdleGrace-time.Minute), false, false), StopAgent: func(string) error { return nil }, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n, "already given up — nothing more is posted")
 	require.Empty(t, relaunched)
@@ -248,11 +217,7 @@ func TestReconcileStuckRunning_FailedStopDoesNotRelaunch(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable),
-		liveAgents("board-SC-1-implementation"), capturingPoster(&posted), retry,
-		progressAt(now.Add(-time.Hour), false, false),
-		func(string) error { return errors.New("docker unavailable") },
-		"d1", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(runningCard(now), alwaysReachable), ReconcileDeps{LiveAgents: liveAgents("board-SC-1-implementation"), PostFailed: capturingPoster(&posted), Retry: retry, Progress: progressAt(now.Add(-time.Hour), false, false), StopAgent: func(string) error { return errors.New("docker unavailable") }, DaemonID: "d1"}, now)
 
 	require.Equal(t, 0, n)
 	require.Empty(t, relaunched, "never relaunch while the hung agent may still be running")

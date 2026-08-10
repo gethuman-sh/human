@@ -80,8 +80,7 @@ func TestReconcileOutage_HandsAnUnendingWaitToAPerson(t *testing.T) {
 	}
 	var posted []struct{ Key, Body string }
 
-	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, "d1", now, zerolog.Nop())
+	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Zero(t, redriven, "a wait past the bound is not relaunched again")
 	require.Equal(t, 1, handedOver)
@@ -116,8 +115,7 @@ func TestReconcileOutage_HandoverIsIdempotent(t *testing.T) {
 	}
 	var posted []struct{ Key, Body string }
 
-	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		capturingPoster(&posted), retry, "d1", now, zerolog.Nop())
+	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Zero(t, redriven)
 	require.Zero(t, handedOver)
@@ -140,8 +138,7 @@ func TestReconcileOutage_WithoutAPosterKeepsWaiting(t *testing.T) {
 		Relaunch: func(_ string, s BoardStage) (bool, error) { relaunched = append(relaunched, s); return true, nil },
 	}
 
-	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(),
-		nil, retry, "d1", now, zerolog.Nop())
+	redriven, handedOver := reconcileOutage(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
 
 	require.Equal(t, 1, redriven)
 	require.Zero(t, handedOver)
