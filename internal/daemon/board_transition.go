@@ -349,6 +349,19 @@ func (d BoardTransitionDeps) applyTransition(ctx context.Context, req BoardTrans
 // forward-only path — and err carries that dispatch's own result.
 func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (handled bool, launched bool, err error) {
 	switch {
+	// Queued launch: a decision was answered and the stage it named has not
+	// started. The card derives to (that stage, queued) — a state none of the
+	// retry rules below admits, so this fell through to the forward-only rule and
+	// was rejected as a non-advance. That made reconcileQueuedLaunch, the pass
+	// added to start exactly these cards (SC-3865), unable to start any of them:
+	// every attempt was refused, charged against the retry budget, and the card
+	// left where it was. Dispatched first because a queued card matches this rule
+	// and no other, and because it is also the human override for a card held
+	// behind a ticket it was told to wait for.
+	case isQueuedLaunch(req.To, card):
+		launched, err := d.launchDecidedStage(ctx, req.PMKey, req.To, card, comments, choiceLabel(comments))
+		return true, launched, err
+
 	// Rework loop: a build whose review failed may be rebuilt. This is the ONE
 	// sanctioned backward move — the executor is re-dispatched with the review
 	// findings, and the resulting handoff chains into a fresh review.
@@ -527,27 +540,48 @@ func (d BoardTransitionDeps) ApplyFix(ctx context.Context, req BoardFixRequest) 
 	if _, state := latestStageState(comments, BoardVerification); state == BoardRunning {
 		return nil
 	}
-	// The --board marker is the mechanical gate that keeps a board run from
-	// pushing: the container holds no push/PR credentials, and the daemon's
-	// Deploy stage owns push → PR → CI → merge on the host against the
-	// bind-mounted repo. The skill and fixer branch on this flag to stop at the
-	// review handoff. Relying on the HUMAN_AGENT_NAME env var alone let a fixer
-	// push and fail — the fix completed and passed review but the card ended red
-	// (SC-252).
-	// The autofix pipeline triages, plans and fixes in one run, so it legitimately
-	// launches the implementation stage with no pre-written plan: requiresPlan is
-	// false (SC-2596).
-	launched, err := d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-		"/human-autofix "+req.PMKey+" --board", WaitCause(""), false)
+	_, err = d.launchFixPipeline(ctx, req.PMKey, fixBug, "")
+	return err
+}
+
+// launchFixPipeline starts the self-planning fix pipeline that owns a ticket and
+// records which one it is. extra is appended to the prompt, so a run resumed by
+// a decision carries the direction that resumed it.
+//
+// The --board marker is the mechanical gate that keeps a board run from pushing:
+// the container holds no push/PR credentials, and the daemon's Deploy stage owns
+// push → PR → CI → merge on the host against the bind-mounted repo. The skill
+// and fixer branch on this flag to stop at the review handoff. Relying on the
+// HUMAN_AGENT_NAME env var alone let a fixer push and fail — the fix completed
+// and passed review but the card ended red (SC-252).
+//
+// These pipelines triage, plan and fix in one run, so they legitimately launch
+// the implementation stage with no pre-written plan: requiresPlan is false
+// (SC-2596).
+//
+// It carries NO idempotency guard of its own. The two gesture entry points
+// (ApplyFix, ApplySecurityFix) check for a running stage before calling; the
+// paths that resume a decision must not, because the agent that RAISED the
+// decision leaves a [human:implementation-started] marker standing — a stage
+// that pauses on an open block posts no *-failed marker (stagePausedOnOptions),
+// so a marker-shaped guard reads the dead run as live and swallows the resume.
+// Those paths establish liveness the honest way, from the running containers.
+func (d BoardTransitionDeps) launchFixPipeline(ctx context.Context, pmKey string, kind fixPipeline, extra string) (bool, error) {
+	skill, identity := "/human-autofix ", "fix"
+	if kind == fixSecurity {
+		skill, identity = "/human-security-fix ", "security"
+	}
+	launched, err := d.startAgentStage(ctx, pmKey, BoardImplementation, ImplementationStartedHeader,
+		skill+pmKey+" --board"+extra, WaitCause(""), false)
 	if launched {
 		// Record which pipeline this run is, durably on the ticket, so a later
-		// recovery relaunch restarts the FIX pipeline even if the ticket-kind
+		// recovery relaunch restarts the SAME pipeline even if the ticket-kind
 		// fetch blips and no verdict has been posted yet (SC-2989).
-		_ = postMarker(ctx, d.Commenter, req.PMKey, marker.Marker{
-			Type: MarkerPipeline, Fields: fields("kind", "fix"),
+		_ = postMarker(ctx, d.Commenter, pmKey, marker.Marker{
+			Type: MarkerPipeline, Fields: fields("kind", identity),
 		})
 	}
-	return err
+	return launched, err
 }
 
 // SecurityFixRequest is the wire request for launching the security-fix pipeline
@@ -577,18 +611,7 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 	if _, state := latestStageState(comments, BoardVerification); state == BoardRunning {
 		return nil
 	}
-	// Like autofix, the security-fix pipeline produces its own plan within the
-	// run, so requiresPlan is false (SC-2596).
-	launched, err := d.startAgentStage(ctx, req.PMKey, BoardImplementation, ImplementationStartedHeader,
-		"/human-security-fix "+req.PMKey+" --board", WaitCause(""), false)
-	if launched {
-		// Durable pipeline identity, mirroring ApplyFix: a recovery relaunch reads
-		// this first and restarts the security-fix pipeline rather than refusing the
-		// run for having no plan (SC-2989).
-		_ = postMarker(ctx, d.Commenter, req.PMKey, marker.Marker{
-			Type: MarkerPipeline, Fields: fields("kind", "security"),
-		})
-	}
+	_, err = d.launchFixPipeline(ctx, req.PMKey, fixSecurity, "")
 	return err
 }
 
@@ -1128,7 +1151,14 @@ func decisionContext(outcome PRLoopOutcome) string {
 // It records the choice exactly as a human's click records it — same
 // [human:option-chosen] marker, same relaunch — so the trail reads the same
 // whoever made the call, and the card is never resumed without a record.
+//
+// The one thing it will not take from the fixer is a WAIT. Putting this ticket
+// behind another one is a sequencing judgement about a backlog, which is the
+// class of call the daemon may never make for itself; taken here it would also
+// hold the card on a decision no person ever saw. Dropped rather than refused —
+// the direction itself is still worth pursuing, and this way the loop moves.
 func (d BoardTransitionDeps) pursueSoleDirection(ctx context.Context, pmKey string, comments []tracker.Comment, only BoardOption) error {
+	only.WaitsFor = ""
 	return d.pursueDecision(ctx, pmKey, comments, BoardImplementation, only)
 }
 
@@ -1978,6 +2008,67 @@ func isDuplicateDrop(to BoardStage, card BoardCard) bool {
 // is exactly a live, undecided fork (SC-1857).
 func awaitingDecision(card BoardCard) bool {
 	return len(card.Options) > 0
+}
+
+// launchDecidedStage starts the stage a recorded decision named, with the
+// direction that decided it injected into the prompt.
+//
+// An implementation launch is routed to the self-planning fix pipeline that
+// owns the ticket when there is one. An autofix or security-fix run raises its
+// decision in PREFLIGHT, before it has written a plan, so handing the answer to
+// the plan executor refuses the launch at the plan gate and drives the card into
+// planning instead — the SC-2986 class, reappearing on the decision path because
+// this was the one relaunch site that never classified the pipeline.
+//
+// A decision is human-initiated, like the Fix/Retry entry points: the interval
+// since the decision became available is the human's think-time, not a pipeline
+// wait, so it is suppressed (empty cause, SC-2462). A plan-executing
+// implementation launch is still plan-gated like every other (SC-2596).
+func (d BoardTransitionDeps) launchDecidedStage(ctx context.Context, pmKey string, stage BoardStage, card BoardCard, comments []tracker.Comment, label string) (bool, error) {
+	direction := ""
+	if label != "" {
+		direction = " — a decision was made on this ticket: pursue the direction in the latest " +
+			OptionChosenHeader + " comment (" + label + ")"
+	}
+	if stage == BoardImplementation {
+		if kind := d.classifyFixPipeline(ctx, pmKey, comments); kind != fixNone {
+			return d.launchFixPipeline(ctx, pmKey, kind, direction)
+		}
+	}
+	return d.startAgentStage(ctx, pmKey, stage, startedHeaderFor(stage),
+		stagePrompt(stage, pmKey, card)+direction, WaitCause(""), stage == BoardImplementation)
+}
+
+// choiceLabel reads the answer text off the ticket's latest recorded choice —
+// the `<id>: <label>` head of its [human:option-chosen] marker. Empty when the
+// ticket carries no choice, which is what a launch with no direction to inject
+// looks like.
+//
+// It exists so a launch the click never made builds the SAME prompt the click
+// would have: the pass that starts a decided stage later has only the ticket to
+// read the answer from.
+func choiceLabel(comments []tracker.Comment) string {
+	chosen, ok := latestOptionChosen(comments)
+	if !ok {
+		return ""
+	}
+	m, ok := marker.ParseBody(chosen.Body)
+	if !ok {
+		return ""
+	}
+	_, label, ok := strings.Cut(m.Head, ":")
+	if !ok {
+		return strings.TrimSpace(m.Head)
+	}
+	return strings.TrimSpace(label)
+}
+
+// isQueuedLaunch reports a card whose answered decision queued a stage that
+// never started, re-dropped on that same stage. Same-stage by definition: the
+// queued placement IS the stage the decision named, so this can only ever start
+// the stage the record asks for, never move the card somewhere else.
+func isQueuedLaunch(to BoardStage, card BoardCard) bool {
+	return card.State == BoardQueued && card.Stage == to
 }
 
 // isReworkTransition reports the one allowed backward move: re-running the
