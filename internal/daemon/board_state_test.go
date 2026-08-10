@@ -945,3 +945,44 @@ func TestDeriveBoardCard_DeployPhaseFollowsTheNewestHalf(t *testing.T) {
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	assert.Equal(t, DeployPhasePRReview, card.DeployPhase)
 }
+
+// TestDeployPhaseFor_FailedLoopCard covers SC-4151 A1's derivation half: a red
+// done-stage card names the loop half that was started under the failure, so
+// AgentNamesForCard can ask whether it is still running. The badge never reads
+// this — it consults DeployPhase only while running.
+func TestDeployPhaseFor_FailedLoopCard(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(markerBody(failureMarker(MarkerPRReviewFailed, "the PR reviewer stopped before recording a verdict")), time.Unix(3, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardFailed, card.State)
+	assert.Equal(t, DeployPhasePRReview, card.DeployPhase, "the half that was running under the red")
+}
+
+// The fix half reddened is named as the fix half.
+func TestDeployPhaseFor_FailedFixHalf(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+		cmt(markerBody(failureMarker(MarkerPRReviewFailed, "the PR fixer stopped before recording an exit")), time.Unix(4, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, DeployPhasePRFix, card.DeployPhase)
+}
+
+// A deploy-path failure names no loop half: answering it with a PR-loop
+// container left over from an earlier round would be a false "still working".
+func TestDeployPhaseFor_FailedDeployNamesNoHalf(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+		cmt(markerBody(marker.Marker{Type: MarkerDeployFixStarted, Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x"), Body: "CI failed"}, "pr", "number", "branch"), time.Unix(4, 0)),
+		cmt(markerBody(failureMarker(MarkerDeployFailed, "the deploy fixer could not resolve the conflict")), time.Unix(5, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardFailed, card.State)
+	assert.Empty(t, card.DeployPhase, "the deploy path started last, so no loop half is claimed")
+}

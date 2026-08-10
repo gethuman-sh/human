@@ -270,6 +270,43 @@ func doneStageLoopHalf(comments []tracker.Comment) string {
 	}
 }
 
+// doneStageStartedHalf names the loop half whose agent was last STARTED in the
+// done stage, looking past a failure marker that landed on top of it.
+//
+// doneStageLoopHalf answers about the newest marker of any kind, which is what
+// "is the loop mid-flight" needs. This answers the different question a red card
+// raises: who would be running this stage, so that whether they still are can be
+// asked at all.
+//
+// It reports nothing when the newest STARTED marker is a deploy or deploy-fix
+// launch rather than a loop half. That is the deliberate narrowing
+// AgentNamesForCard already documents for the deploy fixer: answering a
+// deploy-path failure with a PR-loop container left over from an earlier round
+// would turn an unreaped container into a false "still working".
+func doneStageStartedHalf(comments []tracker.Comment) string {
+	var newest tracker.Comment
+	var half string
+	found := false
+	for _, c := range comments {
+		t := strings.TrimSpace(c.Body)
+		var h string
+		switch {
+		case strings.HasPrefix(t, PRReviewStartedHeader):
+			h = DeployPhasePRReview
+		case strings.HasPrefix(t, PRFixStartedHeader):
+			h = DeployPhasePRFix
+		case strings.HasPrefix(t, DeployStartedHeader), strings.HasPrefix(t, DeployFixStartedHeader):
+			h = "" // a started marker, but not a loop half
+		default:
+			continue
+		}
+		if !found || commentNewer(c, newest) {
+			newest, half, found = c, h, true
+		}
+	}
+	return half
+}
+
 // reconcilePRLoops re-drives a loop card the live exit hook missed: a
 // done/running card whose newest done marker is a loop-started marker and for
 // which no loop half-agent is alive on this machine (a daemon restart lost the

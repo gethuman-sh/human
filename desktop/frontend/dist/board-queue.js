@@ -108,8 +108,8 @@ export const RUNNING_LABELS = {
 };
 // The badge word per half of the pre-merge review→fix loop. Both halves used to
 // read "PR review…", so a card whose live container was -prfix running the PR
-// fixer said the reviewer was working (SC-4151 F15). The daemon carries the
-// datum (BoardViewCard.deployPhase); the copy lives here, as with
+// fixer said the reviewer was working (SC-4151 F15, SC-3569). The daemon
+// carries the datum (BoardViewCard.deployPhase); the copy lives here, as with
 // STOP_DECISION_LABELS.
 export const DEPLOY_PHASE_LABELS = {
     "pr-review": "PR review…",
@@ -138,6 +138,35 @@ export const STOP_DECISION_LABELS = {
         title: "The pre-planning gate concluded this is not a real problem, with the evidence on the card",
     },
 };
+// failedBadge renders a stage's recorded failure — and declines to render it as
+// the last word while an agent for that stage is still working here.
+//
+// A failure marker is durable and a run is not required to have ended when one
+// lands: the loop can record a step dead while its container goes on to finish.
+// Observed on SC-3852 (2026-08-10), where a pr-review-failed marker sat on the
+// card for an hour while the reviewer it described kept making tool calls and
+// then recorded `changes-requested`. The red asked a person to check a pull
+// request, about work that was still being done, and the card lost its running
+// badge in the same instant it gained the error (SC-4151 A1).
+//
+// This is the mirror of livenessBadge: that one refuses to claim work is
+// happening when no agent is behind it, this one refuses to declare it over
+// while one is. The marker is not hidden — the recorded reason stays on the
+// card and in the detail panel — but the badge says the work is still going,
+// because a person sent to intervene on a live run is being sent for nothing.
+// Unknown liveness leaves the plain failure exactly as before.
+function failedBadge(card) {
+    const reason = card.error || "Stage failed";
+    if (card.agentLiveness === "live") {
+        return {
+            cls: "fixing",
+            text: "still working — earlier failure recorded",
+            title: `A failure was recorded for this stage, but an agent is still running it here. Nothing to do yet; the run may still finish. Recorded reason: ${reason}`,
+            spinner: true,
+        };
+    }
+    return { cls: "failed", text: "✕", title: reason };
+}
 // livenessBadge folds the viewer's liveness overlay into a badge that would
 // otherwise assert work is happening.
 //
@@ -295,7 +324,7 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
         };
     }
     if (card.state === "failed")
-        return { cls: "failed", text: "✕", title: card.error || "Stage failed" };
+        return failedBadge(card);
     if (card.state === "resolved") {
         if (card.stage === "planning") {
             // The planner verified the ticket's work is already merged, so there is
