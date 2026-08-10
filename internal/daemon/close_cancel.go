@@ -6,16 +6,17 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/agentname"
 )
 
 // AgentsForPMKey returns the board-agent names in names that belong to pmKey,
 // across every stage. An agent name embeds the sanitized PM key (see
-// agentNameFor), so a live agent is matched by the same sanitize() the launcher
+// agentNameFor), so a live agent is matched by the same agentname.SanitizeKey() the launcher
 // used — not by raw-key equality, which would miss keys carrying characters the
 // name-encoding replaced. Names that are not board agents (or are malformed) are
 // skipped.
 func AgentsForPMKey(names []string, pmKey string) []string {
-	want := sanitize(pmKey)
+	want := agentname.SanitizeKey(pmKey)
 	var out []string
 	for _, name := range names {
 		key, _, ok := parseAgentName(name)

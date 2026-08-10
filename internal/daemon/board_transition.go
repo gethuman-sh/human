@@ -4,7 +4,6 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/agentname"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -226,15 +226,6 @@ type BoardTransitionDeps struct {
 	Getter tracker.Getter
 }
 
-// sanitizeRe drops characters that are invalid in an agent name (alphanumeric,
-// hyphen, underscore only) so a PM key like "SC-105" maps to a valid,
-// reversible agent name.
-var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
-
-func sanitize(s string) string {
-	return sanitizeRe.ReplaceAllString(s, "-")
-}
-
 // Hyphen-free agent-name suffixes for the PR review→fix loop steps. parseAgentName
 // splits on the last hyphen, so the token itself must carry none — the public
 // marker/state names keep their hyphenated form (pr-review-started, stage.pr-review);
@@ -245,26 +236,19 @@ const (
 	deployFixAgentStage BoardStage = "deployfix"
 )
 
-// agentNameFor builds the agent name for a board stage. It is reversible (see
-// parseAgentName) so the failure watcher can recover (pmKey, stage) from a
-// SessionEnd event.
+// agentNameFor builds the agent name for a board stage. The grammar lives in
+// internal/agentname, which internal/capabilities reads too; these two wrappers
+// exist only to carry BoardStage across it.
 func agentNameFor(pmKey string, stage BoardStage) string {
-	return "board-" + sanitize(pmKey) + "-" + string(stage)
+	return agentname.Board(pmKey, string(stage))
 }
 
 // parseAgentName recovers the PM key and stage from a board agent name. The PM
 // key is returned sanitized (the form embedded in the name), which is
 // sufficient to re-resolve comments since the daemon fetched the same keys.
 func parseAgentName(name string) (pmKey string, stage BoardStage, ok bool) {
-	rest, found := strings.CutPrefix(name, "board-")
-	if !found {
-		return "", "", false
-	}
-	idx := strings.LastIndex(rest, "-")
-	if idx <= 0 || idx == len(rest)-1 {
-		return "", "", false
-	}
-	return rest[:idx], BoardStage(rest[idx+1:]), true
+	key, s, ok := agentname.ParseBoard(name)
+	return key, BoardStage(s), ok
 }
 
 // ApplyTransition advances a card from its current stage to the requested next

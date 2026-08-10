@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/gethuman-sh/human/internal/agentname"
 	"github.com/gethuman-sh/human/internal/env"
 )
 
@@ -49,7 +50,7 @@ type RemoteProbe func(ctx context.Context) bool
 // Deploy stage owns shipping, so it may neither push, open a PR, nor deploy.
 func Detect(ctx context.Context, probe RemoteProbe) Set {
 	agent := env.Lookup(ctx, "HUMAN_AGENT_NAME")
-	board := strings.HasPrefix(agent, "board-")
+	board := agentname.IsBoard(agent)
 
 	set := Set{BoardContext: board, Agent: agent, Workspace: WorkspaceLocal}
 	if board {

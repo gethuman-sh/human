@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gethuman-sh/human/internal/agentname"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/proxy"
@@ -190,7 +191,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, runs *RunR
 			newEvents, seq := store.EventsSince(lastSeq)
 			lastSeq = seq
 			for _, evt := range newEvents {
-				if !strings.HasPrefix(evt.AgentName, "board-") {
+				if !agentname.IsBoard(evt.AgentName) {
 					continue
 				}
 				if !hookevents.IsRunEnd(evt.EventName) {
