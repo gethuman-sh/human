@@ -144,7 +144,7 @@ container. All of these must hold:
 - it carries no open `[human:options]` block for its own stage or an earlier one
   (that is a deliberate human pause, not a hang);
 - its stage has a `*-failed` marker header available;
-- it has sat past its grace — `StuckRunningGrace` = **15 minutes** for every stage except a card recorded as *deploying*, whose newest done-stage marker is `[human:deploy-started]`: that one is left alone for `deployTimeout + StuckRunningGrace` = **60 minutes**, because a deploy has no agent to probe and its CI gate legitimately blocks for 45 (`stuckGraceFor`, `internal/daemon/board_reconcile.go`);
+- it has sat past its grace — `StuckRunningGrace` = **15 minutes** for every stage except a card recorded as *deploying*, whose newest done-stage marker is `[human:deploy-started]`: that one is left alone for `deployTimeout + StuckRunningGrace` = **60 minutes**, because a deploy has no agent to probe and its CI gate legitimately blocks for 45 (`stuckGraceFor`, `internal/daemon/board_reconcile.go`). Residual gap: the 60-minute clock starts at the `[human:deploy-started]` post, not at `DeployBranch`'s own dequeue past `deployGate.Lock()` — a deploy queued behind another for long enough can still exceed the grace while healthy and be falsely reddened (SC-4150);
 - it passed the `forTakeover` ownership gate — this machine participates in the
   project, no peer daemon owns the stage, and the branch resolves here (SC-2047);
 - and the stage agent, which *is* alive on this machine, reports stalled.
@@ -343,7 +343,7 @@ waiting on.
 | `WorkingIdleGrace` | 30m | same |
 | `BoardReconcileInterval` | 2m ± 50% jitter | `internal/daemon/board_reconcile.go` |
 | `StuckRunningGrace` | 15m | same |
-| `DeployRunningGrace` | 60m (`deployTimeout` + `StuckRunningGrace`) | `internal/daemon/board_reconcile.go` |
+| deploy-card grace (`stuckGraceFor`, not a named constant) | 60m (`deployTimeout` + `StuckRunningGrace`) | `internal/daemon/board_reconcile.go` |
 | hung-agent stop timeout | 60s | `cmd/cmddaemon/daemon.go` |
 | close-cancel stop budget | 90s | same |
 | `MaxSilenceReaps` | 3 | `internal/daemon/board_failure.go` |

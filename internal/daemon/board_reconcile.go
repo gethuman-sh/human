@@ -423,8 +423,9 @@ func deployEngineRunning(comments []tracker.Comment) bool {
 // do not start together. A deploy queued behind another for long enough can
 // still exceed this grace while perfectly healthy and be falsely reddened.
 // Closing it precisely needs DeployBranch to signal back when it actually
-// leaves the queue, which means touching its sequence — reserved for SC-4027,
-// which lands beside this ticket rather than in it (SC-3852 review).
+// leaves the queue, which means touching its sequence — reserved for SC-4150,
+// filed for this gap specifically (SC-4027, named here previously, is Done
+// and about a different failure — the draft-PR merge refusal — not this one).
 func stuckGraceFor(derived BoardCard, comments []tracker.Comment) time.Duration {
 	if derived.Stage == BoardDoneStage && deployEngineRunning(comments) {
 		return deployTimeout + StuckRunningGrace

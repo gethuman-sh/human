@@ -1129,7 +1129,7 @@
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
       "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)",
       "MaxSilenceReaps": "3 — silence reaps of one stage before the machine stops relaunching and asks for a person (internal/daemon/board_failure.go). Uncharged against DefaultStageRetries, which is why it needs its own bound.",
-      "DeployRunningGrace": "60m = deployTimeout (45m) + StuckRunningGrace (15m) — how long a card recorded as deploying is left alone before the stuck-running sweep judges it (stuckGraceFor, internal/daemon/board_reconcile.go). The deploy has no agent for the sweep to probe, so time is the only evidence available."
+      "deploy-card grace (stuckGraceFor, not a named constant)": "60m = deployTimeout (45m) + StuckRunningGrace (15m) — how long a card recorded as deploying is left alone before the stuck-running sweep judges it (stuckGraceFor, internal/daemon/board_reconcile.go). The deploy has no agent for the sweep to probe, so time is the only evidence available."
     }
   },
   "stage_defaults": {
