@@ -1257,12 +1257,25 @@ func TestHandleBoardAgentExit_SilenceReapGivesUpAfterCap(t *testing.T) {
 	assert.Contains(t, c.added[0], "needs a person")
 }
 
-// A second daemon reaching the same cap for the same stage must post nothing
-// more once the give-up marker is already on the thread (SC-3074 dedup).
+// Once a stage has given up, the dedup holds even across a manual retry: a
+// person can restart a given-up stage (that is the "needs a person" the
+// give-up marker asks for), and a fresh silence reap on that restarted run
+// must still post nothing, because silenceReapGaveUp scans the whole thread
+// for the give-up sentinel, not just since the latest *-started marker
+// (SC-3074 dedup). Without the trailing *-started marker this thread's
+// newest comment IS the give-up marker itself, which the SC-3857
+// stageAlreadyFailed check (handleBoardAgentExit) now also recognizes and
+// short-circuits handleSilenceReapExit on before silenceReapGaveUp is ever
+// consulted — collapsing this test into a duplicate of that check instead of
+// the silenceReapGaveUp dedup it names. The *-started marker keeps the
+// thread realistic (a give-up marker is never followed by one UNLESS a
+// person restarts it) and routes past the check so the case this test names
+// is still exercised live.
 func TestHandleBoardAgentExit_SilenceReapGiveUpDedup(t *testing.T) {
 	comments := []tracker.Comment{
 		cmt(ImplementationStartedHeader, time.Unix(1, 0)),
 		cmt(ImplementationFailedHeader+"\n"+silenceReapGiveUpReason(BoardImplementation, MaxSilenceReaps+1), time.Unix(2, 0)),
+		cmt(ImplementationStartedHeader, time.Unix(3, 0)), // a person manually retried after the give-up
 	}
 	c := &syncCommenter{comments: comments}
 	commenterFor := func() (tracker.Commenter, error) { return c, nil }

@@ -159,6 +159,29 @@ stage's own `*-started` marker before the agent that follows it can exit, which
 flips the guard back off, so a repeated hang past `MaxSilenceReaps` still
 escalates exactly as below.
 
+The same `stageAlreadyFailed` check also sits ahead of a genuine death (§ 2,
+§ 3, § 6), but there it is narrower: it suppresses only the repeat POST of an
+identical `*-failed` marker, never the automatic in-place relaunch that
+follows. The ordinary, prompt-instructed ending for implementation and review
+IS the skill posting its own `*-failed` marker and recording its own
+`stage.<stage>` outcome before it exits (`human-review-skill.md`,
+`human-autofix-skill.md`, `human-security-fix-skill.md`,
+`human-pickup-review-skill.md`) — so by the time the daemon's exit watcher
+processes that same ending, the marker it posted is already the stage's
+newest, indistinguishable by marker history alone from a stale duplicate. The
+relaunch decision is read from the stage's own recorded exit class
+(`deps.Retry.Outcome`) instead, a signal independent of the marker thread, so
+a genuine retryable ending still gets its bounded `tryRelaunch` even though its
+own marker cannot be re-posted. (An earlier cut of this guard returned before
+`tryRelaunch` ran at all and silently dropped that relaunch for every one of
+these endings — not a rare unrecorded-exit corner, the everyday
+retryable-review path; a second-opinion review caught it before it shipped.)
+Silence reap (this section) and the needs-person wall are the exception: each
+decides its post and its relaunch (or lack of one) in a single synchronous
+step the daemon itself performs — never a skill — so an already-failed marker
+there can only be a fully-completed EARLIER cycle, and both the post and the
+relaunch stay suppressed for those two, exactly as stated above.
+
 ### 5. Reconcile — stuck-running card, agent alive but stalled
 
 **Owner:** `reconcileStuckRunning` / `hungLiveAgent`
