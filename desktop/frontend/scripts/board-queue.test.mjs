@@ -679,3 +679,58 @@ test("a populated board on a hiccup is unchanged", () => {
   assert.equal(got.dockerAvailable, false);
   assert.match(got.error, /Board may be stale/);
 });
+
+// SC-3569 reproduction 1: liveness was not an input to the badge at all, so a
+// card whose agent died hours ago rendered the same spinner and the same word
+// as one burning tokens right now.
+test("a dead agent drops the spinner and stops claiming work is happening (SC-3569)", () => {
+  const live = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "live" });
+  const dead = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "dead" });
+  assert.notDeepEqual(live, dead, "a dead card must not render identically to a live one");
+  assert.equal(dead.spinner, false, "the spinner is the claim that a process is alive");
+  assert.equal(live.spinner, true);
+  assert.match(dead.text, /not running/);
+});
+
+// The multi-daemon rule: another machine's agent is invisible from here, so the
+// card must show neither a false spinner nor a false death.
+test("a stage owned by another machine says so, with no spinner and no death (SC-3569)", () => {
+  const info = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "elsewhere" });
+  assert.equal(info.spinner, false);
+  assert.match(info.text, /another machine/);
+  assert.doesNotMatch(info.text, /not running/);
+});
+
+// Absence of a signal is never proof: an unknown liveness renders exactly as before.
+test("unknown liveness renders exactly as today (SC-3569)", () => {
+  assert.deepEqual(
+    badgeInfo({ stage: "implementation", state: "running" }),
+    { cls: "running", text: "building…", title: "Agent running", spinner: true },
+  );
+});
+
+// SC-3569 PR review finding: "dead" and "recovering" must NOT render the
+// same. A running card between agentLaunchGrace and StuckRunningGrace is
+// dead-but-machine-owed — the daemon's own relaunch is still due — so it must
+// never carry the "stalled" class (the person register) or the "Retry it"
+// wording, only "recovering" (the machine register).
+test("a recovering agent stays in the machine register, never the person's (SC-3569)", () => {
+  const dead = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "dead" });
+  const recovering = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "recovering" });
+  assert.equal(dead.cls, "stalled");
+  assert.equal(recovering.cls, "recovering", "must not share the person-facing stalled class");
+  assert.notDeepEqual(dead, recovering);
+  assert.equal(recovering.spinner, false, "no live process is asserted either");
+  assert.doesNotMatch(recovering.title, /Retry it/, "the machine, not the person, is due to act next");
+});
+
+// The queued and fixing badges spin on the same unchecked assumption.
+test("queued and fixing badges also drop the spinner for a dead agent (SC-3569)", () => {
+  const queued = badgeInfo({ stage: "implementation", state: "queued", agentLiveness: "dead" });
+  assert.equal(queued.spinner, false);
+  const fixing = badgeInfo({
+    stage: "verification", state: "done", verdict: "fail", branch: "b", agentLiveness: "dead",
+  });
+  assert.equal(fixing.spinner, false);
+  assert.match(fixing.text, /no fixer running/);
+});

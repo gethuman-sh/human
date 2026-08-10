@@ -505,6 +505,20 @@ func TestDeriveBoardCard_DeployPhasePRReview(t *testing.T) {
 	assert.Equal(t, "pr-review", card.DeployPhase)
 }
 
+// doneStageLoopActive answers the COARSER question — is the review→fix loop
+// mid-flight at all — for the re-drive pass (board_reconcile.go:262) and the
+// stuck-running guard (:370). Splitting the phase out must not narrow it: both
+// halves keep the loop card away from those passes.
+func TestDoneStageLoopActive_MatchesBothLoopHalves(t *testing.T) {
+	review := []tracker.Comment{cmt(PRReviewStartedHeader, time.Unix(2, 0))}
+	fix := []tracker.Comment{cmt(PRFixStartedHeader, time.Unix(2, 0))}
+	deploy := []tracker.Comment{cmt(DeployedHeader, time.Unix(2, 0))}
+
+	assert.True(t, doneStageLoopActive(review))
+	assert.True(t, doneStageLoopActive(fix))
+	assert.False(t, doneStageLoopActive(deploy))
+}
+
 // An implementation stage that reported the substrate was down derives to the
 // distinct BoardOutage state (not BoardFailed) and carries the reason line so
 // the badge can read WHAT is down (SC-2307).
@@ -904,10 +918,11 @@ func TestDispatchedFailure_TakesTheNewestDispatch(t *testing.T) {
 	assert.Empty(t, dispatchedFailure(nil), "no dispatch recorded means nothing to quote")
 }
 
-// TestDeriveBoardCard_DeployPhasePRFix covers SC-4151 F15: the loop's two halves
-// are separate agents in separate containers everywhere else, and the badge
-// called both of them the review — so a card whose live container was -prfix
-// running the PR fixer read "PR review…" for the whole loop.
+// TestDeriveBoardCard_DeployPhasePRFix covers SC-4151 F15 and the observed
+// SC-3322/SC-3569 case: the loop's two halves are separate agents in separate
+// containers everywhere else, and the badge called both of them the review —
+// so a card whose live container was board-SC-3322-prfix running human-pr-fixer
+// read "PR review…" for the whole loop, sending a reader to the wrong log.
 func TestDeriveBoardCard_DeployPhasePRFix(t *testing.T) {
 	comments := []tracker.Comment{
 		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),

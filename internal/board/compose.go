@@ -14,9 +14,10 @@ import (
 // It deliberately produces only what is TRUE OF THE PROJECT — the same board for
 // anyone looking at it. Several per-card fields are left at their zero values
 // because they are true only of the person looking: IdeaColumn, Hidden, NotMine,
-// and the Mockup* set. The viewer fills those in (desktop applyLocal), which is
-// why this can run on the daemon and be shared, and why hidden cards are still
-// returned here: hiding is a viewer's filter, not a property of the work.
+// AgentLiveness, and the Mockup* set. The viewer fills those in (desktop
+// applyLocal), which is why this can run on the daemon and be shared, and why
+// hidden cards are still returned here: hiding is a viewer's filter, not a
+// property of the work.
 //
 // dockerAvailable belongs to the machine that launches agents, so the caller
 // supplies it rather than probing — on the daemon that is its own host, which is
@@ -51,19 +52,23 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 		}
 		blockedBy[issue.Key] = issue.BlockedBy()
 		view.Cards = append(view.Cards, daemon.BoardViewCard{
-			Key:                    issue.Key,
-			Title:                  issue.Title,
-			URL:                    issue.URL,
-			Stage:                  string(stage),
-			State:                  string(card.State),
-			Degraded:               card.Degraded,
-			EngineeringKey:         card.EngineeringKey,
-			Branch:                 card.Branch,
-			PRURL:                  card.PRURL,
-			Error:                  card.Error,
-			ResumeAt:               card.ResumeAt,
-			Verdict:                card.Verdict,
-			VerdictFailed:          daemon.VerdictFailed(card.Verdict),
+			Key:            issue.Key,
+			Title:          issue.Title,
+			URL:            issue.URL,
+			Stage:          string(stage),
+			State:          string(card.State),
+			Degraded:       card.Degraded,
+			EngineeringKey: card.EngineeringKey,
+			Branch:         card.Branch,
+			PRURL:          card.PRURL,
+			Error:          card.Error,
+			ResumeAt:       card.ResumeAt,
+			Verdict:        card.Verdict,
+			VerdictFailed:  daemon.VerdictFailed(card.Verdict),
+			// The deciding marker's machine id. Compose stays host-agnostic by
+			// carrying it: a machine id is a property of the project's markers,
+			// not of the viewer — it is the VIEWER that compares it to its own
+			// (board.MarkAgentLiveness).
 			StageDaemonID:          card.StageDaemonID,
 			ShippedPartial:         card.ShippedPartial,
 			ShippedPartialFollowOn: card.ShippedPartialFollowOn,

@@ -238,8 +238,13 @@ func stageStalled(progress AgentProgressProbe, agentName string, now time.Time) 
 
 // doneStageLoopActive reports whether the card's newest done-stage marker is a
 // PR-loop started marker — the review→fix loop is mid-flight rather than a plain
-// deploy. Used to hand loop cards to the re-drive pass, to keep the generic
-// stuck-running pass from redding them, and (board_state.go) to badge the loop.
+// deploy. Used to hand loop cards to the re-drive pass (:262) and to keep the
+// generic stuck-running pass from redding them (:370); BOTH halves must match,
+// because a loop card's half-agents come and go between rounds.
+//
+// The badge's finer question — which half is running — is doneStageLoopHalf,
+// which this delegates to so the two answers are read off one marker
+// inspection and the header set cannot drift between them (SC-3569, SC-4151 F15).
 func doneStageLoopActive(comments []tracker.Comment) bool {
 	return doneStageLoopHalf(comments) != ""
 }

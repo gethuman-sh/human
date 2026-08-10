@@ -7,6 +7,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/appearance"
+	"github.com/gethuman-sh/human/internal/board"
 	"github.com/gethuman-sh/human/internal/boardprefs"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/vieweridentity"
@@ -157,14 +158,14 @@ func TestBoardAppearanceRejectsOutOfRange(t *testing.T) {
 // The strength rides the same viewer-local overlay as the ownership flag it
 // modulates, so both halves of the feature land on the payload together.
 func TestApplyLocalCarriesDimPercent(t *testing.T) {
-	got := applyLocal(daemon.BoardView{}, nil, nil, boardprefs.Prefs{}, vieweridentity.Identity{}, 20)
+	got := applyLocal(daemon.BoardView{}, nil, nil, boardprefs.Prefs{}, vieweridentity.Identity{}, 20, board.LiveAgents{})
 	if got.DimPercent != 20 {
 		t.Fatalf("DimPercent = %d, want 20", got.DimPercent)
 	}
 
 	// Zero stays zero so it is omitted from the wire and the frontend leaves
 	// the stylesheet alone.
-	got = applyLocal(daemon.BoardView{}, nil, nil, boardprefs.Prefs{}, vieweridentity.Identity{}, 0)
+	got = applyLocal(daemon.BoardView{}, nil, nil, boardprefs.Prefs{}, vieweridentity.Identity{}, 0, board.LiveAgents{})
 	if got.DimPercent != 0 {
 		t.Fatalf("DimPercent = %d, want 0", got.DimPercent)
 	}

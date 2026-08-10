@@ -64,6 +64,7 @@ import {
   deployControlView,
   safetyPollShouldReconcile,
   safetyReconcileError,
+  RUNNING_LABELS,
 } from "./board-queue.js";
 import type { DeploySide } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
@@ -116,9 +117,23 @@ interface Card {
   // RFC3339 time the newest marker of the card's current stage landed; feeds
   // the Engineering-backlog age badge.
   stageEnteredAt?: string;
-  // Done-stage sub-phase ("pr-review" while the machine review→fix loop runs);
-  // badgeInfo reads it to render "PR review…" instead of "deploying…".
+  // Done-stage sub-phase: "pr-review" while the machine reviewer runs, "pr-fix"
+  // while the fixer runs, absent for a plain deploy. badgeInfo reads it so the
+  // badge names the half that is actually running instead of "deploying…".
   deployPhase?: string;
+  // What this viewer's machine could see of the agent behind the card:
+  // "live" | "dead" | "recovering" | "elsewhere", absent when unknown (SC-3569).
+  // "recovering" is dead-but-not-yet-the-person's-turn: the daemon's own
+  // StuckRunningGrace relaunch is still due for this card's class. Filled by
+  // the desktop overlay (applyLocal → board.MarkAgentLiveness), never by the
+  // daemon.
+  agentLiveness?: string;
+  // Machine id signed onto the card's deciding stage marker. Consumed by the Go
+  // overlay to decide agentLiveness; nothing in the frontend reads it. Field
+  // name matches the wire tag exactly (protocol.go's BoardViewCard.StageDaemonID
+  // is `json:"stageDaemonId"`, lowercase d) since this is a stored format read
+  // by name, not by position.
+  stageDaemonId?: string;
   // Idea-space sub-column (0 loosest … 4 most concrete) for Ideas-stage cards.
   // Locally persisted preference; absent means leftmost.
   ideaColumn?: number;
@@ -1089,6 +1104,13 @@ function bugAreaOf(card: Card): "grid" | "fix" | "ready" {
   return "grid";
 }
 
+// The Fix pane's wording for the running badge: the fix cycle runs the board's
+// implementation stage, but here the activity is "fixing". Only the word differs,
+// so it rides badgeInfo's label table — rewriting the rendered HTML instead is
+// what let this pane hardcode a spinner and re-assert life for a dead agent
+// (SC-3569, the exact rendering the SC-1542 report saw).
+const BUG_RUNNING_LABELS: Record<string, string> = { ...RUNNING_LABELS, implementation: "fixing…" };
+
 // renderBugCard wraps renderCard with the pane-specific wording: the fix
 // cycle runs the board's implementation stage, but here the activity is
 // "fixing", and a review that passed reads "fixed" — in this pane the
@@ -1097,8 +1119,14 @@ function bugAreaOf(card: Card): "grid" | "fix" | "ready" {
 function renderBugCard(card: Card): HTMLElement {
   const el = renderCard(card);
   if (card.state === "running" && card.stage === "implementation") {
-    const running = el.querySelector(".badge.running");
-    if (running) running.innerHTML = `<span class="spinner"></span> fixing…`;
+    const info = badgeInfo(card, Date.now(), BUG_RUNNING_LABELS);
+    // badge() rendered the same info.cls, so this finds the badge the board just
+    // produced whether it is running, stalled or elsewhere.
+    const b = info ? el.querySelector<HTMLElement>(`.badge.${info.cls}`) : null;
+    if (info && b) {
+      b.innerHTML = (info.spinner ? `<span class="spinner"></span> ` : "") + escapeHtml(info.text);
+      b.title = info.title;
+    }
   }
   if (card.state === "failed") {
     // The board's bare ✕ is too quiet for this pane: a dead fix run must say
@@ -3274,7 +3302,7 @@ function renderTicketDetail(): void {
     ${shippedPartial}
     ${desc}
     ${detailSections}
-    ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now(), detailCard.state)}
+    ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now(), detailCard.state, detailCard.agentLiveness)}
     ${link}
   `;
   const url = detailCard.url;

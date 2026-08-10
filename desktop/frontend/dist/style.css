@@ -994,6 +994,32 @@ body {
   font-weight: 600;
 }
 
+/* No agent is running a stage this machine owns (SC-3569): the run died or was
+   stopped and nothing will move the card on its own. That is a demand on the
+   user, so it takes the needs-a-person amber register — and never a spinner,
+   which is the claim that a process is alive. */
+.badge.stalled {
+  color: var(--turn-person);
+  font-weight: 600;
+}
+
+/* No agent is running the stage here, but the daemon's own StuckRunningGrace
+   relaunch is not yet due for this card's class (SC-3569 PR review finding):
+   dead, but still the machine's turn, not the person's. Machine register, no
+   spinner — a live process is not asserted, only that no ask is due yet. */
+.badge.recovering {
+  color: var(--turn-machine);
+  font-weight: 600;
+}
+
+/* Another machine's daemon owns this stage (SC-3569). Machine work, so the
+   machine register — but no spinner: this host cannot see a peer's containers,
+   and a spinner here would assert an aliveness nobody verified. */
+.badge.elsewhere {
+  color: var(--turn-machine);
+  font-weight: 600;
+}
+
 /* Age of a finished plan sitting in the Engineering backlog. Muted while
    fresh; escalates amber then red as the plan's code context rots, so stale
    work is visible without reading the number. */

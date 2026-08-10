@@ -16,7 +16,7 @@ import { initMockupsView, showMockups, setPendingMockupSlug, setChosenMockup, } 
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, isReopenable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, isReopenable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, RUNNING_LABELS, } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
@@ -637,6 +637,12 @@ function bugAreaOf(card) {
         return "ready";
     return "grid";
 }
+// The Fix pane's wording for the running badge: the fix cycle runs the board's
+// implementation stage, but here the activity is "fixing". Only the word differs,
+// so it rides badgeInfo's label table — rewriting the rendered HTML instead is
+// what let this pane hardcode a spinner and re-assert life for a dead agent
+// (SC-3569, the exact rendering the SC-1542 report saw).
+const BUG_RUNNING_LABELS = { ...RUNNING_LABELS, implementation: "fixing…" };
 // renderBugCard wraps renderCard with the pane-specific wording: the fix
 // cycle runs the board's implementation stage, but here the activity is
 // "fixing", and a review that passed reads "fixed" — in this pane the
@@ -645,9 +651,14 @@ function bugAreaOf(card) {
 function renderBugCard(card) {
     const el = renderCard(card);
     if (card.state === "running" && card.stage === "implementation") {
-        const running = el.querySelector(".badge.running");
-        if (running)
-            running.innerHTML = `<span class="spinner"></span> fixing…`;
+        const info = badgeInfo(card, Date.now(), BUG_RUNNING_LABELS);
+        // badge() rendered the same info.cls, so this finds the badge the board just
+        // produced whether it is running, stalled or elsewhere.
+        const b = info ? el.querySelector(`.badge.${info.cls}`) : null;
+        if (info && b) {
+            b.innerHTML = (info.spinner ? `<span class="spinner"></span> ` : "") + escapeHtml(info.text);
+            b.title = info.title;
+        }
     }
     if (card.state === "failed") {
         // The board's bare ✕ is too quiet for this pane: a dead fix run must say
@@ -2708,7 +2719,7 @@ function renderTicketDetail() {
     ${shippedPartial}
     ${desc}
     ${detailSections}
-    ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now(), detailCard.state)}
+    ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now(), detailCard.state, detailCard.agentLiveness)}
     ${link}
   `;
     const url = detailCard.url;

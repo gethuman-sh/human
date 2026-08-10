@@ -262,3 +262,18 @@ test("the :root fallback equals the Go default dim percent (SC-3409)", () => {
   assert.ok(def, "internal/appearance must define DefaultDimPercent");
   assert.equal(token, Number(def[1]) / 100, "style.css :root must match DefaultDimPercent");
 });
+
+// SC-3569: the liveness badges must have their own registers — a dead agent is
+// a demand on the user (amber), a peer machine's is machine work (gray).
+test("liveness badge classes carry a colour of their own (SC-3569)", () => {
+  assert.match(ruleBody(".badge.stalled"), /color:\s*var\(--turn-person\)/);
+  assert.match(ruleBody(".badge.elsewhere"), /color:\s*var\(--turn-machine\)/);
+});
+
+// SC-3569 PR review finding: "recovering" (dead, but the daemon's own
+// StuckRunningGrace relaunch is not yet due) must stay in the MACHINE
+// register like "elsewhere" — never the person-facing amber "stalled" uses,
+// or the card would ask a person for work the machine is still due to retry.
+test("recovering badge stays in the machine register, not the person amber (SC-3569)", () => {
+  assert.match(ruleBody(".badge.recovering"), /color:\s*var\(--turn-machine\)/);
+});
