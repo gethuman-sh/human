@@ -247,10 +247,10 @@ func TestTicketCost_rawSonnetIdPricesAtSonnetNotOpus(t *testing.T) {
 
 	// Stated as literals rather than via claude.CostUSD, so the test asserts on
 	// the rate itself: a card edit that reverts sonnet to the opus row goes red.
-	assert.InDelta(t, 2.00+10.00, rollup.TotalCostUSD, 1e-9,
+	assert.InDelta(t, 3.00+15.00, rollup.TotalCostUSD, 1e-9,
 		"a raw sonnet id must price at the sonnet row, not the opus ceiling")
-	assert.InDelta(t, 2.00, rollup.ContextCostUSD, 1e-9)
-	assert.InDelta(t, 10.00, rollup.AnswersCostUSD, 1e-9)
+	assert.InDelta(t, 3.00, rollup.ContextCostUSD, 1e-9)
+	assert.InDelta(t, 15.00, rollup.AnswersCostUSD, 1e-9)
 
 	opusCost := claude.CostUSD(testModel, 1_000_000, 1_000_000, 0, 0)
 	assert.Less(t, rollup.TotalCostUSD, opusCost,
@@ -280,7 +280,7 @@ func TestTopTicketSpend_ranksBySonnetRateNotOpusCeiling(t *testing.T) {
 	assert.Equal(t, "SC-OPUS", got[0].Ticket,
 		"identical tokens on opus must outrank sonnet; equal costs mean both are still priced at the ceiling")
 	assert.Equal(t, "SC-SONNET", got[1].Ticket)
-	assert.InDelta(t, 2.00+10.00, got[1].CostUSD, 1e-9)
+	assert.InDelta(t, 3.00+15.00, got[1].CostUSD, 1e-9)
 }
 
 // A ticket whose rows carry no tokens — every row written before the proxy read

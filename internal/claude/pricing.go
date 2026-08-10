@@ -3,7 +3,8 @@ package claude
 // TokenPrices is the USD cost of one million tokens of each class for a model
 // family. The four classes are priced very differently — output is the most
 // expensive, cache reads a fraction of fresh input — so a blended count cannot
-// be turned into money. This is the single rate card the tool keeps.
+// be turned into money. This is the shape the rate card projects onto per
+// family; the rates themselves live in internal/claude/models.json.
 type TokenPrices struct {
 	InputPerM       float64 // fresh input tokens, USD per 1e6
 	OutputPerM      float64 // generated output tokens, USD per 1e6

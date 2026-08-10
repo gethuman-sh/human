@@ -14,12 +14,11 @@
     {
       "family": "sonnet",
       "display": "Sonnet",
-      "input_per_m": 2.00,
-      "output_per_m": 10.00,
-      "cache_create_per_m": 4.00,
-      "cache_read_per_m": 0.20,
-      "valid_until": "2026-08-31",
-      "provenance": "Published Sonnet 5 INTRODUCTORY pricing, in force through 2026-08-31. From 2026-09-01 the standard rates take effect and this row becomes 3.00 / 15.00 / 6.00 / 0.30 — that is what valid_until exists to force. Cache-write is the 1h tier (2x input); the 5m tier is 2.50 intro / 3.75 standard."
+      "input_per_m": 3.00,
+      "output_per_m": 15.00,
+      "cache_create_per_m": 6.00,
+      "cache_read_per_m": 0.30,
+      "provenance": "Standard Sonnet 5 pricing, confirmed by the 7-day measured billing behind SC-3580: opus/sonnet is a uniform 5/3 = 1.6667x ratio on every class, and $633 reported vs $380 actually spent (1.67x) matches that ratio to 0.05% -- the introductory rate (2/10/4/0.20, ratio 2.5x) does not reconcile. Cache-write is the 1h tier (2x input); the 5m tier is 3.75."
     },
     {
       "family": "haiku",
