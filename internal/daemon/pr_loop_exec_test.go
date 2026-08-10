@@ -148,28 +148,102 @@ func TestAdvancePRLoop_budgetExhausted_escalates(t *testing.T) {
 	assert.Zero(t, p.merged, "escalation must never merge")
 }
 
-func TestAdvancePRLoop_fixNeedsInput_escalates(t *testing.T) {
-	c := &fakeCommenter{comments: []tracker.Comment{
-		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
-		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
-		cmt(PRFixStartedHeader, time.Unix(3, 0)),
-	}}
+// A fixer that stops for a decision but names no direction has not found a
+// fork — it has failed, and saying so is the only thing that carries
+// information. The card used to ask a question assembled entirely out of
+// placeholders, whose one answer re-ran the same loop with nothing new
+// (SC-3630).
+func TestAdvancePRLoop_fixNeedsInput_noDirections_reds(t *testing.T) {
+	c := &fakeCommenter{comments: prFixExitComments()}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 
 	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{ReviewVerdict: "", ReviewRecorded: true, FixExit: string(ExitNeedsInput), FixRecorded: true}))
 
-	// A fixer needs-input is a DECISION: it escalates to a [human:options] block,
-	// not a red failed marker, so each direction is a clickable board choice.
+	_, asked := posted(c, OptionsHeader)
+	assert.False(t, asked, "a decision with no answers is not a decision — it must not be asked")
+	failed, ok := posted(c, PRReviewFailedHeader)
+	require.True(t, ok, "a fixer that named nothing must red the card")
+	assert.Contains(t, failed, "named neither the question nor a way forward")
+	assert.Zero(t, l.calls, "reding the card launches nothing")
+}
+
+// What the fixer reported is the reason. The generic line stands in only when
+// the fixer wrote nothing at all.
+func TestAdvancePRLoop_fixNeedsInput_noDirections_carriesTheFixersSummary(t *testing.T) {
+	c := &fakeCommenter{comments: prFixExitComments()}
+	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{
+		FixExit:     string(ExitNeedsInput),
+		FixRecorded: true,
+		FixSummary:  "the review wants the retry budget moved, which changes the deploy contract",
+	}))
+
+	failed, ok := posted(c, PRReviewFailedHeader)
+	require.True(t, ok)
+	assert.Contains(t, failed, "the review wants the retry budget moved, which changes the deploy contract")
+}
+
+// One direction is not a fork. The daemon takes it and records the choice the
+// same way a human's click would, so the trail is unchanged and the card is
+// never resumed without a record.
+func TestAdvancePRLoop_fixNeedsInput_soleDirection_isPursued(t *testing.T) {
+	c := &fakeCommenter{comments: append(
+		[]tracker.Comment{cmt(PlanReadyHeader, time.Unix(1, 0))}, prFixExitComments()...)}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{
+		FixExit:     string(ExitNeedsInput),
+		FixRecorded: true,
+		FixOptions:  []BoardOption{{ID: "1", Label: "Rebuild the branch without the cache layer"}},
+	}))
+
+	_, asked := posted(c, OptionsHeader)
+	assert.False(t, asked, "a single answer must never be posted as a question")
 	_, failedPosted := posted(c, PRReviewFailedHeader)
-	assert.False(t, failedPosted, "needs-input must not red the card")
-	block, ok := posted(c, OptionsHeader)
-	require.True(t, ok, "needs-input must post an options block")
-	stage, _, opts := parseOptionsBlock(block)
-	assert.Equal(t, BoardImplementation, stage)
-	require.GreaterOrEqual(t, len(opts), 1, "the fallback rebuild option keeps the block valid")
-	assert.Contains(t, opts[0].Label, "Rebuild")
+	assert.False(t, failedPosted, "a direction the daemon can pursue is not a failure")
+
+	chosen, ok := posted(c, OptionChosenHeader)
+	require.True(t, ok, "the choice the daemon made for itself must still be recorded")
+	assert.Contains(t, chosen, "1: Rebuild the branch without the cache layer")
+	assert.Equal(t, 1, l.calls, "the sole direction must actually be pursued")
+	assert.Equal(t, "board-SC-1-implementation", l.name)
+	assert.Contains(t, l.prompt, "Rebuild the branch without the cache layer")
+}
+
+// The automatic pursuit spends the loop's own budget: past it, the sole
+// direction is reported rather than taken, so it can never drive an unbounded
+// rebuild loop.
+func TestAdvancePRLoop_fixNeedsInput_soleDirection_stopsAtTheRoundBudget(t *testing.T) {
+	comments := reviewStartedComments(DefaultPRReviewRounds, "https://example/pr/7", 7, "feat/x")
+	comments = append(comments, cmt(PlanReadyHeader, time.Unix(1, 0)), cmt(PRFixStartedHeader, time.Unix(9, 0)))
+	c := &fakeCommenter{comments: comments}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", PRLoopOutcome{
+		FixExit:     string(ExitNeedsInput),
+		FixRecorded: true,
+		FixOptions:  []BoardOption{{ID: "1", Label: "Rebuild the branch without the cache layer"}},
+	}))
+
+	_, chosenPosted := posted(c, OptionChosenHeader)
+	assert.False(t, chosenPosted, "a spent budget must not be spent again")
+	_, ok := posted(c, PRReviewFailedHeader)
+	assert.True(t, ok, "a direction the budget cannot afford must red the card")
 	assert.Zero(t, l.calls)
+}
+
+// prFixExitComments is the thread a fixer's exit lands on: the handoff, the
+// review round that asked for changes, and the fix round that just ended.
+func prFixExitComments() []tracker.Comment {
+	return []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(PRFixStartedHeader, time.Unix(3, 0)),
+	}
 }
 
 func TestAdvancePRLoop_fixNeedsInput_withOptions(t *testing.T) {

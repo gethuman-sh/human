@@ -68,7 +68,10 @@ EOF
 
 - `head` — record the branch tip after your commit (`git rev-parse <branch>`). The daemon compares it to the head the reviewer read: an unchanged head means you added no commit, so the loop escalates instead of re-reviewing.
 - `done` — every blocking finding addressed and committed; the reviewer runs again on your new commit. Omit `options` on `done`.
-- `needs-input` — a finding names a decision only a human can make. State the question and stop; do not invent an answer to keep the loop moving. On `needs-input`, list 2+ concrete directions in `options` — each becomes a clickable board decision button, and the human's pick re-runs the build with that direction injected (the still-open draft PR is re-adopted, never merged while draft). When you cannot enumerate distinct directions the daemon falls back to a single generic "rebuild" option, so `options` is optional — but naming the real choices is what makes the escalation actionable.
+- `needs-input` — a finding names a decision only a human can make. State the question and stop; do not invent an answer to keep the loop moving. On `needs-input`, list 2+ concrete directions in `options` — each becomes a clickable board decision button, and the human's pick re-runs the build with that direction injected (the still-open draft PR is re-adopted, never merged while draft). What you write decides what the board does, and there is no generic fallback to catch a thin report:
+  - **2 or more directions** — the board asks the human, showing exactly your labels.
+  - **exactly 1** — the daemon takes it without asking, because one answer is not a choice. Write one only when you mean "do this"; write two when the point is that a human must pick.
+  - **none** — the card reds with your `summary` as the reason. That is the right outcome for a fixer that is genuinely stuck, so make `summary` say what you were stuck on; it is all the human gets.
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
 
