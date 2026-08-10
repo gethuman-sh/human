@@ -95,6 +95,18 @@ An agent is reaped when its container is running, it is older than the 10-second
 `zombieGracePeriod`, and `pgrep -x claude` reports nothing. This catches claude
 failing to start, crashing without firing hooks, or a killed tmux pane.
 
+**How the probe asks** (`devcontainer.ProcessRunning`). The exec attaches stdout
+and stderr and drains them to EOF, then reads the exit code only once
+`ExecInspect` reports the exec is no longer `Running`, polling up to
+`execSettleTimeout` = 5s for that. Both halves are load-bearing: the stream is
+what says the process ended, so it only synchronises if the output is attached,
+and a still-running exec carries `ExitCode` 0 — indistinguishable from "pgrep
+found claude". An exec created without attachment therefore reported *every*
+container's claude as alive, and no agent was ever reaped by this rule; the
+containers outlived their agents for hours while the board rendered them live
+(SC-4281). A probe that never settles is an error, not an absence, and escalates
+through § 3 rather than answering.
+
 **Spared:** an agent started without a prompt (bare `human agent start NAME`)
 never launches claude at all. It is reaped only once claude has been *observed*
 running for it at least once (`seenClaude`) — otherwise a deliberately idle
@@ -338,6 +350,7 @@ waiting on.
 | `zombieGracePeriod` | 10s | same |
 | `zombieMaxProcessCheckFailures` | 3 (~15s) | same |
 | `zombieReapHardDeadline` | 45s | same |
+| `execSettleTimeout` | 5s | `internal/devcontainer/exec_probe.go` |
 | delete timeout inside a reap | 30s | same |
 | `IdleGrace` | 3m | `internal/daemon/agentprogress.go` |
 | `WorkingIdleGrace` | 30m | same |

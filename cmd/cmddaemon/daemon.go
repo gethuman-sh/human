@@ -4309,45 +4309,7 @@ func (s *dockerAgentSweeper) IsProcessRunning(ctx context.Context, containerID s
 	}
 	defer func() { _ = docker.Close() }()
 
-	execID, err := docker.ExecCreate(ctx, containerID, []string{"pgrep", "-x", process}, devcontainer.ExecOptions{})
-	if err != nil {
-		return false, err
-	}
-	resp, err := docker.ExecAttach(ctx, execID)
-	if err != nil {
-		return false, err
-	}
-	// Drain the multiplexed stream to EOF before inspecting: ExecInspect's exit
-	// code is only reliable once the exec has finished and the stream closed.
-	// A stalled stream must not park this call (it runs inline on the single
-	// zombie-sweep goroutine): the watchdog closes resp on ctx.Done, unblocking
-	// the drain (SC-427).
-	stop := closeExecOnContextDone(ctx, resp)
-	_, _ = io.Copy(io.Discard, resp.Reader)
-	stop()
-	_ = resp.Close()
-
-	inspect, err := docker.ExecInspect(ctx, execID)
-	if err != nil {
-		return false, err
-	}
-	return inspect.ExitCode == 0, nil
-}
-
-// closeExecOnContextDone starts a watchdog that closes the exec attachment when
-// ctx is cancelled, unblocking a drain parked on a stalled stream (closing
-// resp closes its underlying conn). It returns a stop func the caller invokes
-// once the drain has finished, tearing the watchdog down.
-func closeExecOnContextDone(ctx context.Context, resp devcontainer.ExecAttachResponse) (stop func()) {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = resp.Close()
-		case <-done:
-		}
-	}()
-	return func() { close(done) }
+	return devcontainer.ProcessRunning(ctx, docker, containerID, process)
 }
 
 // agentClaudeAlive reports whether the named agent's claude process is still
