@@ -49,6 +49,32 @@ type LatestOutcomeClass func(ticket, stage string) (string, bool)
 // empty-handed diagnosers so the marker never posts headerless.
 const genericStageFailure = "agent exited without completing the stage"
 
+// AdvanceDeployFix re-enters the deploy after its fixer exits: the fixer is not
+// a board stage, so its exit is driven here rather than through the generic
+// stage-failure path. A nil value leaves the exit unrouted.
+//
+// It shares an underlying signature with ChainReview and DriveLoop and means
+// something else; see ChainReview for why all three are named types.
+type AdvanceDeployFix func(pmKey string) error
+
+// AdvancePRLoop advances the PR review→fix loop on a step's exit. The exiting
+// run's name and error type travel with the call because a step that died
+// before recording its outcome can only be explained from its artifacts
+// (SC-1892). A nil value leaves the exit unrouted.
+type AdvancePRLoop func(pmKey, agentName, errorType string) error
+
+// CommenterFor resolves the PM-role commenter lazily, per event, so the watcher
+// holds no tracker handle across its lifetime. The PM commenter MUST be
+// resolved by role, never by key prefix — both trackers may share a name.
+type CommenterFor func() (tracker.Commenter, error)
+
+// OnHandoff fires with an exiting agent's name the moment its stage is observed
+// to have ended cleanly. It is the success signal that authorizes reclaiming
+// the run's private worktree; every other exit KEEPS the worktree so
+// uncommitted work is never destroyed (SC-731). Best-effort and idempotent by
+// contract. A nil value skips the authorization.
+type OnHandoff func(agentName string)
+
 // RunBoardFailureWatch watches for SessionEnd-style hook events from board
 // agents and posts the stage's *-failed marker when an agent exits WITHOUT
 // having posted its stage's done-marker. This closes the gap where an agent
@@ -69,7 +95,7 @@ const genericStageFailure = "agent exited without completing the stage"
 // resolved marker). It is the success signal that authorizes reclaiming the
 // run's private worktree — every other exit KEEPS the worktree so uncommitted
 // work is never destroyed (SC-731). Best-effort/idempotent by contract.
-func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, runs *RunRegistry, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, liveAgents LiveAgentLister, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
+func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, runs *RunRegistry, commenterFor CommenterFor, chainReview ChainReview, liveAgents LiveAgentLister, advancePRLoop AdvancePRLoop, advanceDeployFix AdvanceDeployFix, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff OnHandoff, retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
 	if store == nil || commenterFor == nil {
 		return
 	}
@@ -160,7 +186,7 @@ func claimExit(runs *RunRegistry, runID, agentName string, logger zerolog.Logger
 // is used to derive cleanExit, which in turn guards against misreading a
 // clean finish that merely raced its own review-complete propagation as a
 // mid-review crash (SC-2133).
-func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, runID, agentName, errorType, eventName string, commenterFor func() (tracker.Commenter, error), chainReview func(pmKey string) error, liveAgents LiveAgentLister, advancePRLoop func(pmKey, agentName, errorType string) error, advanceDeployFix func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
+func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, runID, agentName, errorType, eventName string, commenterFor CommenterFor, chainReview ChainReview, liveAgents LiveAgentLister, advancePRLoop AdvancePRLoop, advanceDeployFix AdvanceDeployFix, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff OnHandoff, retry StageRetry, latestClass LatestOutcomeClass, daemonID string, logger zerolog.Logger) {
 	pmKey, stage, ok := claimExit(runs, runID, agentName, logger)
 	if !ok {
 		return
@@ -270,7 +296,7 @@ func endedDeliberately(comments []tracker.Comment, stage BoardStage, state Board
 		deliberateStopRecorded(comments)
 }
 
-func handleCleanStageEnding(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, cleanExit bool, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, liveAgents LiveAgentLister, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff func(agentName string), retry StageRetry, daemonID string, logger zerolog.Logger) bool {
+func handleCleanStageEnding(ctx context.Context, pmKey string, stage BoardStage, agentName, errorType string, cleanExit bool, comments []tracker.Comment, commenter tracker.Commenter, chainReview ChainReview, liveAgents LiveAgentLister, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, onHandoff OnHandoff, retry StageRetry, daemonID string, logger zerolog.Logger) bool {
 	_, state := latestStageState(comments, stage)
 	clean := state == BoardDone
 	if !clean && !endedDeliberately(comments, stage, state) {
@@ -311,7 +337,7 @@ func handleCleanStageEnding(ctx context.Context, pmKey string, stage BoardStage,
 // own exit is the correct evidence, so this path posts nothing and lets it be.
 // Otherwise it flows into chainReviewAfterBuild's branch/commit-gated chain. A
 // nil chainReview disables chaining entirely.
-func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType string, cleanExit bool, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, liveAgents LiveAgentLister, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, daemonID string, logger zerolog.Logger) {
+func chainReviewAfterCleanBuild(ctx context.Context, pmKey, agentName, errorType string, cleanExit bool, comments []tracker.Comment, commenter tracker.Commenter, chainReview ChainReview, liveAgents LiveAgentLister, reachable BranchReachable, commitsPresent CommitsPresent, diagnose BoardFailureDiagnoser, daemonID string, logger zerolog.Logger) {
 	if chainReview == nil {
 		return
 	}
@@ -467,7 +493,7 @@ func handoffSearchNote(stage BoardStage, header string) string {
 // the flag that authorizes removing the run's worktree, and the FIXER's
 // deliverable is an unpushed local commit by design — waiving that protection on
 // an error the run then recovers from is how the commit would be lost.
-func drivePRLoopExit(pmKey string, stage BoardStage, agentName, errorType string, advancePRLoop func(pmKey, agentName, errorType string) error, onHandoff func(agentName string), logger zerolog.Logger) bool {
+func drivePRLoopExit(pmKey string, stage BoardStage, agentName, errorType string, advancePRLoop AdvancePRLoop, onHandoff OnHandoff, logger zerolog.Logger) bool {
 	if stage != prReviewAgentStage && stage != prFixAgentStage {
 		return false
 	}
@@ -492,7 +518,7 @@ func drivePRLoopExit(pmKey string, stage BoardStage, agentName, errorType string
 // its worktree first (the fixer already pushed its work). It reports whether the
 // exit was the deploy-fix stage and thus fully handled here. A non-deployfix stage
 // returns false so the caller falls through to the PR-loop / stage-failure handling.
-func driveDeployFixExit(pmKey string, stage BoardStage, agentName string, advanceDeployFix func(pmKey string) error, onHandoff func(agentName string), logger zerolog.Logger) bool {
+func driveDeployFixExit(pmKey string, stage BoardStage, agentName string, advanceDeployFix AdvanceDeployFix, onHandoff OnHandoff, logger zerolog.Logger) bool {
 	if stage != deployFixAgentStage {
 		return false
 	}
@@ -551,7 +577,7 @@ func stagePausedOnOptions(comments []tracker.Comment, stage BoardStage) bool {
 // commit gate is wired) the handoff's named commits must actually be present on
 // that branch. Pulled out of handleBoardAgentExit so the exit handler stays a
 // thin stage dispatcher and the chain's gates read as one unit.
-func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker.Comment, commenter tracker.Commenter, chainReview func(pmKey string) error, reachable BranchReachable, commitsPresent CommitsPresent, daemonID string, logger zerolog.Logger) {
+func chainReviewAfterBuild(ctx context.Context, pmKey string, comments []tracker.Comment, commenter tracker.Commenter, chainReview ChainReview, reachable BranchReachable, commitsPresent CommitsPresent, daemonID string, logger zerolog.Logger) {
 	// Only chain a review for a branch this machine can resolve; a board-context
 	// fix leaves its branch local on the machine that produced it, so a daemon
 	// elsewhere must leave the handoff for one that can reach it rather than start

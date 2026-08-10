@@ -30,7 +30,7 @@ type ClosedTicketProbe func(ctx context.Context, pmKey string) (bool, error)
 // uncertainty resolves to "leave it running" — an unparseable name, a probe
 // error, or a ticket that is merely absent rather than confirmed closed — because
 // killing live work on absent evidence is the one failure this must never risk.
-func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, closed ClosedTicketProbe, stopAgent func(agentName string) error, postRecord FailedMarkerPoster, logger zerolog.Logger) int {
+func reconcileOrphanedAgents(ctx context.Context, cards []ReconcileCard, liveAgents LiveAgentLister, closed ClosedTicketProbe, stopAgent StopAgent, postRecord FailedMarkerPoster, logger zerolog.Logger) int {
 	if liveAgents == nil || closed == nil || stopAgent == nil {
 		return 0
 	}

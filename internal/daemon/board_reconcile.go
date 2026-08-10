@@ -108,6 +108,25 @@ type LiveAgentLister func() ([]string, error)
 // the headline. A nil poster disables the stuck-running pass.
 type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
 
+// ChainReview starts the review stage for a card whose build finished and
+// handed off — the live chain's continuation and the durable pass's recovery of
+// it. A nil value disables chaining.
+//
+// It, DriveLoop and AdvanceDeployFix are three DIFFERENT actions that share one
+// underlying signature, and they sat as bare `func(pmKey string) error`
+// parameters in adjacent positions: RunBoardReconcile took chainReview and
+// driveLoop next to each other, so swapping the two arguments compiled and
+// reviewed clean. Named types make the mistake unspellable at the call site.
+type ChainReview func(pmKey string) error
+
+// DriveLoop re-drives the PR review→fix loop from its recorded state, advancing
+// or escalating it idempotently. A nil value disables the re-drive pass.
+type DriveLoop func(pmKey string) error
+
+// StopAgent stops a board agent's container on THIS machine by name. A nil
+// value disables every pass that would kill a run.
+type StopAgent func(agentName string) error
+
 // RunBoardReconcile is the durable counterpart to RunBoardFailureWatch's live
 // fix→review chain. The live chain fires only on the one-shot Stop/SessionEnd
 // hook event; if the daemon restarts or the hook is lost, that trigger is gone
@@ -119,7 +138,7 @@ type FailedMarkerPoster func(ctx context.Context, pmKey, body string) error
 // It runs one pass immediately at start (recovers a restart-orphaned handoff
 // without waiting a full interval) then on a ticker, mirroring
 // RunAgentZombieSweep. nil deps disable it.
-func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, participates ProjectParticipation, identityFor TicketIdentity, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, interval time.Duration, logger zerolog.Logger) {
+func RunBoardReconcile(ctx context.Context, listCards ReconcileLister, reachable BranchReachable, participates ProjectParticipation, identityFor TicketIdentity, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview ChainReview, driveLoop DriveLoop, retry StageRetry, progress AgentProgressProbe, stopAgent StopAgent, daemonID string, interval time.Duration, logger zerolog.Logger) {
 	if listCards == nil || chainReview == nil {
 		return
 	}
@@ -161,7 +180,7 @@ func JitteredInterval(d time.Duration, fraction float64) time.Duration {
 
 // reconcileOnce runs a single reconcile pass. A transient list error is logged
 // and skipped so a momentary tracker blip never kills the loop.
-func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview func(pmKey string) error, driveLoop func(pmKey string) error, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, logger zerolog.Logger) {
+func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate, commitsPresent CommitsPresent, mergedProbe PRMergedProbe, postDeployed DeployedPoster, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, closedProbe ClosedTicketProbe, chainReview ChainReview, driveLoop DriveLoop, retry StageRetry, progress AgentProgressProbe, stopAgent StopAgent, daemonID string, logger zerolog.Logger) {
 	cards, err := listCards(ctx)
 	if err != nil {
 		logger.Warn().Err(err).Msg("board reconcile: cannot list PM cards")
@@ -334,7 +353,7 @@ func doneStageStartedHalf(comments []tracker.Comment) string {
 // started marker carries the machine: stamp that arm reads. The daemon id is
 // persisted across restarts (LoadOrCreateDaemonID), so the restart-orphan case
 // this pass exists for still matches its own stamp and is still re-driven.
-func reconcilePRLoops(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, driveLoop func(pmKey string) error, logger zerolog.Logger) int {
+func reconcilePRLoops(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, driveLoop DriveLoop, logger zerolog.Logger) int {
 	if driveLoop == nil || liveAgents == nil {
 		return 0
 	}
@@ -500,7 +519,7 @@ func stuckRunningCandidate(derived BoardCard, comments []tracker.Comment) bool {
 // this pass's own judgement (silenced) plus the idle duration to report.
 // Pulled out of reconcileStuckRunning to keep that function's branching
 // inside the complexity gate.
-func hungLiveAgent(progress AgentProgressProbe, agentName string, now time.Time, stopAgent func(agentName string) error, pmKey string, stage BoardStage, logger zerolog.Logger) (proceed, silenced bool, idleReason string) {
+func hungLiveAgent(progress AgentProgressProbe, agentName string, now time.Time, stopAgent StopAgent, pmKey string, stage BoardStage, logger zerolog.Logger) (proceed, silenced bool, idleReason string) {
 	// A live container is not the same as a working agent: a hung agent looks
 	// perfectly healthy here, which is why a hang was previously never
 	// detected at all. Ask whether it is still making progress.
@@ -525,7 +544,7 @@ func hungLiveAgent(progress AgentProgressProbe, agentName string, now time.Time,
 	return true, true, idle.Round(time.Second).String()
 }
 
-func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) int {
+func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgents LiveAgentLister, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent StopAgent, daemonID string, now time.Time, logger zerolog.Logger) int {
 	if liveAgents == nil || postFailed == nil {
 		return 0
 	}
@@ -554,7 +573,7 @@ func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, liveAgen
 // and reports whether it was reddened. Split out of reconcileStuckRunning so
 // that function's per-card branching costs its own function rather than the
 // loop's complexity budget.
-func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[string]struct{}, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent func(agentName string) error, daemonID string, now time.Time, logger zerolog.Logger) bool {
+func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[string]struct{}, postFailed FailedMarkerPoster, retry StageRetry, progress AgentProgressProbe, stopAgent StopAgent, daemonID string, now time.Time, logger zerolog.Logger) bool {
 	derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
 	if !stuckCardIsOursToRed(derived, card) {
 		return false
@@ -789,7 +808,7 @@ func reconcileShippedFailures(ctx context.Context, drivable DrivableCards, merge
 // the branch — never starting a review it could never satisfy (SC-652, now
 // enforced by construction rather than a per-path check, SC-2047). Returns the
 // number of reviews launched.
-func reconcileOrphanedHandoffs(drivable DrivableCards, commitsPresent CommitsPresent, chainReview func(pmKey string) error, logger zerolog.Logger) int {
+func reconcileOrphanedHandoffs(drivable DrivableCards, commitsPresent CommitsPresent, chainReview ChainReview, logger zerolog.Logger) int {
 	launched := 0
 	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
