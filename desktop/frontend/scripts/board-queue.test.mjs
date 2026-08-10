@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, isReworkable, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
+import { queueOf, isReworkable, reworkKind, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
 import { DAEMON_FORWARDED_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -57,6 +57,27 @@ test("isReviewRetryable is true only for verification/failed (SC-695)", () => {
   assert.equal(isReviewRetryable({ stage: "verification", state: "done", verdict: "fail", branch: "b" }), false);
   assert.equal(isReviewRetryable({ stage: "verification", state: "running" }), false);
   assert.equal(isReviewRetryable({ stage: "implementation", state: "failed" }), false);
+});
+
+// SC-4299: the Rework menu action must start the same run the card's drop
+// target would have — the fix pipeline for a bug or a security ticket, the
+// build stage for a feature. A feature card misrouted to fixBug would run
+// autofix on a ticket that has no bug verdict.
+test("reworkKind routes each card kind to its own rework pipeline (SC-4299)", () => {
+  const failed = { stage: "verification", state: "done", verdict: "fail", branch: "b" };
+  assert.equal(reworkKind({ ...failed, bug: true }), "bug");
+  assert.equal(reworkKind({ ...failed, security: true }), "security");
+  assert.equal(reworkKind(failed), "build");
+});
+
+// The action is offered for exactly the cards the drop gate accepts — including
+// a passed review with no branch recorded, which is reworkable for the other
+// reason (nothing to ship) and has the same one move out.
+test("every reworkable card kind qualifies for the action (SC-4299)", () => {
+  assert.equal(isReworkable({ stage: "verification", state: "done", verdict: "fail", branch: "b" }), true);
+  assert.equal(isReworkable({ stage: "verification", state: "done", verdict: "pass" }), true, "no branch recorded");
+  assert.equal(isReworkable({ stage: "verification", state: "done", verdict: "pass", branch: "b" }), false);
+  assert.equal(isReworkable({ stage: "verification", state: "running" }), false);
 });
 
 // SC-429 regression: "fix complete, review not started" (stage=implementation,
@@ -157,7 +178,7 @@ test("failed review verdict asks the user, since nothing reworks it (SC-4281)", 
   assert.equal(info.cls, "warning", "nothing runs this rework, so it belongs in the needs-a-person register");
   assert.notEqual(info.spinner, true, "no process is behind it — a spinner would be a claim of work");
   assert.match(info.text, /rework/, "the copy must name the move the user has to make");
-  assert.match(info.title, /Drag the card onto Code/, "and the title must name the gesture that makes it");
+  assert.match(info.title, /choose Rework/, "and the title must name the action that makes it");
 });
 
 // The spinner survives for exactly one case: a rework already dropped, whose

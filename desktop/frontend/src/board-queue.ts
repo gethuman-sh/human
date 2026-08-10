@@ -107,6 +107,17 @@ export function isReworkable(card: QueueCard): boolean {
   return card.stage === "verification" && card.state === "done" && (verdictFailed(card) || !card.branch);
 }
 
+// reworkKind names the pipeline that reworks a card, so the Rework menu action
+// starts the same run its drop target would have. A drop derives that from the
+// column the card was released on; a menu has no target, so it derives it from
+// the card — the two agree because a bug's only rework target is the Fix column
+// and a security ticket's is the Security one.
+export function reworkKind(card: QueueCard): "bug" | "security" | "build" {
+  if (card.bug) return "bug";
+  if (card.security) return "security";
+  return "build";
+}
+
 // ageDays converts a card's stage timestamp into whole days elapsed, or null
 // when the timestamp is absent or unparseable.
 export function ageDays(stageEnteredAt: string | undefined, now: Date): number | null {
@@ -315,7 +326,7 @@ function reworkBadge(card: QueueCard): BadgeInfo {
   return {
     cls: "warning",
     text: "⚠ review found problems — needs rework",
-    title: `Review found problems and nothing reworks it on its own (verdict: ${verdict}). Drag the card onto Code to run the rework — the findings are in the latest [human:review-complete] comment on the ticket.`,
+    title: `Review found problems and nothing reworks it on its own (verdict: ${verdict}). Right-click the card and choose Rework to run it — the findings are in the latest [human:review-complete] comment on the ticket.`,
     spinner: false,
   };
 }
