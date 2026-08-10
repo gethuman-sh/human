@@ -108,7 +108,7 @@ func (e *engineClient) ContainerCreate(ctx context.Context, opts ContainerCreate
 	}
 
 	hostConfig := &container.HostConfig{
-		Binds:       opts.Binds,
+		Binds:       bindStrings(opts.Binds),
 		ExtraHosts:  opts.ExtraHosts,
 		CapAdd:      opts.CapAdd,
 		SecurityOpt: opts.SecurityOpt,

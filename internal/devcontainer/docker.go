@@ -87,7 +87,7 @@ type ContainerCreateOptions struct {
 	WorkingDir  string
 	User        string
 	ExtraHosts  []string // "host:ip" entries for /etc/hosts
-	Binds       []string // "src:dst[:opts]" bind mounts
+	Binds       []Mount  // bind mounts, rendered to Docker's string form at the boundary
 	CapAdd      []string // added capabilities
 	SecurityOpt []string // security options
 	Privileged  bool

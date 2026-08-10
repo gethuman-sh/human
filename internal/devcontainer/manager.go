@@ -300,21 +300,19 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 		)
 	}
 
-	binds := []string{
-		projectDir + ":" + workspaceDir,
-	}
+	binds := []Mount{Bind(projectDir, workspaceDir)}
 
 	// Project-declared persistent caches: a bind whose source is not a path is
 	// a named volume, which Docker auto-creates on first use — no extra API.
 	for _, c := range caches {
-		binds = append(binds, c.VolumeName()+":"+c.Path)
+		binds = append(binds, Bind(c.VolumeName(), c.Path))
 	}
 
 	// A worktree workspace resolves git through the parent repo's .git, which
 	// lives outside the mount — bind it at its host-identical path so the
 	// worktree's absolute gitdir pointer works in-container (ticket 482).
 	if gitDir != "" {
-		binds = append(binds, gitDir+":"+gitDir)
+		binds = append(binds, Bind(gitDir, gitDir))
 	}
 
 	// Mount CA cert if it exists.
@@ -323,14 +321,14 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 
 	caCert := filepath.Join(home, ".human", "ca.crt")
 	if IsValidCACertFile(caCert) {
-		binds = append(binds, caCert+":"+targetHome+"/.human/ca.crt:ro")
+		binds = append(binds, Bind(caCert, targetHome+"/.human/ca.crt").ReadOnly())
 	}
 
 	// Mount project-local Claude config so auth and plugins persist
 	// across container rebuilds without touching the host's ~/.claude.
 	containerClaudeDir := filepath.Join(configDir, ".devcontainer", "claude")
 	if mkErr := os.MkdirAll(containerClaudeDir, 0o750); mkErr == nil {
-		binds = append(binds, containerClaudeDir+":"+targetHome+"/.claude")
+		binds = append(binds, Bind(containerClaudeDir, targetHome+"/.claude"))
 	}
 
 	// Persist ~/.claude.json across container rebuilds. Claude Code stores
@@ -342,11 +340,11 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 			_ = os.WriteFile(claudeJSON, []byte("{}\n"), 0o600) // #nosec G306
 		}
 	}
-	binds = append(binds, claudeJSON+":"+targetHome+"/.claude.json")
+	binds = append(binds, Bind(claudeJSON, targetHome+"/.claude.json"))
 
 	// Mount host human binary so the container always uses the same version.
 	if humanBin, exeErr := os.Executable(); exeErr == nil {
-		binds = append(binds, humanBin+":/usr/local/bin/human:ro")
+		binds = append(binds, Bind(humanBin, "/usr/local/bin/human").ReadOnly())
 	}
 
 	// Parse config mount strings. Devcontainer.json uses the Docker --mount
@@ -357,14 +355,14 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 		if !ok {
 			continue
 		}
-		if bind := parseMountString(s); bind != "" {
-			binds = append(binds, bind)
+		if mt, ok := parseMountString(s); ok {
+			binds = append(binds, mt)
 		}
 	}
 
 	// Deduplicate mounts by target path. Later entries (from config) win
 	// over earlier programmatic ones to avoid Docker "Duplicate mount point" errors.
-	binds = deduplicateBinds(binds)
+	binds = dedupeMounts(binds)
 
 	labels := ManagedLabels(projectDir, containerName, hash)
 
@@ -389,14 +387,15 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 	return opts
 }
 
-// parseMountString converts a devcontainer.json mount string from Docker
-// --mount format ("source=X,target=Y,type=bind,readonly") to Binds format
-// ("X:Y:ro"). If the string already looks like Binds format (contains ":"),
-// it is returned as-is.
-func parseMountString(s string) string {
-	// Already in Binds format (src:dst or src:dst:opts).
+// parseMountString reads a mount as devcontainer.json writes it. The spec's
+// own form is the Docker --mount syntax ("source=X,target=Y,type=bind"); a
+// plain bind string is also accepted, because projects write those too. It
+// reports false for anything this package cannot express as a bind — a volume
+// or tmpfs mount, or a mount naming only one side.
+func parseMountString(s string) (Mount, bool) {
+	// A plain bind string: no --mount keys, so read it as source:target[:opts].
 	if !strings.Contains(s, "source=") && strings.Contains(s, ":") {
-		return s
+		return ParseBind(s)
 	}
 
 	var source, target, mountType string
@@ -420,38 +419,17 @@ func parseMountString(s string) string {
 	// Only bind mounts can be expressed as Binds. Volume and tmpfs mounts
 	// would need the Docker SDK Mounts field which we don't support yet.
 	if mountType != "" && mountType != "bind" {
-		return ""
+		return Mount{}, false
 	}
-
 	if source == "" || target == "" {
-		return ""
+		return Mount{}, false
 	}
 
-	bind := source + ":" + target
+	m := Bind(source, target)
 	if readonly {
-		bind += ":ro"
+		m = m.ReadOnly()
 	}
-	return bind
-}
-
-// deduplicateBinds removes duplicate bind mounts by target path,
-// keeping the last entry for each target.
-func deduplicateBinds(binds []string) []string {
-	seen := make(map[string]int, len(binds))
-	for i, b := range binds {
-		parts := strings.SplitN(b, ":", 3)
-		if len(parts) >= 2 {
-			seen[parts[1]] = i
-		}
-	}
-	result := make([]string, 0, len(seen))
-	for i, b := range binds {
-		parts := strings.SplitN(b, ":", 3)
-		if len(parts) >= 2 && seen[parts[1]] == i {
-			result = append(result, b)
-		}
-	}
-	return result
+	return m, true
 }
 
 // remoteHome returns the home directory path for the devcontainer's remote user.
