@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/gethuman-sh/human/internal/agent"
 	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/daemon"
 )
@@ -125,7 +126,7 @@ func buildFinder() claude.InstanceFinder {
 		&claude.HostFinder{Runner: claude.OSCommandRunner{}, HomeDir: home},
 	}
 	if dc, dcErr := claude.NewEngineDockerClient(); dcErr == nil {
-		finders = append(finders, &claude.DockerFinder{Client: dc})
+		finders = append(finders, &claude.DockerFinder{Client: dc, SessionForContainer: agent.SessionForContainer})
 	}
 	return &claude.CombinedFinder{Finders: finders}
 }

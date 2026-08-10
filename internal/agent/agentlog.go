@@ -8,6 +8,7 @@ package agent
 // agent name and listed newest-first, mirroring the audit trail's UX.
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
@@ -339,6 +341,55 @@ func LatestOutputPath(agentName string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(exe.Dir(), "output.log"), nil
+}
+
+// LatestSessionID returns the Claude session the agent's newest run is writing,
+// read from the run's own hook trail — every event carries agent_name and
+// session_id together, so the pairing is already recorded and needs no probe.
+//
+// It exists because agent containers share one transcript directory: every
+// board agent mounts the same .devcontainer/claude as ~/.claude, so a container
+// asked what it has been doing answers with every agent's transcripts at once.
+// Without this, four containers reported one identical token figure and one
+// container's session state could be read out of another's file (SC-4151 C6).
+//
+// An agent with no runs, an unreadable trail, or a trail with no session yet
+// returns "" — the caller then leaves its behaviour unnarrowed rather than
+// guessing which session is the agent's.
+func LatestSessionID(agentName string) string {
+	exe, err := LatestExecution(agentName)
+	if err != nil {
+		return ""
+	}
+	f, err := os.Open(filepath.Join(exe.Dir(), "hooks.jsonl")) // #nosec G304 -- path derived from validated agent name + hex id
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var evt hookevents.Event
+		if err := json.Unmarshal(scanner.Bytes(), &evt); err != nil {
+			continue
+		}
+		if evt.SessionID != "" {
+			return evt.SessionID
+		}
+	}
+	return ""
+}
+
+// SessionForContainer is LatestSessionID keyed by CONTAINER name, which is what
+// instance discovery holds. It is the value to hand to
+// claude.DockerFinder.SessionForContainer; a container this package did not
+// name is not a managed agent and resolves to "".
+func SessionForContainer(containerName string) string {
+	name, ok := strings.CutPrefix(strings.TrimSpace(containerName), ContainerPrefix)
+	if !ok || name == "" {
+		return ""
+	}
+	return LatestSessionID(name)
 }
 
 // StreamOutput writes the contents of the file at path to w. When follow is
