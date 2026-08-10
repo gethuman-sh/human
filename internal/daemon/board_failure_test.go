@@ -1225,12 +1225,15 @@ func TestHandleBoardAgentExit_SilenceReapDoesNotChargeRetry(t *testing.T) {
 // count — not repeat the relaunch forever.
 func TestHandleBoardAgentExit_SilenceReapGivesUpAfterCap(t *testing.T) {
 	comments := []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))}
-	// Every relaunch (including relaunchSilenceReap) posts the stage's own
-	// *-started marker before the agent that follows it can exit — so each
-	// prior reap in this history is followed by one, leaving the latest marker
-	// a *-started one and the new SC-3857 already-failed guard unblocked for
-	// the reap this test then fires (AD4). Real history, not just the cap
-	// count, is what silenceReapCount still reads correctly either way.
+	// Every relaunch that actually started an agent (including
+	// relaunchSilenceReap) posts the stage's own *-started marker before the
+	// agent that follows it can exit — so each prior reap in this history is
+	// followed by one, leaving the latest marker a *-started one and the new
+	// SC-3857 already-failed guard unblocked for the reap this test then fires
+	// (AD4). A relaunch refused because an agent is already running posts
+	// nothing and leaves that guard on (SC-4244); this history has none. Real
+	// history, not just the cap count, is what silenceReapCount still reads
+	// correctly either way.
 	for i := 0; i < MaxSilenceReaps; i++ {
 		comments = append(comments,
 			cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), time.Unix(int64(10+2*i), 0)),
@@ -1299,9 +1302,10 @@ func TestHandleBoardAgentExit_SilenceReapGiveUpDedup(t *testing.T) {
 func TestHandleBoardAgentExit_SilenceReapRelaunchesUnderCap(t *testing.T) {
 	comments := []tracker.Comment{cmt(ImplementationStartedHeader, time.Unix(1, 0))}
 	// See TestHandleBoardAgentExit_SilenceReapGivesUpAfterCap: each prior reap
-	// is followed by the *-started marker its own relaunch posts, so the
-	// latest marker stays a *-started one and the SC-3857 already-failed guard
-	// does not block the reap this test fires.
+	// is followed by the *-started marker its own relaunch posts once it has
+	// actually started an agent, so the latest marker stays a *-started one and
+	// the SC-3857 already-failed guard does not block the reap this test fires
+	// (a refused relaunch would post nothing and leave the guard on, SC-4244).
 	for i := 0; i < MaxSilenceReaps-1; i++ {
 		comments = append(comments,
 			cmt(ImplementationFailedHeader+"\n"+silenceReapReason("5m0s"), time.Unix(int64(10+2*i), 0)),

@@ -615,27 +615,33 @@ func (d BoardTransitionDeps) ApplySecurityFix(ctx context.Context, req SecurityF
 	return err
 }
 
-// startAgentStage posts the stage's started marker, then launches the agent. On
-// launch failure it posts the stage's *-failed marker so the board reflects the
-// error rather than leaving a stuck spinner. cause names what filled the gap
-// before this launch (SC-2462): a non-empty cause over StageWaitThreshold gets an
-// attributed [human:stage-wait] record; an empty cause (a human-initiated drop)
-// is deliberation, never recorded.
+// startAgentStage launches the agent and, only when one actually started, posts
+// the stage's started marker. On launch failure it posts the stage's *-failed
+// marker so the board reflects the error rather than leaving a stuck spinner.
+// cause names what filled the gap before this launch (SC-2462): a non-empty
+// cause over StageWaitThreshold gets an attributed [human:stage-wait] record; an
+// empty cause (a human-initiated drop) is deliberation, never recorded.
 // launchAgent is the single AgentLauncher boundary every board launch path
 // routes through. A benign single-flight refusal (ErrAgentAlreadyRunning) means
-// "one is already working on it", not "this failed", so it is swallowed to a
-// no-op here and the caller posts no failed marker — leaving the card running.
-// Every other error is returned unchanged so a launch that genuinely could not
-// happen (no container, no credentials) still fails loudly. Centralizing the
-// no-op contract here means a new launch path inherits it without rediscovering
-// the rule (SC-2603; the per-call-site guard it replaces was SC-1419).
+// "one is already working on it" on this machine, not "this failed", so it is
+// still not an error here and the caller posts no failed marker — leaving the
+// existing run's record standing. Every other error is returned unchanged so a
+// launch that genuinely could not happen (no container, no credentials) still
+// fails loudly. Centralizing the no-op contract here means a new launch path
+// inherits it without rediscovering the rule (SC-2603; the per-call-site guard
+// it replaces was SC-1419).
+// The refusal is now reported rather than erased: launched is the fact every
+// caller needs before it may claim a run happened, because a marker that
+// outlives its own launch re-dates the card's clock — buying the still-running
+// agent another StuckRunningGrace from the pass meant to reach it — and charges
+// the retry budget for a run that never began (SC-4244).
 // Ownership follows the work: a launch that actually starts an agent claims the
 // ticket for this machine, so "who holds this right now" is answerable from the
 // ticket alone (SC-3345). It rides here rather than in each caller for the same
 // reason the no-op contract does — a new launch path inherits it without
 // rediscovering the rule. A benign single-flight refusal claims nothing: an
 // agent is already on it, so the existing claim is the accurate one.
-func (d BoardTransitionDeps) launchAgent(ctx context.Context, pmKey, name, prompt string) error {
+func (d BoardTransitionDeps) launchAgent(ctx context.Context, pmKey, name, prompt string) (launched bool, err error) {
 	// Registered BEFORE the launch: the run can fire its first hook event the
 	// moment the container starts, and an id minted afterwards would arrive too
 	// late to recognise it.
@@ -646,12 +652,12 @@ func (d BoardTransitionDeps) launchAgent(ctx context.Context, pmKey, name, promp
 		// refusal means another launch owns the work — either way the id is dead.
 		d.Runs.Forget(runID)
 		if stderrors.Is(err, ErrAgentAlreadyRunning) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	d.setTicketOwner(pmKey)
-	return nil
+	return true, nil
 }
 
 // setTicketOwner makes this machine's identity the ticket's owner. Best-effort by
@@ -718,20 +724,38 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	if !won {
 		return false, nil
 	}
-	// Record the inter-stage wait before the started marker lands: this is the
-	// last instant the previous stage's done marker is the newest done-state
-	// marker, i.e. the eligibility anchor. Best-effort and threshold-gated, so a
-	// promptly-chained stage posts nothing (SC-2462).
-	if waitComments, err := d.Commenter.ListComments(ctx, pmKey); err == nil {
+	// Snapshot the thread BEFORE the launch: this is the last instant the previous
+	// stage's done marker is the newest done-state marker, i.e. the eligibility
+	// anchor. It is RECORDED only after an agent actually started, so a refused
+	// launch leaves no trace of a stage that never began (SC-4244/SC-2462).
+	// Best-effort and threshold-gated, so a promptly-chained stage posts nothing.
+	waitComments, waitErr := d.Commenter.ListComments(ctx, pmKey)
+
+	name := agentNameFor(pmKey, stage)
+	started, err := d.launchAgent(ctx, pmKey, name, prompt)
+	if err != nil {
+		_ = postMarker(ctx, d.Commenter, pmKey, failureMarker(failedTypeFor(stage), errors.CauseChain(err)))
+		return false, errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
+	}
+	if !started {
+		// A benign single-flight refusal: an agent is already working this stage on
+		// this machine, so ITS claim, ITS started marker and ITS clock are the
+		// accurate record. Post nothing — a started marker here would re-date
+		// StageEnteredAt and buy the running agent another StuckRunningGrace from
+		// the pass meant to reach it — and report that nothing started, so the
+		// retry accounting charges no attempt (SC-4244, SC-2989).
+		d.Logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+			Msg("board stage launch refused: an agent is already running this stage on this machine; leaving its record standing")
+		return false, nil
+	}
+	if waitErr == nil {
 		recordStageWait(ctx, d.Commenter, pmKey, stage, waitComments, cause, d.DaemonID, d.Logger)
 	}
 	if _, err := d.Commenter.AddComment(ctx, pmKey, startedHeader); err != nil {
-		return false, errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
-	}
-	name := agentNameFor(pmKey, stage)
-	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
-		_ = postMarker(ctx, d.Commenter, pmKey, failureMarker(failedTypeFor(stage), errors.CauseChain(err)))
-		return false, errors.WrapWithDetails(err, "launching agent", "pm", pmKey, "stage", string(stage))
+		// The agent IS running: reporting launched=false here would re-create the
+		// bug with the sign flipped. The error still surfaces, and the charged
+		// attempt correctly stays charged for a launch that happened.
+		return true, errors.WrapWithDetails(err, "posting started marker", "pm", pmKey, "stage", string(stage))
 	}
 	return true, nil
 }
@@ -956,11 +980,10 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 		return d.deployFailed(pmKey, "", deployReason(
 			"could not push "+card.Branch+" and open its draft pull request — check the branch and forge access, then re-run Deploy", err))
 	}
-	if _, err := d.Commenter.AddComment(ctx, pmKey,
-		prReviewStartedBody(res.URL, res.Number, card.Branch)); err != nil {
-		return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
-	}
-	return d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage, prReviewDispatch(pmKey, res.Number, card.Branch))
+	_, err = d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
+		prReviewDispatch(pmKey, res.Number, card.Branch),
+		prReviewStartedBody(res.URL, res.Number, card.Branch))
+	return err
 }
 
 // prReviewStartedBody carries the loop's PR binding on the started marker so the
@@ -1005,16 +1028,32 @@ func deployFixRounds(comments []tracker.Comment) int {
 }
 
 // launchPRLoopAgent launches one loop step's agent (fire-and-forget, no claim:
-// the loop is driven by the launching daemon's local Stop events). A launch
-// failure escalates the card — leaving it spinning would strand the loop.
-func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string, stage BoardStage, prompt string) error {
+// the loop is driven by the launching daemon's local Stop events) and records
+// the step on the ticket ONLY when an agent actually started. The started body
+// is passed in rather than posted by the caller because the order is the point:
+// a marker written ahead of a refused launch is a loop step the thread claims
+// and nothing performed (SC-4244). A launch failure escalates the card —
+// leaving it spinning would strand the loop.
+func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string, stage BoardStage, prompt, startedBody string) (launched bool, err error) {
 	name := agentNameFor(pmKey, stage)
-	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
+	started, err := d.launchAgent(ctx, pmKey, name, prompt)
+	if err != nil {
 		body := markerBody(failureMarker(MarkerPRReviewFailed, "could not launch the PR "+string(stage)+" agent — "+errors.CauseChain(err)))
 		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
-		return errors.WrapWithDetails(err, "launching PR loop agent", "pm", pmKey, "stage", string(stage))
+		return false, errors.WrapWithDetails(err, "launching PR loop agent", "pm", pmKey, "stage", string(stage))
 	}
-	return nil
+	if !started {
+		// An agent on this machine already owns this loop step: its marker stands,
+		// the loop's own clock is not re-dated, and the running step's Stop event
+		// will drive the next action (SC-4244, SC-2603).
+		d.Logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+			Msg("board PR loop: launch refused, an agent already owns this step; leaving its record standing")
+		return false, nil
+	}
+	if _, err := d.Commenter.AddComment(ctx, pmKey, startedBody); err != nil {
+		return true, errors.WrapWithDetails(err, "posting PR loop started marker", "pm", pmKey, "stage", string(stage))
+	}
+	return true, nil
 }
 
 // prLoopNumber recovers the loop's PR number from the latest pr-review-started
@@ -1044,15 +1083,13 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), card.Branch
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
-		if _, err := d.Commenter.AddComment(ctx, pmKey, prReviewStartedBody(url, number, branch)); err != nil {
-			return errors.WrapWithDetails(err, "posting pr-review-started marker", "pm", pmKey)
-		}
-		return d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage, prReviewDispatch(pmKey, number, branch))
+		_, err := d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
+			prReviewDispatch(pmKey, number, branch), prReviewStartedBody(url, number, branch))
+		return err
 	case PRActionFix:
-		if _, err := d.Commenter.AddComment(ctx, pmKey, PRFixStartedHeader); err != nil {
-			return errors.WrapWithDetails(err, "posting pr-fix-started marker", "pm", pmKey)
-		}
-		return d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage, prFixDispatch(pmKey, number, branch))
+		_, err := d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage,
+			prFixDispatch(pmKey, number, branch), PRFixStartedHeader)
+		return err
 	case PRActionMerge:
 		// Record the loop converging BEFORE acting on it. Both launches and the
 		// escalation already post a marker, so without this the one outcome the
@@ -1272,9 +1309,12 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
 	}
 	// SC-3857: the done stage was already declared dead by an earlier escalation
-	// with no relaunch since (dispatchDeployFixer always posts
+	// with no relaunch since (a dispatch that actually started a fixer posts
 	// [human:deploy-fix-started] before the fixer can exit, so a fresh dispatch
-	// flips this back to false) — posting again would only re-date the card.
+	// flips this back to false; a dispatch refused because a fixer is already
+	// running posts nothing and deliberately leaves the guard on, because the
+	// fixer it would re-tell about is the one still going, SC-4244) — posting
+	// again would only re-date the card.
 	// deployFailed above is deliberately NOT guarded the same way (AD5): it can
 	// fire before any running done-stage marker exists at all, and a guard there
 	// would swallow a genuine new failure on a board Deploy re-drop.
@@ -1883,10 +1923,23 @@ func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pm
 	return d.deployFailed(pmKey, res.URL, deployReason(headline, cause))
 }
 
-// dispatchDeployFixer posts the running deploy-fix-started marker (carrying the
-// failure headline and the PR binding for the trail) and launches the fixer. The
-// marker keeps the card spinning rather than red while the fixer works.
+// dispatchDeployFixer launches the deploy-fixer and, only when one actually
+// started, posts the running deploy-fix-started marker (carrying the failure
+// headline and the PR binding for the trail). The marker keeps the card spinning
+// rather than red while the fixer works — which is only true of a fixer that
+// exists, so it follows the launch (SC-4244).
 func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string) error {
+	launched, err := d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
+	if err != nil {
+		return err
+	}
+	if !launched {
+		// A fixer on this machine is already working this deploy: its marker and
+		// its round stand, and its Stop event re-drives the gate (SC-4244).
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board deploy: fixer launch refused, one is already running; leaving its record standing")
+		return nil
+	}
 	m := marker.Marker{
 		Type:   MarkerDeployFixStarted,
 		Fields: fields("pr", res.URL, "number", strconv.Itoa(res.Number), "branch", branch),
@@ -1895,20 +1948,21 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 	if err := postMarker(ctx, d.Commenter, pmKey, m, "pr", "number", "branch"); err != nil {
 		return errors.WrapWithDetails(err, "posting deploy-fix-started marker", "pm", pmKey)
 	}
-	return d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
+	return nil
 }
 
 // launchDeployFixAgent launches the deploy-fixer fire-and-forget (no claim: driven
 // by this daemon's local Stop event, like the PR-loop agents). A launch failure
 // reds the card — leaving it spinning would strand the deploy.
-func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) error {
+func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) (launched bool, err error) {
 	name := agentNameFor(pmKey, deployFixAgentStage)
-	if err := d.launchAgent(ctx, pmKey, name, prompt); err != nil {
+	started, err := d.launchAgent(ctx, pmKey, name, prompt)
+	if err != nil {
 		body := markerBody(failureMarker(MarkerDeployFailed, "could not launch the deploy fixer — "+errors.CauseChain(err)))
 		_, _ = d.Commenter.AddComment(ctx, pmKey, body)
-		return errors.WrapWithDetails(err, "launching deploy fixer", "pm", pmKey)
+		return false, errors.WrapWithDetails(err, "launching deploy fixer", "pm", pmKey)
 	}
-	return nil
+	return started, nil
 }
 
 // executePrompt builds the implementation-stage dispatch. The BOARD CONTEXT

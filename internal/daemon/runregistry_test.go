@@ -127,8 +127,10 @@ func TestLaunchAgent_RegistersTheRun(t *testing.T) {
 		Runs:      NewRunRegistry(),
 	}
 
-	require.NoError(t, deps.launchAgent(context.Background(), "SC-1", "board-SC-1-implementation", "/do-it"))
+	launched, err := deps.launchAgent(context.Background(), "SC-1", "board-SC-1-implementation", "/do-it")
 
+	require.NoError(t, err)
+	require.True(t, launched)
 	require.NotEmpty(t, l.runID, "the container must be told which run it is")
 	rec, ok := deps.Runs.Claim(l.runID)
 	require.True(t, ok, "the launch must be registered before the run can fire an event")
@@ -153,7 +155,9 @@ func TestLaunchAgent_FailedLaunchForgetsTheRun(t *testing.T) {
 				Runs:      NewRunRegistry(),
 			}
 
-			_ = deps.launchAgent(context.Background(), "SC-1", "board-SC-1-implementation", "/do-it")
+			launched, _ := deps.launchAgent(context.Background(), "SC-1", "board-SC-1-implementation", "/do-it")
+
+			assert.False(t, launched, "neither a hard failure nor a refusal started anything")
 
 			assert.Zero(t, deps.Runs.Len(), "no record survives a launch that did not start")
 		})

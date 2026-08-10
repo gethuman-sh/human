@@ -361,8 +361,23 @@ func (d BoardTransitionDeps) pursueDecision(ctx context.Context, pmKey string, c
 	}
 
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	_, err := d.launchDecidedStage(ctx, pmKey, stage, card, comments, chosen.Label)
-	return err
+	launched, err := d.launchDecidedStage(ctx, pmKey, stage, card, comments, chosen.Label)
+	if err != nil {
+		return err
+	}
+	// The answer is recorded either way — that is the audit trail and the
+	// consumption signal — but the launch it asks for can be refused: a gate, a
+	// lost claim, or an agent already working the stage on this machine.
+	// Discarding that fact used to be harmless only because a started marker was
+	// posted regardless; now that nothing is posted for a refusal, the card
+	// correctly derives to QUEUED and reconcileQueuedLaunch starts it on the next
+	// tick past QueuedLaunchGrace. Say so in the log rather than reporting a start
+	// nobody made (SC-4244).
+	if !launched {
+		d.Logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+			Msg("board decision: the choice is recorded but the stage did not start; the card stays queued for the reconcile pass")
+	}
+	return nil
 }
 
 // waitsForOf reads the ticket a recorded choice deferred to. Empty for every

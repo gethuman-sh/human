@@ -28,8 +28,10 @@ func TestLaunchAgentTakesOwnershipForThisMachine(t *testing.T) {
 	var owned []string
 	deps := ownerDeps(&fakeLauncher{}, &owned, nil)
 
-	require.NoError(t, deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "/human-plan SC-7"))
+	launched, err := deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "/human-plan SC-7")
 
+	require.NoError(t, err)
+	assert.True(t, launched, "a launch that started an agent says so")
 	assert.Equal(t, []string{"SC-7"}, owned, "starting work on a ticket records who is working it")
 }
 
@@ -39,8 +41,10 @@ func TestLaunchAgentSkipsOwnershipWhenAnAgentIsAlreadyRunning(t *testing.T) {
 	var owned []string
 	deps := ownerDeps(&fakeLauncher{err: ErrAgentAlreadyRunning}, &owned, nil)
 
-	require.NoError(t, deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "prompt"))
+	launched, err := deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "prompt")
 
+	require.NoError(t, err, "a refusal is not a failure")
+	assert.False(t, launched, "nothing started here, and every caller keys its marker off that")
 	assert.Empty(t, owned)
 }
 
@@ -49,8 +53,10 @@ func TestLaunchAgentSkipsOwnershipWhenTheLaunchFailed(t *testing.T) {
 	boom := stderrors.New("no container")
 	deps := ownerDeps(&fakeLauncher{err: boom}, &owned, nil)
 
-	require.ErrorIs(t, deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "prompt"), boom)
+	launched, err := deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "prompt")
 
+	require.ErrorIs(t, err, boom)
+	assert.False(t, launched)
 	assert.Empty(t, owned, "nothing is working the ticket, so nothing owns it")
 }
 
@@ -60,8 +66,10 @@ func TestLaunchAgentSucceedsWhenTakingOwnershipFails(t *testing.T) {
 	var owned []string
 	deps := ownerDeps(&fakeLauncher{}, &owned, stderrors.New("tracker down"))
 
-	require.NoError(t, deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "prompt"))
+	launched, err := deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "prompt")
 
+	require.NoError(t, err)
+	assert.True(t, launched)
 	assert.Equal(t, []string{"SC-7"}, owned, "it was attempted")
 }
 
@@ -70,8 +78,10 @@ func TestLaunchAgentWithoutAnOwnerHookStillLaunches(t *testing.T) {
 	l := &fakeLauncher{}
 	deps := BoardTransitionDeps{Commenter: &fakeCommenter{}, Launcher: l, WorkspaceDir: "/ws", ConfigDir: "/ws"}
 
-	require.NoError(t, deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "prompt"))
+	launched, err := deps.launchAgent(context.Background(), "SC-7", "board-SC-7-planning", "prompt")
 
+	require.NoError(t, err)
+	assert.True(t, launched)
 	assert.Equal(t, 1, l.calls)
 }
 

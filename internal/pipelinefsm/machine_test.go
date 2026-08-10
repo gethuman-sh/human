@@ -80,3 +80,36 @@ func TestMermaid_SaysWhenTheMarkerIsPerStage(t *testing.T) {
 	}
 	assert.Contains(t, pipelinefsm.Mermaid(doc), "down (per-stage marker)")
 }
+
+// SC-4244: a launch the single-flight guard refused records nothing and moves
+// nothing, so each of its six events must be a true self-loop with no marker.
+// A placeholder dst would draw a real exit in the diagram and let a future trap
+// state hide behind an edge no item ever takes.
+func TestTheRefusalEventsAreSelfLoopsThatRecordNothing(t *testing.T) {
+	doc, err := pipelinefsm.Load()
+	require.NoError(t, err)
+
+	want := map[string]bool{
+		"stage-relaunch-refused":      false,
+		"outage-relaunch-refused":     false,
+		"queued-launch-refused":       false,
+		"pr-review-launch-refused":    false,
+		"pr-fix-launch-refused":       false,
+		"deploy-fixer-launch-refused": false,
+	}
+	for _, e := range doc.Events {
+		if _, ok := want[e.Name]; !ok {
+			continue
+		}
+		want[e.Name] = true
+		require.Len(t, e.Src, 1, "%s: one source state, so the self-loop is unambiguous", e.Name)
+		assert.Equal(t, e.Src[0], e.Dst, "%s: a refusal moves nothing", e.Name)
+		assert.False(t, e.Moves(), "%s must declare moves_item: false", e.Name)
+		assert.Empty(t, e.Marker, "%s: the absence of a marker IS the fix", e.Name)
+		assert.NotEmpty(t, e.Doc, "%s: say why it records nothing", e.Name)
+		assert.NotEmpty(t, e.Where, "%s: name the code that refuses", e.Name)
+	}
+	for name, found := range want {
+		assert.True(t, found, "%s is missing from the document", name)
+	}
+}

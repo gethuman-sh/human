@@ -391,7 +391,7 @@
         "daemon"
       ],
       "stale_when": "Past QueuedLaunchGrace (2m) with no live agent for the stage. Recording the choice and launching the stage are the two halves of one ApplyOption call, in that order, so the ordinary window is microseconds; the grace exists only so a reconcile tick landing inside it does not race a launch already on its way. A HELD card is never stale by time: it is doing exactly what a person told it to, for as long as the ticket it waits for takes.",
-      "if_nothing_happens": "reconcileQueuedLaunch starts the stage the decision named, on the next tick past the grace — unless the answer was a sequencing one, in which case that same pass HOLDS the card and starts it on the first tick after the ticket it named is done or closed. A held card whose blocker cannot be read stays held: starting the work is the one outcome the person's answer ruled out, and a deliberate wait has no time bound to give up at, so the way out of an unreadable one is a person dropping the card on its own column. Otherwise it relaunches through the CHARGED, capped path (DefaultStageRetries), so a stage that cannot be launched is tried twice and then left for a person rather than forever — and a refusal that starts nothing, the plan gate, is not charged at all and routes the card itself to needs-planning; a hold is charged nothing either, because nothing was attempted. It deliberately does not go through the ordinary retry classifier: that reads the stage's last recorded exit, which here is the ExitNeedsInput of the stage that RAISED the decision, and would classify the card as one to leave for a human — refusing to start exactly the cards this pass exists for. Until SC-3865 nothing watched this state at all: it exists so the stuck-running sweep will not red a card whose decision was just answered (SC-1320), and it achieved that by being a state no sweep looked at — one property, protection from one side and a hole from the other. The pass could not in fact start anything until the transition that admits a queued card existed: every re-drive was rejected as a non-advance by the forward-only rule and charged for the refusal."
+      "if_nothing_happens": "reconcileQueuedLaunch starts the stage the decision named, on the next tick past the grace — unless the answer was a sequencing one, in which case that same pass HOLDS the card and starts it on the first tick after the ticket it named is done or closed. A held card whose blocker cannot be read stays held: starting the work is the one outcome the person's answer ruled out, and a deliberate wait has no time bound to give up at, so the way out of an unreadable one is a person dropping the card on its own column. Otherwise it relaunches through the CHARGED, capped path (DefaultStageRetries), so a stage that cannot be launched is tried twice and then left for a person rather than forever — and a refusal that starts nothing, the plan gate, is not charged at all and routes the card itself to needs-planning; a hold is charged nothing either, because nothing was attempted. A single-flight refusal — an agent already running the stage on this machine — is charged nothing either, and posts no started marker, so the card simply stays queued for the next tick (SC-4244). It deliberately does not go through the ordinary retry classifier: that reads the stage's last recorded exit, which here is the ExitNeedsInput of the stage that RAISED the decision, and would classify the card as one to leave for a human — refusing to start exactly the cards this pass exists for. Until SC-3865 nothing watched this state at all: it exists so the stuck-running sweep will not red a card whose decision was just answered (SC-1320), and it achieved that by being a state no sweep looked at — one property, protection from one side and a hole from the other. The pass could not in fact start anything until the transition that admits a queued card existed: every re-drive was rejected as a non-advance by the forward-only rule and charged for the refusal."
     },
     {
       "name": "stopped",
@@ -400,7 +400,7 @@
         "stage": "any",
         "state": "failed"
       },
-      "holds": "A stage gave up and the marker says why, naming the blocking condition rather than offering a gesture that cannot work. Landing here TWICE with no relaunch in between is absorbed rather than re-told: stageAlreadyFailed (SC-3857) reads the stage's own newest marker and suppresses only a repeat POST of the identical *-failed marker, so a second, unrelated exit event for the same dead run does not re-date an hour-old corpse as freshly broken. The exception is a genuine second failure AFTER a relaunch — every relaunch posts the stage's own *-started marker before the agent that follows it can exit, so a *-started marker newer than the failure flips the guard back off and the new failure posts and re-dates as it always did. Suppressing the post does NOT suppress the automatic in-place relaunch below: the ordinary ending IS a skill posting its own *-failed marker and recording its own stage outcome before it exits, so the marker this ending posted is already the stage's newest by the time the exit event is processed — indistinguishable from a stale duplicate by marker history alone. The relaunch is decided from the stage's own recorded exit class instead, independent of the marker thread, so a genuine retryable ending still gets its bounded relaunch even though its own marker cannot be re-posted (revised after a second-opinion probe showed the first cut of this guard silently dropped that relaunch for the everyday retryable-review path, not only the rare unrecorded-exit corner). The needs-person and silence-reap endings are the exception: each decides its post and its relaunch (or lack of one) in a single synchronous step the daemon itself performs, so an already-failed marker there can only be a fully-completed EARLIER cycle, and both the post and the relaunch stay suppressed for those two. The stop is about ONE stage, and the card is not: a card carries the newest marker of the whole item, so a failure recorded in one stage takes a card whose OTHER stage is still running, and the red then asks a person to intervene on work that is still being done (measured on SC-3853, where a done-stage failure sat over a live implementation agent until that agent's own relaunch turned the card green again). The board answers it by joining the other stage's container before it renders the failure as the last word — a card carrying BoardCard.RunningStage reads as work in progress while an agent is found, and reds exactly as before when none is (SC-4406).",
+      "holds": "A stage gave up and the marker says why, naming the blocking condition rather than offering a gesture that cannot work. Landing here TWICE with no relaunch in between is absorbed rather than re-told: stageAlreadyFailed (SC-3857) reads the stage's own newest marker and suppresses only a repeat POST of the identical *-failed marker, so a second, unrelated exit event for the same dead run does not re-date an hour-old corpse as freshly broken. The exception is a genuine second failure AFTER a relaunch — every relaunch that actually started an agent posts the stage's own *-started marker before the agent that follows it can exit, so a *-started marker newer than the failure flips the guard back off and the new failure posts and re-dates as it always did. A relaunch REFUSED because an agent is already running on this machine posts nothing and leaves the guard on — see stage-relaunch-refused (SC-4244). Suppressing the post does NOT suppress the automatic in-place relaunch below: the ordinary ending IS a skill posting its own *-failed marker and recording its own stage outcome before it exits, so the marker this ending posted is already the stage's newest by the time the exit event is processed — indistinguishable from a stale duplicate by marker history alone. The relaunch is decided from the stage's own recorded exit class instead, independent of the marker thread, so a genuine retryable ending still gets its bounded relaunch even though its own marker cannot be re-posted (revised after a second-opinion probe showed the first cut of this guard silently dropped that relaunch for the everyday retryable-review path, not only the rare unrecorded-exit corner). The needs-person and silence-reap endings are the exception: each decides its post and its relaunch (or lack of one) in a single synchronous step the daemon itself performs, so an already-failed marker there can only be a fully-completed EARLIER cycle, and both the post and the relaunch stay suppressed for those two. The stop is about ONE stage, and the card is not: a card carries the newest marker of the whole item, so a failure recorded in one stage takes a card whose OTHER stage is still running, and the red then asks a person to intervene on work that is still being done (measured on SC-3853, where a done-stage failure sat over a live implementation agent until that agent's own relaunch turned the card green again). The board answers it by joining the other stage's container before it renders the failure as the last word — a card carrying BoardCard.RunningStage reads as work in progress while an agent is found, and reds exactly as before when none is (SC-4406).",
       "who_may_act": [
         "user",
         "daemon"
@@ -898,7 +898,7 @@
         "reason"
       ],
       "doc": "The deploy gave up. The marker names the condition that is blocking — for a deploy-fixer escalation it quotes the failure the fixer was dispatched to fix, which for CI names the red checks — and it does not offer a gesture that cannot work: where re-running Deploy would hit the same failure, it says so instead of advising the retry.",
-      "where": "internal/daemon/board_transition.go deployFailed (NOT guarded by stageAlreadyFailed — it can fire before any running done-stage marker exists at all, e.g. a push failure ahead of pr-review-started, so a guard there would swallow a genuine new failure on a board Deploy re-drop, SC-3857 AD5), and AdvanceDeployFix for a fixer that did not converge (guarded by stageAlreadyFailed: dispatchDeployFixer always posts deploy-fix-started first, so the guard cannot hide a fresh dispatch's own failure)"
+      "where": "internal/daemon/board_transition.go deployFailed (NOT guarded by stageAlreadyFailed — it can fire before any running done-stage marker exists at all, e.g. a push failure ahead of pr-review-started, so a guard there would swallow a genuine new failure on a board Deploy re-drop, SC-3857 AD5), and AdvanceDeployFix for a fixer that did not converge (guarded by stageAlreadyFailed: a dispatch that actually started a fixer posts deploy-fix-started first, so the guard cannot hide that dispatch's own failure; a dispatch REFUSED because a fixer is already running posts nothing and leaves the guard on, deliberately — see deploy-fixer-launch-refused, SC-4244)"
     },
     {
       "name": "stage-asks",
@@ -962,6 +962,72 @@
       "marker": "[human:needs-planning]",
       "where": "board_transition.go refuseIfUnplanned",
       "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one. A relaunch attempted on a card that already failed meets the same gate, so the refusal is also a move a stopped card makes onto itself: the plan is still missing, and the card stays exactly as red as it was."
+    },
+    {
+      "name": "stage-relaunch-refused",
+      "src": [
+        "stopped"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "moves_item": false,
+      "where": "internal/daemon/board_transition.go startAgentStage — launchAgent reports launched=false for ErrAgentAlreadyRunning, so no *-started marker is posted; board_retry.go relaunchBounded then rolls the charged attempt back",
+      "doc": "A relaunch the launcher refused because an agent for (key, stage) is already running on this machine. It records NOTHING and the item does not move. That absence is the point: a started marker here would claim a run that never began, re-date StageEnteredAt, and hand the still-running agent another StuckRunningGrace from the very pass meant to reach it — a hung agent was sustained for hours that way (SC-4244). The refusal is still not a failure: no *-failed marker, no error, and the running run's claim and markers stand (SC-2603, SC-1419)."
+    },
+    {
+      "name": "outage-relaunch-refused",
+      "src": [
+        "substrate-down"
+      ],
+      "dst": "substrate-down",
+      "actor": "daemon",
+      "moves_item": false,
+      "where": "internal/daemon/board_transition.go startAgentStage via board_retry.go relaunchOutage",
+      "doc": "The uncharged outage re-drive, refused because an agent is already running the stage on this machine. Like stage-relaunch-refused it posts nothing: the standing *-outage marker is left in place for the next tick rather than superseded by a start that did not happen."
+    },
+    {
+      "name": "queued-launch-refused",
+      "src": [
+        "queued"
+      ],
+      "dst": "queued",
+      "actor": "daemon",
+      "moves_item": false,
+      "where": "internal/daemon/board_transition.go startAgentStage via board_options.go pursueDecision and board_reconcile_queued.go reconcileQueuedLaunch",
+      "doc": "The stage a decision named could not be started because an agent on this machine already holds it. The choice stays recorded and the card stays queued — which is now the truthful placement, since no started marker is posted to supersede the choice — and reconcileQueuedLaunch tries again on the next tick past the grace, charging nothing (SC-4244)."
+    },
+    {
+      "name": "pr-review-launch-refused",
+      "src": [
+        "pr-review"
+      ],
+      "dst": "pr-review",
+      "actor": "daemon",
+      "moves_item": false,
+      "where": "internal/daemon/board_transition.go AdvancePRLoop → launchPRLoopAgent",
+      "doc": "The loop's next step (a fixer) was refused because an agent already owns it. No pr-fix-started marker, so the loop's stage and its round count stay where they are and the running step's Stop event drives the real next action. reconcilePRLoops re-drives the loop every tick behind an alive-guard, so this edge is a live path, not a theoretical one."
+    },
+    {
+      "name": "pr-fix-launch-refused",
+      "src": [
+        "pr-fix"
+      ],
+      "dst": "pr-fix",
+      "actor": "daemon",
+      "moves_item": false,
+      "where": "internal/daemon/board_transition.go AdvancePRLoop → launchPRLoopAgent",
+      "doc": "The mirror of pr-review-launch-refused: the reviewer relaunch was refused because one already runs. Nothing is recorded, so the loop's clock keeps pointing at the step that is actually going."
+    },
+    {
+      "name": "deploy-fixer-launch-refused",
+      "src": [
+        "ci-gate"
+      ],
+      "dst": "ci-gate",
+      "actor": "daemon",
+      "moves_item": false,
+      "where": "internal/daemon/board_transition.go deployFailedOrDispatchFixer → dispatchDeployFixer",
+      "doc": "A CI failure routed to the deploy-fixer, refused because a fixer is already running on this machine. No deploy-fix-started marker, so the per-ticket deploy-fix round budget is not spent on a round nobody ran, and the gate is released for the running fixer to re-drive."
     },
     {
       "name": "reopen-planning",
