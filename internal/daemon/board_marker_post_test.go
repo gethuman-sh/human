@@ -45,6 +45,7 @@ func TestDaemonPostedMarkersSatisfyTheirContract(t *testing.T) {
 		{MarkerDeployFailed, markerBody(failureMarker(MarkerDeployFailed,
 			"CI checks failed on the pull request — fix the failing checks, then re-run Deploy\n\nfailing: frontend-test"))},
 		{MarkerNeedsPlanning, markerBody(failureMarker(MarkerNeedsPlanning, needsPlanningReason))},
+		{MarkerNeedsPlanning, planStuckBody(3, cmt(NeedsPlanningHeader, time.Unix(1, 0)))},
 		{MarkerPRReviewFailed, markerBody(failureMarker(MarkerPRReviewFailed,
 			"could not launch the PR review agent — no container runtime"))},
 		{MarkerReviewFailed, markerBody(failureMarker(MarkerReviewFailed, genericStageFailure))},

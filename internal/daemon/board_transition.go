@@ -774,18 +774,35 @@ const needsPlanningReason = "implementation cannot start: this ticket has no pla
 // tests can shorten it.
 var PlanRedriveBound = 3
 
-// planStuckMarker is the stable sentinel that distinguishes a plan-stuck
-// escalation body from an ordinary needs-planning refusal. Both share the
-// [human:needs-planning] header — the one marker DeriveBoardCard already
-// promotes over phantom implementation markers (newestTerminalDetermination) — so
-// reusing it gets correct card rendering for the escalation with zero
-// derivation changes; the sentinel is how the guard tells the two apart.
-const planStuckMarker = "this ticket could not be planned automatically"
+// planStuckLegacySentinel is FROZEN. It is not the escalation's wording — it is
+// the wording escalations posted before marker.EscalationField existed happen to
+// have, and the bound is recounted from comments already on the ticket, so this
+// string is how those threads keep deriving as they always did. Nothing writes
+// it; editing it silently reclassifies history, which is the defect SC-4245
+// removed. New escalations are recognised by the field (isPlanStuck).
+const planStuckLegacySentinel = "this ticket could not be planned automatically"
 
-// isPlanStuck reports whether a [human:needs-planning] marker's body is the
-// plan-stuck escalation rather than an ordinary refusal.
+// planStuckHeadline is the escalation's opening sentence — prose, for the person
+// who has to plan the ticket by hand. Free to reword: nothing classifies on it.
+// It currently reads the same as planStuckLegacySentinel so a peer daemon on an
+// older build still recognises a freshly posted escalation; that is a rollout
+// convenience, not a coupling, and the two constants are independent.
+const planStuckHeadline = "this ticket could not be planned automatically"
+
+// isPlanStuck reports whether a [human:needs-planning] comment is the plan-stuck
+// escalation rather than an ordinary refusal. It reads the determination from
+// the marker's own field; the substring test is the legacy path for threads
+// written before the field existed.
 func isPlanStuck(body string) bool {
-	return strings.Contains(body, planStuckMarker)
+	if m, ok := marker.ParseBody(body); ok {
+		if strings.TrimSpace(m.Fields[marker.EscalationField]) == marker.EscalationPlanStuck {
+			return true
+		}
+		if _, hasField := m.Fields[marker.EscalationField]; hasField {
+			return false
+		}
+	}
+	return strings.Contains(body, planStuckLegacySentinel)
 }
 
 // countPlanRefusals counts the ordinary (non-stuck) [human:needs-planning]
@@ -820,9 +837,9 @@ func oldestNeedsPlanning(comments []tracker.Comment) (tracker.Comment, bool) {
 	return oldest, found
 }
 
-// planStuckReason renders the plan-stuck escalation body: what was tried and
-// since when, so the person reading it knows this is not a fresh refusal but
-// a ping-pong the bound has already stopped.
+// planStuckReason renders the escalation's prose: what was tried and since
+// when, so the person reading it knows this is not a fresh refusal but a
+// ping-pong the bound has already stopped.
 func planStuckReason(drives int, since tracker.Comment) string {
 	stuckSince := "an unknown time"
 	if !since.Created.IsZero() {
@@ -830,7 +847,17 @@ func planStuckReason(drives int, since tracker.Comment) string {
 	}
 	return fmt.Sprintf(
 		"%s — tried %d time(s), stuck since %s. A person needs to plan this ticket by hand.",
-		planStuckMarker, drives, stuckSince)
+		planStuckHeadline, drives, stuckSince)
+}
+
+// planStuckBody composes the escalation marker: the determination in a field,
+// the explanation in prose. One composer so writer and reader cannot drift, and
+// so the marker-contract test can put exactly what the daemon posts back through
+// the protocol's own validator.
+func planStuckBody(drives int, since tracker.Comment) string {
+	m := failureMarker(MarkerNeedsPlanning, planStuckReason(drives, since))
+	m.Fields[marker.EscalationField] = marker.EscalationPlanStuck
+	return markerBody(m, marker.EscalationField, "reason")
 }
 
 // refuseIfUnplanned refuses an implementation launch on a ticket that carries no
@@ -894,8 +921,7 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	// when, rather than looping forever between planning and implementation.
 	if drives := countPlanRefusals(comments); drives >= PlanRedriveBound {
 		since, _ := oldestNeedsPlanning(comments)
-		body := markerBody(failureMarker(MarkerNeedsPlanning, planStuckReason(drives, since)))
-		if _, err := d.Commenter.AddComment(ctx, pmKey, body); err != nil {
+		if _, err := d.Commenter.AddComment(ctx, pmKey, planStuckBody(drives, since)); err != nil {
 			return true, errors.WrapWithDetails(err, "posting plan-stuck escalation marker", "pm", pmKey)
 		}
 		d.Logger.Info().Str("pm", pmKey).
