@@ -186,6 +186,21 @@ function renderCard(card) {
         const keys = card.blockers.join(", ");
         meta.push(`<span class="badge blocked" title="${escapeAttr(`Waiting for ${keys} to finish. Remove the link to start this now.`)}">waits for ${escapeHtml(keys)}</span>`);
     }
+    // A card is released into Ready to Deploy on a passing review, and an ABSENT
+    // verdict counts as passing so threads reviewed before verdicts existed keep
+    // flowing (SC-2848). That default is right, but it made "reviewed" and "never
+    // reviewed" look identical in the one lane where the difference decides
+    // whether to ship (SC-4151 F14). The default stands; the card says which it is.
+    if (queueOf(card) === "deploy" && card.stage === "verification" && !card.verdict) {
+        meta.push(`<span class="badge unreviewed" title="${escapeAttr("No review verdict was recorded. This card reached Ready to Deploy on the pre-verdict default, not on a review that passed.")}">no review recorded</span>`);
+    }
+    // A blocker this board cannot show — another tracker, or past the fetch cap —
+    // still holds the card. It used to be dropped, so the card read as unblocked
+    // (SC-4151 E11). Named, not linked: there is no card here to draw an arrow to.
+    if (card.blockersOffBoard?.length) {
+        const keys = card.blockersOffBoard.join(", ");
+        meta.push(`<span class="badge blocked" title="${escapeAttr(`Waiting for ${keys}, which is not on this board — another tracker, or beyond the fetch cap.`)}">waits for ${escapeHtml(keys)} (off board)</span>`);
+    }
     // A shipped-partial trace: the card shipped less than its ticket asked, with
     // the rest carried by the named follow-on. Informational (machine register, no
     // spinner, not "your turn") and additive to the stage badge, since it is true
@@ -2099,19 +2114,27 @@ async function reconcile(opts = {}) {
         if (epoch !== reconcileEpoch)
             return;
         current = boardStateFromPayload(data);
+        // A probe that FAILED says nothing about whether a sweep is running, so the
+        // previous answer stands rather than flipping the indicator to "not
+        // scanning" on a transient error (SC-4151 E12).
         findbugsHunting = await go()
             .FindbugsHunting()
-            .catch(() => false);
+            .catch(() => findbugsHunting);
         securityHunting = await go()
             .SecurityHunting()
-            .catch(() => false);
+            .catch(() => securityHunting);
     }
     catch (err) {
         if (epoch !== reconcileEpoch)
             return;
+        // A board fetch that failed says nothing about Docker, which was never
+        // probed. Reporting it as unavailable disabled every drop and every menu
+        // item with the tooltip "Docker required", sending the reader to debug a
+        // container runtime that is fine (SC-4151 G17). The last known answer
+        // stands; the fetch failure is surfaced as itself, in the banner.
         current = opts.safety
             ? safetyReconcileError(current, errMessage(err))
-            : { cards: [], dockerAvailable: false, error: errMessage(err) };
+            : { cards: [], dockerAvailable: current.dockerAvailable, error: errMessage(err) };
     }
     if (pendingIdeas.length) {
         // A fetched Ideas card whose key matches the pending capture's key IS

@@ -970,6 +970,13 @@ body {
   color: var(--muted);
   font-weight: 600;
 }
+/* A card that reached Ready to Deploy on the pre-verdict default rather than on
+   a recorded pass. Not a failure — nothing went wrong — so it takes the muted
+   register and simply states the gap (SC-4151 F14). */
+.badge.unreviewed {
+  color: var(--muted);
+  font-weight: 600;
+}
 
 /* An open decision block (ticket 534): the pipeline is deliberately waiting on
    the human — amber, because the ball is in play and in the user's court

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, isReworkable, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
+import { queueOf, isReworkable, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
 import { DAEMON_FORWARDED_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -612,4 +612,70 @@ test("sinceText refuses to render an age it could not read", () => {
   assert.equal(sinceText("nonsense", now), "");
   assert.equal(sinceText("2026-08-10T11:59:30Z", now), "30s ago");
   assert.equal(sinceText("2026-08-08T12:00:00Z", now), "2d ago");
+});
+
+// --- The badge names the half of the loop that is running (SC-4151 F15) ---
+
+test("a pr-fix card says the fixer is working, not the reviewer", () => {
+  const info = badgeInfo({ stage: "done", state: "running", deployPhase: "pr-fix" });
+  assert.equal(info.text, "fixing PR findings…");
+});
+
+test("a pr-review card is unchanged", () => {
+  assert.equal(badgeInfo({ stage: "done", state: "running", deployPhase: "pr-review" }).text, "PR review…");
+});
+
+test("an unknown deploy phase falls back to the review wording rather than blanking", () => {
+  assert.equal(badgeInfo({ stage: "done", state: "running", deployPhase: "something-new" }).text, "PR review…");
+});
+
+// --- The Deploy control and its lane agree (SC-4151 F16) ---
+
+test("an empty deploy lane still says there is nothing to deploy yet", () => {
+  const view = deployControlView([{ stage: "planning", state: "done" }], "features");
+  assert.ok(view.disabled);
+  assert.match(view.tooltip, /No ready-to-deploy cards to deploy yet/);
+});
+
+test("cards in the lane that the control refuses are counted, not denied", () => {
+  // A done-stage card sits in the deploy lane whatever its state, but
+  // isReadyToDeploy takes only a reviewed verification/done card with a branch.
+  const cards = [
+    { stage: "done", state: "running" },
+    { stage: "done", state: "failed" },
+  ];
+  const view = deployControlView(cards, "features");
+  assert.equal(view.count, 0);
+  assert.ok(view.disabled);
+  assert.match(view.tooltip, /2 cards here are still finishing or stopped/);
+  assert.doesNotMatch(view.tooltip, /No ready-to-deploy cards to deploy yet/);
+});
+
+test("one waiting card reads in the singular", () => {
+  const view = deployControlView([{ stage: "done", state: "running" }], "features");
+  assert.match(view.tooltip, /1 card here is still finishing or stopped/);
+});
+
+test("a ready card still ships and says so", () => {
+  const view = deployControlView(
+    [{ stage: "verification", state: "done", branch: "b", verdictFailed: false }, { stage: "done", state: "failed" }],
+    "features",
+  );
+  assert.equal(view.count, 1);
+  assert.ok(!view.disabled);
+  assert.match(view.tooltip, /Ship every ready-to-deploy card/);
+});
+
+// --- A failed fetch is not a Docker verdict (SC-4151 G17) ---
+
+test("an empty board after a fetch failure keeps the last known Docker answer", () => {
+  const got = safetyReconcileError({ cards: [], dockerAvailable: true }, "daemon unreachable");
+  assert.equal(got.dockerAvailable, true, "Docker was never probed by this failure");
+  assert.equal(got.error, "daemon unreachable");
+});
+
+test("a populated board on a hiccup is unchanged", () => {
+  const got = safetyReconcileError({ cards: [{ key: "SC-1" }], dockerAvailable: false }, "hiccup");
+  assert.equal(got.dockerAvailable, false);
+  assert.match(got.error, /Board may be stale/);
 });
