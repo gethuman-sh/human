@@ -285,3 +285,57 @@ test("a fully measured roll-up is unchanged — no note, full split", () => {
   assert.match(html, /answers/);
   assert.doesNotMatch(html, /recorded no tokens/);
 });
+
+// --- The current-stage clock only says "running" when it is (SC-4151 B3) ---
+
+test("a failed card's stage clock states when it was entered, not that it is running", () => {
+  const now = Date.now();
+  const enteredAt = new Date(now - 3 * 3600_000).toISOString();
+  const html = buildCostSection(
+    { ticket: "SC-1", ledgerRead: true, hasSpend: true, totalCostUSD: 1, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, calls: 2, unmeasuredCalls: 0, stages: [] },
+    "done",
+    enteredAt,
+    now,
+    "failed",
+  );
+  assert.match(html, /Stage \(done\): entered 3h 0m ago/);
+  assert.doesNotMatch(html, /running/);
+});
+
+test("a running card keeps the live clock", () => {
+  const now = Date.now();
+  const html = buildCostSection(
+    { ticket: "SC-1", ledgerRead: true, hasSpend: true, totalCostUSD: 1, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, calls: 2, unmeasuredCalls: 0, stages: [] },
+    "implementation",
+    new Date(now - 90_000).toISOString(),
+    now,
+    "running",
+  );
+  assert.match(html, /Current stage \(implementation\): 1m 30s running/);
+});
+
+test("an omitted state keeps the original wording, for a payload predating it", () => {
+  const now = Date.now();
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: true, totalCostUSD: 1, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
+    "implementation",
+    new Date(now - 90_000).toISOString(),
+    now,
+  );
+  assert.match(html, /Current stage \(implementation\): 1m 30s running/);
+});
+
+test("outage and stopped cards do not claim to be running either", () => {
+  const now = Date.now();
+  for (const state of ["outage", "queued", "done", "resolved"]) {
+    const html = buildCostSection(
+      { ticket: "SC-1", hasSpend: true, totalCostUSD: 1, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
+      "planning",
+      new Date(now - 60_000).toISOString(),
+      now,
+      state,
+    );
+    assert.doesNotMatch(html, /running/, state);
+    assert.match(html, /entered 1m 0s ago/, state);
+  }
+});

@@ -2685,7 +2685,7 @@ function renderTicketDetail() {
     ${shippedPartial}
     ${desc}
     ${detailSections}
-    ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now())}
+    ${buildCostSection(detailCost, detailCard.stage, detailCard.stageEnteredAt, Date.now(), detailCard.state)}
     ${link}
   `;
     const url = detailCard.url;
@@ -3141,6 +3141,7 @@ function agentRow(v) {
         currentTool: str(o.currentTool),
         blockedTool: str(o.blockedTool),
         errorType: str(o.errorType),
+        lastActivityUnix: num(o.lastActivityUnix),
         startedAtUnix: num(o.startedAtUnix),
         daemonConnected: bool(o.daemonConnected),
         proxyConfigured: bool(o.proxyConfigured),
@@ -3203,10 +3204,29 @@ function formatDurationMs(ms) {
         return `${secs}s`;
     return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
+// agentSilentAfterMs is how long a "working" session may produce nothing before
+// the panel stops spinning for it. The status comes from the last transcript
+// entry's stop_reason and has no staleness rule of its own, so without this an
+// agent that hung an hour ago is indistinguishable from one mid-thought
+// (SC-4151 B5). Set above the daemon's own silence budget so the panel never
+// contradicts a reaper that has not yet had its turn.
+const agentSilentAfterMs = 10 * 60 * 1000;
+// agentSilent reports a session whose last sign of life is old enough that
+// "working" is no longer something the panel can claim. An unknown last
+// activity (0) is never silent: absence of a signal is not proof.
+function agentSilent(a, nowMs = Date.now()) {
+    if (a.status !== "working" || !a.lastActivityUnix)
+        return false;
+    return nowMs - a.lastActivityUnix * 1000 >= agentSilentAfterMs;
+}
 function agentStatusDot(a) {
     // Mirrors the TUI sessionIcon: a spinner while working, ⚠ on error, and a
     // coloured ● otherwise — with idle splitting on whether the session has seen
     // any activity (● active vs ○ never-active).
+    if (agentSilent(a)) {
+        const since = formatElapsedUnix(a.lastActivityUnix);
+        return `<span class="agent-dot silent" title="Working, but nothing recorded for ${escapeAttr(since)} — it may be hung">◍</span>`;
+    }
     if (a.status === "working")
         return `<span class="agent-dot working"><span class="spinner"></span></span>`;
     if (a.status === "error")

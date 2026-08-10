@@ -96,12 +96,25 @@ function fmtDuration(ms) {
     const h = Math.floor(m / 60);
     return `${h}h ${m % 60}m`;
 }
+// stageClockLine phrases the current-stage clock for the state the card is
+// actually in. Only a running card is running; every other state gets the same
+// measurement stated as what it is — when the stage was entered — so the number
+// stops asserting work is in progress behind it. An absent state (a payload
+// from a daemon predating the field) keeps the original wording.
+function stageClockLine(stage, state, elapsedMs) {
+    const elapsed = escapeText(fmtDuration(Math.max(0, elapsedMs)));
+    const named = escapeText(stage ?? "");
+    if (state === undefined || state === "running") {
+        return `Current stage (${named}): ${elapsed} running`;
+    }
+    return `Stage (${named}): entered ${elapsed} ago`;
+}
 // buildCostSection renders the ticket's whole-life cost (with the answers/context
 // split) and elapsed time (per-stage plus the live current-stage clock). A ticket
 // with no recorded spend says so plainly rather than showing $0.00 (SC-2847
 // criterion 5). currentStage/stageEnteredAt come from the open card; nowMs is
 // injected for tests.
-export function buildCostSection(c, currentStage, stageEnteredAt, nowMs) {
+export function buildCostSection(c, currentStage, stageEnteredAt, nowMs, currentState) {
     if (!c || !c.hasSpend) {
         // "No spend" is a claim about the TICKET and may only be made when the
         // ledger was actually read. An older daemon (no ledgerRead field) still
@@ -129,9 +142,14 @@ export function buildCostSection(c, currentStage, stageEnteredAt, nowMs) {
         : allUnmeasured
             ? `<div class="detail-cost-unmeasured">${calls} call${calls === 1 ? "" : "s"} recorded no tokens, so what this cost is not known.</div>`
             : "";
+    // The elapsed figure measures the same thing whatever the card is doing — the
+    // time since its newest stage marker landed — but "running" is a claim about
+    // the work, and this section was making it for every state. A card that failed
+    // three days ago read "72h 4m running", and the longer it had been dead the
+    // more impressive its number (SC-4151 B3). The clock stays; only the state
+    // that earns the word "running" keeps it.
     const curElapsed = stageEnteredAt
-        ? `<div class="detail-cost-current">Current stage (${escapeText(currentStage ?? "")}): ` +
-            `${escapeText(fmtDuration(Math.max(0, nowMs - Date.parse(stageEnteredAt))))} running</div>`
+        ? `<div class="detail-cost-current">${stageClockLine(currentStage, currentState, nowMs - Date.parse(stageEnteredAt))}</div>`
         : "";
     // The per-stage rows carry the same honesty as the total: with nothing
     // measured anywhere, a stage's "$0.0000" is the same false claim in smaller
