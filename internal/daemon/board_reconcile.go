@@ -214,7 +214,7 @@ func reconcileOnce(ctx context.Context, listCards ReconcileLister, gate WorkGate
 	// Last: the passes above all act on cards that are still ON the board, while
 	// this one reaches the runs whose card has left it — the orphan the close
 	// gate cannot cover because the ticket was closed outside the board (1698).
-	if n := reconcileOrphanedAgents(ctx, cards, liveAgents, closedProbe, stopAgent, logger); n > 0 {
+	if n := reconcileOrphanedAgents(ctx, cards, liveAgents, closedProbe, stopAgent, postFailed, logger); n > 0 {
 		logger.Info().Int("stopped", n).Msg("board reconcile: stopped agents orphaned on closed tickets")
 	}
 }

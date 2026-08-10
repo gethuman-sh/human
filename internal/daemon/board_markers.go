@@ -105,6 +105,7 @@ const (
 	MarkerStageWait              = "stage-wait"
 	MarkerClaim                  = "claim"
 	MarkerCloseFailed            = "close-failed"
+	MarkerRunCancelled           = "run-cancelled"
 	MarkerPlanningFailed         = "planning-failed"
 	MarkerImplementationFailed   = "implementation-failed"
 	MarkerPlanningOutage         = "planning-outage"
@@ -214,6 +215,15 @@ const PlanCommentHeader = "[human:plan]"
 // stays green (deployed) while still carrying a visible "close this manually"
 // flag. Best-effort close means recorded-and-surfaced, never red, never silent.
 const CloseFailedHeader = "[human:" + MarkerCloseFailed + "]"
+
+// RunCancelledHeader records that closing a ticket stopped work that was still
+// running on it. Closing is cancellation — it kills the ticket's agents — and it
+// fires from outside the marker bus, so it took a card off the board from ANY
+// state and left nothing behind. Of every closed PM ticket on this board (382,
+// measured 2026-08-08), 60 were closed out of a non-terminal state and 4 out of
+// a RUNNING one, where a live agent was killed with no trace on the thread
+// (SC-4151 E10). The stop itself is unchanged; this is the record it never left.
+const RunCancelledHeader = "[human:" + MarkerRunCancelled + "]"
 
 // RelatedStartedHeader / RelatedHeader bracket the filing-time related-work
 // triage (SC-2405). Both are deliberately kept OUT of orderedMarkerSpecs, like
@@ -365,6 +375,7 @@ var daemonMarkerTypes = []string{
 	MarkerStageWait,
 	MarkerClaim,
 	MarkerCloseFailed,
+	MarkerRunCancelled,
 	MarkerPlanningFailed,
 	MarkerImplementationFailed,
 	MarkerPlanningOutage,

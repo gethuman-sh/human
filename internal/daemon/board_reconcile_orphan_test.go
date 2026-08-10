@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,7 +41,7 @@ func TestReconcileOrphanedAgents_StopsAgentOnTicketClosedOutsideTheBoard(t *test
 	n := reconcileOrphanedAgents(context.Background(), openCards("SC-2"),
 		liveAgents("board-SC-1-implementation"), closedKeys("SC-1"),
 		func(name string) error { stopped = append(stopped, name); return nil },
-		zerolog.Nop())
+		nil, zerolog.Nop())
 
 	require.Equal(t, 1, n)
 	require.Equal(t, []string{"board-SC-1-implementation"}, stopped,
@@ -59,7 +60,7 @@ func TestReconcileOrphanedAgents_StopsEveryStageOfTheClosedTicket(t *testing.T) 
 	n := reconcileOrphanedAgents(context.Background(), nil,
 		liveAgents("board-SC-1-implementation", "board-SC-1-verification"), probe,
 		func(name string) error { stopped = append(stopped, name); return nil },
-		zerolog.Nop())
+		nil, zerolog.Nop())
 
 	require.Equal(t, 2, n)
 	require.ElementsMatch(t, []string{"board-SC-1-implementation", "board-SC-1-verification"}, stopped)
@@ -78,7 +79,7 @@ func TestReconcileOrphanedAgents_OpenCardIsNeverProbed(t *testing.T) {
 	n := reconcileOrphanedAgents(context.Background(), openCards("SC-1"),
 		liveAgents("board-SC-1-implementation"), probe,
 		func(string) error { t.Fatal("a live run on an open card must never be stopped"); return nil },
-		zerolog.Nop())
+		nil, zerolog.Nop())
 
 	require.Zero(t, n)
 	require.False(t, probed, "an agent matching an open card needs no tracker call")
@@ -90,7 +91,7 @@ func TestReconcileOrphanedAgents_AbsentButOpenTicketIsLeftRunning(t *testing.T) 
 	n := reconcileOrphanedAgents(context.Background(), nil,
 		liveAgents("board-SC-1-implementation"), closedKeys(),
 		func(string) error { t.Fatal("a ticket that is merely absent must not stop its run"); return nil },
-		zerolog.Nop())
+		nil, zerolog.Nop())
 
 	require.Zero(t, n)
 }
@@ -105,7 +106,7 @@ func TestReconcileOrphanedAgents_ProbeErrorLeavesTheRunAlone(t *testing.T) {
 	n := reconcileOrphanedAgents(context.Background(), nil,
 		liveAgents("board-SC-1-implementation"), probe,
 		func(string) error { t.Fatal("an unconfirmed close must not stop a run"); return nil },
-		zerolog.Nop())
+		nil, zerolog.Nop())
 
 	require.Zero(t, n)
 }
@@ -124,7 +125,7 @@ func TestReconcileOrphanedAgents_FailedStopIsNotCountedAndDoesNotAbort(t *testin
 
 	n := reconcileOrphanedAgents(context.Background(), nil,
 		liveAgents("board-SC-1-implementation", "board-SC-1-verification"),
-		closedKeys("SC-1"), stop, zerolog.Nop())
+		closedKeys("SC-1"), stop, nil, zerolog.Nop())
 
 	require.Equal(t, 1, n, "only the confirmed stop counts")
 	require.Len(t, attempted, 2, "a failed stop must not abort the remaining agents")
@@ -141,7 +142,7 @@ func TestReconcileOrphanedAgents_NonBoardAgentsAreIgnored(t *testing.T) {
 	n := reconcileOrphanedAgents(context.Background(), nil,
 		liveAgents("some-other-container", "board-"), probe,
 		func(string) error { t.Fatal("a non-board container must never be stopped"); return nil },
-		zerolog.Nop())
+		nil, zerolog.Nop())
 
 	require.Zero(t, n)
 }
@@ -153,7 +154,7 @@ func TestReconcileOrphanedAgents_ListErrorIsNotAnEmptyFleet(t *testing.T) {
 
 	n := reconcileOrphanedAgents(context.Background(), nil, lister, closedKeys("SC-1"),
 		func(string) error { t.Fatal("nothing may be stopped without a live-agent list"); return nil },
-		zerolog.Nop())
+		nil, zerolog.Nop())
 
 	require.Zero(t, n)
 }
@@ -163,9 +164,9 @@ func TestReconcileOrphanedAgents_ListErrorIsNotAnEmptyFleet(t *testing.T) {
 func TestReconcileOrphanedAgents_NilDepsDisableTheSweep(t *testing.T) {
 	stop := func(string) error { t.Fatal("a disabled sweep must stop nothing"); return nil }
 
-	require.Zero(t, reconcileOrphanedAgents(context.Background(), nil, nil, closedKeys("SC-1"), stop, zerolog.Nop()))
-	require.Zero(t, reconcileOrphanedAgents(context.Background(), nil, liveAgents("board-SC-1-implementation"), nil, stop, zerolog.Nop()))
-	require.Zero(t, reconcileOrphanedAgents(context.Background(), nil, liveAgents("board-SC-1-implementation"), closedKeys("SC-1"), nil, zerolog.Nop()))
+	require.Zero(t, reconcileOrphanedAgents(context.Background(), nil, nil, closedKeys("SC-1"), stop, nil, zerolog.Nop()))
+	require.Zero(t, reconcileOrphanedAgents(context.Background(), nil, liveAgents("board-SC-1-implementation"), nil, stop, nil, zerolog.Nop()))
+	require.Zero(t, reconcileOrphanedAgents(context.Background(), nil, liveAgents("board-SC-1-implementation"), closedKeys("SC-1"), nil, nil, zerolog.Nop()))
 }
 
 // The open-card match runs through the same sanitize() the launcher used, so a
@@ -179,7 +180,57 @@ func TestReconcileOrphanedAgents_OpenCardMatchesThroughSanitizedKey(t *testing.T
 	n := reconcileOrphanedAgents(context.Background(), openCards("proj_1"),
 		liveAgents(agentNameFor("proj_1", BoardImplementation)), probe,
 		func(string) error { t.Fatal("a live run on an open card must never be stopped"); return nil },
+		nil, zerolog.Nop())
+
+	require.Zero(t, n)
+}
+
+// TestReconcileOrphanedAgents_RecordsTheCancellation covers SC-4151 E10: closing
+// a ticket kills its agents and fires from outside the marker bus, so a card
+// could go from running to gone with nothing on the thread saying so.
+func TestReconcileOrphanedAgents_RecordsTheCancellation(t *testing.T) {
+	var posted []string
+	n := reconcileOrphanedAgents(context.Background(), openCards("SC-2"),
+		liveAgents("board-SC-1-implementation"), closedKeys("SC-1"),
+		func(string) error { return nil },
+		func(_ context.Context, key, body string) error {
+			posted = append(posted, key+" "+body)
+			return nil
+		},
+		zerolog.Nop())
+
+	require.Equal(t, 1, n)
+	require.Len(t, posted, 1)
+	assert.Contains(t, posted[0], "SC-1 ")
+	assert.Contains(t, posted[0], RunCancelledHeader)
+	assert.Contains(t, posted[0], "stage: "+string(BoardImplementation))
+	assert.Contains(t, posted[0], "agent: board-SC-1-implementation")
+	assert.Contains(t, posted[0], "closed while this stage was running")
+}
+
+// The stop is the safety property; a tracker that refuses the comment — which a
+// just-closed ticket may well do — must never leave the agent running.
+func TestReconcileOrphanedAgents_StopsEvenWhenTheRecordFails(t *testing.T) {
+	var stopped []string
+	n := reconcileOrphanedAgents(context.Background(), openCards("SC-2"),
+		liveAgents("board-SC-1-implementation"), closedKeys("SC-1"),
+		func(name string) error { stopped = append(stopped, name); return nil },
+		func(context.Context, string, string) error { return assert.AnError },
+		zerolog.Nop())
+
+	require.Equal(t, 1, n)
+	assert.Equal(t, []string{"board-SC-1-implementation"}, stopped)
+}
+
+// An agent that was never stopped leaves no record either.
+func TestReconcileOrphanedAgents_NoRecordWhenNothingStops(t *testing.T) {
+	var posted int
+	n := reconcileOrphanedAgents(context.Background(), openCards("SC-1"),
+		liveAgents("board-SC-1-implementation"), closedKeys("SC-1"),
+		func(string) error { t.Fatal("an open card's run must never be stopped"); return nil },
+		func(context.Context, string, string) error { posted++; return nil },
 		zerolog.Nop())
 
 	require.Zero(t, n)
+	assert.Zero(t, posted)
 }

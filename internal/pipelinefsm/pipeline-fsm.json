@@ -17,6 +17,7 @@
       "bug-verify",
       "pipeline",
       "close-failed",
+  "run-cancelled",
       "related-started",
       "related",
       "shipped-partial",
