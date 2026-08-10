@@ -9,11 +9,11 @@ import "github.com/gethuman-sh/human/internal/daemon"
 // the app.go header): all persisted stat data lives on the daemon host, so the
 // daemon is the single aggregation point.
 func (a *App) Stats(rng string) (daemon.StatsOverview, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return daemon.StatsOverview{}, err
 	}
-	ov, err := daemon.GetStatsOverview(info.Addr, info.Token, rng)
+	ov, err := client.GetStatsOverview(rng)
 	if err != nil {
 		return daemon.StatsOverview{}, daemonCause(err)
 	}

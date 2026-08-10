@@ -4,8 +4,6 @@ package main
 
 import (
 	"sort"
-
-	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 // PermissionRequest is the frontend view of one pending destructive-operation
@@ -26,11 +24,11 @@ type PermissionRequest struct {
 // than an error: the strip simply stays hidden, and daemon health is already
 // surfaced separately via DaemonStatus.
 func (a *App) PendingPermissions() ([]PermissionRequest, error) {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return []PermissionRequest{}, nil
 	}
-	confirms, err := daemon.GetPendingConfirms(info.Addr, info.Token)
+	confirms, err := client.GetPendingConfirms()
 	if err != nil {
 		return []PermissionRequest{}, nil
 	}
@@ -56,9 +54,9 @@ func (a *App) PendingPermissions() ([]PermissionRequest, error) {
 // Unlike the polling read above, a failure here must surface: silently
 // dropping a decision the user just made would be worse than an error banner.
 func (a *App) DecidePermission(id string, approved bool) error {
-	info, err := daemon.ReadInfo()
+	client, err := a.daemonClient()
 	if err != nil {
 		return err
 	}
-	return daemon.SendConfirmDecision(info.Addr, info.Token, id, approved)
+	return client.SendConfirmDecision(id, approved)
 }

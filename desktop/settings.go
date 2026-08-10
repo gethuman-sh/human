@@ -34,12 +34,12 @@ type SettingsData struct {
 // Settings fetches the current settings snapshot via the daemon. Secrets are
 // masked daemon-side; this method never sees a resolved credential.
 func (a *App) Settings() (SettingsData, error) {
-	info, err := daemon.ReadInfo()
+	client, info, err := a.daemonClientInfo()
 	if err != nil {
 		return SettingsData{Error: "daemon not running — settings need the daemon"}, nil
 	}
 	data := SettingsData{Daemon: settingsDaemon(info)}
-	doc, err := daemon.GetConfig(info.Addr, info.Token)
+	doc, err := client.GetConfig()
 	if err != nil {
 		data.Error = errors.CauseChain(err)
 		return data, nil
@@ -52,12 +52,12 @@ func (a *App) Settings() (SettingsData, error) {
 // value JSON-encoded (string, bool, or array) so a single binding serves every
 // field type. Returns the refreshed snapshot for in-place re-render.
 func (a *App) SaveSetting(path string, valueJSON string) (SettingsData, error) {
-	info, err := daemon.ReadInfo()
+	client, info, err := a.daemonClientInfo()
 	if err != nil {
 		return SettingsData{Error: "daemon not running — settings need the daemon"}, nil
 	}
 	data := SettingsData{Daemon: settingsDaemon(info)}
-	doc, err := daemon.SetConfig(info.Addr, info.Token, daemon.SetConfigRequest{
+	doc, err := client.SetConfig(daemon.SetConfigRequest{
 		Path:  path,
 		Value: json.RawMessage(valueJSON),
 	})
