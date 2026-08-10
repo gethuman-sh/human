@@ -236,6 +236,13 @@ type BoardViewCard struct {
 	// the card it holds usually sit in different columns, which is why this is
 	// a badge naming the key and not a line drawn between two cards.
 	Blockers []string `json:"blockers,omitempty"`
+	// BlockersOffBoard names blockers this board cannot show: on another
+	// tracker, or past the fetch cap. They were dropped, so a card with a real
+	// open dependency rendered as unblocked — a fact about the view told as a
+	// fact about the work (SC-4151 E11). Kept apart from Blockers because the
+	// arrow layer can only link keys it can find, so these are named on the card
+	// rather than pointed at.
+	BlockersOffBoard []string `json:"blockersOffBoard,omitempty"`
 	// Tracker/TrackerKind are the instance name and provider kind the issue
 	// was listed from. The detail panel passes them back to GetIssueDetail so
 	// the daemon resolves the exact instance — bare numeric keys are ambiguous

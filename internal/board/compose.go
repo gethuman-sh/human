@@ -106,7 +106,15 @@ func markBlocked(cards []daemon.BoardViewCard, blockedBy map[string][]string) {
 		for _, key := range blockedBy[c.Key] {
 			if onBoard[key] {
 				cards[i].Blockers = append(cards[i].Blockers, key)
+				continue
 			}
+			// A blocker the board cannot draw is still a blocker. Dropping it
+			// rendered the card as unblocked while a real, open dependency stood
+			// — the blocker living on another tracker, or beyond the fetch cap,
+			// is a fact about this view, not about the work (SC-4151 E11). The
+			// arrow layer only links keys it can find, so these are carried
+			// separately and named rather than pointed at.
+			cards[i].BlockersOffBoard = append(cards[i].BlockersOffBoard, key)
 		}
 	}
 }

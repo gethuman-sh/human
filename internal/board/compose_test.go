@@ -424,3 +424,23 @@ func TestCompose_CarriesTheOwningMachine(t *testing.T) {
 	assert.Empty(t, cardByKey(t, view, "SC-2").StageDaemonID,
 		"a single-daemon install stamps nothing, and absence must not read as a machine named \"\"")
 }
+
+// TestMarkBlocked_OffBoardBlockerIsNamed covers SC-4151 E11: a dependency the
+// board cannot draw was dropped, so a card with a real open blocker rendered as
+// unblocked. The blocker's absence is a fact about this view, not about the work.
+func TestMarkBlocked_OffBoardBlockerIsNamed(t *testing.T) {
+	cards := []daemon.BoardViewCard{{Key: "SC-1"}, {Key: "SC-2"}}
+	markBlocked(cards, map[string][]string{"SC-1": {"SC-2", "JIRA-9", "SC-999"}})
+
+	assert.Equal(t, []string{"SC-2"}, cards[0].Blockers, "a blocker on the board is still linked")
+	assert.Equal(t, []string{"JIRA-9", "SC-999"}, cards[0].BlockersOffBoard, "the rest are named, not dropped")
+	assert.Empty(t, cards[1].Blockers)
+	assert.Empty(t, cards[1].BlockersOffBoard)
+}
+
+func TestMarkBlocked_NoBlockersLeavesBothEmpty(t *testing.T) {
+	cards := []daemon.BoardViewCard{{Key: "SC-1"}}
+	markBlocked(cards, map[string][]string{})
+	assert.Empty(t, cards[0].Blockers)
+	assert.Empty(t, cards[0].BlockersOffBoard)
+}

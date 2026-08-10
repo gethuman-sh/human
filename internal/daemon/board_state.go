@@ -293,13 +293,22 @@ func supersededByNewerMarker(placed Placement, comments []tracker.Comment) bool 
 		(placed.Stage() == BoardDoneStage && doneStageLoopActive(comments))
 }
 
-// deployPhaseFor names the done-stage sub-phase of a running card: "pr-review"
-// while the pre-merge review→fix loop is mid-flight, empty for a plain deploy so
-// the board badge reads "PR review…" rather than "deploying…" while the loop
-// runs.
+// DeployPhasePRReview and DeployPhasePRFix name the two halves of the pre-merge
+// review→fix loop, as the board badge reads them. They are separate agents in
+// separate containers everywhere else in the machine; the badge used to call
+// both of them the review (SC-4151 F15).
+const (
+	DeployPhasePRReview = "pr-review"
+	DeployPhasePRFix    = "pr-fix"
+)
+
+// deployPhaseFor names the done-stage sub-phase of a running card: which half of
+// the pre-merge review→fix loop is mid-flight, empty for a plain deploy so the
+// board badge reads "PR review…" or "fixing PR findings…" rather than
+// "deploying…" while the loop runs.
 func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
-	if card.Stage == BoardDoneStage && card.State == BoardRunning && doneStageLoopActive(comments) {
-		return "pr-review"
+	if card.Stage == BoardDoneStage && card.State == BoardRunning {
+		return doneStageLoopHalf(comments)
 	}
 	return ""
 }
