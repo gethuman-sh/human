@@ -75,6 +75,13 @@ type Server struct {
 	// nil disables the board-view route, which is what an older client falls
 	// back from.
 	BoardViewFetcher func() (BoardView, error)
+	// CachedBoardViewFetcher returns the last board that composed successfully,
+	// read from the snapshot and never fetched. It answers the one question the
+	// live composer is too slow for: where a card was the last time anyone
+	// looked. The quick paint asks it so an opening board places its work
+	// instead of stacking it all in Backlog (SC-4324). A miss is not a failure —
+	// it returns a zero BoardView, and the caller then paints what it composed.
+	CachedBoardViewFetcher func() BoardView
 	// IssueGetter fetches one full issue for the board's detail panel plus its
 	// comment-sourced extras (review findings, failure reason, fix summary).
 	// List endpoints on some trackers (e.g. Shortcut) return slim payloads
@@ -517,6 +524,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"tracker-diagnose":    func() { s.handleTrackerDiagnose(conn, projectDir) },
 		"tracker-issues":      func() { s.handleTrackerIssues(conn) },
 		"board-view":          func() { s.handleBoardView(conn) },
+		"board-view-cached":   func() { s.handleCachedBoardView(conn) },
 		"tracker-issues-lite": func() { s.handleTrackerIssuesLite(conn) },
 		"tracker-issue":       func() { s.handleTrackerIssue(conn, args[1:]) },
 		"current-user":        func() { s.handleCurrentUser(conn) },
@@ -728,6 +736,28 @@ func (s *Server) handleBoardView(conn net.Conn) {
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
+	}
+	data, err := json.Marshal(view)
+	if err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
+	}
+	_ = json.NewEncoder(conn).Encode(Response{Stdout: string(data) + "\n"})
+}
+
+// handleCachedBoardView returns the last board that composed successfully,
+// without fetching anything. It is the cheap half of the board: no tracker call,
+// no comment scan, just where each card was when the board last loaded.
+//
+// Unlike handleBoardView, an unavailable snapshot is answered with an empty
+// board rather than an error. The caller uses this to improve a board it has
+// already composed, so "nothing remembered" and "nothing to improve" are the
+// same instruction, and failing the route would only make the caller write the
+// same fallback twice.
+func (s *Server) handleCachedBoardView(conn net.Conn) {
+	var view BoardView
+	if s.CachedBoardViewFetcher != nil {
+		view = s.CachedBoardViewFetcher()
 	}
 	data, err := json.Marshal(view)
 	if err != nil {

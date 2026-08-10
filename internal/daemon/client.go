@@ -454,6 +454,27 @@ func (c *Client) GetBoardView() (BoardView, error) {
 	return view, nil
 }
 
+// GetCachedBoardView fetches the last board the daemon composed successfully,
+// with no tracker call behind it. The quick paint uses it to place cards whose
+// real stage has not been derived yet, so an opening board shows its work where
+// it was rather than stacking every ticket in Backlog (SC-4324).
+//
+// Any error — a daemon predating this route, an unreachable one, unreadable JSON
+// — means "no remembered board", and the caller renders exactly what it composed
+// without it. Nothing here is worth failing a board over: this route only ever
+// improves a picture the caller already has.
+func (c *Client) GetCachedBoardView() (BoardView, error) {
+	out, err := c.RunRemoteCapture([]string{"board-view-cached"})
+	if err != nil {
+		return BoardView{}, err
+	}
+	var view BoardView
+	if err := json.Unmarshal(out, &view); err != nil {
+		return BoardView{}, errors.WrapWithDetails(err, "invalid cached board view JSON")
+	}
+	return view, nil
+}
+
 // GetCurrentUserName fetches the authenticated PM-tracker user's display name
 // for the board's ownership dimming (SC-3339). An empty name (or any error,
 // e.g. a daemon predating this route answering command-not-found) means the
