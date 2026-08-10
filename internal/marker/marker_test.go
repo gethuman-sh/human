@@ -140,6 +140,27 @@ func TestKnownTypes_includesShippedPartial(t *testing.T) {
 	assert.Contains(t, KnownTypes(), "shipped-partial")
 }
 
+func TestOptionalFields_needsPlanningEscalation(t *testing.T) {
+	assert.Equal(t, []string{EscalationField}, OptionalFields("needs-planning"))
+	assert.Empty(t, RequiredFields("needs-planning"), "an ordinary refusal requires nothing")
+	assert.Empty(t, OptionalFields("plan"))
+	assert.Empty(t, OptionalFields("no-such-marker"))
+}
+
+func TestValidate_optionalFieldNeverRequired(t *testing.T) {
+	require.NoError(t, Validate(Marker{Type: "needs-planning"}))
+	require.NoError(t, Validate(Marker{
+		Type:   "needs-planning",
+		Fields: map[string]string{EscalationField: EscalationPlanStuck, "reason": "…"},
+	}))
+}
+
+func TestParseBody_escalationField(t *testing.T) {
+	m, ok := ParseBody("[human:needs-planning]\nescalation: plan-stuck\nreason: x\nmachine: d1")
+	require.True(t, ok)
+	assert.Equal(t, EscalationPlanStuck, m.Fields[EscalationField])
+}
+
 func TestValidate_unknownTypeAllowed(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "future-stage"}))
 	assert.Error(t, Validate(Marker{Type: "Not A Type"}))

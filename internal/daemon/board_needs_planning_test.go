@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -279,6 +280,105 @@ func TestUnplannedQuietWhilePlanningRuns(t *testing.T) {
 	assert.Zero(t, l.calls)
 }
 
+// twoSpentCycles is the thread every escalation test starts from: two refuse →
+// drive → planning-failed cycles, which spends a PlanRedriveBound of 2.
+func twoSpentCycles() []tracker.Comment {
+	return []tracker.Comment{
+		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(1, 0)),
+		cmt(PlanningStartedHeader, time.Unix(2, 0)),
+		cmt(PlanningFailedHeader+"\nno-op", time.Unix(3, 0)),
+		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(4, 0)),
+		cmt(PlanningStartedHeader, time.Unix(5, 0)),
+		cmt(PlanningFailedHeader+"\nno-op", time.Unix(6, 0)),
+	}
+}
+
+// rewordedEscalation is a standing escalation as a LATER build writes it: the
+// determination in the field, the prose saying the same thing in different
+// words. Written as a literal on purpose — this is the wire format as it sits
+// on a real ticket, and a test that composed it with the same constants the
+// reader uses would pass for any two strings that happen to match (SC-4245).
+const rewordedEscalation = "[human:needs-planning]\n" +
+	"escalation: plan-stuck\n" +
+	"reason: nobody could plan this ticket automatically — tried 2 time(s), " +
+	"stuck since 1970-01-01T00:00:01Z. A person needs to plan this ticket by hand.\n" +
+	"machine: d1\nbuild: abc123"
+
+// legacyEscalation is a standing escalation as it was written BEFORE the field
+// existed: prose only. Frozen — it is history, and history does not get
+// rewritten when the wording changes (SC-4245, fourth acceptance point).
+const legacyEscalation = "[human:needs-planning]\n" +
+	"reason: this ticket could not be planned automatically — tried 2 time(s), " +
+	"stuck since 1970-01-01T00:00:01Z. A person needs to plan this ticket by hand."
+
+// A standing escalation is recognised by its field, so its prose may be
+// rewritten freely: the guard must still say nothing and drive nothing.
+func TestUnplannedEscalationRecognisedByFieldNotProse(t *testing.T) {
+	origBound := PlanRedriveBound
+	PlanRedriveBound = 2
+	t.Cleanup(func() { PlanRedriveBound = origBound })
+
+	c := &fakeCommenter{comments: append(twoSpentCycles(), cmt(rewordedEscalation, time.Unix(7, 0)))}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	require.NoError(t, err)
+	assert.True(t, refused)
+	assert.Empty(t, c.added, "a standing escalation must be said once, whatever words it used")
+	assert.Zero(t, l.calls)
+}
+
+// An escalation written before the field existed still derives exactly as it
+// did: the thread is the record the bound is recounted from.
+func TestUnplannedEscalationLegacyProseStillRecognised(t *testing.T) {
+	origBound := PlanRedriveBound
+	PlanRedriveBound = 2
+	t.Cleanup(func() { PlanRedriveBound = origBound })
+
+	c := &fakeCommenter{comments: append(twoSpentCycles(), cmt(legacyEscalation, time.Unix(7, 0)))}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	require.NoError(t, err)
+	assert.True(t, refused)
+	assert.Empty(t, c.added, "a standing escalation must be said once, whatever words it used")
+	assert.Zero(t, l.calls)
+}
+
+// The refusal tally counts ordinary refusals only — a field-marked escalation
+// with reworded prose is not one of them.
+func TestCountPlanRefusals_ExcludesFieldMarkedEscalation(t *testing.T) {
+	comments := append(twoSpentCycles(), cmt(rewordedEscalation, time.Unix(7, 0)))
+	assert.Equal(t, 2, countPlanRefusals(comments))
+}
+
+// A comment that states its determination is believed, and a determination this
+// build does not know is not second-guessed by reading the prose: an escalation
+// field with an unknown or empty value means "not the plan-stuck escalation",
+// even when the frozen legacy sentence happens to be in the body. Only a comment
+// carrying no field at all falls back to the sentence, which is what keeps
+// threads written before the field deriving as they always did.
+func TestIsPlanStuck_FieldBeatsProse(t *testing.T) {
+	const legacyProse = "reason: this ticket could not be planned automatically — tried 2 time(s)."
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"field says plan-stuck", rewordedEscalation, true},
+		{"no field, legacy prose", legacyEscalation, true},
+		{"unknown determination, legacy prose", NeedsPlanningHeader + "\nescalation: something-else\n" + legacyProse, false},
+		{"empty determination, legacy prose", NeedsPlanningHeader + "\nescalation:\n" + legacyProse, false},
+		{"padded value still recognised", NeedsPlanningHeader + "\nescalation:   plan-stuck  \nreason: reworded.", true},
+		{"not a marker at all, legacy prose", "this ticket could not be planned automatically — by hand, please", true},
+		{"ordinary refusal", NeedsPlanningHeader + "\n" + needsPlanningReason, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isPlanStuck(tc.body))
+		})
+	}
+}
+
 // Once the ping-pong bound (drive → plan → fail, repeated) is spent, the next
 // refusal must escalate to a person exactly once instead of driving another
 // doomed planning attempt — the bound that keeps the ticket from ping-ponging
@@ -288,16 +388,7 @@ func TestUnplannedEscalatesAfterBound(t *testing.T) {
 	PlanRedriveBound = 2
 	t.Cleanup(func() { PlanRedriveBound = origBound })
 
-	c := &fakeCommenter{comments: []tracker.Comment{
-		// Cycle 1: refuse, drive, planning fails.
-		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(1, 0)),
-		cmt(PlanningStartedHeader, time.Unix(2, 0)),
-		cmt(PlanningFailedHeader+"\nno-op", time.Unix(3, 0)),
-		// Cycle 2: refuse, drive, planning fails.
-		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(4, 0)),
-		cmt(PlanningStartedHeader, time.Unix(5, 0)),
-		cmt(PlanningFailedHeader+"\nno-op", time.Unix(6, 0)),
-	}}
+	c := &fakeCommenter{comments: twoSpentCycles()}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
@@ -305,8 +396,9 @@ func TestUnplannedEscalatesAfterBound(t *testing.T) {
 	assert.True(t, refused)
 	require.Len(t, c.added, 1)
 	assert.Contains(t, c.added[0], NeedsPlanningHeader)
-	assert.Contains(t, c.added[0], planStuckMarker)
+	assert.Contains(t, c.added[0], marker.EscalationField+": "+marker.EscalationPlanStuck)
 	assert.Contains(t, c.added[0], "2 time(s)")
+	assert.True(t, isPlanStuck(c.added[0]), "what the daemon posts must be what the daemon recognises")
 	assert.Zero(t, l.calls, "a bound-exhausted escalation drives nothing")
 }
 
@@ -318,15 +410,8 @@ func TestUnplannedEscalationSaidOnce(t *testing.T) {
 	PlanRedriveBound = 2
 	t.Cleanup(func() { PlanRedriveBound = origBound })
 
-	c := &fakeCommenter{comments: []tracker.Comment{
-		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(1, 0)),
-		cmt(PlanningStartedHeader, time.Unix(2, 0)),
-		cmt(PlanningFailedHeader+"\nno-op", time.Unix(3, 0)),
-		cmt(NeedsPlanningHeader+"\n"+needsPlanningReason, time.Unix(4, 0)),
-		cmt(PlanningStartedHeader, time.Unix(5, 0)),
-		cmt(PlanningFailedHeader+"\nno-op", time.Unix(6, 0)),
-		cmt(NeedsPlanningHeader+"\n"+planStuckReason(2, cmt(NeedsPlanningHeader, time.Unix(1, 0))), time.Unix(7, 0)),
-	}}
+	c := &fakeCommenter{comments: append(twoSpentCycles(),
+		cmt(planStuckBody(2, cmt(NeedsPlanningHeader, time.Unix(1, 0))), time.Unix(7, 0)))}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
 	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)

@@ -961,7 +961,20 @@
       "actor": "daemon",
       "marker": "[human:needs-planning]",
       "where": "board_transition.go refuseIfUnplanned",
-      "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one. A relaunch attempted on a card that already failed meets the same gate, so the refusal is also a move a stopped card makes onto itself: the plan is still missing, and the card stays exactly as red as it was."
+      "doc": "The plan executor was launched on a ticket with no plan, so the launch is refused before any agent claims it. The item surfaces back at planning where a human can start one. A relaunch attempted on a card that already failed meets the same gate, so the refusal is also a move a stopped card makes onto itself: the plan is still missing, and the card stays exactly as red as it was. Which of the two determinations a [human:needs-planning] comment is, is its escalation field — plan-stuck for the bound-exhausted escalation, absent for an ordinary refusal (SC-4245); comments posted before the field carry it in their prose and are read by a frozen legacy sentinel."
+    },
+    {
+      "name": "plan-redrive-exhausted",
+      "src": [
+        "implementing",
+        "stopped",
+        "queued"
+      ],
+      "dst": "stopped",
+      "actor": "daemon",
+      "marker": "[human:needs-planning]",
+      "where": "board_transition.go refuseIfUnplanned — the countPlanRefusals >= PlanRedriveBound branch; the marker is composed by planStuckBody",
+      "doc": "The same refusal, taken PlanRedriveBound (3) times, stops driving planning and asks a person instead. It shares the marker of the ordinary refusal so the card renders identically, and carries `escalation: plan-stuck` so the two are told apart by a field rather than by a sentence in the prose (SC-4245). The bound is recounted from the thread, not from daemon state, so it survives a restart and a handover — which is also why the escalation must be recognised on threads written before the field existed. It is said exactly once: the guard that sees a standing escalation as the newest planning-stage marker returns without posting or launching anything."
     },
     {
       "name": "stage-relaunch-refused",
@@ -1198,6 +1211,7 @@
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
       "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)",
       "MaxSilenceReaps": "3 — silence reaps of one stage before the machine stops relaunching and asks for a person (internal/daemon/board_failure.go). Uncharged against DefaultStageRetries, which is why it needs its own bound.",
+      "PlanRedriveBound": "3 — refusals of one unplanned implementation launch before the machine stops driving planning and escalates to a person (internal/daemon/board_transition.go). Counted from the ticket thread rather than daemon state, so it survives a restart; the escalation itself is excluded from the count by its escalation: plan-stuck field.",
       "deploy-card grace (stuckGraceFor, not a named constant)": "60m = deployTimeout (45m) + StuckRunningGrace (15m) — how long a card recorded as deploying is left alone before the stuck-running sweep judges it (stuckPastGrace, internal/daemon/board_reconcile.go). The deploy registers no agent for the sweep to probe, so the evidence is the engine's own clock where this machine is running it (its dequeue past deployGate, or the last time the queue moved while it waits), and the marker clock everywhere else."
     }
   },

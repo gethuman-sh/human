@@ -42,7 +42,13 @@ type spec struct {
 	// hand-written validator satisfies Validate and leaves RequiredFields
 	// answering "nothing required", which hands an agent a command that posts a
 	// marker this package then rejects.
-	anyOf     []string
+	anyOf []string
+	// optional names fields a marker MAY carry that mean something to a
+	// reader. Validate never consults it — an optional field cannot make a
+	// marker invalid — but declaring it is what keeps a machine-read
+	// distinction in the protocol instead of in prose, and it is what
+	// `human fsm marker` reports to whoever has to post one.
+	optional  []string
 	headEnum  []string
 	needsHead bool
 	// validate carries a contract the field lists cannot express.
@@ -137,20 +143,35 @@ func collectOption(ids map[string]bool, waits map[string]string, id, value strin
 	}
 }
 
+// EscalationField names WHICH determination a marker carries when one marker
+// type is posted for more than one. [human:needs-planning] is posted both for
+// an ordinary refusal and for the escalation raised once the plan re-drive
+// bound is spent; the two used to be told apart by a sentence in the prose,
+// which made the wording load-bearing and reclassified every escalation
+// already on a ticket whenever it changed (SC-4245).
+const (
+	EscalationField     = "escalation"
+	EscalationPlanStuck = "plan-stuck"
+)
+
 var specs = map[string]spec{
 	"plan":                  {},
 	"plan-ready":            {},
 	"planning-failed":       {},
 	"implementation-failed": {},
-	"needs-planning":        {},
-	"ready-for-review":      {required: []string{"branch", "commits"}},
-	"review-started":        {},
-	"review-complete":       {required: []string{"verdict"}},
-	"review-failed":         {required: []string{"reason"}},
-	"no-fix-needed":         {required: []string{"verdict"}},
-	"nothing-to-do":         {required: []string{"evidence"}},
-	"deploy-started":        {},
-	"deploy-failed":         {required: []string{"reason"}},
+	// Two determinations share this header on purpose (SC-2990): the ordinary
+	// refusal, and the plan-stuck escalation raised once PlanRedriveBound is
+	// spent. Which one a comment is, is the escalation field — optional
+	// because an ordinary refusal legitimately has none (SC-4245).
+	"needs-planning":   {optional: []string{EscalationField}},
+	"ready-for-review": {required: []string{"branch", "commits"}},
+	"review-started":   {},
+	"review-complete":  {required: []string{"verdict"}},
+	"review-failed":    {required: []string{"reason"}},
+	"no-fix-needed":    {required: []string{"verdict"}},
+	"nothing-to-do":    {required: []string{"evidence"}},
+	"deploy-started":   {},
+	"deploy-failed":    {required: []string{"reason"}},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case
@@ -234,6 +255,23 @@ func AnyOfFields(markerType string) []string {
 		return nil
 	}
 	return append([]string(nil), s.anyOf...)
+}
+
+// OptionalFields lists the fields a marker type may carry that a reader
+// understands, sorted. Empty for a type with no such fields and for an unknown
+// one.
+//
+// Exported for the same reason as RequiredFields: a distinction the machine
+// makes by reading a field is part of the contract, and a contract nothing can
+// read is prose (SC-4245).
+func OptionalFields(markerType string) []string {
+	s, known := specs[markerType]
+	if !known || len(s.optional) == 0 {
+		return nil
+	}
+	out := append([]string(nil), s.optional...)
+	sort.Strings(out)
+	return out
 }
 
 // Validate checks m against its type's contract. Unknown types pass — only a
