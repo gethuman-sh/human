@@ -3,6 +3,8 @@ package daemon
 import (
 	"slices"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // livenessCard builds the minimum BoardViewCard AgentNamesForCard reads, so a
@@ -96,4 +98,37 @@ func TestAgentNamesForCard_restingCard(t *testing.T) {
 // rather than a name that can never match and would therefore read as dead.
 func TestAgentNamesForCard_runningStageWithoutAnAgent(t *testing.T) {
 	assertNames(t, AgentNamesForCard(livenessCard(BoardBacklog, BoardRunning)), nil)
+}
+
+// TestAgentNamesForCard_FailedCardStillNamesItsAgent covers SC-4151 A1: a
+// failure marker is durable and a run need not have ended when one lands, so a
+// red card's agent must still be looked for. Before this a failed card returned
+// nil and its liveness was never even asked.
+func TestAgentNamesForCard_FailedCardStillNamesItsAgent(t *testing.T) {
+	for _, stage := range []BoardStage{BoardPlanning, BoardImplementation, BoardVerification} {
+		got := AgentNamesForCard(livenessCard(stage, BoardFailed))
+		assert.Equal(t, []string{agentNameFor("SC-1", stage)}, got, string(stage))
+	}
+}
+
+func TestAgentNamesForCard_FailedLoopCardNamesBothHalves(t *testing.T) {
+	got := AgentNamesForCard(BoardViewCard{
+		Key: "SC-3852", Stage: string(BoardDoneStage), State: string(BoardFailed),
+		DeployPhase: DeployPhasePRReview,
+	})
+	assert.Equal(t, []string{agentNameFor("SC-3852", prReviewAgentStage), agentNameFor("SC-3852", prFixAgentStage)}, got)
+}
+
+// A failed done-stage card with no loop half behind it — the deploy path reddened
+// it — stays unknown rather than being answered with a PR-loop container from an
+// earlier round.
+func TestAgentNamesForCard_FailedDeployCardNamesNothing(t *testing.T) {
+	got := AgentNamesForCard(livenessCard(BoardDoneStage, BoardFailed))
+	assert.Nil(t, got)
+}
+
+// A failed BACKLOG card launches no agent, so nothing is named for it.
+func TestAgentNamesForCard_FailedBacklogCardNamesNothing(t *testing.T) {
+	got := AgentNamesForCard(livenessCard(BoardBacklog, BoardFailed))
+	assert.Nil(t, got)
 }

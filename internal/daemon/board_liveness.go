@@ -42,16 +42,22 @@ func AgentNamesForCard(card BoardViewCard) []string {
 		// rounds, and which one is running says nothing about whether the other's
 		// container has yet been reaped.
 		//
-		// The deploy FIXER is deliberately absent, and its liveness stays unknown:
-		// DeployPhase only ever names a PR-loop half (donePhaseFromLoopMarker,
-		// board_state.go), so a card whose newest done marker is
-		// DeployFixStartedHeader reports no phase and returns nil above. Naming
-		// the deployfix agent here would therefore only ever be consulted while
-		// deploy-fix is NOT the current work — turning a not-yet-reaped container
-		// from an earlier round into a false "live". Covering it needs a wire
-		// signal the viewer does not have; teaching donePhaseFromLoopMarker the
-		// deploy-fix header instead would silently widen doneStageLoopActive,
-		// which gates the PR-loop re-drive and the stuck-running guard.
+		// A FAILED done-stage card reports a phase too, naming the half that was
+		// last started underneath the failure (deployPhaseFor →
+		// doneStageStartedHalf). That is the SC-3852 case: the loop reds a step
+		// whose container goes on working, and without a phase a red card's agent
+		// was never even looked for (SC-4151 A1).
+		//
+		// The deploy FIXER is deliberately absent from both, and its liveness
+		// stays unknown: DeployPhase only ever names a PR-loop half, so a card
+		// whose done stage last saw a deploy or deploy-fix launch reports no
+		// phase and returns nil here. Naming the deployfix agent would therefore
+		// only ever be consulted while deploy-fix is NOT the current work —
+		// turning a not-yet-reaped container from an earlier round into a false
+		// "live". Covering it needs a wire signal the viewer does not have;
+		// teaching the loop-half derivation the deploy-fix header instead would
+		// silently widen doneStageLoopActive, which gates the PR-loop re-drive
+		// and the stuck-running guard.
 		if card.DeployPhase == "" {
 			return nil
 		}
@@ -64,8 +70,17 @@ func AgentNamesForCard(card BoardViewCard) []string {
 		// (isReworkTransition, board_transition.go:1684), so that is the agent
 		// that owns the card while the board badges it "fixing…".
 		return []string{agentNameFor(card.Key, BoardImplementation)}
-	case state == BoardRunning || state == BoardQueued:
+	case state == BoardRunning || state == BoardQueued || state == BoardFailed:
 		// Only these three stages launch a named agent (launchForwardStage).
+		//
+		// BoardFailed is here for the opposite question to the one this function
+		// was written for. A failure marker is durable and a run is not required
+		// to have ended when one lands, so a card can be red while the agent it
+		// describes is still working — measured on SC-3852, where a
+		// pr-review-failed marker stood for an hour over a reviewer that went on
+		// to record changes-requested (SC-4151 A1). Asking who would be running
+		// this stage is the same question whether the last marker said started or
+		// failed; only the answer's use differs.
 		if stage != BoardPlanning && stage != BoardImplementation && stage != BoardVerification {
 			return nil
 		}

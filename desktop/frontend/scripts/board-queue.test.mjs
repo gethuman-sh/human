@@ -734,3 +734,33 @@ test("queued and fixing badges also drop the spinner for a dead agent (SC-3569)"
   assert.equal(fixing.spinner, false);
   assert.match(fixing.text, /no fixer running/);
 });
+
+// --- A red card whose agent is working says so (SC-4151 A1) ---
+
+test("a failed card with a live agent reads as still working, not as over", () => {
+  const info = badgeInfo({
+    stage: "done",
+    state: "failed",
+    error: "the PR reviewer stopped before recording a verdict",
+    agentLiveness: "live",
+  });
+  assert.equal(info.cls, "fixing", "the machine register, never the failure register");
+  assert.match(info.text, /still working/);
+  assert.equal(info.spinner, true);
+  // The recorded reason is not hidden — it is just no longer the last word.
+  assert.match(info.title, /the PR reviewer stopped before recording a verdict/);
+  assert.match(info.title, /Nothing to do yet/);
+});
+
+test("a failed card with no agent behind it keeps the plain red", () => {
+  for (const liveness of ["dead", "elsewhere", "recovering", undefined]) {
+    const info = badgeInfo({ stage: "done", state: "failed", error: "boom", agentLiveness: liveness });
+    assert.equal(info.cls, "failed", String(liveness));
+    assert.equal(info.text, "✕", String(liveness));
+    assert.equal(info.title, "boom", String(liveness));
+  }
+});
+
+test("a failed card with no recorded reason still says something", () => {
+  assert.equal(badgeInfo({ stage: "planning", state: "failed" }).title, "Stage failed");
+});

@@ -308,8 +308,19 @@ const (
 // board badge reads "PR review…" or "fixing PR findings…" rather than
 // "deploying…" while the loop runs.
 func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
-	if card.Stage == BoardDoneStage && card.State == BoardRunning {
+	if card.Stage != BoardDoneStage {
+		return ""
+	}
+	if card.State == BoardRunning {
 		return doneStageLoopHalf(comments)
+	}
+	// A FAILED done-stage card still has a loop half behind it, and it is the
+	// case SC-3852 measured: the loop reds a step whose container goes on
+	// working. The badge never reads this — it consults DeployPhase only while
+	// running — but AgentNamesForCard does, and without it a red card's agent is
+	// never even looked for (SC-4151 A1).
+	if card.State == BoardFailed {
+		return doneStageStartedHalf(comments)
 	}
 	return ""
 }
