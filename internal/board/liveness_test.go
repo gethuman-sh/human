@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // card builds a BoardViewCard fixture for the liveness tests. enteredAgo is
@@ -160,12 +162,32 @@ func TestMarkAgentLiveness_unparseableTimestampIsNeverDead(t *testing.T) {
 	assert.Empty(t, cards[0].AgentLiveness)
 }
 
+// The overlay's counterpart to SC-4150: a deploy queued behind another for hours
+// must not read dead here either. It cannot, and this pins why — a done-stage
+// card names an agent only when DeployPhase is a PR-loop half, and none of the
+// three deploy entry routes leaves one set: [human:deploy-started] and
+// [human:deploy-fix-started] are not loop halves, and [human:pr-review-passed]
+// retires the phase (board_state.go, deployPhaseFor).
 func TestMarkAgentLiveness_plainDeployHasNoAgentToMiss(t *testing.T) {
 	c := card("SC-1", string(daemon.BoardDoneStage), string(daemon.BoardRunning), "d1", 3*time.Hour, livenessNow)
 	c.DeployPhase = ""
 	cards := []daemon.BoardViewCard{c}
 	MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
 	assert.Empty(t, cards[0].AgentLiveness, "a plain deploy runs in-process; it never had an agent")
+
+	// The same property for a queued-behind-another deploy: an approved review's
+	// merge names no loop half, so it too must carry no agent to miss.
+	derived := daemon.DeriveBoardCard([]tracker.Comment{
+		{Body: daemon.PRReviewStartedHeader, Created: livenessNow.Add(-3 * time.Hour)},
+		{Body: daemon.PRReviewPassedHeader, Created: livenessNow.Add(-3*time.Hour + time.Minute)},
+	}, tracker.CategoryUnstarted, false)
+	require.Empty(t, derived.DeployPhase, "an approved review's merge names no loop half")
+
+	c2 := card("SC-1", string(daemon.BoardDoneStage), string(daemon.BoardRunning), "d1", 3*time.Hour, livenessNow)
+	c2.DeployPhase = derived.DeployPhase
+	cards2 := []daemon.BoardViewCard{c2}
+	MarkAgentLiveness(cards2, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+	assert.Empty(t, cards2[0].AgentLiveness, "an approve-then-merge deploy runs in-process too; it never had an agent")
 }
 
 func TestMarkAgentLiveness_prLoopJoinsEitherHalf(t *testing.T) {
