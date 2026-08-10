@@ -292,11 +292,17 @@ func (a *App) SetCardHidden(pmKey string, hidden bool) error {
 }
 
 // CardsQuick fetches issue titles only — skipping the per-ticket comment scan
-// that derives board stages — and places every open PM issue in the Backlog. It
-// returns far faster than Cards(), so the board can render titles immediately;
-// the subsequent Cards() call reconciles each card into its real stage. Docker
+// that derives board stages — so the board can render immediately; the
+// subsequent Cards() call reconciles each card into its real stage. Docker
 // availability is assumed here (the real value arrives with Cards()) so the quick
 // path never blocks on a Docker round-trip.
+//
+// Because no stage is derived here, the composer has nothing to place cards by
+// and falls every open ticket to Backlog — which opened the board as one tall
+// Backlog column that rearranged itself seconds later, reading as a wrong board
+// rather than a loading one (SC-4324). So the remembered board is asked where
+// each card was, and the two fetches are joined: this one owns which tickets
+// exist, that one owns where they go.
 func (a *App) CardsQuick() (BoardData, error) {
 	client, info, err := a.daemonClientInfo()
 	if err != nil {
@@ -307,11 +313,19 @@ func (a *App) CardsQuick() (BoardData, error) {
 	if err != nil {
 		return BoardData{}, daemonCause(err)
 	}
+	// A daemon that cannot answer — one predating the route, or one with nothing
+	// remembered — leaves the board exactly as it composes without it. Nothing
+	// here is worth failing a paint over.
+	last, _ := client.GetCachedBoardView()
 	project := projectKeyOf(info)
 	// The quick path never blocks on a Docker round-trip (that is what makes it
 	// quick), so it leaves liveness unknown; the full Cards() reconcile that
 	// follows fills it in a moment later.
-	return boardFromResults(results, true, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(client, info), a.boardAppearance(info), board.LiveAgents{}), nil
+	// Restoring before applyLocal is load-bearing: the viewer overlay reads a
+	// card's stage to decide its Ideas sub-column, so a card placed after it runs
+	// would land in Ideas without one.
+	view := board.RestoreStages(board.Compose(results, true), last)
+	return applyLocal(view, a.ideas.Assignments(project), cardMockups(), a.prefs.Snapshot(project), a.viewerIdentity(client, info), a.boardAppearance(info), board.LiveAgents{}), nil
 }
 
 // viewerIdentity returns the names that mean "me" for the board's ownership
@@ -406,13 +420,6 @@ func (a *App) boardView(client *daemon.Client) (daemon.BoardView, []daemon.Track
 		return view, results, nil
 	}
 	return board.Compose(results, dockerAvailable()), results, nil
-}
-
-// boardFromResults composes the shared board and then applies this viewer's own
-// overlay. The split is the point: Compose produces what is true of the project,
-// applyLocal adds what is true only of the person looking.
-func boardFromResults(results []daemon.TrackerIssuesResult, dockerAvailable bool, ideaCols map[string]int, mocks map[string]cardMockupInfo, prefs boardprefs.Prefs, viewer vieweridentity.Identity, dimPercent int, live board.LiveAgents) BoardData {
-	return applyLocal(board.Compose(results, dockerAvailable), ideaCols, mocks, prefs, viewer, dimPercent, live)
 }
 
 // applyLocal fills the fields Compose deliberately leaves blank because they
