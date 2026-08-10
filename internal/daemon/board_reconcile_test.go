@@ -546,7 +546,7 @@ func TestReconcileStuckRunning_sparesARunningDeployInsideItsOwnGrace(t *testing.
 		Comments: []tracker.Comment{cmt(DeployStartedHeader, now.Add(-20*time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 0, n, "a deploy 20 minutes in is still well inside deployTimeout + StuckRunningGrace")
 	assert.Empty(t, posted)
@@ -561,7 +561,7 @@ func TestReconcileStuckRunning_redsADeployPastItsOwnGrace(t *testing.T) {
 		Comments: []tracker.Comment{cmt(DeployStartedHeader, now.Add(-61*time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 1, n)
 	require.Len(t, posted, 1)
@@ -577,7 +577,7 @@ func TestReconcileStuckRunning_ordinaryStagesKeepTheShortGrace(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-20*time.Minute))},
 	}}
 	var posted []struct{ Key, Body string }
-	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), liveAgents(), capturingPoster(&posted), StageRetry{}, nil, nil, "", now, zerolog.Nop())
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), PostFailed: capturingPoster(&posted)}, now)
 
 	assert.Equal(t, 1, n, "20 minutes is past the ordinary 15-minute grace")
 	require.Len(t, posted, 1)

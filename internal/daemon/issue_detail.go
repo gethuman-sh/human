@@ -43,33 +43,33 @@ func RenderDescriptionHTML(md string) string {
 // removes the per-open tracker round-trip from the reading experience without
 // the panel ever going more than one open stale. Cache size is bounded by the
 // board itself (a fetch caps at 200 issues per project), so no eviction.
+//
+// The cache is keyed by the request itself. Its three fields are exactly the
+// identity of a fetch and all comparable, so Go's own struct-key equality does
+// the work a hand-built "kind\x00tracker\x00key" string was doing — with no
+// separator to choose, no escaping question, and no way for a field carrying
+// the separator to collide with a different request.
 func NewCachedIssueGetter(inner func(IssueDetailRequest) (*IssueDetailFetch, error)) func(IssueDetailRequest) (*IssueDetailFetch, error) {
 	var mu sync.Mutex
-	cache := make(map[string]*IssueDetailFetch)
-	inflight := make(map[string]bool)
-
-	cacheKey := func(req IssueDetailRequest) string {
-		return req.Kind + "\x00" + req.Tracker + "\x00" + req.Key
-	}
+	cache := make(map[IssueDetailRequest]*IssueDetailFetch)
+	inflight := make(map[IssueDetailRequest]bool)
 
 	return func(req IssueDetailRequest) (*IssueDetailFetch, error) {
-		key := cacheKey(req)
-
 		mu.Lock()
-		if cached, ok := cache[key]; ok {
+		if cached, ok := cache[req]; ok {
 			// Single-flight: one refresh per key at a time, so a burst of
 			// opens doesn't stampede the tracker API.
-			if !inflight[key] {
-				inflight[key] = true
+			if !inflight[req] {
+				inflight[req] = true
 				go func() {
 					fresh, err := inner(req)
 					mu.Lock()
 					if err == nil {
 						// A failed refresh keeps the stale copy: readable
 						// beats gone when the tracker blips.
-						cache[key] = fresh
+						cache[req] = fresh
 					}
-					inflight[key] = false
+					inflight[req] = false
 					mu.Unlock()
 				}()
 			}
@@ -83,7 +83,7 @@ func NewCachedIssueGetter(inner func(IssueDetailRequest) (*IssueDetailFetch, err
 			return nil, err
 		}
 		mu.Lock()
-		cache[key] = fresh
+		cache[req] = fresh
 		mu.Unlock()
 		return fresh, nil
 	}
