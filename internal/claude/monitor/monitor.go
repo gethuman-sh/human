@@ -65,11 +65,12 @@ func (m *Monitor) FetchHeavy(ctx context.Context, base *Snapshot) *Snapshot {
 	snap := *base
 	snap.FetchedAt = time.Now()
 
-	// Read daemon info once for all RPC calls.
-	var addr, token string
+	// One client for all four RPCs; it is immutable and dials per call, so the
+	// goroutines below can share it.
+	var client *daemon.Client
 	if snap.Daemon.Alive {
 		if info, err := daemon.ReadInfo(); err == nil {
-			addr, token = info.Addr, info.Token
+			client, _ = daemon.NewClient(info)
 		}
 	}
 
@@ -81,12 +82,12 @@ func (m *Monitor) FetchHeavy(ctx context.Context, base *Snapshot) *Snapshot {
 		netEvents []daemon.NetworkEvent
 		toolStats *stats.ToolStats
 	)
-	if addr != "" {
+	if client != nil {
 		wg.Add(4)
-		go func() { defer wg.Done(); trackers, _ = daemon.GetTrackerDiagnose(addr, token) }()
-		go func() { defer wg.Done(); hookSnaps, _ = daemon.GetHookSnapshot(addr, token) }()
-		go func() { defer wg.Done(); netEvents, _ = daemon.GetNetworkEvents(addr, token) }()
-		go func() { defer wg.Done(); toolStats, _ = daemon.GetToolStats(addr, token) }()
+		go func() { defer wg.Done(); trackers, _ = client.GetTrackerDiagnose() }()
+		go func() { defer wg.Done(); hookSnaps, _ = client.GetHookSnapshot() }()
+		go func() { defer wg.Done(); netEvents, _ = client.GetNetworkEvents() }()
+		go func() { defer wg.Done(); toolStats, _ = client.GetToolStats() }()
 	}
 
 	// Discovery runs in parallel with the daemon RPCs above.

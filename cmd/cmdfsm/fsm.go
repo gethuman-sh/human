@@ -29,9 +29,9 @@ import (
 // caller may not use.
 const defaultActor = "skill"
 
-// resolveDaemon is swapped in tests. `where` is the only subcommand that needs a
+// connectDaemon is swapped in tests. `where` is the only subcommand that needs a
 // daemon; the rest read the compiled-in document and work in any container.
-var resolveDaemon = daemon.ResolveDaemon
+var connectDaemon = daemon.Connect
 
 // BuildFSMCmd builds `human fsm`.
 func BuildFSMCmd() *cobra.Command {
@@ -83,11 +83,11 @@ func buildWhereCmd() *cobra.Command {
 			"taking an edge you do not own.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, token, err := resolveDaemon()
+			client, err := connectDaemon()
 			if err != nil {
 				return err
 			}
-			report, err := daemon.FSMWhere(addr, token, daemon.WhereRequest{Key: args[0], Actor: actor, History: history})
+			report, err := client.FSMWhere(daemon.WhereRequest{Key: args[0], Actor: actor, History: history})
 			if err != nil {
 				return err
 			}

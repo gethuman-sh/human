@@ -50,11 +50,11 @@ func buildProxyModelOutcomesCmd() *cobra.Command {
 }
 
 func runProxyModelOutcomes(cmd *cobra.Command, asJSON bool) error {
-	addr, token, err := resolveDaemonEndpoint()
+	client, err := connectDaemon()
 	if err != nil {
 		return err
 	}
-	outcomes, err := daemon.GetModelOutcomes(addr, token)
+	outcomes, err := client.GetModelOutcomes()
 	if err != nil {
 		return errors.WrapWithDetails(err, "fetching model outcomes from daemon")
 	}
@@ -90,26 +90,30 @@ func writeModelOutcomes(w io.Writer, outcomes []proxy.ModelCallOutcome, asJSON b
 	return nil
 }
 
-// resolveDaemonEndpoint resolves the daemon address and token from the
-// environment, falling back to daemon.json — the same resolution the CA-cert
-// fetch uses.
-func resolveDaemonEndpoint() (addr, token string, err error) {
-	addr = os.Getenv("HUMAN_DAEMON_ADDR")
-	token = os.Getenv("HUMAN_DAEMON_TOKEN")
-	if addr == "" {
-		info, infoErr := readDaemonInfo()
-		if infoErr != nil {
-			return "", "", errors.WrapWithDetails(infoErr, "daemon not reachable")
+// connectDaemon returns a client for the daemon named by the environment,
+// falling back to daemon.json.
+//
+// It does not use daemon.Connect: `proxy trust` runs under sudo, where ~
+// resolves to /root, so the info file has to be read from the invoking user's
+// home instead. That is the whole difference, and it is why this resolution
+// stays local.
+func connectDaemon() (*daemon.Client, error) {
+	envToken := os.Getenv("HUMAN_DAEMON_TOKEN")
+	info := daemon.DaemonInfo{Addr: os.Getenv("HUMAN_DAEMON_ADDR"), Token: envToken}
+	if info.Addr == "" {
+		file, err := readDaemonInfo()
+		if err != nil {
+			return nil, errors.WrapWithDetails(err, "daemon not reachable")
 		}
-		addr = info.Addr
-		if token == "" {
-			token = info.Token
+		info = file
+		if envToken != "" {
+			info.Token = envToken
 		}
 	}
-	if addr == "" {
-		return "", "", errors.WithDetails("daemon address not configured")
+	if info.Addr == "" {
+		return nil, errors.WithDetails("daemon address not configured")
 	}
-	return addr, token, nil
+	return daemon.NewClient(info)
 }
 
 func buildProxyTrustCmd() *cobra.Command {
@@ -215,25 +219,12 @@ func findCACertLocal() ([]byte, error) {
 // fetchCACertFromDaemon asks the daemon to run "proxy ca-cert" and returns
 // the PEM output.
 func fetchCACertFromDaemon() ([]byte, error) {
-	addr := os.Getenv("HUMAN_DAEMON_ADDR")
-	token := os.Getenv("HUMAN_DAEMON_TOKEN")
-
-	if addr == "" {
-		info, err := readDaemonInfo()
-		if err != nil {
-			return nil, errors.WrapWithDetails(err, "daemon not reachable")
-		}
-		addr = info.Addr
-		if token == "" {
-			token = info.Token
-		}
+	client, err := connectDaemon()
+	if err != nil {
+		return nil, err
 	}
 
-	if addr == "" {
-		return nil, errors.WithDetails("daemon address not configured")
-	}
-
-	resp, err := daemon.RunRemoteCapture(addr, token, []string{"proxy", "ca-cert"})
+	resp, err := client.RunRemoteCapture([]string{"proxy", "ca-cert"})
 	if err != nil {
 		return nil, errors.WrapWithDetails(err, "failed to fetch CA cert from daemon")
 	}

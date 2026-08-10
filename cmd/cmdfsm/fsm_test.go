@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -83,10 +84,10 @@ func TestConstants_CarriesTheBudgetsTheProseRefersToByName(t *testing.T) {
 // where needs the daemon, and says so plainly rather than failing obscurely: it
 // is the one subcommand that cannot answer from the compiled-in document alone.
 func TestWhere_SaysSoWhenNoDaemonIsReachable(t *testing.T) {
-	original := resolveDaemon
-	t.Cleanup(func() { resolveDaemon = original })
-	resolveDaemon = func() (string, string, error) {
-		return "", "", assert.AnError
+	original := connectDaemon
+	t.Cleanup(func() { connectDaemon = original })
+	connectDaemon = func() (*daemon.Client, error) {
+		return nil, assert.AnError
 	}
 
 	err := runErr(t, "where", "SC-1")

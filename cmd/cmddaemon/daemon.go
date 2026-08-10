@@ -1267,7 +1267,11 @@ var inFlightOps = func() (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	status, err := daemon.GetDaemonBusy(info.Addr, info.Token)
+	client, err := daemon.NewClient(info)
+	if err != nil {
+		return 0, false
+	}
+	status, err := client.GetDaemonBusy()
 	if err != nil {
 		return 0, false
 	}
