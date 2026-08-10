@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/proxy"
 	"github.com/gethuman-sh/human/internal/tracker"
@@ -122,7 +123,7 @@ func RunBoardFailureWatch(ctx context.Context, store *HookEventStore, runs *RunR
 				if !strings.HasPrefix(evt.AgentName, "board-") {
 					continue
 				}
-				if evt.EventName != "Stop" && evt.EventName != "SessionEnd" && evt.EventName != "StopFailure" {
+				if !hookevents.IsRunEnd(evt.EventName) {
 					continue
 				}
 				go handleBoardAgentExit(ctx, runs, evt.RunID, evt.AgentName, evt.ErrorType, evt.EventName, commenterFor, chainReview, liveAgents, advancePRLoop, advanceDeployFix, reachable, commitsPresent, diagnose, onHandoff, retry, latestClass, daemonID, logger)
@@ -211,7 +212,7 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, runID, agentNa
 	// is the only thing that tells them apart. cleanExit gates the mid-review
 	// death check below: a clean exit-0 that merely raced its own
 	// review-complete propagation is never a death (SC-2133).
-	cleanExit := eventName != "StopFailure"
+	cleanExit := eventName != hookevents.EventStopFailure
 	// A clean stage finish leaves the stage's done-marker as the latest marker;
 	// only treat the exit as a failure when that did NOT happen. Re-read with
 	// bounded backoff first: a reap-synthesized exit can be handled before the

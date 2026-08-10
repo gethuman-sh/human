@@ -764,7 +764,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 			errorType = daemon.ReapSilenceErrorType + ":" + reason.Idle.Round(time.Second).String()
 		}
 		hookEvents.Append(hookevents.Event{
-			EventName: "StopFailure",
+			EventName: hookevents.EventStopFailure,
 			AgentName: agentName,
 			ErrorType: errorType,
 			Timestamp: time.Now().UTC(),

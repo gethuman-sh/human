@@ -6,6 +6,29 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/logparser"
 )
 
+// The event names that mean a run ENDED. They are named because the difference
+// between them is load-bearing and invisible in the string: Stop and SessionEnd
+// are a clean exit-0, StopFailure is the zombie sweep's synthesized death, and
+// both kinds carry an empty ErrorType — so the name is the only thing that
+// tells a finished stage from a killed one.
+//
+// Only this subset is named. The rest of the vocabulary (PreToolUse,
+// PostToolUse, Notification, …) is read in one switch in this package, where a
+// literal has nowhere to drift to; these three are matched by four separate
+// readers in the daemon.
+const (
+	EventStop        = "Stop"
+	EventSessionEnd  = "SessionEnd"
+	EventStopFailure = "StopFailure"
+)
+
+// IsRunEnd reports whether an event name means the run ended, cleanly or not.
+// The three readers that used to spell the disjunction by hand are the reason
+// it exists: they must agree, and nothing made them.
+func IsRunEnd(eventName string) bool {
+	return eventName == EventStop || eventName == EventSessionEnd || eventName == EventStopFailure
+}
+
 // Event represents a single hook event line from events.jsonl.
 type Event struct {
 	EventName        string    `json:"event"`

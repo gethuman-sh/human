@@ -103,7 +103,7 @@ func trackProgress(progress map[string]AgentProgress, evt hookevents.Event) {
 	}
 	// A finished agent is not a stalled one; drop it so a completed run cannot
 	// later be mistaken for a hang.
-	if evt.EventName == "Stop" || evt.EventName == "SessionEnd" || evt.EventName == "StopFailure" {
+	if hookevents.IsRunEnd(evt.EventName) {
 		delete(progress, evt.AgentName)
 		return
 	}
