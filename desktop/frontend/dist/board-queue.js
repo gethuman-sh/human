@@ -167,13 +167,25 @@ export const STOP_DECISION_LABELS = {
 // card and in the detail panel — but the badge says the work is still going,
 // because a person sent to intervene on a live run is being sent for nothing.
 // Unknown liveness leaves the plain failure exactly as before.
-function failedBadge(card) {
+//
+// The live agent need not be the failed stage's own. A card carries one (stage,
+// state) and the newest marker owns it, so a failure recorded in one stage
+// paints over a run still going in another: measured on SC-3853, where the card
+// read "the PR reviewer stopped before recording a verdict" for five minutes
+// while the implementation agent worked, and went green when that agent
+// restarted — nothing a person did or could have done mattered. runningStage
+// names the working stage so the badge says which one it is rather than
+// implying it is the failed one (SC-4406).
+function failedBadge(card, runningLabels = RUNNING_LABELS) {
     const reason = card.error || "Stage failed";
     if (card.agentLiveness === "live") {
+        const elsewhere = card.runningStage ? (runningLabels[card.runningStage] ?? "working…") : "";
         return {
             cls: "fixing",
-            text: "still working — earlier failure recorded",
-            title: `A failure was recorded for this stage, but an agent is still running it here. Nothing to do yet; the run may still finish. Recorded reason: ${reason}`,
+            text: elsewhere ? `still ${elsewhere} — earlier failure recorded` : "still working — earlier failure recorded",
+            title: elsewhere
+                ? `A failure was recorded, but an agent is running this ticket's ${card.runningStage} stage here. Nothing to do yet. Recorded reason: ${reason}`
+                : `A failure was recorded for this stage, but an agent is still running it here. Nothing to do yet; the run may still finish. Recorded reason: ${reason}`,
             spinner: true,
         };
     }
@@ -391,7 +403,7 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
         };
     }
     if (card.state === "failed")
-        return failedBadge(card);
+        return failedBadge(card, runningLabels);
     if (card.state === "resolved") {
         if (card.stage === "planning") {
             // The planner verified the ticket's work is already merged, so there is

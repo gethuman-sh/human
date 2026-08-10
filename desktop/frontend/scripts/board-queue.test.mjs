@@ -819,6 +819,60 @@ test("a failed card with a live agent reads as still working, not as over", () =
   assert.match(info.title, /Nothing to do yet/);
 });
 
+// --- A red card names the stage that is still working (SC-4406) ---
+
+test("a failed card names the other stage that is running", () => {
+  const info = badgeInfo({
+    stage: "done",
+    state: "failed",
+    error: "the PR reviewer stopped before recording a verdict",
+    runningStage: "implementation",
+    agentLiveness: "live",
+  });
+  assert.equal(info.cls, "fixing", "the machine register, never the failure register");
+  assert.match(info.text, /still building/, "the badge says WHICH stage is working");
+  assert.equal(info.spinner, true);
+  assert.match(info.title, /implementation stage/);
+  assert.match(info.title, /the PR reviewer stopped before recording a verdict/);
+});
+
+// The subtitle is derived from the same classifier as the badge, so softening
+// the badge must take the red explanation line with it — otherwise the card
+// says "still working" over a red error.
+test("a failed card working elsewhere shows no red explanation line", () => {
+  const card = {
+    stage: "done",
+    state: "failed",
+    error: "the PR reviewer stopped before recording a verdict",
+    runningStage: "implementation",
+    agentLiveness: "live",
+  };
+  assert.equal(cardError(card), "");
+  assert.equal(cardError({ ...card, agentLiveness: "dead" }), card.error);
+});
+
+// A live agent with no named other stage keeps the wording it had before
+// SC-4406 — the failed stage's own agent is the one still working.
+test("a failed card with a live agent and no other stage keeps the old wording", () => {
+  const info = badgeInfo({ stage: "implementation", state: "failed", error: "boom", agentLiveness: "live" });
+  assert.equal(info.cls, "fixing");
+  assert.match(info.text, /still working — earlier failure recorded/);
+});
+
+// The named stage is not itself the evidence: without a live agent the card
+// stays red, so a stale started marker can never hide a real failure.
+test("a named running stage with no live agent still reds the card", () => {
+  const info = badgeInfo({
+    stage: "done",
+    state: "failed",
+    error: "boom",
+    runningStage: "implementation",
+    agentLiveness: "dead",
+  });
+  assert.equal(info.cls, "failed");
+  assert.equal(info.text, "✕");
+});
+
 test("a failed card with no agent behind it keeps the plain red", () => {
   for (const liveness of ["dead", "elsewhere", "recovering", undefined]) {
     const info = badgeInfo({ stage: "done", state: "failed", error: "boom", agentLiveness: liveness });
