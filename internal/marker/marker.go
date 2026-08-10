@@ -183,7 +183,7 @@ func RequiredFields(markerType string) []string {
 // order the contract prefers them — so a caller that has to name exactly one
 // names the first. Empty when the type has no such contract.
 //
-// Exported for the same reason as RequiredFields: `human fsm next` builds the
+// Exported for the same reason as RequiredFields: `human fsm where` builds the
 // runnable `human marker post` command from these lists, and a contract it
 // cannot read is a command that posts a marker Validate then rejects.
 func AnyOfFields(markerType string) []string {
