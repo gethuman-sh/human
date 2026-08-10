@@ -290,3 +290,33 @@ func TestPRBody_singleTrackerOmitsEngineering(t *testing.T) {
 func (s *stubProvider) UnlinkIssues(context.Context, string, string) error {
 	return nil
 }
+
+// --ready (the review loop's draft interlock, SC-4027) and --override-decision
+// (the open-decision refusal, SC-3852) are independent gestures that reach the
+// engine by different carriers: the draft override rides on the deps, the
+// decision override on the request. Routing the CLI through StartDeploy moved
+// the call that carries the deps, so pin that --ready still arrives.
+func TestRunDeploy_readyCarriesTheDraftOverrideThroughThePrelude(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ready bool
+	}{{"ready un-drafts", true}, {"default leaves the interlock", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got daemon.BoardTransitionDeps
+			prevEntry, prevDeps := deployEntry, newTransitionDeps
+			deployEntry = func(_ context.Context, d daemon.BoardTransitionDeps, _ daemon.StartDeployRequest) error {
+				got = d
+				return nil
+			}
+			newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
+				return daemon.BoardTransitionDeps{}
+			}
+			t.Cleanup(func() { deployEntry, newTransitionDeps = prevEntry, prevDeps })
+
+			var buf bytes.Buffer
+			require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf,
+				"SC-1", "release/x", "T", tc.ready, false))
+			assert.Equal(t, tc.ready, got.MergeDraftPR)
+		})
+	}
+}
