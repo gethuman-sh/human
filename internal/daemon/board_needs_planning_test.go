@@ -352,6 +352,33 @@ func TestCountPlanRefusals_ExcludesFieldMarkedEscalation(t *testing.T) {
 	assert.Equal(t, 2, countPlanRefusals(comments))
 }
 
+// A comment that states its determination is believed, and a determination this
+// build does not know is not second-guessed by reading the prose: an escalation
+// field with an unknown or empty value means "not the plan-stuck escalation",
+// even when the frozen legacy sentence happens to be in the body. Only a comment
+// carrying no field at all falls back to the sentence, which is what keeps
+// threads written before the field deriving as they always did.
+func TestIsPlanStuck_FieldBeatsProse(t *testing.T) {
+	const legacyProse = "reason: this ticket could not be planned automatically — tried 2 time(s)."
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"field says plan-stuck", rewordedEscalation, true},
+		{"no field, legacy prose", legacyEscalation, true},
+		{"unknown determination, legacy prose", NeedsPlanningHeader + "\nescalation: something-else\n" + legacyProse, false},
+		{"empty determination, legacy prose", NeedsPlanningHeader + "\nescalation:\n" + legacyProse, false},
+		{"padded value still recognised", NeedsPlanningHeader + "\nescalation:   plan-stuck  \nreason: reworded.", true},
+		{"not a marker at all, legacy prose", "this ticket could not be planned automatically — by hand, please", true},
+		{"ordinary refusal", NeedsPlanningHeader + "\n" + needsPlanningReason, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isPlanStuck(tc.body))
+		})
+	}
+}
+
 // Once the ping-pong bound (drive → plan → fail, repeated) is spent, the next
 // refusal must escalate to a person exactly once instead of driving another
 // doomed planning attempt — the bound that keeps the ticket from ping-ponging
