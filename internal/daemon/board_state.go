@@ -96,6 +96,18 @@ type BoardCard struct {
 	// cannot see locally (SC-1450). Empty for an unsigned marker, preserving
 	// single-daemon behaviour.
 	StageDaemonID string `json:"stage_daemon_id,omitempty"`
+	// RunningStage names a stage OTHER than this card's own placement whose own
+	// newest marker is a start — an agent may still be working the ticket while
+	// the card shows a failure somewhere else. Set only on a FAILED card, which
+	// is the only placement whose reading it changes: a card carries one (stage,
+	// state) pair and the newest marker wins, so when two stages interleave the
+	// live one becomes invisible and the red asks a person to intervene on work
+	// the machine is still doing (SC-4406, measured on SC-3853).
+	//
+	// It widens WHICH agent the viewer asks about, never what it concludes: the
+	// liveness answer still comes from a running container, so a stale running
+	// marker with nothing behind it reds the card exactly as before.
+	RunningStage BoardStage `json:"running_stage,omitempty"`
 	// DeployPhase names the done-stage sub-phase for a running card: "pr-review"
 	// while the machine reviewer runs, "pr-fix" while the fixer runs, empty for
 	// a plain deploy. It lets the board badge read "PR review…"/"fixing PR
@@ -214,6 +226,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		card.WaitsFor = waitsForOf(latest)
 	}
 	card.DeployPhase = deployPhaseFor(card, comments)
+	card.RunningStage = runningStageElsewhere(comments, card.placement())
 	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
 	attachOpenOptions(&card, comments)
 	return card
@@ -234,6 +247,41 @@ func attachFailureAndResume(card *BoardCard, state BoardState, latest tracker.Co
 	if state == BoardOutage {
 		card.ResumeAt = parseResumeLine(latest.Body)
 	}
+}
+
+// runningStageElsewhere names the stage whose own newest marker is a start
+// while the card itself is red somewhere else — the ticket's other, possibly
+// live, run. Empty for every card that is not failed, and for a failure with no
+// such stage.
+//
+// Only the three stages that launch a named agent are asked about, because the
+// answer exists to be joined against a container name (AgentNamesForCard): the
+// done stage runs its PR-loop halves under DeployPhase and a plain deploy runs
+// in-process with no agent at all, so neither has a name this could look for.
+//
+// The card's own stage is skipped rather than trusted to be excluded by its
+// failure: a placement can be handed to a card by supersession or a terminal
+// determination, and a rule that only holds because of how the placement was
+// reached is one edit away from not holding.
+func runningStageElsewhere(comments []tracker.Comment, placed Placement) BoardStage {
+	if placed.State() != BoardFailed {
+		return ""
+	}
+	var found BoardStage
+	var newest tracker.Comment
+	for _, stage := range agentLaunchStages {
+		if stage == placed.Stage() {
+			continue
+		}
+		state, latest := latestStateInStage(comments, stage)
+		if state != BoardRunning {
+			continue
+		}
+		if found == "" || commentNewer(latest, newest) {
+			found, newest = stage, latest
+		}
+	}
+	return found
 }
 
 // ticketReviewStop reads the operative ticket-review STOP verdict off the card's

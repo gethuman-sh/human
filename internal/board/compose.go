@@ -75,6 +75,7 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			ShippedPartialFollowOn: card.ShippedPartialFollowOn,
 			StageEnteredAt:         formatStageTime(card.StageEnteredAt),
 			DeployPhase:            card.DeployPhase,
+			RunningStage:           string(card.RunningStage),
 			Labels:                 issue.Labels,
 			Description:            issue.Description,
 			Assignee:               issue.Assignee,

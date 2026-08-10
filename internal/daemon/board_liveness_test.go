@@ -132,3 +132,36 @@ func TestAgentNamesForCard_FailedBacklogCardNamesNothing(t *testing.T) {
 	got := AgentNamesForCard(livenessCard(BoardBacklog, BoardFailed))
 	assert.Nil(t, got)
 }
+
+// SC-4406: a failed card whose ticket still shows a start in ANOTHER stage
+// names that stage's agent too. The measured case is SC-3853 — a red
+// done-stage card sending a person to check a pull request while the
+// implementation agent nobody asked about was alive and working.
+func TestAgentNamesForCard_FailedCardAlsoNamesTheOtherRunningStage(t *testing.T) {
+	card := livenessCard(BoardDoneStage, BoardFailed)
+	card.DeployPhase = DeployPhasePRReview
+	card.RunningStage = string(BoardImplementation)
+	assertNames(t, AgentNamesForCard(card), []string{
+		"board-SC-1-prreview",
+		"board-SC-1-prfix",
+		"board-SC-1-implementation",
+	})
+}
+
+// A failed done-stage card the deploy path reddened has no loop half, so the
+// other running stage is the ONLY name — the case that used to answer nil and
+// leave liveness unknown.
+func TestAgentNamesForCard_FailedDeployCardNamesTheOtherRunningStage(t *testing.T) {
+	card := livenessCard(BoardDoneStage, BoardFailed)
+	card.RunningStage = string(BoardImplementation)
+	assertNames(t, AgentNamesForCard(card), []string{"board-SC-1-implementation"})
+}
+
+// The widening is failed-only on purpose. For a RUNNING card the question is
+// whether THIS stage's agent is alive, and a container lingering in a
+// neighbouring stage would answer it falsely — so the field is ignored.
+func TestAgentNamesForCard_RunningCardIgnoresTheOtherStage(t *testing.T) {
+	card := livenessCard(BoardVerification, BoardRunning)
+	card.RunningStage = string(BoardImplementation)
+	assertNames(t, AgentNamesForCard(card), []string{"board-SC-1-verification"})
+}

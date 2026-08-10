@@ -986,3 +986,60 @@ func TestDeployPhaseFor_FailedDeployNamesNoHalf(t *testing.T) {
 	assert.Equal(t, BoardFailed, card.State)
 	assert.Empty(t, card.DeployPhase, "the deploy path started last, so no loop half is claimed")
 }
+
+// SC-4406 replays the SC-3853 sequence: the implementation stage is relaunched,
+// and twenty minutes later a done-stage PR-review failure lands and takes the
+// card. The placement is right — the failure IS the newest marker — but the
+// implementation run it painted over is still going, so the card must carry the
+// stage that is working for the viewer to join a container against.
+func TestDeriveBoardCard_RunningStageNamesTheOtherLiveStage(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ImplementationStartedHeader, time.Unix(1000, 0)),
+		cmt(PRReviewStartedHeader, time.Unix(1100, 0)),
+		cmt(PRReviewFailedHeader+"\nthe PR reviewer stopped before recording a verdict", time.Unix(2000, 0)),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardDoneStage, card.Stage)
+	assert.Equal(t, BoardFailed, card.State)
+	assert.Equal(t, BoardImplementation, card.RunningStage)
+}
+
+// A stage that finished is not a stage that is running: its own newest marker is
+// terminal, so it is never offered as the ticket's live run.
+func TestDeriveBoardCard_RunningStageIgnoresAFinishedStage(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ImplementationStartedHeader, time.Unix(1000, 0)),
+		cmt(ReadyForReviewHeader+"\nbranch: feat/x", time.Unix(1100, 0)),
+		cmt(PRReviewFailedHeader+"\nno verdict", time.Unix(2000, 0)),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardFailed, card.State)
+	assert.Empty(t, card.RunningStage)
+}
+
+// Only a FAILED card carries the field. A running or done card's liveness
+// question is about its own stage, and answering it with a neighbouring stage's
+// container would make a dead run read as live.
+func TestDeriveBoardCard_RunningStageIsFailedCardsOnly(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ImplementationStartedHeader, time.Unix(1000, 0)),
+		cmt(ReviewStartedHeader, time.Unix(2000, 0)),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardVerification, card.Stage)
+	assert.Equal(t, BoardRunning, card.State)
+	assert.Empty(t, card.RunningStage)
+}
+
+// With two other stages showing a start, the newest wins — the same
+// latest-marker rule the placement itself follows, so the card never names an
+// older run over a newer one.
+func TestDeriveBoardCard_RunningStagePicksTheNewestStart(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(PlanningStartedHeader, time.Unix(1000, 0)),
+		cmt(ImplementationStartedHeader, time.Unix(1500, 0)),
+		cmt(PRReviewFailedHeader+"\nno verdict", time.Unix(2000, 0)),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardImplementation, card.RunningStage)
+}

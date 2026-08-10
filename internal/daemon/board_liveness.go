@@ -20,6 +20,12 @@ const (
 	AgentElsewhere  = "elsewhere"
 )
 
+// agentLaunchStages are the stages that launch a named agent
+// (launchForwardStage). The done stage is deliberately absent: its PR-loop
+// halves are named through DeployPhase and a plain deploy runs in-process in
+// the daemon under no agent name at all.
+var agentLaunchStages = []BoardStage{BoardPlanning, BoardImplementation, BoardVerification}
+
 // AgentNamesForCard names every board agent that could legitimately be running
 // the work a card currently shows. It is the viewer's half of the join the
 // daemon already performs internally (board_reconcile.go:267-270), exported so
@@ -31,7 +37,28 @@ const (
 // BoardDoneStage to runDoneStage, which launches nothing), and a resting card
 // runs nothing at all. The caller must then report liveness as unknown: silence
 // from a stage that never had an agent is not evidence of death.
+//
+// A FAILED card asks about one agent more: the stage RunningStage names, which
+// is another stage of the same ticket still showing a start. The card renders
+// one placement and the newest marker owns it, so a failure recorded in one
+// stage paints over a run that is still going in another — measured on SC-3853,
+// where a red done-stage card sent a person to check a pull request while the
+// implementation agent it never asked about was alive and working (SC-4406).
+// Restricted to the failed placement on purpose: for a RUNNING card the
+// question is whether THIS stage's agent is alive, and a lingering container
+// from a neighbouring stage would answer it falsely.
 func AgentNamesForCard(card BoardViewCard) []string {
+	names := agentNamesForPlacement(card)
+	if BoardState(card.State) == BoardFailed && card.RunningStage != "" {
+		names = append(names, agentNameFor(card.Key, BoardStage(card.RunningStage)))
+	}
+	return names
+}
+
+// agentNamesForPlacement names the agents of the card's own (stage, state) —
+// the placement half of the answer, before a failed card's other running stage
+// is added to it.
+func agentNamesForPlacement(card BoardViewCard) []string {
 	stage := BoardStage(card.Stage)
 	state := BoardState(card.State)
 	switch {

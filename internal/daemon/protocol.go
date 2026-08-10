@@ -221,6 +221,13 @@ type BoardViewCard struct {
 	// explicit field copy below — the daemon→desktop hop is a Go copy, not a
 	// JSON re-tag.
 	DeployPhase string `json:"deployPhase,omitempty"`
+	// RunningStage names another stage of a FAILED card's ticket whose own
+	// newest marker is a start — the run the card's single (stage, state) pair
+	// cannot show. The viewer joins it into the liveness question so a red card
+	// with a live agent behind it renders as work in progress, and the badge
+	// names which stage is working (SC-4406). Empty on every card that is not
+	// failed. Populated by the explicit field copy in compose.go.
+	RunningStage string `json:"runningStage,omitempty"`
 	// Degraded marks a card whose markers could not be read this scan (a
 	// ListComments error). The frontend renders it locked — non-draggable and
 	// non-launchable — so a transient fetch failure never presents as idle,

@@ -251,3 +251,30 @@ func TestMarkAgentLiveness_sanitizedKeyMatchesLauncherName(t *testing.T) {
 	})
 	assert.Equal(t, daemon.AgentLive, cards[0].AgentLiveness, "the join must use agentNameFor's sanitize, not raw concatenation")
 }
+
+// SC-4406, the whole point end to end: a red card whose ticket has a live agent
+// in ANOTHER stage reads live, so the badge renders the machine register instead
+// of sending a person to intervene on work that is still being done.
+func TestMarkAgentLiveness_FailedCardIsLiveWhenAnotherStageRuns(t *testing.T) {
+	c := card("SC-3853", string(daemon.BoardDoneStage), string(daemon.BoardFailed), "d1", 3*time.Hour, livenessNow)
+	c.DeployPhase = daemon.DeployPhasePRReview
+	c.RunningStage = string(daemon.BoardImplementation)
+	cards := []daemon.BoardViewCard{c}
+	MarkAgentLiveness(cards, LiveAgents{
+		Names: map[string]bool{"board-SC-3853-implementation": true}, DaemonID: "d1", Now: livenessNow,
+	})
+	assert.Equal(t, daemon.AgentLive, cards[0].AgentLiveness)
+}
+
+// The softening rests on a RUNNING CONTAINER, never on the marker that named the
+// stage. A stale started marker with nothing behind it leaves the card dead —
+// which is what keeps a genuine failure from being hidden forever by a lie the
+// stuck-running pass has not caught up with yet.
+func TestMarkAgentLiveness_FailedCardStaysDeadWhenTheOtherStageIsAMarkerOnly(t *testing.T) {
+	c := card("SC-3853", string(daemon.BoardDoneStage), string(daemon.BoardFailed), "d1", 3*time.Hour, livenessNow)
+	c.DeployPhase = daemon.DeployPhasePRReview
+	c.RunningStage = string(daemon.BoardImplementation)
+	cards := []daemon.BoardViewCard{c}
+	MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+	assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness)
+}
