@@ -657,8 +657,7 @@ func TestDoRequest_authHeader(t *testing.T) {
 
 	client := New(srv.URL, "my-secret-token")
 	// Pre-populate state cache to avoid extra requests.
-	client.states = map[int64]string{500: "To Do"}
-	client.stateTypes = map[int64]tracker.Category{500: tracker.CategoryUnstarted}
+	client.states = map[int64]workflowState{500: {name: "To Do", category: tracker.CategoryUnstarted}}
 	_, err := client.GetIssue(context.Background(), "1")
 
 	require.NoError(t, err)

@@ -28,12 +28,12 @@ func TestBuildWithFeatures_BakesContainerEnv(t *testing.T) {
 		Image:    "mcr.microsoft.com/devcontainers/base:ubuntu",
 		Features: map[string]any{"ghcr.io/devcontainers/features/node:1": map[string]any{}},
 	}
-	id, _, err := builder.buildWithFeatures(context.Background(), cfg, "base:ref", "human-dc-test:hash", &strings.Builder{})
+	img, err := builder.buildWithFeatures(context.Background(), cfg, "base:ref", "human-dc-test:hash", &strings.Builder{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "sha256:withenv" {
-		t.Errorf("commit id = %q, want sha256:withenv", id)
+	if img.ID != "sha256:withenv" {
+		t.Errorf("commit id = %q, want sha256:withenv", img.ID)
 	}
 	if mock.commitEnv["NVM_DIR"] != "/usr/local/share/nvm" {
 		t.Errorf("commit env NVM_DIR = %q, want it baked in", mock.commitEnv["NVM_DIR"])
@@ -49,15 +49,15 @@ func TestEnsureImage_Cached(t *testing.T) {
 	}
 	builder := &ImageBuilder{Docker: mock, Logger: testLogger()}
 
-	id, name, err := builder.EnsureImage(context.Background(), &DevcontainerConfig{Image: "ubuntu"}, "/tmp/test", "abc123abc123def456", false, &strings.Builder{})
+	img, err := builder.EnsureImage(context.Background(), &DevcontainerConfig{Image: "ubuntu"}, "/tmp/test", "abc123abc123def456", false, &strings.Builder{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "sha256:cached" {
-		t.Errorf("expected cached image ID, got %q", id)
+	if img.ID != "sha256:cached" {
+		t.Errorf("expected cached image ID, got %q", img.ID)
 	}
-	if !strings.HasPrefix(name, "human-dc-") {
-		t.Errorf("unexpected image name: %q", name)
+	if !strings.HasPrefix(img.Name, "human-dc-") {
+		t.Errorf("unexpected image name: %q", img.Name)
 	}
 	// Should not have pulled.
 	if len(mock.pullCalls) != 0 {
@@ -81,7 +81,7 @@ func TestEnsureImage_PullOnMiss(t *testing.T) {
 	}
 
 	builder := &ImageBuilder{Docker: mock2, Logger: testLogger()}
-	_, _, err := builder.EnsureImage(context.Background(), &DevcontainerConfig{Image: "ubuntu"}, "/tmp/test", "abc123abc123def456", false, &strings.Builder{})
+	_, err := builder.EnsureImage(context.Background(), &DevcontainerConfig{Image: "ubuntu"}, "/tmp/test", "abc123abc123def456", false, &strings.Builder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,15 +103,15 @@ func TestEnsureImage_ForcedRebuild(t *testing.T) {
 	}
 
 	builder := &ImageBuilder{Docker: mock2, Logger: testLogger()}
-	id, _, err := builder.EnsureImage(context.Background(), &DevcontainerConfig{Image: "ubuntu"}, "/tmp/test", "abc123abc123", true, &strings.Builder{})
+	img, err := builder.EnsureImage(context.Background(), &DevcontainerConfig{Image: "ubuntu"}, "/tmp/test", "abc123abc123", true, &strings.Builder{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(mock.pullCalls) != 1 {
 		t.Errorf("expected pull on rebuild, got %d calls", len(mock.pullCalls))
 	}
-	if id != "sha256:fresh" {
-		t.Errorf("expected fresh image ID, got %q", id)
+	if img.ID != "sha256:fresh" {
+		t.Errorf("expected fresh image ID, got %q", img.ID)
 	}
 }
 
@@ -120,7 +120,7 @@ func TestEnsureImage_NoImageOrBuild(t *testing.T) {
 		imageInspectErr: fmt.Errorf("not found"),
 	}
 	builder := &ImageBuilder{Docker: mock, Logger: testLogger()}
-	_, _, err := builder.EnsureImage(context.Background(), &DevcontainerConfig{}, "/tmp/test", "hash", false, &strings.Builder{})
+	_, err := builder.EnsureImage(context.Background(), &DevcontainerConfig{}, "/tmp/test", "hash", false, &strings.Builder{})
 	if err == nil {
 		t.Error("expected error when neither image nor build specified")
 	}
@@ -209,7 +209,7 @@ func TestEnsureImage_DockerFileShorthand(t *testing.T) {
 
 	builder := &ImageBuilder{Docker: mock2, Logger: testLogger()}
 	cfg := &DevcontainerConfig{DockerFile: "Dockerfile"}
-	_, _, err := builder.EnsureImage(context.Background(), cfg, tmp, "abc123abc123def456", false, &strings.Builder{})
+	_, err := builder.EnsureImage(context.Background(), cfg, tmp, "abc123abc123def456", false, &strings.Builder{})
 	if err != nil {
 		t.Fatal(err)
 	}

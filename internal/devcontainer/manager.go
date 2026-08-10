@@ -107,7 +107,7 @@ func (m *Manager) Up(ctx context.Context, opts UpOptions) (*Meta, error) {
 func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, projectDir, containerName, hash string, opts UpOptions, out io.Writer) (*Meta, error) {
 	builder := &ImageBuilder{Docker: m.Docker, Logger: m.Logger}
 	_, _ = fmt.Fprintln(out, "Building devcontainer image...")
-	imageID, imageName, err := builder.EnsureImage(ctx, cfg, projectDir, hash, opts.Rebuild, out)
+	img, err := builder.EnsureImage(ctx, cfg, projectDir, hash, opts.Rebuild, out)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	}
 	// Docker bind mounts require absolute paths.
 	sourceDir, _ = filepath.Abs(sourceDir)
-	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, imageName, workspaceDir, hash, opts.DaemonInfo, opts.GitDir, opts.cacheVolumes)
+	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, img.Name, workspaceDir, hash, opts.DaemonInfo, opts.GitDir, opts.cacheVolumes)
 	ParseRunArgs(cfg.RunArgs, &createOpts, m.Logger)
 
 	_, _ = fmt.Fprintf(out, "Creating container %s...\n", containerName)
@@ -156,7 +156,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	meta := Meta{
 		Name: SanitizeName(filepath.Base(projectDir)), ProjectDir: projectDir,
 		ContainerID: containerID, ContainerName: containerName,
-		ImageID: imageID, ImageName: imageName,
+		ImageID: img.ID, ImageName: img.Name,
 		Status: StatusRunning, CreatedAt: now, StartedAt: now,
 		WorkspaceDir: workspaceDir, RemoteUser: remoteUser, ConfigHash: hash,
 	}

@@ -23,13 +23,25 @@ var _ tracker.Provider = (*Client)(nil)
 var _ tracker.CurrentUserNamer = (*Client)(nil)
 
 // Client is a Shortcut REST API client that implements tracker.Provider.
+// workflowState is one Shortcut workflow state: what it is called and which
+// normalised category it maps to. The two are read from the same fetch and are
+// only ever meaningful together.
+type workflowState struct {
+	name     string
+	category tracker.Category
+}
+
 type Client struct {
 	api *apiclient.Client
 
-	statesMu       sync.Mutex
-	states         map[int64]string           // workflow_state_id → state name
-	stateTypes     map[int64]tracker.Category // workflow_state_id → normalised category
-	defaultStateID int64                      // first Unstarted state (for creating stories)
+	statesMu sync.Mutex
+	// states holds one entry per workflow state, so a state's name and its
+	// normalised category cannot disagree about whether the state exists. Two
+	// maps on one key could: a state present in the first and missing from the
+	// second read back as CategoryUnknown with no error, which lands the ticket
+	// in the wrong board column and says nothing.
+	states         map[int64]workflowState
+	defaultStateID int64 // first Unstarted state (for creating stories)
 
 	membersMu sync.Mutex
 	members   map[string]string // member UUID → display name
@@ -387,10 +399,10 @@ func (c *Client) ListStatuses(ctx context.Context, _ string) ([]tracker.Status, 
 	}
 
 	statuses := make([]tracker.Status, 0, len(c.states))
-	for id, name := range c.states {
+	for _, st := range c.states {
 		statuses = append(statuses, tracker.Status{
-			Name:     name,
-			Category: c.stateTypes[id],
+			Name:     st.name,
+			Category: st.category,
 		})
 	}
 	slices.SortFunc(statuses, func(a, b tracker.Status) int {
@@ -412,23 +424,23 @@ func (c *Client) resolveStateByName(ctx context.Context, targetStatus string) (i
 	}
 
 	// Try exact name match (case-insensitive).
-	for id, name := range c.states {
-		if strings.EqualFold(name, targetStatus) {
+	for id, st := range c.states {
+		if strings.EqualFold(st.name, targetStatus) {
 			return id, nil
 		}
 	}
 
 	// Fall back to type-based match for backward compat with "issue start".
 	targetLower := tracker.Category(strings.ToLower(targetStatus))
-	for id, typ := range c.stateTypes {
-		if typ == targetLower {
+	for id, st := range c.states {
+		if st.category == targetLower {
 			return id, nil
 		}
 	}
 
 	names := make([]string, 0, len(c.states))
-	for _, name := range c.states {
-		names = append(names, name)
+	for _, st := range c.states {
+		names = append(names, st.name)
 	}
 	return 0, errors.WithDetails("workflow state not found",
 		"targetStatus", targetStatus, "available", strings.Join(names, ", "))
@@ -829,8 +841,8 @@ func (c *Client) resolveStateName(ctx context.Context, stateID int64) (string, e
 		}
 	}
 
-	if name, ok := c.states[stateID]; ok {
-		return name, nil
+	if st, ok := c.states[stateID]; ok {
+		return st.name, nil
 	}
 	return fmt.Sprintf("Unknown(%d)", stateID), nil
 }
@@ -847,13 +859,11 @@ func (c *Client) fetchWorkflowsLocked(ctx context.Context) error {
 		return err
 	}
 
-	c.states = make(map[int64]string)
-	c.stateTypes = make(map[int64]tracker.Category)
+	c.states = make(map[int64]workflowState)
 	for _, wf := range workflows {
 		for _, st := range wf.States {
 			category := tracker.Category(st.Type)
-			c.states[st.ID] = st.Name
-			c.stateTypes[st.ID] = category
+			c.states[st.ID] = workflowState{name: st.Name, category: category}
 			if c.defaultStateID == 0 && category == tracker.CategoryUnstarted {
 				c.defaultStateID = st.ID
 			}
@@ -977,9 +987,9 @@ func (c *Client) isDoneOrArchived(story scStory) bool {
 // having been finished.
 func (c *Client) isDone(story scStory) bool {
 	c.statesMu.Lock()
-	stateType := c.stateTypes[story.WorkflowStateID]
+	st := c.states[story.WorkflowStateID]
 	c.statesMu.Unlock()
-	return stateType == tracker.CategoryDone
+	return st.category == tracker.CategoryDone
 }
 
 // belongsInResult reports whether a story survives the caller's filter.
@@ -1052,7 +1062,7 @@ func (c *Client) toTrackerIssue(ctx context.Context, story scStory, project stri
 
 	// Resolve status type from the cached state types map.
 	c.statesMu.Lock()
-	statusType := c.stateTypes[story.WorkflowStateID]
+	statusType := c.states[story.WorkflowStateID].category
 	c.statesMu.Unlock()
 
 	assignee := ""

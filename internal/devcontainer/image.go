@@ -27,17 +27,26 @@ type ImageBuilder struct {
 	Puller FeaturePuller
 }
 
+// Image is a built or pulled container image: the digest Docker assigned and
+// the name the container is created from. Both are strings and they were
+// returned side by side through four functions that thread them into each
+// other, so returning them the wrong way round compiled and reviewed clean.
+type Image struct {
+	ID   string
+	Name string
+}
+
 // EnsureImage ensures a devcontainer image exists. If not cached (or rebuild
 // requested), it builds/pulls the image per the devcontainer config.
 // Returns the image ID.
-func (b *ImageBuilder) EnsureImage(ctx context.Context, cfg *DevcontainerConfig, projectDir, configHash string, rebuild bool, out io.Writer) (string, string, error) {
+func (b *ImageBuilder) EnsureImage(ctx context.Context, cfg *DevcontainerConfig, projectDir, configHash string, rebuild bool, out io.Writer) (Image, error) {
 	imageName := ImageName(projectDir, configHash)
 
 	// Check cache: a committed image with features already baked in.
 	if !rebuild {
 		if resp, err := b.Docker.ImageInspect(ctx, imageName); err == nil {
 			_, _ = fmt.Fprintf(out, "Using cached image %s\n", imageName) // #nosec G705 -- CLI output
-			return resp.ID, imageName, nil
+			return Image{ID: resp.ID, Name: imageName}, nil
 		}
 	}
 
@@ -45,35 +54,35 @@ func (b *ImageBuilder) EnsureImage(ctx context.Context, cfg *DevcontainerConfig,
 	var baseRef string
 	switch {
 	case cfg.Build != nil && cfg.Build.Dockerfile != "":
-		id, name, err := b.buildFromDockerfile(ctx, cfg, projectDir, imageName, out)
+		img, err := b.buildFromDockerfile(ctx, cfg, projectDir, imageName, out)
 		if err != nil {
-			return "", "", err
+			return Image{}, err
 		}
 		if len(cfg.Features) == 0 {
-			return id, name, nil
+			return img, nil
 		}
-		baseRef = name
+		baseRef = img.Name
 	case cfg.DockerFile != "":
 		build := &BuildConfig{Dockerfile: cfg.DockerFile}
-		id, name, err := b.buildFromDockerfile(ctx, &DevcontainerConfig{Build: build}, projectDir, imageName, out)
+		img, err := b.buildFromDockerfile(ctx, &DevcontainerConfig{Build: build}, projectDir, imageName, out)
 		if err != nil {
-			return "", "", err
+			return Image{}, err
 		}
 		if len(cfg.Features) == 0 {
-			return id, name, nil
+			return img, nil
 		}
-		baseRef = name
+		baseRef = img.Name
 	case cfg.Image != "":
-		id, ref, err := b.pullImage(ctx, cfg.Image, imageName, out)
+		img, err := b.pullImage(ctx, cfg.Image, imageName, out)
 		if err != nil {
-			return "", "", err
+			return Image{}, err
 		}
 		if len(cfg.Features) == 0 {
-			return id, ref, nil
+			return img, nil
 		}
-		baseRef = ref
+		baseRef = img.Name
 	default:
-		return "", "", errors.WithDetails("devcontainer.json must specify image or build.dockerfile")
+		return Image{}, errors.WithDetails("devcontainer.json must specify image or build.dockerfile")
 	}
 
 	// Features present: install in a temp container and commit as the cached image.
@@ -83,7 +92,7 @@ func (b *ImageBuilder) EnsureImage(ctx context.Context, cfg *DevcontainerConfig,
 // buildWithFeatures creates a temp container, installs features, and commits
 // the result as the cached image. This ensures subsequent container creations
 // from this image skip feature installation entirely.
-func (b *ImageBuilder) buildWithFeatures(ctx context.Context, cfg *DevcontainerConfig, baseRef, imageName string, out io.Writer) (string, string, error) {
+func (b *ImageBuilder) buildWithFeatures(ctx context.Context, cfg *DevcontainerConfig, baseRef, imageName string, out io.Writer) (Image, error) {
 	remoteUser := cfg.RemoteUser
 	if remoteUser == "" {
 		remoteUser = "root"
@@ -99,14 +108,14 @@ func (b *ImageBuilder) buildWithFeatures(ctx context.Context, cfg *DevcontainerC
 		Cmd:   []string{"sleep", "infinity"},
 	})
 	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "creating temp container for features")
+		return Image{}, errors.WrapWithDetails(err, "creating temp container for features")
 	}
 	defer func() {
 		_ = b.Docker.ContainerRemove(ctx, tempID, ContainerRemoveOptions{Force: true})
 	}()
 
 	if err := b.Docker.ContainerStart(ctx, tempID); err != nil {
-		return "", "", errors.WrapWithDetails(err, "starting temp container")
+		return Image{}, errors.WrapWithDetails(err, "starting temp container")
 	}
 
 	// Install features. The returned env is each feature's containerEnv (e.g. the
@@ -118,46 +127,46 @@ func (b *ImageBuilder) buildWithFeatures(ctx context.Context, cfg *DevcontainerC
 	}
 	featureEnv, err := InstallFeatures(ctx, b.Docker, puller, tempID, cfg.Features, remoteUser, b.Logger, out)
 	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "installing features")
+		return Image{}, errors.WrapWithDetails(err, "installing features")
 	}
 
 	// Commit the container as the cached image, baking in the feature env.
 	committedID, err := b.Docker.ContainerCommit(ctx, tempID, imageName, featureEnv)
 	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "committing image with features")
+		return Image{}, errors.WrapWithDetails(err, "committing image with features")
 	}
 
 	_, _ = fmt.Fprintf(out, "Image cached: %s\n", imageName) // #nosec G705 -- CLI output
-	return committedID, imageName, nil
+	return Image{ID: committedID, Name: imageName}, nil
 }
 
 // pullImage pulls a base image. The container is created using the original
 // image ref directly (no re-tagging needed for image-only configs).
-func (b *ImageBuilder) pullImage(ctx context.Context, ref, targetName string, out io.Writer) (string, string, error) {
+func (b *ImageBuilder) pullImage(ctx context.Context, ref, targetName string, out io.Writer) (Image, error) {
 	_, _ = fmt.Fprintf(out, "Pulling %s...\n", ref) // #nosec G705 -- CLI output
 	reader, err := b.Docker.ImagePull(ctx, ref, ImagePullOptions{})
 	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "pulling image", "ref", ref)
+		return Image{}, errors.WrapWithDetails(err, "pulling image", "ref", ref)
 	}
 	defer func() { _ = reader.Close() }()
 
 	// Drain pull output, capturing any error messages.
 	if pullErr := drainDockerOutput(reader); pullErr != nil {
-		return "", "", errors.WrapWithDetails(pullErr, "image pull failed", "ref", ref)
+		return Image{}, errors.WrapWithDetails(pullErr, "image pull failed", "ref", ref)
 	}
 
 	resp, err := b.Docker.ImageInspect(ctx, ref)
 	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "inspecting pulled image", "ref", ref)
+		return Image{}, errors.WrapWithDetails(err, "inspecting pulled image", "ref", ref)
 	}
 
 	_, _ = fmt.Fprintf(out, "Image ready: %s\n", ref) // #nosec G705 -- CLI output
 	// Use the original ref as imageName so ContainerCreate can find it.
-	return resp.ID, ref, nil
+	return Image{ID: resp.ID, Name: ref}, nil
 }
 
 // buildFromDockerfile builds an image from a Dockerfile.
-func (b *ImageBuilder) buildFromDockerfile(ctx context.Context, cfg *DevcontainerConfig, projectDir, imageName string, out io.Writer) (string, string, error) {
+func (b *ImageBuilder) buildFromDockerfile(ctx context.Context, cfg *DevcontainerConfig, projectDir, imageName string, out io.Writer) (Image, error) {
 	dockerfile := cfg.Build.Dockerfile
 
 	// Resolve build context directory.
@@ -171,7 +180,7 @@ func (b *ImageBuilder) buildFromDockerfile(ctx context.Context, cfg *Devcontaine
 	// Create tar archive of the build context.
 	buildCtx, err := createBuildContext(contextDir, filepath.Join(projectDir, ".devcontainer", dockerfile))
 	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "creating build context", "dir", contextDir)
+		return Image{}, errors.WrapWithDetails(err, "creating build context", "dir", contextDir)
 	}
 
 	// Convert build args.
@@ -189,22 +198,22 @@ func (b *ImageBuilder) buildFromDockerfile(ctx context.Context, cfg *Devcontaine
 		Remove:     true,
 	})
 	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "building image")
+		return Image{}, errors.WrapWithDetails(err, "building image")
 	}
 	defer func() { _ = reader.Close() }()
 
 	// Drain build output, capturing any error messages.
 	if buildErr := drainDockerOutput(reader); buildErr != nil {
-		return "", "", errors.WrapWithDetails(buildErr, "image build failed")
+		return Image{}, errors.WrapWithDetails(buildErr, "image build failed")
 	}
 
 	resp, err := b.Docker.ImageInspect(ctx, imageName)
 	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "inspecting built image")
+		return Image{}, errors.WrapWithDetails(err, "inspecting built image")
 	}
 
 	_, _ = fmt.Fprintf(out, "Image built: %s\n", imageName)
-	return resp.ID, imageName, nil
+	return Image{ID: resp.ID, Name: imageName}, nil
 }
 
 // dockerMessage is a line from Docker build/pull JSON output stream.

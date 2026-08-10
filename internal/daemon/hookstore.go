@@ -20,14 +20,26 @@ const maxHookEventsPerSession = 200
 // overflows that bound before reaching visible pruning behaviour.
 const maxHookEvents = 10000
 
+// seqEvent is one stored event and the monotonic sequence assigned when it was
+// appended. The sequence is what lets a subscriber ask for everything after
+// what it last saw, independently of the ring's length — tracking deltas by
+// slice length stops working the moment the ring saturates.
+type seqEvent struct {
+	seq uint64
+	evt hookevents.Event
+}
+
 // HookEventStore is a thread-safe ring buffer of recent hook events.
 // It stores raw events and can derive per-session snapshots on demand.
 // Subscribers are notified (non-blocking) whenever a new event is appended.
 type HookEventStore struct {
-	mu          sync.Mutex
-	events      []hookevents.Event
-	eventSeqs   []uint64 // monotonic id per event, index-aligned with events
-	appended    uint64   // total events ever appended (last assigned sequence)
+	mu sync.Mutex
+	// events is the ring, each entry carrying the sequence assigned when it was
+	// appended. One slice of pairs rather than two index-aligned slices: the
+	// alignment was an invariant three separate splices had to preserve by
+	// hand, and nothing checked that they did.
+	events      []seqEvent
+	appended    uint64 // total events ever appended (last assigned sequence)
 	subscribers []chan struct{}
 	// progress is the last sign of life per agent, kept outside the ring so
 	// eviction cannot make a quiet-but-working agent look hung.
@@ -42,9 +54,8 @@ type HookEventStore struct {
 // NewHookEventStore creates an empty store.
 func NewHookEventStore() *HookEventStore {
 	return &HookEventStore{
-		events:    make([]hookevents.Event, 0, maxHookEvents),
-		eventSeqs: make([]uint64, 0, maxHookEvents),
-		progress:  make(map[string]AgentProgress),
+		events:   make([]seqEvent, 0, maxHookEvents),
+		progress: make(map[string]AgentProgress),
 	}
 }
 
@@ -69,15 +80,14 @@ func (s *HookEventStore) Append(evt hookevents.Event) {
 	if evt.SessionID != "" {
 		sessionCount := 0
 		for _, e := range s.events {
-			if e.SessionID == evt.SessionID {
+			if e.evt.SessionID == evt.SessionID {
 				sessionCount++
 			}
 		}
 		if sessionCount >= maxHookEventsPerSession {
 			for i, e := range s.events {
-				if e.SessionID == evt.SessionID {
+				if e.evt.SessionID == evt.SessionID {
 					s.events = append(s.events[:i], s.events[i+1:]...)
-					s.eventSeqs = append(s.eventSeqs[:i], s.eventSeqs[i+1:]...)
 					break
 				}
 			}
@@ -88,13 +98,10 @@ func (s *HookEventStore) Append(evt hookevents.Event) {
 	}
 	trackProgress(s.progress, evt)
 	s.appended++
-	s.events = append(s.events, evt)
-	s.eventSeqs = append(s.eventSeqs, s.appended)
+	s.events = append(s.events, seqEvent{seq: s.appended, evt: evt})
 	if len(s.events) > maxHookEvents {
 		copy(s.events, s.events[len(s.events)-maxHookEvents:])
 		s.events = s.events[:maxHookEvents]
-		copy(s.eventSeqs, s.eventSeqs[len(s.eventSeqs)-maxHookEvents:])
-		s.eventSeqs = s.eventSeqs[:maxHookEvents]
 	}
 	subs := make([]chan struct{}, len(s.subscribers))
 	copy(subs, s.subscribers)
@@ -164,7 +171,8 @@ func (s *HookEventStore) Snapshot() map[string]hookevents.SessionSnapshot {
 	defer s.mu.Unlock()
 
 	sessions := make(map[string]hookevents.SessionSnapshot)
-	for _, evt := range s.events {
+	for _, e := range s.events {
+		evt := e.evt
 		if evt.SessionID == "" {
 			continue
 		}
@@ -185,7 +193,9 @@ func (s *HookEventStore) RecentEvents() []hookevents.Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]hookevents.Event, len(s.events))
-	copy(out, s.events)
+	for i, e := range s.events {
+		out[i] = e.evt
+	}
 	return out
 }
 
@@ -198,9 +208,9 @@ func (s *HookEventStore) EventsSince(since uint64) ([]hookevents.Event, uint64) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []hookevents.Event
-	for i, seq := range s.eventSeqs {
-		if seq > since {
-			out = append(out, s.events[i])
+	for _, e := range s.events {
+		if e.seq > since {
+			out = append(out, e.evt)
 		}
 	}
 	return out, s.appended
@@ -291,7 +301,7 @@ func (s *HookEventStore) DurationMsSincePre(sessionID, toolName string, postTS t
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := len(s.events) - 1; i >= 0; i-- {
-		e := s.events[i]
+		e := s.events[i].evt
 		if e.SessionID != sessionID || e.ToolName != toolName {
 			continue
 		}
