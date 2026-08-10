@@ -943,6 +943,10 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		Retry:     stageRetry,
 		Progress:  agentProgress,
 		StopAgent: stopHungAgent,
+		// A deploy runs in this process and registers no agent, so its progress is
+		// readable only from the engine's own registry — without it a deploy waiting
+		// at the queue is indistinguishable from one that died (SC-4150).
+		DeployRun: daemon.DeployRunSince,
 		DaemonID:  ds.daemonID,
 		Interval:  daemon.BoardReconcileInterval,
 		Logger:    logger,

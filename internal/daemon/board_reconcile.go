@@ -153,6 +153,12 @@ type ReconcileDeps struct {
 	Retry          StageRetry
 	Progress       AgentProgressProbe
 	StopAgent      StopAgent
+	// DeployRun tells the sweep when the deploy engine's own clock started for a
+	// card, so a deploy waiting its turn at the unbounded deployGate is judged by
+	// the engine rather than by a marker posted before it ever queued (SC-4150).
+	// Nil — or an answer of !ok — means this machine knows nothing about the run,
+	// and the marker clock is used exactly as before.
+	DeployRun DeployRunProbe
 	// DaemonID is this machine's identity: it tells this daemon's own running
 	// stage from a peer's, and signs every marker the passes post.
 	DaemonID string
@@ -417,20 +423,36 @@ func deployEngineRunning(comments []tracker.Comment) bool {
 // engine's own timeout plus the ordinary grace, a deploy that never returned is
 // as dead as any other stage and is redded as usual.
 //
-// Known gap, not closed here: [human:deploy-started] is posted (StartDeploy,
-// deploy_entry.go) BEFORE DeployBranch's own "queued" log and its
-// deployGate.Lock() — so the ticket's StageEnteredAt and deployTimeout's clock
-// do not start together. A deploy queued behind another for long enough can
-// still exceed this grace while perfectly healthy and be falsely reddened.
-// Closing it precisely needs DeployBranch to signal back when it actually
-// leaves the queue, which means touching its sequence — reserved for SC-4150,
-// filed for this gap specifically (SC-4027, named here previously, is Done
-// and about a different failure — the draft-PR merge refusal — not this one).
+// The marker set this reads is the FALLBACK path only — the machine that is not
+// running the deploy, or one that restarted and lost the registry. Where the
+// engine's own clock is knowable, stuckPastGrace uses it instead, which is what
+// makes the grace mean the same thing on every deploy route rather than only on
+// the one whose newest marker happens to be [human:deploy-started] (SC-4150).
 func stuckGraceFor(derived BoardCard, comments []tracker.Comment) time.Duration {
 	if derived.Stage == BoardDoneStage && deployEngineRunning(comments) {
 		return deployTimeout + StuckRunningGrace
 	}
 	return StuckRunningGrace
+}
+
+// stuckPastGrace answers the only question the grace check needs: has this card
+// sat long enough to be judged. Two clocks can answer it and they do not start
+// together — the ticket's marker clock (StageEnteredAt) and the deploy engine's
+// own, which does not start until DeployBranch is past the unbounded deployGate.
+// Where this machine is running the deploy, the engine's clock is the truthful
+// one; where it is not, the marker clock is all there is (SC-4150).
+//
+// The engine's clock covers every deploy entry route at once, because it is keyed
+// by the in-flight run rather than by which marker is newest: the approve branch's
+// [human:pr-review-passed] and the deploy fixer's [human:deploy-fix-started] left
+// a deploy on the ordinary 15-minute grace with a 45-minute CI gate ahead of it.
+func stuckPastGrace(derived BoardCard, card ReconcileCard, probe DeployRunProbe, now time.Time) bool {
+	if derived.Stage == BoardDoneStage && probe != nil {
+		if since, ok := probe(card.Key); ok {
+			return now.Sub(since) >= deployTimeout+StuckRunningGrace
+		}
+	}
+	return now.Sub(derived.StageEnteredAt) >= stuckGraceFor(derived, card.Comments)
 }
 
 // reconcilePRLoops re-drives a loop card the live exit hook missed: a
@@ -678,7 +700,7 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	if failedType == "" {
 		return false
 	}
-	if now.Sub(derived.StageEnteredAt) < stuckGraceFor(derived, card.Comments) {
+	if !stuckPastGrace(derived, card, deps.DeployRun, now) {
 		// Young enough to still be genuine in-flight work.
 		return false
 	}
