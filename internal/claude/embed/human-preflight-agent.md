@@ -87,10 +87,26 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
 
 6. **Find out whether this work already exists, and whether other open work is heading for the same code.** The most expensive failure is not a wrong answer, it is doing work someone already did. Two tickets describing one problem have been implemented twice and collided in the same function; the same one-line fix has been written on two machines in parallel. The signal that settles this is **what is actually open — branches and pull requests — not what tickets happen to say about each other.** Ticket text cannot carry "a branch or PR is open right now"; the forge can.
 
-   **6a — Is this ticket already being built? (authoritative).** Run `human underway <PM_KEY>`. If `underway` is true, work is already open against this exact ticket — a pull request or a branch. **Do not build a second copy.** Emit the `DECISION REQUIRED:` fork below, naming the PR URL / branch from the `work` list:
+   **6a — Is this ticket already being built? (authoritative).** Run `human underway <PM_KEY>`. If `underway` is true, work is already open against this exact ticket — a pull request or a branch. **Do not build a second copy.**
+
+   Then establish **whose** work it is, because that is what decides whether there is anything to ask:
+
+   ```bash
+   human handoff show <PM_KEY>     # the branch a previous run of this pipeline handed off
+   ```
+
+   **This pipeline's own earlier run** — the open ref is the branch the handoff names — is **not a fork**. It is this ticket's work, interrupted, and recovering your own artifact needs nobody's permission. Read what state it is in and say so:
+
+   ```bash
+   human github pr state --number <N>
+   ```
+
+   A conflicted merge, or a review that stopped without recording a verdict, are faults in the PR, not in the code — and re-implementing a fix cures neither. The deploy gate rebases what it can and dispatches a deploy-fix round for a content conflict; the PR review loop re-drives a review that never finished. Record what you found and which of those owns it in `assumptions`, return `PREFLIGHT OK`, and let the run's own resume ladder pick up from the furthest recorded step. **Never ask which recovery route to take** — they converge on the same pull request, so it is a mechanics question, and mechanics are yours.
+
+   **A person's open work** — a ref this ticket's handoff does not name — IS a fork, and the only one here: stopping discards their intent, superseding discards their work, and neither is yours to choose. Emit the `DECISION REQUIRED:` fork below, naming the PR URL / branch from the `work` list:
 
    ```
-   DECISION REQUIRED: <KIND> already open for <PM_KEY> (<url-or-branch>) — stop and let it finish, or supersede it with this run?
+   DECISION REQUIRED: <KIND> already open for <PM_KEY> (<url-or-branch>), not from this pipeline — stop and let it finish, or supersede it with this run?
    1: Stop — the open <KIND> is the work; do not build a duplicate
    2: Supersede — build in this run and replace the open <KIND>
    ```
@@ -128,11 +144,18 @@ A question is admissible **only** if all three hold:
 
 Ask about **scope forks and product intent**. Never about implementation choices you can make yourself.
 
-Ordering is admissible on the same terms, but only when the other ticket is **actively in progress**: two
-live runs aimed at the same code are a fork about which one the product wants first, and the options read
-as *"<TICKET_KEY> goes first"* / *"this goes first"* / *"they do not overlap — run both"*. An option that
-defers to another ticket carries a `waits-for-<id>` line naming it (see the Verdict below) — without one
-the machine reads it as an ordinary direction and starts the work the answer put second. An open ticket
+Ordering is admissible on the same terms, but only when the other ticket is **actively in progress** AND
+you can **name the collision**: the file, and the function or section inside it, that both changes rewrite.
+Two live runs landing in the same function are a fork about which one the product wants first, and the
+options read as *"<TICKET_KEY> goes first"* / *"this goes first"*. An option that defers to another ticket
+carries a `waits-for-<id>` line naming it (see the Verdict below) — without one the machine reads it as an
+ordinary direction and starts the work the answer put second.
+
+**"Both touch this repo" is not a collision, and neither is "both touch this file".** If your own reading
+shows the hunks are disjoint — different functions, different sections of a document — there is nothing to
+decide: git merges them, and asking anyway spends a person's attention on a conflict that will not happen.
+Record what you compared and run. If you find yourself writing *"they do not overlap — run both"* as one of
+the answers, you have already done the work the question was for: take that answer yourself. An open ticket
 that has **not started** is never an ordering fork — record it in the verdict below, do not ask about it.
 
 If you cannot name what you searched, you have not earned the question. Go read more.
