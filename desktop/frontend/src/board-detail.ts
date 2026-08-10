@@ -126,11 +126,18 @@ export function buildDetailSections(d: DetailSections): string {
 // priced roll-up with the answers/context split and per-stage breakdown.
 export interface TicketCost {
   ticket: string;
+  // Whether the ledger was consulted at all. False means the answer says
+  // nothing about the ticket — see buildCostSection.
+  ledgerRead?: boolean;
   hasSpend: boolean;
   totalCostUSD: number;
   contextCostUSD: number;
   answersCostUSD: number;
   totalDurationMs: number;
+  // How many calls the roll-up covers, and how many of those carried no token
+  // counts so could not be priced.
+  calls?: number;
+  unmeasuredCalls?: number;
   stages: { stage: string; costUSD: number; contextCostUSD: number; answersCostUSD: number; durationMs: number }[];
 }
 
@@ -160,20 +167,51 @@ export function buildCostSection(
   nowMs: number,
 ): string {
   if (!c || !c.hasSpend) {
+    // "No spend" is a claim about the TICKET and may only be made when the
+    // ledger was actually read. An older daemon (no ledgerRead field) still
+    // reads as before; a daemon that says it could not consult the ledger says
+    // so instead of attributing its own gap to the work (SC-4151 C8).
+    const unread = c !== null && c.ledgerRead === false;
+    const text = unread
+      ? "Cost could not be read for this ticket — the ledger was not available."
+      : "No spend recorded for this ticket yet.";
     return `<section class="detail-section detail-cost"><h3 class="detail-section-title">Cost &amp; time</h3>` +
-      `<div class="detail-cost-empty">No spend recorded for this ticket yet.</div></section>`;
+      `<div class="detail-cost-empty">${text}</div></section>`;
   }
+  // Calls that carried no token counts cannot be priced. Pricing them at zero
+  // and printing the sum states that the run was free; when EVERY call is
+  // unmeasured the figure is not a cost at all, so it is not shown as one
+  // (SC-4151 C7). A partial gap keeps the figure and qualifies it.
+  const calls = c.calls ?? 0;
+  const unmeasured = c.unmeasuredCalls ?? 0;
+  const allUnmeasured = calls > 0 && unmeasured === calls;
+  const totalLine = allUnmeasured
+    ? `cost not measured · ${escapeText(fmtDuration(c.totalDurationMs))}`
+    : `${escapeText(fmtUSD(c.totalCostUSD))} · ${escapeText(fmtDuration(c.totalDurationMs))}`;
+  const unmeasuredNote =
+    unmeasured > 0 && !allUnmeasured
+      ? `<div class="detail-cost-unmeasured">${unmeasured} of ${calls} calls recorded no tokens — not included above.</div>`
+      : allUnmeasured
+        ? `<div class="detail-cost-unmeasured">${calls} call${calls === 1 ? "" : "s"} recorded no tokens, so what this cost is not known.</div>`
+        : "";
   const curElapsed = stageEnteredAt
     ? `<div class="detail-cost-current">Current stage (${escapeText(currentStage ?? "")}): ` +
       `${escapeText(fmtDuration(Math.max(0, nowMs - Date.parse(stageEnteredAt))))} running</div>`
     : "";
+  // The per-stage rows carry the same honesty as the total: with nothing
+  // measured anywhere, a stage's "$0.0000" is the same false claim in smaller
+  // type, so the row shows the duration alone.
   const stageRows = c.stages.map((s) =>
     `<div class="detail-cost-stage"><span>${escapeText(s.stage || "—")}</span>` +
-    `<span>${escapeText(fmtUSD(s.costUSD))} · ${escapeText(fmtDuration(s.durationMs))}</span></div>`,
+    `<span>${allUnmeasured ? "" : escapeText(fmtUSD(s.costUSD)) + " · "}${escapeText(fmtDuration(s.durationMs))}</span></div>`,
   ).join("");
+  const split = allUnmeasured
+    ? ""
+    : `<div class="detail-cost-split">answers ${escapeText(fmtUSD(c.answersCostUSD))} · context ${escapeText(fmtUSD(c.contextCostUSD))}</div>`;
   return `<section class="detail-section detail-cost"><h3 class="detail-section-title">Cost &amp; time</h3>` +
-    `<div class="detail-cost-total">${escapeText(fmtUSD(c.totalCostUSD))} · ${escapeText(fmtDuration(c.totalDurationMs))}</div>` +
-    `<div class="detail-cost-split">answers ${escapeText(fmtUSD(c.answersCostUSD))} · context ${escapeText(fmtUSD(c.contextCostUSD))}</div>` +
+    `<div class="detail-cost-total">${totalLine}</div>` +
+    split +
+    unmeasuredNote +
     curElapsed +
     `<div class="detail-cost-stages">${stageRows}</div></section>`;
 }

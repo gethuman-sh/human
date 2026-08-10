@@ -264,3 +264,46 @@ func TestTopTicketSpend_limitKeepsTheMostExpensive(t *testing.T) {
 	assert.Equal(t, "SC-3", got[0].Ticket, "90000 output tokens is the most expensive")
 	assert.Equal(t, "SC-1", got[1].Ticket)
 }
+
+// TestStore_UnmeasuredCallsCounted covers the SC-4151 C7 case: calls recorded
+// with no token counts at all (the SC-3440 zero-token rows) price at nothing
+// because nothing was measured. The roll-up must say how many, so the reader is
+// never shown a dollar figure that means "not known".
+func TestStore_UnmeasuredCallsCounted(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// The shape of SC-3339: every call recorded, none measured.
+	for range 3 {
+		require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: "SC-UNMEASURED", Stage: "implementation", DurationMs: 1000}))
+	}
+	rollup, err := s.TicketCost(ctx, "", "SC-UNMEASURED")
+	require.NoError(t, err)
+	assert.True(t, rollup.HasSpend, "calls were recorded")
+	assert.True(t, rollup.LedgerRead, "the ledger answered")
+	assert.Equal(t, 3, rollup.Calls)
+	assert.Equal(t, 3, rollup.UnmeasuredCalls, "no call carried tokens")
+	assert.Zero(t, rollup.TotalCostUSD, "nothing to price")
+	assert.Equal(t, int64(3000), rollup.TotalDurationMs, "the time is real even when the cost is unknown")
+}
+
+func TestStore_PartialMeasurementGap(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: "SC-MIXED", Stage: "planning", Model: testModel, InputTokens: 100, OutputTokens: 200, DurationMs: 1000}))
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: "SC-MIXED", Stage: "planning", Model: testModel, DurationMs: 500}))
+
+	rollup, err := s.TicketCost(ctx, "", "SC-MIXED")
+	require.NoError(t, err)
+	assert.Equal(t, 2, rollup.Calls)
+	assert.Equal(t, 1, rollup.UnmeasuredCalls)
+	assert.Positive(t, rollup.TotalCostUSD, "the measured call still prices")
+}
+
+// TestTicketCost_ZeroValueIsNotAnAnswer pins the C8 distinction: the zero value
+// must not claim the ledger was consulted, because handleTicketCost returns it
+// verbatim when there is no ledger to consult.
+func TestTicketCost_ZeroValueIsNotAnAnswer(t *testing.T) {
+	assert.False(t, TicketCost{Ticket: "SC-1"}.LedgerRead)
+}

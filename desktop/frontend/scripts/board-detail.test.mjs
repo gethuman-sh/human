@@ -190,3 +190,98 @@ test("no stageEnteredAt omits the live current-stage clock", () => {
   );
   assert.doesNotMatch(html, /Current stage/);
 });
+
+// --- Cost the ledger could not measure or could not read (SC-4151 C7/C8) ---
+
+test("a roll-up whose every call recorded no tokens says the cost is unknown, not $0.0000", () => {
+  // The shape of SC-1542 (85 calls, 8m40s) and SC-3339 (222 calls, 80m37s): real
+  // duration, real calls, no token counts on any of them, so nothing to price.
+  const html = buildCostSection(
+    {
+      ticket: "SC-3339",
+      ledgerRead: true,
+      hasSpend: true,
+      totalCostUSD: 0,
+      contextCostUSD: 0,
+      answersCostUSD: 0,
+      totalDurationMs: 4_836_948,
+      calls: 222,
+      unmeasuredCalls: 222,
+      stages: [{ stage: "implementation", costUSD: 0, contextCostUSD: 0, answersCostUSD: 0, durationMs: 4_836_948 }],
+    },
+    "implementation",
+    undefined,
+    Date.now(),
+  );
+  assert.match(html, /cost not measured/);
+  assert.match(html, /222 calls recorded no tokens/);
+  assert.doesNotMatch(html, /\$0\.0000/);
+  // The duration is real and still shown — only the price is unknown.
+  assert.match(html, /1h 20m/);
+});
+
+test("a partial measurement gap keeps the figure and qualifies it", () => {
+  const html = buildCostSection(
+    {
+      ticket: "SC-1",
+      ledgerRead: true,
+      hasSpend: true,
+      totalCostUSD: 1.23,
+      contextCostUSD: 0.8,
+      answersCostUSD: 0.43,
+      totalDurationMs: 5000,
+      calls: 10,
+      unmeasuredCalls: 4,
+      stages: [],
+    },
+    "implementation",
+    undefined,
+    Date.now(),
+  );
+  assert.match(html, /\$1\.23/);
+  assert.match(html, /4 of 10 calls recorded no tokens/);
+});
+
+test("a ledger that could not be read says so, instead of claiming the ticket is unspent", () => {
+  const html = buildCostSection(
+    { ticket: "SC-1", ledgerRead: false, hasSpend: false, totalCostUSD: 0, contextCostUSD: 0, answersCostUSD: 0, totalDurationMs: 0, stages: [] },
+    "implementation",
+    undefined,
+    Date.now(),
+  );
+  assert.match(html, /ledger was not available/);
+  assert.doesNotMatch(html, /No spend recorded/);
+});
+
+test("a payload from a daemon predating ledgerRead still reads as no spend", () => {
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: false, totalCostUSD: 0, contextCostUSD: 0, answersCostUSD: 0, totalDurationMs: 0, stages: [] },
+    "implementation",
+    undefined,
+    Date.now(),
+  );
+  assert.match(html, /No spend recorded/);
+});
+
+test("a fully measured roll-up is unchanged — no note, full split", () => {
+  const html = buildCostSection(
+    {
+      ticket: "SC-1",
+      ledgerRead: true,
+      hasSpend: true,
+      totalCostUSD: 2.5,
+      contextCostUSD: 1.5,
+      answersCostUSD: 1.0,
+      totalDurationMs: 1000,
+      calls: 7,
+      unmeasuredCalls: 0,
+      stages: [],
+    },
+    "planning",
+    undefined,
+    Date.now(),
+  );
+  assert.match(html, /\$2\.50/);
+  assert.match(html, /answers/);
+  assert.doesNotMatch(html, /recorded no tokens/);
+});

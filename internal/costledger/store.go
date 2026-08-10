@@ -48,12 +48,27 @@ type StageCost struct {
 // split (criterion 3) and per-stage breakdown (criterion 4). HasSpend is false
 // when no call was ever recorded, driving the plain empty state (criterion 5).
 type TicketCost struct {
-	Ticket          string      `json:"ticket"`
-	HasSpend        bool        `json:"hasSpend"`
-	TotalCostUSD    float64     `json:"totalCostUSD"`
-	ContextCostUSD  float64     `json:"contextCostUSD"`
-	AnswersCostUSD  float64     `json:"answersCostUSD"`
-	TotalDurationMs int64       `json:"totalDurationMs"`
+	Ticket string `json:"ticket"`
+	// LedgerRead reports that the ledger was actually consulted. Without it a
+	// ticket nobody spent on and a ledger that would not open are the same
+	// empty answer, and the panel states "no spend recorded for this ticket" —
+	// a claim about the ticket made from a fact about the reader (SC-4151 C8).
+	LedgerRead      bool    `json:"ledgerRead"`
+	HasSpend        bool    `json:"hasSpend"`
+	TotalCostUSD    float64 `json:"totalCostUSD"`
+	ContextCostUSD  float64 `json:"contextCostUSD"`
+	AnswersCostUSD  float64 `json:"answersCostUSD"`
+	TotalDurationMs int64   `json:"totalDurationMs"`
+	// Calls is how many recorded calls the roll-up is made of, and
+	// UnmeasuredCalls how many of them carried no token counts at all — the
+	// zero-token rows written before the proxy could read usage off a
+	// compressed body (SC-3440). They price at nothing because nothing was
+	// measured, not because nothing was spent, and a dollar figure that does
+	// not say so asserts a run was free (SC-4151 C7). Two tickets on this
+	// board consist of nothing else: SC-1542 (85 calls, 8m40s) and SC-3339
+	// (222 calls, 80m37s), both rendering $0.0000 beside a real duration.
+	Calls           int         `json:"calls"`
+	UnmeasuredCalls int         `json:"unmeasuredCalls"`
 	Stages          []StageCost `json:"stages"`
 }
 
@@ -136,9 +151,11 @@ func (s *Store) InsertCall(ctx context.Context, r CallRecord) error {
 // (criterion 4). Each token class feeds its own claude.CostUSD argument slot —
 // collapsing classes mis-rates by up to 20x.
 func (s *Store) TicketCost(ctx context.Context, project, ticket string) (TicketCost, error) {
-	out := TicketCost{Ticket: ticket}
+	out := TicketCost{Ticket: ticket, LedgerRead: true}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT stage, model, SUM(input_tokens), SUM(output_tokens), SUM(cache_create_tokens), SUM(cache_read_tokens), SUM(duration_ms)
+		`SELECT stage, model, SUM(input_tokens), SUM(output_tokens), SUM(cache_create_tokens), SUM(cache_read_tokens), SUM(duration_ms),
+		        COUNT(*),
+		        SUM(CASE WHEN input_tokens + output_tokens + cache_create_tokens + cache_read_tokens = 0 THEN 1 ELSE 0 END)
 		 FROM ticket_calls WHERE project = ? AND ticket = ? GROUP BY stage, model`,
 		project, ticket)
 	if err != nil {
@@ -149,12 +166,14 @@ func (s *Store) TicketCost(ctx context.Context, project, ticket string) (TicketC
 	byStage := map[string]*StageCost{}
 	for rows.Next() {
 		var stage, model string
-		var in, outTok, cc, cr int
+		var in, outTok, cc, cr, calls, unmeasured int
 		var durMs int64
-		if err := rows.Scan(&stage, &model, &in, &outTok, &cc, &cr, &durMs); err != nil {
+		if err := rows.Scan(&stage, &model, &in, &outTok, &cc, &cr, &durMs, &calls, &unmeasured); err != nil {
 			return out, errors.WrapWithDetails(err, "scan ticket cost row", "ticket", ticket)
 		}
 		out.HasSpend = true
+		out.Calls += calls
+		out.UnmeasuredCalls += unmeasured
 		cost := claude.CostUSD(model, in, outTok, cc, cr)
 		ctxCost := claude.CostUSD(model, in, 0, cc, cr)
 		ansCost := claude.CostUSD(model, 0, outTok, 0, 0)
