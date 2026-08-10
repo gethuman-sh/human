@@ -16,7 +16,7 @@ import { initMockupsView, showMockups, setPendingMockupSlug, setChosenMockup, } 
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, isReviewRetryable, isReopenable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, RUNNING_LABELS, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, reworkKind, isReviewRetryable, isReopenable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, RUNNING_LABELS, } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
@@ -403,6 +403,37 @@ function showCardMenu(card, x, y) {
             void transition(card.key, card.title, "verification", "verification");
         });
         menu.appendChild(retryReview);
+    }
+    // The rework a failing review verdict needs. Nothing starts it on its own —
+    // pipeline-fsm.json's `reviewed` state says it waits for a rework the board
+    // must offer — and until now the board offered it only as a drag back onto
+    // the card's build column, which is invisible unless you already know it.
+    // Every other stage a person has to restart by hand has a menu action for it
+    // (Retry plan, Replan, Retry build, Retry review, Retry deploy); this was the
+    // gap, on the one state where the badge explicitly asks the user to act
+    // (SC-4299). Each kind starts the same run its drop target would have.
+    if (isReworkable(card)) {
+        const rework = document.createElement("button");
+        rework.type = "button";
+        rework.className = "context-menu-item";
+        rework.textContent = "Rework";
+        rework.disabled = !current.dockerAvailable;
+        if (rework.disabled)
+            rework.title = "Docker required";
+        rework.addEventListener("click", () => {
+            menu.remove();
+            switch (reworkKind(card)) {
+                case "bug":
+                    void fixBug(card.key, card.title);
+                    return;
+                case "security":
+                    void fixSecurity(card.key, card.title);
+                    return;
+                default:
+                    void transition(card.key, card.title, "verification", "implementation");
+            }
+        });
+        menu.appendChild(rework);
     }
     // A resolved card — the pipeline concluded there is nothing to do, or no fix
     // is needed — had no gesture at all. The retry paths key on failed or outage

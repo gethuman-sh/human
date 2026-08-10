@@ -49,6 +49,7 @@ import {
   QUEUE_TRANSITION_TO,
   queueOf,
   isReworkable,
+  reworkKind,
   isReviewRetryable,
   isReopenable,
   ageBadge,
@@ -856,6 +857,37 @@ function showCardMenu(card: Card, x: number, y: number): void {
       void transition(card.key, card.title, "verification", "verification");
     });
     menu.appendChild(retryReview);
+  }
+
+  // The rework a failing review verdict needs. Nothing starts it on its own —
+  // pipeline-fsm.json's `reviewed` state says it waits for a rework the board
+  // must offer — and until now the board offered it only as a drag back onto
+  // the card's build column, which is invisible unless you already know it.
+  // Every other stage a person has to restart by hand has a menu action for it
+  // (Retry plan, Replan, Retry build, Retry review, Retry deploy); this was the
+  // gap, on the one state where the badge explicitly asks the user to act
+  // (SC-4299). Each kind starts the same run its drop target would have.
+  if (isReworkable(card)) {
+    const rework = document.createElement("button");
+    rework.type = "button";
+    rework.className = "context-menu-item";
+    rework.textContent = "Rework";
+    rework.disabled = !current.dockerAvailable;
+    if (rework.disabled) rework.title = "Docker required";
+    rework.addEventListener("click", () => {
+      menu.remove();
+      switch (reworkKind(card)) {
+        case "bug":
+          void fixBug(card.key, card.title);
+          return;
+        case "security":
+          void fixSecurity(card.key, card.title);
+          return;
+        default:
+          void transition(card.key, card.title, "verification", "implementation");
+      }
+    });
+    menu.appendChild(rework);
   }
 
   // A resolved card — the pipeline concluded there is nothing to do, or no fix
