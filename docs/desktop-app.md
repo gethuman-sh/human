@@ -139,16 +139,20 @@ The desktop artifact must never be published through a goreleaser `builds:` entr
 
 ## Creating tickets — ideation chat
 
-The Backlog column header shows a '+' button, the post-project-import
-"Create first ticket" prompt, and the left rail's "new ticket" action all
-open the same chat-style panel docked to the right side of the board. (The
-idea space has its own lighter '+': it quick-captures a title-only ticket
-labeled `human/idea` into its leftmost sub-column, no chat involved; dragging
-that idea card onto Backlog opens this same panel in **evolve mode**, whose
-terminal action rewrites the idea ticket in place — title and description
-replaced, idea label removed, key preserved — instead of creating a new
-ticket.) Every fresh session opened from any of these entry points follows
-the same idea-first path (SC-2858): the seed text first quick-captures a
+The ideation chat panel opens two ways: the post-project-import "Create
+first ticket" prompt starts a fresh session, and dragging an Ideas card
+onto Backlog — or promoting it directly from the Ideas column — opens the
+same chat-style panel docked to the right side of the board, but in
+**evolve mode**, whose terminal action rewrites the idea ticket in place —
+title and description replaced, idea label removed, key preserved —
+instead of creating a new ticket. (SC-4485 removed the Backlog column's
+own '+' button and the left rail's "new ticket" action, which duplicated
+these entry points. The idea space's own lighter '+' is unchanged: it
+quick-captures a title-only ticket labeled `human/idea` into its leftmost
+sub-column, no chat involved, and remains the only button-driven entry
+point into ticket creation.) Every fresh session opened from the
+post-import prompt follows the same idea-first path (SC-2858): the seed
+text first quick-captures a
 title-only idea ticket (exactly what the idea space's own '+' does), then the
 same conversation continues against that ticket in evolve mode — so a ticket
 that started as a chat carries the idea marker exactly as long as one started
