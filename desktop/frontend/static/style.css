@@ -195,12 +195,6 @@ body {
   height: 0;
 }
 
-/* Action items (e.g. new-ticket '+') trigger a command rather than switch view. */
-.rail-action {
-  font-size: 24px;
-  font-weight: 300;
-}
-
 /* Inline SVG rail glyphs inherit the item's color via stroke="currentColor", so
    they tint white on the accent square like the text glyphs. display:block drops
    the inline baseline gap that would offset them from center. */

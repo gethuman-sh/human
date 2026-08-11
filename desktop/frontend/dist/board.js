@@ -562,16 +562,7 @@ function renderColumn(queue) {
     sortByHandOrder(cards, current.columnOrder?.[queue]);
     const header = document.createElement("div");
     header.className = "column-header";
-    if (queue === "product") {
-        header.innerHTML =
-            `<span>${QUEUE_LABELS[queue]}</span>` +
-                `<button class="add-card" title="New ticket via ideation">+</button>` +
-                `<span class="column-count">${cards.length}</span>`;
-        header.querySelector(".add-card").addEventListener("click", () => void openIdeation());
-    }
-    else {
-        header.innerHTML = `<span>${QUEUE_LABELS[queue]}</span><span class="column-count">${cards.length}</span>`;
-    }
+    header.innerHTML = `<span>${QUEUE_LABELS[queue]}</span><span class="column-count">${cards.length}</span>`;
     col.appendChild(header);
     const body = document.createElement("div");
     body.className = "column-body";
@@ -2889,14 +2880,15 @@ async function sendIdeationReply(text) {
     startIdeationPoll();
     try {
         if (isFresh) {
-            // SC-2858: every fresh session — however the panel was opened (Product
-            // "+", post-import "Create first ticket", rail nav "new ticket") — must
-            // start from a captured idea, never a ticket created outright. The
-            // seed text becomes the idea's title, then the same conversation
-            // continues in evolve mode against that freshly captured ticket,
-            // mirroring the Ideas-column promotion path (promoteIdea) rather than
-            // duplicating it. The idea marker stays on the ticket until the
-            // conversation's terminal action (evolveTicket) removes it.
+            // SC-2858 (SC-4485 narrowed the entry points, not this rule): a fresh
+            // session — today reachable only via the post-import "Create first
+            // ticket" prompt — must start from a captured idea, never a ticket
+            // created outright. The seed text becomes the idea's title, then the
+            // same conversation continues in evolve mode against that freshly
+            // captured ticket, mirroring the Ideas-column promotion path
+            // (promoteIdea) rather than duplicating it. The idea marker stays on
+            // the ticket until the conversation's terminal action (evolveTicket)
+            // removes it.
             const ideaKey = await go().CreateIdea(text);
             ideation = await go().StartIdeation(text, ideationMode ?? "chat", restart, ideaKey, []);
         }
@@ -3659,12 +3651,6 @@ function wireRail() {
         if (item.disabled)
             return;
         item.addEventListener("click", () => {
-            // Action items trigger a command (e.g. the ideation chat) rather than
-            // switching the active view.
-            if (item.dataset.action === "ideation") {
-                void openIdeation();
-                return;
-            }
             const view = item.dataset.view;
             if (view)
                 selectView(view);
