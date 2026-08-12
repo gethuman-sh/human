@@ -495,7 +495,10 @@ func TestDecodeJSON_RejectsOversizedBody(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(srv.URL, WithProviderName("test"))
+	// A generous timeout: streaming 50MiB+ over loopback can take well over
+	// the client's 30s default on a loaded CI runner, which previously made
+	// this test flake on a transport timeout instead of the size-limit path.
+	c := New(srv.URL, WithProviderName("test"), WithTimeout(2*time.Minute))
 	resp, err := c.Do(context.Background(), "GET", "/big", "", nil)
 	require.NoError(t, err)
 
