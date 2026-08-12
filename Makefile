@@ -108,7 +108,7 @@ check: fmt-check check-test lint sec secrets
 # strips it before binding generation, which would hide every file. Building
 # requires the Wails CLI (desktop-deps installs it).
 desktop-deps:
-	go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+	go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
 
 # Wails v2 defaults to the EOL webkit2gtk-4.0 ABI on Linux; modern Debian/Ubuntu
 # ship only webkit2gtk-4.1, which requires the `webkit2_41` tag. Auto-append it

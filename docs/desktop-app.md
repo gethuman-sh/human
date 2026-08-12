@@ -58,7 +58,7 @@ The only valid acceptance signal for the desktop app is launching the built `.ap
 
 ## Toolchain prerequisites
 
-* Wails CLI, pinned: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0` (or `make desktop-deps`)
+* Wails CLI, pinned: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0` (or `make desktop-deps`)
 * Node 20+ (the frontend builds via `tsc` + a dependency-free bundle step)
 * Per-OS webview toolchain:
   * **macOS**: Xcode command line tools — `xcode-select --install`
