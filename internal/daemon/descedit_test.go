@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/ideadraft"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -388,4 +389,92 @@ func TestParseDescProposalBlock_NoMarker(t *testing.T) {
 	_, _, found, err := parseDescProposalBlock("just chatting")
 	assert.False(t, found)
 	assert.NoError(t, err)
+}
+
+// recordingCommenter captures the provenance record Apply posts.
+type recordingCommenter struct {
+	mu     sync.Mutex
+	bodies []string
+	err    error
+}
+
+func (c *recordingCommenter) ListComments(context.Context, string) ([]tracker.Comment, error) {
+	return nil, nil
+}
+
+func (c *recordingCommenter) AddComment(_ context.Context, _ string, body string) (*tracker.Comment, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return nil, c.err
+	}
+	c.bodies = append(c.bodies, body)
+	return &tracker.Comment{Body: body}, nil
+}
+
+func (c *recordingCommenter) all() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.bodies...)
+}
+
+// appliedWithCommenter drives a session to an applied proposal, recording what
+// the engine posted alongside the write.
+func appliedWithCommenter(t *testing.T, commenter *recordingCommenter) DescEditStatus {
+	t.Helper()
+	runner := &fakeRunner{turns: []IdeationTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
+	editor := &fakeEditor{returned: &tracker.Issue{Key: "SC-1", URL: "https://x/1"}}
+	e := newTestDescEditEngine(runner, editor)
+	e.ResolveCommenter = func() (tracker.Commenter, error) { return commenter, nil }
+
+	st, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
+	require.NoError(t, err)
+	_, err = e.Reply(DescEditReplyRequest{SessionID: st.SessionID, Message: "rewrite it"})
+	require.NoError(t, err)
+	waitForDescEditState(t, e, DescEditAwaitingReply)
+
+	applied, err := e.Apply(DescEditApplyRequest{SessionID: st.SessionID})
+	require.NoError(t, err)
+	return applied
+}
+
+// The applied text is the user's, and pinning it as human-authored is what
+// stops a redraft armed before promotion from writing over their edit.
+func TestDescEditApply_PinsAHumanFingerprint(t *testing.T) {
+	commenter := &recordingCommenter{}
+	applied := appliedWithCommenter(t, commenter)
+
+	assert.Equal(t, DescEditApplied, applied.State)
+	bodies := commenter.all()
+	require.Len(t, bodies, 1)
+	assert.Contains(t, bodies[0], IdeaDraftHeader)
+	assert.Contains(t, bodies[0], "author: human")
+	assert.Contains(t, bodies[0], "description: "+ideadraft.Fingerprint("Proposed text"))
+	assert.NotContains(t, bodies[0], "source:", "a human record has no input the machine could redraft from")
+}
+
+func TestDescEditApply_SurvivesAFailedFingerprintPost(t *testing.T) {
+	commenter := &recordingCommenter{err: assert.AnError}
+	applied := appliedWithCommenter(t, commenter)
+
+	assert.Equal(t, DescEditApplied, applied.State, "a failed record must not turn a saved description into a failed apply")
+	assert.Equal(t, "https://x/1", applied.AppliedURL)
+}
+
+func TestDescEditSystemPrompt_PromotedWidensTheRemit(t *testing.T) {
+	prompt := descEditSystemPrompt("a drafted description [TBA: for whom?]", true)
+
+	assert.Contains(t, prompt, "challenge the premise")
+	assert.Contains(t, prompt, "NEVER answer a [TBA:] yourself")
+	assert.NotContains(t, prompt, "Never suggest or discuss changing the title, acceptance criteria structure",
+		"the copy-editor gate is exactly what promotion must not keep")
+}
+
+func TestDescEditSystemPrompt_UnpromotedIsUnchanged(t *testing.T) {
+	prompt := descEditSystemPrompt("a description", false)
+
+	assert.Contains(t, prompt, "Your ONLY job is proposing rewrites")
+	assert.Contains(t, prompt, "Never suggest or discuss changing the title, acceptance criteria structure")
+	assert.NotContains(t, prompt, "challenge the premise")
+	assert.NotContains(t, prompt, "[TBA:")
 }

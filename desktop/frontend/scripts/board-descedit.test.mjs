@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   descEditInputEnabled,
   descEditApplyEnabled,
+  descEditAllowedFor,
   buildDescriptionPreview,
   descEditShouldDiscardOnClose,
 } from "../build/board-descedit.js";
@@ -66,4 +67,24 @@ test("descEditShouldDiscardOnClose is a no-op once applied — that lifecycle al
 test("descEditShouldDiscardOnClose is a no-op with no session to discard", () => {
   assert.equal(descEditShouldDiscardOnClose("none", undefined), false);
   assert.equal(descEditShouldDiscardOnClose("awaiting_reply", undefined), false);
+});
+
+// SC-4520: promotion opens the editor on a card the board is still rendering in
+// Ideas — the labels have come off the ticket, but no refetch has happened yet.
+test("the lane gate admits a just-promoted Ideas card", () => {
+  assert.equal(descEditAllowedFor("ideas", false, false, true), true);
+});
+
+test("a click on an Ideas card opens nothing", () => {
+  assert.equal(descEditAllowedFor("ideas"), false);
+});
+
+test("a Product-Backlog feature card opens on a plain click", () => {
+  assert.equal(descEditAllowedFor("product"), true);
+});
+
+test("bugs and security tickets are never description-edited, promoted or not", () => {
+  assert.equal(descEditAllowedFor("product", true), false);
+  assert.equal(descEditAllowedFor("product", false, true), false);
+  assert.equal(descEditAllowedFor("ideas", true, false, true), false);
 });

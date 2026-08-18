@@ -800,42 +800,39 @@ func (a *App) CloseTicket(pmKey string) error {
 	return daemonCause(client.CloseTicket(daemon.CloseTicketRequest{PMKey: pmKey}))
 }
 
+// PromoteIdea graduates an idea to a PM ticket by removing its idea labels —
+// the whole of promotion's server half. No agent turn and no rewrite: the
+// description the background drafter left is what the description editor then
+// opens on.
+func (a *App) PromoteIdea(key string, labels []string) error {
+	client, err := a.daemonClient()
+	if err != nil {
+		return err
+	}
+	return daemonCause(client.IdeaPromote(daemon.IdeaPromoteRequest{Key: key, Labels: labels}))
+}
+
 // IdeationMsg is the frontend-facing transcript entry.
 type IdeationMsg struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
 }
 
-// IdeationOption is one guided-mode multiple-choice question, frontend-facing.
-type IdeationOption struct {
-	Text    string   `json:"text"`
-	Options []string `json:"options"`
-	Kind    string   `json:"kind"`
-}
-
-// IdeationDraftView is the frontend-facing agent-drafted ticket summary.
-type IdeationDraftView struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-}
-
 // IdeationView is the frontend-facing session snapshot.
 type IdeationView struct {
-	SessionID  string             `json:"sessionId,omitempty"`
-	Mode       string             `json:"mode,omitempty"`
-	State      string             `json:"state"`
-	Messages   []IdeationMsg      `json:"messages"`
-	Question   *IdeationOption    `json:"question,omitempty"`
-	Draft      *IdeationDraftView `json:"draft,omitempty"`
-	CreatedKey string             `json:"createdKey,omitempty"`
-	Error      string             `json:"error,omitempty"`
+	SessionID  string        `json:"sessionId,omitempty"`
+	Mode       string        `json:"mode,omitempty"`
+	State      string        `json:"state"`
+	Messages   []IdeationMsg `json:"messages"`
+	CreatedKey string        `json:"createdKey,omitempty"`
+	Error      string        `json:"error,omitempty"`
 }
 
-// StartIdeation begins (or re-attaches to) the board ideation session. mode
-// is "chat" or "guided"; empty defaults to "chat" in the daemon engine.
-// evolveKey (with the card's idea labels) switches the session to evolve
-// mode: the outcome rewrites that ticket in place instead of creating one —
-// the Ideas→Backlog promotion path.
+// StartIdeation begins (or re-attaches to) the board ideation session. chat is
+// the only mode; empty defaults to it in the daemon engine. evolveKey (with the
+// card's idea labels) switches the session to evolve mode: the outcome rewrites
+// that ticket in place instead of creating one — the post-import "Create first
+// ticket" flow.
 func (a *App) StartIdeation(seed, mode string, restart bool, evolveKey string, evolveLabels []string) (IdeationView, error) {
 	client, err := a.daemonClient()
 	if err != nil {
@@ -915,24 +912,6 @@ func (a *App) ReplyIdeation(sessionID, message string) (IdeationView, error) {
 	return ideationView(st), nil
 }
 
-// ApproveIdeation submits the user's (possibly edited) guided-mode draft for
-// ticket creation.
-func (a *App) ApproveIdeation(sessionID, title, description string) (IdeationView, error) {
-	client, err := a.daemonClient()
-	if err != nil {
-		return IdeationView{}, err
-	}
-	st, err := client.IdeationApprove(daemon.IdeationApproveRequest{
-		SessionID:   sessionID,
-		Title:       title,
-		Description: description,
-	})
-	if err != nil {
-		return IdeationView{}, daemonCause(err)
-	}
-	return ideationView(st), nil
-}
-
 // IdeationStatus returns the current session snapshot for panel polling and
 // re-attach on panel reopen. Re-attach (rather than treating panel close as
 // abandonment) is the deliberate AD-4 lifecycle: closing the panel does not
@@ -958,12 +937,6 @@ func ideationView(st daemon.IdeationStatus) IdeationView {
 		Messages:   []IdeationMsg{},
 		CreatedKey: st.CreatedKey,
 		Error:      st.Error,
-	}
-	if st.Question != nil {
-		view.Question = &IdeationOption{Text: st.Question.Text, Options: st.Question.Options, Kind: st.Question.Kind}
-	}
-	if st.Draft != nil {
-		view.Draft = &IdeationDraftView{Title: st.Draft.Title, Description: st.Draft.Description}
 	}
 	for _, m := range st.Transcript {
 		view.Messages = append(view.Messages, IdeationMsg{Role: m.Role, Text: m.Text})
@@ -992,7 +965,10 @@ type DescEditView struct {
 // description-edit chat for one ticket. currentDescription seeds the
 // agent's context — the frontend fetches it via GetIssueDetail before
 // calling this, since some trackers' list fetches omit the description.
-func (a *App) StartDescEdit(key, currentDescription string, restart bool) (DescEditView, error) {
+// promoted marks the session opened by dragging an idea onto Product Backlog,
+// which widens the chat's remit from copy-editing to challenging the premise
+// and working through the drafter's [TBA: …] questions.
+func (a *App) StartDescEdit(key, currentDescription string, restart, promoted bool) (DescEditView, error) {
 	client, err := a.daemonClient()
 	if err != nil {
 		return DescEditView{}, err
@@ -1001,6 +977,7 @@ func (a *App) StartDescEdit(key, currentDescription string, restart bool) (DescE
 		Key:                key,
 		CurrentDescription: currentDescription,
 		Restart:            restart,
+		Promoted:           promoted,
 	})
 	if err != nil {
 		return DescEditView{}, daemonCause(err)

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/ideadraft"
 	"github.com/gethuman-sh/human/internal/marker"
 )
 
@@ -77,6 +78,10 @@ func TestDaemonPostedMarkersSatisfyTheirContract(t *testing.T) {
 		})},
 		{MarkerDeployed, ShippedOutOfBandDeployedBody("https://example/pr/7")},
 		{MarkerLateResultReconciled, LateResultReconciledBody("review", BoardVerification, eligible, eligible.Add(4*time.Minute))},
+		// The daemon writes an idea-draft record when the description editor
+		// applies a human's edit: the words are now the user's, and the record
+		// is what stops a redraft still in flight from writing over them.
+		{MarkerIdeaDraft, markerBody(ideadraft.HumanRecord("the applied description"), ideadraft.FieldOrder...)},
 	}
 
 	// A decision block only validates when its field order is the one the real

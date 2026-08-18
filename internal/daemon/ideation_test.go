@@ -108,22 +108,6 @@ func markerBlock(title, description string) string {
 	return "[human:ideation-ticket]\n```json\n{\"title\": \"" + title + "\", \"description\": \"" + description + "\"}\n```"
 }
 
-func questionBlock(text, kind string, options ...string) string {
-	optJSON := "["
-	for i, o := range options {
-		if i > 0 {
-			optJSON += ", "
-		}
-		optJSON += "\"" + o + "\""
-	}
-	optJSON += "]"
-	return "[human:ideation-question]\n```json\n{\"text\": \"" + text + "\", \"options\": " + optJSON + ", \"kind\": \"" + kind + "\"}\n```"
-}
-
-func newTestGuidedEngine(runner IdeationRunner, creator tracker.Creator, project string, notify func()) *IdeationEngine {
-	return newTestEngine(runner, creator, project, notify)
-}
-
 func TestIdeationStart_EmptySeed(t *testing.T) {
 	e := newTestEngine(&fakeRunner{}, newFakeCreator(), "PRJ", nil)
 	_, err := e.Start(IdeationStartRequest{Seed: " "})
@@ -452,132 +436,13 @@ func TestParseTicketBlock_Variants(t *testing.T) {
 	}
 }
 
-func TestIdeationGuidedQuestionParsed(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
-		{Reply: questionBlock("Who has this pain?", "content", "PM users", "Engineers"), ResumeID: "cs-1"},
-	}}
-	e := newTestGuidedEngine(runner, newFakeCreator(), "PRJ", nil)
-	_, err := e.Start(IdeationStartRequest{Seed: "seed", Mode: IdeationModeGuided})
-	require.NoError(t, err)
-
-	st := waitForState(t, e, IdeationAwaitingReply)
-	require.NotNil(t, st.Question)
-	assert.Equal(t, "Who has this pain?", st.Question.Text)
-	assert.Equal(t, []string{"PM users", "Engineers"}, st.Question.Options)
-	assert.Equal(t, "content", st.Question.Kind)
-	assert.Equal(t, IdeationModeGuided, st.Mode)
-}
-
-func TestIdeationGuidedQuestionMalformed_Repaired(t *testing.T) {
-	broken := "[human:ideation-question]\n```json\n{broken\n```"
-	runner := &fakeRunner{turns: []IdeationTurn{
-		{Reply: broken, ResumeID: "cs-1"},
-		{Reply: questionBlock("Who has this pain?", "content", "PM users", "Engineers"), ResumeID: "cs-2"},
-	}}
-	e := newTestGuidedEngine(runner, newFakeCreator(), "PRJ", nil)
-	_, err := e.Start(IdeationStartRequest{Seed: "seed", Mode: IdeationModeGuided})
-	require.NoError(t, err)
-
-	st := waitForState(t, e, IdeationAwaitingReply)
-	require.Equal(t, 2, runner.callCount())
-	call := runner.callAt(1)
-	assert.Equal(t, "cs-1", call.resumeID)
-	assert.Equal(t, ideationQuestionRepairPrompt, call.prompt)
-	require.NotNil(t, st.Question)
-	assert.Equal(t, "Who has this pain?", st.Question.Text)
-}
-
-func TestIdeationGuidedQuestionMalformed_RepairExhausted(t *testing.T) {
-	broken := "[human:ideation-question]\n```json\n{broken\n```"
-	runner := &fakeRunner{turns: []IdeationTurn{
-		{Reply: broken, ResumeID: "cs-1"},
-		{Reply: broken, ResumeID: "cs-2"},
-	}}
-	e := newTestGuidedEngine(runner, newFakeCreator(), "PRJ", nil)
-	_, err := e.Start(IdeationStartRequest{Seed: "seed", Mode: IdeationModeGuided})
-	require.NoError(t, err)
-
-	st := waitForState(t, e, IdeationError)
-	assert.Equal(t, 2, runner.callCount())
-	assert.Contains(t, st.Error, "malformed question block")
-}
-
-func TestIdeationGuidedTicketBlock_AwaitsApproval(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
-		{Reply: markerBlock("T", "D"), ResumeID: "cs-1"},
-	}}
-	creator := newFakeCreator()
-	e := newTestGuidedEngine(runner, creator, "PRJ", nil)
-	_, err := e.Start(IdeationStartRequest{Seed: "seed", Mode: IdeationModeGuided})
-	require.NoError(t, err)
-
-	st := waitForState(t, e, IdeationAwaitingApproval)
-	require.NotNil(t, st.Draft)
-	assert.Equal(t, "T", st.Draft.Title)
-	assert.Equal(t, "D", st.Draft.Description)
-	assert.Nil(t, creator.capturedIssue())
-}
-
-func TestIdeationApprove_CreatesWithEditedFields(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
-		{Reply: markerBlock("T", "D"), ResumeID: "cs-1"},
-	}}
-	creator := newFakeCreator()
-	e := newTestGuidedEngine(runner, creator, "PRJ", nil)
-	_, err := e.Start(IdeationStartRequest{Seed: "seed", Mode: IdeationModeGuided})
-	require.NoError(t, err)
-	st := waitForState(t, e, IdeationAwaitingApproval)
-
-	approved, err := e.Approve(IdeationApproveRequest{SessionID: st.SessionID, Title: "edited title", Description: "edited desc"})
-	require.NoError(t, err)
-	assert.Equal(t, IdeationDone, approved.State)
-	assert.Equal(t, "SC-999", approved.CreatedKey)
-
-	issue := creator.capturedIssue()
-	require.NotNil(t, issue)
-	assert.Equal(t, "edited title", issue.Title)
-	assert.Equal(t, "edited desc", issue.Description)
-}
-
-func TestIdeationApprove_WrongSession(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
-		{Reply: markerBlock("T", "D"), ResumeID: "cs-1"},
-	}}
-	creator := newFakeCreator()
-	e := newTestGuidedEngine(runner, creator, "PRJ", nil)
-	_, err := e.Start(IdeationStartRequest{Seed: "seed", Mode: IdeationModeGuided})
-	require.NoError(t, err)
-	waitForState(t, e, IdeationAwaitingApproval)
-
-	_, err = e.Approve(IdeationApproveRequest{SessionID: "nope", Title: "T"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no matching ideation session")
-
-	st := e.Status()
-	assert.Equal(t, IdeationAwaitingApproval, st.State)
-}
-
-func TestIdeationApprove_WrongState(t *testing.T) {
-	block := make(chan struct{})
-	defer close(block)
-	runner := &blockingRunner{release: block}
-	e := newTestGuidedEngine(runner, newFakeCreator(), "PRJ", nil)
-	st, err := e.Start(IdeationStartRequest{Seed: "seed", Mode: IdeationModeGuided})
-	require.NoError(t, err)
-	require.Equal(t, IdeationThinking, st.State)
-
-	_, err = e.Approve(IdeationApproveRequest{SessionID: st.SessionID, Title: "T"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not awaiting approval")
-}
-
 func TestIdeationChatMode_Unchanged(t *testing.T) {
 	runner := &fakeRunner{turns: []IdeationTurn{
 		{Reply: markerBlock("T", "D"), ResumeID: "cs-1"},
 	}}
 	creator := newFakeCreator()
-	e := newTestGuidedEngine(runner, creator, "PRJ", nil)
-	// Mode left unset: defaults to chat.
+	e := newTestEngine(runner, creator, "PRJ", nil)
+	// Mode left unset: defaults to chat — the only mode there is.
 	_, err := e.Start(IdeationStartRequest{Seed: "seed"})
 	require.NoError(t, err)
 
@@ -612,6 +477,10 @@ func (f *fakeEditor) captured() (string, tracker.EditOptions) {
 	return f.key, f.opts
 }
 
+// The evolve path survives SC-4520's promotion-path retirement: its live
+// caller is the post-import "Create first ticket" flow, and deleting it would
+// have turned that flow into TWO tickets — a label-stripped orphan idea plus a
+// separately created one. The Nil(creator.capturedIssue()) below is that guard.
 func TestIdeationEvolveMode(t *testing.T) {
 	runner := &fakeRunner{turns: []IdeationTurn{{Reply: markerBlock("Refined title", "Refined body"), ResumeID: "cs-1"}}}
 	editor := &fakeEditor{returned: &tracker.Issue{Key: "SC-42", URL: "https://app.shortcut.com/x/story/42"}}

@@ -148,6 +148,15 @@ type Server struct {
 	// (the Bugs pane's on-demand "Find related work" action) and the auto-launch
 	// that fires after a bug is filed (SC-2405).
 	RelateLauncher func(req RelateRequest) error
+	// IdeaDraftLauncher launches the background PM-description drafter for one
+	// idea (SC-4520). Fired by capture and by the freshness poll's redraft
+	// watcher; nil disables drafting entirely, which is how the feature
+	// degrades to no draft rather than to an error at capture.
+	IdeaDraftLauncher func(req IdeaDraftRequest) error
+	// IdeaPromoter graduates an idea to a PM ticket by removing its idea
+	// labels — the whole of promotion's server half. nil disables the
+	// idea-promote route.
+	IdeaPromoter func(req IdeaPromoteRequest) error
 	// SecurityRunner launches the human-security sweep (multi-agent vulnerability
 	// scan that files surviving findings as security tickets) in the registered
 	// project's devcontainer — the Security pane's counterpart to FindbugsRunner.
@@ -557,9 +566,9 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"close-ticket":       func() { s.withBlockingOp(func() { s.handleCloseTicket(conn, args[1:]) }) },
 		"ideation-start":     func() { s.withBlockingOp(func() { s.handleIdeationStart(conn, args[1:]) }) },
 		"ideation-reply":     func() { s.withBlockingOp(func() { s.handleIdeationReply(conn, args[1:]) }) },
-		"ideation-approve":   func() { s.withBlockingOp(func() { s.handleIdeationApprove(conn, args[1:]) }) },
 		"ideation-status":    func() { s.handleIdeationStatus(conn) },
 		"idea-create":        func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
+		"idea-promote":       func() { s.withBlockingOp(func() { s.handleIdeaPromote(conn, args[1:]) }) },
 		"descedit-start":     func() { s.withBlockingOp(func() { s.handleDescEditStart(conn, args[1:]) }) },
 		"descedit-reply":     func() { s.withBlockingOp(func() { s.handleDescEditReply(conn, args[1:]) }) },
 		"descedit-apply":     func() { s.withBlockingOp(func() { s.handleDescEditApply(conn, args[1:]) }) },

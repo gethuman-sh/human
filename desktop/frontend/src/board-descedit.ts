@@ -46,3 +46,13 @@ export function buildDescriptionPreview(saved: string, proposal: string | undefi
   }
   return { text: saved, isPreview: false };
 }
+
+// descEditAllowedFor is the description editor's lane gate. A click opens it
+// only on a Product-Backlog feature card; a promotion opens it on a card the
+// board is still rendering in Ideas, because the labels have come off the
+// ticket but no refetch has happened yet. Passing that fact in beats waiting
+// for the refetch: the modal must open on the drop, not a poll later.
+export function descEditAllowedFor(queue: string, bug = false, security = false, justPromoted = false): boolean {
+  if (bug || security) return false;
+  return justPromoted || queue === "product";
+}

@@ -79,6 +79,9 @@ var findbugsSkillContent []byte
 //go:embed embed/human-relate-skill.md
 var relateSkillContent []byte
 
+//go:embed embed/human-idea-draft-skill.md
+var ideaDraftSkillContent []byte
+
 //go:embed embed/findbugs-recon-agent.md
 var findbugsReconAgentContent []byte
 
@@ -288,6 +291,7 @@ func Install(w io.Writer, fw FileWriter, personal bool) error {
 		{content: executorAgentContent, relPath: filepath.Join("agents", "human-executor.md")},
 		{content: findbugsSkillContent, relPath: filepath.Join("skills", "human-findbugs", "SKILL.md")},
 		{content: relateSkillContent, relPath: filepath.Join("skills", "human-relate", "SKILL.md")},
+		{content: ideaDraftSkillContent, relPath: filepath.Join("skills", "human-idea-draft", "SKILL.md")},
 		{content: findbugsReconAgentContent, relPath: filepath.Join("agents", "findbugs-recon.md")},
 		{content: findbugsLogicAgentContent, relPath: filepath.Join("agents", "findbugs-logic.md")},
 		{content: findbugsErrorsAgentContent, relPath: filepath.Join("agents", "findbugs-errors.md")},

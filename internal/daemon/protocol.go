@@ -282,6 +282,10 @@ type BoardViewCard struct {
 	// ([human:related] found/none). The Bugs pane suppresses the on-demand
 	// "Find related work" menu item when true (SC-2405).
 	HasRelatedRecord bool `json:"hasRelatedRecord,omitempty"`
+	// TBACount is how many unanswered [TBA:] gaps the idea's drafted
+	// description still carries (SC-4520). Zero on every non-idea card and on
+	// an idea nothing has drafted yet; the card face renders nothing for zero.
+	TBACount int `json:"tbaCount,omitempty"`
 	// Hidden marks a ticket the user parked off the board (right-click →
 	// Hide). Locally persisted view preference, never tracker state; the
 	// frontend filters hidden cards out unless the user reveals them.

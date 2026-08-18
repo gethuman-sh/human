@@ -23,8 +23,6 @@ type PersistedIdeation struct {
 	State           IdeationState     `json:"state"`
 	Transcript      []IdeationMessage `json:"transcript,omitempty"`
 	ResumeID        string            `json:"resume_id,omitempty"`
-	Question        *IdeationQuestion `json:"question,omitempty"`
-	Draft           *IdeationDraft    `json:"draft,omitempty"`
 	CreatedKey      string            `json:"created_key,omitempty"`
 	CreatedURL      string            `json:"created_url,omitempty"`
 	ErrMsg          string            `json:"err_msg,omitempty"`
@@ -54,8 +52,6 @@ func (s *ideationSession) persist() PersistedIdeation {
 		State:           s.state,
 		Transcript:      s.transcript,
 		ResumeID:        s.resumeID,
-		Question:        s.question,
-		Draft:           s.draft,
 		CreatedKey:      s.createdKey,
 		CreatedURL:      s.createdURL,
 		ErrMsg:          s.errMsg,
@@ -74,8 +70,6 @@ func restoreSession(p PersistedIdeation) *ideationSession {
 		state:           p.State,
 		transcript:      p.Transcript,
 		resumeID:        p.ResumeID,
-		question:        p.Question,
-		draft:           p.Draft,
 		createdKey:      p.CreatedKey,
 		createdURL:      p.CreatedURL,
 		errMsg:          p.ErrMsg,

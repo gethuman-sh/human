@@ -46,6 +46,11 @@ var writeOnlyStateKeys = map[string]string{
 	"stage.pr-review":     "read by the daemon's PR review→fix deploy loop (SC-1387), not by a prompt",
 	"stage.pr-fix":        "read by the daemon's PR review→fix deploy loop (SC-1387), not by a prompt",
 	"stage.deploy-fix":    "read by the daemon's deploy CI/conflict fixer loop (SC-1557), not by a prompt",
+	// The background idea drafter is not a board stage and nothing dispatches on
+	// it: its outcome is the ticket's description and its [human:idea-draft]
+	// marker. This record exists because the exit contract requires every run to
+	// leave a machine-readable outcome; it is the run's own trail, not a handoff.
+	"stage.idea-draft": "not a board stage — nothing dispatches on it; this is the exit-contract record",
 }
 
 // collectStateKeys returns the concrete keys prompts write and read.

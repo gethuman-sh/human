@@ -289,6 +289,12 @@ the singleton scan agents (`features`, `findbugs`, `findsecurity`, `mockups-<slu
 delete any prior agent of that name first. This makes a retry after a stale or
 crashed run idempotent.
 
+The daemon-launched per-ticket runs do the same and were never listed here:
+`relate-<KEY>` (`relateLauncherFunc`) and `idea-draft-<KEY>`
+(`ideaDraftLauncherFunc`). For the drafter this teardown is also what bounds it
+to one run per idea, since the redraft trigger fires per key and a burst of
+tracker edits collapses into one launch.
+
 ### 10. A person asks
 
 `human agent stop NAME` runs the same `Manager.Stop` choke point as everything
@@ -319,6 +325,14 @@ Collected in one place, because the spares are the load-bearing part:
 - **An outage card** (`BoardOutage`): it is waiting on the substrate, not hung. It
   is relaunched uncharged each tick until `OutageWaitBound` = **6 hours**, after
   which it is handed to a person — still uncharged.
+- **A daemon-launched per-ticket run that is silent** — `relate-<KEY>`,
+  `idea-draft-<KEY>`. The silence reap (§ 4), the stuck-running passes (§ 5,
+  § 6), the orphan sweep (§ 7) and close-is-cancellation (§ 8) all identify a run
+  through `board-<KEY>-<stage>` (`parseAgentName`), and these carry no stage.
+  They are still caught by §§ 1–3 when claude ends or the container goes
+  unreachable, and bounded by § 9's per-key teardown on the next run for the same
+  key — but a hung one is not reaped for silence, and closing its ticket does not
+  cancel it.
 - **Anything on a machine that does not own the stage** (`forTakeover` gate).
 - **Everything, when the liveness list or the closed-ticket probe errors.** A probe
   blip is not evidence.
