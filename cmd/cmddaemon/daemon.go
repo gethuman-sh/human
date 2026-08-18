@@ -513,6 +513,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		MockupChooser:     mockupChooserFunc(projectRegistry),
 		MockupPruner:      mockupPrunerFunc(projectRegistry),
 		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
+		DescEdit:          descEditEngine(projectRegistry, vaultResolver, logger),
 		LeaseChecker:      leaseChecker,
 	}
 
@@ -4247,6 +4248,29 @@ func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookS
 			hookStore.Append(hookevents.Event{EventName: "IdeationCreated", Timestamp: time.Now().UTC()})
 		},
 		Store:  store,
+		Logger: logger,
+	}
+}
+
+// descEditEngine wires the Product-Backlog description-edit chat (SC-2873):
+// the same host-claude headless-turn runner ideation uses (see
+// hostClaudeIdeationRunner), and the role-resolved PM tracker.Editor as the
+// sole write path. No hook-store Notify: applying a description edit does
+// not move the card between stages, so there is nothing for the board's
+// subscribe loop to react to.
+func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) *daemon.DescEditEngine {
+	firstEntry := func() (daemon.ProjectEntry, error) {
+		return reg.SoleEntry()
+	}
+	return &daemon.DescEditEngine{
+		Runner: hostClaudeIdeationRunner{reg: reg},
+		ResolveEditor: func() (tracker.Editor, error) {
+			entry, err := firstEntry()
+			if err != nil {
+				return nil, err
+			}
+			return resolvePMEditor(entry.Dir, entry.EnvLookup(), resolver)
+		},
 		Logger: logger,
 	}
 }
