@@ -970,3 +970,116 @@ func ideationView(st daemon.IdeationStatus) IdeationView {
 	}
 	return view
 }
+
+// DescEditMsg is the frontend-facing description-edit chat transcript entry.
+type DescEditMsg struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
+// DescEditView is the frontend-facing description-edit session snapshot.
+type DescEditView struct {
+	SessionID  string        `json:"sessionId,omitempty"`
+	Key        string        `json:"key,omitempty"`
+	State      string        `json:"state"`
+	Messages   []DescEditMsg `json:"messages"`
+	Proposal   string        `json:"proposal,omitempty"`
+	AppliedURL string        `json:"appliedUrl,omitempty"`
+	Error      string        `json:"error,omitempty"`
+}
+
+// StartDescEdit begins (or re-attaches to) the Product-Backlog
+// description-edit chat for one ticket. currentDescription seeds the
+// agent's context — the frontend fetches it via GetIssueDetail before
+// calling this, since some trackers' list fetches omit the description.
+func (a *App) StartDescEdit(key, currentDescription string, restart bool) (DescEditView, error) {
+	client, err := a.daemonClient()
+	if err != nil {
+		return DescEditView{}, err
+	}
+	st, err := client.DescEditStart(daemon.DescEditStartRequest{
+		Key:                key,
+		CurrentDescription: currentDescription,
+		Restart:            restart,
+	})
+	if err != nil {
+		return DescEditView{}, daemonCause(err)
+	}
+	return descEditView(st), nil
+}
+
+// ReplyDescEdit sends the user's chat message into the running
+// description-edit session.
+func (a *App) ReplyDescEdit(sessionID, message string) (DescEditView, error) {
+	client, err := a.daemonClient()
+	if err != nil {
+		return DescEditView{}, err
+	}
+	st, err := client.DescEditReply(daemon.DescEditReplyRequest{SessionID: sessionID, Message: message})
+	if err != nil {
+		return DescEditView{}, daemonCause(err)
+	}
+	return descEditView(st), nil
+}
+
+// ApplyDescEdit writes the session's current proposed rewrite to the
+// tracker — the modal's explicit Apply/Save action; nothing is written
+// before this call.
+func (a *App) ApplyDescEdit(sessionID string) (DescEditView, error) {
+	client, err := a.daemonClient()
+	if err != nil {
+		return DescEditView{}, err
+	}
+	st, err := client.DescEditApply(daemon.DescEditApplyRequest{SessionID: sessionID})
+	if err != nil {
+		return DescEditView{}, daemonCause(err)
+	}
+	return descEditView(st), nil
+}
+
+// DiscardDescEdit ends the named session without writing anything to the
+// tracker — called from the modal's close path (Close button, Escape,
+// backdrop click) so a later reopen of the same ticket starts genuinely
+// fresh instead of reattaching to the discarded proposal/chat history (AC6).
+func (a *App) DiscardDescEdit(sessionID string) (DescEditView, error) {
+	client, err := a.daemonClient()
+	if err != nil {
+		return DescEditView{}, err
+	}
+	st, err := client.DescEditDiscard(daemon.DescEditDiscardRequest{SessionID: sessionID})
+	if err != nil {
+		return DescEditView{}, daemonCause(err)
+	}
+	return descEditView(st), nil
+}
+
+// DescEditStatus returns the current description-edit session snapshot, for
+// modal-open re-attach and in-flight-turn polling.
+func (a *App) DescEditStatus() (DescEditView, error) {
+	client, err := a.daemonClient()
+	if err != nil {
+		return DescEditView{}, err
+	}
+	st, err := client.GetDescEditStatus()
+	if err != nil {
+		return DescEditView{}, daemonCause(err)
+	}
+	return descEditView(st), nil
+}
+
+// descEditView maps the daemon wire snapshot to the frontend-facing shape.
+func descEditView(st daemon.DescEditStatus) DescEditView {
+	view := DescEditView{
+		SessionID:  st.SessionID,
+		Key:        st.Key,
+		State:      string(st.State),
+		Messages:   []DescEditMsg{},
+		Proposal:   st.Proposal,
+		AppliedURL: st.AppliedURL,
+		Error:      st.Error,
+	}
+	for _, m := range st.Transcript {
+		view.Messages = append(view.Messages, DescEditMsg{Role: m.Role, Text: m.Text})
+	}
+	return view
+}

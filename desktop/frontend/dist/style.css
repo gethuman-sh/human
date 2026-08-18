@@ -658,6 +658,108 @@ body {
   background: var(--accent);
 }
 
+/* Product-Backlog description-edit modal (SC-2873): a centered split-view
+   modal — deliberately NOT the fixed-edge .detail-panel/.ideation-panel
+   pattern, so its click target is visibly distinct per the ticket's AC.
+   The chat pane reuses .ideation-transcript/.ideation-status/.ideation-form
+   (and their .msg bubbles) verbatim; only new layout/preview rules follow. */
+.descedit-modal {
+  width: 900px;
+  max-width: calc(100vw - 64px);
+  height: 600px;
+  max-height: calc(100vh - 64px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.descedit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--col-border);
+}
+
+.descedit-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.descedit-close:hover {
+  color: var(--text);
+}
+
+.descedit-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.descedit-desc-pane {
+  flex: 1;
+  min-width: 0;
+  padding: 14px;
+  overflow-y: auto;
+  border-right: 1px solid var(--col-border);
+}
+
+.descedit-desc-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.descedit-preview-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-bottom: 8px;
+}
+
+.descedit-desc-preview {
+  border: 1px dashed var(--accent);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.descedit-chat-pane {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.descedit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--col-border);
+}
+
+.descedit-apply {
+  background: var(--accent);
+}
+
+.descedit-apply:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Start Project wizard: a .modal variant. Its confirm action is constructive
    (create/scaffold), so it uses the accent color instead of the destructive
    red the shared .modal-confirm carries for close-ticket confirmation. */

@@ -738,6 +738,61 @@ func (c *Client) ideationCall(route string, payload any) (IdeationStatus, error)
 	return st, nil
 }
 
+// DescEditStart starts (or re-attaches to) a description-edit chat session
+// for one Product-Backlog ticket.
+func (c *Client) DescEditStart(req DescEditStartRequest) (DescEditStatus, error) {
+	return c.descEditCall("descedit-start", req)
+}
+
+// DescEditReply sends the user's chat message into the running
+// description-edit session.
+func (c *Client) DescEditReply(req DescEditReplyRequest) (DescEditStatus, error) {
+	return c.descEditCall("descedit-reply", req)
+}
+
+// DescEditApply writes the session's current proposed rewrite to the
+// tracker — the modal's explicit Apply/Save action.
+func (c *Client) DescEditApply(req DescEditApplyRequest) (DescEditStatus, error) {
+	return c.descEditCall("descedit-apply", req)
+}
+
+// DescEditDiscard ends a description-edit session without writing anything to
+// the tracker — the modal's close-without-apply path (AC6).
+func (c *Client) DescEditDiscard(req DescEditDiscardRequest) (DescEditStatus, error) {
+	return c.descEditCall("descedit-discard", req)
+}
+
+// GetDescEditStatus fetches the current description-edit session snapshot.
+func (c *Client) GetDescEditStatus() (DescEditStatus, error) {
+	out, err := c.RunRemoteCapture([]string{"descedit-status"})
+	if err != nil {
+		return DescEditStatus{}, err
+	}
+	var st DescEditStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return DescEditStatus{}, errors.WrapWithDetails(err, "invalid description-edit status JSON")
+	}
+	return st, nil
+}
+
+// descEditCall marshals payload as the single JSON arg and decodes the
+// returned snapshot — mirrors ideationCall.
+func (c *Client) descEditCall(route string, payload any) (DescEditStatus, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return DescEditStatus{}, errors.WrapWithDetails(err, "marshaling "+route+" request")
+	}
+	out, err := c.RunRemoteCapture([]string{route, string(data)})
+	if err != nil {
+		return DescEditStatus{}, err
+	}
+	var st DescEditStatus
+	if err := json.Unmarshal(out, &st); err != nil {
+		return DescEditStatus{}, errors.WrapWithDetails(err, "invalid description-edit status JSON")
+	}
+	return st, nil
+}
+
 // GetPendingConfirms fetches pending destructive operation confirmations from the daemon.
 func (c *Client) GetPendingConfirms() ([]PendingConfirm, error) {
 	out, err := c.RunRemoteCapture([]string{"pending-confirms"})
