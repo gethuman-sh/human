@@ -36,7 +36,7 @@ test("fresh sessions capture an idea before starting the conversation (SC-2858)"
 test("the captured idea key is passed as StartIdeation's evolveKey (SC-2858)", () => {
   assert.match(
     sendIdeationReplyBody,
-    /StartIdeation\(text,\s*ideationMode \?\? "chat",\s*restart,\s*ideaKey,\s*\[\]\)/,
+    /StartIdeation\(text,\s*"chat",\s*restart,\s*ideaKey,\s*\[\]\)/,
     "StartIdeation must be called in evolve mode against the freshly captured idea",
   );
 });
@@ -49,13 +49,55 @@ test("no remaining direct-create call passes an empty evolveKey (SC-2858)", () =
   );
 });
 
-test("promoteIdea (the existing Ideas-column path) is untouched", () => {
-  const body = functionBody(ts, "async function promoteIdea");
+// SC-4520: promotion is a label edit plus the description editor, never an
+// agent turn. The drop branch and the function it calls are asserted together —
+// a promotion that removed the labels and opened nothing would leave the user
+// staring at a card that silently changed columns.
+test("dropping an idea on Product Backlog promotes it and opens the editor (SC-4520)", () => {
+  const performDropBody = functionBody(ts, "function performDrop(");
   assert.match(
-    body,
-    /StartIdeation\(seed,\s*"guided",\s*true,\s*card\.key,\s*card\.labels\s*\?\?\s*\[\]\)/,
-    "the drag-to-promote flow must still call StartIdeation directly with the card's own key/labels",
+    performDropBody,
+    /toQueue === "product" && info\.stage === "ideas"/,
+    "the ideas->product drop branch must still exist",
   );
+  assert.match(performDropBody, /promoteIdeaToBacklog\(info\.key\)/, "the drop must go through the promotion path");
+
+  const promoteBody = functionBody(ts, "async function promoteIdeaToBacklog");
+  assert.match(promoteBody, /go\(\)\.PromoteIdea\(/, "promotion removes the idea labels through the daemon");
+  assert.match(
+    promoteBody,
+    /openDescEditModal\(card,\s*\{\s*promoted:\s*true\s*\}\)/,
+    "and then opens the description editor with its remit widened",
+  );
+});
+
+// The guided interview, its approval park and the old promote path are retired
+// (SC-4520). A leftover comment is as much a defect as leftover code here: it
+// describes a UI that no longer exists.
+test("guided mode and the approval park are gone from board.ts (SC-4520)", () => {
+  for (const token of [
+    "async function promoteIdea(",
+    "ApproveIdeation",
+    "approveIdeation",
+    "awaiting_approval",
+    "renderIdeationOptions",
+    "renderIdeationDraft",
+    "renderModePicker",
+    "ideationMode",
+    "interface IdeationQuestion",
+    "interface IdeationDraft",
+    "ideation-mode-btn",
+    '"guided"',
+  ]) {
+    assert.ok(!ts.includes(token), `board.ts must no longer contain ${token}`);
+  }
+});
+
+test("the retired ideation markup is gone from index.html (SC-4520)", () => {
+  const html = readFileSync(resolve(here, "..", "static", "index.html"), "utf8");
+  for (const id of ["ideation-mode-picker", "ideation-options", "ideation-draft"]) {
+    assert.ok(!html.includes(id), `index.html must no longer contain #${id}`);
+  }
 });
 
 test("CreateIdea failure is caught the same way as a StartIdeation failure", () => {

@@ -42,6 +42,29 @@ func TestAgentIPRegistry_NonAgentNameUnattributed(t *testing.T) {
 
 // Mapped answers the question the liveness probe must ask before trusting an
 // in-flight count of zero (SC-3853).
+// A per-ticket auxiliary run is not a board stage, but it spends real money on
+// a real ticket: without this its outcome arrives unattributed and the cost
+// ledger drops it (SC-4520).
+func TestAttribute_AuxAgentName(t *testing.T) {
+	r := NewAgentIPRegistry()
+	r.Register("10.0.0.5", "idea-draft-SC-1")
+	r.Register("10.0.0.6", "relate-SC-1")
+	r.Register("10.0.0.7", "garbage-SC-1")
+
+	ticket, stage, ok := r.Attribute("10.0.0.5:1")
+	require.True(t, ok)
+	assert.Equal(t, "SC-1", ticket)
+	assert.Equal(t, "idea-draft", stage, "the prefix is the stage for a run that has none")
+
+	ticket, stage, ok = r.Attribute("10.0.0.6:1")
+	require.True(t, ok)
+	assert.Equal(t, "SC-1", ticket)
+	assert.Equal(t, "relate", stage)
+
+	_, _, ok = r.Attribute("10.0.0.7:1")
+	assert.False(t, ok, "the aux grammar answers for a closed list, not for any hyphenated name")
+}
+
 func TestAgentIPRegistry_Mapped(t *testing.T) {
 	r := NewAgentIPRegistry()
 	name := agentNameFor("SC-1", BoardImplementation)

@@ -16,9 +16,8 @@ test("input stays enabled for the non-terminal interactive states", () => {
   assert.equal(ideationInputEnabled("error"), true);
 });
 
-test("input is disabled while thinking or awaiting approval", () => {
+test("input is disabled while thinking", () => {
   assert.equal(ideationInputEnabled("thinking"), false);
-  assert.equal(ideationInputEnabled("awaiting_approval"), false);
 });
 
 test("done + createdKey triggers auto-close (SC-859)", () => {

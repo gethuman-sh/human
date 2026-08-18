@@ -1082,6 +1082,14 @@ body {
   font-weight: 600;
 }
 
+/* Unanswered [TBA:] questions on a drafted idea (SC-4520): the same
+   needs-a-person amber as .badge.decision — the machine refused to guess and
+   only the user can settle them. */
+.badge.tba {
+  color: var(--turn-person);
+  font-weight: 600;
+}
+
 /* A recorded decision that has (re)queued the chosen stage (SC-1320): gray
    machine-working register — the spinner carries aliveness while a fresh agent
    picks the work up (SC-1830). Never red. */
@@ -1536,92 +1544,6 @@ body {
 
 .ideation-form input.hidden {
   display: none;
-}
-
-.ideation-mode-picker {
-  display: flex;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--col-border);
-}
-
-.ideation-mode-picker.hidden {
-  display: none;
-}
-
-.ideation-mode-btn {
-  flex: 1;
-  background: var(--accent);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  padding: 8px 10px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.ideation-options {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-}
-
-.ideation-options.hidden {
-  display: none;
-}
-
-.ideation-option {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  color: var(--text);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.ideation-option:hover {
-  border-color: var(--accent);
-}
-
-.ideation-draft {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-}
-
-.ideation-draft.hidden {
-  display: none;
-}
-
-.ideation-draft-title,
-.ideation-draft-description {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  color: var(--text);
-  font-size: 13px;
-}
-
-.ideation-draft-description {
-  min-height: 120px;
-  resize: vertical;
-}
-
-.ideation-draft-submit {
-  background: var(--accent);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  padding: 8px 14px;
-  font-weight: 600;
-  cursor: pointer;
 }
 
 /* --- Ticket detail slide-out -----------------------------------------------

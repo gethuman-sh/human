@@ -165,74 +165,6 @@ func TestDetectDestructiveBypassesIdeation(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestDetectDestructiveBypassesIdeationApprove(t *testing.T) {
-	_, ok := detectDestructive([]string{"ideation-approve", `{"session_id":"x","title":"T"}`})
-	assert.False(t, ok)
-}
-
-func TestHandleIdeationApproveNilEngine(t *testing.T) {
-	token := "tok"
-	addr := startIdeationServer(t, token, nil)
-	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"ideation-approve", "{}"}})
-	assert.Equal(t, 1, resp.ExitCode)
-	assert.Contains(t, resp.Stderr, "ideation not available")
-}
-
-func TestHandleIdeationApproveBadArg(t *testing.T) {
-	token := "tok"
-	engine := newTestEngine(&fakeRunner{}, newFakeCreator(), "PRJ", nil)
-	addr := startIdeationServer(t, token, engine)
-	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"ideation-approve", "not json"}})
-	assert.Equal(t, 1, resp.ExitCode)
-	assert.Contains(t, resp.Stderr, "invalid ideation-approve request")
-}
-
-func TestHandleIdeationApproveNoSession(t *testing.T) {
-	token := "tok"
-	engine := newTestEngine(&fakeRunner{}, newFakeCreator(), "PRJ", nil)
-	addr := startIdeationServer(t, token, engine)
-
-	body, _ := json.Marshal(IdeationApproveRequest{SessionID: "nope", Title: "T"})
-	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"ideation-approve", string(body)}})
-	assert.Equal(t, 1, resp.ExitCode)
-	assert.Contains(t, resp.Stderr, "no matching ideation session")
-}
-
-func TestHandleIdeationApproveValid(t *testing.T) {
-	token := "tok"
-	runner := &fakeRunner{turns: []IdeationTurn{
-		{Reply: markerBlock("T", "D"), ResumeID: "cs-1"},
-	}}
-	engine := newTestEngine(runner, newFakeCreator(), "PRJ", nil)
-	addr := startIdeationServer(t, token, engine)
-
-	startBody, _ := json.Marshal(IdeationStartRequest{Seed: "seed", Mode: IdeationModeGuided})
-	startResp := sendRequest(t, addr, Request{Token: token, Args: []string{"ideation-start", string(startBody)}})
-	require.Equal(t, 0, startResp.ExitCode)
-	var started IdeationStatus
-	require.NoError(t, json.Unmarshal([]byte(startResp.Stdout), &started))
-
-	deadline := time.Now().Add(2 * time.Second)
-	var status IdeationStatus
-	for time.Now().Before(deadline) {
-		statusResp := sendRequest(t, addr, Request{Token: token, Args: []string{"ideation-status"}})
-		require.NoError(t, json.Unmarshal([]byte(statusResp.Stdout), &status))
-		if status.State == IdeationAwaitingApproval {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	require.Equal(t, IdeationAwaitingApproval, status.State)
-
-	approveBody, _ := json.Marshal(IdeationApproveRequest{SessionID: started.SessionID, Title: "edited title", Description: "edited desc"})
-	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"ideation-approve", string(approveBody)}})
-	assert.Equal(t, 0, resp.ExitCode)
-	var st IdeationStatus
-	require.NoError(t, json.Unmarshal([]byte(resp.Stdout), &st))
-	assert.Equal(t, IdeationDone, st.State)
-	assert.NotEmpty(t, st.CreatedKey)
-}
-
 func TestServer_ideaCreateRoute(t *testing.T) {
 	creator := newFakeCreator()
 	engine := newTestEngine(&fakeRunner{}, creator, "proj", nil)
@@ -249,6 +181,43 @@ func TestServer_ideaCreateRoute(t *testing.T) {
 	captured := creator.capturedIssue()
 	require.NotNil(t, captured)
 	assert.Equal(t, []string{tracker.IdeaLabel}, captured.Labels)
+}
+
+// Capture IS the ask for a draft, so the create route fires the drafter — and
+// it does so without making the user wait for a container to start.
+func TestHandleIdeaCreate_FiresTheDrafter(t *testing.T) {
+	launched := make(chan IdeaDraftRequest, 1)
+	srv := &Server{
+		Logger:   zerolog.Nop(),
+		Ideation: newTestEngine(&fakeRunner{}, newFakeCreator(), "proj", nil),
+		IdeaDraftLauncher: func(req IdeaDraftRequest) error {
+			launched <- req
+			return nil
+		},
+	}
+
+	resp := captureHandlerResponse(t, func(conn net.Conn) {
+		srv.handleIdeaCreate(conn, []string{`{"title":"Weekly digest email"}`})
+	})
+	require.Equal(t, 0, resp.ExitCode, "stderr: %s", resp.Stderr)
+
+	select {
+	case req := <-launched:
+		assert.Equal(t, "SC-999", req.Key)
+		assert.Equal(t, "Weekly digest email", req.Title)
+	case <-time.After(2 * time.Second):
+		t.Fatal("capturing an idea must fire the background drafter")
+	}
+}
+
+// No substrate wiring degrades to no draft, never to an error at capture.
+func TestHandleIdeaCreate_SurvivesANilLauncher(t *testing.T) {
+	srv := &Server{Logger: zerolog.Nop(), Ideation: newTestEngine(&fakeRunner{}, newFakeCreator(), "proj", nil)}
+
+	resp := captureHandlerResponse(t, func(conn net.Conn) {
+		srv.handleIdeaCreate(conn, []string{`{"title":"Weekly digest email"}`})
+	})
+	assert.Equal(t, 0, resp.ExitCode, "stderr: %s", resp.Stderr)
 }
 
 func TestServer_ideaCreateRouteBadInput(t *testing.T) {
