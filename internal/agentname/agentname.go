@@ -67,3 +67,25 @@ func ParseBoard(name string) (key, stage string, ok bool) {
 	}
 	return rest[:idx], rest[idx+1:], true
 }
+
+// AuxPrefixes are the daemon-launched runs that work on ONE ticket without
+// being a board stage: they carry no stage of their own, so the prefix IS the
+// stage as far as accounting is concerned. Listed longest-first so a prefix
+// that is a prefix of another cannot win the wrong match.
+var AuxPrefixes = []string{"idea-draft", "relate"}
+
+// Aux builds the name for an auxiliary per-ticket run.
+func Aux(prefix, key string) string { return prefix + "-" + SanitizeKey(key) }
+
+// ParseAux recovers the key and the prefix-as-stage from an auxiliary run's
+// name. It deliberately answers for a CLOSED list rather than any hyphenated
+// name: an unknown name must stay unattributed, not be decoded into a ticket
+// key that does not exist.
+func ParseAux(name string) (key, stage string, ok bool) {
+	for _, p := range AuxPrefixes {
+		if rest, found := strings.CutPrefix(name, p+"-"); found && rest != "" {
+			return rest, p, true
+		}
+	}
+	return "", "", false
+}
