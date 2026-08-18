@@ -69,3 +69,23 @@ func TestSanitizeKey(t *testing.T) {
 	assert.Equal(t, "octocat-repo-42", SanitizeKey("octocat/repo#42"))
 	assert.Equal(t, "a-b", SanitizeKey("a   b"), "a run of invalid characters collapses to one hyphen")
 }
+
+// ParseAux answers for a closed list on purpose: a name it does not recognise
+// must stay unattributed rather than be decoded into a ticket key that never
+// existed.
+func TestParseAux(t *testing.T) {
+	key, stage, ok := ParseAux(Aux("idea-draft", "SC-1"))
+	require.True(t, ok)
+	assert.Equal(t, "SC-1", key)
+	assert.Equal(t, "idea-draft", stage)
+
+	key, stage, ok = ParseAux(Aux("relate", "SC-1"))
+	require.True(t, ok)
+	assert.Equal(t, "SC-1", key)
+	assert.Equal(t, "relate", stage)
+
+	for _, name := range []string{"board-SC-1-planning", "idea-draft-", "relate-", "", "garbage-SC-1"} {
+		_, _, ok := ParseAux(name)
+		assert.False(t, ok, "ParseAux(%q) must not resolve", name)
+	}
+}

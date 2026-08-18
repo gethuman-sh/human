@@ -203,6 +203,13 @@ var specs = map[string]spec{
 	// hasCompletedRelatedRecord, which classifies found/none as a completed record.
 	"related-started": {},
 	"related":         {needsHead: true, headEnum: []string{"found", "none", "incomplete"}},
+	// The background idea drafter (SC-4520). idea-draft-started brackets the
+	// run's start; idea-draft is the PROVENANCE record, not the draft — the
+	// draft is the ticket's description, and this says who last wrote it and
+	// from what. author is required because the whole guard turns on it: a
+	// record that cannot say whose words those are cannot protect them.
+	"idea-draft-started": {},
+	"idea-draft":         {required: []string{"author"}, optional: []string{"description", "source"}},
 	// The durable "shipped-partial" trace (SC-2910, the deferred deliverable of
 	// SC-2848). Posted on the PM ticket when a deliberately-deferred acceptance
 	// criterion is sanctioned (the planner's ship-narrow-plus-follow-on fork):
