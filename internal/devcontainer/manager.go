@@ -1,6 +1,7 @@
 package devcontainer
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -30,12 +31,14 @@ type UpOptions struct {
 	Out           io.Writer
 	ContainerName string // override container name (default: derived from project dir)
 	SourceDir     string // override mount source (default: same as ProjectDir)
-	// GitDir is the parent repo's .git directory to bind at its host-identical
-	// path when SourceDir is a git worktree: a worktree's .git FILE references
-	// the parent by absolute host path, so without this bind every in-container
-	// git command fails with "not a git repository" (ticket 482). Empty for
-	// shared-checkout and non-git workspaces, whose .git travels with the
-	// source mount itself.
+	// GitDir is the repository's common .git directory to bind at its
+	// host-identical path when SourceDir is a git worktree: a worktree's .git
+	// FILE references the object store by absolute host path, so without this
+	// bind every in-container git command fails with "not a git repository"
+	// (ticket 482). The COMMON dir, because a worktree of a worktree resolves
+	// through the same one and a per-worktree .git is only a pointer to it
+	// (SC-4595). Empty for shared-checkout and non-git workspaces, whose .git
+	// travels with the source mount itself.
 	GitDir string
 
 	// cacheVolumes is populated by Up from the project's .humanconfig caches
@@ -342,8 +345,13 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 	}
 	binds = append(binds, Bind(claudeJSON, targetHome+"/.claude.json"))
 
-	// Mount host human binary so the container always uses the same version.
-	if humanBin, exeErr := os.Executable(); exeErr == nil {
+	// Mount host human binary so the container always uses the same version —
+	// but only one the container can actually execute. The image ships a linux
+	// human at this path already, so binding a macOS build over it does not pin
+	// a version, it replaces a working binary with one that answers "Exec format
+	// error" — and takes the lifecycle hooks with it, since postStartCommand
+	// installs the proxy CA by running human (SC-4596).
+	if humanBin, exeErr := os.Executable(); exeErr == nil && runsInContainer(humanBin) {
 		binds = append(binds, Bind(humanBin, "/usr/local/bin/human").ReadOnly())
 	}
 
@@ -646,4 +654,32 @@ func (m *Manager) prepareCacheVolumes(ctx context.Context, containerID, remoteUs
 		return err
 	}
 	return execInContainer(ctx, m.Docker, containerID, "root", append([]string{"chown", remoteUser}, paths...), nil, m.Logger)
+}
+
+// elfMagic is the first four bytes of every ELF executable — the format a linux
+// container can run.
+var elfMagic = []byte{0x7f, 'E', 'L', 'F'}
+
+// runsInContainer reports whether the host binary at path is in the container's
+// executable format, so a bind of it replaces the image's binary with something
+// that still runs.
+//
+// Format, not architecture: an ELF built for another CPU than the container's
+// still fails, and detecting that means reading the ELF header's machine field
+// for a mapping to Docker's platform strings. The case this exists for is the
+// whole-format mismatch a macOS or Windows host produces, which is one read of
+// four bytes. An unreadable binary answers false — the image's own binary is a
+// working fallback, and a failed launch is not.
+func runsInContainer(path string) bool {
+	f, err := os.Open(path) // #nosec G304 -- path is this process's own executable
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+
+	header := make([]byte, len(elfMagic))
+	if _, err := io.ReadFull(f, header); err != nil {
+		return false
+	}
+	return bytes.Equal(header, elfMagic)
 }

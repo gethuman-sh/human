@@ -320,6 +320,31 @@ var BranchReachable = func(ctx context.Context, dir, branch string) bool {
 	return BranchReachability(ctx, dir, branch) == ReachabilityPresent
 }
 
+// CommonGitDir returns the absolute path of the repository's COMMON git
+// directory for dir — the object store itself, shared by the main checkout and
+// every linked worktree (running `git -C <dir> rev-parse --path-format=absolute
+// --git-common-dir`).
+//
+// It is not `<dir>/.git`, and the difference is the whole reason it exists. That
+// join answers correctly only for a main checkout; in a linked worktree `.git`
+// is a pointer FILE naming a path outside the tree, so a caller that binds it
+// into a container hands over a pointer to something that is not there
+// (SC-4595). The common dir is the same directory in both topologies, and every
+// worktree's metadata lives under it, so binding it once serves them all.
+//
+// Package var so callers can stub git access in tests.
+var CommonGitDir = func(ctx context.Context, dir string) (string, error) {
+	out, err := runner(ctx, "git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", errors.WrapWithDetails(err, "resolving common git dir", "dir", dir)
+	}
+	common := strings.TrimSpace(string(out))
+	if common == "" {
+		return "", errors.WithDetails("git named no common dir", "dir", dir)
+	}
+	return common, nil
+}
+
 // WorktreeAdd creates a detached private worktree at worktreePath rooted at base
 // (running `git -C <repoDir> worktree add --detach <worktreePath> <base>`). The
 // worktree shares repoDir's object DB, so branches created inside it are visible
