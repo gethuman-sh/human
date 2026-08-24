@@ -30,14 +30,12 @@ type UpOptions struct {
 	Out           io.Writer
 	ContainerName string // override container name (default: derived from project dir)
 	SourceDir     string // override mount source (default: same as ProjectDir)
-	// GitDir is the repository's common .git directory to bind at its
-	// host-identical path when SourceDir is a git worktree: a worktree's .git
-	// FILE references the object store by absolute host path, so without this
-	// bind every in-container git command fails with "not a git repository"
-	// (ticket 482). The COMMON dir, because a worktree of a worktree resolves
-	// through the same one and a per-worktree .git is only a pointer to it
-	// (SC-4595). Empty for shared-checkout and non-git workspaces, whose .git
-	// travels with the source mount itself.
+	// GitDir is the parent repo's .git directory to bind at its host-identical
+	// path when SourceDir is a git worktree: a worktree's .git FILE references
+	// the parent by absolute host path, so without this bind every in-container
+	// git command fails with "not a git repository" (ticket 482). Empty for
+	// shared-checkout and non-git workspaces, whose .git travels with the
+	// source mount itself.
 	GitDir string
 
 	// cacheVolumes is populated by Up from the project's .humanconfig caches

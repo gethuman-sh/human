@@ -112,7 +112,7 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 		return Meta{}, err
 	}
 
-	dcMeta, err := m.startDevcontainer(ctx, containerName, configDir, workspace, worktreeGitDir(ctx, projectDir, worktree), opts.Rebuild)
+	dcMeta, err := m.startDevcontainer(ctx, containerName, configDir, workspace, worktreeGitDir(projectDir, worktree), opts.Rebuild)
 	if err != nil {
 		removeWorktreeOnFailure()
 		// A failure here is most often an unreachable Docker engine. Surface an
@@ -161,29 +161,13 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 	return meta, nil
 }
 
-// worktreeGitDir names the git directory a worktree workspace must have bound
-// alongside it — a worktree's .git FILE points at the object store by absolute
-// host path, so the container needs that path to exist (ticket 482).
-// Shared-checkout runs (no worktree) carry their .git inside the source mount
-// and need nothing extra.
-//
-// The answer is the COMMON git dir, not <projectDir>/.git. The two coincide
-// only while the project dir is a main checkout; when the project dir is itself
-// a linked worktree — a daemon registered on one, which is the ordinary way to
-// run several projects off one repo — <projectDir>/.git is a pointer file, and
-// binding it gave the container a pointer to an unmounted path. Every git
-// command then answered "not a git repository", and the board recorded the
-// stage failure as the ticket's rather than the container's (SC-4595).
-//
-// Falling back to the join keeps a launch that git cannot answer for working
-// exactly as it did before, rather than dropping the mount entirely and
-// breaking the main-checkout case too.
-func worktreeGitDir(ctx context.Context, projectDir, worktree string) string {
+// worktreeGitDir names the parent repo's .git for a worktree workspace — a
+// worktree's .git FILE points there by absolute host path, so the container
+// must bind it alongside (ticket 482). Shared-checkout runs (no worktree)
+// carry their .git inside the source mount and need nothing extra.
+func worktreeGitDir(projectDir, worktree string) string {
 	if worktree == "" {
 		return ""
-	}
-	if common, err := gitrepo.CommonGitDir(ctx, projectDir); err == nil {
-		return common
 	}
 	return filepath.Join(projectDir, ".git")
 }
@@ -193,11 +177,11 @@ func resolveDirectories(opts StartOpts) (workspace, configDir string) {
 	if workspace == "" {
 		workspace = "."
 	}
-	// Must be absolute: it becomes projectDir, which worktreeGitDir turns into
-	// a Docker bind-mount source — Docker rejects a relative mount path
-	// outright ("invalid mount path: '.git' must be absolute") whenever a
-	// caller (e.g. the CLI's default "." workspace) leaves it relative, and the
-	// fallback join is exactly such a path.
+	// Must be absolute: it becomes projectDir, which worktreeGitDir joins
+	// with ".git" to produce a Docker bind-mount source — Docker rejects a
+	// relative mount path outright ("invalid mount path: '.git' must be
+	// absolute") whenever a caller (e.g. the CLI's default "." workspace)
+	// leaves it relative.
 	if abs, err := filepath.Abs(workspace); err == nil {
 		workspace = abs
 	}
