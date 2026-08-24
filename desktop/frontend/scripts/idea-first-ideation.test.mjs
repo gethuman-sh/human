@@ -1,12 +1,11 @@
-// Regression guard for SC-2858: every fresh ideation session — however the
-// panel was opened (today: only the post-import "Create first ticket"
-// prompt; SC-4485 removed the Product "+" and sidebar rail "+" button
-// triggers, leaving the guided-Q&A flow itself reachable only via
-// drag-to-Product/promote-from-Ideas) — must capture an idea first and
-// continue in evolve mode, rather than creating a finished ticket outright.
-// The frontend is intentionally dependency-free (no DOM test runner), so
-// this asserts the source wiring rather than rendering, like
-// ideation-done.test.mjs.
+// Regression guard for SC-2858, now kept by construction (SC-4520): no board
+// surface starts an ideation session at all, so none can create a finished
+// ticket outright. Capture is the only way in — the Ideas column's `+` and the
+// post-import "Create first ticket" prompt both open the same quick-add — and
+// what a captured idea becomes is decided by the background drafter and the
+// description editor at promotion.
+// The frontend is intentionally dependency-free (no DOM test runner), so this
+// asserts the source wiring rather than rendering, like ideation-done.test.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -25,28 +24,34 @@ function functionBody(source, signature) {
 
 const sendIdeationReplyBody = functionBody(ts, "async function sendIdeationReply");
 
-test("fresh sessions capture an idea before starting the conversation (SC-2858)", () => {
-  assert.match(
-    sendIdeationReplyBody,
-    /const ideaKey = await go\(\)\.CreateIdea\(text\)/,
-    "a fresh session must call CreateIdea with the seed text before starting the conversation",
-  );
+test("no board surface starts an ideation session (SC-2858, SC-4520)", () => {
+  assert.ok(!ts.includes("StartIdeation"), "board.ts must not call or declare the StartIdeation binding");
+  assert.doesNotMatch(ts, /openIdeation\(/, "nothing may open the ideation panel");
+  assert.doesNotMatch(ts, /function openIdeation/, "and the opener itself is gone");
 });
 
-test("the captured idea key is passed as StartIdeation's evolveKey (SC-2858)", () => {
+test("sendIdeationReply only replies into a session that already exists (SC-2858)", () => {
   assert.match(
     sendIdeationReplyBody,
-    /StartIdeation\(text,\s*"chat",\s*restart,\s*ideaKey,\s*\[\]\)/,
-    "StartIdeation must be called in evolve mode against the freshly captured idea",
+    /const sessionId = ideation\.sessionId;\n  if \(!text \|\| !sessionId\) return;/,
+    "a reply with no live session must be refused, not turned into a fresh one",
   );
+  assert.match(sendIdeationReplyBody, /go\(\)\.ReplyIdeation\(sessionId, text\)/);
+  assert.doesNotMatch(sendIdeationReplyBody, /CreateIdea/, "the fresh-session branch is gone");
 });
 
-test("no remaining direct-create call passes an empty evolveKey (SC-2858)", () => {
-  assert.doesNotMatch(
-    sendIdeationReplyBody,
-    /StartIdeation\([^)]*,\s*""\s*,\s*\[\]\)/,
-    "a future edit must not silently reintroduce the direct-create (empty evolveKey) path",
-  );
+// The post-import prompt is the flow criterion 18b's retirement had to rehome:
+// it used to capture an idea and then evolve it in a chat. It now captures an
+// idea and stops — the drafter writes the description, promotion opens the
+// editor.
+test("the post-import prompt captures an idea (SC-4520)", () => {
+  const wizardBody = functionBody(ts, "function renderStartWizard(): void {");
+  assert.match(wizardBody, /captureFirstIdea\(\);/, "Create-first-ticket must go through idea capture");
+  assert.doesNotMatch(wizardBody, /Ideation/, "and must not reach the ideation panel");
+
+  const captureBody = functionBody(ts, "function captureFirstIdea(): void {");
+  assert.match(captureBody, /querySelector<HTMLElement>\("\.idea-subcol"\)/);
+  assert.match(captureBody, /showIdeaQuickAdd\(col\)/, "it opens the Ideas column's own quick-add");
 });
 
 // SC-4520: promotion is a label edit plus the description editor, never an
@@ -71,10 +76,10 @@ test("dropping an idea on Product Backlog promotes it and opens the editor (SC-4
   );
 });
 
-// The guided interview, its approval park and the old promote path are retired
-// (SC-4520). A leftover comment is as much a defect as leftover code here: it
-// describes a UI that no longer exists.
-test("guided mode and the approval park are gone from board.ts (SC-4520)", () => {
+// The guided interview, its approval park, the old promote path and evolve mode
+// are retired (SC-4520). A leftover comment is as much a defect as leftover code
+// here: it describes a UI that no longer exists.
+test("guided mode, the approval park and evolve mode are gone from board.ts (SC-4520)", () => {
   for (const token of [
     "async function promoteIdea(",
     "ApproveIdeation",
@@ -88,6 +93,8 @@ test("guided mode and the approval park are gone from board.ts (SC-4520)", () =>
     "interface IdeationDraft",
     "ideation-mode-btn",
     '"guided"',
+    "evolveKey",
+    "evolveLabels",
   ]) {
     assert.ok(!ts.includes(token), `board.ts must no longer contain ${token}`);
   }
@@ -100,27 +107,9 @@ test("the retired ideation markup is gone from index.html (SC-4520)", () => {
   }
 });
 
-test("CreateIdea failure is caught the same way as a StartIdeation failure", () => {
-  const tryStart = sendIdeationReplyBody.indexOf("try {");
-  const catchStart = sendIdeationReplyBody.indexOf("} catch (err) {", tryStart);
-  assert.ok(tryStart >= 0 && catchStart > tryStart, "sendIdeationReply must have a try/catch block");
-  const tryBlock = sendIdeationReplyBody.slice(tryStart, catchStart);
-  assert.match(tryBlock, /go\(\)\.CreateIdea\(/, "CreateIdea must be called inside the try block");
-  assert.match(tryBlock, /go\(\)\.StartIdeation\(/, "StartIdeation must be called inside the same try block");
-
-  const catchBlock = sendIdeationReplyBody.slice(
-    catchStart,
-    sendIdeationReplyBody.indexOf("}", sendIdeationReplyBody.indexOf("return;", catchStart)) + 1,
-  );
-  assert.match(catchBlock, /renderIdeationError\(errMessage\(err\)\)/);
-  assert.match(catchBlock, /stopIdeationPoll\(\)/);
-  assert.match(catchBlock, /return;/);
-});
-
-// SC-4485: the Product-lane and sidebar rail "+" buttons are removed — only
-// the Ideas column's own "+" (renderIdeaSpace, untouched) and the post-import
-// "Create first ticket" prompt (renderStartWizard, untouched) still open the
-// ideation panel.
+// SC-4485: the Product-lane and sidebar rail "+" buttons are removed. With the
+// post-import prompt rehomed onto capture (SC-4520), the Ideas column's own "+"
+// is the only button left that creates anything.
 test("the Product-lane add-card button is gone from renderColumn (SC-4485)", () => {
   assert.doesNotMatch(ts, /New ticket via ideation/, "the Product-lane button title must not remain");
   const renderColumnBody = functionBody(ts, "function renderColumn(queue: string): HTMLElement {");
@@ -131,16 +120,10 @@ test("the Product-lane add-card button is gone from renderColumn (SC-4485)", () 
 test("wireRail no longer wires a data-action ideation branch (SC-4485)", () => {
   const wireRailBody = functionBody(ts, "function wireRail(): void {");
   assert.doesNotMatch(wireRailBody, /dataset\.action/, "the dead action-item branch must be removed");
-  assert.doesNotMatch(wireRailBody, /openIdeation/, "wireRail must no longer call openIdeation directly");
 });
 
 test("the Ideas column's own quick-add is unchanged (SC-4485)", () => {
   const renderIdeaSpaceBody = functionBody(ts, "function renderIdeaSpace(): HTMLElement {");
   assert.match(renderIdeaSpaceBody, /Capture an idea/, "the Ideas column's own + must remain");
   assert.match(renderIdeaSpaceBody, /showIdeaQuickAdd\(subcols\[0\]\)/, "its quick-add wiring must remain");
-});
-
-test("the post-import prompt still opens ideation directly (SC-4485, out of scope)", () => {
-  const wizardBody = functionBody(ts, "function renderStartWizard(): void {");
-  assert.match(wizardBody, /void openIdeation\(\);/, "renderStartWizard's Create-first-ticket path must be untouched");
 });

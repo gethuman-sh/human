@@ -1222,6 +1222,17 @@ function showIdeaQuickAdd(col, prefill = "") {
             input.remove();
     });
 }
+// captureFirstIdea is what the post-import "Create first ticket" prompt does:
+// the first ticket is an idea like every other one — a title, captured, drafted
+// in the background, promoted when the user is ready. It opens the Ideas
+// column's own quick-add rather than a chat panel, so there is exactly one way
+// into ticket creation. A board that has not rendered its columns yet leaves
+// the user the `+` button, which is the same gesture.
+function captureFirstIdea() {
+    const col = document.querySelector(".idea-subcol");
+    if (col)
+        showIdeaQuickAdd(col);
+}
 // renderPendingCard builds the placeholder card for a ticket (idea or bug)
 // still being created: a spinner sits where the ticket number will land. No
 // drag, no menu — there is no ticket to act on yet.
@@ -2975,25 +2986,12 @@ function renderTicketDetail() {
         });
     });
 }
-async function openIdeation() {
-    // Mirror of the exclusivity in openTicketDetail: both panels occupy the
-    // fixed right edge, so opening one always closes the other.
-    closeTicketDetail();
-    const panel = document.getElementById("ideation-panel");
-    if (panel)
-        panel.classList.remove("hidden");
-    ideationOpen = true;
-    try {
-        ideation = await go().IdeationStatus();
-    }
-    catch (err) {
-        renderIdeationError(errMessage(err));
-        return;
-    }
-    renderIdeation();
-    if (ideation.state === "thinking")
-        startIdeationPoll();
-}
+// No openIdeation: SC-4520 took away the last thing that opened this panel.
+// Promotion is a label edit plus the description editor, and the post-import
+// prompt captures an idea, so nothing starts an ideation session from the
+// board. The panel below stays wired to a session that can only pre-date this
+// build — its own teardown, with the daemon engine and routes it talks to, is
+// the follow-on's.
 function closeIdeation() {
     const panel = document.getElementById("ideation-panel");
     if (panel)
@@ -3022,14 +3020,20 @@ async function pollIdeation() {
         stopIdeationPoll();
     }
 }
-// sendIdeationReply carries the freeform input text into the running session —
-// just `message: string` to ReplyIdeation, and `seed: string` to StartIdeation
-// on a fresh session.
+// sendIdeationReply carries the freeform input text into the running session.
+//
+// Replies only. SC-2858's rule — a session must start from a captured idea,
+// never a ticket created outright — is now kept by construction: SC-4520 left
+// no surface that starts one. Promotion is a label edit plus the description
+// editor, and the post-import prompt captures an idea like the Ideas `+` does,
+// so the panel can only ever be re-attached to a session that already exists.
 async function sendIdeationReply(text) {
-    if (!text)
+    // Read the session id BEFORE the optimistic update below reassigns
+    // `ideation` — reassignment drops the narrowing the guard just established,
+    // and the id is what the reply is addressed to.
+    const sessionId = ideation.sessionId;
+    if (!text || !sessionId)
         return;
-    const isFresh = ideation.state === "none" || ideation.state === "done" || ideation.state === "error";
-    const restart = ideation.state === "done" || ideation.state === "error";
     // Optimistic update: show the user's message immediately and disable the
     // input while the turn is in flight.
     ideation = {
@@ -3040,20 +3044,7 @@ async function sendIdeationReply(text) {
     renderIdeation();
     startIdeationPoll();
     try {
-        if (isFresh) {
-            // SC-2858 (SC-4485 narrowed the entry points, not this rule): a fresh
-            // session — today reachable only via the post-import "Create first
-            // ticket" prompt — must start from a captured idea, never a ticket
-            // created outright. The seed text becomes the idea's title, then the
-            // same conversation continues in evolve mode against that freshly
-            // captured ticket. The idea marker stays on the ticket until the
-            // conversation's terminal action (evolveTicket) removes it.
-            const ideaKey = await go().CreateIdea(text);
-            ideation = await go().StartIdeation(text, "chat", restart, ideaKey, []);
-        }
-        else {
-            ideation = await go().ReplyIdeation(ideation.sessionId, text);
-        }
+        ideation = await go().ReplyIdeation(sessionId, text);
     }
     catch (err) {
         renderIdeationError(errMessage(err));
@@ -3236,7 +3227,7 @@ function renderStartWizard() {
         modal.querySelector(".modal-cancel").addEventListener("click", () => closeStartWizard());
         modal.querySelector(".modal-confirm").addEventListener("click", () => {
             closeStartWizard();
-            void openIdeation();
+            captureFirstIdea();
         });
         return;
     }

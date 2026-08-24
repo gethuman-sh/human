@@ -29,10 +29,10 @@ func ValidateIdeaPromote(req IdeaPromoteRequest) error {
 // falling back to the canonical pair when the caller sent none (removing an
 // absent label is a no-op, so the fallback is safe).
 //
-// Lifted out of the ideation engine's evolveTicket, which SC-4520 takes off the
-// promotion path: promotion calls this directly now, and evolveTicket — still
-// reached by the post-import "Create first ticket" flow — calls it too, so the
-// rule that decides what promotion strips has one home.
+// Lifted out of the ideation engine's terminal action, which SC-4520 retired
+// along with the whole agent-driven promotion path: this route is the only
+// thing that strips an idea's labels now, so the rule has one home and one
+// caller.
 func IdeaLabelsToRemove(labels []string) []string {
 	var idea []string
 	for _, l := range labels {

@@ -829,21 +829,19 @@ type IdeationView struct {
 }
 
 // StartIdeation begins (or re-attaches to) the board ideation session. chat is
-// the only mode; empty defaults to it in the daemon engine. evolveKey (with the
-// card's idea labels) switches the session to evolve mode: the outcome rewrites
-// that ticket in place instead of creating one — the post-import "Create first
-// ticket" flow.
-func (a *App) StartIdeation(seed, mode string, restart bool, evolveKey string, evolveLabels []string) (IdeationView, error) {
+// the only mode; empty defaults to it in the daemon engine. The session creates
+// a PM ticket: SC-4520 retired the evolve mode that rewrote an existing idea
+// ticket, together with the promotion path and the post-import prompt that were
+// its only callers. No board surface starts a session today.
+func (a *App) StartIdeation(seed, mode string, restart bool) (IdeationView, error) {
 	client, err := a.daemonClient()
 	if err != nil {
 		return IdeationView{}, err
 	}
 	st, err := client.IdeationStart(daemon.IdeationStartRequest{
-		Seed:         seed,
-		Mode:         daemon.IdeationMode(mode),
-		Restart:      restart,
-		EvolveKey:    evolveKey,
-		EvolveLabels: evolveLabels,
+		Seed:    seed,
+		Mode:    daemon.IdeationMode(mode),
+		Restart: restart,
 	})
 	if err != nil {
 		return IdeationView{}, daemonCause(err)

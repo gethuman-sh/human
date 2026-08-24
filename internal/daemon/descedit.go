@@ -103,6 +103,12 @@ type descEditSession struct {
 	promoted           bool
 }
 
+// PMEditorResolver resolves the PM-role tracker's Editor. The description
+// editor is its owner — Apply is the only agent-driven path that writes a
+// ticket's description — and the promote route resolves the same way for the
+// label edit.
+type PMEditorResolver func() (tracker.Editor, error)
+
 // DescEditEngine owns the single active Product-Backlog description-edit
 // session. All exported methods are safe for concurrent use. Unlike
 // IdeationEngine, sessions are NOT persisted across a daemon restart: nothing
@@ -110,7 +116,7 @@ type descEditSession struct {
 // unsaved chat is low-cost (see plan's Architecture Decisions).
 type DescEditEngine struct {
 	Runner        DescEditRunner
-	ResolveEditor PMEditorResolver // reused from ideation.go — role-resolved PM tracker.Editor
+	ResolveEditor PMEditorResolver // role-resolved PM tracker.Editor; the sole write path
 	// ResolveCommenter resolves the PM tracker's commenter used to record that
 	// an applied description is now the human's words. nil disables the record,
 	// which costs the guard nothing it had before.

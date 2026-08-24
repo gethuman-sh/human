@@ -4299,8 +4299,9 @@ func resolvePMCreator(dir string, lookup config.EnvLookup, resolver *vault.Resol
 	return nil, "", errors.WithDetails("no PM-role tracker configured", "dir", dir)
 }
 
-// resolvePMEditor resolves the PM-role tracker.Editor for evolve-mode idea
-// promotion. Role-based, never key-prefix — mirrors resolvePMCommenter.
+// resolvePMEditor resolves the PM-role tracker.Editor used by the description
+// editor's Apply and by idea promotion's label edit. Role-based, never
+// key-prefix — mirrors resolvePMCommenter.
 func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.Editor, error) {
 	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
 	if err != nil {
@@ -4321,8 +4322,9 @@ func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 }
 
 // ideationEngine wires the board ideation engine: host claude runner, role-
-// resolved PM creator/editor, and a hook-store poke so the created card
-// reaches the board through the existing subscribe/refetch loop.
+// resolved PM creator, and a hook-store poke so the created card reaches the
+// board through the existing subscribe/refetch loop. No editor: a session
+// creates a ticket and never rewrites one (SC-4520 retired evolve mode).
 func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, store daemon.IdeationStore, logger zerolog.Logger) *daemon.IdeationEngine {
 	firstEntry := func() (daemon.ProjectEntry, error) {
 		return reg.SoleEntry()
@@ -4335,13 +4337,6 @@ func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookS
 				return nil, "", err
 			}
 			return resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
-		},
-		ResolveEditor: func() (tracker.Editor, error) {
-			entry, err := firstEntry()
-			if err != nil {
-				return nil, err
-			}
-			return resolvePMEditor(entry.Dir, entry.EnvLookup(), resolver)
 		},
 		Notify: func() {
 			hookStore.Append(hookevents.Event{EventName: "IdeationCreated", Timestamp: time.Now().UTC()})

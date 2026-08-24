@@ -233,9 +233,10 @@ type BoardViewCard struct {
 	// non-launchable — so a transient fetch failure never presents as idle,
 	// actionable Backlog work (1700).
 	Degraded bool `json:"degraded,omitempty"`
-	// Labels and Description feed the Ideas→Backlog promotion: labels tell
-	// the evolve session which idea labels to remove, the description seeds
-	// the ideation conversation alongside the title.
+	// Labels and Description feed the Ideas→Backlog promotion: labels tell the
+	// promote route which idea labels to remove, and the description is what
+	// the editor the board opens next starts from — the drafter's text, or
+	// nothing if no draft ran.
 	Labels      []string `json:"labels,omitempty"`
 	Description string   `json:"description,omitempty"`
 	// Assignee is the ticket owner shown in the detail panel. Display-only:

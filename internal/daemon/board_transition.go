@@ -275,10 +275,10 @@ func (d BoardTransitionDeps) ApplyRetryTransition(ctx context.Context, req Board
 // chain caller that only cares whether the move was accepted.
 func (d BoardTransitionDeps) applyTransition(ctx context.Context, req BoardTransitionRequest) (launched bool, err error) {
 	// Ideas never move via board transitions: promotion out of the Ideas
-	// column is a label swap performed by the ideation engine's evolve mode,
-	// which the desktop opens instead of calling this route.
+	// column is a label edit, performed by the idea-promote route the desktop
+	// calls instead of this one.
 	if req.From == BoardIdeas || req.To == BoardIdeas {
-		return false, errors.WithDetails("ideas transitions are handled via ideation",
+		return false, errors.WithDetails("ideas transitions are handled via the idea-promote route",
 			"pm", req.PMKey, "from", string(req.From), "to", string(req.To))
 	}
 
