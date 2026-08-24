@@ -62,7 +62,13 @@ type BoardFreshnessOpts struct {
 //
 // The listing it already paid for is handed to Observe, which is how a
 // per-ticket watcher (the idea drafter's redraft trigger) sees tracker-side
-// changes without a second listing of its own.
+// changes without a second listing of its own — and therefore inside the same
+// HasWatchers gate. A change made to an idea while no board is open raises its
+// redraft at the first tick after one opens, not at the moment of the edit.
+// That is the deliberate trade: the alternative is listing the tracker around
+// the clock on every machine running a daemon, to write a draft nobody is
+// waiting for. Ideas captured on the board — the case the feature exists for —
+// draft immediately from their own launch at capture, not from this poll.
 func RunBoardFreshnessPoll(ctx context.Context, opts BoardFreshnessOpts) {
 	if opts.List == nil || opts.Poke == nil || opts.HasWatchers == nil {
 		return

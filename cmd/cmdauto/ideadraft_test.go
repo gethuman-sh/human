@@ -26,10 +26,13 @@ type draftStub struct {
 	// stripTBA models a tracker whose editor rewrites the stored text — the
 	// round-trip this ticket could not verify from code.
 	stripTBA bool
-	comments []tracker.Comment
-	edits    []tracker.EditOptions
-	posted   []string
-	now      time.Time
+	// commentErr models the tracker accepting the description edit and then
+	// refusing the provenance comment — the half-written run.
+	commentErr error
+	comments   []tracker.Comment
+	edits      []tracker.EditOptions
+	posted     []string
+	now        time.Time
 }
 
 func (d *draftStub) GetIssue(context.Context, string) (*tracker.Issue, error) {
@@ -45,6 +48,9 @@ func (d *draftStub) ListComments(context.Context, string) ([]tracker.Comment, er
 }
 
 func (d *draftStub) AddComment(_ context.Context, _ string, body string) (*tracker.Comment, error) {
+	if d.commentErr != nil {
+		return nil, d.commentErr
+	}
 	d.now = d.now.Add(time.Minute)
 	c := tracker.Comment{Body: body, Created: d.now}
 	d.comments = append(d.comments, c)
@@ -192,4 +198,81 @@ func TestValidateIdeaDraftOpts(t *testing.T) {
 	assert.NoError(t, validateIdeaDraftOpts(IdeaDraftOpts{Check: true}))
 	assert.NoError(t, validateIdeaDraftOpts(IdeaDraftOpts{StandDown: true}))
 	assert.NoError(t, validateIdeaDraftOpts(IdeaDraftOpts{DescriptionFile: "x"}))
+}
+
+// A failed run leaves the description byte-identical to what it was — the
+// acceptance criterion, and the reason the provenance comment is not allowed to
+// fail quietly: machine-written words no record claims read as a human's
+// forever after.
+func TestRunIdeaDraft_RestoresTheDescriptionWhenTheRecordFails(t *testing.T) {
+	p := newDraftStub("")
+	p.commentErr = assert.AnError
+
+	var buf bytes.Buffer
+	err := RunIdeaDraft(context.Background(), p, &buf, "SC-1",
+		IdeaDraftOpts{DescriptionFile: draftFile(t, "a draft [TBA: who?]")})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the description was put back")
+	assert.Empty(t, p.issue.Description, "the ticket is as the run found it")
+	require.Len(t, p.edits, 2, "the write and the undo")
+	require.NotNil(t, p.edits[1].Description)
+	assert.Empty(t, *p.edits[1].Description)
+	assert.Empty(t, p.posted)
+
+	// And the next run is still free to draft: nothing on the ticket claims a
+	// human wrote anything.
+	p.commentErr = nil
+	res, _ := runDraft(t, p, IdeaDraftOpts{DescriptionFile: draftFile(t, "a second try")})
+	assert.True(t, res.Written)
+}
+
+// A rollback that itself fails must say both things: the run failed AND the
+// ticket is not as it was.
+func TestRunIdeaDraft_ReportsAFailedRestore(t *testing.T) {
+	p := &failingEditStub{draftStub: newDraftStub(""), failEditAfter: 1}
+	p.commentErr = assert.AnError
+
+	var buf bytes.Buffer
+	err := RunIdeaDraft(context.Background(), p, &buf, "SC-1",
+		IdeaDraftOpts{DescriptionFile: draftFile(t, "a draft")})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not be put back")
+}
+
+// failingEditStub lets the first EditIssue through and refuses the rest, so the
+// undo fails while the write succeeded.
+type failingEditStub struct {
+	*draftStub
+	failEditAfter int
+	edited        int
+}
+
+func (f *failingEditStub) EditIssue(ctx context.Context, key string, opts tracker.EditOptions) (*tracker.Issue, error) {
+	f.edited++
+	if f.edited > f.failEditAfter {
+		return nil, assert.AnError
+	}
+	return f.draftStub.EditIssue(ctx, key, opts)
+}
+
+// A ticket that lost its idea label is NOT a ticket whose description a human
+// wrote: recording one there would freeze the words of a re-labelled ticket
+// forever.
+func TestRunIdeaDraft_StandDownOnANonIdeaRecordsNothing(t *testing.T) {
+	p := newDraftStub("machine words")
+	p.issue.Labels = nil
+
+	res, _ := runDraft(t, p, IdeaDraftOpts{StandDown: true})
+
+	assert.Equal(t, string(ideadraft.VerdictStandDown), res.Decision)
+	assert.Equal(t, string(ideadraft.ReasonNotAnIdea), res.Reason)
+	assert.Empty(t, p.posted, "no human record for a stand-down about labels")
+
+	// Re-labelled as an idea, the description is still unclaimed — the guard
+	// stands down on provenance, not on a record this run must not have left.
+	p.issue.Labels = []string{"human/idea"}
+	again, _ := runDraft(t, p, IdeaDraftOpts{Check: true})
+	assert.Equal(t, string(ideadraft.ReasonUnknownProvenance), again.Reason)
 }

@@ -50,6 +50,32 @@ var FieldOrder = []string{FieldAuthor, FieldDescription, FieldSource}
 // Verdict is what the guard permits.
 type Verdict string
 
+// Reason names WHY a verdict was reached. It is a value rather than prose so a
+// caller can branch on it — the stand-downs are not interchangeable, and the
+// one that means "this ticket is no longer an idea" must not be recorded as
+// "a human wrote these words".
+type Reason string
+
+const (
+	// ReasonNotAnIdea is a stand-down about the ticket's LABELS, not about who
+	// wrote its description.
+	ReasonNotAnIdea Reason = "not an idea ticket"
+	// ReasonHumanAuthored is a stand-down on an existing human record.
+	ReasonHumanAuthored Reason = "a human authored this description"
+	// ReasonNoPriorDraft admits the first draft.
+	ReasonNoPriorDraft Reason = "no description and no prior draft"
+	// ReasonUnknownProvenance is a stand-down on words nobody recorded writing.
+	ReasonUnknownProvenance Reason = "description of unknown provenance"
+	// ReasonChangedSinceDraft is a stand-down on words edited since the machine
+	// wrote them.
+	ReasonChangedSinceDraft Reason = "description changed since the machine wrote it"
+	// ReasonAlreadyCurrent means the draft still matches its input.
+	ReasonAlreadyCurrent Reason = "the draft is already current"
+	// ReasonSourceChanged admits a redraft: the machine owns the description
+	// and the input it was drafted from has changed.
+	ReasonSourceChanged Reason = "the machine wrote the current description and its source changed"
+)
+
 const (
 	// VerdictWrite means the machine may write its draft.
 	VerdictWrite Verdict = "write"
@@ -112,30 +138,39 @@ func LatestProvenance(comments []tracker.Comment) Provenance {
 // It is deliberately fail-safe: every condition it cannot account for lands on
 // stand-down, because writing over a human's words costs more than skipping a
 // draft.
-func Decide(isIdea bool, title, description string, comments []tracker.Comment) (Verdict, string) {
+func Decide(isIdea bool, title, description string, comments []tracker.Comment) (Verdict, Reason) {
 	// Promotion removes the idea labels while a debounced redraft may still be
 	// armed for the key; a ticket that is no longer an idea is being edited by
 	// a person and must never be written into.
 	if !isIdea {
-		return VerdictStandDown, "not an idea ticket"
+		return VerdictStandDown, ReasonNotAnIdea
 	}
 	p := LatestProvenance(comments)
 	if p.Found && p.Author == AuthorHuman {
-		return VerdictStandDown, "a human authored this description"
+		return VerdictStandDown, ReasonHumanAuthored
 	}
 	if !p.Found {
 		if strings.TrimSpace(description) == "" {
-			return VerdictWrite, "no description and no prior draft"
+			return VerdictWrite, ReasonNoPriorDraft
 		}
-		return VerdictStandDown, "description of unknown provenance"
+		return VerdictStandDown, ReasonUnknownProvenance
 	}
 	if description != "" && Fingerprint(description) != p.Description {
-		return VerdictStandDown, "description changed since the machine wrote it"
+		return VerdictStandDown, ReasonChangedSinceDraft
 	}
 	if SourceFingerprint(title) == p.Source {
-		return VerdictCurrent, "the draft is already current"
+		return VerdictCurrent, ReasonAlreadyCurrent
 	}
-	return VerdictWrite, "the machine wrote the current description and its source changed"
+	return VerdictWrite, ReasonSourceChanged
+}
+
+// PinsHuman reports whether a stand-down should be recorded as human
+// authorship. Only the ones ABOUT the description qualify: pinning a
+// stand-down that merely means "this ticket carries no idea label any more"
+// would freeze the description of a ticket that is later re-labelled as an
+// idea, and nothing would ever draft it again.
+func PinsHuman(v Verdict, r Reason) bool {
+	return v == VerdictStandDown && r != ReasonNotAnIdea
 }
 
 // MachineRecord builds the provenance marker for text the machine just wrote.

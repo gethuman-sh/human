@@ -107,16 +107,16 @@ func RunIdeaDraft(ctx context.Context, p tracker.Provider, out io.Writer, key st
 		return err
 	}
 	verdict, reason := ideadraft.Decide(issue.IsIdea(), issue.Title, issue.Description, comments)
-	res := ideaDraftResult{Key: key, Decision: string(verdict), Reason: reason, TBA: ideadraft.TBACount(issue.Description)}
+	res := ideaDraftResult{Key: key, Decision: string(verdict), Reason: string(reason), TBA: ideadraft.TBACount(issue.Description)}
 
 	switch {
 	case opts.Check:
 	case opts.StandDown:
-		if err := recordStandDown(ctx, p, key, issue.Description, verdict, comments); err != nil {
+		if err := recordStandDown(ctx, p, key, issue.Description, verdict, reason, comments); err != nil {
 			return err
 		}
 	case verdict == ideadraft.VerdictWrite:
-		if err := writeIdeaDraft(ctx, p, key, issue.Title, opts, &res); err != nil {
+		if err := writeIdeaDraft(ctx, p, key, issue.Title, issue.Description, opts, &res); err != nil {
 			return err
 		}
 	}
@@ -126,8 +126,13 @@ func RunIdeaDraft(ctx context.Context, p tracker.Provider, out io.Writer, key st
 // recordStandDown pins the current description as the human's. It is
 // idempotent: a ticket already carrying a human record for these exact bytes
 // gains nothing from a second one.
-func recordStandDown(ctx context.Context, p tracker.Provider, key, description string, verdict ideadraft.Verdict, comments []tracker.Comment) error {
-	if verdict != ideadraft.VerdictStandDown {
+//
+// Only a stand-down ABOUT the description is recorded (ideadraft.PinsHuman): a
+// ticket that stood down because its idea label is gone gets no record, or a
+// re-labelled ticket would carry a human record for words the machine wrote and
+// could never be drafted again.
+func recordStandDown(ctx context.Context, p tracker.Provider, key, description string, verdict ideadraft.Verdict, reason ideadraft.Reason, comments []tracker.Comment) error {
+	if !ideadraft.PinsHuman(verdict, reason) {
 		return nil
 	}
 	prev := ideadraft.LatestProvenance(comments)
@@ -142,7 +147,12 @@ func recordStandDown(ctx context.Context, p tracker.Provider, key, description s
 // the ticket back: what cannot be checked from code is whether the tracker's
 // own editor preserves the literal [TBA: text, so the first real run answers it
 // instead of the assumption failing silently.
-func writeIdeaDraft(ctx context.Context, p tracker.Provider, key, title string, opts IdeaDraftOpts, res *ideaDraftResult) error {
+//
+// prior is the description as it was, so a failed provenance record can be
+// undone. The two writes are not atomic and the tracker offers no transaction;
+// what CAN be held is that a run either finishes both or leaves the ticket as
+// it found it.
+func writeIdeaDraft(ctx context.Context, p tracker.Provider, key, title, prior string, opts IdeaDraftOpts, res *ideaDraftResult) error {
 	text, err := readIdeaDraftText(opts)
 	if err != nil {
 		return err
@@ -154,13 +164,30 @@ func writeIdeaDraft(ctx context.Context, p tracker.Provider, key, title string, 
 		return err
 	}
 	if _, err := p.AddComment(ctx, key, marker.Render(ideadraft.MachineRecord(text, title), ideadraft.FieldOrder)); err != nil {
-		return err
+		return restoreIdeaDescription(ctx, p, key, prior, err)
 	}
 	res.Written = true
 	res.TBA = ideadraft.TBACount(text)
 	after, err := p.GetIssue(ctx, key)
 	res.RoundtripOK = err == nil && after != nil && ideadraft.TBACount(after.Description) == res.TBA
 	return nil
+}
+
+// restoreIdeaDescription puts back the description a failed run had already
+// written. Without it the ticket keeps machine-written words that no record
+// claims, every later run reads them as unknown provenance and stands down, and
+// that draft is frozen for good — the one failure mode the guard cannot tell
+// from a human's edit. Restoring is safe precisely because the guard let this
+// run write: prior was empty or the machine's own previous draft, never a
+// person's words.
+func restoreIdeaDescription(ctx context.Context, p tracker.Provider, key, prior string, cause error) error {
+	if _, err := p.EditIssue(ctx, key, tracker.EditOptions{Description: &prior}); err != nil {
+		return errors.WrapWithDetails(cause,
+			"recording the draft failed and the description could not be put back",
+			"key", key, "restore_error", err.Error())
+	}
+	return errors.WrapWithDetails(cause,
+		"recording the draft failed; the description was put back as it was", "key", key)
 }
 
 func readIdeaDraftText(opts IdeaDraftOpts) (string, error) {

@@ -38,7 +38,7 @@ func TestDecide_NoMarkerEmptyDescription(t *testing.T) {
 func TestDecide_NoMarkerNonEmptyDescription(t *testing.T) {
 	v, reason := Decide(true, "an idea", "hand written", nil)
 	assert.Equal(t, VerdictStandDown, v)
-	assert.Contains(t, reason, "unknown provenance")
+	assert.Equal(t, ReasonUnknownProvenance, reason)
 }
 
 func TestDecide_MachineWroteItAndTitleChanged(t *testing.T) {
@@ -74,7 +74,19 @@ func TestDecide_HumanRecordIsFinal(t *testing.T) {
 func TestDecide_NotAnIdea(t *testing.T) {
 	v, reason := Decide(false, "t", "", nil)
 	assert.Equal(t, VerdictStandDown, v)
-	assert.Contains(t, reason, "not an idea")
+	assert.Equal(t, ReasonNotAnIdea, reason)
+}
+
+// The two stand-downs are not interchangeable: one says a person owns these
+// words, the other says this ticket is not an idea right now. Recording the
+// second as the first would freeze a re-labelled ticket's description for good.
+func TestPinsHuman_OnlyDescriptionStandDowns(t *testing.T) {
+	assert.True(t, PinsHuman(VerdictStandDown, ReasonUnknownProvenance))
+	assert.True(t, PinsHuman(VerdictStandDown, ReasonChangedSinceDraft))
+	assert.True(t, PinsHuman(VerdictStandDown, ReasonHumanAuthored))
+	assert.False(t, PinsHuman(VerdictStandDown, ReasonNotAnIdea))
+	assert.False(t, PinsHuman(VerdictWrite, ReasonNoPriorDraft))
+	assert.False(t, PinsHuman(VerdictCurrent, ReasonAlreadyCurrent))
 }
 
 func TestDecide_LatestMarkerWins(t *testing.T) {
