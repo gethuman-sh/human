@@ -1,6 +1,7 @@
 package devcontainer
 
 import (
+	"archive/tar"
 	"context"
 	"fmt"
 	"io"
@@ -25,6 +26,13 @@ type mockDockerClient struct {
 	startCalls  []string
 	stopCalls   []string
 	removeCalls []string
+
+	// copyCalls records CopyToContainer invocations; callLog interleaves them
+	// with create/start so a test can assert the copy happens between the two
+	// (SC-4631: the binary must be in place before postStartCommand runs).
+	copyCalls []copyCall
+	copyErr   error
+	callLog   []string
 
 	inspectState  ContainerState
 	inspectLabels map[string]string
@@ -72,6 +80,7 @@ func (m *mockDockerClient) ImageList(_ context.Context, _ ImageListOptions) ([]I
 func (m *mockDockerClient) ContainerCreate(_ context.Context, opts ContainerCreateOptions) (string, error) {
 	m.mu.Lock()
 	m.createCalls = append(m.createCalls, opts)
+	m.callLog = append(m.callLog, "create")
 	m.mu.Unlock()
 	id := m.createID
 	if id == "" {
@@ -83,6 +92,7 @@ func (m *mockDockerClient) ContainerCreate(_ context.Context, opts ContainerCrea
 func (m *mockDockerClient) ContainerStart(_ context.Context, id string) error {
 	m.mu.Lock()
 	m.startCalls = append(m.startCalls, id)
+	m.callLog = append(m.callLog, "start")
 	m.mu.Unlock()
 	return nil
 }
@@ -156,8 +166,29 @@ func (m *mockDockerClient) ExecInspect(_ context.Context, _ string) (ExecInspect
 	return ExecInspectResponse{ExitCode: m.execExit}, nil
 }
 
-func (m *mockDockerClient) CopyToContainer(_ context.Context, _, _ string, _ io.Reader) error {
-	return nil
+// copyCall is one CopyToContainer: where it went and the single tar entry it
+// carried, so a test can assert the binary's name and mode rather than its size.
+type copyCall struct {
+	Dst       string
+	EntryName string
+	EntryMode int64
+	Bytes     int64
+}
+
+func (m *mockDockerClient) CopyToContainer(_ context.Context, _, dstPath string, content io.Reader) error {
+	call := copyCall{Dst: dstPath}
+	tr := tar.NewReader(content)
+	if hdr, err := tr.Next(); err == nil {
+		call.EntryName, call.EntryMode = hdr.Name, hdr.Mode
+		n, _ := io.Copy(io.Discard, tr)
+		call.Bytes = n
+	}
+	_, _ = io.Copy(io.Discard, content) // drain: the producer writes from a pipe
+	m.mu.Lock()
+	m.copyCalls = append(m.copyCalls, call)
+	m.callLog = append(m.callLog, "copy")
+	m.mu.Unlock()
+	return m.copyErr
 }
 
 func (m *mockDockerClient) CopyFromContainer(_ context.Context, _, _ string) (io.ReadCloser, error) {

@@ -63,6 +63,11 @@ type ImagePullOptions struct {
 type ImageInspectResponse struct {
 	ID   string
 	Tags []string
+	// Architecture is the platform the image runs, in Docker's naming ("amd64",
+	// "arm64") — which is Go's GOARCH naming too. It decides which cross-built
+	// human is copied into the container, so it is read from the image and never
+	// assumed from the host.
+	Architecture string
 }
 
 // ImageListOptions filters image listing.
