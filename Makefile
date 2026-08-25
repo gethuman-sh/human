@@ -31,7 +31,10 @@ export GOEXPERIMENT
 # commit and date are read when a target runs rather than at parse time.
 LDFLAGS = -X main.version=dev -X main.commit=$$(git rev-parse --short HEAD) -X main.date=$$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-build:
+# build-linux rides along because the artifact is load-bearing: a launch copies
+# bin/human-linux-$(LINUX_ARCH) into the container, and building the two apart is
+# how their version stamps drift (SC-4631).
+build: build-linux
 	go build -ldflags "$(LDFLAGS)" -o bin/human .
 
 # The agent container runs linux, so a macOS or Windows host cannot pin the
