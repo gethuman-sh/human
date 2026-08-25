@@ -29,7 +29,7 @@ future contributions and is recorded in the `cla-signatures` branch.
 ## Development
 
 ```sh
-make build   # build the human binary
+make build   # build the human binary, and the linux build agent containers run
 make test    # run tests
 make lint    # run linters
 make check   # everything CI runs

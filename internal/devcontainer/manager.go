@@ -20,6 +20,11 @@ import (
 type Manager struct {
 	Docker DockerClient
 	Logger zerolog.Logger
+	// hostExecutable overrides how the daemon's own path is found when resolving
+	// the linux binary to copy into the container. Injected for tests only: a test
+	// binary is itself an ELF of the container's architecture, so without this a
+	// test asserting "no usable binary" would silently resolve one.
+	hostExecutable func() (string, error)
 }
 
 // UpOptions configures the devcontainer up operation.
@@ -127,17 +132,23 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	}
 	// Docker bind mounts require absolute paths.
 	sourceDir, _ = filepath.Abs(sourceDir)
+
+	// The container runs the linux human this resolves, copied in below. It is
+	// resolved BEFORE the container exists so a host with no usable binary is
+	// told which file to produce, instead of being handed a container that
+	// cannot start (SC-4631).
+	arch := m.containerArch(ctx, img.Name)
+	humanBin, err := resolveContainerHuman(arch, projectDir, homeDirOrEmpty(), m.hostExecutablePath())
+	if err != nil {
+		return nil, err
+	}
+
 	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, img.Name, workspaceDir, hash, opts.DaemonInfo, opts.GitDir, opts.cacheVolumes)
 	ParseRunArgs(cfg.RunArgs, &createOpts, m.Logger)
 
-	_, _ = fmt.Fprintf(out, "Creating container %s...\n", containerName)
-	containerID, err := m.Docker.ContainerCreate(ctx, createOpts)
+	containerID, err := m.createAndStart(ctx, createOpts, containerName, humanBin, out)
 	if err != nil {
-		return nil, errors.WrapWithDetails(err, "creating container", "name", containerName)
-	}
-
-	if err := m.Docker.ContainerStart(ctx, containerID); err != nil {
-		return nil, errors.WrapWithDetails(err, "starting container", "id", containerID)
+		return nil, err
 	}
 
 	if err := m.prepareCacheVolumes(ctx, containerID, remoteUser, opts.cacheVolumes); err != nil {
@@ -179,6 +190,42 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	return &meta, nil
 }
 
+// createAndStart creates the container, copies the resolved linux human into
+// it, then starts it — in that order, because postStartCommand runs `human`
+// and a container started before the binary lands has already failed its
+// hooks (SC-4631, AD1). Split out of createFresh to keep it under the gocyclo
+// gate.
+func (m *Manager) createAndStart(ctx context.Context, createOpts ContainerCreateOptions, containerName, humanBin string, out io.Writer) (string, error) {
+	_, _ = fmt.Fprintf(out, "Creating container %s...\n", containerName) // #nosec G705 -- CLI terminal output, not web
+	containerID, err := m.Docker.ContainerCreate(ctx, createOpts)
+	if err != nil {
+		return "", errors.WrapWithDetails(err, "creating container", "name", containerName)
+	}
+
+	if err := m.injectContainerHuman(ctx, containerID, humanBin); err != nil {
+		// A container that never started and never will is a name conflict for
+		// the next launch, so it is removed rather than left behind.
+		_ = m.Docker.ContainerRemove(ctx, containerID, ContainerRemoveOptions{Force: true})
+		return "", err
+	}
+
+	if err := m.Docker.ContainerStart(ctx, containerID); err != nil {
+		return "", errors.WrapWithDetails(err, "starting container", "id", containerID)
+	}
+
+	return containerID, nil
+}
+
+// homeDirOrEmpty is os.UserHomeDir with the error folded into the empty string:
+// a home that cannot be read simply removes one candidate.
+func homeDirOrEmpty() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
 // findContainerByName looks for a managed container with the given name.
 func (m *Manager) findContainerByName(ctx context.Context, name string) (ContainerSummary, error) {
 	containers, err := m.Docker.ContainerList(ctx, ContainerListOptions{
@@ -200,6 +247,20 @@ func (m *Manager) findContainerByName(ctx context.Context, name string) (Contain
 		}
 	}
 	return ContainerSummary{}, errors.WithDetails("no container found", "name", name)
+}
+
+// removeNeverStarted removes a container stuck in `created` and returns the
+// non-nil "rebuilding" error handleExisting's caller already treats as the
+// create-fresh signal (Up logs it and falls through, exactly as the
+// config-changed path does) — kept separate so handleExisting itself stays
+// under the complexity gate.
+func (m *Manager) removeNeverStarted(ctx context.Context, existingID, name, containerName string, out io.Writer) error {
+	_, _ = fmt.Fprintf(out, "Removing never-started container %s...\n", containerName)
+	if rmErr := m.Docker.ContainerRemove(ctx, existingID, ContainerRemoveOptions{Force: true}); rmErr != nil {
+		return errors.WrapWithDetails(rmErr, "removing never-started container", "name", containerName)
+	}
+	_ = DeleteMeta(name)
+	return errors.WithDetails("never-started container removed, rebuilding")
 }
 
 // handleExisting handles the case where a container already exists for this project.
@@ -234,6 +295,14 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 			_ = WriteMeta(meta)
 		}
 		return &meta, nil
+	}
+
+	// A container in `created` was never started. Restarting it repeats whatever
+	// stopped it from starting — every container the host-binary bind broke is
+	// in this state and its config hash still matches, so without this the fix
+	// cannot reach a host that already hit the bug (SC-4631).
+	if existing.State == "created" {
+		return nil, m.removeNeverStarted(ctx, existing.ID, name, containerName, out)
 	}
 
 	// Stopped container.
@@ -342,10 +411,12 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 	}
 	binds = append(binds, Bind(claudeJSON, targetHome+"/.claude.json"))
 
-	// Mount host human binary so the container always uses the same version.
-	if humanBin, exeErr := os.Executable(); exeErr == nil {
-		binds = append(binds, Bind(humanBin, "/usr/local/bin/human").ReadOnly())
-	}
+	// The container's own human binary no longer travels as a bind: Docker
+	// Desktop on macOS shares only a fixed list of host directories, silently
+	// materializing an unshared source as an empty directory, and where the
+	// bind does succeed the host binary is Mach-O and cannot execute in the
+	// linux image anyway. createFresh copies a resolved linux binary in after
+	// ContainerCreate instead (SC-4631).
 
 	// Parse config mount strings. Devcontainer.json uses the Docker --mount
 	// syntax (source=X,target=Y,type=bind) which must be converted to Binds

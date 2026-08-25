@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -40,6 +41,10 @@ func setupTestProject(t *testing.T, configJSON string) (string, *mockDockerClien
 	if err := os.WriteFile(filepath.Join(dcDir, "devcontainer.json"), []byte(configJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
+	// Every launch now resolves a linux human before it creates anything, so a
+	// test project carries one (SC-4631).
+	writeFakeLinuxHuman(t, projectDir, runtime.GOARCH)
 
 	mock := &mockDockerClient{
 		imageInspectErr:    fmt.Errorf("not found"),
@@ -991,6 +996,20 @@ func (m *existingContainerMock) ContainerList(_ context.Context, _ ContainerList
 	return m.containers, nil
 }
 
+// neverStartedMock wraps pullThenInspectMock (whose ImageInspect fails once
+// then succeeds, as EnsureImage's pull-then-inspect flow requires) to also
+// return a pre-configured container list, for a rebuild-after-"created" test
+// that must reach createFresh instead of stalling on a permanently failing
+// image inspect.
+type neverStartedMock struct {
+	*pullThenInspectMock
+	containers []ContainerSummary
+}
+
+func (m *neverStartedMock) ContainerList(_ context.Context, _ ContainerListOptions) ([]ContainerSummary, error) {
+	return m.containers, nil
+}
+
 func TestParseRunArgs_Empty(t *testing.T) {
 	opts := &ContainerCreateOptions{}
 	ParseRunArgs(nil, opts, testLogger())
@@ -1191,5 +1210,197 @@ func TestManager_Up_FailedHookIsVisibleWithoutLogger(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "WARNING") || !strings.Contains(buf.String(), "may be incomplete") {
 		t.Errorf("a failed lifecycle hook must be reported on the writer: %s", buf.String())
+	}
+}
+
+// Binding the daemon's own executable into the container (os.Executable() onto
+// /usr/local/bin/human) is the SC-4631 defect: on macOS the source is either
+// outside Docker Desktop's shared paths (silently materialized as an empty
+// directory, failing runc init) or a Mach-O binary the linux image cannot
+// execute. No bind of any kind belongs in the create options any more.
+func TestBuildCreateOptions_NoHostBinaryBindRemains(t *testing.T) {
+	m := &Manager{}
+	dir := t.TempDir()
+
+	opts := m.buildCreateOptions(&DevcontainerConfig{}, dir, dir, "human-agent-board-SC-1-implementation", "img", "/workspace", "hash", nil, "", nil)
+
+	for _, b := range opts.Binds {
+		if b.Target == "/usr/local/bin/human" {
+			t.Errorf("buildCreateOptions still binds a host path onto %q: %+v", b.Target, b)
+		}
+	}
+}
+
+// A host with no usable linux/<arch> human must fail before ContainerCreate,
+// naming the file to produce — not hand the container a binary that dies at
+// runc init or exec format error (SC-4631).
+func TestManager_Up_NoLinuxBinary_CreatesNoContainer(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+	if err := os.Remove(filepath.Join(projectDir, "bin", "human-linux-"+runtime.GOARCH)); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := &Manager{
+		Docker: docker, Logger: testLogger(),
+		hostExecutable: func() (string, error) { return "", fmt.Errorf("no executable") },
+	}
+	var buf bytes.Buffer
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf})
+	if err == nil {
+		t.Fatal("expected an error when no linux human binary is available")
+	}
+	if !strings.Contains(err.Error(), "bin/human-linux-") {
+		t.Errorf("error = %v, want it to name the candidate path", err)
+	}
+	if len(mock.createCalls) != 0 {
+		t.Errorf("createCalls = %d, want 0 — no container for an unresolved binary", len(mock.createCalls))
+	}
+	if len(mock.startCalls) != 0 {
+		t.Errorf("startCalls = %d, want 0", len(mock.startCalls))
+	}
+}
+
+// The resolved binary must reach the container before ContainerStart: the
+// image's postStartCommand runs `human`, so a container started with the wrong
+// (or no) binary has already failed its hooks by the time the copy would land
+// (SC-4631, AD1).
+func TestManager_Up_CopiesTheLinuxBinaryBeforeStart(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	var buf bytes.Buffer
+	if _, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(mock.copyCalls) != 1 {
+		t.Fatalf("copyCalls = %d, want 1", len(mock.copyCalls))
+	}
+	call := mock.copyCalls[0]
+	if call.Dst != "/usr/local/bin" {
+		t.Errorf("copy dst = %q, want /usr/local/bin", call.Dst)
+	}
+	if call.EntryName != "human" {
+		t.Errorf("copy entry name = %q, want human", call.EntryName)
+	}
+	if call.EntryMode != 0o755 {
+		t.Errorf("copy entry mode = %o, want 0755", call.EntryMode)
+	}
+	if got := strings.Join(mock.callLog, ","); got != "create,copy,start" {
+		t.Errorf("callLog = %q, want create,copy,start", got)
+	}
+}
+
+// The image, not the host, decides which architecture's binary is needed —
+// the launch must resolve human-linux-amd64 on an arm64 daemon host running an
+// amd64 image (SC-4631, AD2).
+func TestManager_Up_ArchitectureComesFromTheImage(t *testing.T) {
+	projectDir, _, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+	// Remove the default runtime.GOARCH fixture and provide only an amd64 one,
+	// so the test proves the arch came from the image and not the host.
+	if err := os.Remove(filepath.Join(projectDir, "bin", "human-linux-"+runtime.GOARCH)); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	writeFakeLinuxHuman(t, projectDir, "amd64")
+	docker.inspectResult.Architecture = "amd64"
+
+	mgr := &Manager{
+		Docker: docker, Logger: testLogger(),
+		hostExecutable: func() (string, error) { return "", fmt.Errorf("no executable") },
+	}
+	var buf bytes.Buffer
+	if _, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+}
+
+// A copy that fails must not leave a container the postStartCommand will run
+// against a missing/incomplete binary — remove it and surface the error
+// instead (SC-4631).
+func TestManager_Up_CopyFailureRemovesTheContainer(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+	mock.copyErr = fmt.Errorf("no such directory")
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	var buf bytes.Buffer
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf})
+	if err == nil {
+		t.Fatal("expected an error when the copy fails")
+	}
+	if len(mock.startCalls) != 0 {
+		t.Errorf("startCalls = %d, want 0 — a container with no binary must never start", len(mock.startCalls))
+	}
+	found := false
+	for _, id := range mock.removeCalls {
+		if id == mock.createID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("removeCalls = %v, want the created container id removed", mock.removeCalls)
+	}
+}
+
+// A container in state "created" was never started — every container the
+// host-binary bind broke is stuck exactly there, with its config hash still
+// matching, so it must be rebuilt rather than "restarted" into the same dead
+// state (SC-4631, AD6).
+func TestManager_Up_NeverStartedContainerIsRebuiltNotRestarted(t *testing.T) {
+	projectDir, _, _ := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+
+	containerName := ContainerName(projectDir)
+	configData, err := os.ReadFile(filepath.Join(projectDir, ".devcontainer", "devcontainer.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := ConfigHash(configData)
+
+	// The rebuild path re-runs EnsureImage, which pulls then inspects — so the
+	// image-inspect mock must succeed on the second call, exactly like a fresh
+	// TestManager_Up_NewContainer run, not fail every time.
+	callCount := 0
+	pullMock := &pullThenInspectMock{
+		mockDockerClient: &mockDockerClient{
+			imageInspectErr: fmt.Errorf("not found"),
+			createID:        "container-fresh",
+			inspectState:    ContainerState{Running: true},
+		},
+		inspectCallCount: &callCount,
+		inspectErr:       fmt.Errorf("not found"),
+		inspectResult:    ImageInspectResponse{ID: "sha256:pulled", Tags: []string{"ubuntu:22.04"}},
+	}
+	existingMock := &neverStartedMock{
+		pullThenInspectMock: pullMock,
+		containers: []ContainerSummary{{
+			ID:     "never-started-id",
+			Names:  []string{"/" + containerName},
+			Image:  "ubuntu:22.04",
+			State:  "created",
+			Labels: map[string]string{LabelManaged: "true", LabelConfigHash: hash},
+		}},
+	}
+
+	mgr := &Manager{Docker: existingMock, Logger: testLogger()}
+	var buf bytes.Buffer
+	meta, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ContainerID != "container-fresh" {
+		t.Errorf("ContainerID = %q, want the freshly created container", meta.ContainerID)
+	}
+	removedOld := false
+	for _, id := range existingMock.removeCalls {
+		if id == "never-started-id" {
+			removedOld = true
+		}
+	}
+	if !removedOld {
+		t.Errorf("removeCalls = %v, want the never-started container removed", existingMock.removeCalls)
+	}
+	for _, id := range existingMock.startCalls {
+		if id == "never-started-id" {
+			t.Errorf("ContainerStart was called on the never-started container %q — it must be rebuilt, not restarted", id)
+		}
 	}
 }

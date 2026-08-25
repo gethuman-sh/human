@@ -77,8 +77,9 @@ func (e *engineClient) ImageInspect(ctx context.Context, imageRef string) (Image
 		return ImageInspectResponse{}, err
 	}
 	return ImageInspectResponse{
-		ID:   resp.ID,
-		Tags: resp.RepoTags,
+		ID:           resp.ID,
+		Tags:         resp.RepoTags,
+		Architecture: resp.Architecture,
 	}, nil
 }
 

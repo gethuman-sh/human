@@ -424,6 +424,12 @@ See [documentation.md](docs/documentation.md) for full configuration details.
 make build
 ```
 
+This builds the `human` binary for your host and, alongside it,
+`bin/human-linux-<arch>` — the linux build that agent containers run. The
+container gets that binary copied in at launch, so building the two together is
+what keeps the CLI inside a container at the same version as the daemon outside
+it.
+
 ### Desktop app (workflow board)
 
 The desktop GUI is the interactive workflow board with five columns (Ideas → Product backlog → Engineering backlog → Code → Ready to Deploy) plus a terminal **Deploy** drop zone: every column names a state that is true of each card in it, and dragging a card forward launches that transition's `human` agent. Code holds the whole build-and-review cycle — dropping an engineering-backlog card there launches the executor, and when the build lands the review starts automatically, no gesture. A passing review releases the card into Ready to Deploy on its own; a failing verdict pins it in Code with a warning icon and the findings as a ticket comment (re-drop it on Code to rebuild against them). Dropping a reviewed card on Deploy ships it: branch pushed, PR opened, merged once CI is green, ticket closed — the card leaves the board, which shows only work in flight. On merge-deploy platforms (Scalingo, Heroku, Vercel, …) that drop puts the change in production. Right-click a card for Close ticket / Open in tracker; Product-backlog cards also offer Create mocks (UI mockups for the ticket via `/human-mockups`), which becomes View mocks once the set exists — opening a navigable tree where any mockup can spawn free-text-guided variation groups at any depth, a leaf can be marked the winner (the highlighted root→leaf path is the chosen design), and that winner is handed to planning and execution automatically. The Ideas queue is an idea space — one rounded rectangle five invisible lanes wide: drag ideas left or right to sort looser ones left and concrete ones right — placement is saved locally, never on the ticket. Its `+` quick-captures a title-only ticket labeled `human/idea` into the leftmost sub-column; dragging an idea onto the Product backlog opens guided ideation that evolves the same ticket in place (same key, idea label removed). It runs on macOS, Windows and Linux.
