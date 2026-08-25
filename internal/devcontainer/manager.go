@@ -196,7 +196,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 // hooks (SC-4631, AD1). Split out of createFresh to keep it under the gocyclo
 // gate.
 func (m *Manager) createAndStart(ctx context.Context, createOpts ContainerCreateOptions, containerName, humanBin string, out io.Writer) (string, error) {
-	_, _ = fmt.Fprintf(out, "Creating container %s...\n", containerName)
+	_, _ = fmt.Fprintf(out, "Creating container %s...\n", containerName) // #nosec G705 -- CLI terminal output, not web
 	containerID, err := m.Docker.ContainerCreate(ctx, createOpts)
 	if err != nil {
 		return "", errors.WrapWithDetails(err, "creating container", "name", containerName)
