@@ -1,4 +1,4 @@
-.PHONY: all build fmt fmt-check install test check-test test-integration coverage coverage-check fuzz fsm fsm-diagram lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package desktop-frontend desktop-frontend-check
+.PHONY: all build build-linux fmt fmt-check install test check-test test-integration coverage coverage-check fuzz fsm fsm-diagram lint sec secrets check clean upgrade-deps release hooks unhooks desktop desktop-deps desktop-dev desktop-package desktop-frontend desktop-frontend-check
 
 VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 
@@ -25,8 +25,30 @@ fmt-check:
 GOEXPERIMENT ?= runtimesecret
 export GOEXPERIMENT
 
+# Stamped into both `build` and `build-linux` so the binary a container runs
+# reports the same version as the host's — the reason for cross-building one at
+# all. Recursively expanded, and the $$ reaches the recipe's shell, so the
+# commit and date are read when a target runs rather than at parse time.
+LDFLAGS = -X main.version=dev -X main.commit=$$(git rev-parse --short HEAD) -X main.date=$$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
 build:
-	go build -ldflags "-X main.version=dev -X main.commit=$$(git rev-parse --short HEAD) -X main.date=$$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o bin/human .
+	go build -ldflags "$(LDFLAGS)" -o bin/human .
+
+# The agent container runs linux, so a macOS or Windows host cannot pin the
+# container to its own build by binding its binary in — the executable format
+# differs and every in-container `human` answers "exec format error" (SC-4596).
+# Falling back to the binary the devcontainer feature shipped is not the same
+# thing: that one lags the host by weeks and lacks the pipeline commands an
+# agent needs to record its work. build-linux produces a binary the container
+# can execute, carrying the host's own version stamp.
+#
+# CGO is off so the result runs against whatever libc the image has; nothing on
+# the CLI path needs it. LINUX_ARCH defaults to the host's architecture, which
+# is the container's too under Docker Desktop — override it to build the other.
+LINUX_ARCH ?= $(shell go env GOARCH)
+
+build-linux:
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(LINUX_ARCH) go build -ldflags "$(LDFLAGS)" -o bin/human-linux-$(LINUX_ARCH) .
 
 # install delivers both user-facing artifacts: the CLI via go install, and the
 # board app next to it in the Go bin dir (or into ~/Applications as a .app
