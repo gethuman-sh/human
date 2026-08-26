@@ -44,7 +44,7 @@ func TestAgentIPRegistry_NonAgentNameUnattributed(t *testing.T) {
 // in-flight count of zero (SC-3853).
 // A per-ticket auxiliary run is not a board stage, but it spends real money on
 // a real ticket: without this its outcome arrives unattributed and the cost
-// ledger drops it (SC-4520).
+// ledger drops it (SC-4608).
 func TestAttribute_AuxAgentName(t *testing.T) {
 	r := NewAgentIPRegistry()
 	r.Register("10.0.0.5", "idea-draft-SC-1")

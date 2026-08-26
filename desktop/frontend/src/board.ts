@@ -175,7 +175,7 @@ interface Card {
   blockersOffBoard?: string[];
   // How many unanswered [TBA:] gaps this idea's drafted description still
   // carries (wire name tbaCount, read by name). Absent or 0 on every card
-  // nothing has drafted, which renders no badge (SC-4520).
+  // nothing has drafted, which renders no badge (SC-4608).
   tbaCount?: number;
   // Set when the daemon could not read this ticket's markers this scan (a
   // comment-fetch error). Rendered locked: non-draggable, no launch actions,
@@ -3585,7 +3585,7 @@ function renderTicketDetail(): void {
   });
 }
 
-// No openIdeation: SC-4520 took away the last thing that opened this panel.
+// No openIdeation: SC-4608 took away the last thing that opened this panel.
 // Promotion is a label edit plus the description editor, and the post-import
 // prompt captures an idea, so nothing starts an ideation session from the
 // board. The panel below stays wired to a session that can only pre-date this
@@ -3622,7 +3622,7 @@ async function pollIdeation(): Promise<void> {
 // sendIdeationReply carries the freeform input text into the running session.
 //
 // Replies only. SC-2858's rule — a session must start from a captured idea,
-// never a ticket created outright — is now kept by construction: SC-4520 left
+// never a ticket created outright — is now kept by construction: SC-4608 left
 // no surface that starts one. Promotion is a label edit plus the description
 // editor, and the post-import prompt captures an idea like the Ideas `+` does,
 // so the panel can only ever be re-attached to a session that already exists.

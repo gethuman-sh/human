@@ -963,7 +963,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// live subscribers so it costs nothing when no board is open.
 	// The same listing also feeds the idea drafter's redraft trigger: a
 	// tracker-side edit to an idea arms a debounce, and one run fires when the
-	// editing stops (SC-4520). It costs no extra tracker traffic precisely
+	// editing stops (SC-4608). It costs no extra tracker traffic precisely
 	// because it rides on the listing this poll already paid for.
 	ideaDrafts := &daemon.IdeaDraftWatcher{Launch: ds.srv.IdeaDraftLauncher, Logger: logger}
 	go daemon.RunBoardFreshnessPoll(ctx, daemon.BoardFreshnessOpts{
@@ -4324,7 +4324,7 @@ func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 // ideationEngine wires the board ideation engine: host claude runner, role-
 // resolved PM creator, and a hook-store poke so the created card reaches the
 // board through the existing subscribe/refetch loop. No editor: a session
-// creates a ticket and never rewrites one (SC-4520 retired evolve mode).
+// creates a ticket and never rewrites one (SC-4608 retired evolve mode).
 func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, store daemon.IdeationStore, logger zerolog.Logger) *daemon.IdeationEngine {
 	firstEntry := func() (daemon.ProjectEntry, error) {
 		return reg.SoleEntry()

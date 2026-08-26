@@ -69,7 +69,7 @@ test("descEditShouldDiscardOnClose is a no-op with no session to discard", () =>
   assert.equal(descEditShouldDiscardOnClose("awaiting_reply", undefined), false);
 });
 
-// SC-4520: promotion opens the editor on a card the board is still rendering in
+// SC-4608: promotion opens the editor on a card the board is still rendering in
 // Ideas — the labels have come off the ticket, but no refetch has happened yet.
 test("the lane gate admits a just-promoted Ideas card", () => {
   assert.equal(descEditAllowedFor("ideas", false, false, true), true);

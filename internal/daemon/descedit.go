@@ -60,7 +60,7 @@ type DescEditStartRequest struct {
 	// Promoted marks the session opened by dragging an idea onto Product
 	// Backlog. It widens the chat's remit — the guided ideation flow this
 	// replaced existed to push back, and a copy-editor that may not discuss
-	// scope replaces none of that (SC-4520).
+	// scope replaces none of that (SC-4608).
 	Promoted bool `json:"promoted,omitempty"`
 }
 

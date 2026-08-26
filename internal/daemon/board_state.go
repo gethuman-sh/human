@@ -45,7 +45,7 @@ type BoardCard struct {
 	// record does not set it, so a died-halfway run stays re-runnable (SC-2405).
 	HasRelatedRecord bool `json:"has_related_record,omitempty"`
 	// TBACount is how many unanswered [TBA:] gaps the idea's drafted
-	// description still carries (SC-4520). Zero on every non-idea card and on
+	// description still carries (SC-4608). Zero on every non-idea card and on
 	// an idea nothing has drafted yet; the card face renders nothing for zero.
 	TBACount int `json:"tba_count,omitempty"`
 	// Verdict is the `verdict:` line of the latest [human:review-complete]

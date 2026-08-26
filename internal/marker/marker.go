@@ -203,7 +203,7 @@ var specs = map[string]spec{
 	// hasCompletedRelatedRecord, which classifies found/none as a completed record.
 	"related-started": {},
 	"related":         {needsHead: true, headEnum: []string{"found", "none", "incomplete"}},
-	// The background idea drafter (SC-4520). idea-draft-started brackets the
+	// The background idea drafter (SC-4608). idea-draft-started brackets the
 	// run's start; idea-draft is the PROVENANCE record, not the draft — the
 	// draft is the ticket's description, and this says who last wrote it and
 	// from what. author is required because the whole guard turns on it: a

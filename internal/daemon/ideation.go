@@ -36,7 +36,7 @@ type IdeationMessage struct {
 // IdeationMode selects which agent prompt/turn discipline the session runs.
 // Chat is the only mode: the guided one-question-at-a-time interview and its
 // draft-approval park were retired with the promotion path they existed for
-// (SC-4520). The type survives because the wire field and the persisted
+// (SC-4608). The type survives because the wire field and the persisted
 // session still carry it.
 type IdeationMode string
 
@@ -60,7 +60,7 @@ type IdeationStatus struct {
 //
 // A session's terminal action is creating a PM ticket, and only that: the
 // evolve mode that rewrote an existing idea ticket in place went with the
-// promotion path it served (SC-4520). An idea is promoted by removing its
+// promotion path it served (SC-4608). An idea is promoted by removing its
 // labels (idea-promote) and refined in the description editor.
 type IdeationStartRequest struct {
 	Seed    string       `json:"seed"`

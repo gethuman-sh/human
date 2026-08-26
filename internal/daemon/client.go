@@ -684,7 +684,7 @@ func (c *Client) Relate(req RelateRequest) error {
 }
 
 // IdeaPromote graduates an idea to a PM ticket by removing its idea labels.
-// That is the whole of promotion's server half (SC-4520): no agent turn, no
+// That is the whole of promotion's server half (SC-4608): no agent turn, no
 // rewrite — the description the background drafter left is what the board's
 // description editor then opens on.
 func (c *Client) IdeaPromote(req IdeaPromoteRequest) error {

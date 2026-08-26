@@ -137,7 +137,7 @@ So a future change that breaks `wails build` is caught automatically rather than
 
 The desktop artifact must never be published through a goreleaser `builds:` entry (e.g. `main: ./desktop`) — that is a plain `go build` and produces the non-runnable binary described above. The artifact is cgo and cannot be cross-compiled, so each OS bundle is produced by `make desktop` (wraps `wails build`) on its native CI runner and, when the artifact ships, attached with goreleaser's `release.extra_files`. See the guard comment in `.goreleaser.yaml`.
 
-## Creating tickets — capture, draft, promote (SC-4520)
+## Creating tickets — capture, draft, promote (SC-4608)
 
 There is one way into ticket creation and it is a text field: the idea
 space's '+' quick-captures a title-only ticket labeled `human/idea` into
@@ -163,7 +163,7 @@ description editor (below) on the drafted text, with its remit widened to
 challenge scope and work through the `[TBA: …]` questions. The card lands
 in Product Backlog on the next refetch.
 
-The ideation chat panel that used to do this is **unreachable**: SC-4520
+The ideation chat panel that used to do this is **unreachable**: SC-4608
 retired the guided interview, its approval park, the drag-to-Backlog
 ideation launch and the evolve mode whose terminal action rewrote an idea
 ticket in place. The daemon engine behind it — the `ideation-start`,
@@ -190,7 +190,7 @@ Product Backlog lane's click target changed.
 
 The chat is scoped to rewriting the description text only — it declines to
 discuss title, acceptance criteria, labels or any other field. Opened on a
-**just-promoted** card its remit is wider (SC-4520): it may challenge the
+**just-promoted** card its remit is wider (SC-4608): it may challenge the
 premise and the scope, and it works through the drafter's `[TBA: …]`
 questions with the user — never answering one itself, never deleting one the
 user has not answered. It still proposes description text and nothing else.

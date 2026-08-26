@@ -18,7 +18,7 @@ const IdeationMaxAge = 24 * time.Hour
 // the provider, so restoring the session id, state and resume id is enough to
 // carry a chat across a restart.
 //
-// A session saved by a pre-SC-4520 daemon may still carry evolve_key/
+// A session saved by a pre-SC-4608 daemon may still carry evolve_key/
 // evolve_labels. They are ignored on load: this build has no terminal action
 // that rewrites an existing ticket, and an unknown JSON field decodes to
 // nothing — the stale session restores as an ordinary chat and, with no UI

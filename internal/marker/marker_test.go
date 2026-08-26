@@ -109,7 +109,7 @@ func TestValidate_relatedHeadEnum(t *testing.T) {
 
 // The idea drafter's provenance record must say whose words the description
 // holds: the guard that protects a human's writing turns entirely on author,
-// so a record without it protects nothing (SC-4520).
+// so a record without it protects nothing (SC-4608).
 func TestValidate_ideaDraftRequiresAuthor(t *testing.T) {
 	require.Error(t, Validate(Marker{Type: "idea-draft"}))
 	assert.NoError(t, Validate(Marker{Type: "idea-draft", Fields: map[string]string{"author": "machine"}}))

@@ -243,7 +243,7 @@ const RelatedStartedHeader = "[human:related-started]"
 const RelatedHeader = "[human:related]"
 
 // MarkerIdeaDraft / IdeaDraftStartedHeader / IdeaDraftHeader bracket a
-// background idea-drafting run (SC-4520). Neither header moves the card: the
+// background idea-drafting run (SC-4608). Neither header moves the card: the
 // drafter writes the ticket's description and the ticket stays an idea, which
 // is why both sit in the pipeline document's unclassified_markers beside
 // related. IdeaDraftHeader is the provenance record — who last wrote the

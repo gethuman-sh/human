@@ -284,7 +284,7 @@ type BoardViewCard struct {
 	// "Find related work" menu item when true (SC-2405).
 	HasRelatedRecord bool `json:"hasRelatedRecord,omitempty"`
 	// TBACount is how many unanswered [TBA:] gaps the idea's drafted
-	// description still carries (SC-4520). Zero on every non-idea card and on
+	// description still carries (SC-4608). Zero on every non-idea card and on
 	// an idea nothing has drafted yet; the card face renders nothing for zero.
 	TBACount int `json:"tbaCount,omitempty"`
 	// Hidden marks a ticket the user parked off the board (right-click →

@@ -149,7 +149,7 @@ type Server struct {
 	// that fires after a bug is filed (SC-2405).
 	RelateLauncher func(req RelateRequest) error
 	// IdeaDraftLauncher launches the background PM-description drafter for one
-	// idea (SC-4520). Fired by capture and by the freshness poll's redraft
+	// idea (SC-4608). Fired by capture and by the freshness poll's redraft
 	// watcher; nil disables drafting entirely, which is how the feature
 	// degrades to no draft rather than to an error at capture.
 	IdeaDraftLauncher func(req IdeaDraftRequest) error

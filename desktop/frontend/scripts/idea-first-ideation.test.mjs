@@ -1,4 +1,4 @@
-// Regression guard for SC-2858, now kept by construction (SC-4520): no board
+// Regression guard for SC-2858, now kept by construction (SC-4608): no board
 // surface starts an ideation session at all, so none can create a finished
 // ticket outright. Capture is the only way in — the Ideas column's `+` and the
 // post-import "Create first ticket" prompt both open the same quick-add — and
@@ -24,7 +24,7 @@ function functionBody(source, signature) {
 
 const sendIdeationReplyBody = functionBody(ts, "async function sendIdeationReply");
 
-test("no board surface starts an ideation session (SC-2858, SC-4520)", () => {
+test("no board surface starts an ideation session (SC-2858, SC-4608)", () => {
   assert.ok(!ts.includes("StartIdeation"), "board.ts must not call or declare the StartIdeation binding");
   assert.doesNotMatch(ts, /openIdeation\(/, "nothing may open the ideation panel");
   assert.doesNotMatch(ts, /function openIdeation/, "and the opener itself is gone");
@@ -44,7 +44,7 @@ test("sendIdeationReply only replies into a session that already exists (SC-2858
 // it used to capture an idea and then evolve it in a chat. It now captures an
 // idea and stops — the drafter writes the description, promotion opens the
 // editor.
-test("the post-import prompt captures an idea (SC-4520)", () => {
+test("the post-import prompt captures an idea (SC-4608)", () => {
   const wizardBody = functionBody(ts, "function renderStartWizard(): void {");
   assert.match(wizardBody, /captureFirstIdea\(\);/, "Create-first-ticket must go through idea capture");
   assert.doesNotMatch(wizardBody, /Ideation/, "and must not reach the ideation panel");
@@ -54,11 +54,11 @@ test("the post-import prompt captures an idea (SC-4520)", () => {
   assert.match(captureBody, /showIdeaQuickAdd\(col\)/, "it opens the Ideas column's own quick-add");
 });
 
-// SC-4520: promotion is a label edit plus the description editor, never an
+// SC-4608: promotion is a label edit plus the description editor, never an
 // agent turn. The drop branch and the function it calls are asserted together —
 // a promotion that removed the labels and opened nothing would leave the user
 // staring at a card that silently changed columns.
-test("dropping an idea on Product Backlog promotes it and opens the editor (SC-4520)", () => {
+test("dropping an idea on Product Backlog promotes it and opens the editor (SC-4608)", () => {
   const performDropBody = functionBody(ts, "function performDrop(");
   assert.match(
     performDropBody,
@@ -77,9 +77,9 @@ test("dropping an idea on Product Backlog promotes it and opens the editor (SC-4
 });
 
 // The guided interview, its approval park, the old promote path and evolve mode
-// are retired (SC-4520). A leftover comment is as much a defect as leftover code
+// are retired (SC-4608). A leftover comment is as much a defect as leftover code
 // here: it describes a UI that no longer exists.
-test("guided mode, the approval park and evolve mode are gone from board.ts (SC-4520)", () => {
+test("guided mode, the approval park and evolve mode are gone from board.ts (SC-4608)", () => {
   for (const token of [
     "async function promoteIdea(",
     "ApproveIdeation",
@@ -100,7 +100,7 @@ test("guided mode, the approval park and evolve mode are gone from board.ts (SC-
   }
 });
 
-test("the retired ideation markup is gone from index.html (SC-4520)", () => {
+test("the retired ideation markup is gone from index.html (SC-4608)", () => {
   const html = readFileSync(resolve(here, "..", "static", "index.html"), "utf8");
   for (const id of ["ideation-mode-picker", "ideation-options", "ideation-draft"]) {
     assert.ok(!html.includes(id), `index.html must no longer contain #${id}`);
@@ -108,7 +108,7 @@ test("the retired ideation markup is gone from index.html (SC-4520)", () => {
 });
 
 // SC-4485: the Product-lane and sidebar rail "+" buttons are removed. With the
-// post-import prompt rehomed onto capture (SC-4520), the Ideas column's own "+"
+// post-import prompt rehomed onto capture (SC-4608), the Ideas column's own "+"
 // is the only button left that creates anything.
 test("the Product-lane add-card button is gone from renderColumn (SC-4485)", () => {
   assert.doesNotMatch(ts, /New ticket via ideation/, "the Product-lane button title must not remain");

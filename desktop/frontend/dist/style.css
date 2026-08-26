@@ -1082,7 +1082,7 @@ body {
   font-weight: 600;
 }
 
-/* Unanswered [TBA:] questions on a drafted idea (SC-4520): the same
+/* Unanswered [TBA:] questions on a drafted idea (SC-4608): the same
    needs-a-person amber as .badge.decision — the machine refused to guess and
    only the user can settle them. */
 .badge.tba {

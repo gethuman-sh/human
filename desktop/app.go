@@ -830,7 +830,7 @@ type IdeationView struct {
 
 // StartIdeation begins (or re-attaches to) the board ideation session. chat is
 // the only mode; empty defaults to it in the daemon engine. The session creates
-// a PM ticket: SC-4520 retired the evolve mode that rewrote an existing idea
+// a PM ticket: SC-4608 retired the evolve mode that rewrote an existing idea
 // ticket, together with the promotion path and the post-import prompt that were
 // its only callers. No board surface starts a session today.
 func (a *App) StartIdeation(seed, mode string, restart bool) (IdeationView, error) {
