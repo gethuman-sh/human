@@ -63,8 +63,8 @@ type BoardFreshnessOpts struct {
 // The listing it already paid for is handed to Observe, which is how a
 // per-ticket watcher (the idea drafter's redraft trigger) sees tracker-side
 // changes without a second listing of its own — and therefore inside the same
-// HasWatchers gate. A change made to an idea while no board is open raises its
-// redraft at the first tick after one opens, not at the moment of the edit.
+// HasWatchers gate. An idea retitled while no board is open raises its redraft
+// at the first tick after one opens, not at the moment of the edit.
 // That is the deliberate trade: the alternative is listing the tracker around
 // the clock on every machine running a daemon, to write a draft nobody is
 // waiting for. Ideas captured on the board — the case the feature exists for —

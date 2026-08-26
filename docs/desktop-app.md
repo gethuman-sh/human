@@ -153,8 +153,13 @@ leaving an inline `[TBA: <question>]` wherever it would have had to guess;
 the Ideas card face shows the count of unanswered ones. It writes only over
 its own words: a `[human:idea-draft]` marker records the fingerprint of what
 it wrote, and once a person edits the description nothing automatic ever
-writes to that ticket again. An idea edited outside the board is redrafted
-via the board freshness poll's `UpdatedAt` diff, debounced.
+writes to that ticket again. An idea **retitled** outside the board is
+redrafted via the board freshness poll's `UpdatedAt` diff, debounced. The
+title is the trigger because it is the input a draft is made from, and
+because the drafter's own write advances `UpdatedAt` — redrafting on any
+advance would relaunch the run that write came from, on a loop. Editing an
+idea's description outside the board therefore raises no redraft: those are
+words the overwrite guard stands down on anyway.
 
 Dragging an Ideas card onto Product Backlog **promotes** it: the
 idea-classifying labels come off through the `idea-promote` route — no

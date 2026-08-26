@@ -11,8 +11,8 @@ import (
 )
 
 // IdeaDraftDebounce is how long an idea must sit unchanged before a redraft
-// fires. It is a QUIET window, not a rate limit: every observed change pushes
-// it out, so an editing session in the tracker's web UI — which bumps
+// fires. It is a QUIET window, not a rate limit: every observed title change
+// pushes it out, so an editing session in the tracker's web UI — which bumps
 // UpdatedAt on every save — produces one run when the session ends rather than
 // one per save. Four board-freshness ticks (30s each): long enough to swallow a
 // burst, short enough that the redraft lands inside the idle interval the whole
@@ -39,6 +39,12 @@ func ValidateIdeaDraft(req IdeaDraftRequest) error {
 // IdeaDraftWatcher turns the board freshness poll's listing into redrafts.
 // It holds only what it has SEEN, never a verdict: whether a redraft may write
 // is decided from the ticket and its markers, in the container, every time.
+//
+// It arms on a TITLE change, not on any UpdatedAt advance, and that is the
+// loop-breaker rather than a refinement: the drafter's own write advances
+// UpdatedAt, so "redraft whenever the ticket changed" relaunches the run its
+// own last write caused, once per quiet window, for as long as a board stays
+// open.
 type IdeaDraftWatcher struct {
 	Launch   func(IdeaDraftRequest) error
 	Debounce time.Duration
@@ -110,13 +116,24 @@ func (w *IdeaDraftWatcher) Observe(results []TrackerIssuesResult) {
 }
 
 // observeIdea records one idea's state, arming the debounce only for a key it
-// has seen before: capture fires its own draft, and a daemon restart must not
-// redraft every idea on the board. Callers hold the lock.
+// has seen before — capture fires its own draft, and a daemon restart must not
+// redraft every idea on the board — and only when that key's TITLE has changed.
+//
+// The title is the filter because it is the input a draft is made from
+// (ideadraft.SourceFingerprint) and the one half of an idea the drafter never
+// touches, so a new title is exactly the change that makes the standing draft
+// stale. UpdatedAt remains the detector: it is what says the tracker side moved
+// at all. The deliberate cost is that a description edited in the tracker's web
+// UI raises no redraft — those are words the overwrite guard stands down on
+// anyway, so the run it would launch could only be a no-op.
+//
+// Callers hold the lock.
 func (w *IdeaDraftWatcher) observeIdea(key, title string, updated, now time.Time) {
 	prev, known := w.seen[key]
+	prevTitle := w.title[key]
 	w.seen[key] = updated
 	w.title[key] = title
-	if known && updated.After(prev) {
+	if known && updated.After(prev) && title != prevTitle {
 		w.due[key] = now.Add(w.debounce())
 	}
 }

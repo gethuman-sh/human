@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -81,19 +82,61 @@ func TestIdeaDraftWatcher_DebouncesABurst(t *testing.T) {
 	w.Observe(ideaResults(idea("SC-1", "one", time.Unix(500, 0))))
 	for i := range 3 {
 		now = now.Add(10 * time.Second)
-		w.Observe(ideaResults(idea("SC-1", "edit", time.Unix(int64(600+i*10), 0))))
+		w.Observe(ideaResults(idea("SC-1", fmt.Sprintf("edit %d", i), time.Unix(int64(600+i*10), 0))))
 	}
 	require.Empty(t, rec.all(), "a burst inside the window fires nothing yet")
 
-	// The editing stops: the next tick sees the same UpdatedAt, so the window
+	// The editing stops: the next tick sees the same title, so the window
 	// closes instead of being pushed out again.
 	now = now.Add(2 * time.Minute)
-	w.Observe(ideaResults(idea("SC-1", "edit", time.Unix(620, 0))))
+	w.Observe(ideaResults(idea("SC-1", "edit 2", time.Unix(620, 0))))
 
 	launched := rec.settle()
 	require.Len(t, launched, 1, "a burst produces exactly one run")
 	assert.Equal(t, "SC-1", launched[0].Key)
-	assert.Equal(t, "edit", launched[0].Title, "the launch carries the last-seen title")
+	assert.Equal(t, "edit 2", launched[0].Title, "the launch carries the last-seen title")
+}
+
+// The loop-breaker. The drafter's own write advances UpdatedAt without touching
+// the title, so arming on the advance alone would relaunch the run that write
+// came from, once per quiet window, for as long as a board stays open.
+func TestIdeaDraftWatcher_IgnoresADescriptionOnlyChange(t *testing.T) {
+	rec := &launchRecorder{}
+	now := time.Unix(1000, 0)
+	w := watcherAt(&now, rec)
+
+	w.Observe(ideaResults(idea("SC-1", "one", time.Unix(500, 0))))
+	for i := range 4 {
+		now = now.Add(5 * time.Minute)
+		w.Observe(ideaResults(idea("SC-1", "one", time.Unix(int64(600+i*10), 0))))
+	}
+
+	assert.Empty(t, rec.settle(), "an UpdatedAt advance the title did not move is not a redraft trigger")
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assert.Empty(t, w.due, "nothing was armed, so nothing stays pending")
+}
+
+// The title moving after a run of description-only advances still arms: the
+// filter is the title, not a one-shot latch on the first change seen.
+func TestIdeaDraftWatcher_ArmsOnATitleChangeAfterQuietAdvances(t *testing.T) {
+	rec := &launchRecorder{}
+	now := time.Unix(1000, 0)
+	w := watcherAt(&now, rec)
+
+	w.Observe(ideaResults(idea("SC-1", "one", time.Unix(500, 0))))
+	now = now.Add(5 * time.Minute)
+	w.Observe(ideaResults(idea("SC-1", "one", time.Unix(600, 0)))) // the drafter's own write
+	now = now.Add(5 * time.Minute)
+	w.Observe(ideaResults(idea("SC-1", "one better idea", time.Unix(700, 0))))
+	require.Empty(t, rec.all(), "the window has just opened")
+
+	now = now.Add(5 * time.Minute)
+	w.Observe(ideaResults(idea("SC-1", "one better idea", time.Unix(700, 0))))
+
+	launched := rec.settle()
+	require.Len(t, launched, 1)
+	assert.Equal(t, "one better idea", launched[0].Title)
 }
 
 func TestIdeaDraftWatcher_IgnoresNonIdeaAndNonPM(t *testing.T) {
@@ -105,9 +148,11 @@ func TestIdeaDraftWatcher_IgnoresNonIdeaAndNonPM(t *testing.T) {
 	engineering := []TrackerIssuesResult{{TrackerRole: "engineering", Issues: []tracker.Issue{idea("HUM-1", "eng idea", time.Unix(500, 0))}}}
 
 	w.Observe(append(ideaResults(feature), engineering...))
+	// Both titles move, so the label and the role are the only things that can
+	// hold the launches back.
 	now = now.Add(5 * time.Minute)
-	w.Observe(append(ideaResults(tracker.Issue{Key: "SC-9", Title: "work", UpdatedAt: time.Unix(900, 0)}),
-		[]TrackerIssuesResult{{TrackerRole: "engineering", Issues: []tracker.Issue{idea("HUM-1", "eng idea", time.Unix(900, 0))}}}...))
+	w.Observe(append(ideaResults(tracker.Issue{Key: "SC-9", Title: "work renamed", UpdatedAt: time.Unix(900, 0)}),
+		[]TrackerIssuesResult{{TrackerRole: "engineering", Issues: []tracker.Issue{idea("HUM-1", "eng idea renamed", time.Unix(900, 0))}}}...))
 
 	assert.Empty(t, rec.settle())
 }
@@ -121,7 +166,7 @@ func TestIdeaDraftWatcher_ForgetsAPromotedKey(t *testing.T) {
 
 	w.Observe(ideaResults(idea("SC-1", "one", time.Unix(500, 0))))
 	now = now.Add(time.Second)
-	w.Observe(ideaResults(idea("SC-1", "one", time.Unix(600, 0))))
+	w.Observe(ideaResults(idea("SC-1", "one renamed", time.Unix(600, 0))))
 
 	now = now.Add(5 * time.Minute)
 	w.Observe(ideaResults()) // promoted: no longer an idea, no longer listed
