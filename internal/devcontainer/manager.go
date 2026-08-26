@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/errors"
@@ -400,13 +401,24 @@ const (
 	spareIfRunning removalForce = false
 )
 
+// alreadyGone reports whether a Docker call failed because the container it
+// names no longer exists. A container the reaper, a concurrent daemon pass or a
+// manual `docker rm` took between the listing and the removal leaves the name
+// free — the same state a successful removal produces — so failing the launch
+// on it costs a run that used to self-heal. Read from the SDK's typed error
+// rather than its message, as isDockerUnreachable reads a connection failure
+// (SC-4632).
+func alreadyGone(err error) bool {
+	return cerrdefs.IsNotFound(err)
+}
+
 // removeForRebuild frees the container name and returns the one error Up is
 // allowed to recover from. initErr rides along as a detail so a rebuild that
 // fails the same way can name the original cause. A removal that Docker refuses
-// is returned as itself, so nothing falls through to create over a name that is
-// still held.
+// for any reason other than the container already being gone is returned as
+// itself, so nothing falls through to create over a name that is still held.
 func (m *Manager) removeForRebuild(ctx context.Context, containerID, metaName, reason, initErr string, force removalForce) error {
-	if rmErr := m.Docker.ContainerRemove(ctx, containerID, ContainerRemoveOptions{Force: bool(force)}); rmErr != nil {
+	if rmErr := m.Docker.ContainerRemove(ctx, containerID, ContainerRemoveOptions{Force: bool(force)}); rmErr != nil && !alreadyGone(rmErr) {
 		return errors.WrapWithDetails(rmErr, "removing old container for rebuild", "id", containerID)
 	}
 	_ = DeleteMeta(metaName)

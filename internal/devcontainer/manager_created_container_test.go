@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
+
 	"github.com/gethuman-sh/human/errors"
 )
 
@@ -240,5 +242,100 @@ func TestManager_Up_StaleCreatedListingWithFailedInspectDoesNotKillARunningConta
 	}
 	if len(docker.createCalls) != 0 {
 		t.Errorf("must not create over a container that still holds the name, createCalls = %d", len(docker.createCalls))
+	}
+}
+
+// vanishedContainerDocker models the window between the listing and the
+// removal: the container is in the list, and by the time the manager acts on
+// it something else has taken it — the reaper sweep, a concurrent daemon pass,
+// a manual `docker rm`. removeErr is what Docker answers at that moment.
+type vanishedContainerDocker struct {
+	*mockDockerClient
+	summary    ContainerSummary
+	inspectErr error
+	removeErr  error
+}
+
+func (d *vanishedContainerDocker) ContainerList(_ context.Context, _ ContainerListOptions) ([]ContainerSummary, error) {
+	return []ContainerSummary{d.summary}, nil
+}
+
+func (d *vanishedContainerDocker) ContainerInspect(_ context.Context, _ string) (ContainerInspectResponse, error) {
+	return ContainerInspectResponse{}, d.inspectErr
+}
+
+func (d *vanishedContainerDocker) ContainerRemove(ctx context.Context, id string, opts ContainerRemoveOptions) error {
+	_ = d.mockDockerClient.ContainerRemove(ctx, id, opts)
+	return d.removeErr
+}
+
+// dockerNotFound builds the error the Engine SDK returns for a container that
+// is no longer there: the message is decoration, the errdefs classification is
+// the fact.
+func dockerNotFound(id string) error {
+	return fmt.Errorf("Error response from daemon: No such container: %s: %w", id, cerrdefs.ErrNotFound)
+}
+
+func vanishedDockerFor(containerName string, removeErr error) *vanishedContainerDocker {
+	return &vanishedContainerDocker{
+		mockDockerClient: &mockDockerClient{
+			imageInspectResult: ImageInspectResponse{ID: "sha256:cached"},
+			createID:           "container-abc123",
+		},
+		inspectErr: dockerNotFound("gone-id"),
+		removeErr:  removeErr,
+		summary: ContainerSummary{
+			ID:     "gone-id",
+			Names:  []string{"/" + containerName},
+			Image:  "ubuntu:22.04",
+			State:  "created",
+			Labels: map[string]string{LabelManaged: "true"},
+		},
+	}
+}
+
+// TestManager_Up_ContainerGoneBeforeRemovalStillLaunches pins the self-heal the
+// name-conflict gate must not cost: a container that is already gone frees the
+// name exactly as a successful removal does, so the launch proceeds to create
+// instead of failing and charging a stage retry (SC-4632).
+func TestManager_Up_ContainerGoneBeforeRemovalStillLaunches(t *testing.T) {
+	projectDir, _, _ := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+	docker := vanishedDockerFor(ContainerName(projectDir), dockerNotFound("gone-id"))
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	var buf bytes.Buffer
+	meta, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf})
+	if err != nil {
+		t.Fatalf("Up failed although the name was free: %s", errors.CauseChain(err))
+	}
+	if len(docker.createCalls) != 1 {
+		t.Errorf("expected the launch to create a fresh container, createCalls = %d", len(docker.createCalls))
+	}
+	meta = must(t, meta, "expected non-nil meta")
+	if meta.ContainerID != "container-abc123" {
+		t.Errorf("containerID = %q, want the freshly created one", meta.ContainerID)
+	}
+}
+
+// TestManager_Up_RemovalFailingForAnotherReasonStopsTheLaunch keeps the gate
+// itself: only "already gone" frees the name. Any other refusal leaves the old
+// container holding it, and creating over it returns Docker's name conflict as
+// the run's only visible failure (SC-4632).
+func TestManager_Up_RemovalFailingForAnotherReasonStopsTheLaunch(t *testing.T) {
+	projectDir, _, _ := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+	docker := vanishedDockerFor(ContainerName(projectDir),
+		fmt.Errorf("Error response from daemon: permission denied while removing container"))
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	var buf bytes.Buffer
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf})
+	if err == nil {
+		t.Fatal("expected the failed removal to fail the launch")
+	}
+	if chain := errors.CauseChain(err); !strings.Contains(chain, "permission denied") {
+		t.Errorf("expected the removal failure in the chain, got: %s", chain)
+	}
+	if len(docker.createCalls) != 0 {
+		t.Errorf("must not create over a name still held, createCalls = %d", len(docker.createCalls))
 	}
 }
