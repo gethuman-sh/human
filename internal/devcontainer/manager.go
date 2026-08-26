@@ -369,9 +369,11 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 // fails still answers yes — the name is held either way, so the only thing lost
 // is the reason, which is already lost in that case. That answer is a guess
 // about a live container, which is why the removal it leads to is unforced:
-// Docker refuses to take a running container without force, so one that started
-// after the listing survives and the launch fails on the refusal instead
-// (SC-4632).
+// Docker refuses to take a running container without force, so on this path a
+// container that started after the listing survives and the launch fails on the
+// refusal instead. That sparing is this path's alone — a container whose config
+// hash no longer matches is answered "no" here and rebuilt by the config-changed
+// path below, which removes with force by design (SC-4632).
 func (m *Manager) neverStarted(ctx context.Context, existing ContainerSummary) (string, bool) {
 	if existing.State != containerStateCreated {
 		return "", false
