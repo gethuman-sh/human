@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sort"
+	"time"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -158,12 +159,7 @@ func (e *engineClient) ContainerInspect(ctx context.Context, containerID string)
 		return ContainerInspectResponse{}, err
 	}
 	ctr := resp.Container
-	state := ContainerState{}
-	if ctr.State != nil {
-		state.Status = string(ctr.State.Status)
-		state.Running = ctr.State.Running
-		state.ExitCode = ctr.State.ExitCode
-	}
+	state := containerStateFrom(ctr.State)
 	configInfo := ContainerConfigInfo{}
 	if ctr.Config != nil {
 		configInfo.Env = ctr.Config.Env
@@ -177,6 +173,36 @@ func (e *engineClient) ContainerInspect(ctx context.Context, containerID string)
 		Config:    configInfo,
 		IPAddress: firstContainerIP(ctr.NetworkSettings),
 	}, nil
+}
+
+// containerStateFrom maps Docker's state onto ours. Error and StartedAt travel
+// with it because they are the only way a caller can tell a container that
+// never ran from one that ran and stopped, and the only record of what stopped
+// it from running (SC-4632).
+func containerStateFrom(s *container.State) ContainerState {
+	if s == nil {
+		return ContainerState{}
+	}
+	return ContainerState{
+		Status:    string(s.Status),
+		Running:   s.Running,
+		ExitCode:  s.ExitCode,
+		Error:     s.Error,
+		StartedAt: parseContainerTime(s.StartedAt),
+	}
+}
+
+// parseContainerTime reads Docker's RFC3339Nano timestamps. Docker writes
+// "0001-01-01T00:00:00Z" for a container that never started, which parses to
+// the zero time; an unparsable value is treated the same way, because the only
+// question asked of it is "did this ever run", and an unreadable answer is not
+// evidence that it did.
+func parseContainerTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // firstContainerIP returns the first non-empty IP across the container's

@@ -3,6 +3,7 @@ package devcontainer
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // DockerClient abstracts Docker Engine operations for devcontainer management.
@@ -124,11 +125,24 @@ type ContainerInspectResponse struct {
 	IPAddress string
 }
 
+// containerStateCreated is Docker's state for a container that exists but has
+// never run: an init failure (a bad mount, a missing binary) stops it here,
+// holding its name, with nothing to restart.
+const containerStateCreated = "created"
+
 // ContainerState represents the container's runtime state.
 type ContainerState struct {
 	Status   string // "running", "exited", "created", etc.
 	Running  bool
 	ExitCode int
+	// Error is what Docker recorded as the reason the container could not run.
+	// It is the only place the init failure survives once the start call has
+	// returned, and reporting it is what keeps a relaunch from blaming the name
+	// it collides on instead of the mount that killed the run (SC-4632).
+	Error string
+	// StartedAt is the zero time for a container that never ran, which is what
+	// separates "created and failed" from "ran and stopped".
+	StartedAt time.Time
 }
 
 // ContainerConfigInfo holds container configuration from inspection.

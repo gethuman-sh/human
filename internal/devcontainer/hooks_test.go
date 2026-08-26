@@ -26,6 +26,9 @@ type mockDockerClient struct {
 	startCalls  []string
 	stopCalls   []string
 	removeCalls []string
+	// startErr makes ContainerStart fail, which is how a test reaches the
+	// reuse paths that only run when a container cannot be started.
+	startErr error
 
 	// copyCalls records CopyToContainer invocations; callLog interleaves them
 	// with create/start so a test can assert the copy happens between the two
@@ -94,7 +97,7 @@ func (m *mockDockerClient) ContainerStart(_ context.Context, id string) error {
 	m.startCalls = append(m.startCalls, id)
 	m.callLog = append(m.callLog, "start")
 	m.mu.Unlock()
-	return nil
+	return m.startErr
 }
 
 func (m *mockDockerClient) ContainerStop(_ context.Context, id string, _ *int) error {
