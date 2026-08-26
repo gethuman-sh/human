@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -337,5 +339,69 @@ func TestManager_Up_RemovalFailingForAnotherReasonStopsTheLaunch(t *testing.T) {
 	}
 	if len(docker.createCalls) != 0 {
 		t.Errorf("must not create over a name still held, createCalls = %d", len(docker.createCalls))
+	}
+}
+
+// restartRaceDocker models the same window one branch further on: the listing
+// shows an exited container the config still matches, and by the time
+// ContainerStart runs, the reaper or a concurrent pass has taken it. Only that
+// container is gone — the one the rebuild creates starts normally.
+type restartRaceDocker struct {
+	*mockDockerClient
+	goneID  string
+	summary ContainerSummary
+}
+
+func (d *restartRaceDocker) ContainerList(_ context.Context, _ ContainerListOptions) ([]ContainerSummary, error) {
+	return []ContainerSummary{d.summary}, nil
+}
+
+func (d *restartRaceDocker) ContainerStart(ctx context.Context, id string) error {
+	if id == d.goneID {
+		return dockerNotFound(id)
+	}
+	return d.mockDockerClient.ContainerStart(ctx, id)
+}
+
+// TestManager_Up_ContainerGoneBeforeRestartStillLaunches is the same self-heal
+// on the restart path: a container that vanished between the listing and
+// ContainerStart leaves its name free, so the launch creates a fresh one
+// instead of failing and charging a stage retry (SC-4632).
+func TestManager_Up_ContainerGoneBeforeRestartStillLaunches(t *testing.T) {
+	projectDir, _, _ := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+	containerName := ContainerName(projectDir)
+	configData, _ := os.ReadFile(filepath.Join(projectDir, ".devcontainer", "devcontainer.json"))
+	hash := ConfigHash(configData)
+
+	docker := &restartRaceDocker{
+		mockDockerClient: &mockDockerClient{
+			imageInspectResult: ImageInspectResponse{ID: "sha256:cached"},
+			createID:           "container-abc123",
+		},
+		goneID: "stopped-id",
+		summary: ContainerSummary{
+			ID:     "stopped-id",
+			Names:  []string{"/" + containerName},
+			Image:  "ubuntu:22.04",
+			State:  "exited",
+			Labels: map[string]string{LabelManaged: "true", LabelConfigHash: hash},
+		},
+	}
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	var buf bytes.Buffer
+	meta, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf})
+	if err != nil {
+		t.Fatalf("Up failed although the name was free: %s", errors.CauseChain(err))
+	}
+	if len(docker.createCalls) != 1 {
+		t.Errorf("expected the launch to create a fresh container, createCalls = %d", len(docker.createCalls))
+	}
+	if len(docker.removeCalls) != 0 {
+		t.Errorf("a container Docker says is gone must not be removed, removeCalls = %v", docker.removeCalls)
+	}
+	meta = must(t, meta, "expected non-nil meta")
+	if meta.ContainerID != "container-abc123" {
+		t.Errorf("containerID = %q, want the freshly created one", meta.ContainerID)
 	}
 }

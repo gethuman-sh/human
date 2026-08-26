@@ -108,8 +108,19 @@ func (m *Manager) Up(ctx context.Context, opts UpOptions) (*Meta, error) {
 		if handleErr == nil {
 			return meta, nil
 		}
-		// Only a removal frees the name, so only the removal sentinel may fall
-		// through to create. Any other error leaves the old container in place,
+		// Every Docker call under handleExisting names `existing`, so a
+		// not-found from any of them says that one container is gone and its
+		// name is free — the same state a successful removal leaves behind.
+		// Deciding it here rather than per branch is what makes it a property
+		// of the phase: the removal path and the restart path each hit this
+		// race, and a branch added later inherits the answer instead of
+		// failing a launch over a name nothing holds (SC-4632).
+		if alreadyGone(handleErr) {
+			handleErr = rebuildUnderFreedName(SanitizeName(filepath.Base(projectDir)),
+				"container vanished: "+handleErr.Error(), "")
+		}
+		// Only a freed name may fall through to create, so only the rebuild
+		// sentinel does. Any other error leaves the old container in place,
 		// and creating over it returns Docker's name conflict — which is then
 		// the only thing the ticket and the board ever see (SC-4632).
 		if !stderrors.Is(handleErr, errRebuildAfterRemoval) {
@@ -416,13 +427,24 @@ func alreadyGone(err error) bool {
 
 // removeForRebuild frees the container name and returns the one error Up is
 // allowed to recover from. initErr rides along as a detail so a rebuild that
-// fails the same way can name the original cause. A removal that Docker refuses
-// for any reason other than the container already being gone is returned as
-// itself, so nothing falls through to create over a name that is still held.
+// fails the same way can name the original cause — which is why this path
+// answers an already-gone container itself instead of leaving it to Up's
+// catch-all, where that detail has nothing to ride on. A removal that Docker
+// refuses for any other reason is returned as itself, so nothing falls through
+// to create over a name that is still held.
 func (m *Manager) removeForRebuild(ctx context.Context, containerID, metaName, reason, initErr string, force removalForce) error {
 	if rmErr := m.Docker.ContainerRemove(ctx, containerID, ContainerRemoveOptions{Force: bool(force)}); rmErr != nil && !alreadyGone(rmErr) {
 		return errors.WrapWithDetails(rmErr, "removing old container for rebuild", "id", containerID)
 	}
+	return rebuildUnderFreedName(metaName, reason, initErr)
+}
+
+// rebuildUnderFreedName records that nothing holds the container name any more
+// and returns the one error Up may recover from. The stale metadata goes with
+// the name: it points at a container that no longer exists, and a rebuild that
+// dies before writing its own would otherwise leave it behind as the project's
+// current state (SC-4632).
+func rebuildUnderFreedName(metaName, reason, initErr string) error {
 	_ = DeleteMeta(metaName)
 	return errors.WrapWithDetails(errRebuildAfterRemoval, "%s, rebuilding",
 		"reason", reason, "init_error", initErr)
