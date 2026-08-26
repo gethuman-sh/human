@@ -293,7 +293,7 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 	// host already hit by it (SC-4631, AD6).
 	if initErr, never := m.neverStarted(ctx, existing); never {
 		_, _ = fmt.Fprintf(out, "Container %s never started, removing it...\n", containerName)
-		return nil, m.removeForRebuild(ctx, existing.ID, name, "container never started", initErr)
+		return nil, m.removeForRebuild(ctx, existing.ID, name, "container never started", initErr, spareIfRunning)
 	}
 
 	// Only reuse a running container when its build config is unchanged.
@@ -359,14 +359,18 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 
 	// Config changed: remove old container so caller can rebuild.
 	_, _ = fmt.Fprintf(out, "Config changed, removing old container %s...\n", containerName)
-	return nil, m.removeForRebuild(ctx, existing.ID, name, "config changed", "")
+	return nil, m.removeForRebuild(ctx, existing.ID, name, "config changed", "", killIfRunning)
 }
 
 // neverStarted reports whether the existing container was created but never
 // ran, and returns what Docker recorded as the reason. Only "created" can be
 // that container: "exited" ran and stopped, "running" is alive. An inspect that
 // fails still answers yes — the name is held either way, so the only thing lost
-// is the reason, which is already lost in that case (SC-4632).
+// is the reason, which is already lost in that case. That answer is a guess
+// about a live container, which is why the removal it leads to is unforced:
+// Docker refuses to take a running container without force, so one that started
+// after the listing survives and the launch fails on the refusal instead
+// (SC-4632).
 func (m *Manager) neverStarted(ctx context.Context, existing ContainerSummary) (string, bool) {
 	if existing.State != containerStateCreated {
 		return "", false
@@ -381,11 +385,28 @@ func (m *Manager) neverStarted(ctx context.Context, existing ContainerSummary) (
 	return singleLine(resp.State.Error), true
 }
 
+// removalForce says whether a removal may take a live container with it. It is
+// a decision each caller must make out loud: forcing is right when the
+// container is known to be replaceable, and wrong wherever the caller is only
+// inferring that it is dead.
+type removalForce bool
+
+const (
+	// killIfRunning replaces a container the config no longer matches, running
+	// or not — that container cannot serve the run either way.
+	killIfRunning removalForce = true
+	// spareIfRunning leaves the running/dead decision to Docker at the moment
+	// of removal, the only point where the answer cannot already be stale.
+	spareIfRunning removalForce = false
+)
+
 // removeForRebuild frees the container name and returns the one error Up is
 // allowed to recover from. initErr rides along as a detail so a rebuild that
-// fails the same way can name the original cause.
-func (m *Manager) removeForRebuild(ctx context.Context, containerID, metaName, reason, initErr string) error {
-	if rmErr := m.Docker.ContainerRemove(ctx, containerID, ContainerRemoveOptions{Force: true}); rmErr != nil {
+// fails the same way can name the original cause. A removal that Docker refuses
+// is returned as itself, so nothing falls through to create over a name that is
+// still held.
+func (m *Manager) removeForRebuild(ctx context.Context, containerID, metaName, reason, initErr string, force removalForce) error {
+	if rmErr := m.Docker.ContainerRemove(ctx, containerID, ContainerRemoveOptions{Force: bool(force)}); rmErr != nil {
 		return errors.WrapWithDetails(rmErr, "removing old container for rebuild", "id", containerID)
 	}
 	_ = DeleteMeta(metaName)

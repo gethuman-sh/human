@@ -151,3 +151,94 @@ func TestSingleLine_FlattensAndCaps(t *testing.T) {
 		t.Errorf("capped value must end in an ellipsis, got %q", long[len(long)-8:])
 	}
 }
+
+// staleListDocker models the race the "never started" path must survive: the
+// list state is a snapshot, so a container listed as "created" may have started
+// since, and the inspect that would say so can fail for reasons of its own — a
+// timeout, a daemon hiccup. Removal is the only thing that knows the truth at
+// the moment it acts, so this fake enforces Docker's rule: a running container
+// does not come off without Force.
+type staleListDocker struct {
+	*mockDockerClient
+	mu          sync.Mutex
+	running     bool
+	removed     bool
+	removeOpts  []ContainerRemoveOptions
+	summary     ContainerSummary
+	inspectFail error
+}
+
+func (d *staleListDocker) ContainerInspect(_ context.Context, _ string) (ContainerInspectResponse, error) {
+	return ContainerInspectResponse{}, d.inspectFail
+}
+
+func (d *staleListDocker) ContainerList(_ context.Context, _ ContainerListOptions) ([]ContainerSummary, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.removed {
+		return nil, nil
+	}
+	return []ContainerSummary{d.summary}, nil
+}
+
+func (d *staleListDocker) ContainerRemove(ctx context.Context, id string, opts ContainerRemoveOptions) error {
+	_ = d.mockDockerClient.ContainerRemove(ctx, id, opts)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.removeOpts = append(d.removeOpts, opts)
+	if d.running && !opts.Force {
+		return fmt.Errorf("Error response from daemon: cannot remove container %q: "+
+			"container is running: stop the container before removing or force remove", id)
+	}
+	d.removed = true
+	return nil
+}
+
+// TestManager_Up_StaleCreatedListingWithFailedInspectDoesNotKillARunningContainer
+// pins the SC-4632 acceptance criterion its first fix left open: a container in
+// state "running" is never removed by this path. The listing says "created" and
+// the inspect fails, so nothing the manager can read proves the container is
+// dead — and an unforced removal is what makes the difference decidable by
+// Docker, atomically, instead of guessed from a stale snapshot.
+func TestManager_Up_StaleCreatedListingWithFailedInspectDoesNotKillARunningContainer(t *testing.T) {
+	projectDir, _, _ := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+	containerName := ContainerName(projectDir)
+
+	docker := &staleListDocker{
+		mockDockerClient: &mockDockerClient{
+			imageInspectResult: ImageInspectResponse{ID: "sha256:cached"},
+			createID:           "container-abc123",
+		},
+		running:     true,
+		inspectFail: fmt.Errorf("Error response from daemon: i/o timeout"),
+		summary: ContainerSummary{
+			ID:     "raced-id",
+			Names:  []string{"/" + containerName},
+			Image:  "ubuntu:22.04",
+			State:  "created",
+			Labels: map[string]string{LabelManaged: "true"},
+		},
+	}
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	var buf bytes.Buffer
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf})
+
+	for _, opts := range docker.removeOpts {
+		if opts.Force {
+			t.Errorf("a container that may be running was force-removed, removeOpts = %+v", docker.removeOpts)
+		}
+	}
+	if docker.removed {
+		t.Error("the running container was removed")
+	}
+	if err == nil {
+		t.Fatal("expected the failed removal to fail the launch")
+	}
+	if chain := errors.CauseChain(err); !strings.Contains(chain, "container is running") {
+		t.Errorf("expected the removal refusal in the chain, got: %s", chain)
+	}
+	if len(docker.createCalls) != 0 {
+		t.Errorf("must not create over a container that still holds the name, createCalls = %d", len(docker.createCalls))
+	}
+}
