@@ -125,10 +125,18 @@ func checkDocker(ctx context.Context) (bool, string) {
 
 // checkCACert catches ticket 428's failure mode: a present-but-unparseable
 // CA silently breaks in-container TLS and hook delivery for every agent. An
-// absent file is fine — the daemon generates it on first proxy use.
+// absent file is fine — the daemon generates it on first proxy use — but only
+// absence is: a stat that fails for any other reason means the daemon cannot
+// tell whether the CA it mounts into every container is usable, and reporting
+// that as "not yet generated" states the one thing known to be untrue
+// (SC-4686, the same absent-vs-unreadable conflation as checkClaudeAuth).
 func checkCACert(path string) (bool, string) {
 	if _, err := os.Stat(path); err != nil {
-		return true, "not yet generated"
+		if os.IsNotExist(err) {
+			return true, "not yet generated"
+		}
+		return false, path + " cannot be read: " + err.Error() +
+			" — fix its permissions, or delete it and restart the daemon to regenerate"
 	}
 	if !devcontainer.IsValidCACertFile(path) {
 		return false, path + " exists but is not a valid PEM certificate — delete it and restart the daemon to regenerate"

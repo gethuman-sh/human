@@ -78,6 +78,26 @@ func TestCheckCACert(t *testing.T) {
 	assert.Contains(t, detail, "restart the daemon to regenerate")
 }
 
+// A stat that fails for a reason other than absence must not be reported as
+// "not yet generated": the daemon cannot tell whether the CA it mounts into
+// every container is usable, and absence is the one thing it knows is untrue.
+// A path under a non-searchable directory yields a non-NotExist stat error.
+func TestCheckCACert_unreadableIsNotReportedAsAbsent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+	locked := filepath.Join(t.TempDir(), "locked")
+	require.NoError(t, os.Mkdir(locked, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(locked, "ca.crt"), []byte("x"), 0o600))
+	require.NoError(t, os.Chmod(locked, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	ok, detail := checkCACert(filepath.Join(locked, "ca.crt"))
+	assert.False(t, ok)
+	assert.NotContains(t, detail, "not yet generated")
+	assert.Contains(t, detail, "cannot be read")
+}
+
 func TestCheckPersistence(t *testing.T) {
 	ok, _ := checkPersistence(doctorPersistence{stats: true, audit: true, confirms: true})
 	assert.True(t, ok)
