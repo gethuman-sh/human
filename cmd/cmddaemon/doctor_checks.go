@@ -165,48 +165,97 @@ type claudeCreds struct {
 	} `json:"claudeAiOauth"`
 }
 
-// checkClaudeAuth catches SC-912: a daemon whose Claude OAuth session expired
-// still competes for board work and fails every pickup ~15s in at agent auth.
+// claudeStoreState is what one project's host credential store says about its
+// Claude session. Everything the probe cannot judge collapses to claudeStoreOK:
+// the check blames a project only on positive evidence.
+type claudeStoreState int
+
+const (
+	claudeStoreOK      claudeStoreState = iota // usable, or unjudgeable and therefore not blamed
+	claudeStoreAbsent                          // no store at all — never signed in
+	claudeStoreExpired                         // signed in once, session dead and unrefreshable
+)
+
+// claudeStoreAt classifies one project's host credential store.
+//
+// Absence and schema drift are different faults and get different verdicts. A
+// file that does not exist is a definite, checkable state with a known remedy —
+// nobody ever signed in — so it is reported. Everything else the probe cannot
+// read or cannot parse is unjudgeable: a path or schema mismatch must never
+// block a daemon whose Claude is in fact authenticated, so it degrades to OK
+// (SC-4686 for the split; SC-912 for the fail-open it preserves).
+//
+// An empty claudeAiOauth block stays OK deliberately. It is indistinguishable
+// from schema drift — a renamed field leaves the block looking empty too — and
+// the fields read here are too few to tell the two apart.
+func claudeStoreAt(path string, nowMS int64) claudeStoreState {
+	raw, err := os.ReadFile(path) // #nosec G304 -- path is built from the daemon's own project registry dirs, not external input
+	if err != nil {
+		if os.IsNotExist(err) {
+			return claudeStoreAbsent
+		}
+		return claudeStoreOK // fail-open: unreadable for some other reason → no evidence either way
+	}
+	var creds claudeCreds
+	if err := json.Unmarshal(raw, &creds); err != nil {
+		return claudeStoreOK // fail-open: schema drift must not block launches
+	}
+	if creds.ClaudeAiOauth.ExpiresAt == 0 {
+		return claudeStoreOK // fail-open: no expiry recorded → cannot judge freshness
+	}
+	// An expired ACCESS token with a refresh token present is the normal resting
+	// state between agent runs — the next launched Claude refreshes it silently.
+	// Only a session that can no longer refresh is dead.
+	if creds.ClaudeAiOauth.RefreshToken != "" {
+		return claudeStoreOK
+	}
+	if creds.ClaudeAiOauth.ExpiresAt <= nowMS {
+		return claudeStoreExpired
+	}
+	return claudeStoreOK
+}
+
+// checkClaudeAuth catches the two states in which every launched agent dies at
+// Claude auth while the daemon keeps competing for board work: a session that
+// expired past refreshing (SC-912, ~15s deaths) and a credential store that was
+// never signed in at all (SC-4686, ~7s deaths with "Not logged in · Please run
+// /login"). Both are launch-critical, so reporting them refuses the pickup
+// instead of spending a stage's retry budget on a container that cannot work.
+//
 // The in-container Claude store is bind-mounted from the host at
 // <entry.Dir>/.devcontainer/claude/ → ~/.claude, so the probe reads the host
-// copy of .credentials.json. It is fail-open by design: only a present,
-// parseable session that is past its expiresAt AND has no refresh token is a
-// failure — with a refresh token the next launched Claude renews the access
-// token itself, so an expired access token between runs is healthy. An absent,
-// unreadable, unparseable, or expiresAt-less file degrades to pre-fix behaviour
-// (ok=true) so a path/schema mismatch never blocks a healthy daemon.
+// copy of .credentials.json. claudeStoreAt holds which states are judgeable.
 func checkClaudeAuth(reg *daemon.ProjectRegistry) (bool, string) {
 	nowMS := time.Now().UnixMilli()
-	var expired []string
+	var absent, expired []string
 	for _, entry := range reg.Entries() {
-		path := filepath.Join(entry.Dir, ".devcontainer", "claude", ".credentials.json")
-		raw, err := os.ReadFile(path) // #nosec G304 -- path is built from the daemon's own project registry dirs, not external input
-		if err != nil {
-			continue // fail-open: no host store here, nothing to verify
-		}
-		var creds claudeCreds
-		if err := json.Unmarshal(raw, &creds); err != nil {
-			continue // fail-open: schema drift must not block launches
-		}
-		if creds.ClaudeAiOauth.ExpiresAt == 0 {
-			continue // fail-open: no expiry recorded → cannot judge freshness
-		}
-		// An expired ACCESS token with a refresh token present is the normal
-		// resting state between agent runs — the next launched Claude refreshes
-		// it silently. Only a session that can no longer refresh is dead.
-		if creds.ClaudeAiOauth.RefreshToken != "" {
-			continue
-		}
-		if creds.ClaudeAiOauth.ExpiresAt <= nowMS {
+		switch claudeStoreAt(filepath.Join(entry.Dir, ".devcontainer", "claude", ".credentials.json"), nowMS) {
+		case claudeStoreAbsent:
+			absent = append(absent, entry.Dir)
+		case claudeStoreExpired:
 			expired = append(expired, entry.Dir)
+		case claudeStoreOK:
 		}
 	}
+	var faults []string
+	if len(absent) > 0 {
+		faults = append(faults, "no Claude credential store for "+strings.Join(absent, ", "))
+	}
 	if len(expired) > 0 {
-		return false, "Claude session expired for " + strings.Join(expired, ", ") +
-			" — sign in to the project's container credential store: run 'human agent start reauth --interactive' in the project, /login inside it, then 'human agent stop reauth'; the daemon resumes picking up board work once the session is fresh"
+		faults = append(faults, "Claude session expired for "+strings.Join(expired, ", "))
+	}
+	if len(faults) > 0 {
+		return false, strings.Join(faults, "; ") + " — " + claudeReauthRemedy
 	}
 	return true, "session valid"
 }
+
+// claudeReauthRemedy is the one procedure that fixes every state
+// checkClaudeAuth reports, so both faults print it from one place.
+const claudeReauthRemedy = "sign in to the project's container credential store: " +
+	"run 'human agent start reauth --interactive' in the project, /login inside it, " +
+	"then 'human agent stop reauth'; " +
+	"the daemon resumes picking up board work once the session is fresh"
 
 // checkCodenavIndex reports the shared code-navigation index's coverage. A
 // still-warming project is reported ok=true (the daemon's background loop will

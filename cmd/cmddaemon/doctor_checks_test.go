@@ -109,17 +109,52 @@ func TestCheckClaudeAuth_valid(t *testing.T) {
 	assert.Equal(t, "session valid", detail)
 }
 
-// No host credential store → fail-open (ok=true): a path/schema mismatch must
-// degrade to pre-fix behaviour, never block a healthy daemon.
-func TestCheckClaudeAuth_absentStoreFailsOpen(t *testing.T) {
-	reg, err := daemon.NewProjectRegistry([]string{t.TempDir()})
+// A registered project with no host credential store at all is the SC-4686
+// failure: every stage agent dies ~7s in at "Not logged in", while doctor said
+// "session valid". Absence is not schema drift — it is a definite state with a
+// known remedy, so it goes red and names it.
+func TestCheckClaudeAuth_absentStoreIsUnauthenticated(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := daemon.NewProjectRegistry([]string{dir})
 	require.NoError(t, err)
-	ok, _ := checkClaudeAuth(reg)
+	ok, detail := checkClaudeAuth(reg)
+	assert.False(t, ok)
+	assert.Contains(t, detail, dir)
+	assert.Contains(t, detail, "container credential store")
+	assert.Contains(t, detail, "human agent start reauth --interactive")
+}
+
+// A store that cannot be read for a reason other than absence is unjudgeable —
+// the daemon has no evidence the session is dead — so it keeps failing open.
+// Reading a directory yields a non-NotExist error on every supported platform.
+func TestCheckClaudeAuth_unreadableStoreFailsOpen(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devcontainer", "claude", ".credentials.json"), 0o755))
+	reg, err := daemon.NewProjectRegistry([]string{dir})
+	require.NoError(t, err)
+	ok, detail := checkClaudeAuth(reg)
 	assert.True(t, ok)
+	assert.Equal(t, "session valid", detail)
+}
+
+// Schema drift must never block a healthy daemon: a store whose JSON no longer
+// parses is reported ok, exactly as before SC-4686.
+func TestCheckClaudeAuth_unparseableStoreFailsOpen(t *testing.T) {
+	dir := t.TempDir()
+	credDir := filepath.Join(dir, ".devcontainer", "claude")
+	require.NoError(t, os.MkdirAll(credDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(credDir, ".credentials.json"), []byte("not json at all"), 0o600))
+	reg, err := daemon.NewProjectRegistry([]string{dir})
+	require.NoError(t, err)
+	ok, detail := checkClaudeAuth(reg)
+	assert.True(t, ok)
+	assert.Equal(t, "session valid", detail)
 }
 
 // A present credential file that records no expiry cannot be judged, so the
-// check fails open rather than blocking on an unknowable freshness.
+// check fails open rather than blocking on an unknowable freshness. This is
+// also the shape schema drift takes — a renamed field leaves the block looking
+// empty — which is why an empty block is NOT treated like an absent store.
 func TestCheckClaudeAuth_missingExpiryFailsOpen(t *testing.T) {
 	reg := claudeAuthRegistry(t, 0)
 	ok, _ := checkClaudeAuth(reg)
