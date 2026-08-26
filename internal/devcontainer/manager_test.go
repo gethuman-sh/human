@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
 )
 
@@ -983,6 +984,83 @@ func TestManager_Up_StoppedSameConfig(t *testing.T) {
 	if !strings.Contains(buf.String(), "Restarting stopped") {
 		t.Errorf("expected 'Restarting stopped' in output: %s", buf.String())
 	}
+	// An exited container is restarted in place; removing it would throw away
+	// a warm container the config still matches.
+	if len(existingMock.removeCalls) != 0 {
+		t.Errorf("exited container must not be removed, removeCalls = %v", existingMock.removeCalls)
+	}
+}
+
+func TestManager_Up_ReuseFailureDoesNotFallThroughToCreate(t *testing.T) {
+	// A restart that fails leaves the old container holding the name, so
+	// creating over it can only produce a name conflict. The real failure must
+	// surface instead (SC-4632).
+	projectDir, _, _ := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+
+	containerName := ContainerName(projectDir)
+	configData, _ := os.ReadFile(filepath.Join(projectDir, ".devcontainer", "devcontainer.json"))
+	hash := ConfigHash(configData)
+
+	existingMock := &existingContainerMock{
+		mockDockerClient: &mockDockerClient{
+			imageInspectResult: ImageInspectResponse{ID: "sha256:cached"},
+			createID:           "container-abc123",
+			startErr:           fmt.Errorf("write /var/lib/docker: no space left on device"),
+		},
+		containers: []ContainerSummary{{
+			ID:     "stopped-id",
+			Names:  []string{"/" + containerName},
+			Image:  "ubuntu:22.04",
+			State:  "exited",
+			Labels: map[string]string{LabelManaged: "true", LabelConfigHash: hash},
+		}},
+	}
+
+	mgr := &Manager{Docker: existingMock, Logger: testLogger()}
+	var buf bytes.Buffer
+	_, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf})
+	if err == nil {
+		t.Fatal("expected the restart failure to fail the launch")
+	}
+	if chain := errors.CauseChain(err); !strings.Contains(chain, "no space left on device") {
+		t.Errorf("expected the restart failure in the chain, got: %s", chain)
+	}
+	if len(existingMock.createCalls) != 0 {
+		t.Errorf("must not create over a container that still holds the name, createCalls = %d", len(existingMock.createCalls))
+	}
+}
+
+func TestManager_Up_RunningContainerIsNeverRemoved(t *testing.T) {
+	// The never-started path must not reach a live container.
+	projectDir, _, _ := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+
+	containerName := ContainerName(projectDir)
+	configData, _ := os.ReadFile(filepath.Join(projectDir, ".devcontainer", "devcontainer.json"))
+	hash := ConfigHash(configData)
+
+	existingMock := &existingContainerMock{
+		mockDockerClient: &mockDockerClient{
+			imageInspectResult: ImageInspectResponse{ID: "sha256:cached"},
+			createID:           "container-abc123",
+			inspectState:       ContainerState{Running: true, Status: "running"},
+		},
+		containers: []ContainerSummary{{
+			ID:     "running-id",
+			Names:  []string{"/" + containerName},
+			Image:  "ubuntu:22.04",
+			State:  "running",
+			Labels: map[string]string{LabelManaged: "true", LabelConfigHash: hash},
+		}},
+	}
+
+	mgr := &Manager{Docker: existingMock, Logger: testLogger()}
+	var buf bytes.Buffer
+	if _, err := mgr.Up(context.Background(), UpOptions{ProjectDir: projectDir, Out: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	if len(existingMock.removeCalls) != 0 {
+		t.Errorf("running container must never be removed, removeCalls = %v", existingMock.removeCalls)
+	}
 }
 
 // existingContainerMock wraps mockDockerClient to return a pre-configured
@@ -1363,7 +1441,10 @@ func TestManager_Up_NeverStartedContainerIsRebuiltNotRestarted(t *testing.T) {
 		mockDockerClient: &mockDockerClient{
 			imageInspectErr: fmt.Errorf("not found"),
 			createID:        "container-fresh",
-			inspectState:    ContainerState{Running: true},
+			// The listing's "created" is a snapshot; the inspect is what
+			// decides, so the fixture answers what a container that truly
+			// never ran reports — not running, StartedAt unset (SC-4632).
+			inspectState: ContainerState{Status: containerStateCreated},
 		},
 		inspectCallCount: &callCount,
 		inspectErr:       fmt.Errorf("not found"),

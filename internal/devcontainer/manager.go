@@ -2,6 +2,7 @@ package devcontainer
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,13 @@ import (
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
 )
+
+// errRebuildAfterRemoval is the one outcome of handleExisting that Up may
+// recover from: the container holding the name is gone, so creating under that
+// name cannot collide. Every other error leaves the name held, and falling
+// through on one of those is what turned a run's real failure into "the
+// container name is already in use" (SC-4632).
+var errRebuildAfterRemoval = stderrors.New("existing container removed, rebuilding")
 
 // Manager orchestrates devcontainer lifecycle operations.
 type Manager struct {
@@ -46,6 +54,11 @@ type UpOptions struct {
 	// cacheVolumes is populated by Up from the project's .humanconfig caches
 	// section — callers never set it directly.
 	cacheVolumes []CacheVolume
+
+	// priorInitError is the recorded State.Error of a container that was
+	// removed because it never started; Up sets it so a rebuild that dies the
+	// same way names the original cause instead of a bare start failure.
+	priorInitError string
 }
 
 // Up creates and starts a devcontainer. If the container already exists and is
@@ -94,7 +107,17 @@ func (m *Manager) Up(ctx context.Context, opts UpOptions) (*Meta, error) {
 		if handleErr == nil {
 			return meta, nil
 		}
-		m.Logger.Info().Msg("rebuilding after config change")
+		// Only a removal frees the name, so only the removal sentinel may fall
+		// through to create. Any other error leaves the old container in place,
+		// and creating over it returns Docker's name conflict — which is then
+		// the only thing the ticket and the board ever see (SC-4632).
+		if !stderrors.Is(handleErr, errRebuildAfterRemoval) {
+			return nil, handleErr
+		}
+		if prior, ok := errors.AllDetails(handleErr)["init_error"].(string); ok {
+			opts.priorInitError = prior
+		}
+		m.Logger.Info().Str("reason", handleErr.Error()).Msg("rebuilding container")
 	}
 
 	// 3. Run initializeCommand on the host (not in container).
@@ -146,7 +169,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, img.Name, workspaceDir, hash, opts.DaemonInfo, opts.GitDir, opts.cacheVolumes)
 	ParseRunArgs(cfg.RunArgs, &createOpts, m.Logger)
 
-	containerID, err := m.createAndStart(ctx, createOpts, containerName, humanBin, out)
+	containerID, err := m.createAndStart(ctx, createOpts, containerName, humanBin, opts.priorInitError, out)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +218,11 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 // and a container started before the binary lands has already failed its
 // hooks (SC-4631, AD1). Split out of createFresh to keep it under the gocyclo
 // gate.
-func (m *Manager) createAndStart(ctx context.Context, createOpts ContainerCreateOptions, containerName, humanBin string, out io.Writer) (string, error) {
+//
+// priorInitError is the State.Error of a container this launch removed because
+// it never started; a start that fails the same way names that cause instead of
+// only its own symptom (SC-4632).
+func (m *Manager) createAndStart(ctx context.Context, createOpts ContainerCreateOptions, containerName, humanBin, priorInitError string, out io.Writer) (string, error) {
 	_, _ = fmt.Fprintf(out, "Creating container %s...\n", containerName) // #nosec G705 -- CLI terminal output, not web
 	containerID, err := m.Docker.ContainerCreate(ctx, createOpts)
 	if err != nil {
@@ -210,6 +237,10 @@ func (m *Manager) createAndStart(ctx context.Context, createOpts ContainerCreate
 	}
 
 	if err := m.Docker.ContainerStart(ctx, containerID); err != nil {
+		if priorInitError != "" {
+			return "", errors.WrapWithDetails(err, "starting container, previous container died of: %s",
+				"prior_error", priorInitError, "id", containerID)
+		}
 		return "", errors.WrapWithDetails(err, "starting container", "id", containerID)
 	}
 
@@ -249,25 +280,21 @@ func (m *Manager) findContainerByName(ctx context.Context, name string) (Contain
 	return ContainerSummary{}, errors.WithDetails("no container found", "name", name)
 }
 
-// removeNeverStarted removes a container stuck in `created` and returns the
-// non-nil "rebuilding" error handleExisting's caller already treats as the
-// create-fresh signal (Up logs it and falls through, exactly as the
-// config-changed path does) — kept separate so handleExisting itself stays
-// under the complexity gate.
-func (m *Manager) removeNeverStarted(ctx context.Context, existingID, name, containerName string, out io.Writer) error {
-	_, _ = fmt.Fprintf(out, "Removing never-started container %s...\n", containerName)
-	if rmErr := m.Docker.ContainerRemove(ctx, existingID, ContainerRemoveOptions{Force: true}); rmErr != nil {
-		return errors.WrapWithDetails(rmErr, "removing never-started container", "name", containerName)
-	}
-	_ = DeleteMeta(name)
-	return errors.WithDetails("never-started container removed, rebuilding")
-}
-
 // handleExisting handles the case where a container already exists for this project.
 func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary, cfg *DevcontainerConfig, hash, containerName, projectDir string, out io.Writer) (*Meta, error) {
 	existingHash := existing.Labels[LabelConfigHash]
 
 	name := SanitizeName(filepath.Base(projectDir))
+
+	// A container that never ran cannot be restarted into life and cannot be
+	// created over while it holds the name; remove it and carry what killed it.
+	// Every container the host-binary bind broke is stuck exactly here with its
+	// config hash still matching, so this is also what lets that fix reach a
+	// host already hit by it (SC-4631, AD6).
+	if initErr, never := m.neverStarted(ctx, existing); never {
+		_, _ = fmt.Fprintf(out, "Container %s never started, removing it...\n", containerName)
+		return nil, m.removeForRebuild(ctx, existing.ID, name, "container never started", initErr)
+	}
 
 	// Only reuse a running container when its build config is unchanged.
 	// Otherwise fall through to the removal/rebuild path below so an edited
@@ -295,14 +322,6 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 			_ = WriteMeta(meta)
 		}
 		return &meta, nil
-	}
-
-	// A container in `created` was never started. Restarting it repeats whatever
-	// stopped it from starting — every container the host-binary bind broke is
-	// in this state and its config hash still matches, so without this the fix
-	// cannot reach a host that already hit the bug (SC-4631).
-	if existing.State == "created" {
-		return nil, m.removeNeverStarted(ctx, existing.ID, name, containerName, out)
 	}
 
 	// Stopped container.
@@ -340,11 +359,52 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 
 	// Config changed: remove old container so caller can rebuild.
 	_, _ = fmt.Fprintf(out, "Config changed, removing old container %s...\n", containerName)
-	if rmErr := m.Docker.ContainerRemove(ctx, existing.ID, ContainerRemoveOptions{Force: true}); rmErr != nil {
-		return nil, errors.WrapWithDetails(rmErr, "removing old container for rebuild")
+	return nil, m.removeForRebuild(ctx, existing.ID, name, "config changed", "")
+}
+
+// neverStarted reports whether the existing container was created but never
+// ran, and returns what Docker recorded as the reason. Only "created" can be
+// that container: "exited" ran and stopped, "running" is alive. An inspect that
+// fails still answers yes — the name is held either way, so the only thing lost
+// is the reason, which is already lost in that case (SC-4632).
+func (m *Manager) neverStarted(ctx context.Context, existing ContainerSummary) (string, bool) {
+	if existing.State != containerStateCreated {
+		return "", false
 	}
-	_ = DeleteMeta(name)
-	return nil, errors.WithDetails("config changed, rebuilding")
+	resp, err := m.Docker.ContainerInspect(ctx, existing.ID)
+	if err != nil {
+		return "", true
+	}
+	if resp.State.Running || !resp.State.StartedAt.IsZero() {
+		return "", false
+	}
+	return singleLine(resp.State.Error), true
+}
+
+// removeForRebuild frees the container name and returns the one error Up is
+// allowed to recover from. initErr rides along as a detail so a rebuild that
+// fails the same way can name the original cause.
+func (m *Manager) removeForRebuild(ctx context.Context, containerID, metaName, reason, initErr string) error {
+	if rmErr := m.Docker.ContainerRemove(ctx, containerID, ContainerRemoveOptions{Force: true}); rmErr != nil {
+		return errors.WrapWithDetails(rmErr, "removing old container for rebuild", "id", containerID)
+	}
+	_ = DeleteMeta(metaName)
+	return errors.WrapWithDetails(errRebuildAfterRemoval, "%s, rebuilding",
+		"reason", reason, "init_error", initErr)
+}
+
+// singleLine flattens a Docker-reported error into one line and caps it. The
+// daemon turns a launch failure into a *-failed marker by cutting the diagnosis
+// at the first newline — headline into the reason field, rest into the body —
+// and a blank line truncates the field block, so a multi-line State.Error
+// arriving verbatim would lose most of itself on the card.
+func singleLine(s string) string {
+	flat := strings.Join(strings.Fields(s), " ")
+	const max = 500
+	if r := []rune(flat); len(r) > max {
+		return string(r[:max]) + "\u2026"
+	}
+	return flat
 }
 
 // buildCreateOptions creates ContainerCreateOptions from the devcontainer config.
