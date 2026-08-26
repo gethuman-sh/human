@@ -382,9 +382,12 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 // about a live container, which is why the removal it leads to is unforced:
 // Docker refuses to take a running container without force, so on this path a
 // container that started after the listing survives and the launch fails on the
-// refusal instead. That sparing is this path's alone — a container whose config
-// hash no longer matches is answered "no" here and rebuilt by the config-changed
-// path below, which removes with force by design (SC-4632).
+// refusal instead. The sparing follows this answer rather than the config hash,
+// which this function never reads: a container listed "created" whose inspect
+// fails is answered yes whatever its hash says, and is spared here too. Only a
+// container answered "no" — one the listing does not call "created", or one
+// inspect shows has run — can reach the config-changed path below, which
+// removes with force by design (SC-4632).
 func (m *Manager) neverStarted(ctx context.Context, existing ContainerSummary) (string, bool) {
 	if existing.State != containerStateCreated {
 		return "", false
