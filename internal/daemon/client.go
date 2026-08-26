@@ -635,12 +635,6 @@ func (c *Client) IdeationReply(req IdeationReplyRequest) (IdeationStatus, error)
 	return c.ideationCall("ideation-reply", req)
 }
 
-// IdeationApprove submits the user's (possibly edited) guided-mode draft for
-// ticket creation.
-func (c *Client) IdeationApprove(req IdeationApproveRequest) (IdeationStatus, error) {
-	return c.ideationCall("ideation-approve", req)
-}
-
 // IdeaCreate quick-captures a title-only, idea-labeled ticket on the PM
 // tracker — the Ideas column's `+` button.
 func (c *Client) IdeaCreate(req IdeaCreateRequest) (IdeaCreateResponse, error) {
@@ -686,6 +680,19 @@ func (c *Client) Relate(req RelateRequest) error {
 		return errors.WrapWithDetails(err, "marshaling relate request")
 	}
 	_, err = c.RunRemoteCapture([]string{"relate", string(data)})
+	return err
+}
+
+// IdeaPromote graduates an idea to a PM ticket by removing its idea labels.
+// That is the whole of promotion's server half (SC-4608): no agent turn, no
+// rewrite — the description the background drafter left is what the board's
+// description editor then opens on.
+func (c *Client) IdeaPromote(req IdeaPromoteRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling idea-promote request")
+	}
+	_, err = c.RunRemoteCapture([]string{"idea-promote", string(data)})
 	return err
 }
 

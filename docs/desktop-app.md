@@ -137,57 +137,51 @@ So a future change that breaks `wails build` is caught automatically rather than
 
 The desktop artifact must never be published through a goreleaser `builds:` entry (e.g. `main: ./desktop`) — that is a plain `go build` and produces the non-runnable binary described above. The artifact is cgo and cannot be cross-compiled, so each OS bundle is produced by `make desktop` (wraps `wails build`) on its native CI runner and, when the artifact ships, attached with goreleaser's `release.extra_files`. See the guard comment in `.goreleaser.yaml`.
 
-## Creating tickets — ideation chat
+## Creating tickets — capture, draft, promote (SC-4608)
 
-The ideation chat panel opens two ways: the post-project-import "Create
-first ticket" prompt starts a fresh session, and dragging an Ideas card
-onto Backlog — or promoting it directly from the Ideas column — opens the
-same chat-style panel docked to the right side of the board, but in
-**evolve mode**, whose terminal action rewrites the idea ticket in place —
-title and description replaced, idea label removed, key preserved —
-instead of creating a new ticket. (SC-4485 removed the Backlog column's
-own '+' button and the left rail's "new ticket" action, which duplicated
-these entry points. The idea space's own lighter '+' is unchanged: it
-quick-captures a title-only ticket labeled `human/idea` into its leftmost
-sub-column, no chat involved, and remains the only button-driven entry
-point into ticket creation.) Every fresh session opened from the
-post-import prompt follows the same idea-first path (SC-2858): the seed
-text first quick-captures a
-title-only idea ticket (exactly what the idea space's own '+' does), then the
-same conversation continues against that ticket in evolve mode — so a ticket
-that started as a chat carries the idea marker exactly as long as one started
-by dragging an idea card, and there is no UI path left that creates a
-finished ticket outright. Typing a seed idea starts a daemon-side ideation
-agent: the daemon runs headless `claude -p` turns on the daemon host
-(`--resume`d per reply, so multi-turn context comes from Claude Code's own
-session store), asking one challenge question per turn until it is
-confident, then emits a structured `[human:ideation-ticket]` block that the
-daemon parses and uses to rewrite the captured idea ticket in place via the
-tracker `Editor` abstraction (evolve mode), removing the idea label. The
-underlying direct-create path (`creator.CreateIssue`, no idea stage) still
-exists in the daemon engine and is used by non-UI callers such as the
-command-line tool — the desktop UI simply never reaches it anymore. The
-updated card then appears in the Backlog column through the existing
-subscribe/refetch loop — no bespoke refresh path is added for ideation.
+There is one way into ticket creation and it is a text field: the idea
+space's '+' quick-captures a title-only ticket labeled `human/idea` into
+the leftmost sub-column. The post-project-import "Create first ticket"
+prompt opens that same quick-add — a first ticket is an idea like every
+other one. (SC-4485 had already removed the Backlog column's own '+' and
+the left rail's "new ticket" action.)
 
-The panel talks to three dedicated daemon routes — `ideation-start`,
-`ideation-reply`, `ideation-status` — each taking a single JSON argument and
-returning the same `IdeationStatus` JSON snapshot, following the
-`board-transition` route pattern rather than generic command forwarding.
+What used to be an interview at promotion time is now background work
+while the idea sits in Ideas. Capture fires a containerized
+`idea-draft-<KEY>` run that writes **the description** — never the title —
+leaving an inline `[TBA: <question>]` wherever it would have had to guess;
+the Ideas card face shows the count of unanswered ones. It writes only over
+its own words: a `[human:idea-draft]` marker records the fingerprint of what
+it wrote, and once a person edits the description nothing automatic ever
+writes to that ticket again. An idea **retitled** outside the board is
+redrafted via the board freshness poll's `UpdatedAt` diff, debounced. The
+title is the trigger because it is the input a draft is made from, and
+because the drafter's own write advances `UpdatedAt` — redrafting on any
+advance would relaunch the run that write came from, on a loop. Editing an
+idea's description outside the board therefore raises no redraft: those are
+words the overwrite guard stands down on anyway.
 
-Lifecycle contract (decided for v1, see HUM-152 AD-4):
+Dragging an Ideas card onto Product Backlog **promotes** it: the
+idea-classifying labels come off through the `idea-promote` route — no
+agent turn, no rewrite, same key, same title — and the board opens the
+description editor (below) on the drafted text, with its remit widened to
+challenge scope and work through the `[TBA: …]` questions. The card lands
+in Product Backlog on the next refetch.
 
-* One concurrent session, held in daemon memory.
-* Closing the panel does **not** abandon the session — reopening calls
-  `ideation-status` and re-attaches to the live transcript.
-* Starting a new session while one is already active (not yet `done`/`error`)
-  re-attaches to it, idempotently, unless the request sets `restart: true`,
-  which abandons the old session and starts a fresh one.
-* Sessions do **not** survive a daemon restart (in-memory only).
+The ideation chat panel that used to do this is **unreachable**: SC-4608
+retired the guided interview, its approval park, the drag-to-Backlog
+ideation launch and the evolve mode whose terminal action rewrote an idea
+ticket in place. The daemon engine behind it — the `ideation-start`,
+`ideation-reply` and `ideation-status` routes, the session store, and the
+direct-create path (`creator.CreateIssue`) the CLI still uses — is left
+standing for the follow-on ticket to remove, so the interactive flow can be
+restored from a wire rather than from git if the drafts turn out thin.
+CLI-side ideation (`/human-ideate`, the `human-ideator` agent,
+`human idea promote`) is untouched and still works.
 
-Requires the `claude` CLI installed and authenticated on the daemon host — if
-the binary is missing or the agent turn fails (e.g. not logged in), the panel
-surfaces a visible session error rather than hanging.
+Drafting requires the container substrate and the `claude` CLI on the daemon
+host. With neither, capture still returns and promotion still works — the
+description is simply empty, and the editor opens on it.
 
 ## Refining a description — Product Backlog chat editor (SC-2873)
 
@@ -200,10 +194,15 @@ deliberate, narrow first step (see the ticket's Known Limitation): only the
 Product Backlog lane's click target changed.
 
 The chat is scoped to rewriting the description text only — it declines to
-discuss title, acceptance criteria, labels or any other field. A rewrite the
-agent proposes appears in the left pane as a visibly distinct "Proposed
-rewrite (unsaved)" preview; nothing reaches the tracker until the user clicks
-Apply. Unlike the ideation panel's AD-4 above, closing this modal without
+discuss title, acceptance criteria, labels or any other field. Opened on a
+**just-promoted** card its remit is wider (SC-4608): it may challenge the
+premise and the scope, and it works through the drafter's `[TBA: …]`
+questions with the user — never answering one itself, never deleting one the
+user has not answered. It still proposes description text and nothing else.
+A rewrite the agent proposes appears in the left pane as a visibly distinct
+"Proposed rewrite (unsaved)" preview; nothing reaches the tracker until the user clicks
+Apply. Applying also records the description as the human's words, so the
+background drafter never writes over an applied edit. Closing this modal without
 Apply/Save **discards the daemon-side chat session outright** (AC6): the
 modal's close path (Close button, Escape, backdrop click) calls
 `descedit-discard` on whatever session was live, so reopening the SAME ticket

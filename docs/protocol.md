@@ -37,3 +37,4 @@ only the version-skew warning.
 | Protocol | Date | Change | MinProtocol | MinDaemonProtocol |
 |---|---|---|---|---|
 | 1 | 2026-07-21 | Protocol handshake introduced (integer gate on both sides). Pre-protocol clients remain gated by the legacy `MinClientVersion` ≥ 0.21.0 check (last legacy break: the HUM-160 permission-grant cycle). | 1 | 1 |
+| 2 | 2026-08-26 | SC-4608 background idea drafting. Added: the `idea-promote` route; `DescEditStartRequest.Promoted`; `BoardCard.TBACount` / `BoardViewCard.TBACount`. Removed: the `ideation-approve` route, `IdeationApproveRequest`, `IdeationStartRequest.EvolveKey`/`EvolveLabels`, `IdeationStatus.Question`/`Draft` (and the `IdeationQuestion`/`IdeationDraft` shapes behind them). `MinProtocol` moves because a client at 1 calling the removed `ideation-approve` misbehaves rather than merely lacking a feature; `MinDaemonProtocol` moves because the desktop now calls `idea-promote`, which a daemon at 1 does not serve. | 2 | 2 |

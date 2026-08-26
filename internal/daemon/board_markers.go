@@ -242,6 +242,17 @@ const RunCancelledHeader = "[human:" + MarkerRunCancelled + "]"
 const RelatedStartedHeader = "[human:related-started]"
 const RelatedHeader = "[human:related]"
 
+// MarkerIdeaDraft / IdeaDraftStartedHeader / IdeaDraftHeader bracket a
+// background idea-drafting run (SC-4608). Neither header moves the card: the
+// drafter writes the ticket's description and the ticket stays an idea, which
+// is why both sit in the pipeline document's unclassified_markers beside
+// related. IdeaDraftHeader is the provenance record — who last wrote the
+// description and from what — and the daemon writes it too, when the
+// description editor applies a human's edit.
+const MarkerIdeaDraft = "idea-draft"
+const IdeaDraftStartedHeader = "[human:idea-draft-started]"
+const IdeaDraftHeader = "[human:" + MarkerIdeaDraft + "]"
+
 // ShippedPartialHeader marks the durable shipped-partial trace (SC-2910): the
 // PM ticket shipped with one or more acceptance criteria deliberately deferred
 // to a follow-on ticket. Like RelatedHeader and CloseFailedHeader it is
@@ -398,6 +409,7 @@ var daemonMarkerTypes = []string{
 	MarkerDeployFixStarted,
 	MarkerHandoffCheckUnreadable,
 	MarkerLateResultReconciled,
+	MarkerIdeaDraft,
 }
 
 // markerSpec maps a marker header to the (stage, state) it represents.

@@ -23,11 +23,10 @@ func TestIdeationDBRoundTrip(t *testing.T) {
 
 	p := PersistedIdeation{
 		ID:         "ideation-1",
-		Mode:       IdeationModeGuided,
+		Mode:       IdeationModeChat,
 		State:      IdeationAwaitingReply,
 		Transcript: []IdeationMessage{{Role: "user", Text: "an idea", Time: time.Now().UTC().Truncate(time.Second)}},
 		ResumeID:   "resume-abc",
-		Question:   &IdeationQuestion{Text: "who for?", Options: []string{"a", "b"}, Kind: "content"},
 		UpdatedAt:  time.Now().UTC().Truncate(time.Second),
 	}
 	require.NoError(t, db.Save(p))
@@ -38,8 +37,6 @@ func TestIdeationDBRoundTrip(t *testing.T) {
 	assert.Equal(t, "ideation-1", got.ID)
 	assert.Equal(t, IdeationAwaitingReply, got.State)
 	assert.Equal(t, "resume-abc", got.ResumeID, "resume id must survive: it is what resumes the agent conversation")
-	require.NotNil(t, got.Question)
-	assert.Equal(t, "who for?", got.Question.Text)
 	require.Len(t, got.Transcript, 1)
 	assert.Equal(t, "an idea", got.Transcript[0].Text)
 
@@ -56,7 +53,7 @@ func TestIdeationDBKeepsOneRow(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 
-	for i, state := range []IdeationState{IdeationThinking, IdeationAwaitingReply, IdeationAwaitingApproval} {
+	for i, state := range []IdeationState{IdeationThinking, IdeationDone, IdeationAwaitingReply} {
 		require.NoError(t, db.Save(PersistedIdeation{ID: "s", State: state, UpdatedAt: time.Now()}), "save %d", i)
 	}
 	var rows int
@@ -66,7 +63,7 @@ func TestIdeationDBKeepsOneRow(t *testing.T) {
 	got, err := db.Load()
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, IdeationAwaitingApproval, got.State, "last save wins")
+	assert.Equal(t, IdeationAwaitingReply, got.State, "last save wins")
 }
 
 // --- restore policy ---
@@ -82,7 +79,6 @@ func TestPersistedIdeationRestorable(t *testing.T) {
 		want bool
 	}{
 		{"live awaiting reply", PersistedIdeation{ID: "a", State: IdeationAwaitingReply, UpdatedAt: fresh}, true},
-		{"live awaiting approval", PersistedIdeation{ID: "a", State: IdeationAwaitingApproval, UpdatedAt: fresh}, true},
 		{"interrupted mid-turn", PersistedIdeation{ID: "a", State: IdeationThinking, UpdatedAt: fresh}, true},
 		{"finished", PersistedIdeation{ID: "a", State: IdeationDone, UpdatedAt: fresh}, false},
 		{"errored", PersistedIdeation{ID: "a", State: IdeationError, UpdatedAt: fresh}, false},

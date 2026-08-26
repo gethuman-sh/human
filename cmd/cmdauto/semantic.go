@@ -119,8 +119,9 @@ func BuildAutoCloseCmd(deps cmdutil.Deps) *cobra.Command {
 	}
 }
 
-// BuildAutoIdeaCmd creates the top-level "idea" command with the promote
-// subcommand: strip the idea labels when an idea graduates to a PM ticket.
+// BuildAutoIdeaCmd creates the top-level "idea" command: promote strips the
+// idea labels when an idea graduates to a PM ticket, and draft is the guarded
+// write path the background drafter uses.
 func BuildAutoIdeaCmd(deps cmdutil.Deps) *cobra.Command {
 	ideaCmd := &cobra.Command{
 		Use:   "idea",
@@ -140,6 +141,7 @@ func BuildAutoIdeaCmd(deps cmdutil.Deps) *cobra.Command {
 		},
 	}
 	ideaCmd.AddCommand(promoteCmd)
+	ideaCmd.AddCommand(buildIdeaDraftCmd(deps))
 	return ideaCmd
 }
 

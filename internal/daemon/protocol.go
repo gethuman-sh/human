@@ -233,9 +233,10 @@ type BoardViewCard struct {
 	// non-launchable — so a transient fetch failure never presents as idle,
 	// actionable Backlog work (1700).
 	Degraded bool `json:"degraded,omitempty"`
-	// Labels and Description feed the Ideas→Backlog promotion: labels tell
-	// the evolve session which idea labels to remove, the description seeds
-	// the ideation conversation alongside the title.
+	// Labels and Description feed the Ideas→Backlog promotion: labels tell the
+	// promote route which idea labels to remove, and the description is what
+	// the editor the board opens next starts from — the drafter's text, or
+	// nothing if no draft ran.
 	Labels      []string `json:"labels,omitempty"`
 	Description string   `json:"description,omitempty"`
 	// Assignee is the ticket owner shown in the detail panel. Display-only:
@@ -282,6 +283,10 @@ type BoardViewCard struct {
 	// ([human:related] found/none). The Bugs pane suppresses the on-demand
 	// "Find related work" menu item when true (SC-2405).
 	HasRelatedRecord bool `json:"hasRelatedRecord,omitempty"`
+	// TBACount is how many unanswered [TBA:] gaps the idea's drafted
+	// description still carries (SC-4608). Zero on every non-idea card and on
+	// an idea nothing has drafted yet; the card face renders nothing for zero.
+	TBACount int `json:"tbaCount,omitempty"`
 	// Hidden marks a ticket the user parked off the board (right-click →
 	// Hide). Locally persisted view preference, never tracker state; the
 	// frontend filters hidden cards out unless the user reveals them.

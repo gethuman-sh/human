@@ -17,20 +17,22 @@ const IdeationMaxAge = 24 * time.Hour
 // ResumeID is the load-bearing field: the agent conversation itself lives with
 // the provider, so restoring the session id, state and resume id is enough to
 // carry a chat across a restart.
+//
+// A session saved by a pre-SC-4608 daemon may still carry evolve_key/
+// evolve_labels. They are ignored on load: this build has no terminal action
+// that rewrites an existing ticket, and an unknown JSON field decodes to
+// nothing — the stale session restores as an ordinary chat and, with no UI
+// entry point left to reach it, expires at IdeationMaxAge.
 type PersistedIdeation struct {
 	ID              string            `json:"id"`
 	Mode            IdeationMode      `json:"mode,omitempty"`
 	State           IdeationState     `json:"state"`
 	Transcript      []IdeationMessage `json:"transcript,omitempty"`
 	ResumeID        string            `json:"resume_id,omitempty"`
-	Question        *IdeationQuestion `json:"question,omitempty"`
-	Draft           *IdeationDraft    `json:"draft,omitempty"`
 	CreatedKey      string            `json:"created_key,omitempty"`
 	CreatedURL      string            `json:"created_url,omitempty"`
 	ErrMsg          string            `json:"err_msg,omitempty"`
 	RepairAttempted bool              `json:"repair_attempted,omitempty"`
-	EvolveKey       string            `json:"evolve_key,omitempty"`
-	EvolveLabels    []string          `json:"evolve_labels,omitempty"`
 	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
@@ -54,14 +56,10 @@ func (s *ideationSession) persist() PersistedIdeation {
 		State:           s.state,
 		Transcript:      s.transcript,
 		ResumeID:        s.resumeID,
-		Question:        s.question,
-		Draft:           s.draft,
 		CreatedKey:      s.createdKey,
 		CreatedURL:      s.createdURL,
 		ErrMsg:          s.errMsg,
 		RepairAttempted: s.repairAttempted,
-		EvolveKey:       s.evolveKey,
-		EvolveLabels:    s.evolveLabels,
 		UpdatedAt:       time.Now().UTC(),
 	}
 }
@@ -74,14 +72,10 @@ func restoreSession(p PersistedIdeation) *ideationSession {
 		state:           p.State,
 		transcript:      p.Transcript,
 		resumeID:        p.ResumeID,
-		question:        p.Question,
-		draft:           p.Draft,
 		createdKey:      p.CreatedKey,
 		createdURL:      p.CreatedURL,
 		errMsg:          p.ErrMsg,
 		repairAttempted: p.RepairAttempted,
-		evolveKey:       p.EvolveKey,
-		evolveLabels:    p.EvolveLabels,
 	}
 }
 

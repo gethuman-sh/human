@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/ideadraft"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -56,6 +57,11 @@ type DescEditStartRequest struct {
 	Key                string `json:"key"`
 	CurrentDescription string `json:"current_description"`
 	Restart            bool   `json:"restart,omitempty"`
+	// Promoted marks the session opened by dragging an idea onto Product
+	// Backlog. It widens the chat's remit — the guided ideation flow this
+	// replaced existed to push back, and a copy-editor that may not discuss
+	// scope replaces none of that (SC-4608).
+	Promoted bool `json:"promoted,omitempty"`
 }
 
 // DescEditReplyRequest sends the user's chat message into a running session.
@@ -94,7 +100,14 @@ type descEditSession struct {
 	appliedURL         string
 	errMsg             string
 	repairAttempted    bool
+	promoted           bool
 }
+
+// PMEditorResolver resolves the PM-role tracker's Editor. The description
+// editor is its owner — Apply is the only agent-driven path that writes a
+// ticket's description — and the promote route resolves the same way for the
+// label edit.
+type PMEditorResolver func() (tracker.Editor, error)
 
 // DescEditEngine owns the single active Product-Backlog description-edit
 // session. All exported methods are safe for concurrent use. Unlike
@@ -103,9 +116,13 @@ type descEditSession struct {
 // unsaved chat is low-cost (see plan's Architecture Decisions).
 type DescEditEngine struct {
 	Runner        DescEditRunner
-	ResolveEditor PMEditorResolver // reused from ideation.go — role-resolved PM tracker.Editor
-	TurnTimeout   time.Duration    // defaults to 5 * time.Minute when zero
-	Logger        zerolog.Logger
+	ResolveEditor PMEditorResolver // role-resolved PM tracker.Editor; the sole write path
+	// ResolveCommenter resolves the PM tracker's commenter used to record that
+	// an applied description is now the human's words. nil disables the record,
+	// which costs the guard nothing it had before.
+	ResolveCommenter func() (tracker.Commenter, error)
+	TurnTimeout      time.Duration // defaults to 5 * time.Minute when zero
+	Logger           zerolog.Logger
 
 	mu   sync.Mutex
 	sess *descEditSession
@@ -166,6 +183,7 @@ func (e *DescEditEngine) Start(req DescEditStartRequest) (DescEditStatus, error)
 		key:                req.Key,
 		currentDescription: req.CurrentDescription,
 		state:              DescEditAwaitingReply,
+		promoted:           req.Promoted,
 	}
 	return e.snapshot(), nil
 }
@@ -193,12 +211,13 @@ func (e *DescEditEngine) Reply(req DescEditReplyRequest) (DescEditStatus, error)
 	resumeID := e.sess.resumeID
 	sessID := e.sess.id
 	currentDescription := e.sess.currentDescription
+	promoted := e.sess.promoted
 	snap := e.snapshot()
 	e.mu.Unlock()
 
 	prompt := req.Message
 	if resumeID == "" {
-		prompt = descEditSystemPrompt(currentDescription) + "\n\nUser: " + req.Message
+		prompt = descEditSystemPrompt(currentDescription, promoted) + "\n\nUser: " + req.Message
 	}
 	go e.runTurn(sessID, resumeID, prompt)
 	return snap, nil
@@ -253,6 +272,12 @@ func (e *DescEditEngine) Apply(req DescEditApplyRequest) (DescEditStatus, error)
 	if updated == nil {
 		return DescEditStatus{}, errors.WithDetails("tracker returned no issue for the description edit", "key", key)
 	}
+
+	// The applied text is the user's, whether they wrote every word or accepted
+	// the machine's draft unchanged. Pinning it as human-authored is what stops
+	// a redraft still in flight — a debounce armed before the labels came off —
+	// from writing over the edit the user just made.
+	e.recordHumanFingerprint(key, proposal)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -365,15 +390,54 @@ const descEditRepairPrompt = "Your previous message contained the [human:descrip
 	"block was missing or empty. Re-emit ONLY the line [human:description-proposal] followed by a fenced ```markdown " +
 	"code block containing the complete replacement description text — no other text."
 
-// descEditSystemPrompt builds the scoped, narrow chat discipline this ticket
-// requires: description text ONLY, never other fields, explicit user Apply.
-func descEditSystemPrompt(currentDescription string) string {
+// recordHumanFingerprint posts the provenance record that says the description
+// is now human-authored. Best effort on purpose: a failed comment must never
+// turn a saved description into a failed apply — the user's words are already
+// on the ticket, and the worst case is a later redraft standing down for a
+// different reason (an unrecognised description) rather than this one.
+func (e *DescEditEngine) recordHumanFingerprint(key, text string) {
+	if e.ResolveCommenter == nil {
+		return
+	}
+	commenter, err := e.ResolveCommenter()
+	if err != nil || commenter == nil {
+		e.Logger.Error().Err(err).Str("key", key).
+			Msg("description edit applied but its human-authored record could not be posted")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := postMarker(ctx, commenter, key, ideadraft.HumanRecord(text), ideadraft.FieldOrder...); err != nil {
+		e.Logger.Error().Err(err).Str("key", key).
+			Msg("description edit applied but its human-authored record could not be posted")
+	}
+}
+
+// descEditSystemPrompt builds the chat's discipline: description text ONLY,
+// never other fields, explicit user Apply. A promoted card widens the remit —
+// the guided ideation flow promotion used to open existed to push back, and a
+// copy-editor that may not discuss scope replaces none of that.
+func descEditSystemPrompt(currentDescription string, promoted bool) string {
 	var b strings.Builder
 	b.WriteString("You are a description-editing assistant helping a product owner refine ONE ticket's description ")
 	b.WriteString("text through conversation. You may read the repository with read-only tools for context.\n\n")
-	b.WriteString("Your ONLY job is proposing rewrites of the description text below. Never suggest or discuss ")
-	b.WriteString("changing the title, acceptance criteria structure, labels, status, or any other ticket field — if ")
-	b.WriteString("asked, say that is out of scope for this chat.\n\n")
+	if promoted {
+		b.WriteString("This ticket has just been promoted from a raw idea, so your job is wider than copy-editing. ")
+		b.WriteString("You may — and should — challenge the premise: whether this is worth doing, what is in and out ")
+		b.WriteString("of scope, and what the smallest version worth shipping is. Push back where the description ")
+		b.WriteString("asserts something the repository does not support.\n")
+		b.WriteString("The description carries inline `[TBA: <question>]` markers where a background drafter refused ")
+		b.WriteString("to guess. Work through them with the user, one at a time, and replace each with the user's own ")
+		b.WriteString("answer in the sentence it sits in. NEVER answer a [TBA:] yourself, and never delete one the ")
+		b.WriteString("user has not answered — an invented answer is the exact failure the marker exists to prevent. ")
+		b.WriteString("Say plainly when none are left.\n")
+		b.WriteString("You still propose DESCRIPTION text only: the title, labels, status and every other field are ")
+		b.WriteString("out of this chat's reach, and Apply writes the description and nothing else.\n\n")
+	} else {
+		b.WriteString("Your ONLY job is proposing rewrites of the description text below. Never suggest or discuss ")
+		b.WriteString("changing the title, acceptance criteria structure, labels, status, or any other ticket field — if ")
+		b.WriteString("asked, say that is out of scope for this chat.\n\n")
+	}
 	b.WriteString("Discuss phrasing, structure, and clarity in plain chat replies. When you have a concrete rewrite ")
 	b.WriteString("ready for the user's review, output the line `[human:description-proposal]` followed by a fenced ")
 	b.WriteString("```markdown code block containing the COMPLETE replacement description text (the full text, not a ")

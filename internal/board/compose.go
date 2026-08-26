@@ -85,6 +85,7 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			Bug:                    issue.IsBug(),
 			Security:               issue.IsSecurity(),
 			HasRelatedRecord:       card.HasRelatedRecord,
+			TBACount:               card.TBACount,
 			Options:                card.Options,
 			OptionsContext:         card.OptionsContext,
 			StopDecision:           card.StopDecision,

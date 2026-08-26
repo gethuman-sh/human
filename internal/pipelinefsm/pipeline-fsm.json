@@ -1,7 +1,7 @@
 {
   "$comment": "The state transitions of one item (a ticket) through the human pipeline, as the code and prompts implement them today. Each transition names the ACTOR that causes it, the SKILL that does the work, the MARKER that records it, and WHERE it is implemented. Topology is name/src/dst only; every other field is annotation.",
   "version": 1,
-  "describes": "commit 2dcdc5a4, 2026-08-07",
+  "describes": "commit 45a9fe90, 2026-08-26",
   "item": "a ticket, from filing to merged",
   "initial": "filed",
   "actors": {
@@ -20,6 +20,8 @@
   "run-cancelled",
       "related-started",
       "related",
+      "idea-draft-started",
+      "idea-draft",
       "shipped-partial",
       "handoff-check-unreadable",
       "late-result-reconciled",
@@ -43,10 +45,11 @@
       "holds": "The ticket is open and carries no pipeline marker.",
       "who_may_act": [
         "user",
-        "skill"
+        "skill",
+        "daemon"
       ],
       "stale_when": "Never. Waiting is what Backlog is for, and an item may rest here indefinitely.",
-      "if_nothing_happens": "Nothing. The machine does not start work nobody asked for. A person may hand a Backlog ticket straight to an agent — a directly invoked plan or ticket-review run posts its markers here without the board dispatching anything — but nothing begins on its own."
+      "if_nothing_happens": "Nothing, with one named exception. The machine starts no pipeline STAGE nobody asked for: a person may hand a Backlog ticket straight to an agent — a directly invoked plan or ticket-review run posts its markers here without the board dispatching anything — but no stage begins on its own. The exception is the idea drafter (actor: daemon): capturing an idea IS the ask for a draft, so the daemon launches `idea-draft-<KEY>` on capture and, debounced, on a tracker-side TITLE change (the title is the input a draft is made from; arming on any UpdatedAt advance would relaunch the run the drafter's own write caused) — where: `cmd/cmddaemon.ideaDraftLauncherFunc` and `internal/daemon.IdeaDraftWatcher.Observe`. It writes the ticket's description and posts [human:idea-draft-started] / [human:idea-draft], neither of which is a transition; the item does not move and no stage runs."
     },
     {
       "name": "ticket-review",
@@ -1244,6 +1247,6 @@
     "doc": "Things that look like places an item can be, and are not. Each was proposed as a state at least once; each fails the same test — you cannot tell an item is there by reading its ticket, because nothing about the ticket changed. Recorded so the argument is made once rather than rediscovered, and so removing one does not read as an oversight.",
     "an unreadable source": "The tracker failed to load, so the board cannot see the item. It WAS a declared state (`unknown`, with `source-unreadable` from 26 states and `source-readable-again` back to `filed`) and it was wrong three ways. The code disagrees: BoardCard.Degraded keeps the card's last-known Stage/State so the board renders it locked in place rather than demoting it (SC-1700) — the item does not move. Its own edges were implemented in internal/board/gate.go and internal/board/compose.go, the only two transitions in this document whose where: was the rendering layer. And its exit landed on `filed`, which said a recovered fetch resets every item to the initial state. The item's own doc string already admitted it: `it says the board could not look, not that the item moved`.",
     "a closed ticket": "Closing takes an item OUT of the pipeline rather than moving it within, so there is no state to name and no edge to add. The one real effect — the ticket's agents are stopped — is a container's story, and docs/reaper.md owns it as `close is cancellation` with its code owner. The board renders it by removing the card (BoardHidden), which is the board's business, not the machine's.",
-    "an idea": "An idea-labelled ticket is before the machine, not inside it: the initial state is `filed`, membership is the label alone (DeriveBoardCard returns the Ideas stage before reading a single comment), and promotion is a label edit that posts no marker. Nothing about it is derived from the item's markers."
+    "an idea": "An idea-labelled ticket is not inside the machine, even though the machine now acts on it. Membership is the label alone (DeriveBoardCard returns the Ideas stage before reading a single comment), the initial state is `filed`, and promotion is still a label edit that posts no transition marker. What changed with SC-4608 is that a daemon-launched drafter writes the ticket's DESCRIPTION and records provenance in [human:idea-draft] — both listed above as recording content, not movement. So the drafter acts ON an idea without the idea entering the machine: nothing about where the item is is derived from its markers, there is no stage running, and no marker it carries moves it. A state would have to be something you could read off the ticket, and there is still nothing there to read."
   }
 }

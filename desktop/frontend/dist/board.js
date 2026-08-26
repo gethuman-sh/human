@@ -21,7 +21,7 @@ import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
 import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
-import { descEditInputEnabled, descEditApplyEnabled, buildDescriptionPreview, descEditShouldDiscardOnClose, } from "./board-descedit.js";
+import { descEditInputEnabled, descEditApplyEnabled, descEditAllowedFor, buildDescriptionPreview, descEditShouldDiscardOnClose, } from "./board-descedit.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
 import { reconcilePending, dropPending } from "./board-pending.js";
@@ -186,6 +186,13 @@ function renderCard(card) {
     if (card.blockers?.length) {
         const keys = card.blockers.join(", ");
         meta.push(`<span class="badge blocked" title="${escapeAttr(`Waiting for ${keys} to finish. Remove the link to start this now.`)}">waits for ${escapeHtml(keys)}</span>`);
+    }
+    // An idea whose background draft left questions it refused to guess at. The
+    // count is what a person has to answer before the ticket means anything, so
+    // it sits on the card face rather than only inside it.
+    if (card.tbaCount) {
+        const n = card.tbaCount;
+        meta.push(`<span class="badge tba" title="${escapeAttr(`${n} question${n === 1 ? "" : "s"} the draft could not answer — open the card to answer them.`)}">${n} TBA</span>`);
     }
     // A card is released into Ready to Deploy on a passing review, and an ABSENT
     // verdict counts as passing so threads reviewed before verdicts existed keep
@@ -1215,6 +1222,17 @@ function showIdeaQuickAdd(col, prefill = "") {
             input.remove();
     });
 }
+// captureFirstIdea is what the post-import "Create first ticket" prompt does:
+// the first ticket is an idea like every other one — a title, captured, drafted
+// in the background, promoted when the user is ready. It opens the Ideas
+// column's own quick-add rather than a chat panel, so there is exactly one way
+// into ticket creation. A board that has not rendered its columns yet leaves
+// the user the `+` button, which is the same gesture.
+function captureFirstIdea() {
+    const col = document.querySelector(".idea-subcol");
+    if (col)
+        showIdeaQuickAdd(col);
+}
 // renderPendingCard builds the placeholder card for a ticket (idea or bug)
 // still being created: a spinner sits where the ticket number will land. No
 // drag, no menu — there is no ticket to act on yet.
@@ -1403,7 +1421,7 @@ function beginPointerDrag(el, card) {
             // never get here (pointerdown filters them), and right-clicks go to the
             // contextmenu handler instead.
             else if (wasClick) {
-                if (queueOf(card) === "product" && !card.bug && !card.security) {
+                if (descEditAllowedFor(queueOf(card), card.bug, card.security)) {
                     void openDescEditModal(card);
                 }
                 else {
@@ -1487,10 +1505,11 @@ function performDrop(target, info, pt) {
         return;
     }
     if (toQueue === "product" && info.stage === "ideas") {
-        // Promotion is a conversation, not a stage transition: the evolve-mode
-        // ideation session rewrites the ticket in place and removes the idea
-        // label; the card moves columns when the board refetches.
-        void promoteIdea(info.key);
+        // Promotion is a label edit plus a conversation, never a stage transition:
+        // the labels come off the ticket and the description editor opens on
+        // whatever description is there — including none, when the drafter is
+        // still running, failed, or had no container to run in.
+        void promoteIdeaToBacklog(info.key);
         return;
     }
     const to = QUEUE_TRANSITION_TO[toQueue] ?? "";
@@ -1540,43 +1559,24 @@ function reorderWithinQueue(queue, key, dropY) {
     // local-only column-order write, same as the ideaColumn drop.
     async () => { });
 }
-// promoteIdea opens the ideation panel in evolve mode, seeded with the idea
-// card's content. An active session must be explicitly replaced — the daemon
-// holds a single ideation session, so a silent restart would discard it.
-async function promoteIdea(key) {
+// promoteIdeaToBacklog graduates an idea: the idea labels come off the ticket
+// and the description editor opens on the description the background drafter
+// already wrote. No agent turn — the interview that used to run before the
+// ticket existed now happens over a real draft.
+async function promoteIdeaToBacklog(key) {
     const card = current.cards.find((c) => c.key === key);
     if (!card)
         return;
-    const active = ideation.state === "thinking" || ideation.state === "awaiting_reply" || ideation.state === "awaiting_approval";
-    if (active) {
-        const ok = await confirmDialog("Replace the active ideation session?", "Promoting this idea abandons the conversation currently in the ideation panel.", "Replace");
-        if (!ok)
-            return;
-    }
-    let seed = card.title;
-    if (card.description)
-        seed += `\n\n${card.description}`;
-    const panel = document.getElementById("ideation-panel");
-    if (panel)
-        panel.classList.remove("hidden");
-    ideationOpen = true;
-    // Guided mode by default: a parked idea was parked precisely because it
-    // wasn't thought through — structured questions fit that moment.
-    ideationMode = "guided";
-    ideation = { state: "thinking", messages: [{ role: "user", text: seed }] };
-    renderIdeation();
-    startIdeationPoll();
     try {
-        ideation = await go().StartIdeation(seed, "guided", true, card.key, card.labels ?? []);
+        await go().PromoteIdea(key, card.labels ?? []);
     }
     catch (err) {
-        renderIdeationError(errMessage(err));
-        stopIdeationPoll();
+        showError(errMessage(err));
         return;
     }
-    renderIdeation();
-    if (ideation.state !== "thinking")
-        stopIdeationPoll();
+    // The editor opens immediately on the card as it stands; the daemon's
+    // board:changed event moves it into Product Backlog on the next refetch.
+    await openDescEditModal(card, { promoted: true });
 }
 async function transition(key, title, from, to) {
     const card = current.cards.find((c) => c.key === key);
@@ -2376,10 +2376,6 @@ function escapeAttr(s) {
 let ideation = { state: "none", messages: [] };
 let ideationOpen = false;
 let ideationTimer = null;
-// ideationMode is transient frontend-only state: null means the mode picker
-// has not been resolved yet for a fresh session. It is not sent to the
-// daemon until the user picks a mode and sends the first message/seed.
-let ideationMode = null;
 const IDEATION_POLL_MS = 1000;
 function stopIdeationPoll() {
     if (ideationTimer !== null) {
@@ -2395,77 +2391,6 @@ function startIdeationPoll() {
         return;
     ideationTimer = window.setInterval(() => void pollIdeation(), IDEATION_POLL_MS);
 }
-function renderModePicker() {
-    const picker = document.getElementById("ideation-mode-picker");
-    if (!picker)
-        return;
-    const show = ideation.state === "none" && ideationMode === null;
-    picker.classList.toggle("hidden", !show);
-}
-function renderIdeationOptions() {
-    const container = document.getElementById("ideation-options");
-    const input = document.getElementById("ideation-input");
-    if (!container)
-        return;
-    const question = ideation.state === "awaiting_reply" ? ideation.question : undefined;
-    if (!question) {
-        container.classList.add("hidden");
-        container.innerHTML = "";
-        if (input)
-            input.classList.remove("hidden");
-        return;
-    }
-    container.classList.remove("hidden");
-    container.innerHTML = "";
-    question.options.forEach((opt) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "ideation-option";
-        btn.textContent = opt;
-        btn.addEventListener("click", () => void sendIdeationReply(opt));
-        container.appendChild(btn);
-    });
-    const other = document.createElement("button");
-    other.type = "button";
-    other.className = "ideation-option ideation-option-other";
-    other.textContent = "Other…";
-    other.addEventListener("click", () => {
-        if (input) {
-            input.classList.remove("hidden");
-            input.focus();
-        }
-    });
-    container.appendChild(other);
-    // The freeform escape hatch stays hidden behind "Other…" until clicked, but
-    // remains functionally enabled/usable for every question regardless of Kind.
-    if (input)
-        input.classList.add("hidden");
-}
-function renderIdeationDraft() {
-    const draftEl = document.getElementById("ideation-draft");
-    const form = document.getElementById("ideation-form");
-    if (!draftEl)
-        return;
-    if (ideation.state !== "awaiting_approval" || !ideation.draft) {
-        draftEl.classList.add("hidden");
-        return;
-    }
-    draftEl.classList.remove("hidden");
-    if (form)
-        form.classList.add("hidden");
-    const titleInput = document.getElementById("ideation-draft-title");
-    const descInput = document.getElementById("ideation-draft-description");
-    // Only pre-fill on first render of a draft (avoid clobbering in-progress
-    // user edits on every poll tick).
-    if (titleInput && titleInput.dataset.sessionId !== ideation.sessionId) {
-        titleInput.value = ideation.draft.title;
-        titleInput.dataset.sessionId = ideation.sessionId ?? "";
-    }
-    if (descInput && descInput.dataset.sessionId !== ideation.sessionId) {
-        descInput.value = ideation.draft.description;
-        descInput.dataset.sessionId = ideation.sessionId ?? "";
-    }
-}
 // Keys whose "Move to feature" was already triggered this session: the board
 // snapshot can lag the transition for a poll tick or two, and the guard keeps
 // the button from re-arming (and double-launching an agent) in that window.
@@ -2474,7 +2399,7 @@ const ideationMovedKeys = new Set();
 // Product-backlog card, but the panel used to dead-end at "Created SC-XXX"
 // with no way to act on it (SC-881) — so the line carries a right-aligned
 // "Move to feature" action that launches the same backlog→planning transition
-// a drag onto the Engineering backlog would, for both chat and guided modes.
+// a drag onto the Engineering backlog would.
 function renderIdeationDone(statusLine) {
     const key = ideation.createdKey ?? "";
     statusLine.textContent = `Created ${key}`;
@@ -2526,17 +2451,12 @@ function renderIdeation() {
             statusLine.classList.add("hidden");
         }
     }
-    renderModePicker();
-    renderIdeationOptions();
-    renderIdeationDraft();
     const form = document.getElementById("ideation-form");
     const input = document.getElementById("ideation-input");
     const send = document.getElementById("ideation-send");
     const inputEnabled = ideationInputEnabled(ideation.state);
-    // The draft-review form takes over the panel's bottom area while
-    // awaiting_approval; the free-text form must not be reachable there.
     if (form)
-        form.classList.toggle("hidden", ideation.state === "awaiting_approval");
+        form.classList.remove("hidden");
     if (input) {
         input.disabled = !inputEnabled;
         input.placeholder = ideation.state === "awaiting_reply" ? "Your answer…" : "Describe the idea…";
@@ -2578,7 +2498,11 @@ function startDescEditPoll() {
         return;
     descEditTimer = window.setInterval(() => void pollDescEdit(), DESCEDIT_POLL_MS);
 }
-async function openDescEditModal(card) {
+async function openDescEditModal(card, opts = {}) {
+    // A promotion opens this on a card the board is still rendering in Ideas: the
+    // labels have come off the ticket but no refetch has happened yet.
+    if (!descEditAllowedFor(queueOf(card), card.bug, card.security, opts.promoted))
+        return;
     descEditCard = card;
     descEdit = { state: "none", messages: [] };
     descEditSavedDescription = card.description ?? "";
@@ -2643,7 +2567,7 @@ async function openDescEditModal(card) {
         descEditSavedDescription = detail.description || descEditSavedDescription;
         descEditSavedHTML = detail.descriptionHTML || null;
         renderDescEdit();
-        const started = await go().StartDescEdit(card.key, descEditSavedDescription, false);
+        const started = await go().StartDescEdit(card.key, descEditSavedDescription, false, opts.promoted ?? false);
         // The modal can be closed — or reopened on another ticket — while Start is
         // still in flight. The session exists on the daemon by then, but no close
         // handler ever saw its id, so AC6's discard-on-close could not fire and the
@@ -3062,39 +2986,18 @@ function renderTicketDetail() {
         });
     });
 }
-async function openIdeation() {
-    // Mirror of the exclusivity in openTicketDetail: both panels occupy the
-    // fixed right edge, so opening one always closes the other.
-    closeTicketDetail();
-    const panel = document.getElementById("ideation-panel");
-    if (panel)
-        panel.classList.remove("hidden");
-    ideationOpen = true;
-    try {
-        ideation = await go().IdeationStatus();
-    }
-    catch (err) {
-        renderIdeationError(errMessage(err));
-        return;
-    }
-    // Leave ideationMode as whatever it currently is: it starts null at module
-    // load and is only reset by closeIdeation() for terminal/none states, so a
-    // panel reopen mid-flow must not re-show a fresh mode picker.
-    renderIdeation();
-    if (ideation.state === "thinking")
-        startIdeationPoll();
-}
+// No openIdeation: SC-4608 took away the last thing that opened this panel.
+// Promotion is a label edit plus the description editor, and the post-import
+// prompt captures an idea, so nothing starts an ideation session from the
+// board. The panel below stays wired to a session that can only pre-date this
+// build — its own teardown, with the daemon engine and routes it talks to, is
+// the follow-on's.
 function closeIdeation() {
     const panel = document.getElementById("ideation-panel");
     if (panel)
         panel.classList.add("hidden");
     ideationOpen = false;
     stopIdeationPoll();
-    // Closing does not abandon an active session (AD-4): only reset the mode
-    // picker when there is no live session to reattach to on reopen.
-    if (ideation.state === "done" || ideation.state === "error" || ideation.state === "none") {
-        ideationMode = null;
-    }
 }
 async function pollIdeation() {
     try {
@@ -3117,18 +3020,20 @@ async function pollIdeation() {
         stopIdeationPoll();
     }
 }
-// sendIdeationReply carries either the freeform input text or a clicked
-// option's text into the running session — both are just `message: string`
-// to ReplyIdeation, and `seed: string` to StartIdeation on a fresh session.
-// awaiting_approval is never routed through here: the draft-review form
-// (see renderIdeationDraft/approveIdeation) replaces the free-text form
-// entirely while a session is in that state, so this function should not be
-// invoked with a stale awaiting_approval state during a poll/input race.
+// sendIdeationReply carries the freeform input text into the running session.
+//
+// Replies only. SC-2858's rule — a session must start from a captured idea,
+// never a ticket created outright — is now kept by construction: SC-4608 left
+// no surface that starts one. Promotion is a label edit plus the description
+// editor, and the post-import prompt captures an idea like the Ideas `+` does,
+// so the panel can only ever be re-attached to a session that already exists.
 async function sendIdeationReply(text) {
-    if (!text || ideation.state === "awaiting_approval")
+    // Read the session id BEFORE the optimistic update below reassigns
+    // `ideation` — reassignment drops the narrowing the guard just established,
+    // and the id is what the reply is addressed to.
+    const sessionId = ideation.sessionId;
+    if (!text || !sessionId)
         return;
-    const isFresh = ideation.state === "none" || ideation.state === "done" || ideation.state === "error";
-    const restart = ideation.state === "done" || ideation.state === "error";
     // Optimistic update: show the user's message immediately and disable the
     // input while the turn is in flight.
     ideation = {
@@ -3139,22 +3044,7 @@ async function sendIdeationReply(text) {
     renderIdeation();
     startIdeationPoll();
     try {
-        if (isFresh) {
-            // SC-2858 (SC-4485 narrowed the entry points, not this rule): a fresh
-            // session — today reachable only via the post-import "Create first
-            // ticket" prompt — must start from a captured idea, never a ticket
-            // created outright. The seed text becomes the idea's title, then the
-            // same conversation continues in evolve mode against that freshly
-            // captured ticket, mirroring the Ideas-column promotion path
-            // (promoteIdea) rather than duplicating it. The idea marker stays on
-            // the ticket until the conversation's terminal action (evolveTicket)
-            // removes it.
-            const ideaKey = await go().CreateIdea(text);
-            ideation = await go().StartIdeation(text, ideationMode ?? "chat", restart, ideaKey, []);
-        }
-        else {
-            ideation = await go().ReplyIdeation(ideation.sessionId, text);
-        }
+        ideation = await go().ReplyIdeation(sessionId, text);
     }
     catch (err) {
         renderIdeationError(errMessage(err));
@@ -3182,34 +3072,6 @@ async function submitIdeation() {
         return;
     input.value = "";
     await sendIdeationReply(text);
-}
-async function approveIdeation() {
-    const titleInput = document.getElementById("ideation-draft-title");
-    const descInput = document.getElementById("ideation-draft-description");
-    if (!titleInput || !descInput || !ideation.sessionId)
-        return;
-    const sessionId = ideation.sessionId;
-    ideation = { ...ideation, state: "thinking" };
-    renderIdeation();
-    startIdeationPoll();
-    try {
-        ideation = await go().ApproveIdeation(sessionId, titleInput.value.trim(), descInput.value);
-    }
-    catch (err) {
-        renderIdeationError(errMessage(err));
-        stopIdeationPoll();
-        return;
-    }
-    if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
-        // Terminal transition: the PM ticket was created — closeIdeation() hides the
-        // panel, stops the poll, and resets the mode picker. The daemon's board:changed
-        // event surfaces the new card (SC-859).
-        closeIdeation();
-        return;
-    }
-    renderIdeation();
-    if (ideation.state !== "thinking")
-        stopIdeationPoll();
 }
 // wizardChecked is the re-trigger guard: set before any await in
 // maybeOfferStartProject so overlapping reconciles (board:changed storms)
@@ -3365,7 +3227,7 @@ function renderStartWizard() {
         modal.querySelector(".modal-cancel").addEventListener("click", () => closeStartWizard());
         modal.querySelector(".modal-confirm").addEventListener("click", () => {
             closeStartWizard();
-            void openIdeation();
+            captureFirstIdea();
         });
         return;
     }
@@ -3987,14 +3849,6 @@ function init() {
         e.preventDefault();
         void submitIdeation();
     });
-    document.querySelectorAll(".ideation-mode-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
-            const mode = btn.dataset.mode === "guided" ? "guided" : "chat";
-            ideationMode = mode;
-            renderIdeation();
-        });
-    });
-    document.getElementById("ideation-draft-submit")?.addEventListener("click", () => void approveIdeation());
 }
 // Window resizes are covered by sizeWatcher (the columns resize with the
 // window), so no separate resize listener is needed.

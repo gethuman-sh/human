@@ -3,6 +3,8 @@ package daemon
 import (
 	"net"
 	"sync"
+
+	"github.com/gethuman-sh/human/internal/agentname"
 )
 
 // AgentIPRegistry maps a container's bridge IP to the board agent name it runs,
@@ -102,10 +104,19 @@ func (r *AgentIPRegistry) Attribute(remoteAddr string) (ticket, stage string, ok
 		return "", "", false
 	}
 	pmKey, st, ok := parseAgentName(name)
-	if !ok {
-		return "", "", false
+	if ok {
+		return pmKey, string(st), true
 	}
-	return pmKey, string(st), true
+	// A per-ticket auxiliary run (relate, idea-draft) is not a board stage and
+	// so has no stage grammar — but it spends real money against a real ticket,
+	// and an outcome with no ticket is dropped by the ledger rather than stored
+	// unattributed. Its prefix is its stage. Only Attribute learns this grammar:
+	// widening parseAgentName would enrol these runs in the reaper's board-only
+	// sweeps under a stage token no vocabulary declares.
+	if key, prefix, aux := agentname.ParseAux(name); aux {
+		return key, prefix, true
+	}
+	return "", "", false
 }
 
 // AgentFor resolves a connection's remote address to the raw agent name — the

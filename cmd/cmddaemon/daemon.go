@@ -24,6 +24,7 @@ import (
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/internal/agent"
+	"github.com/gethuman-sh/human/internal/agentname"
 	"github.com/gethuman-sh/human/internal/agentstate"
 	"github.com/gethuman-sh/human/internal/audit"
 	"github.com/gethuman-sh/human/internal/board"
@@ -40,6 +41,7 @@ import (
 	"github.com/gethuman-sh/human/internal/dispatch"
 	"github.com/gethuman-sh/human/internal/forge"
 	"github.com/gethuman-sh/human/internal/gitrepo"
+	"github.com/gethuman-sh/human/internal/ideadraft"
 	"github.com/gethuman-sh/human/internal/logrotate"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/messaging/slack"
@@ -494,7 +496,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		BoardFixer:             boardFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring),
 		BoardSecurityFixer:     securityFixerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring),
 		BoardOptioner:          boardOptionerFunc(projectRegistry, vaultResolver, daemonID, logger, launchGate, ipWiring),
-		BugCreator:             bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID)),
+		BugCreator:             bugCreatorFunc(projectRegistry, vaultResolver, relateLauncherFunc(projectRegistry, daemonID, ipWiring)),
 		WhereComments:          whereCommentsFunc(projectRegistry, vaultResolver),
 		WhereAttempts: func(pmKey string, stage daemon.BoardStage) (int, error) {
 			// The READ-ONLY twin of the retry path's counter. bumpStageRetries
@@ -506,14 +508,16 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		CloseTicketer:     closeTicketerFunc(projectRegistry, vaultResolver, liveBoardAgents, (&dockerAgentCleaner{}).DeleteAgent, logger),
 		FeaturesGenerator: featuresGeneratorFunc(projectRegistry),
 		FindbugsRunner:    findbugsRunnerFunc(projectRegistry),
-		RelateLauncher:    relateLauncherFunc(projectRegistry, daemonID),
+		RelateLauncher:    relateLauncherFunc(projectRegistry, daemonID, ipWiring),
+		IdeaDraftLauncher: ideaDraftLauncherFunc(projectRegistry, daemonID, ipWiring),
+		IdeaPromoter:      ideaPromoterFunc(projectRegistry, vaultResolver),
 		SecurityRunner:    securityRunnerFunc(projectRegistry),
 		MockupsCreator:    mockupsCreatorFunc(projectRegistry),
 		VariationsCreator: variationsCreatorFunc(projectRegistry),
 		MockupChooser:     mockupChooserFunc(projectRegistry),
 		MockupPruner:      mockupPrunerFunc(projectRegistry),
 		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
-		DescEdit:          descEditEngine(projectRegistry, vaultResolver, logger),
+		DescEdit:          descEditEngine(projectRegistry, vaultResolver, daemonID, logger),
 		LeaseChecker:      leaseChecker,
 	}
 
@@ -957,10 +961,19 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// another teammate or daemon) — none raise a board event — by polling the
 	// cheap titles-only listing and poking subscribers on any change. Gated on
 	// live subscribers so it costs nothing when no board is open.
-	go daemon.RunBoardFreshnessPoll(ctx,
-		ds.srv.LiteIssueFetcher, ds.srv.PokeBoard,
-		boardHasWatchers(ds.srv.HookEvents),
-		daemon.BoardFreshnessInterval, logger)
+	// The same listing also feeds the idea drafter's redraft trigger: a
+	// tracker-side change to an idea's TITLE arms a debounce, and one run fires
+	// when the editing stops (SC-4608). It costs no extra tracker traffic
+	// precisely because it rides on the listing this poll already paid for.
+	ideaDrafts := &daemon.IdeaDraftWatcher{Launch: ds.srv.IdeaDraftLauncher, Logger: logger}
+	go daemon.RunBoardFreshnessPoll(ctx, daemon.BoardFreshnessOpts{
+		List:        ds.srv.LiteIssueFetcher,
+		Poke:        ds.srv.PokeBoard,
+		HasWatchers: boardHasWatchers(ds.srv.HookEvents),
+		Observe:     ideaDrafts.Observe,
+		Interval:    daemon.BoardFreshnessInterval,
+		Logger:      logger,
+	})
 
 	// Keep the searchable ticket record current, so an agent's "is this already
 	// being handled?" check has something to find. It was fed only by a hand-run
@@ -2388,6 +2401,23 @@ func applyScanResults(results []daemon.TrackerIssuesResult, readyKeys map[string
 	}
 }
 
+// ideaDescription returns the idea's description, fetching it per ticket only
+// when the listing did not carry one. Best effort by design: a fetch failure
+// yields no description, which renders no badge — a card is never wrong about a
+// count it could not read.
+func ideaDescription(g tracker.Getter, key, listed string) string {
+	if listed != "" {
+		return listed
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	full, err := g.GetIssue(ctx, key)
+	if err != nil || full == nil {
+		return ""
+	}
+	return full.Description
+}
+
 // scanReadyForReview walks PM-tracker results, fetches each issue's comments,
 // and returns the set of engineering ticket keys currently flagged ready for
 // review. A newer [human:review-complete] comment on the same issue clears
@@ -2419,11 +2449,24 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult, l
 		}
 		for _, issue := range results[i].Issues {
 			// Idea tickets are placed by their label alone — no marker scan
-			// needed, so skip the per-issue comment round-trip entirely.
+			// needed. They still need their own content, though: the card face
+			// counts the drafter's unanswered [TBA:] gaps, and a list fetch
+			// carries the description on some backends and omits it on others
+			// (Shortcut's search route), where an omitted description is
+			// indistinguishable from an empty one. So the description is taken
+			// from the listing when it has one and fetched per ticket when it
+			// does not — best effort: a failed fetch renders no badge, never a
+			// wrong count.
 			if issue.IsIdea() {
-				mu.Lock()
-				cards[issue.Key] = daemon.DeriveBoardCard(nil, issue.StatusType, true)
-				mu.Unlock()
+				wg.Add(1)
+				go func(g tracker.Getter, key string, statusType tracker.Category, listed string) {
+					defer wg.Done()
+					card := daemon.DeriveBoardCard(nil, statusType, true)
+					card.TBACount = ideadraft.TBACount(ideaDescription(g, key, listed))
+					mu.Lock()
+					cards[key] = card
+					mu.Unlock()
+				}(jobs[i].inst.Provider, issue.Key, issue.StatusType, issue.Description)
 				continue
 			}
 			wg.Add(1)
@@ -3771,7 +3814,7 @@ func securityCreatorFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) 
 // incomplete one) is idempotent — Manager.Start refuses to start over a live
 // agent of the same name. The daemonID is stamped so a peer daemon spares the
 // launch it did not start, like every other board-launched agent (SC-2405).
-func relateLauncherFunc(reg *daemon.ProjectRegistry, daemonID string) func(daemon.RelateRequest) error {
+func relateLauncherFunc(reg *daemon.ProjectRegistry, daemonID string, agentIPs agentIPWiring) func(daemon.RelateRequest) error {
 	return func(req daemon.RelateRequest) error {
 		if err := daemon.ValidateRelate(req); err != nil {
 			return err
@@ -3780,12 +3823,68 @@ func relateLauncherFunc(reg *daemon.ProjectRegistry, daemonID string) func(daemo
 		if err != nil {
 			return err
 		}
-		name := "relate-" + req.PMKey
+		name := agentname.Aux("relate", req.PMKey)
 		if docker, err := devcontainer.NewDockerClient(); err == nil {
 			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), name)
 			_ = docker.Close()
 		}
-		return dockerAgentLauncher{daemonID: daemonID}.Launch(context.Background(), name, "/human-relate "+req.PMKey, entry.Dir, entry.Dir, "")
+		return dockerAgentLauncher{daemonID: daemonID, agentIPs: agentIPs}.
+			Launch(context.Background(), name, "/human-relate "+req.PMKey, entry.Dir, entry.Dir, "")
+	}
+}
+
+// ideaDraftLauncherFunc builds the daemon's IdeaDraftLauncher: it launches the
+// background PM-description drafter for one idea in the registered project's
+// devcontainer, exactly like the relate triage. Any prior agent of the same
+// name is deleted first so a redraft over a still-running or crashed draft is
+// idempotent — Manager.Start refuses to start over a live agent of the same
+// name — which is also what bounds this to one run per idea at a time. The
+// agentIPs wiring is what puts the run's model spend on the ticket's own cost
+// ledger row; without it the outcome arrives unattributed and is dropped
+// (ModelOutcomeSink.store).
+//
+// The project is resolved per key rather than as the sole entry: the redraft
+// trigger fires per ticket, and a multi-project registry must route rather than
+// refuse.
+func ideaDraftLauncherFunc(reg *daemon.ProjectRegistry, daemonID string, agentIPs agentIPWiring) func(daemon.IdeaDraftRequest) error {
+	return func(req daemon.IdeaDraftRequest) error {
+		if err := daemon.ValidateIdeaDraft(req); err != nil {
+			return err
+		}
+		entry, err := reg.EntryForKey(req.Key)
+		if err != nil {
+			return err
+		}
+		name := agentname.Aux("idea-draft", req.Key)
+		if docker, err := devcontainer.NewDockerClient(); err == nil {
+			_ = (&agent.Manager{Docker: docker}).Delete(context.Background(), name)
+			_ = docker.Close()
+		}
+		return dockerAgentLauncher{daemonID: daemonID, agentIPs: agentIPs}.
+			Launch(context.Background(), name, "/human-idea-draft "+req.Key, entry.Dir, entry.Dir, "")
+	}
+}
+
+// ideaPromoterFunc builds the daemon's IdeaPromoter: promotion is a label edit
+// and nothing else — no agent turn, no rewrite, the ticket keeps its key, its
+// title and whatever description the drafter left.
+func ideaPromoterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func(daemon.IdeaPromoteRequest) error {
+	return func(req daemon.IdeaPromoteRequest) error {
+		if err := daemon.ValidateIdeaPromote(req); err != nil {
+			return err
+		}
+		entry, err := reg.EntryForKey(req.Key)
+		if err != nil {
+			return err
+		}
+		editor, err := resolvePMEditor(entry.Dir, entry.EnvLookup(), resolver)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, err = editor.EditIssue(ctx, req.Key, tracker.EditOptions{RemoveLabels: daemon.IdeaLabelsToRemove(req.Labels)})
+		return err
 	}
 }
 
@@ -4200,8 +4299,9 @@ func resolvePMCreator(dir string, lookup config.EnvLookup, resolver *vault.Resol
 	return nil, "", errors.WithDetails("no PM-role tracker configured", "dir", dir)
 }
 
-// resolvePMEditor resolves the PM-role tracker.Editor for evolve-mode idea
-// promotion. Role-based, never key-prefix — mirrors resolvePMCommenter.
+// resolvePMEditor resolves the PM-role tracker.Editor used by the description
+// editor's Apply and by idea promotion's label edit. Role-based, never
+// key-prefix — mirrors resolvePMCommenter.
 func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolver) (tracker.Editor, error) {
 	instances, err := cmdutil.LoadAllInstancesWithResolver(dir, lookup, resolver)
 	if err != nil {
@@ -4222,8 +4322,9 @@ func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 }
 
 // ideationEngine wires the board ideation engine: host claude runner, role-
-// resolved PM creator/editor, and a hook-store poke so the created card
-// reaches the board through the existing subscribe/refetch loop.
+// resolved PM creator, and a hook-store poke so the created card reaches the
+// board through the existing subscribe/refetch loop. No editor: a session
+// creates a ticket and never rewrites one (SC-4608 retired evolve mode).
 func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, store daemon.IdeationStore, logger zerolog.Logger) *daemon.IdeationEngine {
 	firstEntry := func() (daemon.ProjectEntry, error) {
 		return reg.SoleEntry()
@@ -4236,13 +4337,6 @@ func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookS
 				return nil, "", err
 			}
 			return resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
-		},
-		ResolveEditor: func() (tracker.Editor, error) {
-			entry, err := firstEntry()
-			if err != nil {
-				return nil, err
-			}
-			return resolvePMEditor(entry.Dir, entry.EnvLookup(), resolver)
 		},
 		Notify: func() {
 			hookStore.Append(hookevents.Event{EventName: "IdeationCreated", Timestamp: time.Now().UTC()})
@@ -4258,7 +4352,7 @@ func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookS
 // sole write path. No hook-store Notify: applying a description edit does
 // not move the card between stages, so there is nothing for the board's
 // subscribe loop to react to.
-func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logger zerolog.Logger) *daemon.DescEditEngine {
+func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) *daemon.DescEditEngine {
 	firstEntry := func() (daemon.ProjectEntry, error) {
 		return reg.SoleEntry()
 	}
@@ -4271,7 +4365,10 @@ func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, logge
 			}
 			return resolvePMEditor(entry.Dir, entry.EnvLookup(), resolver)
 		},
-		Logger: logger,
+		// The signed commenter, so the applied-edit provenance record carries
+		// the same daemon stamp every other daemon-posted marker does.
+		ResolveCommenter: boardPMCommenterFunc(reg, resolver, daemonID),
+		Logger:           logger,
 	}
 }
 

@@ -241,3 +241,63 @@ func (p *optionsCapturingProvider) ListIssues(_ context.Context, opts tracker.Li
 	*p.seen = opts
 	return nil, nil
 }
+
+// ideaProvider answers the per-ticket detail fetch an idea card's TBA count
+// needs — the list fetch omits descriptions on some backends, where an omitted
+// description is indistinguishable from an empty one.
+type ideaProvider struct {
+	stubProvider
+	description string
+	getErr      error
+	gets        int
+}
+
+func (p *ideaProvider) GetIssue(context.Context, string) (*tracker.Issue, error) {
+	p.gets++
+	if p.getErr != nil {
+		return nil, p.getErr
+	}
+	return &tracker.Issue{Key: "SC-1", Description: p.description}, nil
+}
+
+func ideaResult(listedDescription string) []daemon.TrackerIssuesResult {
+	return []daemon.TrackerIssuesResult{{
+		TrackerRole: "pm",
+		Issues: []tracker.Issue{{
+			Key:         "SC-1",
+			Labels:      []string{"human/idea"},
+			Description: listedDescription,
+			StatusType:  tracker.CategoryUnstarted,
+		}},
+	}}
+}
+
+func TestScanReadyForReview_IdeaCardCarriesTBACount(t *testing.T) {
+	prov := &ideaProvider{description: "who [TBA: for whom?] and [TBA: by when?]"}
+	jobs := []fetchJob{{inst: tracker.Instance{Name: "work", Kind: "shortcut", Provider: prov}}}
+
+	_, _, cards := scanReadyForReview(jobs, ideaResult(""), zerolog.Nop(), nil)
+	require.Contains(t, cards, "SC-1")
+	assert.Equal(t, daemon.BoardIdeas, cards["SC-1"].Stage)
+	assert.Equal(t, 2, cards["SC-1"].TBACount)
+	assert.Equal(t, 1, prov.gets, "the count comes from the per-ticket detail fetch when the listing carried none")
+}
+
+func TestScanReadyForReview_IdeaListedDescriptionNeedsNoFetch(t *testing.T) {
+	prov := &ideaProvider{description: "never read"}
+	jobs := []fetchJob{{inst: tracker.Instance{Name: "work", Kind: "shortcut", Provider: prov}}}
+
+	_, _, cards := scanReadyForReview(jobs, ideaResult("one [TBA: who?]"), zerolog.Nop(), nil)
+	assert.Equal(t, 1, cards["SC-1"].TBACount)
+	assert.Zero(t, prov.gets, "a listing that already carries the description costs no round-trip")
+}
+
+func TestScanReadyForReview_IdeaFetchFailureCountsZero(t *testing.T) {
+	prov := &ideaProvider{getErr: errors.New("tracker unreachable")}
+	jobs := []fetchJob{{inst: tracker.Instance{Name: "work", Kind: "shortcut", Provider: prov}}}
+
+	_, _, cards := scanReadyForReview(jobs, ideaResult(""), zerolog.Nop(), nil)
+	require.Contains(t, cards, "SC-1", "an idea whose description could not be read is still a placed card")
+	assert.Equal(t, daemon.BoardIdeas, cards["SC-1"].Stage)
+	assert.Zero(t, cards["SC-1"].TBACount, "no badge beats a wrong count")
+}

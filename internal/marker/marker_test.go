@@ -107,6 +107,16 @@ func TestValidate_relatedHeadEnum(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "related-started"}))
 }
 
+// The idea drafter's provenance record must say whose words the description
+// holds: the guard that protects a human's writing turns entirely on author,
+// so a record without it protects nothing (SC-4608).
+func TestValidate_ideaDraftRequiresAuthor(t *testing.T) {
+	require.Error(t, Validate(Marker{Type: "idea-draft"}))
+	assert.NoError(t, Validate(Marker{Type: "idea-draft", Fields: map[string]string{"author": "machine"}}))
+	// idea-draft-started brackets the run's start and carries nothing.
+	assert.NoError(t, Validate(Marker{Type: "idea-draft-started"}))
+}
+
 func TestValidate_ticketReviewVerdictEnum(t *testing.T) {
 	// The gate ACTS on every outcome, so the head names what it did. A verdict
 	// outside the enum would be a state no later stage knows how to read.

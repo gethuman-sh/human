@@ -65,30 +65,6 @@ func (s *Server) handleIdeationReply(conn net.Conn, args []string) {
 	s.writeIdeationStatus(conn, st)
 }
 
-// handleIdeationApprove submits the user's (possibly edited) guided-mode
-// draft for ticket creation.
-func (s *Server) handleIdeationApprove(conn net.Conn, args []string) {
-	if s.Ideation == nil {
-		s.writeError(conn, "ideation not available", 1)
-		return
-	}
-	if len(args) != 1 {
-		s.writeError(conn, "ideation-approve requires one JSON arg", 1)
-		return
-	}
-	var req IdeationApproveRequest
-	if err := json.Unmarshal([]byte(args[0]), &req); err != nil {
-		s.writeError(conn, "invalid ideation-approve request: "+err.Error(), 1)
-		return
-	}
-	st, err := s.Ideation.Approve(req)
-	if err != nil {
-		s.writeError(conn, err.Error(), 1)
-		return
-	}
-	s.writeIdeationStatus(conn, st)
-}
-
 // handleIdeationStatus returns the current session snapshot; state "none"
 // when no session exists so the client needs no error-path for the empty case.
 func (s *Server) handleIdeationStatus(conn net.Conn) {
@@ -132,6 +108,15 @@ func (s *Server) handleIdeaCreate(conn net.Conn, args []string) {
 	if err != nil {
 		s.writeError(conn, err.Error(), 1)
 		return
+	}
+	// Capture IS the ask for a draft, and the ask must cost the user nothing:
+	// the launch goes on a background goroutine so a slow container start never
+	// delays the `+`. A nil launcher (no substrate wiring) simply skips it —
+	// the same contract the bug-filing path's relate launch has.
+	if s.IdeaDraftLauncher != nil {
+		go func(key, title string) {
+			_ = s.IdeaDraftLauncher(IdeaDraftRequest{Key: key, Title: title})
+		}(key, req.Title)
 	}
 	data, err := json.Marshal(IdeaCreateResponse{Key: key, URL: url})
 	if err != nil {
