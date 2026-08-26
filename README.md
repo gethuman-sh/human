@@ -430,6 +430,17 @@ container gets that binary copied in at launch, so building the two together is
 what keeps the CLI inside a container at the same version as the daemon outside
 it.
 
+An installed `human` (Homebrew or `install.sh`) has no linux build on disk at
+all. There the daemon downloads the linux archive **for its own version** from
+the GitHub release the first time it launches a container, verifies it against
+that release's `checksums.txt`, and caches it at
+`~/.human/bin/human-<version>-linux-<arch>` — so the second launch performs no
+network request, and a daemon upgrade fetches the matching build rather than
+reusing the previous one. A source checkout keeps using its own
+`bin/human-linux-<arch>` and downloads nothing. With no network and no cached
+binary the launch fails before the container is created, naming the version it
+wanted: an agent container is never handed a `human` older than its daemon.
+
 ### Desktop app (workflow board)
 
 The desktop GUI is the interactive workflow board with five columns (Ideas → Product backlog → Engineering backlog → Code → Ready to Deploy) plus a terminal **Deploy** drop zone: every column names a state that is true of each card in it, and dragging a card forward launches that transition's `human` agent. Code holds the whole build-and-review cycle — dropping an engineering-backlog card there launches the executor, and when the build lands the review starts automatically, no gesture. A passing review releases the card into Ready to Deploy on its own; a failing verdict pins it in Code with a warning icon and the findings as a ticket comment (re-drop it on Code to rebuild against them). Dropping a reviewed card on Deploy ships it: branch pushed, PR opened, merged once CI is green, ticket closed — the card leaves the board, which shows only work in flight. On merge-deploy platforms (Scalingo, Heroku, Vercel, …) that drop puts the change in production. Right-click a card for Close ticket / Open in tracker; Product-backlog cards also offer Create mocks (UI mockups for the ticket via `/human-mockups`), which becomes View mocks once the set exists — opening a navigable tree where any mockup can spawn free-text-guided variation groups at any depth, a leaf can be marked the winner (the highlighted root→leaf path is the chosen design), and that winner is handed to planning and execution automatically. The Ideas queue is an idea space — one rounded rectangle five invisible lanes wide: drag ideas left or right to sort looser ones left and concrete ones right — placement is saved locally, never on the ticket. Its `+` quick-captures a title-only ticket labeled `human/idea` into the leftmost sub-column and fires a background drafter that writes that ticket's PM description while it sits there, leaving every gap it would have had to guess at as an inline `[TBA: …]` question (the card face shows how many are unanswered); dragging an idea onto the Product backlog removes the idea label — no agent turn, the title is never touched — and opens the chat-assisted description editor on that draft, where the assistant challenges the scope and works through the `[TBA: …]` questions with you rather than answering them itself. It runs on macOS, Windows and Linux.

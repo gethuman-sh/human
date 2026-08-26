@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -1483,5 +1484,57 @@ func TestManager_Up_NeverStartedContainerIsRebuiltNotRestarted(t *testing.T) {
 		if id == "never-started-id" {
 			t.Errorf("ContainerStart was called on the never-started container %q — it must be rebuilt, not restarted", id)
 		}
+	}
+}
+
+func TestDaemonVersion_NilInfo(t *testing.T) {
+	if got := daemonVersion(nil); got != "" {
+		t.Errorf("daemonVersion(nil) = %q, want empty — no daemon means no version to match", got)
+	}
+	if got := daemonVersion(&daemon.DaemonInfo{Version: "0.21.0"}); got != "0.21.0" {
+		t.Errorf("daemonVersion = %q, want 0.21.0", got)
+	}
+}
+
+// An installed host carries no linux human anywhere on disk: the launch must
+// download the build matching the DAEMON's own version and copy that one into
+// the container (SC-4633).
+func TestManager_Up_FetchesTheDaemonVersionWhenNothingLocal(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04", "remoteUser": "vscode"}`)
+	if err := os.Remove(filepath.Join(projectDir, "bin", "human-linux-"+runtime.GOARCH)); err != nil {
+		t.Fatal(err)
+	}
+	var gotVersion, gotOS, gotDest string
+	calls := 0
+	mgr := &Manager{
+		Docker: docker, Logger: testLogger(),
+		hostExecutable: func() (string, error) { return "", fmt.Errorf("no executable") },
+		fetchLinuxHuman: func(_ context.Context, version, goos, goarch, dest string, _ io.Writer) error {
+			calls++
+			gotVersion, gotOS, gotDest = version, goos, dest
+			writeELF(t, dest, elfMachineFor(goarch))
+			return nil
+		},
+	}
+	var buf bytes.Buffer
+	_, err := mgr.Up(context.Background(), UpOptions{
+		ProjectDir: projectDir, Out: &buf,
+		DaemonInfo: &daemon.DaemonInfo{Version: "0.21.0"},
+	})
+	if err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("fetch called %d times, want 1", calls)
+	}
+	if gotVersion != "0.21.0" || gotOS != "linux" {
+		t.Errorf("fetched %s/%s, want 0.21.0/linux", gotVersion, gotOS)
+	}
+	want := filepath.Join(os.Getenv("HOME"), ".human", "bin", "human-0.21.0-linux-"+runtime.GOARCH)
+	if gotDest != want {
+		t.Errorf("fetch destination = %q, want %q", gotDest, want)
+	}
+	if len(mock.copyCalls) != 1 {
+		t.Fatalf("copyCalls = %d, want 1 — the downloaded binary must reach the container", len(mock.copyCalls))
 	}
 }
