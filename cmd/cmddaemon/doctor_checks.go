@@ -250,11 +250,15 @@ func checkClaudeAuth(reg *daemon.ProjectRegistry) (bool, string) {
 	return true, "session valid"
 }
 
-// claudeReauthRemedy is the one procedure that fixes every state
-// checkClaudeAuth reports, so both faults print it from one place.
+// claudeReauthRemedy is the one procedure that fixes every state checkClaudeAuth
+// reports. It stops at /login on purpose: the daemon tears an interactive agent
+// down on its run-end hook (daemon.cleanupAfterExit), so a documented trailing
+// 'human agent stop reauth' always lost the race and greeted the user with
+// "reading agent metadata: ... no such file or directory" — on the exact
+// procedure someone reaches for when their pipeline is already broken.
 const claudeReauthRemedy = "sign in to the project's container credential store: " +
-	"run 'human agent start reauth --interactive' in the project, /login inside it, " +
-	"then 'human agent stop reauth'; " +
+	"run 'human agent start reauth --interactive' in the project and /login inside it, " +
+	"then exit the session (the daemon cleans the agent up); " +
 	"the daemon resumes picking up board work once the session is fresh"
 
 // checkCodenavIndex reports the shared code-navigation index's coverage. A

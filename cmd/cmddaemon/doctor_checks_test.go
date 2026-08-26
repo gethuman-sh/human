@@ -92,6 +92,14 @@ func TestCheckPersistence(t *testing.T) {
 	assert.Contains(t, detail, "approvals")
 }
 
+// The remedy every claude-auth fault prints must stop at /login: the daemon
+// auto-cleans an interactive agent on its run-end hook, so a trailing
+// 'human agent stop reauth' always failed with a raw metadata-path error.
+func TestClaudeReauthRemedy_doesNotDocumentAgentStop(t *testing.T) {
+	assert.Contains(t, claudeReauthRemedy, "human agent start reauth --interactive")
+	assert.NotContains(t, claudeReauthRemedy, "human agent stop reauth")
+}
+
 // A session whose expiresAt is in the past is the SC-912 failure: the check goes
 // red and names the re-authenticate fix so the daemon stops sniping board work.
 func TestCheckClaudeAuth_expired(t *testing.T) {
