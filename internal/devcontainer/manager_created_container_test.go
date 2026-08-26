@@ -23,11 +23,18 @@ import (
 // succeeds and the name conflict that masked the real failure cannot happen.
 type nameHoldingDocker struct {
 	*mockDockerClient
-	initError  string
-	mu         sync.Mutex
-	nextID     int
-	containers []ContainerSummary
-	states     map[string]ContainerState
+	initError string
+	// laterInitError, when set, is what every start after the first dies of.
+	// A rebuild that dies of something else is the only way to tell the dead
+	// container's carried-forward reason apart from the rebuild's own failure;
+	// with one error for both, a test asserting on that reason passes whether
+	// or not anything was carried forward at all (SC-4632).
+	laterInitError string
+	mu             sync.Mutex
+	nextID         int
+	startCount     int
+	containers     []ContainerSummary
+	states         map[string]ContainerState
 }
 
 func newNameHoldingDocker(initError string) *nameHoldingDocker {
@@ -70,8 +77,13 @@ func (d *nameHoldingDocker) ContainerStart(ctx context.Context, id string) error
 	_ = d.mockDockerClient.ContainerStart(ctx, id)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.states[id] = ContainerState{Status: "created", ExitCode: 128, Error: d.initError}
-	return fmt.Errorf("Error response from daemon: %s", d.initError)
+	d.startCount++
+	reason := d.initError
+	if d.startCount > 1 && d.laterInitError != "" {
+		reason = d.laterInitError
+	}
+	d.states[id] = ContainerState{Status: "created", ExitCode: 128, Error: reason}
+	return fmt.Errorf("Error response from daemon: %s", reason)
 }
 
 func (d *nameHoldingDocker) ContainerRemove(ctx context.Context, id string, opts ContainerRemoveOptions) error {
@@ -170,10 +182,17 @@ type staleListDocker struct {
 	removeOpts  []ContainerRemoveOptions
 	summary     ContainerSummary
 	inspectFail error
+	// inspectState is what a successful inspect reports, so the same fake also
+	// serves the cases where the manager can read the container's real state
+	// and must decide from it rather than from the listing.
+	inspectState ContainerState
 }
 
-func (d *staleListDocker) ContainerInspect(_ context.Context, _ string) (ContainerInspectResponse, error) {
-	return ContainerInspectResponse{}, d.inspectFail
+func (d *staleListDocker) ContainerInspect(_ context.Context, id string) (ContainerInspectResponse, error) {
+	if d.inspectFail != nil {
+		return ContainerInspectResponse{}, d.inspectFail
+	}
+	return ContainerInspectResponse{ID: id, State: d.inspectState}, nil
 }
 
 func (d *staleListDocker) ContainerList(_ context.Context, _ ContainerListOptions) ([]ContainerSummary, error) {
