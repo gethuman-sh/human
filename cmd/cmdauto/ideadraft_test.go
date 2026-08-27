@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/internal/ideadraft"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -275,4 +276,46 @@ func TestRunIdeaDraft_StandDownOnANonIdeaRecordsNothing(t *testing.T) {
 	p.issue.Labels = []string{"human/idea"}
 	again, _ := runDraft(t, p, IdeaDraftOpts{Check: true})
 	assert.Equal(t, string(ideadraft.ReasonUnknownProvenance), again.Reason)
+}
+
+// TestBuildIdeaDraftCmd_ReadsForwardedStdin covers the WIRING, not the read.
+// The drafter reaches this command through the daemon, which forwards the run's
+// stdin as the command's own; a test that sets IdeaDraftOpts.Stdin by hand
+// passes whether or not the RunE ever assigns it, which is how the command
+// shipped unable to write at all ([SC-4727]).
+func TestBuildIdeaDraftCmd_ReadsForwardedStdin(t *testing.T) {
+	p := newDraftStub("")
+	deps := cmdutil.Deps{
+		LoadInstances: func(string) ([]tracker.Instance, error) {
+			return []tracker.Instance{{Name: "work", Kind: "shortcut", Provider: p}}, nil
+		},
+		AuditLogPath: func() string { return "" },
+	}
+
+	text := "## Problem\n\nSomething [TBA: for whom?]\n"
+	cmd := buildIdeaDraftCmd(deps)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetIn(strings.NewReader(text))
+	cmd.SetArgs([]string{"SC-1", "--description-file", "-"})
+	require.NoError(t, cmd.Execute())
+
+	var res ideaDraftResult
+	require.NoError(t, json.Unmarshal([]byte(lastJSONLine(t, out.String())), &res))
+	assert.True(t, res.Written, "the forwarded stdin must reach the write")
+	assert.Equal(t, text, p.issue.Description)
+	require.Len(t, p.posted, 1)
+	assert.Contains(t, p.posted[0], "[human:idea-draft]")
+}
+
+// lastJSONLine returns the result object from output that may be preceded by
+// the resolver's human-readable lines.
+func lastJSONLine(t *testing.T, out string) string {
+	t.Helper()
+	i := strings.Index(out, "{")
+	if i < 0 {
+		t.Fatalf("no JSON object in output: %q", out)
+	}
+	return out[i:]
 }
