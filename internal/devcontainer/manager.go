@@ -16,6 +16,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/release"
 )
 
 // errRebuildAfterRemoval is the one outcome of handleExisting that Up may
@@ -34,6 +35,30 @@ type Manager struct {
 	// binary is itself an ELF of the container's architecture, so without this a
 	// test asserting "no usable binary" would silently resolve one.
 	hostExecutable func() (string, error)
+	// fetchLinuxHuman downloads the released linux human when no local one
+	// answers. Injected for tests only: nil means release.FetchBinary, so the
+	// single production construction site is unchanged and no test ever reaches
+	// the network.
+	fetchLinuxHuman binaryFetcher
+}
+
+// linuxHumanFetcher is the fetcher this launch will use.
+func (m *Manager) linuxHumanFetcher() binaryFetcher {
+	if m.fetchLinuxHuman != nil {
+		return m.fetchLinuxHuman
+	}
+	return release.FetchBinary
+}
+
+// daemonVersion is the running daemon's build stamp, or "" when this launch has
+// no daemon behind it (UpOptions.DaemonInfo is nil for a plain `devcontainer
+// up`). Empty means no download is attempted at all: without a daemon there is
+// no version to match, and matching the version is the whole point.
+func daemonVersion(info *daemon.DaemonInfo) string {
+	if info == nil {
+		return ""
+	}
+	return info.Version
 }
 
 // UpOptions configures the devcontainer up operation.
@@ -173,7 +198,8 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 	// told which file to produce, instead of being handed a container that
 	// cannot start (SC-4631).
 	arch := m.containerArch(ctx, img.Name)
-	humanBin, err := resolveContainerHuman(arch, projectDir, homeDirOrEmpty(), m.hostExecutablePath())
+	humanBin, err := resolveContainerHuman(ctx, arch, daemonVersion(opts.DaemonInfo),
+		projectDir, homeDirOrEmpty(), m.hostExecutablePath(), m.linuxHumanFetcher(), out)
 	if err != nil {
 		return nil, err
 	}
