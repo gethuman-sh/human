@@ -58,6 +58,11 @@ func buildIdeaDraftCmd(deps cmdutil.Deps) *cobra.Command {
 			if err := validateIdeaDraftOpts(opts); err != nil {
 				return err
 			}
+			// The drafter runs in a container and reaches this command through
+			// the daemon, which forwards the run's stdin here. os.Stdin is the
+			// daemon's own, so a nil Stdin silently reads nothing and the write
+			// is refused as empty.
+			opts.Stdin = cmd.InOrStdin()
 			result, err := cmdutil.ResolveAutoProvider(cmd.Context(), cmd, args[0], true, deps)
 			if err != nil {
 				return err
