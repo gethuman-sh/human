@@ -216,6 +216,20 @@ work as if it were its own.
 - Never `git add -A` on a directory; stage the files the change actually touches.
 - The shared checkout is for reading and for `git pull` only.
 
+# Worktrees
+
+**Working in the CLI (interactive Claude Code in this repo): ALWAYS work in a git worktree.**
+Several Claude Code sessions and pipeline agents run against this checkout at the same time,
+so the shared checkout is never yours alone. Editing, committing, stashing or checking out a
+branch there means changing files under another run — and its `git status` picks up your
+work as if it were its own.
+
+- `git worktree add <path> -b <branch>` before the first edit, one per change.
+- `git worktree lock <path>` right after creating it — another session's prune unregisters
+  an unlocked worktree mid-run and takes its git metadata with it.
+- Never `git add -A` on a directory; stage the files the change actually touches.
+- The shared checkout is for reading and for `git pull` only.
+
 # Commit
 
 When asked to commit, go through changes and create atomar commits that have one connected change each.
