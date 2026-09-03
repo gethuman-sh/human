@@ -742,7 +742,8 @@ func (c *Client) GetDescEditStatus() (DescEditStatus, error) {
 }
 
 // descEditCall marshals payload as the single JSON arg and decodes the
-// returned snapshot — mirrors ideationCall.
+// returned snapshot — the same wire shape as BoardTransition, with a JSON
+// reply.
 func (c *Client) descEditCall(route string, payload any) (DescEditStatus, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
