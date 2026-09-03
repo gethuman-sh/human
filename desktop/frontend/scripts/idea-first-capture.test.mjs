@@ -1,11 +1,12 @@
-// Regression guard for SC-2858, now kept by construction (SC-4608): no board
-// surface starts an ideation session at all, so none can create a finished
-// ticket outright. Capture is the only way in — the Ideas column's `+` and the
-// post-import "Create first ticket" prompt both open the same quick-add — and
-// what a captured idea becomes is decided by the background drafter and the
-// description editor at promotion.
+// Regression guard for SC-2858, kept by construction since SC-4608 and made
+// permanent by SC-4521: the ideation panel, its engine and its routes are
+// gone, so no board surface can create a finished ticket outright. Capture is
+// the only way in — the Ideas column's `+` and the post-import "Create first
+// ticket" prompt both open the same quick-add — and what a captured idea
+// becomes is decided by the background drafter and the description editor at
+// promotion.
 // The frontend is intentionally dependency-free (no DOM test runner), so this
-// asserts the source wiring rather than rendering, like ideation-done.test.mjs.
+// asserts the source wiring rather than rendering.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -22,28 +23,15 @@ function functionBody(source, signature) {
   return fn.slice(0, fn.indexOf("\n}"));
 }
 
-const sendIdeationReplyBody = functionBody(ts, "async function sendIdeationReply");
-
-test("no board surface starts an ideation session (SC-2858, SC-4608)", () => {
+test("no board surface starts an ideation session (SC-2858, SC-4608, SC-4521)", () => {
   assert.ok(!ts.includes("StartIdeation"), "board.ts must not call or declare the StartIdeation binding");
   assert.doesNotMatch(ts, /openIdeation\(/, "nothing may open the ideation panel");
   assert.doesNotMatch(ts, /function openIdeation/, "and the opener itself is gone");
 });
 
-test("sendIdeationReply only replies into a session that already exists (SC-2858)", () => {
-  assert.match(
-    sendIdeationReplyBody,
-    /const sessionId = ideation\.sessionId;\n  if \(!text \|\| !sessionId\) return;/,
-    "a reply with no live session must be refused, not turned into a fresh one",
-  );
-  assert.match(sendIdeationReplyBody, /go\(\)\.ReplyIdeation\(sessionId, text\)/);
-  assert.doesNotMatch(sendIdeationReplyBody, /CreateIdea/, "the fresh-session branch is gone");
-});
-
-// The post-import prompt is the flow criterion 18b's retirement had to rehome:
-// it used to capture an idea and then evolve it in a chat. It now captures an
-// idea and stops — the drafter writes the description, promotion opens the
-// editor.
+// The post-import prompt used to capture an idea and then evolve it in a chat.
+// It now captures an idea and stops — the drafter writes the description,
+// promotion opens the editor.
 test("the post-import prompt captures an idea (SC-4608)", () => {
   const wizardBody = functionBody(ts, "function renderStartWizard(): void {");
   assert.match(wizardBody, /captureFirstIdea\(\);/, "Create-first-ticket must go through idea capture");
@@ -77,10 +65,13 @@ test("dropping an idea on Product Backlog promotes it and opens the editor (SC-4
 });
 
 // The guided interview, its approval park, the old promote path and evolve mode
-// are retired (SC-4608). A leftover comment is as much a defect as leftover code
-// here: it describes a UI that no longer exists.
-test("guided mode, the approval park and evolve mode are gone from board.ts (SC-4608)", () => {
+// were retired by SC-4608; SC-4521 took the panel, its state and its bindings
+// with them. A leftover comment is as much a defect as leftover code here: it
+// describes a UI that no longer exists.
+test("the ideation panel and every trace of it are gone from board.ts (SC-4608, SC-4521)", () => {
   for (const token of [
+    "ideation",
+    "Ideation",
     "async function promoteIdea(",
     "ApproveIdeation",
     "approveIdeation",
@@ -100,10 +91,22 @@ test("guided mode, the approval park and evolve mode are gone from board.ts (SC-
   }
 });
 
-test("the retired ideation markup is gone from index.html (SC-4608)", () => {
+test("the retired ideation markup is gone from index.html (SC-4608, SC-4521)", () => {
   const html = readFileSync(resolve(here, "..", "static", "index.html"), "utf8");
-  for (const id of ["ideation-mode-picker", "ideation-options", "ideation-draft"]) {
-    assert.ok(!html.includes(id), `index.html must no longer contain #${id}`);
+  assert.ok(!html.includes("ideation"), "index.html must carry no ideation markup at all");
+});
+
+// The panel is gone but its chat pane styling is not: the description editor
+// renders against those rules, and style.css never had .descedit-* rules of
+// its own. Deleting "the ideation CSS" wholesale would leave the editor
+// unstyled, so the shared rules were renamed into the chat domain (SC-4521).
+test("the ideation CSS is gone and its chat rules survive as .chat-* (SC-4521)", () => {
+  const css = readFileSync(resolve(here, "..", "static", "style.css"), "utf8");
+  for (const rule of [".ideation-panel", ".ideation-header", ".ideation-close", ".ideation-move-feature"]) {
+    assert.ok(!css.includes(rule + " {"), `style.css must no longer define ${rule}`);
+  }
+  for (const rule of [".chat-transcript", ".chat-status", ".chat-form"]) {
+    assert.match(css, new RegExp(rule.replace(".", "\\.") + "\\s*\\{"), `style.css must define ${rule}`);
   }
 });
 

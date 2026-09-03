@@ -72,7 +72,6 @@ import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import type { Box, Drawn, Side } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection, type TicketCost } from "./board-detail.js";
-import { ideationInputEnabled, shouldCloseIdeation } from "./board-ideation.js";
 import {
   descEditInputEnabled,
   descEditApplyEnabled,
@@ -232,19 +231,6 @@ interface BoardData {
   dimPercent?: number;
 }
 
-interface IdeationMsg {
-  role: string;
-  text: string;
-}
-
-interface IdeationView {
-  sessionId?: string;
-  mode?: string; // chat is the only mode
-  state: string; // none | thinking | awaiting_reply | done | error
-  messages: IdeationMsg[];
-  createdKey?: string;
-  error?: string;
-}
 
 interface DescEditMsg {
   role: string;
@@ -427,8 +413,6 @@ interface AppBindings {
   CreateIdea(title: string): Promise<string>;
   CreateBug(title: string, description: string): Promise<string>;
   CreateSecurity(title: string, description: string): Promise<string>;
-  ReplyIdeation(sessionId: string, message: string): Promise<IdeationView>;
-  IdeationStatus(): Promise<IdeationView>;
   StartDescEdit(key: string, currentDescription: string, restart: boolean, promoted: boolean): Promise<DescEditView>;
   PromoteIdea(key: string, labels: string[]): Promise<void>;
   ReplyDescEdit(sessionId: string, message: string): Promise<DescEditView>;
@@ -2971,116 +2955,12 @@ function escapeAttr(s: unknown): string {
   return escapeHtml(s).replaceAll('"', "&quot;");
 }
 
-// --- Ideation chat panel -----------------------------------------------
-//
-// The panel is a thin client over the daemon's ideation-start/reply/status
-// routes: it never derives session state itself, it only renders whatever
-// the daemon last reported. Closing the panel does NOT abandon the
-// daemon-side session (AD-4) — reopening re-attaches via IdeationStatus().
-
-let ideation: IdeationView = { state: "none", messages: [] };
-let ideationOpen = false;
-let ideationTimer: number | null = null;
-const IDEATION_POLL_MS = 1000;
-
-function stopIdeationPoll(): void {
-  if (ideationTimer !== null) {
-    clearInterval(ideationTimer);
-    ideationTimer = null;
-  }
-}
-
-// startIdeationPoll only runs while the panel is visible: the daemon-side
-// session keeps making progress on its own regardless (AD-4), so there is no
-// need to poll for a panel the user cannot see.
-function startIdeationPoll(): void {
-  if (!ideationOpen || ideationTimer !== null) return;
-  ideationTimer = window.setInterval(() => void pollIdeation(), IDEATION_POLL_MS);
-}
-
-// Keys whose "Move to feature" was already triggered this session: the board
-// snapshot can lag the transition for a poll tick or two, and the guard keeps
-// the button from re-arming (and double-launching an agent) in that window.
-const ideationMovedKeys = new Set<string>();
-
-// renderIdeationDone fills the done-state status line. The created ticket is a
-// Product-backlog card, but the panel used to dead-end at "Created SC-XXX"
-// with no way to act on it (SC-881) — so the line carries a right-aligned
-// "Move to feature" action that launches the same backlog→planning transition
-// a drag onto the Engineering backlog would.
-function renderIdeationDone(statusLine: HTMLElement): void {
-  const key = ideation.createdKey ?? "";
-  statusLine.textContent = `Created ${key}`;
-  if (!key) return;
-
-  const card = current.cards.find((c) => c.key === key);
-  // Once the ticket has left the backlog — via this button or a board drag —
-  // the move is spent; showing it armed again would offer a second launch.
-  const moved = ideationMovedKeys.has(key) || (card !== undefined && card.stage !== "backlog");
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "ideation-move-feature";
-  btn.textContent = moved ? "Moved to feature" : "Move to feature";
-  btn.disabled = moved || !current.dockerAvailable;
-  if (!moved && !current.dockerAvailable) {
-    btn.title = "Docker is required to launch the planning agent";
-  }
-  btn.onclick = () => {
-    if (ideationMovedKeys.has(key)) return;
-    ideationMovedKeys.add(key);
-    renderIdeation();
-    void transition(key, card?.title ?? "", card?.stage ?? "backlog", "planning");
-  };
-  statusLine.appendChild(btn);
-}
-
-function renderIdeation(): void {
-  const transcript = document.getElementById("ideation-transcript");
-  if (!transcript) return;
-  transcript.innerHTML = ideation.messages
-    .map((m) => `<div class="msg ${m.role === "user" ? "user" : "agent"}">${escapeHtml(m.text)}</div>`)
-    .join("");
-  transcript.scrollTop = transcript.scrollHeight;
-
-  const statusLine = document.getElementById("ideation-status-line");
-  if (statusLine) {
-    statusLine.classList.remove("hidden", "error");
-    if (ideation.state === "thinking") {
-      statusLine.textContent = "Agent is thinking…";
-    } else if (ideation.state === "error") {
-      statusLine.textContent = ideation.error || "Ideation session failed";
-      statusLine.classList.add("error");
-    } else if (ideation.state === "done") {
-      renderIdeationDone(statusLine);
-    } else {
-      statusLine.classList.add("hidden");
-    }
-  }
-
-  const form = document.getElementById("ideation-form");
-  const input = document.getElementById("ideation-input") as HTMLInputElement | null;
-  const send = document.getElementById("ideation-send") as HTMLButtonElement | null;
-  const inputEnabled = ideationInputEnabled(ideation.state);
-  if (form) form.classList.remove("hidden");
-  if (input) {
-    input.disabled = !inputEnabled;
-    input.placeholder = ideation.state === "awaiting_reply" ? "Your answer…" : "Describe the idea…";
-  }
-  if (send) send.disabled = !inputEnabled;
-}
-
-function renderIdeationError(msg: string): void {
-  ideation = { ...ideation, state: "error", error: msg };
-  renderIdeation();
-}
-
 // --- Product-Backlog description-edit modal (SC-2873) ----------------------
 //
 // A dynamically-built centered modal (like showBugModal), deliberately NOT
-// the fixed-edge slide-out pattern .detail-panel/.ideation-panel use — the
-// AC requires this click target to be visibly distinct. Unlike ideation's
-// AD-4 (chat survives a close), AC6 requires the opposite here: closing the
-// modal without Apply/Save discards the pending proposal and chat, so
+// the fixed-edge slide-out pattern .detail-panel uses — the AC requires this
+// click target to be visibly distinct. AC6 requires that closing the modal
+// without Apply/Save discards the pending proposal and chat, so
 // closeDescEditModal ends the daemon-side session via DiscardDescEdit —
 // reopening the SAME ticket after a close always starts genuinely fresh, not
 // re-attached. A close racing the opening StartDescEdit ends it the same way
@@ -3132,9 +3012,9 @@ async function openDescEditModal(card: Card, opts: { promoted?: boolean } = {}):
         <div id="descedit-desc" class="detail-description">Loading…</div>
       </div>
       <div class="descedit-chat-pane">
-        <div id="descedit-transcript" class="descedit-transcript ideation-transcript"></div>
-        <div id="descedit-status-line" class="descedit-status ideation-status hidden"></div>
-        <form id="descedit-form" class="descedit-form ideation-form">
+        <div id="descedit-transcript" class="descedit-transcript chat-transcript"></div>
+        <div id="descedit-status-line" class="descedit-status chat-status hidden"></div>
+        <form id="descedit-form" class="descedit-form chat-form">
           <input id="descedit-input" type="text" autocomplete="off" placeholder="How should this description change?" />
           <button id="descedit-send" type="submit">Send</button>
         </form>
@@ -3389,9 +3269,6 @@ function toggleTicketDetail(card: Card): void {
 }
 
 function openTicketDetail(card: Card): void {
-  // The detail panel and the ideation panel share the fixed right edge; only
-  // one may be visible. Closing ideation keeps its session running (AD-4).
-  closeIdeation();
   detailCard = card;
   detailError = null;
   detailHTML = null;
@@ -3590,101 +3467,14 @@ function renderTicketDetail(): void {
   });
 }
 
-// No openIdeation: SC-4608 took away the last thing that opened this panel.
-// Promotion is a label edit plus the description editor, and the post-import
-// prompt captures an idea, so nothing starts an ideation session from the
-// board. The panel below stays wired to a session that can only pre-date this
-// build — its own teardown, with the daemon engine and routes it talks to, is
-// the follow-on's.
-function closeIdeation(): void {
-  const panel = document.getElementById("ideation-panel");
-  if (panel) panel.classList.add("hidden");
-  ideationOpen = false;
-  stopIdeationPoll();
-}
-
-async function pollIdeation(): Promise<void> {
-  try {
-    ideation = await go().IdeationStatus();
-  } catch (err) {
-    renderIdeationError(errMessage(err));
-    stopIdeationPoll();
-    return;
-  }
-  if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
-    // Terminal transition: the PM ticket was created — closeIdeation() hides the
-    // panel, stops the poll, and resets the mode picker. The daemon's board:changed
-    // event surfaces the new card (SC-859).
-    closeIdeation();
-    return;
-  }
-  renderIdeation();
-  if (ideation.state !== "thinking") {
-    stopIdeationPoll();
-  }
-}
-
-// sendIdeationReply carries the freeform input text into the running session.
-//
-// Replies only. SC-2858's rule — a session must start from a captured idea,
-// never a ticket created outright — is now kept by construction: SC-4608 left
-// no surface that starts one. Promotion is a label edit plus the description
-// editor, and the post-import prompt captures an idea like the Ideas `+` does,
-// so the panel can only ever be re-attached to a session that already exists.
-async function sendIdeationReply(text: string): Promise<void> {
-  // Read the session id BEFORE the optimistic update below reassigns
-  // `ideation` — reassignment drops the narrowing the guard just established,
-  // and the id is what the reply is addressed to.
-  const sessionId = ideation.sessionId;
-  if (!text || !sessionId) return;
-
-  // Optimistic update: show the user's message immediately and disable the
-  // input while the turn is in flight.
-  ideation = {
-    ...ideation,
-    state: "thinking",
-    messages: [...ideation.messages, { role: "user", text }],
-  };
-  renderIdeation();
-  startIdeationPoll();
-
-  try {
-    ideation = await go().ReplyIdeation(sessionId, text);
-  } catch (err) {
-    renderIdeationError(errMessage(err));
-    stopIdeationPoll();
-    return;
-  }
-  if (shouldCloseIdeation(ideation.state, ideation.createdKey)) {
-    // Terminal transition: the PM ticket was created — closeIdeation() hides the
-    // panel, stops the poll, and resets the mode picker. The daemon's board:changed
-    // event surfaces the new card (SC-859).
-    closeIdeation();
-    return;
-  }
-  renderIdeation();
-  if (ideation.state !== "thinking") {
-    stopIdeationPoll();
-  }
-}
-
-async function submitIdeation(): Promise<void> {
-  const input = document.getElementById("ideation-input") as HTMLInputElement | null;
-  if (!input) return;
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = "";
-  await sendIdeationReply(text);
-}
-
 // --- Start Project wizard ------------------------------------------------
 //
 // Offered exactly once per session, and only when the board is a *confirmed*
 // empty board (successful fetch, zero cards) AND the project directory holds
 // no source files — i.e. there is genuinely no project yet, just tool config.
 // The steps are static local choices derived from the Go-side template
-// registry, so unlike ideation there is no per-step backend round-trip: only
-// the final scaffold call goes to Go.
+// registry, so there is no per-step backend round-trip: only the final
+// scaffold call goes to Go.
 
 type WizardStep = "type" | "language" | "creating" | "done" | "error";
 
@@ -3883,7 +3673,7 @@ async function createStartProject(tpl: StarterTemplate): Promise<void> {
 // The desktop equivalent of the TUI's instances panel. Data comes from the Go
 // App.Instances() binding, which runs the monitor in-process (not via the
 // daemon). The view only polls while it is the active view — the discovery scan
-// is cheap but pointless for a hidden panel, mirroring the ideation poll.
+// is cheap but pointless for a hidden panel.
 
 // The Instances() payload comes through one door. Every field is coerced by
 // runtime TYPE rather than passed through with `?? []`, so a field whose type
@@ -4479,12 +4269,7 @@ function init(): void {
       toggleTheme();
     }
   });
-  document.getElementById("ideation-close")?.addEventListener("click", () => closeIdeation());
   document.getElementById("detail-close")?.addEventListener("click", () => closeTicketDetail());
-  document.getElementById("ideation-form")?.addEventListener("submit", (e: Event) => {
-    e.preventDefault();
-    void submitIdeation();
-  });
 }
 
 // Window resizes are covered by sizeWatcher (the columns resize with the
