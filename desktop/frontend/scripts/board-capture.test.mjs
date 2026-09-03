@@ -105,7 +105,12 @@ test("the bug and security quick-adds are untouched (SC-4725)", () => {
 // control had — the acceptance criterion is that the change holds in every
 // theme.
 test("the fancy press-squish covers the new control (SC-4725)", () => {
-  const squish = stripped.match(/((?:\[data-theme="fancy"\][^{]*,\s*)*\[data-theme="fancy"\][^{]*:active\s*)\{\s*transform:\s*scale\(0\.92\)/);
+  // [^,{]* (not [^{]*) so a selector segment can never itself absorb the
+  // comma that separates it from the next one — with [^{]* the split between
+  // repetitions of the (?:...)* group and the trailing segment is ambiguous,
+  // which is what let this backtrack exponentially on a non-matching input
+  // (CodeQL js/redos, SC-4725 deploy fix).
+  const squish = stripped.match(/((?:\[data-theme="fancy"\][^,{]*,\s*)*\[data-theme="fancy"\][^,{]*:active\s*)\{\s*transform:\s*scale\(0\.92\)/);
   assert.ok(squish, 'the fancy scale(0.92) :active rule must exist');
   assert.match(squish[1], /\.capture-idea:active/, "the fancy :active squish must list .capture-idea:active");
 });
