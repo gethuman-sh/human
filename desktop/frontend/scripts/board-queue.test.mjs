@@ -303,8 +303,8 @@ test("cardError is empty when the error field is blank or absent (SC-1301)", () 
 
 // SC-1301 wiring guard: renderCard's error subtitle must be gated on the shared
 // cardError classifier, never on raw `card.error`. The frontend is dependency-
-// free (no DOM test runner), so this asserts the source wiring like
-// ideation-done.test.mjs — so the unconditional render cannot be reintroduced.
+// free (no DOM test runner), so this asserts the source wiring rather than
+// rendering — so the unconditional render cannot be reintroduced.
 test("renderCard gates the error subtitle on cardError, not raw card.error (SC-1301)", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const ts = readFileSync(resolve(here, "..", "src", "board.ts"), "utf8");

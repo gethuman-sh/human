@@ -171,16 +171,19 @@ description editor (below) on the drafted text, with its remit widened to
 challenge scope and work through the `[TBA: …]` questions. The card lands
 in Product Backlog on the next refetch.
 
-The ideation chat panel that used to do this is **unreachable**: SC-4608
-retired the guided interview, its approval park, the drag-to-Backlog
-ideation launch and the evolve mode whose terminal action rewrote an idea
-ticket in place. The daemon engine behind it — the `ideation-start`,
-`ideation-reply` and `ideation-status` routes, the session store, and the
-direct-create path (`creator.CreateIssue`) the CLI still uses — is left
-standing for the follow-on ticket to remove, so the interactive flow can be
-restored from a wire rather than from git if the drafts turn out thin.
-CLI-side ideation (`/human-ideate`, the `human-ideator` agent,
-`human idea promote`) is untouched and still works.
+The ideation chat panel that used to do this is **gone** (SC-4521). SC-4608
+retired the guided interview, its approval park, the drag-to-Backlog ideation
+launch and the evolve mode whose terminal action rewrote an idea ticket in
+place, leaving the daemon engine standing as a restore path in case the
+background drafts turned out thin. They did not, so the panel, its markup and
+CSS, its desktop bindings, the `ideation-start`/`ideation-reply`/
+`ideation-status` routes and the session store are all removed — there is now
+exactly one way a ticket comes into being. Idea capture, the one thing the
+engine owned that the board still needs, moved to its own `IdeaCreator` behind
+the unchanged `idea-create` route. A `~/.human/ideation.db` left by an older
+install is inert: nothing reads or writes it, and no upgrade path deletes a
+user's file unasked. CLI-side ideation (`/human-ideate`, the `human-ideator`
+agent, `human idea promote`) is untouched and still works.
 
 Drafting requires the container substrate and the `claude` CLI on the daemon
 host. With neither, capture still returns and promotion still works — the
@@ -219,8 +222,7 @@ in-progress, unsaved edit is cheap to lose since nothing was ever written).
 
 The panel talks to five dedicated daemon routes — `descedit-start`,
 `descedit-reply`, `descedit-apply`, `descedit-discard`, `descedit-status` —
-following the same single-JSON-argument route pattern as the ideation routes
-above. `Apply` writes through the role-resolved PM tracker's `Editor`,
+following the same single-JSON-argument route pattern as `idea-create`. `Apply` writes through the role-resolved PM tracker's `Editor`,
 touching only the `Description` field of `tracker.EditOptions` — `Title` and
 label fields are never set, so the write path cannot drift into editing
 anything else. `Discard` never touches the tracker either; it only ends the

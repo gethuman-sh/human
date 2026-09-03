@@ -625,16 +625,6 @@ func (c *Client) PruneMockup(req PruneMockupRequest) error {
 	return err
 }
 
-// IdeationStart starts (or re-attaches to) the board ideation session.
-func (c *Client) IdeationStart(req IdeationStartRequest) (IdeationStatus, error) {
-	return c.ideationCall("ideation-start", req)
-}
-
-// IdeationReply sends the user's answer into the running ideation session.
-func (c *Client) IdeationReply(req IdeationReplyRequest) (IdeationStatus, error) {
-	return c.ideationCall("ideation-reply", req)
-}
-
 // IdeaCreate quick-captures a title-only, idea-labeled ticket on the PM
 // tracker — the Ideas column's `+` button.
 func (c *Client) IdeaCreate(req IdeaCreateRequest) (IdeaCreateResponse, error) {
@@ -714,37 +704,6 @@ func (c *Client) SecurityCreate(req SecurityCreateRequest) (SecurityCreateRespon
 	return resp, nil
 }
 
-// GetIdeationStatus fetches the current ideation session snapshot.
-func (c *Client) GetIdeationStatus() (IdeationStatus, error) {
-	out, err := c.RunRemoteCapture([]string{"ideation-status"})
-	if err != nil {
-		return IdeationStatus{}, err
-	}
-	var st IdeationStatus
-	if err := json.Unmarshal(out, &st); err != nil {
-		return IdeationStatus{}, errors.WrapWithDetails(err, "invalid ideation status JSON")
-	}
-	return st, nil
-}
-
-// ideationCall marshals payload as the single JSON arg and decodes the returned
-// snapshot — the same wire shape as BoardTransition, with a JSON reply.
-func (c *Client) ideationCall(route string, payload any) (IdeationStatus, error) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return IdeationStatus{}, errors.WrapWithDetails(err, "marshaling "+route+" request")
-	}
-	out, err := c.RunRemoteCapture([]string{route, string(data)})
-	if err != nil {
-		return IdeationStatus{}, err
-	}
-	var st IdeationStatus
-	if err := json.Unmarshal(out, &st); err != nil {
-		return IdeationStatus{}, errors.WrapWithDetails(err, "invalid ideation status JSON")
-	}
-	return st, nil
-}
-
 // DescEditStart starts (or re-attaches to) a description-edit chat session
 // for one Product-Backlog ticket.
 func (c *Client) DescEditStart(req DescEditStartRequest) (DescEditStatus, error) {
@@ -783,7 +742,8 @@ func (c *Client) GetDescEditStatus() (DescEditStatus, error) {
 }
 
 // descEditCall marshals payload as the single JSON arg and decodes the
-// returned snapshot — mirrors ideationCall.
+// returned snapshot — the same wire shape as BoardTransition, with a JSON
+// reply.
 func (c *Client) descEditCall(route string, payload any) (DescEditStatus, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {

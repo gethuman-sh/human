@@ -1,10 +1,9 @@
 // Pure predicates/builders for the Product-Backlog description-edit chat
 // modal (SC-2873), kept free of DOM and Wails bindings so they can be unit-
-// tested directly (mirrors board-ideation.ts / board-detail.ts).
-// descEditInputEnabled mirrors ideationInputEnabled: the chat input/send are
-// live only while the session is idle and interactive. "applied" is terminal
-// for THIS session (mirrors ideation's "done") — the user closes and reopens
-// to start a fresh chat against the now-saved description.
+// tested directly (mirrors board-detail.ts).
+// descEditInputEnabled: the chat input/send are live only while the session is
+// idle and interactive. "applied" is terminal for THIS session — the user
+// closes and reopens to start a fresh chat against the now-saved description.
 export function descEditInputEnabled(state) {
     return state === "awaiting_reply" || state === "error";
 }

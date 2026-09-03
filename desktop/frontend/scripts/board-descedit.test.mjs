@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   descEditInputEnabled,
   descEditApplyEnabled,
@@ -87,4 +90,29 @@ test("bugs and security tickets are never description-edited, promoted or not", 
   assert.equal(descEditAllowedFor("product", true), false);
   assert.equal(descEditAllowedFor("product", false, true), false);
   assert.equal(descEditAllowedFor("ideas", true, false, true), false);
+});
+
+// SC-4521 regression guard. The chat pane has never had .descedit-* rules of
+// its own: it renders against the shared chat rules, which until SC-4521 were
+// named .ideation-*. Retiring the panel therefore had to rename them rather
+// than delete them, and a future "tidy up the chat CSS" must not undo that —
+// the failure mode is an unstyled editor nobody notices until they open it.
+test("the descedit chat pane renders against chat rules style.css actually defines (SC-4521)", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const ts = readFileSync(resolve(here, "..", "src", "board.ts"), "utf8");
+  const css = readFileSync(resolve(here, "..", "static", "style.css"), "utf8");
+
+  for (const [hook, shared] of [
+    ["descedit-transcript", "chat-transcript"],
+    ["descedit-status", "chat-status"],
+    ["descedit-form", "chat-form"],
+  ]) {
+    assert.match(
+      ts,
+      new RegExp(`class="${hook} ${shared}`),
+      `the ${hook} element must carry the shared .${shared} class`,
+    );
+    assert.match(css, new RegExp(`\\.${shared}\\s*\\{`), `style.css must define .${shared}`);
+    assert.ok(!css.includes(`.${hook} {`), `.${hook} is a JS hook only — styling lives on .${shared}`);
+  }
 });

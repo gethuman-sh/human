@@ -191,7 +191,6 @@ type daemonState struct {
 	auditStore            *audit.Store
 	auditWriter           *audit.Writer
 	confirmDB             *daemon.ConfirmDB
-	ideationDB            *daemon.IdeationDB
 	daemonID              string
 	// info is the on-disk identity this process will claim once it is actually
 	// serving. It is built here but written only after readiness, so a stalled
@@ -377,22 +376,6 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		confirmDB = nil
 	}
 
-	// A live ideation chat is in-memory state that a restart would otherwise
-	// reset; persisting it lets a self-restart land between turns harmlessly.
-	// A failed open degrades to memory-only rather than aborting startup.
-	ideationDB, err := daemon.NewIdeationDB(daemon.DefaultIdeationDBPath())
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to open ideation database, ideation sessions will not survive a restart")
-		ideationDB = nil
-	}
-	// Assigned through a typed nil check: handing a nil *IdeationDB straight to
-	// the interface would produce a non-nil interface wrapping a nil pointer,
-	// and the engine's nil-Store check would not catch it.
-	var ideationStore daemon.IdeationStore
-	if ideationDB != nil {
-		ideationStore = ideationDB
-	}
-
 	statsStore, err := stats.NewStatsStore(stats.DefaultDBPath())
 	if err != nil {
 		logger.Warn().Err(err).Msg("failed to open stats database, tool persistence disabled")
@@ -516,14 +499,10 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		VariationsCreator: variationsCreatorFunc(projectRegistry),
 		MockupChooser:     mockupChooserFunc(projectRegistry),
 		MockupPruner:      mockupPrunerFunc(projectRegistry),
-		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
+		IdeaCreator:       ideaCreator(projectRegistry, vaultResolver, hookStore),
 		DescEdit:          descEditEngine(projectRegistry, vaultResolver, daemonID, logger),
 		LeaseChecker:      leaseChecker,
 	}
-
-	// Bring back a chat the previous process was in the middle of, before the
-	// server accepts its first ideation request.
-	restoreIdeationSession(srv.Ideation, ideationStore, logger)
 
 	return &daemonState{
 		srv:                   srv,
@@ -543,7 +522,6 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		auditStore:            auditStore,
 		auditWriter:           auditWriter,
 		confirmDB:             confirmDB,
-		ideationDB:            ideationDB,
 		daemonID:              daemonID,
 		info:                  info,
 	}, nil
@@ -670,9 +648,6 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 	if ds.confirmDB != nil {
 		defer func() { _ = ds.confirmDB.Close() }()
-	}
-	if ds.ideationDB != nil {
-		defer func() { _ = ds.ideationDB.Close() }()
 	}
 
 	out := cmd.OutOrStdout()
@@ -4212,11 +4187,11 @@ func variationSubtree(mockupsDir, root string) []string {
 	return out
 }
 
-// hostClaudeIdeationRunner implements daemon.IdeationRunner by running one
+// hostClaudeChatRunner implements daemon.DescEditRunner by running one
 // headless `claude -p` turn on the daemon host in the registered project dir.
 // Session continuity across turns rides on claude's own --resume store, so the
 // daemon holds no conversation state beyond the resume id.
-type hostClaudeIdeationRunner struct {
+type hostClaudeChatRunner struct {
 	reg *daemon.ProjectRegistry
 }
 
@@ -4227,10 +4202,10 @@ type claudeTurnOutput struct {
 	IsError   bool   `json:"is_error"`
 }
 
-func (r hostClaudeIdeationRunner) Run(ctx context.Context, resumeID, prompt string) (daemon.IdeationTurn, error) {
+func (r hostClaudeChatRunner) Run(ctx context.Context, resumeID, prompt string) (daemon.ChatTurn, error) {
 	entry, err := r.reg.SoleEntry()
 	if err != nil {
-		return daemon.IdeationTurn{}, err
+		return daemon.ChatTurn{}, err
 	}
 	// Read-only tool allowlist: the agent may inspect the repo but nothing
 	// else; the daemon, not the agent, writes the ticket. Single argv element
@@ -4250,22 +4225,22 @@ func (r hostClaudeIdeationRunner) Run(ctx context.Context, resumeID, prompt stri
 	var parsed claudeTurnOutput
 	parseErr := json.Unmarshal(out, &parsed)
 	if parseErr == nil && parsed.IsError {
-		return daemon.IdeationTurn{}, errors.WithDetails("ideation agent turn failed", "result", parsed.Result)
+		return daemon.ChatTurn{}, errors.WithDetails("agent turn failed", "result", parsed.Result)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
-			return daemon.IdeationTurn{}, errors.WrapWithDetails(ctx.Err(), "ideation agent turn timed out")
+			return daemon.ChatTurn{}, errors.WrapWithDetails(ctx.Err(), "agent turn timed out")
 		}
 		detail := ""
 		if ee, ok := goerrors.AsType[*exec.ExitError](err); ok {
 			detail = strings.TrimSpace(string(ee.Stderr))
 		}
-		return daemon.IdeationTurn{}, errors.WrapWithDetails(err, "running ideation agent turn", "stderr", detail)
+		return daemon.ChatTurn{}, errors.WrapWithDetails(err, "running agent turn", "stderr", detail)
 	}
 	if parseErr != nil {
-		return daemon.IdeationTurn{}, errors.WrapWithDetails(parseErr, "parsing ideation agent output")
+		return daemon.ChatTurn{}, errors.WrapWithDetails(parseErr, "parsing agent turn output")
 	}
-	return daemon.IdeationTurn{Reply: parsed.Result, ResumeID: parsed.SessionID}, nil
+	return daemon.ChatTurn{Reply: parsed.Result, ResumeID: parsed.SessionID}, nil
 }
 
 // resolvePMCreator resolves the PM-role tracker.Creator and its first
@@ -4321,35 +4296,27 @@ func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 	return nil, errors.WithDetails("no PM-role tracker with edit support configured", "dir", dir)
 }
 
-// ideationEngine wires the board ideation engine: host claude runner, role-
-// resolved PM creator, and a hook-store poke so the created card reaches the
-// board through the existing subscribe/refetch loop. No editor: a session
-// creates a ticket and never rewrites one (SC-4608 retired evolve mode).
-func ideationEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore, store daemon.IdeationStore, logger zerolog.Logger) *daemon.IdeationEngine {
-	firstEntry := func() (daemon.ProjectEntry, error) {
-		return reg.SoleEntry()
-	}
-	return &daemon.IdeationEngine{
-		Runner: hostClaudeIdeationRunner{reg: reg},
+// ideaCreator wires the Ideas column's `+`: the role-resolved PM creator and a
+// hook-store poke so the captured card reaches the board through the existing
+// subscribe/refetch loop. No runner and no session — capture is one write.
+func ideaCreator(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore) *daemon.IdeaCreator {
+	return &daemon.IdeaCreator{
 		ResolveCreator: func() (tracker.Creator, string, error) {
-			entry, err := firstEntry()
+			entry, err := reg.SoleEntry()
 			if err != nil {
 				return nil, "", err
 			}
 			return resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
 		},
 		Notify: func() {
-			hookStore.Append(hookevents.Event{EventName: "IdeationCreated", Timestamp: time.Now().UTC()})
+			hookStore.Append(hookevents.Event{EventName: "IdeaCreated", Timestamp: time.Now().UTC()})
 		},
-		Store:  store,
-		Logger: logger,
 	}
 }
 
 // descEditEngine wires the Product-Backlog description-edit chat (SC-2873):
-// the same host-claude headless-turn runner ideation uses (see
-// hostClaudeIdeationRunner), and the role-resolved PM tracker.Editor as the
-// sole write path. No hook-store Notify: applying a description edit does
+// the host-claude headless-turn runner (hostClaudeChatRunner) and the
+// role-resolved PM tracker.Editor as the sole write path. No hook-store Notify: applying a description edit does
 // not move the card between stages, so there is nothing for the board's
 // subscribe loop to react to.
 func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) *daemon.DescEditEngine {
@@ -4357,7 +4324,7 @@ func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemo
 		return reg.SoleEntry()
 	}
 	return &daemon.DescEditEngine{
-		Runner: hostClaudeIdeationRunner{reg: reg},
+		Runner: hostClaudeChatRunner{reg: reg},
 		ResolveEditor: func() (tracker.Editor, error) {
 			entry, err := firstEntry()
 			if err != nil {
@@ -4369,26 +4336,6 @@ func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemo
 		// the same daemon stamp every other daemon-posted marker does.
 		ResolveCommenter: boardPMCommenterFunc(reg, resolver, daemonID),
 		Logger:           logger,
-	}
-}
-
-// restoreIdeationSession brings back a chat interrupted by a restart — the
-// self-restart handover lands between turns, exactly when the user is composing
-// a reply. A finished or stale session is left behind rather than resurrected.
-func restoreIdeationSession(engine *daemon.IdeationEngine, store daemon.IdeationStore, logger zerolog.Logger) {
-	if engine == nil || store == nil {
-		return
-	}
-	saved, err := store.Load()
-	if err != nil {
-		logger.Warn().Err(err).Msg("loading persisted ideation session failed")
-		return
-	}
-	if saved == nil {
-		return
-	}
-	if engine.Restore(*saved, time.Now(), daemon.IdeationMaxAge) {
-		logger.Info().Str("session", saved.ID).Str("state", string(saved.State)).Msg("restored ideation session")
 	}
 }
 

@@ -191,52 +191,6 @@ func TestRunRemote_ConnectionRefused(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot reach daemon")
 }
 
-func TestGetIdeationStatus_Success(t *testing.T) {
-	addr := startMockDaemon(t, func(req Request) Response {
-		assert.Equal(t, []string{"ideation-status"}, req.Args)
-		data := `{"session_id":"ideation-1","state":"awaiting_reply"}` + "\n"
-		return Response{Stdout: data}
-	})
-
-	st, err := newTestClient(addr, "tok").GetIdeationStatus()
-	require.NoError(t, err)
-	assert.Equal(t, "ideation-1", st.SessionID)
-	assert.Equal(t, IdeationAwaitingReply, st.State)
-}
-
-func TestIdeationStart_ErrorPropagates(t *testing.T) {
-	addr := startMockDaemon(t, func(_ Request) Response {
-		return Response{Stderr: "ideation not available\n", ExitCode: 1}
-	})
-
-	_, err := newTestClient(addr, "tok").IdeationStart(IdeationStartRequest{Seed: "idea"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "daemon command failed")
-}
-
-func TestIdeationReply_Success(t *testing.T) {
-	addr := startMockDaemon(t, func(req Request) Response {
-		require.Len(t, req.Args, 2)
-		assert.Equal(t, "ideation-reply", req.Args[0])
-		data := `{"session_id":"ideation-1","state":"thinking"}` + "\n"
-		return Response{Stdout: data}
-	})
-
-	st, err := newTestClient(addr, "tok").IdeationReply(IdeationReplyRequest{SessionID: "ideation-1", Message: "answer"})
-	require.NoError(t, err)
-	assert.Equal(t, IdeationThinking, st.State)
-}
-
-func TestGetIdeationStatus_InvalidJSON(t *testing.T) {
-	addr := startMockDaemon(t, func(_ Request) Response {
-		return Response{Stdout: "not json\n"}
-	})
-
-	_, err := newTestClient(addr, "tok").GetIdeationStatus()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid ideation status JSON")
-}
-
 func TestGetDescEditStatus_Success(t *testing.T) {
 	addr := startMockDaemon(t, func(req Request) Response {
 		assert.Equal(t, []string{"descedit-status"}, req.Args)

@@ -812,43 +812,6 @@ func (a *App) PromoteIdea(key string, labels []string) error {
 	return daemonCause(client.IdeaPromote(daemon.IdeaPromoteRequest{Key: key, Labels: labels}))
 }
 
-// IdeationMsg is the frontend-facing transcript entry.
-type IdeationMsg struct {
-	Role string `json:"role"`
-	Text string `json:"text"`
-}
-
-// IdeationView is the frontend-facing session snapshot.
-type IdeationView struct {
-	SessionID  string        `json:"sessionId,omitempty"`
-	Mode       string        `json:"mode,omitempty"`
-	State      string        `json:"state"`
-	Messages   []IdeationMsg `json:"messages"`
-	CreatedKey string        `json:"createdKey,omitempty"`
-	Error      string        `json:"error,omitempty"`
-}
-
-// StartIdeation begins (or re-attaches to) the board ideation session. chat is
-// the only mode; empty defaults to it in the daemon engine. The session creates
-// a PM ticket: SC-4608 retired the evolve mode that rewrote an existing idea
-// ticket, together with the promotion path and the post-import prompt that were
-// its only callers. No board surface starts a session today.
-func (a *App) StartIdeation(seed, mode string, restart bool) (IdeationView, error) {
-	client, err := a.daemonClient()
-	if err != nil {
-		return IdeationView{}, err
-	}
-	st, err := client.IdeationStart(daemon.IdeationStartRequest{
-		Seed:    seed,
-		Mode:    daemon.IdeationMode(mode),
-		Restart: restart,
-	})
-	if err != nil {
-		return IdeationView{}, daemonCause(err)
-	}
-	return ideationView(st), nil
-}
-
 // CreateIdea quick-captures a title-only idea ticket — the Ideas column's `+`.
 // Returns the created ticket's key so the frontend can reconcile the
 // optimistic placeholder by key instead of title (SC-1691).
@@ -895,51 +858,6 @@ func (a *App) CreateSecurity(title, description string) (string, error) {
 		return "", daemonCause(err)
 	}
 	return resp.Key, nil
-}
-
-// ReplyIdeation sends the user's answer into the running session.
-func (a *App) ReplyIdeation(sessionID, message string) (IdeationView, error) {
-	client, err := a.daemonClient()
-	if err != nil {
-		return IdeationView{}, err
-	}
-	st, err := client.IdeationReply(daemon.IdeationReplyRequest{SessionID: sessionID, Message: message})
-	if err != nil {
-		return IdeationView{}, daemonCause(err)
-	}
-	return ideationView(st), nil
-}
-
-// IdeationStatus returns the current session snapshot for panel polling and
-// re-attach on panel reopen. Re-attach (rather than treating panel close as
-// abandonment) is the deliberate AD-4 lifecycle: closing the panel does not
-// stop the daemon-side session, so reopening must recover the live transcript.
-func (a *App) IdeationStatus() (IdeationView, error) {
-	client, err := a.daemonClient()
-	if err != nil {
-		return IdeationView{}, err
-	}
-	st, err := client.GetIdeationStatus()
-	if err != nil {
-		return IdeationView{}, daemonCause(err)
-	}
-	return ideationView(st), nil
-}
-
-// ideationView maps the daemon wire snapshot to the frontend-facing shape.
-func ideationView(st daemon.IdeationStatus) IdeationView {
-	view := IdeationView{
-		SessionID:  st.SessionID,
-		Mode:       string(st.Mode),
-		State:      string(st.State),
-		Messages:   []IdeationMsg{},
-		CreatedKey: st.CreatedKey,
-		Error:      st.Error,
-	}
-	for _, m := range st.Transcript {
-		view.Messages = append(view.Messages, IdeationMsg{Role: m.Role, Text: m.Text})
-	}
-	return view
 }
 
 // DescEditMsg is the frontend-facing description-edit chat transcript entry.
