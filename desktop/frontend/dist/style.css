@@ -1370,6 +1370,42 @@ body {
   color: var(--accent);
 }
 
+/* The board's primary action. Every ticket on this board begins as a captured
+   idea, so this control is deliberately NOT .add-card: sharing that neutral
+   20px circle with the bug and security quick-adds is what made the one action
+   that starts all work read as chrome (SC-4725). Accent fill and a written
+   label carry the weight the removed rail '+' used to add (SC-4485). */
+.capture-idea {
+  /* Pins the button beside the "Ideas" title and leaves the count at the right
+     edge of the space-between header — the mirror of .findbugs-btn's auto. */
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 15px;
+  background: var(--accent);
+  color: #fff;
+  /* The only button here that sets it: a 15-character label beside the header
+     title makes the UA default font a visible mismatch, where a glyph did not. */
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.capture-idea-glyph {
+  font-size: 17px;
+  font-weight: 400;
+}
+
+.capture-idea:hover {
+  filter: brightness(1.1);
+}
+
 .findbugs-btn,
 .findsecurity-btn {
   /* Reuse the column-header control look; distinct from the neutral + so the
@@ -2376,7 +2412,8 @@ body {
   transform: scale(0.88);
 }
 [data-theme="fancy"] .modal-actions button:active,
-[data-theme="fancy"] .add-card:active {
+[data-theme="fancy"] .add-card:active,
+[data-theme="fancy"] .capture-idea:active {
   transform: scale(0.92);
 }
 
