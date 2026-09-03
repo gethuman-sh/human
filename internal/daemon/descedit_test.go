@@ -96,7 +96,7 @@ func TestDescEditEngine_ReplyRejectsEmptyMessage(t *testing.T) {
 }
 
 func TestDescEditEngine_ReplyFirstTurnCarriesFullPrompt(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{{Reply: "ok", ResumeID: "cs-1"}}}
+	runner := &fakeRunner{turns: []ChatTurn{{Reply: "ok", ResumeID: "cs-1"}}}
 	e := newTestDescEditEngine(runner, nil)
 	st, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
 	require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestDescEditEngine_ReplyFirstTurnCarriesFullPrompt(t *testing.T) {
 }
 
 func TestDescEditEngine_ReplySecondTurnIsPlainMessage(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
+	runner := &fakeRunner{turns: []ChatTurn{
 		{Reply: "first reply", ResumeID: "cs-1"},
 		{Reply: "second reply", ResumeID: "cs-1"},
 	}}
@@ -134,7 +134,7 @@ func TestDescEditEngine_ReplySecondTurnIsPlainMessage(t *testing.T) {
 }
 
 func TestDescEditEngine_ProposalMarkerSetsProposal(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
+	runner := &fakeRunner{turns: []ChatTurn{
 		{Reply: "Here's a rewrite.\n" + descProposalBlock("New description text"), ResumeID: "cs-1"},
 	}}
 	e := newTestDescEditEngine(runner, nil)
@@ -153,7 +153,7 @@ func TestDescEditEngine_ProposalMarkerSetsProposal(t *testing.T) {
 }
 
 func TestDescEditEngine_PlainChatDoesNotClearProposal(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
+	runner := &fakeRunner{turns: []ChatTurn{
 		{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"},
 		{Reply: "just chatting, no marker here", ResumeID: "cs-1"},
 	}}
@@ -173,7 +173,7 @@ func TestDescEditEngine_PlainChatDoesNotClearProposal(t *testing.T) {
 }
 
 func TestDescEditEngine_MalformedMarkerTriggersOneRepair(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
+	runner := &fakeRunner{turns: []ChatTurn{
 		{Reply: "[human:description-proposal]\n```markdown\n\n```", ResumeID: "cs-1"},
 		{Reply: descProposalBlock("Repaired text"), ResumeID: "cs-1"},
 	}}
@@ -190,7 +190,7 @@ func TestDescEditEngine_MalformedMarkerTriggersOneRepair(t *testing.T) {
 }
 
 func TestDescEditEngine_MalformedMarkerErrorsAfterRepairFails(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{
+	runner := &fakeRunner{turns: []ChatTurn{
 		{Reply: "[human:description-proposal]\n```markdown\n\n```", ResumeID: "cs-1"},
 		{Reply: "[human:description-proposal]\n```markdown\n\n```", ResumeID: "cs-1"},
 	}}
@@ -217,7 +217,7 @@ func TestDescEditEngine_ApplyRejectsWithoutProposal(t *testing.T) {
 }
 
 func TestDescEditEngine_ApplyWritesOnlyDescription(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
+	runner := &fakeRunner{turns: []ChatTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
 	editor := &fakeEditor{returned: &tracker.Issue{Key: "SC-1", URL: "https://x/1"}}
 	e := newTestDescEditEngine(runner, editor)
 	st, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
@@ -241,7 +241,7 @@ func TestDescEditEngine_ApplyWritesOnlyDescription(t *testing.T) {
 }
 
 // countingEditor wraps a tracker.Editor and counts EditIssue invocations —
-// fakeEditor (ideation_test.go) only captures the last call, not a count,
+// fakeEditor (testdoubles_test.go) only captures the last call, not a count,
 // which is exactly what the idempotency guarantee needs to verify.
 type countingEditor struct {
 	inner tracker.Editor
@@ -263,7 +263,7 @@ func (c *countingEditor) callCount() int {
 }
 
 func TestDescEditEngine_ApplyIsIdempotent(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
+	runner := &fakeRunner{turns: []ChatTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
 	inner := &fakeEditor{returned: &tracker.Issue{Key: "SC-1", URL: "https://x/1"}}
 	editor := &countingEditor{inner: inner}
 	e := newTestDescEditEngine(runner, editor)
@@ -283,7 +283,7 @@ func TestDescEditEngine_ApplyIsIdempotent(t *testing.T) {
 }
 
 func TestDescEditEngine_ApplyFailurePreservesProposal(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
+	runner := &fakeRunner{turns: []ChatTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
 	editor := &fakeEditor{err: assert.AnError}
 	e := newTestDescEditEngine(runner, editor)
 	st, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
@@ -301,7 +301,7 @@ func TestDescEditEngine_ApplyFailurePreservesProposal(t *testing.T) {
 }
 
 func TestDescEditEngine_ApplyNoEditorConfigured(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
+	runner := &fakeRunner{turns: []ChatTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
 	e := &DescEditEngine{Runner: runner, TurnTimeout: time.Second}
 	st, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
 	require.NoError(t, err)
@@ -335,7 +335,7 @@ func TestDescEditEngine_DiscardEndsMatchingSession(t *testing.T) {
 // ticket must NOT reattach to the stale proposal/transcript — it must start
 // a brand new session.
 func TestDescEditEngine_DiscardThenStartSameKeyStartsFresh(t *testing.T) {
-	runner := &fakeRunner{turns: []IdeationTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
+	runner := &fakeRunner{turns: []ChatTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
 	e := newTestDescEditEngine(runner, nil)
 	st, err := e.Start(DescEditStartRequest{Key: "SC-1", CurrentDescription: "old"})
 	require.NoError(t, err)
@@ -422,7 +422,7 @@ func (c *recordingCommenter) all() []string {
 // the engine posted alongside the write.
 func appliedWithCommenter(t *testing.T, commenter *recordingCommenter) DescEditStatus {
 	t.Helper()
-	runner := &fakeRunner{turns: []IdeationTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
+	runner := &fakeRunner{turns: []ChatTurn{{Reply: descProposalBlock("Proposed text"), ResumeID: "cs-1"}}}
 	editor := &fakeEditor{returned: &tracker.Issue{Key: "SC-1", URL: "https://x/1"}}
 	e := newTestDescEditEngine(runner, editor)
 	e.ResolveCommenter = func() (tracker.Commenter, error) { return commenter, nil }

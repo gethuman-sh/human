@@ -58,9 +58,9 @@ type DescEditStartRequest struct {
 	CurrentDescription string `json:"current_description"`
 	Restart            bool   `json:"restart,omitempty"`
 	// Promoted marks the session opened by dragging an idea onto Product
-	// Backlog. It widens the chat's remit — the guided ideation flow this
-	// replaced existed to push back, and a copy-editor that may not discuss
-	// scope replaces none of that (SC-4608).
+	// Backlog. It widens the chat's remit — the guided interview this replaced
+	// existed to push back, and a copy-editor that may not discuss scope
+	// replaces none of that (SC-4608).
 	Promoted bool `json:"promoted,omitempty"`
 }
 
@@ -81,12 +81,18 @@ type DescEditDiscardRequest struct {
 	SessionID string `json:"session_id"`
 }
 
+// ChatTurn is one completed headless agent turn.
+type ChatTurn struct {
+	Reply    string // agent's text output for this turn
+	ResumeID string // provider session id to resume the next turn
+}
+
 // DescEditRunner runs one headless agent turn for the description-edit chat.
-// Same shape as IdeationRunner (Run returns an IdeationTurn) — kept as a
-// distinct interface so the two engines' agent backends can diverge without
-// coupling, even though the daemon wires both to the same host-claude runner.
+// resumeID is empty on the first turn; session continuity across turns rides
+// on the provider's own resume store, so the daemon holds no conversation
+// state beyond the id. Implementations must be safe for sequential reuse.
 type DescEditRunner interface {
-	Run(ctx context.Context, resumeID, prompt string) (IdeationTurn, error)
+	Run(ctx context.Context, resumeID, prompt string) (ChatTurn, error)
 }
 
 type descEditSession struct {
@@ -110,10 +116,9 @@ type descEditSession struct {
 type PMEditorResolver func() (tracker.Editor, error)
 
 // DescEditEngine owns the single active Product-Backlog description-edit
-// session. All exported methods are safe for concurrent use. Unlike
-// IdeationEngine, sessions are NOT persisted across a daemon restart: nothing
-// is ever written to the tracker before Apply, so losing an in-progress,
-// unsaved chat is low-cost (see plan's Architecture Decisions).
+// session. All exported methods are safe for concurrent use. Sessions are NOT
+// persisted across a daemon restart: nothing is ever written to the tracker
+// before Apply, so losing an in-progress, unsaved chat is low-cost.
 type DescEditEngine struct {
 	Runner        DescEditRunner
 	ResolveEditor PMEditorResolver // role-resolved PM tracker.Editor; the sole write path
@@ -162,8 +167,8 @@ func (e *DescEditEngine) snapshot() DescEditStatus {
 }
 
 // Start begins a new session, or re-attaches to an active one for the SAME
-// key. Unlike ideation's AD-4, closing the description-edit modal DOES end
-// the session (Discard, called from the modal's close path) — so in normal
+// key. Closing the description-edit modal DOES end the session (Discard,
+// called from the modal's close path) — so in normal
 // use this reattach only ever fires within a single still-open modal
 // instance (e.g. a retried Start racing its own in-flight call), never across
 // a close/reopen. A different key or Restart:true always starts fresh — no
@@ -191,7 +196,7 @@ func (e *DescEditEngine) Start(req DescEditStartRequest) (DescEditStatus, error)
 // Reply feeds the user's chat message into the running session. The first
 // real turn (resumeID empty) carries the full scoped system prompt plus the
 // current description; later turns rely on --resume for continuity and send
-// only the plain message (mirrors ideation's Start-vs-Reply prompt split).
+// only the plain message.
 func (e *DescEditEngine) Reply(req DescEditReplyRequest) (DescEditStatus, error) {
 	if strings.TrimSpace(req.Message) == "" {
 		return DescEditStatus{}, errors.WithDetails("description-edit reply message must not be empty")
@@ -311,7 +316,8 @@ func (e *DescEditEngine) Discard(req DescEditDiscardRequest) DescEditStatus {
 }
 
 // runTurn executes one headless agent turn and applies its result. Runs in
-// its own goroutine so Reply returns immediately (mirrors ideation's AD-3).
+// its own goroutine so Reply returns immediately: turns are asynchronous and
+// the client polls for status rather than holding the connection open.
 func (e *DescEditEngine) runTurn(sessID, resumeID, prompt string) {
 	ctx, cancel := context.WithTimeout(context.Background(), e.turnTimeout())
 	defer cancel()
@@ -415,7 +421,7 @@ func (e *DescEditEngine) recordHumanFingerprint(key, text string) {
 
 // descEditSystemPrompt builds the chat's discipline: description text ONLY,
 // never other fields, explicit user Apply. A promoted card widens the remit —
-// the guided ideation flow promotion used to open existed to push back, and a
+// the guided interview promotion used to open existed to push back, and a
 // copy-editor that may not discuss scope replaces none of that.
 func descEditSystemPrompt(currentDescription string, promoted bool) string {
 	var b strings.Builder

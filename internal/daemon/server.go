@@ -173,9 +173,6 @@ type Server struct {
 	MockupChooser func(req ChooseMockupRequest) error
 	// MockupPruner archives a variation subtree. nil disables the prune-mockup route.
 	MockupPruner func(req PruneMockupRequest) error
-	// Ideation owns the board's single agent-driven ideation session. nil
-	// disables the ideation-start/reply/status routes.
-	Ideation *IdeationEngine
 	// IdeaCreator quick-captures ideas for the Ideas column's `+`. nil
 	// disables the idea-create route.
 	IdeaCreator *IdeaCreator
@@ -567,9 +564,6 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"security-fix":       func() { s.withBlockingOp(func() { s.handleBoardSecurityFix(conn, args[1:]) }) },
 		"board-option":       func() { s.withBlockingOp(func() { s.handleBoardOption(conn, args[1:]) }) },
 		"close-ticket":       func() { s.withBlockingOp(func() { s.handleCloseTicket(conn, args[1:]) }) },
-		"ideation-start":     func() { s.withBlockingOp(func() { s.handleIdeationStart(conn, args[1:]) }) },
-		"ideation-reply":     func() { s.withBlockingOp(func() { s.handleIdeationReply(conn, args[1:]) }) },
-		"ideation-status":    func() { s.handleIdeationStatus(conn) },
 		"idea-create":        func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
 		"idea-promote":       func() { s.withBlockingOp(func() { s.handleIdeaPromote(conn, args[1:]) }) },
 		"descedit-start":     func() { s.withBlockingOp(func() { s.handleDescEditStart(conn, args[1:]) }) },

@@ -87,7 +87,7 @@ func TestHandleDescEditReplyNoSession(t *testing.T) {
 
 func TestHandleDescEditReplyValid(t *testing.T) {
 	token := "tok"
-	runner := &fakeRunner{turns: []IdeationTurn{{Reply: "ok, thinking...", ResumeID: "cs-1"}}}
+	runner := &fakeRunner{turns: []ChatTurn{{Reply: "ok, thinking...", ResumeID: "cs-1"}}}
 	engine := newTestDescEditEngine(runner, nil)
 	addr := startDescEditServer(t, token, engine)
 

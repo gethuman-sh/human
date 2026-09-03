@@ -10,17 +10,17 @@ import (
 // fakeRunner returns queued turns/errors in order, recording each call.
 type fakeRunner struct {
 	mu    sync.Mutex
-	turns []IdeationTurn
+	turns []ChatTurn
 	errs  []error
 	calls []struct{ resumeID, prompt string }
 }
 
-func (f *fakeRunner) Run(_ context.Context, resumeID, prompt string) (IdeationTurn, error) {
+func (f *fakeRunner) Run(_ context.Context, resumeID, prompt string) (ChatTurn, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, struct{ resumeID, prompt string }{resumeID, prompt})
 	idx := len(f.calls) - 1
-	var turn IdeationTurn
+	var turn ChatTurn
 	var err error
 	if idx < len(f.turns) {
 		turn = f.turns[idx]

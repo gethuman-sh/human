@@ -180,7 +180,7 @@ func (r *ProjectRegistry) EntryForKey(key string) (ProjectEntry, error) {
 	return ProjectEntry{}, errors.WithDetails("recorded project origin is no longer registered", "key", key, "dir", dir)
 }
 
-// SoleEntry resolves keyless project-wide actions (bug-create, ideation, board
+// SoleEntry resolves keyless project-wide actions (bug-create, idea-create, board
 // git probes, ...) that carry no card to route by. It resolves in the common
 // single-project setup and errors in a multi-project setup rather than
 // silently binding a fixed project (SC-1694) — correctly routing these

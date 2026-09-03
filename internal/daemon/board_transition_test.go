@@ -1305,7 +1305,7 @@ func TestVerdictFailed(t *testing.T) {
 }
 
 func TestApplyTransitionIdeasGuard(t *testing.T) {
-	// Ideas leave their column via ideation's label swap, never via a board
+	// Ideas leave their column via promotion's label removal, never via a board
 	// transition — both directions are rejected before any comment fetch.
 	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, &fakeDeployer{})
 	err := deps.ApplyTransition(context.Background(), BoardTransitionRequest{PMKey: "SC-1", From: BoardIdeas, To: BoardBacklog})
