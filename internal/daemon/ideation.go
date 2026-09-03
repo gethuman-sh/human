@@ -86,10 +86,6 @@ type IdeationRunner interface {
 	Run(ctx context.Context, resumeID, prompt string) (IdeationTurn, error)
 }
 
-// PMCreatorResolver resolves the single PM-role tracker Creator and its first
-// configured project, mirroring the role-based resolution of resolvePMCommenter.
-type PMCreatorResolver func() (creator tracker.Creator, project string, err error)
-
 // ideationSession is the engine's internal mutable state (guarded by engine mu).
 type ideationSession struct {
 	id              string
@@ -329,21 +325,6 @@ func (e *IdeationEngine) applyRepairOrError(sessID, reply, repairPrompt, errMsg 
 	e.commitLocked()
 }
 
-// createOwnedIssue creates an issue and makes its creator the owner, so a ticket
-// ideation produces is never ownerless (SC-3345). Ownership is applied here,
-// outside the session lock, so a slow tracker cannot stall the ideation engine;
-// it is best-effort, so a refused claim still yields the created ticket.
-func createOwnedIssue(creator tracker.Creator, issue *tracker.Issue) (*tracker.Issue, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	created, err := creator.CreateIssue(ctx, issue)
-	if err != nil || created == nil {
-		return created, err
-	}
-	_, _ = tracker.AssignToCurrentUserBestEffort(ctx, creator, created.Key)
-	return created, nil
-}
-
 // createTicket materializes the session's outcome: a new PM ticket. Run without
 // holding mu so the network call cannot block Status()/Reply().
 func (e *IdeationEngine) createTicket(sessID, title, description string) {
@@ -403,34 +384,11 @@ func (e *IdeationEngine) createTicket(sessID, title, description string) {
 	}
 }
 
-// CreateIdea quick-captures a title-only ticket carrying the idea label — the
-// Ideas column's `+` button. No agent involved: a background drafter writes the
-// description while the idea waits, and promotion opens the description editor
-// on it.
+// CreateIdea delegates to IdeaCreator, which owns idea capture. The method
+// survives only so this extraction commit changes no behaviour; it goes with
+// the engine.
 func (e *IdeationEngine) CreateIdea(title string) (key, url string, err error) {
-	if strings.TrimSpace(title) == "" {
-		return "", "", errors.WithDetails("idea title must not be empty")
-	}
-	if e.ResolveCreator == nil {
-		return "", "", errors.WithDetails("no PM ticket creator configured")
-	}
-	creator, project, err := e.ResolveCreator()
-	if err != nil {
-		return "", "", err
-	}
-	// An idea is owned by whoever raised it, from the moment it exists.
-	created, err := createOwnedIssue(creator, &tracker.Issue{
-		Project: project,
-		Title:   title,
-		Labels:  []string{tracker.IdeaLabel},
-	})
-	if err != nil {
-		return "", "", errors.WrapWithDetails(err, "creating idea ticket", "project", project)
-	}
-	if e.Notify != nil {
-		e.Notify()
-	}
-	return created.Key, created.URL, nil
+	return (&IdeaCreator{ResolveCreator: e.ResolveCreator, Notify: e.Notify}).CreateIdea(title)
 }
 
 // ideationTicketMarker is the line the agent emits when confident; the JSON

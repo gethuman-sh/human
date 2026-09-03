@@ -176,6 +176,9 @@ type Server struct {
 	// Ideation owns the board's single agent-driven ideation session. nil
 	// disables the ideation-start/reply/status routes.
 	Ideation *IdeationEngine
+	// IdeaCreator quick-captures ideas for the Ideas column's `+`. nil
+	// disables the idea-create route.
+	IdeaCreator *IdeaCreator
 	// DescEdit owns the Product-Backlog description-edit chat (SC-2873). nil
 	// disables the descedit-start/reply/apply/discard/status routes.
 	DescEdit *DescEditEngine

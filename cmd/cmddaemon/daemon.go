@@ -517,6 +517,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		MockupChooser:     mockupChooserFunc(projectRegistry),
 		MockupPruner:      mockupPrunerFunc(projectRegistry),
 		Ideation:          ideationEngine(projectRegistry, vaultResolver, hookStore, ideationStore, logger),
+		IdeaCreator:       ideaCreator(projectRegistry, vaultResolver, hookStore),
 		DescEdit:          descEditEngine(projectRegistry, vaultResolver, daemonID, logger),
 		LeaseChecker:      leaseChecker,
 	}
@@ -4319,6 +4320,24 @@ func resolvePMEditor(dir string, lookup config.EnvLookup, resolver *vault.Resolv
 		return ed, nil
 	}
 	return nil, errors.WithDetails("no PM-role tracker with edit support configured", "dir", dir)
+}
+
+// ideaCreator wires the Ideas column's `+`: the role-resolved PM creator and a
+// hook-store poke so the captured card reaches the board through the existing
+// subscribe/refetch loop. No runner and no session — capture is one write.
+func ideaCreator(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStore *daemon.HookEventStore) *daemon.IdeaCreator {
+	return &daemon.IdeaCreator{
+		ResolveCreator: func() (tracker.Creator, string, error) {
+			entry, err := reg.SoleEntry()
+			if err != nil {
+				return nil, "", err
+			}
+			return resolvePMCreator(entry.Dir, entry.EnvLookup(), resolver)
+		},
+		Notify: func() {
+			hookStore.Append(hookevents.Event{EventName: "IdeaCreated", Timestamp: time.Now().UTC()})
+		},
+	}
 }
 
 // ideationEngine wires the board ideation engine: host claude runner, role-
