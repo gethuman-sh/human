@@ -108,8 +108,8 @@ test("the retired ideation markup is gone from index.html (SC-4608)", () => {
 });
 
 // SC-4485: the Product-lane and sidebar rail "+" buttons are removed. With the
-// post-import prompt rehomed onto capture (SC-4608), the Ideas column's own "+"
-// is the only button left that creates anything.
+// post-import prompt rehomed onto capture (SC-4608), the Ideas column's own
+// capture button is the only button left that creates anything.
 test("the Product-lane add-card button is gone from renderColumn (SC-4485)", () => {
   assert.doesNotMatch(ts, /New ticket via ideation/, "the Product-lane button title must not remain");
   const renderColumnBody = functionBody(ts, "function renderColumn(queue: string): HTMLElement {");
@@ -122,8 +122,11 @@ test("wireRail no longer wires a data-action ideation branch (SC-4485)", () => {
   assert.doesNotMatch(wireRailBody, /dataset\.action/, "the dead action-item branch must be removed");
 });
 
-test("the Ideas column's own quick-add is unchanged (SC-4485)", () => {
+// The styling of this control changed in SC-4725; its wiring and its label did
+// not. That is what this guards — the surviving entry point still reaches the
+// same quick-add and still says what it does.
+test("the Ideas column's capture button still wires the quick-add and keeps its label (SC-4485, SC-4725)", () => {
   const renderIdeaSpaceBody = functionBody(ts, "function renderIdeaSpace(): HTMLElement {");
-  assert.match(renderIdeaSpaceBody, /Capture an idea/, "the Ideas column's own + must remain");
+  assert.match(renderIdeaSpaceBody, /Capture an idea/, "the Ideas column's capture control must remain");
   assert.match(renderIdeaSpaceBody, /showIdeaQuickAdd\(subcols\[0\]\)/, "its quick-add wiring must remain");
 });

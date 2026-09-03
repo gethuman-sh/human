@@ -1123,11 +1123,16 @@ function renderIdeaSpace(): HTMLElement {
   // Ideas capture is deliberately dumb: a title becomes a labeled ticket in
   // one keystroke — the thinking happens later, at promotion. New ideas are
   // loose by definition, so quick-add writes into the leftmost sub-column.
+  // The control is deliberately not an .add-card like the bug and security
+  // quick-adds: every ticket on this board begins as a captured idea, so this
+  // is the one control that must not read as neutral chrome (SC-4725). It says
+  // what it does in words because a bare `+` is what users failed to read as
+  // "capture an idea".
   header.innerHTML =
     `<span>${QUEUE_LABELS["ideas"]}</span>` +
-    `<button class="add-card" title="Capture an idea">+</button>` +
+    `<button class="capture-idea"><span class="capture-idea-glyph" aria-hidden="true">+</span>Capture an idea</button>` +
     `<span class="column-count">${ideas.length + pendingIdeas.length}</span>`;
-  header.querySelector(".add-card")!.addEventListener("click", () => showIdeaQuickAdd(subcols[0]));
+  header.querySelector(".capture-idea")!.addEventListener("click", () => showIdeaQuickAdd(subcols[0]));
 
   space.appendChild(header);
   space.appendChild(grid);
@@ -1766,7 +1771,7 @@ function showIdeaQuickAdd(col: HTMLElement, prefill = ""): void {
 // in the background, promoted when the user is ready. It opens the Ideas
 // column's own quick-add rather than a chat panel, so there is exactly one way
 // into ticket creation. A board that has not rendered its columns yet leaves
-// the user the `+` button, which is the same gesture.
+// the user the "Capture an idea" button, which is the same gesture.
 function captureFirstIdea(): void {
   const col = document.querySelector<HTMLElement>(".idea-subcol");
   if (col) showIdeaQuickAdd(col);
