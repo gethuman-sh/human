@@ -592,3 +592,31 @@ func TestGetTrackerIssue_InvalidJSON(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid tracker issue JSON")
 }
+
+func TestRecreateDescription_ForwardsTheRequest(t *testing.T) {
+	var got Request
+	addr := startMockDaemon(t, func(req Request) Response {
+		got = req
+		return Response{Stdout: "ok\n"}
+	})
+
+	err := newTestClient(addr, "").RecreateDescription(RecreateDescriptionRequest{Key: "SC-1", Title: "a promoted ticket"})
+	require.NoError(t, err)
+	require.Len(t, got.Args, 2)
+	assert.Equal(t, "recreate-description", got.Args[0])
+	var sent RecreateDescriptionRequest
+	require.NoError(t, json.Unmarshal([]byte(got.Args[1]), &sent))
+	assert.Equal(t, "SC-1", sent.Key)
+	assert.Equal(t, "a promoted ticket", sent.Title)
+}
+
+// A recreate that never started must reach the caller as an error, not as a
+// rewrite that quietly produced nothing.
+func TestRecreateDescription_PropagatesTheDaemonError(t *testing.T) {
+	addr := startMockDaemon(t, func(Request) Response {
+		return Response{Stderr: "description recreation not available", ExitCode: 1}
+	})
+
+	err := newTestClient(addr, "").RecreateDescription(RecreateDescriptionRequest{Key: "SC-1"})
+	require.Error(t, err)
+}

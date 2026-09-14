@@ -559,12 +559,15 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		// Heavy, must-not-interrupt routes are counted as blocking ops so an
 		// overlapping binary-change handover postpones itself rather than
 		// killing a deploy/launch mid-flight.
-		"board-transition":   func() { s.withBlockingOp(func() { s.handleBoardTransition(conn, args[1:]) }) },
-		"board-fix":          func() { s.withBlockingOp(func() { s.handleBoardFix(conn, args[1:]) }) },
-		"security-fix":       func() { s.withBlockingOp(func() { s.handleBoardSecurityFix(conn, args[1:]) }) },
-		"board-option":       func() { s.withBlockingOp(func() { s.handleBoardOption(conn, args[1:]) }) },
-		"close-ticket":       func() { s.withBlockingOp(func() { s.handleCloseTicket(conn, args[1:]) }) },
-		"idea-create":        func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
+		"board-transition": func() { s.withBlockingOp(func() { s.handleBoardTransition(conn, args[1:]) }) },
+		"board-fix":        func() { s.withBlockingOp(func() { s.handleBoardFix(conn, args[1:]) }) },
+		"security-fix":     func() { s.withBlockingOp(func() { s.handleBoardSecurityFix(conn, args[1:]) }) },
+		"board-option":     func() { s.withBlockingOp(func() { s.handleBoardOption(conn, args[1:]) }) },
+		"close-ticket":     func() { s.withBlockingOp(func() { s.handleCloseTicket(conn, args[1:]) }) },
+		"idea-create":      func() { s.withBlockingOp(func() { s.handleIdeaCreate(conn, args[1:]) }) },
+		"recreate-description": func() {
+			s.withBlockingOp(func() { s.handleRecreateDescription(conn, args[1:]) })
+		},
 		"idea-promote":       func() { s.withBlockingOp(func() { s.handleIdeaPromote(conn, args[1:]) }) },
 		"descedit-start":     func() { s.withBlockingOp(func() { s.handleDescEditStart(conn, args[1:]) }) },
 		"descedit-reply":     func() { s.withBlockingOp(func() { s.handleDescEditReply(conn, args[1:]) }) },

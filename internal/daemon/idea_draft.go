@@ -25,6 +25,11 @@ var IdeaDraftDebounce = 2 * time.Minute
 type IdeaDraftRequest struct {
 	Key   string `json:"key"`
 	Title string `json:"title,omitempty"`
+	// Recreate is set ONLY by the user-initiated recreate route: a person chose
+	// "Recreate description" on a Product-Backlog card and that click bypasses
+	// the overwrite guard for this one run. The watcher never sets it, which is
+	// what keeps background behaviour exactly where it was.
+	Recreate bool `json:"recreate,omitempty"`
 }
 
 // ValidateIdeaDraft rejects a request that names no ticket — a launch with no

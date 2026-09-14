@@ -201,3 +201,20 @@ func TestValidateIdeaDraft(t *testing.T) {
 	require.Error(t, ValidateIdeaDraft(IdeaDraftRequest{Key: "   "}))
 	assert.NoError(t, ValidateIdeaDraft(IdeaDraftRequest{Key: "SC-1"}))
 }
+
+// The line that proves background behaviour did not move: the watcher never
+// sets Recreate, so a redraft it arms still faces the overwrite guard in full.
+func TestIdeaDraftWatcher_NeverRequestsARecreate(t *testing.T) {
+	rec := &launchRecorder{}
+	now := time.Unix(1000, 0)
+	w := watcherAt(&now, rec)
+
+	w.Observe(ideaResults(idea("SC-1", "one", time.Unix(500, 0))))
+	w.Observe(ideaResults(idea("SC-1", "one renamed", time.Unix(600, 0))))
+	now = now.Add(2 * time.Minute)
+	w.Observe(ideaResults(idea("SC-1", "one renamed", time.Unix(600, 0))))
+
+	reqs := rec.settle()
+	require.Len(t, reqs, 1)
+	assert.False(t, reqs[0].Recreate, "only a user-initiated recreate may bypass the guard")
+}
