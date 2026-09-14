@@ -19,6 +19,10 @@ import (
 // IdeaDraftOpts selects which of the three things `human idea draft` does.
 // Exactly one is set per run; the command rejects any other combination,
 // because a run that both checks and writes has no honest verdict to report.
+//
+// Recreate is the exception and is not a fourth mode: it is a MODIFIER that
+// composes with --check and --description-file, saying the run happens because
+// a person asked for it rather than because a watcher fired.
 type IdeaDraftOpts struct {
 	// DescriptionFile holds the drafted text, or "-" for stdin.
 	DescriptionFile string
@@ -27,6 +31,10 @@ type IdeaDraftOpts struct {
 	// StandDown pins the current description as human-authored, so nothing
 	// automatic ever redrafts this ticket again.
 	StandDown bool
+	// Recreate says a person asked for this rewrite from the board, so the
+	// overwrite guard is bypassed for this one call. Nothing sets it except the
+	// user-initiated recreate route; the background watcher never does.
+	Recreate bool
 	// Stdin is where "-" reads from; nil means os.Stdin.
 	Stdin io.Reader
 }
@@ -74,6 +82,7 @@ func buildIdeaDraftCmd(deps cmdutil.Deps) *cobra.Command {
 	cmd.Flags().StringVar(&opts.DescriptionFile, "description-file", "", "File holding the new description, or - for stdin")
 	cmd.Flags().BoolVar(&opts.Check, "check", false, "Report the verdict without writing or recording anything")
 	cmd.Flags().BoolVar(&opts.StandDown, "stand-down", false, "Record that the description is human-authored and must never be redrafted")
+	cmd.Flags().BoolVar(&opts.Recreate, "recreate", false, "The user asked for this rewrite: write over the existing description whoever wrote it")
 	return cmd
 }
 
@@ -94,6 +103,13 @@ func validateIdeaDraftOpts(opts IdeaDraftOpts) error {
 		return errors.WithDetails("--check, --stand-down and --description-file are exclusive",
 			"modes", "check|stand-down|description-file")
 	}
+	// Pinning a description as human-authored BECAUSE the human asked the
+	// machine to rewrite it is incoherent — the combination has no honest
+	// outcome to report, so it is refused rather than silently resolved.
+	if opts.Recreate && opts.StandDown {
+		return errors.WithDetails("--recreate and --stand-down cannot be combined",
+			"modes", "recreate|stand-down")
+	}
 	return nil
 }
 
@@ -111,7 +127,7 @@ func RunIdeaDraft(ctx context.Context, p tracker.Provider, out io.Writer, key st
 	if err != nil {
 		return err
 	}
-	verdict, reason := ideadraft.Decide(issue.IsIdea(), issue.Title, issue.Description, comments)
+	verdict, reason := ideadraft.VerdictFor(opts.Recreate, issue.IsIdea(), issue.Title, issue.Description, comments)
 	res := ideaDraftResult{Key: key, Decision: string(verdict), Reason: string(reason), TBA: ideadraft.TBACount(issue.Description)}
 
 	switch {
@@ -182,9 +198,9 @@ func writeIdeaDraft(ctx context.Context, p tracker.Provider, key, title, prior s
 // written. Without it the ticket keeps machine-written words that no record
 // claims, every later run reads them as unknown provenance and stands down, and
 // that draft is frozen for good — the one failure mode the guard cannot tell
-// from a human's edit. Restoring is safe precisely because the guard let this
-// run write: prior was empty or the machine's own previous draft, never a
-// person's words.
+// from a human's edit. It puts back exactly what this run replaced, whoever
+// wrote it: under --recreate prior can be a person's words, and returning them
+// after a failed run is more obviously right, not less.
 func restoreIdeaDescription(ctx context.Context, p tracker.Provider, key, prior string, cause error) error {
 	if _, err := p.EditIssue(ctx, key, tracker.EditOptions{Description: &prior}); err != nil {
 		return errors.WrapWithDetails(cause,

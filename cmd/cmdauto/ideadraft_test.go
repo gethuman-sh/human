@@ -15,6 +15,7 @@ import (
 
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/internal/ideadraft"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -318,4 +319,95 @@ func lastJSONLine(t *testing.T, out string) string {
 		t.Fatalf("no JSON object in output: %q", out)
 	}
 	return out[i:]
+}
+
+// newHumanAuthoredStub is the case the recreate flag exists for: a promoted
+// ticket (no idea label) whose description a person owns by record. Every
+// refusal the guard has is stacked on it at once.
+func newHumanAuthoredStub(description string) *draftStub {
+	p := &draftStub{
+		issue: tracker.Issue{Key: "SC-1", Title: "a promoted ticket", Description: description},
+		now:   time.Unix(1000, 0),
+	}
+	p.comments = []tracker.Comment{{
+		Body:    marker.Render(ideadraft.HumanRecord(description), ideadraft.FieldOrder),
+		Created: time.Unix(900, 0),
+	}}
+	return p
+}
+
+func TestRunIdeaDraft_RecreateChecksWriteOnAHumanAuthoredNonIdea(t *testing.T) {
+	p := newHumanAuthoredStub("words a person wrote")
+	res, _ := runDraft(t, p, IdeaDraftOpts{Check: true, Recreate: true})
+
+	assert.Equal(t, string(ideadraft.VerdictWrite), res.Decision)
+	assert.Equal(t, string(ideadraft.ReasonRecreateRequested), res.Reason)
+	assert.False(t, res.Written)
+	assert.Empty(t, p.edits, "--check changes nothing, recreate or not")
+	assert.Empty(t, p.posted)
+}
+
+// Without the flag the very same fixture still stands down: the guard is intact
+// and the bypass is reachable only by asking for it.
+func TestRunIdeaDraft_WithoutRecreateTheSameFixtureStandsDown(t *testing.T) {
+	p := newHumanAuthoredStub("words a person wrote")
+	res, _ := runDraft(t, p, IdeaDraftOpts{DescriptionFile: draftFile(t, "a fresh draft")})
+
+	assert.Equal(t, string(ideadraft.VerdictStandDown), res.Decision)
+	assert.False(t, res.Written)
+	assert.Empty(t, p.edits)
+}
+
+// The write half: a recreate replaces a person's words and records the result
+// as the machine's own, because after the rewrite they ARE the machine's words.
+func TestRunIdeaDraft_RecreateOverwritesAndRecordsMachineAuthorship(t *testing.T) {
+	p := newHumanAuthoredStub("words a person wrote")
+	text := "## Problem\n\nRewritten [TBA: for whom?]\n"
+	res, _ := runDraft(t, p, IdeaDraftOpts{DescriptionFile: draftFile(t, text), Recreate: true})
+
+	assert.True(t, res.Written)
+	assert.Equal(t, string(ideadraft.ReasonRecreateRequested), res.Reason)
+	assert.Equal(t, 1, res.TBA)
+
+	require.Len(t, p.edits, 1)
+	require.NotNil(t, p.edits[0].Description)
+	assert.Equal(t, text, *p.edits[0].Description)
+	assert.Nil(t, p.edits[0].Title, "a recreate touches the description and nothing else")
+
+	require.Len(t, p.posted, 1)
+	assert.Contains(t, p.posted[0], "[human:idea-draft]")
+	assert.Contains(t, p.posted[0], "author: "+ideadraft.AuthorMachine)
+	assert.Contains(t, p.posted[0], "description: "+ideadraft.Fingerprint(text))
+}
+
+// A recreate that dies between the two writes puts the person's words back —
+// the restore is not limited to text the machine wrote.
+func TestRunIdeaDraft_RecreateRestoresAPersonsWordsWhenTheRecordFails(t *testing.T) {
+	prior := "words a person wrote"
+	p := newHumanAuthoredStub(prior)
+	p.commentErr = assert.AnError
+
+	var buf bytes.Buffer
+	err := RunIdeaDraft(context.Background(), p, &buf, "SC-1",
+		IdeaDraftOpts{DescriptionFile: draftFile(t, "a fresh draft"), Recreate: true})
+
+	require.Error(t, err)
+	require.Len(t, p.edits, 2)
+	require.NotNil(t, p.edits[1].Description)
+	assert.Equal(t, prior, *p.edits[1].Description)
+	assert.Equal(t, prior, p.issue.Description)
+}
+
+func TestValidateIdeaDraftOpts_RecreateIsAModifierNotAMode(t *testing.T) {
+	assert.NoError(t, validateIdeaDraftOpts(IdeaDraftOpts{Check: true, Recreate: true}))
+	assert.NoError(t, validateIdeaDraftOpts(IdeaDraftOpts{DescriptionFile: "x", Recreate: true}))
+	require.Error(t, validateIdeaDraftOpts(IdeaDraftOpts{Recreate: true}),
+		"--recreate alone still chooses no mode")
+	require.Error(t, validateIdeaDraftOpts(IdeaDraftOpts{StandDown: true, Recreate: true}),
+		"pinning a description as human-authored because the human asked for a rewrite is incoherent")
+}
+
+func TestBuildIdeaDraftCmd_HasTheRecreateFlag(t *testing.T) {
+	cmd := buildIdeaDraftCmd(cmdutil.Deps{})
+	assert.NotNil(t, cmd.Flags().Lookup("recreate"))
 }
