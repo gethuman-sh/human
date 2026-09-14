@@ -7,7 +7,8 @@ import { recreateAllowedFor, recreateConfirmBody } from "../build/board-recreate
 // to a [human:plan] marker that a silent rewrite would invalidate.
 test("recreateAllowedFor: Product Backlog feature cards only", () => {
   assert.equal(recreateAllowedFor("product"), true);
-  for (const queue of ["ideas", "engineering", "implementation", "verification", "done", ""]) {
+  // The real column set is QUEUES in board-queue.ts.
+  for (const queue of ["ideas", "engineering", "building", "deploy", ""]) {
     assert.equal(recreateAllowedFor(queue), false, `queue ${queue} must not offer recreate`);
   }
 });
