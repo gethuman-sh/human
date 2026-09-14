@@ -21,6 +21,7 @@ import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
 import { descEditInputEnabled, descEditApplyEnabled, descEditAllowedFor, buildDescriptionPreview, descEditShouldDiscardOnClose, draftNotice, } from "./board-descedit.js";
+import { recreateAllowedFor, recreateConfirmBody } from "./board-recreate.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
 import { reconcilePending, dropPending } from "./board-pending.js";
@@ -513,6 +514,27 @@ function showCardMenu(card, x, y) {
             });
         }
         menu.appendChild(mockItem);
+    }
+    // Recreate throws the description away and has the idea drafter write a new
+    // one from the ticket. It sits in Product Backlog only: the Ideas lane
+    // already redrafts on a title change, and after planning the description is
+    // the input to a [human:plan] marker. Deliberately NOT disabled while the
+    // description-edit modal is open or a run is in flight — the confirmation
+    // dialog naming what will be replaced is the whole concurrency story.
+    if (recreateAllowedFor(queueOf(card), card.bug, card.security)) {
+        const recreateItem = document.createElement("button");
+        recreateItem.type = "button";
+        recreateItem.className = "context-menu-item";
+        recreateItem.textContent = "Recreate description";
+        // It launches a containerized agent — same Docker gate as its neighbours.
+        recreateItem.disabled = !current.dockerAvailable;
+        if (recreateItem.disabled)
+            recreateItem.title = "Docker required";
+        recreateItem.addEventListener("click", () => {
+            menu.remove();
+            void recreateDescription(card);
+        });
+        menu.appendChild(recreateItem);
     }
     // Hiding is view hygiene, not ticket lifecycle: parked noise disappears
     // from the board while the ticket on the tracker stays untouched.
@@ -1668,6 +1690,31 @@ function applyPermissionDecision(req, approved) {
 // "Creating mocks…" on the next right-click.
 async function createMocks(card) {
     await runGuardedAction(() => go().CreateMocks(card.key, card.title, card.description ?? ""), (err) => showError(errMessage(err)), reconcile);
+}
+// recreateDescription asks the daemon to rewrite one Product-Backlog ticket's
+// description with the idea drafter, confirming first when there is text to
+// lose. Progress and failure need no new UI: the descedit pane already renders
+// the drafting/failed state the three drafter markers produce.
+async function recreateDescription(card) {
+    // card.description comes from the board's LIST fetch, which some trackers
+    // omit — the same reason openDescEditModal re-fetches. Deciding "empty, so no
+    // confirmation" from it would silently discard a real description without
+    // ever asking, so a fetch failure aborts rather than falling back.
+    let description = "";
+    try {
+        const detail = await go().GetIssueDetail(card.trackerKind ?? "", card.tracker ?? "", card.key);
+        description = detail.description ?? "";
+    }
+    catch (err) {
+        showError(errMessage(err));
+        return;
+    }
+    if (description.trim() !== "") {
+        const ok = await confirmDialog(`Recreate description for ${card.key}?`, recreateConfirmBody(card.key), "Recreate description");
+        if (!ok)
+            return;
+    }
+    await runGuardedAction(() => go().RecreateDescription(card.key, card.title), (err) => showError(errMessage(err)), reconcile);
 }
 // confirmDialog renders a small modal overlay and resolves true/false on the
 // user's choice. Overlay-click and Escape count as cancel. Built with the same
