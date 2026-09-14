@@ -230,6 +230,50 @@ in-memory session so `Start`'s same-key reattach (used within a single
 still-open modal instance, e.g. a retried `Start` call) has nothing stale left
 to reattach to after a close.
 
+## Recreating a description — Product Backlog card menu (SC-4923)
+
+The chat editor above edits the text that is there. A description drafted from
+a one-line capture, or missing entirely, has nothing worth nudging sentence by
+sentence, so a Product-Backlog card's context menu offers **Recreate
+description**: it throws the current text away and runs the same background
+drafter that would have written it in Ideas — the producer that leaves an
+inline `[TBA: <question>]` wherever it would have had to guess. No new agent
+exists for this; it is the Ideas drafter with a new trigger, launched under the
+same `idea-draft-<KEY>` agent name, so the reaper's teardown and the aux
+failure watcher already cover it.
+
+The item appears only where it applies — the Product Backlog lane, feature
+cards, never inside the description-edit modal — and is Docker-gated like its
+neighbours, because it launches a containerized agent. Deliberately NOT
+in the gate: whether the description editor is open on the same card, and
+whether a run is already in flight. The confirmation dialog is the whole
+concurrency story.
+
+That dialog appears only when there is text to lose, and names replacement
+explicitly; clicking through IS the authorization to discard. The current
+description is re-read through `GetIssueDetail` before deciding whether to ask,
+because some trackers omit it from the board's list fetch and deciding "empty,
+so no confirmation" from a missing field would discard a real description
+without ever asking. A failed re-read aborts rather than falling back.
+
+The click reaches the daemon through the `recreate-description` route
+(`RecreateDescriptionRequest`), which launches the drafter and returns; unlike
+`idea-create`'s fire-and-forget goroutine the launch error is returned, because
+a recreate that never starts must reach the error banner instead of looking
+like a rewrite that produced nothing. Progress and failure need no new UI: the
+board already derives `drafting`/`failed` from the drafter's three markers for
+any ticket, lane-agnostically. The write is the drafter's own words and is
+recorded as such — a `[human:idea-draft]` machine record is posted, and since
+the newest provenance record wins, a prior "a human wrote this" pin does not
+survive a recreate. That is the point of the click. Recovery of the replaced
+text is the backing tracker's description history; no extra marker is written.
+
+Ideas-lane cards are excluded on purpose: their drafter is already free to
+write them, so a manual recreate there would duplicate background behaviour.
+Lanes after Product Backlog are excluded because a planned ticket's description
+is the input to its `[human:plan]` marker, and regenerating one without the
+other would silently invalidate the plan.
+
 ## macOS code-signing / notarization (release-gating follow-up)
 
 `wails build` does NOT sign or notarize the macOS `.app` — it delegates to Apple's `codesign` / `notarytool` with operator-provided signing identities and secrets. Shipping a notarized macOS build is therefore a release-gating follow-up, not covered by the CI matrix above.

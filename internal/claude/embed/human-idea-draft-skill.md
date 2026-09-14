@@ -6,7 +6,7 @@ argument-hint: <idea-key> [--recreate]
 
 # Overview
 
-Point this skill at a freshly captured idea and it writes that ticket's PM description while the idea sits in the Ideas column — so promotion later opens on a real draft instead of a blank page. It runs **once, in a single pass**, reads the repository for evidence, and never sub-launches other agents.
+Point this skill at a freshly captured idea and it writes that ticket's PM description while the idea sits in the Ideas column — so promotion later opens on a real draft instead of a blank page. With `--recreate` it is pointed at a ticket that has already been promoted, whose description a person asked to have written again from scratch; the work is identical, only the trigger differs. It runs **once, in a single pass**, reads the repository for evidence, and never sub-launches other agents.
 
 This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — there is nobody to ask, and that is precisely why the unanswerable parts stay on the page as questions rather than becoming answers.
 
