@@ -905,19 +905,26 @@ func reconcileShippedFailures(ctx context.Context, drivable DrivableCards, deps 
 }
 
 // reconcileOrphanedHandoffs launches the missed review for every card whose
-// latest implementation marker is a ready-for-review handoff with no
-// subsequent review marker. It reuses DeriveBoardCard verbatim so detection can
-// never disagree with the board's rendered state.
+// newest [human:ready-for-review] handoff is still waiting for the review that
+// judges it. It reuses DeriveBoardCard verbatim so detection can never disagree
+// with the board's rendered state.
 //
-// The orphan condition is Stage == BoardImplementation && State == BoardDone.
-// DeriveBoardCard picks the furthest stage carrying any marker, so any
-// verification marker (review-started/complete/failed) would make the furthest
-// stage verification — Stage == BoardImplementation therefore structurally
-// means no verification marker exists at all. This subsumes ApplyFix's
-// verification-running guard. And ApplyTransition re-loads live comments and
-// no-ops when the target stage already has a running marker, so even if the
-// live hook event and a reconcile tick race, the second call is a no-op at the
-// transition layer — the two can never double-launch a review.
+// The orphan condition is said twice on purpose. handoffAwaitsReview is what the
+// pass MEANS — a handoff newer than the newest verification marker — and the
+// placement check is the board agreeing. It used to be the placement alone, on
+// the claim that "any verification marker would make the furthest stage
+// verification, so implementation/done structurally means no verification marker
+// exists at all". That claim was false for a SECOND-round handoff: a card
+// reworked after a failing verdict carried a verification marker forever, so the
+// pass built for exactly this card could never see it, and the card looped on
+// Rework for 21 hours (SC-4958, on SC-430's recovery). A pass whose correctness
+// rests on a rank accident in another file is one edit away from blind again.
+//
+// It still subsumes ApplyFix's verification-running guard. And ApplyTransition
+// re-loads live comments and no-ops when the target stage already has a running
+// marker, so even if the live hook event and a reconcile tick race, the second
+// call is a no-op at the transition layer — the two can never double-launch a
+// review.
 //
 // The reachability gate guarding the chain now lives upstream: this pass receives
 // DrivableCards from the forReview gate, so a review is chained only for a handoff
@@ -932,7 +939,7 @@ func reconcileOrphanedHandoffs(drivable DrivableCards, deps ReconcileDeps) int {
 	launched := 0
 	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
-		if derived.Stage != BoardImplementation || derived.State != BoardDone {
+		if !handoffAwaitsReview(card.Comments) || derived.Stage != BoardImplementation || derived.State != BoardDone {
 			continue
 		}
 		// Skip-and-leave when the commits are not DEFINITELY present — a clean
