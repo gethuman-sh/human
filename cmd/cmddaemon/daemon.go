@@ -3865,8 +3865,21 @@ func ideaDraftLauncherFunc(reg *daemon.ProjectRegistry, daemonID string, agentIP
 			_ = docker.Close()
 		}
 		return dockerAgentLauncher{daemonID: daemonID, agentIPs: agentIPs}.
-			Launch(context.Background(), name, "/human-idea-draft "+req.Key, entry.Dir, entry.Dir, "")
+			Launch(context.Background(), name, ideaDraftPrompt(req), entry.Dir, entry.Dir, "")
 	}
+}
+
+// ideaDraftPrompt builds the drafting skill's invocation. A user-initiated
+// recreate carries --recreate so the skill passes it to every `human idea
+// draft` call it makes, which is what lets the guard be bypassed for that one
+// run; a watcher-launched redraft carries nothing and behaves as it always did.
+// Extracted so the difference is reachable in a test without Docker.
+func ideaDraftPrompt(req daemon.IdeaDraftRequest) string {
+	prompt := "/human-idea-draft " + req.Key
+	if req.Recreate {
+		prompt += " --recreate"
+	}
+	return prompt
 }
 
 // ideaPromoterFunc builds the daemon's IdeaPromoter: promotion is a label edit

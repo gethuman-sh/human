@@ -1,18 +1,20 @@
 ---
 name: human-idea-draft
 description: Draft an idea ticket's PM description in the background, leaving every gap as an inline [TBA: …] instead of guessing
-argument-hint: <idea-key>
+argument-hint: <idea-key> [--recreate]
 ---
 
 # Overview
 
-Point this skill at a freshly captured idea and it writes that ticket's PM description while the idea sits in the Ideas column — so promotion later opens on a real draft instead of a blank page. It runs **once, in a single pass**, reads the repository for evidence, and never sub-launches other agents.
+Point this skill at a freshly captured idea and it writes that ticket's PM description while the idea sits in the Ideas column — so promotion later opens on a real draft instead of a blank page. With `--recreate` it is pointed at a ticket that has already been promoted, whose description a person asked to have written again from scratch; the work is identical, only the trigger differs. It runs **once, in a single pass**, reads the repository for evidence, and never sub-launches other agents.
 
 This skill runs **without user interaction**. Do NOT use `AskUserQuestion` at any step — there is nobody to ask, and that is precisely why the unanswerable parts stay on the page as questions rather than becoming answers.
 
 The artifact is the **description**. The title is the user's own capture phrase and is never touched.
 
 `$KEY` below is the idea key passed as the argument.
+
+When the arguments carry `--recreate`, a person asked for this rewrite from the board's Product-Backlog card menu. Pass `--recreate` to **every** `human idea draft` call in this run. Nothing else about the run changes: the same rules produce the same `[TBA: …]`-carrying draft from the same evidence.
 
 ## The rules (these govern every sentence you write)
 
@@ -34,7 +36,7 @@ human marker post $KEY idea-draft-started
 ### 2. Ask whether your work is wanted at all
 
 ```bash
-human idea draft $KEY --check
+human idea draft $KEY --check   # add --recreate when the run carries it
 ```
 
 Read the JSON `decision`:
@@ -45,6 +47,8 @@ Read the JSON `decision`:
   ```
 - `current` — the draft is already current and its input has not changed. Record and stop; write nothing.
 - `write` — continue.
+
+Under `--recreate` the check returns `write` by construction — the user's ask outranks the guard. The `stand-down` and `current` branches cannot be reached there and must not be second-guessed, and `--stand-down` is never called in a recreate run: the command rejects the combination.
 
 ### 3. Read the ticket
 
@@ -77,7 +81,7 @@ Every point the evidence does not support carries its `[TBA: …]` in place.
 ### 6. Write it through the guard
 
 ```bash
-human idea draft $KEY --description-file <file>
+human idea draft $KEY --description-file <file>   # add --recreate when the run carries it
 ```
 
 Read the JSON back:

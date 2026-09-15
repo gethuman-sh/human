@@ -1,6 +1,10 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -124,4 +128,70 @@ func TestProtocolConstants_Sane(t *testing.T) {
 	assert.LessOrEqual(t, MinProtocol, Protocol)
 	assert.LessOrEqual(t, MinDaemonProtocol, Protocol)
 	assert.GreaterOrEqual(t, MinProtocol, 1)
+}
+
+// ledgerRow is one line of the docs/protocol.md table, parsed by COLUMN NAME
+// rather than by offset from the end, so adding a column to the ledger fails
+// here loudly instead of silently comparing the wrong number.
+type ledgerRow struct {
+	protocol, minProtocol, minDaemonProtocol int
+}
+
+// parseProtocolLedger reads the ledger out of docs/protocol.md. It is the
+// document the rule lives in, so it is the document the test reads — deriving
+// the expectation from anything else would make the test agree with itself
+// while the rule stayed unenforced.
+func parseProtocolLedger(t *testing.T) []ledgerRow {
+	t.Helper()
+	path, err := filepath.Abs(filepath.Join("..", "..", "docs", "protocol.md"))
+	require.NoError(t, err)
+	data, err := os.ReadFile(path) //nolint:gosec // fixed repo-relative path
+	require.NoError(t, err, "docs/protocol.md is where the ledger rule is written")
+
+	var rows []ledgerRow
+	for _, line := range strings.Split(string(data), "\n") {
+		cells := strings.Split(strings.TrimSpace(line), "|")
+		if len(cells) != 7 {
+			continue // not a ledger row: prose, the header, or the separator
+		}
+		proto, err := strconv.Atoi(strings.TrimSpace(cells[1]))
+		if err != nil {
+			continue // the header row, whose first cell is "Protocol"
+		}
+		minProto, err := strconv.Atoi(strings.TrimSpace(cells[4]))
+		require.NoError(t, err, "MinProtocol column of ledger row %d", proto)
+		minDaemon, err := strconv.Atoi(strings.TrimSpace(cells[5]))
+		require.NoError(t, err, "MinDaemonProtocol column of ledger row %d", proto)
+		rows = append(rows, ledgerRow{proto, minProto, minDaemon})
+	}
+	return rows
+}
+
+// TestProtocolLedger_CoversThisBuild is the rule in docs/protocol.md with
+// something behind it. Until now the only thing enforcing "bump Protocol and
+// add a ledger line" was a reviewer remembering to look, and a wire change
+// shipped past it twice (SC-4820 changed response shapes and bumped nothing;
+// SC-4923 added a route and was caught only in review). A rule nobody enforces
+// is a rule that gets deleted, so this test is the alternative to deleting it.
+func TestProtocolLedger_CoversThisBuild(t *testing.T) {
+	rows := parseProtocolLedger(t)
+	require.NotEmpty(t, rows, "no ledger rows parsed — has the table format changed?")
+
+	last := rows[len(rows)-1]
+	assert.Equal(t, Protocol, last.protocol,
+		"this build speaks protocol %d but docs/protocol.md's ledger ends at %d — every wire change bumps Protocol AND adds a ledger line",
+		Protocol, last.protocol)
+	assert.Equal(t, MinProtocol, last.minProtocol,
+		"ledger row %d records MinProtocol %d, the code says %d", last.protocol, last.minProtocol, MinProtocol)
+	assert.Equal(t, MinDaemonProtocol, last.minDaemonProtocol,
+		"ledger row %d records MinDaemonProtocol %d, the code says %d", last.protocol, last.minDaemonProtocol, MinDaemonProtocol)
+
+	// "Never reuse or renumber. The ledger is append-only." — one row per
+	// protocol, in order, no gaps: a gap means a bump whose reasoning was
+	// never written down.
+	for i, row := range rows {
+		assert.Equal(t, i+1, row.protocol, "ledger row %d is out of order or a number was reused/skipped", i+1)
+		assert.LessOrEqual(t, row.minProtocol, row.protocol, "ledger row %d floors MinProtocol above the protocol itself", row.protocol)
+		assert.LessOrEqual(t, row.minDaemonProtocol, row.protocol, "ledger row %d floors MinDaemonProtocol above the protocol itself", row.protocol)
+	}
 }

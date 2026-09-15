@@ -592,6 +592,19 @@ func (c *Client) CreateMocks(req CreateMocksRequest) error {
 	return err
 }
 
+// RecreateDescription asks the daemon to run the idea drafter against one
+// Product-Backlog ticket, replacing its description. Single JSON arg, matching
+// CreateMocks. It returns once the agent is launched, not when the new
+// description exists — the board learns that from the tracker-change poll.
+func (c *Client) RecreateDescription(req RecreateDescriptionRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return errors.WrapWithDetails(err, "marshaling recreate description request")
+	}
+	_, err = c.RunRemoteCapture([]string{"recreate-description", string(data)})
+	return err
+}
+
 // CreateVariations asks the daemon to launch human-mockups in variation mode:
 // a new group of variations of one existing mockup. Single JSON arg, matching
 // CreateMocks; returns once the agent is launched.

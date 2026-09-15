@@ -748,6 +748,22 @@ func (a *App) CreateMocks(pmKey, pmTitle, description string) error {
 	}))
 }
 
+// RecreateDescription asks the daemon to run the idea drafter against one
+// Product-Backlog ticket, replacing its description with a freshly written one.
+// The confirmation dialog the frontend showed IS the authorization to discard
+// the old text; recovery of what was replaced is the backing tracker's own
+// description history, so no extra marker is written here.
+func (a *App) RecreateDescription(pmKey, pmTitle string) error {
+	client, err := a.daemonClient()
+	if err != nil {
+		return err
+	}
+	return daemonCause(client.RecreateDescription(daemon.RecreateDescriptionRequest{
+		Key:   pmKey,
+		Title: pmTitle,
+	}))
+}
+
 // CreateVariations asks the daemon to spawn a new group of variations of one
 // existing mockup (parentSlug/parentFile) honoring the free-text instructions.
 // The source group is never touched; the new group attaches under it in the

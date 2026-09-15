@@ -105,3 +105,67 @@ func TestLatestProvenance_AbsentAuthorReadsAsMachine(t *testing.T) {
 	assert.True(t, p.Found)
 	assert.Equal(t, AuthorMachine, p.Author)
 }
+
+// verdictCase is one row of the guard's whole reason table: the same inputs
+// asked twice, once as a background run and once as a user-initiated recreate.
+type verdictCase struct {
+	name        string
+	isIdea      bool
+	title       string
+	description string
+	comments    []tracker.Comment
+	wantVerdict Verdict
+	wantReason  Reason
+}
+
+func verdictCases() []verdictCase {
+	drafted := "the draft"
+	machine := []tracker.Comment{comment(MachineRecord(drafted, "old"), time.Unix(100, 0))}
+	human := []tracker.Comment{comment(HumanRecord("a person's words"), time.Unix(100, 0))}
+	return []verdictCase{
+		{"not an idea", false, "t", "anything", nil, VerdictStandDown, ReasonNotAnIdea},
+		{"human authored", true, "t", "a person's words", human, VerdictStandDown, ReasonHumanAuthored},
+		{"unknown provenance", true, "t", "hand written", nil, VerdictStandDown, ReasonUnknownProvenance},
+		{"changed since draft", true, "old", "edited by hand", machine, VerdictStandDown, ReasonChangedSinceDraft},
+		{"already current", true, "old", drafted, machine, VerdictCurrent, ReasonAlreadyCurrent},
+		{"no prior draft", true, "t", "", nil, VerdictWrite, ReasonNoPriorDraft},
+		{"source changed", true, "new", drafted, machine, VerdictWrite, ReasonSourceChanged},
+	}
+}
+
+// The whole point of the recreate flag: every reason the guard has to refuse is
+// outranked by the user asking. ReasonAlreadyCurrent is the regression that
+// matters — a card drafted in Ideas and promoted with its title unchanged lands
+// exactly there, so lifting only the isIdea gate would leave the button dead.
+func TestVerdictFor_RecreateOutranksEveryRefusal(t *testing.T) {
+	for _, tc := range verdictCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			v, reason := VerdictFor(true, tc.isIdea, tc.title, tc.description, tc.comments)
+			assert.Equal(t, VerdictWrite, v)
+			assert.Equal(t, ReasonRecreateRequested, reason)
+		})
+	}
+}
+
+// Without the flag, VerdictFor is Decide verbatim — the proof that background
+// behaviour did not move.
+func TestVerdictFor_WithoutRecreateIsDecide(t *testing.T) {
+	for _, tc := range verdictCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			v, reason := VerdictFor(false, tc.isIdea, tc.title, tc.description, tc.comments)
+			assert.Equal(t, tc.wantVerdict, v)
+			assert.Equal(t, tc.wantReason, reason)
+
+			wantV, wantR := Decide(tc.isIdea, tc.title, tc.description, tc.comments)
+			assert.Equal(t, wantV, v)
+			assert.Equal(t, wantR, reason)
+		})
+	}
+}
+
+// A recreate never produces a stand-down, so it can never pin the description
+// as human-authored on its way past the guard.
+func TestPinsHuman_NeverPinsARecreate(t *testing.T) {
+	v, reason := VerdictFor(true, false, "t", "a person's words", nil)
+	assert.False(t, PinsHuman(v, reason))
+}

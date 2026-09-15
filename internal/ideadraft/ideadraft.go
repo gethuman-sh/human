@@ -74,6 +74,11 @@ const (
 	// ReasonSourceChanged admits a redraft: the machine owns the description
 	// and the input it was drafted from has changed.
 	ReasonSourceChanged Reason = "the machine wrote the current description and its source changed"
+	// ReasonRecreateRequested is the one verdict a person asks for directly: the
+	// user chose Recreate on a card whose description already exists. Every
+	// other reason Decide can return is an inference about who owns the words,
+	// and an inference must not overrule the person it is inferring about.
+	ReasonRecreateRequested Reason = "the user asked for the description to be recreated"
 )
 
 const (
@@ -162,6 +167,19 @@ func Decide(isIdea bool, title, description string, comments []tracker.Comment) 
 		return VerdictCurrent, ReasonAlreadyCurrent
 	}
 	return VerdictWrite, ReasonSourceChanged
+}
+
+// VerdictFor is the guard's single entry point. A recreate is the user's
+// explicit instruction and outranks every reason Decide has to refuse — the
+// guard exists to protect words nobody asked to lose, and the click IS that
+// ask. Re-deriving the decision from fingerprints could only refuse, which is
+// why the bypass lives here rather than as a branch inside Decide: Decide
+// answers "may the MACHINE write unbidden", and that question is unchanged.
+func VerdictFor(recreate, isIdea bool, title, description string, comments []tracker.Comment) (Verdict, Reason) {
+	if recreate {
+		return VerdictWrite, ReasonRecreateRequested
+	}
+	return Decide(isIdea, title, description, comments)
 }
 
 // PinsHuman reports whether a stand-down should be recorded as human
