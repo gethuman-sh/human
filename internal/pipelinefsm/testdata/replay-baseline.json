@@ -112,6 +112,14 @@
           "SC-3322"
         ],
         "ticket": "SC-3853"
+      },
+      "implementation-started@handed-off": {
+        "count": 1,
+        "why": "The rework loop re-dispatched implementation onto a card that had ALREADY handed off — rounds 3 and 4 of SC-4923's history, each built against a finding round 2 had fixed. The cause is the one this ticket fixes: a verdict outlived the round it judged, so the card kept deriving verification/done with a failing verdict, the board offered only Rework, and every Rework started another build. FIXED by SC-4958: a handoff newer than the verdict retires it, the card derives implementation/done, the review chains live and reconcileOrphanedHandoffs recovers a missed one. This recorded history predates the fix and stays as the evidence that produced it — the machine still refuses the move it made.",
+        "ticket": "SC-4958",
+        "evidence": [
+          "SC-4923"
+        ]
       }
     }
   },
@@ -136,7 +144,7 @@
     "doc": "Markers that fit several edges leading to different states. Not defects — the header genuinely does not say which move was made, and the answer is in the marker BODY the corpus deliberately does not carry. A NEW ambiguity should fail; these should not.",
     "kinds": {
       "bug-verdict@preflight": 14,
-      "implementation-started@queued": 5,
+      "implementation-started@queued": 7,
       "implementation-started@stopped": 32,
       "implementation-started@substrate-down": 2
     }
