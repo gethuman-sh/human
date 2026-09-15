@@ -441,11 +441,17 @@ func chainReviewAfterCleanBuild(ctx context.Context, exit RunExit, commenter tra
 	if deps.ChainReview == nil {
 		return
 	}
-	if vOK, vState := latestStageState(exit.Comments, BoardVerification); vOK {
-		// review-complete (pass OR fail verdict) is a recorded outcome the board
-		// acts on; a review-failed marker is already retryable. Either way, do not
-		// chain a second review. Only a mid-review death — the marker still reads
-		// "running" AND the exit itself was not clean — needs a retryable marker.
+	if vOK, vState := latestStageState(exit.Comments, BoardVerification); vOK && !handoffAwaitsReview(exit.Comments) {
+		// A verification marker NEWER than this exit's handoff accounts for the
+		// review: review-complete (pass OR fail verdict) is a recorded outcome the
+		// board acts on, and a review-failed marker is already retryable. Either
+		// way, do not chain a second review. Recency is the whole test — the SC-782
+		// merged case posts its review-started/complete AFTER the handoff, so its
+		// protection is exactly preserved, while a rework handoff posted after a
+		// verdict flows on to chainReviewAfterBuild instead of returning here with
+		// no warning logged (SC-4958). Only a mid-review death — the marker still
+		// reads "running" AND the exit itself was not clean — needs a retryable
+		// marker.
 		if vState == BoardRunning && !exit.CleanExit() {
 			// A stage is judged dead only on evidence about that stage. In the
 			// chained topology board-<key>-verification is a separate,

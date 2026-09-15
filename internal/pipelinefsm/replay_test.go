@@ -366,3 +366,26 @@ func TestLoadCorpus_ReportsAMissingFile(t *testing.T) {
 
 	assert.Error(t, err)
 }
+
+// A rework round, as the pipeline runs it: a verdict, a decision, a rebuild, and
+// the handoff that answers the verdict. The item is handed off again — the edge
+// the machine had no way to describe, which is why nothing re-reviewed the fix
+// (SC-4958, reproduced from SC-4923's history).
+func TestReplay_AReworkHandoffReturnsTheItemToHandedOff(t *testing.T) {
+	doc, err := Load()
+	require.NoError(t, err)
+
+	// Replay always starts at the document's initial state (filed), so the
+	// fragment is prefixed with the plan-ready that gets a real ticket to
+	// planned before the first implementation-started — otherwise that marker
+	// would match the self-planning fix-run edge instead of the plan-executing
+	// one, for a reason this ticket does not touch.
+	r := doc.Replay([]string{
+		"plan-ready", "implementation-started", "ready-for-review", "review-started", "review-complete",
+		"options", "option-chosen", "implementation-started", "ready-for-review",
+	})
+
+	assert.Empty(t, r.Refused, "every move a rework round makes must be described")
+	assert.Equal(t, "handed-off", r.State, "the rebuild is handed back and awaits a fresh review")
+	assert.True(t, doc.Accepts("reviewed", "ready-for-review"))
+}
