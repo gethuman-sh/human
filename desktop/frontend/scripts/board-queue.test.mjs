@@ -885,3 +885,13 @@ test("a failed card with no agent behind it keeps the plain red", () => {
 test("a failed card with no recorded reason still says something", () => {
   assert.equal(badgeInfo({ stage: "planning", state: "failed" }).title, "Stage failed");
 });
+
+test("a rework handoff awaiting review is not a failed review offering only Rework", () => {
+  // The card SC-4958 makes the daemon emit: the rebuild is handed back, the old
+  // verdict is spent, nothing has reviewed it yet.
+  const card = { stage: "implementation", state: "done", branch: "sc-4923-recreate-description" };
+  assert.equal(isReworkable(card), false, "Rework must not be the card's only move");
+  assert.equal(queueOf(card), "building");
+  assert.equal(isReviewRetryable(card), false);
+  assert.equal(badgeInfo(card, new Date()).text, "awaiting review…");
+});

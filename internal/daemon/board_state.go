@@ -48,11 +48,13 @@ type BoardCard struct {
 	// description still carries (SC-4608). Zero on every non-idea card and on
 	// an idea nothing has drafted yet; the card face renders nothing for zero.
 	TBACount int `json:"tba_count,omitempty"`
-	// Verdict is the `verdict:` line of the latest [human:review-complete]
-	// comment (pass / pass with notes / fail / incomplete). A fail or incomplete
-	// verdict keeps the card out of Ready to Deploy and blocks the deploy
-	// transition; an absent verdict counts as pass so threads reviewed before
-	// verdicts existed keep flowing.
+	// Verdict is the review verdict that still governs the card: the `verdict:`
+	// line of the latest [human:review-complete] comment, unless a newer
+	// [human:ready-for-review] handoff has answered it — a verdict judges the
+	// round it read, so a rework handoff retires it and the field goes empty
+	// (SC-4958). A fail or incomplete verdict keeps the card out of Ready to
+	// Deploy and blocks the deploy transition; an absent verdict counts as pass
+	// so threads reviewed before verdicts existed keep flowing.
 	Verdict string `json:"verdict,omitempty"`
 	// ShippedPartial reports a [human:shipped-partial] marker on the ticket: the
 	// planner's sanctioned ship-narrow-plus-follow-on fork left one or more
@@ -215,7 +217,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
-	card.Verdict = latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
+	card.Verdict = currentVerdict(comments)
 	card.PRURL = derivePRURL(comments)
 	if followOn, ok := deriveShippedPartial(comments); ok {
 		card.ShippedPartial = true
@@ -345,18 +347,89 @@ func applyStateOverrides(comments []tracker.Comment, placed Placement, latest tr
 }
 
 // supersededByNewerMarker reports whether the furthest-stage marker may be
-// overridden by a strictly-newer marker anywhere on the ticket. Two cases: a
-// stale failure the pipeline has moved past (SC-910), and a done-stage PR loop a
+// overridden by a strictly-newer marker anywhere on the ticket. Three cases: a
+// stale failure the pipeline has moved past (SC-910); a done-stage PR loop a
 // chosen rebuild has restarted from an earlier stage — its strictly-newer
 // implementation-started marker retires the loop marker so the card leaves the
-// done lane back to Building.
+// done lane back to Building; and a finished verification a newer rework
+// handoff has answered — see the comment on the third disjunct below (SC-4958).
 func supersededByNewerMarker(placed Placement, comments []tracker.Comment) bool {
 	// An outage marker is transient — a newer *-started marker from the reconcile
 	// relaunch retires it, exactly like a stale failure (SC-2307). Without this
 	// the card would sit on "machine down" even after the substrate returned and
 	// the relaunched agent posted its started marker.
+	//
+	// A finished review is retired by the handoff that ANSWERS it: a verdict
+	// judges the round it read, and a rebuild handed back after it is a built
+	// card awaiting review, not a finished review. Without this the card kept
+	// describing itself as "reviewed, failed" no matter what happened next — no
+	// second review was ever chained, the recovery sweep could not see it, and
+	// the board offered only Rework, which started another build against code
+	// that was already fixed (SC-4958).
 	return placed.State() == BoardFailed || placed.State() == BoardOutage ||
-		(placed.Stage() == BoardDoneStage && doneStageLoopActive(comments))
+		(placed.Stage() == BoardDoneStage && doneStageLoopActive(comments)) ||
+		(placed.Stage() == BoardVerification && placed.State() == BoardDone && handoffAwaitsReview(comments))
+}
+
+// currentVerdict is the verdict that still governs the card: empty once a
+// handoff has answered it. Read through here rather than off the latest
+// review-complete directly, so the deploy gate, the rework affordance and the
+// agent-name special case all stop keying on a judgement of a round that is
+// over (SC-4958).
+func currentVerdict(comments []tracker.Comment) string {
+	if handoffAwaitsReview(comments) {
+		return ""
+	}
+	return latestPrefixedLine(comments, ReviewCompleteHeader, "verdict:")
+}
+
+// handoffAwaitsReview reports that the ticket's newest [human:ready-for-review]
+// is still waiting for the review that judges it — no verification marker at
+// all, or every one of them older than that handoff. It is the one fact the
+// derivation, the live chain and the recovery sweep all needed and none of them
+// had: "which round is this verdict about".
+func handoffAwaitsReview(comments []tracker.Comment) bool {
+	handoff, ok := latestCommentWithHeader(comments, ReadyForReviewHeader)
+	if !ok {
+		return false
+	}
+	judged, ok := latestCommentInStage(comments, BoardVerification)
+	if !ok {
+		return true
+	}
+	return commentNewer(handoff, judged)
+}
+
+// latestCommentWithHeader returns the newest comment whose body starts with
+// header, under the board's total order.
+func latestCommentWithHeader(comments []tracker.Comment, header string) (tracker.Comment, bool) {
+	var latest tracker.Comment
+	var have bool
+	for _, c := range comments {
+		if !strings.HasPrefix(strings.TrimSpace(c.Body), header) {
+			continue
+		}
+		if !have || commentNewer(c, latest) {
+			latest, have = c, true
+		}
+	}
+	return latest, have
+}
+
+// latestCommentInStage returns the newest board marker classified into stage.
+func latestCommentInStage(comments []tracker.Comment, stage BoardStage) (tracker.Comment, bool) {
+	var latest tracker.Comment
+	var have bool
+	for _, c := range comments {
+		p, ok := fromMarker(c.Body)
+		if !ok || p.Stage() != stage {
+			continue
+		}
+		if !have || commentNewer(c, latest) {
+			latest, have = c, true
+		}
+	}
+	return latest, have
 }
 
 // DeployPhasePRReview and DeployPhasePRFix name the two halves of the pre-merge
@@ -474,21 +547,12 @@ func failureBody(body string) string {
 // latestStateInStage resolves the stage's state from its newest marker and
 // returns that marker's comment so a failure message can be extracted.
 func latestStateInStage(comments []tracker.Comment, stage BoardStage) (BoardState, tracker.Comment) {
-	state := BoardIdle
-	var haveLatest bool
-	var latest tracker.Comment
-	for _, c := range comments {
-		p, ok := fromMarker(c.Body)
-		if !ok || p.Stage() != stage {
-			continue
-		}
-		if !haveLatest || commentNewer(c, latest) {
-			latest = c
-			haveLatest = true
-			state = p.State()
-		}
+	latest, ok := latestCommentInStage(comments, stage)
+	if !ok {
+		return BoardIdle, tracker.Comment{}
 	}
-	return state, latest
+	p, _ := fromMarker(latest.Body)
+	return p.State(), latest
 }
 
 // latestMarkerOverall returns the newest board marker across ALL stages — the
@@ -604,20 +668,11 @@ func firstEngineeringKey(comments []tracker.Comment) string {
 // latest comment whose body starts with header. Used for branch: (on
 // ready-for-review) and pr: (on pr-pushed).
 func latestPrefixedLine(comments []tracker.Comment, header, prefix string) string {
-	var value string
-	var haveLatest bool
-	var latest tracker.Comment
-	for _, c := range comments {
-		if !strings.HasPrefix(strings.TrimSpace(c.Body), header) {
-			continue
-		}
-		if !haveLatest || commentNewer(c, latest) {
-			latest = c
-			haveLatest = true
-			value = parsePrefixedLine(c.Body, prefix)
-		}
+	latest, ok := latestCommentWithHeader(comments, header)
+	if !ok {
+		return ""
 	}
-	return value
+	return parsePrefixedLine(latest.Body, prefix)
 }
 
 // latestHandoffBody returns the full body of the latest [human:ready-for-review]
@@ -625,20 +680,11 @@ func latestPrefixedLine(comments []tracker.Comment, header, prefix string) strin
 // and commit SHAs a review or deploy binds against — reading the whole body once
 // rather than re-scanning per field.
 func latestHandoffBody(comments []tracker.Comment) string {
-	var body string
-	var haveLatest bool
-	var latest tracker.Comment
-	for _, c := range comments {
-		if !strings.HasPrefix(strings.TrimSpace(c.Body), ReadyForReviewHeader) {
-			continue
-		}
-		if !haveLatest || commentNewer(c, latest) {
-			latest = c
-			haveLatest = true
-			body = c.Body
-		}
+	latest, ok := latestCommentWithHeader(comments, ReadyForReviewHeader)
+	if !ok {
+		return ""
 	}
-	return body
+	return latest.Body
 }
 
 // parsePrefixedLine returns the trimmed value following the first line that

@@ -248,13 +248,13 @@
         "stage": "implementation",
         "state": "done"
       },
-      "holds": "Branch and commits are recorded on the ticket AND the commits were verified reachable on the branch before the marker was posted.",
+      "holds": "Branch and commits are recorded on the ticket AND the commits were verified reachable on the branch before the marker was posted. Any verdict recorded BEFORE this handoff judged an earlier round and no longer governs the item.",
       "who_may_act": [
         "daemon",
         "user"
       ],
       "stale_when": "The review was never chained — the live hook was lost to a daemon restart.",
-      "if_nothing_happens": "reconcileOrphanedHandoffs chains the review, but only when the commits are DEFINITELY present on this machine. A clean absence or an unreadable check leaves the card alone rather than redding work another machine may be able to serve."
+      "if_nothing_happens": "reconcileOrphanedHandoffs chains the review for a handoff newer than the newest verification marker, but only when the commits are DEFINITELY present on this machine. A clean absence or an unreadable check leaves the card alone rather than redding work another machine may be able to serve."
     },
     {
       "name": "in-review",
@@ -277,13 +277,14 @@
         "stage": "verification",
         "state": "done"
       },
-      "holds": "A verdict is recorded. The board reads the daemon's blocking DECISION, never the verdict string.",
+      "holds": "A verdict is recorded, and it judges the round the item was in when it was posted. The board reads the daemon's blocking DECISION, never the verdict string.",
       "who_may_act": [
         "user",
-        "daemon"
+        "daemon",
+        "skill"
       ],
-      "stale_when": "Never.",
-      "if_nothing_happens": "Nothing automatic on the shipping path: a passing verdict waits for the Deploy gesture, and a failing or incomplete one waits for a rework the board must offer, because the daemon refuses the deploy drop. The daemon does act here on the legacy PR path only."
+      "stale_when": "A [human:ready-for-review] handoff newer than the verdict. The verdict judged the round it was posted against; the rebuild it asked for has been handed back, so the item is handed-off again and awaits a fresh review.",
+      "if_nothing_happens": "A passing verdict waits for the Deploy gesture. A rework hands off again, and that handoff leaves this state: chainReviewAfterCleanBuild launches the review live, and reconcileOrphanedHandoffs recovers it when the live hook is lost. The daemon also acts here on the legacy PR path."
     },
     {
       "name": "deploying",
@@ -680,7 +681,8 @@
       "name": "handoff-posted",
       "src": [
         "implementing",
-        "verifying"
+        "verifying",
+        "reviewed"
       ],
       "dst": "handed-off",
       "actor": "skill",
@@ -692,7 +694,7 @@
       ],
       "prompt": "human-executor-agent.md, human-autofix-skill.md Step 7.1",
       "where": "posted via `human handoff post`, which verifies the commits are reachable on the branch first",
-      "doc": "Branch and commits are recorded on the ticket for whoever reviews next. The commits are verified reachable on the branch before the marker is posted, so a handoff never names work nobody else can see."
+      "doc": "Branch and commits are recorded on the ticket for whoever reviews next. The commits are verified reachable on the branch before the marker is posted, so a handoff never names work nobody else can see. A handoff from reviewed is the rework round answering a verdict: the verdict judged the round before it, so the item is handed off again and awaits a fresh review (SC-4958)."
     },
     {
       "name": "implementation-failed",
@@ -913,7 +915,8 @@
         "verifying",
         "implementing",
         "in-review",
-        "pr-review"
+        "pr-review",
+        "reviewed"
       ],
       "dst": "awaiting-decision",
       "actor": "skill",
