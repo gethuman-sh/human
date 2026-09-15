@@ -48,11 +48,13 @@ type BoardCard struct {
 	// description still carries (SC-4608). Zero on every non-idea card and on
 	// an idea nothing has drafted yet; the card face renders nothing for zero.
 	TBACount int `json:"tba_count,omitempty"`
-	// Verdict is the `verdict:` line of the latest [human:review-complete]
-	// comment (pass / pass with notes / fail / incomplete). A fail or incomplete
-	// verdict keeps the card out of Ready to Deploy and blocks the deploy
-	// transition; an absent verdict counts as pass so threads reviewed before
-	// verdicts existed keep flowing.
+	// Verdict is the review verdict that still governs the card: the `verdict:`
+	// line of the latest [human:review-complete] comment, unless a newer
+	// [human:ready-for-review] handoff has answered it — a verdict judges the
+	// round it read, so a rework handoff retires it and the field goes empty
+	// (SC-4958). A fail or incomplete verdict keeps the card out of Ready to
+	// Deploy and blocks the deploy transition; an absent verdict counts as pass
+	// so threads reviewed before verdicts existed keep flowing.
 	Verdict string `json:"verdict,omitempty"`
 	// ShippedPartial reports a [human:shipped-partial] marker on the ticket: the
 	// planner's sanctioned ship-narrow-plus-follow-on fork left one or more
@@ -345,11 +347,12 @@ func applyStateOverrides(comments []tracker.Comment, placed Placement, latest tr
 }
 
 // supersededByNewerMarker reports whether the furthest-stage marker may be
-// overridden by a strictly-newer marker anywhere on the ticket. Two cases: a
-// stale failure the pipeline has moved past (SC-910), and a done-stage PR loop a
+// overridden by a strictly-newer marker anywhere on the ticket. Three cases: a
+// stale failure the pipeline has moved past (SC-910); a done-stage PR loop a
 // chosen rebuild has restarted from an earlier stage — its strictly-newer
 // implementation-started marker retires the loop marker so the card leaves the
-// done lane back to Building.
+// done lane back to Building; and a finished verification a newer rework
+// handoff has answered — see the comment on the third disjunct below (SC-4958).
 func supersededByNewerMarker(placed Placement, comments []tracker.Comment) bool {
 	// An outage marker is transient — a newer *-started marker from the reconcile
 	// relaunch retires it, exactly like a stale failure (SC-2307). Without this
