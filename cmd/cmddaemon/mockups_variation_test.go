@@ -265,3 +265,15 @@ func TestLaunchMockupAgent_RequestsMockupsShare(t *testing.T) {
 	boardOpts := dockerAgentLauncher{}.startOpts("board-sc-1-x", "p", "/proj", "/proj", "")
 	assert.Nil(t, boardOpts.SharedPaths)
 }
+
+// Regression for SC-4991: mockupAgentLauncher is the launcher production
+// actually launches mockup creators through (launchMockupAgent delegates to
+// it), so pinning ITS sharedPaths — rather than rebuilding a dockerAgentLauncher
+// literal as TestLaunchMockupAgent_RequestsMockupsShare does above — is what
+// catches a regression to the real launch path. Without mockupAgentLauncher's
+// sharedPaths, launchMockupAgent's Launch call would still reach
+// devcontainer.NewDockerClient with no Docker engine to observe it against, so
+// this is the only place the production value is checkable at all.
+func TestMockupAgentLauncher_SharesMockupsDir(t *testing.T) {
+	assert.Equal(t, []string{mockupsDirName}, mockupAgentLauncher.sharedPaths)
+}

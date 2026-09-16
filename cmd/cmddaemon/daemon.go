@@ -3989,14 +3989,20 @@ func securityRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 // reads from the project (desktop/mockups.go).
 const mockupsDirName = "mockups"
 
-// launchMockupAgent is the single launch path of both mockup creators. It
-// shares the project's mockups/ into the run's isolated workspace so the
-// agent's output lands where the board reads it instead of in a worktree that
-// is swept (SC-4991). A var so creator tests can observe the launch without
-// Docker.
+// mockupAgentLauncher is the dockerAgentLauncher both mockup creators launch
+// through, sharing the project's mockups/ into the run's isolated workspace so
+// the agent's output lands where the board reads it instead of in a worktree
+// that is swept (SC-4991). Its own var — rather than an inline literal inside
+// launchMockupAgent — so a test can pin the shared path production actually
+// requests without a Docker engine behind it: launchMockupAgent's Launch call
+// reaches devcontainer.NewDockerClient before any field of the launcher is
+// otherwise observable.
+var mockupAgentLauncher = dockerAgentLauncher{sharedPaths: []string{mockupsDirName}}
+
+// launchMockupAgent is the single launch path of both mockup creators. A var
+// so creator tests can observe the launch without Docker.
 var launchMockupAgent = func(ctx context.Context, name, prompt, projectDir string) error {
-	return dockerAgentLauncher{sharedPaths: []string{mockupsDirName}}.
-		Launch(ctx, name, prompt, projectDir, projectDir, "")
+	return mockupAgentLauncher.Launch(ctx, name, prompt, projectDir, projectDir, "")
 }
 
 // mockupsCreatorFunc builds the daemon's MockupsCreator closure: it records
@@ -4092,7 +4098,7 @@ func nextVariationSlug(projectDir, parentSlug, parentFile string) string {
 		}
 		prefix += "-o" + trimmed
 	}
-	mockupsDir := filepath.Join(projectDir, "mockups")
+	mockupsDir := filepath.Join(projectDir, mockupsDirName)
 	for k := 1; ; k++ {
 		slug := fmt.Sprintf("%s-v%d", prefix, k)
 		if _, err := os.Stat(filepath.Join(mockupsDir, slug)); os.IsNotExist(err) {
@@ -4127,7 +4133,7 @@ func variationsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateVariat
 			_ = docker.Close()
 		}
 
-		childDir := filepath.Join(entry.Dir, "mockups", childSlug)
+		childDir := filepath.Join(entry.Dir, mockupsDirName, childSlug)
 		if err := os.MkdirAll(childDir, 0o700); err != nil {
 			return errors.WrapWithDetails(err, "reserve variation group dir", "dir", childDir)
 		}
@@ -4178,7 +4184,7 @@ func mockupChooserFunc(reg *daemon.ProjectRegistry) func(daemon.ChooseMockupRequ
 		if req.Slug == "" {
 			return store.ClearChoice(req.PMKey)
 		}
-		target := filepath.Join(entry.Dir, "mockups", req.Slug, req.File)
+		target := filepath.Join(entry.Dir, mockupsDirName, req.Slug, req.File)
 		if _, err := os.Stat(target); err != nil {
 			return errors.WrapWithDetails(err, "chosen mockup not found",
 				"slug", req.Slug, "file", req.File)
@@ -4204,7 +4210,7 @@ func mockupPrunerFunc(reg *daemon.ProjectRegistry) func(daemon.PruneMockupReques
 		if req.Slug == mockups.SlugFor(req.PMKey) {
 			return errors.WithDetails("cannot prune the root mockup group", "slug", req.Slug)
 		}
-		mockupsDir := filepath.Join(entry.Dir, "mockups")
+		mockupsDir := filepath.Join(entry.Dir, mockupsDirName)
 		subtree := variationSubtree(mockupsDir, req.Slug)
 
 		archiveRoot := filepath.Join(mockupsDir, ".archive")
