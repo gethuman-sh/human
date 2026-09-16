@@ -297,7 +297,10 @@ to die.
 `Manager.Start` refuses to start over a still-running agent, so the launchers for
 the singleton scan agents (`features`, `findbugs`, `findsecurity`, `mockups-<slug>`)
 delete any prior agent of that name first. This makes a retry after a stale or
-crashed run idempotent.
+crashed run idempotent — and for a launch that declares `SharedPaths` (the
+mockup creators, SC-4991) it also guarantees a fresh container, which is what
+keeps such a launch from being served by a still-running container created
+before the shared mount existed.
 
 The daemon-launched per-ticket runs do the same and were never listed here:
 `relate-<KEY>` (`relateLauncherFunc`) and `idea-draft-<KEY>`
@@ -377,6 +380,19 @@ The teardown choke point is `Manager.stopLocked` (`internal/agent/manager.go`):
    to lose (SC-731). The kept worktree has its HEAD **detached**, so it stops
    owning `refs/heads/<branch>` and cannot freeze the shared repo's local branch
    (SC-2322).
+
+   A run may also declare **shared project paths** (`StartOpts.SharedPaths`) —
+   directories bound from the project over the same relative path inside the
+   worktree mount, so a run that never commits and never hands off can still
+   produce output the project keeps. The mockup creators are the only users
+   (`mockups/`, SC-4991). What this costs teardown is nothing: the bind lives in
+   the CONTAINER's mount namespace, the container is stopped and removed before
+   `stopLocked` touches the worktree, and both `WorktreeRemove`/`WorktreeDetach`
+   and the 90-day `PruneExecutions` sweep run on the host, where `<worktree>/mockups`
+   is the worktree's own checked-out copy and the project's directory is not
+   reachable through it. Asserted, not assumed:
+   `TestPruneExecutions_KeptWorktreeSweepNeverTouchesTheProject`,
+   `TestStopLocked_HandoffRemovesOnlyTheWorktree`.
 4. **`outcome.json` records TWO things with two owners** (SC-4820): how the
    PROCESS ended (`process`, `exit_code`, `exit_known` — written only by the
    tee at stream EOF, the only observer that ever holds the code) and how the
