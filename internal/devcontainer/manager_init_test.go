@@ -14,7 +14,7 @@ func TestBuildCreateOptions_RunsAnInitThatReapsOrphans(t *testing.T) {
 	m := &Manager{}
 	dir := t.TempDir()
 
-	opts := m.buildCreateOptions(&DevcontainerConfig{}, dir, dir, "human-agent-board-SC-1-implementation", "img", "/workspace", "hash", nil, "", nil)
+	opts := m.buildCreateOptions(&DevcontainerConfig{}, dir, dir, "human-agent-board-SC-1-implementation", "img", "/workspace", "hash", nil, nil, nil)
 
 	assert.Equal(t, []string{"sleep", "infinity"}, opts.Cmd, "PID 1 is the command that cannot reap")
 	assert.True(t, opts.Init, "an init must reap what PID 1 will not")

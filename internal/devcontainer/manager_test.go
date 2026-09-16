@@ -612,17 +612,18 @@ func TestManager_Up_WithMounts(t *testing.T) {
 // Regression for SC-482: a worktree workspace's .git is a FILE pointing at the
 // parent repo's .git by absolute host path. Binding only the worktree leaves
 // every in-container git command dying with "not a git repository" — the
-// parent .git must be bound at its host-identical path alongside.
+// parent .git must be bound at its host-identical path alongside (now carried
+// as an ExtraMounts entry, SC-4991).
 func TestManager_Up_WorktreeGitDirBind(t *testing.T) {
 	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
 	gitDir := filepath.Join(projectDir, ".git")
 
 	mgr := &Manager{Docker: docker, Logger: testLogger()}
 	_, err := mgr.Up(context.Background(), UpOptions{
-		ProjectDir: projectDir,
-		SourceDir:  t.TempDir(), // stands in for the private worktree
-		GitDir:     gitDir,
-		Out:        &bytes.Buffer{},
+		ProjectDir:  projectDir,
+		SourceDir:   t.TempDir(), // stands in for the private worktree
+		ExtraMounts: []Mount{Bind(gitDir, gitDir)},
+		Out:         &bytes.Buffer{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -638,9 +639,9 @@ func TestManager_Up_WorktreeGitDirBind(t *testing.T) {
 	t.Errorf("missing parent-repo git bind %q in binds: %v", want, bindStrings(mock.createCalls[0].Binds))
 }
 
-// Without a GitDir (shared-checkout mount, non-git workspace) no extra bind
+// Without ExtraMounts (shared-checkout mount, non-git workspace) no extra bind
 // appears — the workspace's own .git directory travels with the source mount.
-func TestManager_Up_NoGitDirNoExtraBind(t *testing.T) {
+func TestManager_Up_NoExtraMountsNoExtraBind(t *testing.T) {
 	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
 
 	mgr := &Manager{Docker: docker, Logger: testLogger()}
@@ -653,9 +654,57 @@ func TestManager_Up_NoGitDirNoExtraBind(t *testing.T) {
 	}
 	for _, b := range bindStrings(mock.createCalls[0].Binds) {
 		if strings.Contains(b, ".git:") {
-			t.Errorf("unexpected .git bind %q without GitDir", b)
+			t.Errorf("unexpected .git bind %q without ExtraMounts", b)
 		}
 	}
+}
+
+// Regression for SC-4991: a run isolated in a private worktree writes output
+// the project must keep (mockups) relative to its CWD. The project's directory
+// must therefore be bound over the same path inside the source mount, or the
+// output dies with the worktree.
+func TestManager_Up_SharedProjectPathBind(t *testing.T) {
+	projectDir, mock, docker := setupTestProject(t, `{"image": "ubuntu:22.04"}`)
+	shared := filepath.Join(projectDir, "mockups")
+	if err := os.MkdirAll(shared, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := &Manager{Docker: docker, Logger: testLogger()}
+	_, err := mgr.Up(context.Background(), UpOptions{
+		ProjectDir:  projectDir,
+		SourceDir:   t.TempDir(), // stands in for the private worktree
+		ExtraMounts: []Mount{Bind(shared, "/workspaces/myproject/mockups")},
+		Out:         &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := shared + ":/workspaces/myproject/mockups"
+	got := bindStrings(mock.createCalls[0].Binds)
+	if !slices.Contains(got, want) {
+		t.Errorf("missing shared project bind %q in binds: %v", want, got)
+	}
+}
+
+// TestContainerWorkspaceDir asserts the exported helper answers the same
+// question Up itself resolves internally, so a caller (the agent package) can
+// name a path inside the workspace before Up ever runs.
+func TestContainerWorkspaceDir(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		projectDir, _, _ := setupTestProject(t, `{"image": "x"}`)
+		want := "/workspaces/" + filepath.Base(projectDir)
+		if got := ContainerWorkspaceDir(projectDir); got != want {
+			t.Errorf("ContainerWorkspaceDir() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("explicit workspaceFolder", func(t *testing.T) {
+		projectDir, _, _ := setupTestProject(t, `{"image": "x", "workspaceFolder": "/src"}`)
+		if got := ContainerWorkspaceDir(projectDir); got != "/src" {
+			t.Errorf("ContainerWorkspaceDir() = %q, want /src", got)
+		}
+	})
 }
 
 func TestManager_Up_WithCACert(t *testing.T) {
@@ -1301,7 +1350,7 @@ func TestBuildCreateOptions_NoHostBinaryBindRemains(t *testing.T) {
 	m := &Manager{}
 	dir := t.TempDir()
 
-	opts := m.buildCreateOptions(&DevcontainerConfig{}, dir, dir, "human-agent-board-SC-1-implementation", "img", "/workspace", "hash", nil, "", nil)
+	opts := m.buildCreateOptions(&DevcontainerConfig{}, dir, dir, "human-agent-board-SC-1-implementation", "img", "/workspace", "hash", nil, nil, nil)
 
 	for _, b := range opts.Binds {
 		if b.Target == "/usr/local/bin/human" {

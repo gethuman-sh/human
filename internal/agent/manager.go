@@ -67,6 +67,15 @@ type StartOpts struct {
 	// SC-201. Empty leaves the run unregistered and the old name-based path in
 	// charge.
 	RunID string
+	// SharedPaths are project-relative directories whose contents belong to the
+	// PROJECT, not to this run: they are created if missing and bound over the
+	// same path inside the private worktree mount, so a run that never commits
+	// and never hands off can still produce output that outlives it. Worktree
+	// isolation returns work through git alone, and mockups are neither
+	// committed nor handed off — they were written into the worktree and swept
+	// with it (SC-4991). Ignored for a non-git workspace, which is not isolated
+	// and is already the project.
+	SharedPaths []string
 }
 
 // Manager orchestrates agent lifecycle using devcontainers.
@@ -107,12 +116,12 @@ func (m *Manager) Start(ctx context.Context, opts StartOpts) (Meta, error) {
 	// project never share HEAD/index/tree. configDir stays the shared repo so
 	// persisted Claude auth binds (derived from ProjectDir) survive across runs.
 	projectDir := workspace
-	workspace, worktree, removeWorktreeOnFailure, err := m.isolateWorkspace(ctx, projectDir, opts.Name)
+	workspace, worktree, extraMounts, removeWorktreeOnFailure, err := m.prepareWorkspace(ctx, projectDir, configDir, opts)
 	if err != nil {
 		return Meta{}, err
 	}
 
-	dcMeta, err := m.startDevcontainer(ctx, containerName, configDir, workspace, worktreeGitDir(projectDir, worktree), opts.Rebuild)
+	dcMeta, err := m.startDevcontainer(ctx, containerName, configDir, workspace, extraMounts, opts.Rebuild)
 	if err != nil {
 		removeWorktreeOnFailure()
 		// A failure here is most often an unreachable Docker engine. Surface an
@@ -199,7 +208,7 @@ func resolveDirectories(opts StartOpts) (workspace, configDir string) {
 	return
 }
 
-func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDir, workspace, gitDir string, rebuild bool) (*devcontainer.Meta, error) {
+func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDir, workspace string, extraMounts []devcontainer.Mount, rebuild bool) (*devcontainer.Meta, error) {
 	// Ensure daemon is running and reachable from containers (0.0.0.0).
 	daemonInfo := m.ensureDaemonForContainers(configDir)
 
@@ -208,7 +217,7 @@ func (m *Manager) startDevcontainer(ctx context.Context, containerName, configDi
 		ProjectDir:    configDir,
 		ContainerName: containerName,
 		SourceDir:     workspace,
-		GitDir:        gitDir,
+		ExtraMounts:   extraMounts,
 		Rebuild:       rebuild,
 		DaemonInfo:    daemonInfo,
 		Out:           os.Stderr,
