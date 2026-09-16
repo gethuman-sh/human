@@ -2644,6 +2644,28 @@ type dockerAgentLauncher struct {
 	// to this agent's ticket+stage (SC-2555). A nil registry disables the
 	// mapping; accounting still records the call, just without attribution.
 	agentIPs agentIPWiring
+	// sharedPaths are project-relative directories this launch's agent writes
+	// output the PROJECT keeps into. A run is isolated in a private worktree and
+	// returns work through git; a run that never commits (the mockup creators)
+	// needs its output directory shared back or the work dies with the worktree
+	// (SC-4991). Empty for every board stage — their work goes home as commits.
+	sharedPaths []string
+}
+
+// startOpts is the StartOpts this launcher asks Manager.Start for. Extracted so
+// a test can assert what a launch requests — chiefly that the shared paths
+// travel — without a Docker engine behind it.
+func (l dockerAgentLauncher) startOpts(name, prompt, workspace, configDir, runID string) agent.StartOpts {
+	return agent.StartOpts{
+		Name:        name,
+		Prompt:      prompt,
+		SkipPerms:   true,
+		Workspace:   workspace,
+		ConfigDir:   configDir,
+		DaemonID:    l.daemonID,
+		RunID:       runID,
+		SharedPaths: l.sharedPaths,
+	}
 }
 
 func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace, configDir, runID string) error {
@@ -2654,15 +2676,7 @@ func (l dockerAgentLauncher) Launch(ctx context.Context, name, prompt, workspace
 	defer func() { _ = docker.Close() }()
 
 	mgr := &agent.Manager{Docker: docker}
-	meta, err := mgr.Start(ctx, agent.StartOpts{
-		Name:      name,
-		Prompt:    prompt,
-		SkipPerms: true,
-		Workspace: workspace,
-		ConfigDir: configDir,
-		DaemonID:  l.daemonID,
-		RunID:     runID,
-	})
+	meta, err := mgr.Start(ctx, l.startOpts(name, prompt, workspace, configDir, runID))
 	if err == nil {
 		l.registerAgentIP(ctx, docker, meta.ContainerID, name)
 	}
@@ -3970,6 +3984,21 @@ func securityRunnerFunc(reg *daemon.ProjectRegistry) func() error {
 	}
 }
 
+// mockupsDirName is the project-relative directory every mockup group lives
+// in — the one the /human-mockups skill writes CWD-relative and the desktop
+// reads from the project (desktop/mockups.go).
+const mockupsDirName = "mockups"
+
+// launchMockupAgent is the single launch path of both mockup creators. It
+// shares the project's mockups/ into the run's isolated workspace so the
+// agent's output lands where the board reads it instead of in a worktree that
+// is swept (SC-4991). A var so creator tests can observe the launch without
+// Docker.
+var launchMockupAgent = func(ctx context.Context, name, prompt, projectDir string) error {
+	return dockerAgentLauncher{sharedPaths: []string{mockupsDirName}}.
+		Launch(ctx, name, prompt, projectDir, projectDir, "")
+}
+
 // mockupsCreatorFunc builds the daemon's MockupsCreator closure: it records
 // the ticket→mockup-set link in the project's .human/mockups.json and launches
 // the human-mockups skill in the registered project's devcontainer — the same
@@ -4002,7 +4031,7 @@ func mockupsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateMocksRequ
 		if req.Description != "" {
 			prompt += "\n\nTicket context:\n" + req.Description
 		}
-		if err := (dockerAgentLauncher{}).Launch(context.Background(), agentName, prompt, entry.Dir, entry.Dir, ""); err != nil {
+		if err := launchMockupAgent(context.Background(), agentName, prompt, entry.Dir); err != nil {
 			_ = store.Delete(req.PMKey)
 			return err
 		}
@@ -4014,16 +4043,26 @@ func mockupsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateMocksRequ
 // reserve a variation group's directory before launching the agent. internal/
 // daemon cannot import desktop's MockupSet, so this mirrors its JSON tags. Zero
 // options keeps validMockupSet false, so the reserved group stays hidden from
-// the viewer until the agent fills it in.
+// the viewer until the agent fills it in. Once launched, the group's mockups/
+// directory is shared into the run (SC-4991) and a successful run OVERWRITES
+// this placeholder with the agent's real manifest, whose option shape is
+// objects, not strings; a run that dies before writing leaves the hidden
+// 0-option group exactly as it does today.
 type childManifest struct {
-	Slug         string   `json:"slug"`
-	Feature      string   `json:"feature"`
-	Ticket       string   `json:"ticket,omitempty"`
-	Parent       string   `json:"parent,omitempty"`
-	ParentFile   string   `json:"parentFile,omitempty"`
-	Instructions string   `json:"instructions,omitempty"`
-	Created      string   `json:"created"`
-	Options      []string `json:"options"`
+	Slug         string `json:"slug"`
+	Feature      string `json:"feature"`
+	Ticket       string `json:"ticket,omitempty"`
+	Parent       string `json:"parent,omitempty"`
+	ParentFile   string `json:"parentFile,omitempty"`
+	Instructions string `json:"instructions,omitempty"`
+	Created      string `json:"created"`
+	// Options is read back only to answer "does this group have any?" — the
+	// option SHAPE is the skill's contract and the desktop's to interpret. It
+	// was []string, which parses the daemon's own 0-option placeholder and
+	// FAILS on the agent's real manifest; once the agent's manifest lands in
+	// the project (SC-4991) that failure would drop the group's parent link
+	// and silently stop variationSubtree from finding real descendants.
+	Options []json.RawMessage `json:"options"`
 }
 
 // leadingDigits returns the run of digits at the start of s ("03-foo.html" →
@@ -4100,7 +4139,7 @@ func variationsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateVariat
 			ParentFile:   req.ParentFile,
 			Instructions: req.Instructions,
 			Created:      time.Now().UTC().Format(time.RFC3339),
-			Options:      []string{},
+			Options:      []json.RawMessage{},
 		}
 		data, err := json.Marshal(manifest)
 		if err != nil {
@@ -4118,7 +4157,7 @@ func variationsCreatorFunc(reg *daemon.ProjectRegistry) func(daemon.CreateVariat
 			"\n  source file: mockups/" + req.ParentSlug + "/" + req.ParentFile +
 			"\nWrite the new group to: mockups/" + childSlug + "/" +
 			"\nChange instructions:\n" + req.Instructions
-		if err := (dockerAgentLauncher{}).Launch(context.Background(), agentName, prompt, entry.Dir, entry.Dir, ""); err != nil {
+		if err := launchMockupAgent(context.Background(), agentName, prompt, entry.Dir); err != nil {
 			_ = os.RemoveAll(childDir)
 			return err
 		}
