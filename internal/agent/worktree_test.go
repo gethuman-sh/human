@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,130 @@ func stubGit(t *testing.T, isRepo bool) *[]string {
 		gitrepo.IsRepo, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove, gitrepo.DefaultBranch, gitrepo.Fetch = prevIsRepo, prevAdd, prevRemove, prevDefault, prevFetch
 	})
 	return &added
+}
+
+// writeDevcontainerConfig writes a minimal devcontainer.json so
+// devcontainer.ContainerWorkspaceDir can resolve a workspace path for dir.
+func writeDevcontainerConfig(t *testing.T, dir string) {
+	t.Helper()
+	dcDir := filepath.Join(dir, ".devcontainer")
+	if err := os.MkdirAll(dcDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dcDir, "devcontainer.json"), []byte(`{"image":"x"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Regression for SC-4991: a run isolated in a private worktree writes output
+// (mockups) the PROJECT must keep. sharedMounts must bind the project's
+// directory over the same relative path inside the container workspace.
+func TestSharedMounts_BindsProjectPathOverWorktree(t *testing.T) {
+	projectDir := t.TempDir()
+	writeDevcontainerConfig(t, projectDir)
+	worktree := t.TempDir()
+
+	mounts, err := sharedMounts(projectDir, projectDir, worktree, []string{"mockups"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantTarget := "/workspaces/" + filepath.Base(projectDir) + "/mockups"
+	wantSource := filepath.Join(projectDir, "mockups")
+	var foundShared, foundGit bool
+	gitDir := filepath.Join(projectDir, ".git")
+	for _, m := range mounts {
+		if m.Source == wantSource && m.Target == wantTarget {
+			foundShared = true
+		}
+		if m.Source == gitDir && m.Target == gitDir {
+			foundGit = true
+		}
+	}
+	if !foundShared {
+		t.Errorf("missing shared mockups bind in %+v", mounts)
+	}
+	if !foundGit {
+		t.Errorf("missing .git bind in %+v", mounts)
+	}
+}
+
+// A shared path that does not exist yet must be created — the mount source
+// cannot be missing when the container starts.
+func TestSharedMounts_CreatesMissingProjectPath(t *testing.T) {
+	projectDir := t.TempDir()
+	writeDevcontainerConfig(t, projectDir)
+	worktree := t.TempDir()
+
+	if _, err := sharedMounts(projectDir, projectDir, worktree, []string{"mockups"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(projectDir, "mockups"))
+	if err != nil {
+		t.Fatalf("shared path not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("shared path is not a directory")
+	}
+}
+
+// No worktree means no isolation: the workspace already IS the project, so
+// neither the .git bind nor a shared-path bind is needed.
+func TestSharedMounts_NoWorktreeMeansNoSharedBind(t *testing.T) {
+	projectDir := t.TempDir()
+	writeDevcontainerConfig(t, projectDir)
+
+	mounts, err := sharedMounts(projectDir, projectDir, "", []string{"mockups"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range mounts {
+		if strings.HasSuffix(m.Target, "/mockups") {
+			t.Errorf("unexpected shared-path mount without a worktree: %+v", m)
+		}
+		if strings.HasSuffix(m.Target, "/.git") || m.Target == filepath.Join(projectDir, ".git") {
+			t.Errorf("unexpected .git mount without a worktree: %+v", m)
+		}
+	}
+}
+
+// A shared path escaping the project directory must be rejected, and nothing
+// created outside projectDir.
+func TestSharedMounts_RejectsEscapingPath(t *testing.T) {
+	projectDir := t.TempDir()
+	writeDevcontainerConfig(t, projectDir)
+	worktree := t.TempDir()
+
+	for _, bad := range []string{"../escape", "/etc"} {
+		if _, err := sharedMounts(projectDir, projectDir, worktree, []string{bad}); err == nil {
+			t.Errorf("expected error for shared path %q", bad)
+		} else if !strings.Contains(err.Error(), "relative path inside the project") {
+			t.Errorf("unexpected error for %q: %v", bad, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(projectDir), "escape")); err == nil {
+		t.Fatal("escaping path must not have been created")
+	}
+}
+
+// The .git bind must not be displaced by a shared path — git tooling in the
+// container looks for it first.
+func TestSharedMounts_GitDirFirst(t *testing.T) {
+	projectDir := t.TempDir()
+	writeDevcontainerConfig(t, projectDir)
+	worktree := t.TempDir()
+
+	mounts, err := sharedMounts(projectDir, projectDir, worktree, []string{"mockups"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts) == 0 {
+		t.Fatal("expected at least one mount")
+	}
+	wantGitDir := filepath.Join(projectDir, ".git")
+	if mounts[0].Source != wantGitDir {
+		t.Errorf("mounts[0].Source = %q, want %q (git bind must come first)", mounts[0].Source, wantGitDir)
+	}
 }
 
 // stubWorktreeAddCapturingBase stubs gitrepo.WorktreeAdd to record the base ref

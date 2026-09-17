@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/gitrepo"
 )
 
@@ -40,6 +43,53 @@ func (m *Manager) isolateWorkspace(ctx context.Context, projectDir, name string)
 		}
 	}
 	return mountSource, worktree, cleanup, nil
+}
+
+// prepareWorkspace resolves everything about WHERE this run runs: the isolated
+// bind-mount source, and the binds that must accompany it — the parent repo's
+// .git (ticket 482) and every shared project path (SC-4991). A failure after the
+// worktree exists removes it, so a launch that cannot be mounted correctly never
+// becomes a tracked agent with a half-wired workspace.
+func (m *Manager) prepareWorkspace(ctx context.Context, projectDir, configDir string, opts StartOpts) (workspace, worktree string, extra []devcontainer.Mount, cleanup func(), err error) {
+	workspace, worktree, cleanup, err = m.isolateWorkspace(ctx, projectDir, opts.Name)
+	if err != nil {
+		return "", "", nil, cleanup, err
+	}
+	extra, err = sharedMounts(projectDir, configDir, worktree, opts.SharedPaths)
+	if err != nil {
+		cleanup()
+		return "", "", nil, func() {}, err
+	}
+	return workspace, worktree, extra, cleanup, nil
+}
+
+// sharedMounts builds the binds a worktree run needs: the parent repo's .git at
+// its host-identical path, then one bind per shared project path at the SAME
+// relative path inside the container workspace — which is why the target is
+// resolved through devcontainer rather than guessed here.
+func sharedMounts(projectDir, configDir, worktree string, sharedPaths []string) ([]devcontainer.Mount, error) {
+	var mounts []devcontainer.Mount
+	if gitDir := worktreeGitDir(projectDir, worktree); gitDir != "" {
+		mounts = append(mounts, devcontainer.Bind(gitDir, gitDir))
+	}
+	// No worktree means no isolation: the workspace already IS the project, so a
+	// shared path is already shared.
+	if worktree == "" || len(sharedPaths) == 0 {
+		return mounts, nil
+	}
+	workspaceDir := devcontainer.ContainerWorkspaceDir(configDir)
+	for _, p := range sharedPaths {
+		rel := filepath.Clean(p)
+		if filepath.IsAbs(rel) || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, errors.WithDetails("shared path must be a relative path inside the project", "path", p)
+		}
+		src := filepath.Join(projectDir, rel)
+		if err := os.MkdirAll(src, 0o750); err != nil {
+			return nil, errors.WrapWithDetails(err, "creating shared project path", "path", src)
+		}
+		mounts = append(mounts, devcontainer.Bind(src, path.Join(workspaceDir, filepath.ToSlash(rel))))
+	}
+	return mounts, nil
 }
 
 // mountSourceForRun resolves the per-run bind-mount source: a private detached

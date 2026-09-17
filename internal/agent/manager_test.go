@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/internal/devcontainer"
+	"github.com/gethuman-sh/human/internal/gitrepo"
 )
 
 // mockDockerClient implements devcontainer.DockerClient for agent tests.
@@ -677,5 +679,104 @@ func TestExecClaudeDetached_continueFlag(t *testing.T) {
 	want := []string{"claude", "--dangerously-skip-permissions", "--continue", "-p", "resume this"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("argv = %v, want %v", got, want)
+	}
+}
+
+// stubWorktreeDetach records every worktree path detach was called with.
+func stubWorktreeDetach(t *testing.T) *[]string {
+	t.Helper()
+	var calls []string
+	prev := gitrepo.WorktreeDetach
+	gitrepo.WorktreeDetach = func(_ context.Context, worktree string) error {
+		calls = append(calls, worktree)
+		return nil
+	}
+	t.Cleanup(func() { gitrepo.WorktreeDetach = prev })
+	return &calls
+}
+
+// Regression for SC-4991: stopLocked removes the container BEFORE it ever
+// touches the worktree, and for a no-handoff run it only DETACHES (never
+// removes) the worktree. Asserted together with the project file surviving:
+// a shared path lives only in the (already-torn-down) container's mount
+// namespace, so nothing on the host stop path can reach it.
+func TestStopLocked_NoHandoffDetachesAndKeepsProjectFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	detachCalls := stubWorktreeDetach(t)
+	removeCalls := stubWorktreeRemove(t)
+
+	projectDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, "mockups"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	keepFile := filepath.Join(projectDir, "mockups", "keep.txt")
+	if err := os.WriteFile(keepFile, []byte("project state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(t.TempDir(), "kept-wt")
+
+	if err := WriteMeta(Meta{
+		Name: "mockups-sc-1", ContainerID: "c", ContainerName: ContainerName("mockups-sc-1"),
+		Status: StatusRunning, ProjectDir: projectDir, Worktree: wt, Handoff: false,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockDockerClient{}
+	mgr := &Manager{Docker: mock}
+	if err := mgr.Stop(context.Background(), "mockups-sc-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(*detachCalls) != 1 || (*detachCalls)[0] != wt {
+		t.Fatalf("WorktreeDetach calls = %v, want [%s]", *detachCalls, wt)
+	}
+	if len(*removeCalls) != 0 {
+		t.Fatalf("WorktreeRemove calls = %v, want none for a no-handoff run", *removeCalls)
+	}
+	if len(mock.stopCalls) == 0 || len(mock.removeCalls) == 0 {
+		t.Fatalf("container stop/remove not recorded: stop=%v remove=%v", mock.stopCalls, mock.removeCalls)
+	}
+	if _, err := os.Stat(keepFile); err != nil {
+		t.Fatalf("project file must survive stop: %v", err)
+	}
+}
+
+// Regression for SC-4991: a handoff run removes only the WORKTREE — never the
+// project's own shared-path directory, even though the worktree may carry a
+// same-named subdirectory of its own.
+func TestStopLocked_HandoffRemovesOnlyTheWorktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	removeCalls := stubWorktreeRemove(t)
+
+	projectDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, "mockups"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	keepFile := filepath.Join(projectDir, "mockups", "keep.txt")
+	if err := os.WriteFile(keepFile, []byte("project state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wt := filepath.Join(t.TempDir(), "kept-wt")
+
+	if err := WriteMeta(Meta{
+		Name: "mockups-sc-2", ContainerID: "c", ContainerName: ContainerName("mockups-sc-2"),
+		Status: StatusRunning, ProjectDir: projectDir, Worktree: wt, Handoff: true,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := &Manager{Docker: &mockDockerClient{}}
+	if err := mgr.Stop(context.Background(), "mockups-sc-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(*removeCalls) != 1 || (*removeCalls)[0] != [2]string{projectDir, wt} {
+		t.Fatalf("WorktreeRemove calls = %v, want [(%s, %s)]", *removeCalls, projectDir, wt)
+	}
+	if _, err := os.Stat(keepFile); err != nil {
+		t.Fatalf("project file must survive stop: %v", err)
 	}
 }

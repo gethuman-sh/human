@@ -61,6 +61,33 @@ func daemonVersion(info *daemon.DaemonInfo) string {
 	return info.Version
 }
 
+// workspaceFolder is where projectDir is mounted inside the container: what the
+// config declares, else /workspaces/<basename>.
+func workspaceFolder(cfg *DevcontainerConfig, projectDir string) string {
+	if cfg.WorkspaceFolder != "" {
+		return cfg.WorkspaceFolder
+	}
+	return "/workspaces/" + filepath.Base(projectDir)
+}
+
+// ContainerWorkspaceDir answers the same question from outside this package,
+// for a caller that must name a path INSIDE the workspace before Up runs (an
+// agent binding a shared project directory, SC-4991). It reads the project's
+// config so the answer is the one Up will use; an unreadable config falls back
+// to the same default Up would, because Up will then fail on its own terms
+// rather than on a mount target guessed differently here.
+func ContainerWorkspaceDir(projectDir string) string {
+	abs, err := filepath.Abs(projectDir)
+	if err != nil {
+		abs = projectDir
+	}
+	cfg, err := ReadConfig(abs)
+	if err != nil {
+		return "/workspaces/" + filepath.Base(abs)
+	}
+	return workspaceFolder(ResolveVariables(cfg, abs), abs)
+}
+
 // UpOptions configures the devcontainer up operation.
 type UpOptions struct {
 	ProjectDir    string
@@ -69,13 +96,15 @@ type UpOptions struct {
 	Out           io.Writer
 	ContainerName string // override container name (default: derived from project dir)
 	SourceDir     string // override mount source (default: same as ProjectDir)
-	// GitDir is the parent repo's .git directory to bind at its host-identical
-	// path when SourceDir is a git worktree: a worktree's .git FILE references
-	// the parent by absolute host path, so without this bind every in-container
-	// git command fails with "not a git repository" (ticket 482). Empty for
-	// shared-checkout and non-git workspaces, whose .git travels with the
-	// source mount itself.
-	GitDir string
+	// ExtraMounts are the binds this launch needs beyond the source mount and
+	// the project's caches, with container-absolute targets. Two callers need
+	// one: a worktree source whose .git FILE points at the parent repo by
+	// absolute host path (ticket 482), and a run that must write output the
+	// project keeps — its private worktree is discarded, so the project's own
+	// directory is bound over the same path inside the mount (SC-4991). It is a
+	// LIST because a single scalar carve-out meant the second shared path could
+	// not exist at all.
+	ExtraMounts []Mount
 
 	// cacheVolumes is populated by Up from the project's .humanconfig caches
 	// section — callers never set it directly.
@@ -177,10 +206,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 		return nil, err
 	}
 
-	workspaceDir := cfg.WorkspaceFolder
-	if workspaceDir == "" {
-		workspaceDir = "/workspaces/" + filepath.Base(projectDir)
-	}
+	workspaceDir := workspaceFolder(cfg, projectDir)
 	remoteUser := cfg.RemoteUser
 	if remoteUser == "" {
 		remoteUser = "root"
@@ -204,7 +230,7 @@ func (m *Manager) createFresh(ctx context.Context, cfg *DevcontainerConfig, proj
 		return nil, err
 	}
 
-	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, img.Name, workspaceDir, hash, opts.DaemonInfo, opts.GitDir, opts.cacheVolumes)
+	createOpts := m.buildCreateOptions(cfg, sourceDir, projectDir, containerName, img.Name, workspaceDir, hash, opts.DaemonInfo, opts.ExtraMounts, opts.cacheVolumes)
 	ParseRunArgs(cfg.RunArgs, &createOpts, m.Logger)
 
 	containerID, err := m.createAndStart(ctx, createOpts, containerName, humanBin, opts.priorInitError, out)
@@ -343,10 +369,7 @@ func (m *Manager) handleExisting(ctx context.Context, existing ContainerSummary,
 		meta, readErr := ReadMeta(name)
 		if readErr != nil {
 			// Metadata missing but container exists; reconstruct and persist.
-			workspaceDir := cfg.WorkspaceFolder
-			if workspaceDir == "" {
-				workspaceDir = "/workspaces/" + filepath.Base(projectDir)
-			}
+			workspaceDir := workspaceFolder(cfg, projectDir)
 			remoteUser := cfg.RemoteUser
 			if remoteUser == "" {
 				remoteUser = "root"
@@ -495,7 +518,7 @@ func singleLine(s string) string {
 
 // buildCreateOptions creates ContainerCreateOptions from the devcontainer config.
 // configDir is the directory containing .devcontainer/devcontainer.json (may differ from projectDir).
-func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, configDir, containerName, imageName, workspaceDir, hash string, daemonInfo *daemon.DaemonInfo, gitDir string, caches []CacheVolume) ContainerCreateOptions {
+func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, configDir, containerName, imageName, workspaceDir, hash string, daemonInfo *daemon.DaemonInfo, extraMounts []Mount, caches []CacheVolume) ContainerCreateOptions {
 	env := make([]string, 0)
 	for k, v := range cfg.ContainerEnv {
 		env = append(env, k+"="+v)
@@ -523,12 +546,10 @@ func (m *Manager) buildCreateOptions(cfg *DevcontainerConfig, projectDir, config
 		binds = append(binds, Bind(c.VolumeName(), c.Path))
 	}
 
-	// A worktree workspace resolves git through the parent repo's .git, which
-	// lives outside the mount — bind it at its host-identical path so the
-	// worktree's absolute gitdir pointer works in-container (ticket 482).
-	if gitDir != "" {
-		binds = append(binds, Bind(gitDir, gitDir))
-	}
+	// Binds the caller resolved: the parent repo's .git for a worktree source
+	// (ticket 482), and any project directory shared back into the workspace so
+	// output written there survives the worktree (SC-4991).
+	binds = append(binds, extraMounts...)
 
 	// Mount CA cert if it exists.
 	home, _ := os.UserHomeDir()

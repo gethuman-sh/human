@@ -334,6 +334,61 @@ func TestPruneExecutions_RemovesKeptWorktree(t *testing.T) {
 	}
 }
 
+// Regression for SC-4991: a shared project path (mockups/) is bound into the
+// container's mount namespace only — it does not exist on the host outside
+// the project directory itself. The 90-day retention sweep runs on the HOST
+// and must not be able to reach (let alone delete) the project through a
+// worktree it is cleaning up, even when the worktree has its own same-named
+// directory.
+func TestPruneExecutions_KeptWorktreeSweepNeverTouchesTheProject(t *testing.T) {
+	withLogRoot(t)
+	projectDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, "mockups"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	keepFile := filepath.Join(projectDir, "mockups", "keep.txt")
+	if err := os.WriteFile(keepFile, []byte("project state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	wt := filepath.Join(t.TempDir(), "kept-wt")
+	if err := os.MkdirAll(filepath.Join(wt, "mockups"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "mockups", "worktree-only.txt"), []byte("wt state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var removed [][2]string
+	prev := gitrepo.WorktreeRemove
+	gitrepo.WorktreeRemove = func(_ context.Context, repo, path string) error {
+		removed = append(removed, [2]string{repo, path})
+		return nil // records only, does not delete — mirrors the real call under test
+	}
+	t.Cleanup(func() { gitrepo.WorktreeRemove = prev })
+
+	if _, err := NewExecution(LaunchRecord{
+		ID: "stale", Agent: "a", StartedAt: time.Now().Add(-100 * 24 * time.Hour),
+		Worktree: wt, RepoDir: projectDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := PruneExecutions(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(removed) != 1 || removed[0] != [2]string{projectDir, wt} {
+		t.Fatalf("WorktreeRemove = %v, want [(%s, %s)]", removed, projectDir, wt)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Fatalf("kept worktree dir should be gone, stat err = %v", err)
+	}
+	if _, err := os.Stat(keepFile); err != nil {
+		t.Fatalf("project file must survive the sweep: %v", err)
+	}
+}
+
 func TestPruneExecutions_KeepsRecentWorktree(t *testing.T) {
 	withLogRoot(t)
 	var removed []string
