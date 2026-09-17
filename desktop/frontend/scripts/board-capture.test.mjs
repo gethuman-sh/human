@@ -50,12 +50,22 @@ function pxValue(body, prop) {
   return Number(m[1]);
 }
 
-const renderIdeaSpaceBody = functionBody(stripTsComments(ts), "function renderIdeaSpace(): HTMLElement {");
+const src = stripTsComments(ts);
+const renderIdeaSpaceBody = functionBody(src, "function renderIdeaSpace(): HTMLElement {");
+// SC-4818: idea capture is a centered composer on document.body. The three
+// bodies below are the whole surface — the shared dialog shell, the composer
+// that opens on it, and the filing that follows a capture.
+const buildModalBody = functionBody(
+  src,
+  "function buildModal(className: string, html: string): { modal: HTMLElement; close: () => void } {",
+);
+const composerBody = functionBody(src, 'function showIdeaCaptureModal(prefill = ""): void {');
+const captureIdeaBody = functionBody(src, "async function captureIdea(title: string): Promise<void> {");
 
 // The class in the markup and the class in the selector are one fact written
 // twice: a rename that misses the second throws on the non-null assertion and
 // the header dies at render. Assert them together so the pair fails here.
-test("the Ideas header renders .capture-idea and wires it to the quick-add (SC-4725)", () => {
+test("the Ideas header renders .capture-idea and wires it to the composer (SC-4725, SC-4818)", () => {
   assert.match(renderIdeaSpaceBody, /class="capture-idea"/, "the header must render the capture-idea button");
   assert.doesNotMatch(
     renderIdeaSpaceBody, /add-card/,
@@ -63,8 +73,8 @@ test("the Ideas header renders .capture-idea and wires it to the quick-add (SC-4
   );
   assert.match(
     renderIdeaSpaceBody,
-    /querySelector\("\.capture-idea"\)!\.addEventListener\("click", \(\) => showIdeaQuickAdd\(subcols\[0\]\)\)/,
-    "the click must be wired via .capture-idea to the leftmost sub-column's quick-add",
+    /querySelector\("\.capture-idea"\)!\.addEventListener\("click", \(\) => showIdeaCaptureModal\(\)\)/,
+    "the click must be wired via .capture-idea to the idea composer",
   );
 });
 
@@ -113,4 +123,110 @@ test("the fancy press-squish covers the new control (SC-4725)", () => {
   const squish = stripped.match(/((?:\[data-theme="fancy"\][^,{]*,\s*)*\[data-theme="fancy"\][^,{]*:active\s*)\{\s*transform:\s*scale\(0\.92\)/);
   assert.ok(squish, 'the fancy scale(0.92) :active rule must exist');
   assert.match(squish[1], /\.capture-idea:active/, "the fancy :active squish must list .capture-idea:active");
+});
+
+// The bug this ticket fixes is structural, not cosmetic: capture was a child of
+// a narrow column, which is what made the typing area one line wide. Assert the
+// structure (an overlay on document.body) rather than any pixel value.
+test("idea capture is an overlay on document.body, not a column child (SC-4818)", () => {
+  assert.doesNotMatch(src, /showIdeaQuickAdd/, "the inline quick-add function must be gone");
+  assert.doesNotMatch(src, /idea-quick-add/, "the inline quick-add markup class must be gone");
+  assert.match(
+    composerBody, /buildModal\("modal idea-modal"/,
+    "the composer must be built on the shared .modal-overlay family, not a new one",
+  );
+});
+
+test("the composer is a multi-line text area (SC-4818)", () => {
+  assert.match(composerBody, /class="modal-textarea" rows="6"/, "a title too long for one line must wrap in a textarea");
+  assert.match(composerBody, /modal-title">Capture an idea/, "the composer must say what it captures");
+});
+
+// Enter is the capture gesture the old quick-add had; a textarea would
+// otherwise swallow it as a newline, so the preventDefault is the fix, not
+// tidiness.
+test("Enter captures and Shift+Enter breaks a line (SC-4818)", () => {
+  assert.match(composerBody, /e\.key !== "Enter" \|\| e\.shiftKey/, "Shift+Enter must fall through to the textarea");
+  assert.match(composerBody, /e\.preventDefault\(\)/, "a capturing Enter must not also leave a newline behind");
+  assert.match(composerBody, /submit\(\)/, "Enter must run the same submit the Capture button runs");
+});
+
+test("the composer opens focused (SC-4818)", () => {
+  assert.match(composerBody, /input\.focus\(\);/, "the caret must be in the text area on open");
+});
+
+// The three ways out live in buildModal exactly once. A copy in the composer
+// would be the third paste this extraction exists to prevent.
+test("Escape, the scrim and Cancel all close, once, in the shared builder (SC-4818)", () => {
+  assert.match(buildModalBody, /e\.key === "Escape"/, "Escape must close the dialog");
+  assert.match(buildModalBody, /e\.target === overlay/, "a click on the scrim, not inside the box, must close it");
+  assert.match(
+    buildModalBody, /querySelector\("\.modal-cancel"\)!\.addEventListener\("click", close\)/,
+    "Cancel must close the dialog",
+  );
+  for (const [re, what] of [
+    [/e\.key === "Escape"/, "Escape"],
+    [/e\.target === overlay/, "the scrim click"],
+    [/\.modal-cancel"\)!\.addEventListener/, "Cancel"],
+  ]) {
+    assert.doesNotMatch(composerBody, re, `the composer must not re-implement ${what} — buildModal owns it`);
+  }
+});
+
+test("a second click focuses the open composer instead of stacking one (SC-4818)", () => {
+  assert.match(
+    composerBody,
+    /querySelector<HTMLTextAreaElement>\("\.idea-modal \.modal-textarea"\)[\s\S]*?if \(open\) \{[\s\S]*?open\.focus\(\);\s*return;/,
+    "an already-open composer must take the caret back, not be covered by a second overlay",
+  );
+});
+
+// A typed description would permanently stand the background drafter down
+// (VerdictStandDown, ReasonUnknownProvenance), so the wire stays title-only.
+test("the wire stays title-only (SC-4818)", () => {
+  assert.match(captureIdeaBody, /go\(\)\.CreateIdea\(title\)/, "capture must file through CreateIdea with the title");
+  assert.doesNotMatch(src, /CreateIdea\([^)]*,/, "CreateIdea must never be handed a second argument");
+});
+
+// The textarea can hold newlines; a tracker title cannot, and nothing
+// downstream normalizes one — the placeholder card must carry the same string.
+test("a multi-line entry becomes a single-line title (SC-4818)", () => {
+  assert.match(composerBody, /replace\(\/\\s\+\/g, " "\)\.trim\(\)/, "whitespace runs must collapse before the title is sent");
+});
+
+test("an empty composer captures nothing (SC-4818)", () => {
+  assert.match(
+    composerBody,
+    /if \(!title\) \{[\s\S]*?input\.focus\(\);\s*return;\s*\}[\s\S]*?captureIdea\(title\)/,
+    "an empty or all-whitespace composer must keep the caret and file nothing",
+  );
+});
+
+// SC-1691: the placeholder must never outlive a create that failed, and the
+// text must come back with the error rather than disappear with it.
+test("a failed create rolls back and reopens the composer with the title (SC-4818, SC-1691)", () => {
+  assert.match(captureIdeaBody, /pendingIdeas = dropPending\(pendingIdeas, pending\)/, "the placeholder must be dropped");
+  assert.match(captureIdeaBody, /showError\(errMessage\(err\)\)/, "the failure must be shown");
+  assert.match(captureIdeaBody, /showIdeaCaptureModal\(title\)/, "the typed title must come back in a fresh composer");
+});
+
+test("a successful create invalidates in-flight fetches (SC-4818)", () => {
+  assert.match(
+    captureIdeaBody, /reconcileEpoch\+\+[\s\S]*?await reconcile\(\)/,
+    "a pre-create snapshot must not be allowed to blink the new ticket away",
+  );
+});
+
+test("the inline quick-add styles are gone (SC-4818)", () => {
+  assert.doesNotMatch(stripped, /\.idea-quick-add/, "the removed input must not leave its rules behind");
+});
+
+// One overlay family, not two: the composer takes the sibling dialog's field
+// rules by joining its selector lists rather than copying the declarations.
+test("the composer shares the bug dialog's field rules rather than copying them (SC-4818)", () => {
+  assert.match(
+    stripped, /\.bug-modal \.modal-textarea,\s*\.idea-modal \.modal-textarea \{/,
+    "the textarea rule must name both dialogs instead of being pasted",
+  );
+  assert.match(exactRuleBody(".idea-modal"), /width:/, ".idea-modal must set its own width");
 });

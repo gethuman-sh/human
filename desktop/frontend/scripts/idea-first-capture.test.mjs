@@ -2,7 +2,7 @@
 // permanent by SC-4521: the ideation panel, its engine and its routes are
 // gone, so no board surface can create a finished ticket outright. Capture is
 // the only way in — the Ideas column's `+` and the post-import "Create first
-// ticket" prompt both open the same quick-add — and what a captured idea
+// ticket" prompt both open the same composer — and what a captured idea
 // becomes is decided by the background drafter and the description editor at
 // promotion.
 // The frontend is intentionally dependency-free (no DOM test runner), so this
@@ -32,14 +32,17 @@ test("no board surface starts an ideation session (SC-2858, SC-4608, SC-4521)", 
 // The post-import prompt used to capture an idea and then evolve it in a chat.
 // It now captures an idea and stops — the drafter writes the description,
 // promotion opens the editor.
-test("the post-import prompt captures an idea (SC-4608)", () => {
+test("the post-import prompt captures an idea (SC-4608, SC-4818)", () => {
   const wizardBody = functionBody(ts, "function renderStartWizard(): void {");
   assert.match(wizardBody, /captureFirstIdea\(\);/, "Create-first-ticket must go through idea capture");
   assert.doesNotMatch(wizardBody, /Ideation/, "and must not reach the ideation panel");
 
   const captureBody = functionBody(ts, "function captureFirstIdea(): void {");
-  assert.match(captureBody, /querySelector<HTMLElement>\("\.idea-subcol"\)/);
-  assert.match(captureBody, /showIdeaQuickAdd\(col\)/, "it opens the Ideas column's own quick-add");
+  assert.match(captureBody, /showIdeaCaptureModal\(\)/, "it opens the same composer the Ideas header opens");
+  assert.doesNotMatch(
+    captureBody, /idea-subcol/,
+    "capture no longer depends on the board having rendered its columns (SC-4818)",
+  );
 });
 
 // SC-4608: promotion is a label edit plus the description editor, never an
@@ -127,9 +130,9 @@ test("wireRail no longer wires a data-action ideation branch (SC-4485)", () => {
 
 // The styling of this control changed in SC-4725; its wiring and its label did
 // not. That is what this guards — the surviving entry point still reaches the
-// same quick-add and still says what it does.
-test("the Ideas column's capture button still wires the quick-add and keeps its label (SC-4485, SC-4725)", () => {
+// same composer and still says what it does.
+test("the Ideas column's capture button still wires capture and keeps its label (SC-4485, SC-4725, SC-4818)", () => {
   const renderIdeaSpaceBody = functionBody(ts, "function renderIdeaSpace(): HTMLElement {");
   assert.match(renderIdeaSpaceBody, /Capture an idea/, "the Ideas column's capture control must remain");
-  assert.match(renderIdeaSpaceBody, /showIdeaQuickAdd\(subcols\[0\]\)/, "its quick-add wiring must remain");
+  assert.match(renderIdeaSpaceBody, /showIdeaCaptureModal\(\)/, "its capture wiring must remain");
 });
