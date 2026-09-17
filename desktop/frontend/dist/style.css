@@ -253,7 +253,7 @@ body {
 
 /* The idea space: the Ideas queue widened into five lanes spanning a
    loose→concrete axis. It reads as ONE column-styled rounded rectangle —
-   a shared header (title, quick-add, total count) above five invisible,
+   a shared header (title, capture control, total count) above five invisible,
    unlabeled lanes; card position alone expresses how concrete an idea is. */
 .idea-space {
   display: flex;
@@ -292,21 +292,6 @@ body {
   background: transparent;
   border: none;
   border-radius: 0;
-}
-
-/* Inline quick-add input at the top of an idea-space sub-column. */
-.idea-quick-add {
-  background: var(--card-bg);
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  padding: 8px 10px;
-  color: var(--text);
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.idea-quick-add:disabled {
-  opacity: 0.5;
 }
 
 .column {
@@ -630,8 +615,17 @@ body {
   width: 420px;
 }
 
+/* The idea composer (SC-4818): the same dialog family as file-a-bug, wider
+   because room to type is the point of it. It has no title input — the wire is
+   a single-line title and a typed description would stand the background
+   drafter down — so only the textarea rules are shared. */
+.idea-modal {
+  width: 480px;
+}
+
 .bug-modal .modal-input,
-.bug-modal .modal-textarea {
+.bug-modal .modal-textarea,
+.idea-modal .modal-textarea {
   width: 100%;
   margin-top: 12px;
   padding: 8px 10px;
@@ -644,17 +638,20 @@ body {
 }
 
 .bug-modal .modal-input:focus,
-.bug-modal .modal-textarea:focus {
+.bug-modal .modal-textarea:focus,
+.idea-modal .modal-textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
 
-.bug-modal .modal-textarea {
+.bug-modal .modal-textarea,
+.idea-modal .modal-textarea {
   resize: vertical;
   min-height: 90px;
 }
 
-.bug-modal .modal-confirm {
+.bug-modal .modal-confirm,
+.idea-modal .modal-confirm {
   background: var(--accent);
 }
 
