@@ -1497,16 +1497,39 @@ let findbugsHunting = false;
 // optimistically on a Find Security click so the button responds instantly.
 let securityHunting = false;
 
-// showBugModal opens the file-a-bug dialog: a title and a free-text
-// description. Filing is optimistic like the idea quick-add — the placeholder
-// card appears immediately; a failed create reopens the dialog with the text
-// intact so nothing typed is lost.
-function showBugModal(prefillTitle = "", prefillDescription = ""): void {
+// buildModal creates the centered dialog every filing surface on this board
+// shares: the scrim, the .modal box, and the three ways out that must behave
+// identically wherever a dialog appears (a click on the scrim, Escape, Cancel).
+// Extracted when idea capture became the third dialog built this way — a third
+// paste is where the three stop agreeing (SC-4818). The caller owns its own
+// fields and its own confirm gesture, which is where the three legitimately
+// differ.
+function buildModal(className: string, html: string): { modal: HTMLElement; close: () => void } {
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   const modal = document.createElement("div");
-  modal.className = "modal bug-modal";
-  modal.innerHTML = `
+  modal.className = className;
+  modal.innerHTML = html;
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  const close = (): void => overlay.remove();
+  overlay.addEventListener("click", (e: MouseEvent) => {
+    if (e.target === overlay) close();
+  });
+  modal.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Escape") close();
+  });
+  modal.querySelector(".modal-cancel")!.addEventListener("click", close);
+  return { modal, close };
+}
+
+// showBugModal opens the file-a-bug dialog: a title and a free-text
+// description. Filing is optimistic like idea capture — the placeholder
+// card appears immediately; a failed create reopens the dialog with the text
+// intact so nothing typed is lost.
+function showBugModal(prefillTitle = "", prefillDescription = ""): void {
+  const { modal, close } = buildModal("modal bug-modal", `
     <div class="modal-title">File a bug</div>
     <input class="modal-input" type="text" placeholder="What is broken?" />
     <textarea class="modal-textarea" rows="6" placeholder="What did you see, what did you expect?"></textarea>
@@ -1514,9 +1537,7 @@ function showBugModal(prefillTitle = "", prefillDescription = ""): void {
       <button class="modal-cancel" type="button">Cancel</button>
       <button class="modal-confirm" type="button">Create bug</button>
     </div>
-  `;
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
+  `);
 
   const titleInput = modal.querySelector(".modal-input") as HTMLInputElement;
   const descInput = modal.querySelector(".modal-textarea") as HTMLTextAreaElement;
@@ -1524,14 +1545,6 @@ function showBugModal(prefillTitle = "", prefillDescription = ""): void {
   titleInput.value = prefillTitle;
   descInput.value = prefillDescription;
 
-  const close = (): void => overlay.remove();
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) close();
-  });
-  modal.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Escape") close();
-  });
-  modal.querySelector(".modal-cancel")!.addEventListener("click", close);
   confirm.addEventListener("click", () => {
     const title = titleInput.value.trim();
     if (!title) {
@@ -1571,11 +1584,7 @@ async function createBug(title: string, description: string): Promise<void> {
 // half's counterpart to showBugModal, same optimistic-filing contract (the
 // placeholder appears at once; a failed create reopens the dialog intact).
 function showSecurityModal(prefillTitle = "", prefillDescription = ""): void {
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  const modal = document.createElement("div");
-  modal.className = "modal bug-modal";
-  modal.innerHTML = `
+  const { modal, close } = buildModal("modal bug-modal", `
     <div class="modal-title">File a security issue</div>
     <input class="modal-input" type="text" placeholder="What is the vulnerability?" />
     <textarea class="modal-textarea" rows="6" placeholder="What is exposed, and how could it be exploited?"></textarea>
@@ -1583,9 +1592,7 @@ function showSecurityModal(prefillTitle = "", prefillDescription = ""): void {
       <button class="modal-cancel" type="button">Cancel</button>
       <button class="modal-confirm" type="button">Create security issue</button>
     </div>
-  `;
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
+  `);
 
   const titleInput = modal.querySelector(".modal-input") as HTMLInputElement;
   const descInput = modal.querySelector(".modal-textarea") as HTMLTextAreaElement;
@@ -1593,14 +1600,6 @@ function showSecurityModal(prefillTitle = "", prefillDescription = ""): void {
   titleInput.value = prefillTitle;
   descInput.value = prefillDescription;
 
-  const close = (): void => overlay.remove();
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) close();
-  });
-  modal.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Escape") close();
-  });
-  modal.querySelector(".modal-cancel")!.addEventListener("click", close);
   confirm.addEventListener("click", () => {
     const title = titleInput.value.trim();
     if (!title) {
