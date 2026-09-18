@@ -77,6 +77,13 @@ type CommenterFor func() (tracker.Commenter, error)
 // contract. A nil value skips the authorization.
 type OnHandoff func(agentName string)
 
+// OnAuthRefused fires with the ticket key of a board run that died because the
+// model API refused its Claude login. The credential store looks the same
+// whether its refresh token is live or already rejected, so this exit is the
+// only evidence the launch gate can act on (SC-5036). A nil value records
+// nothing.
+type OnAuthRefused func(pmKey string)
+
 // RunExit is one board agent run's exit: what the hook event said, resolved to
 // the work the daemon's own launch record says it was for, plus the ticket's
 // comment thread as read after the exit.
@@ -140,9 +147,18 @@ type FailureDeps struct {
 	OnHandoff        OnHandoff
 	Retry            StageRetry
 	LatestClass      LatestOutcomeClass
+	OnAuthRefused    OnAuthRefused
 	// DaemonID stamps this daemon's identity on every marker the exit path posts.
 	DaemonID string
 	Logger   zerolog.Logger
+}
+
+// noteAuthRefusal passes an exit classified as an authentication refusal on to
+// the doctor's evidence, if a recorder is wired.
+func (d FailureDeps) noteAuthRefusal(pmKey string, kind endingKind, reason string) {
+	if d.OnAuthRefused != nil && kind == endingNeedsPerson && reason == authRefusedReason {
+		d.OnAuthRefused(pmKey)
+	}
 }
 
 // handoff fires the worktree-reclaim authorization, if one is wired.
@@ -305,6 +321,7 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, evt hookevents
 	// and the model-boundary class BEFORE the outage gate below, so it is
 	// recognised even when retry.recordedOutage sees nothing.
 	kind, reason := classifyUnavailability(exit.ErrorType, deps.LatestClass, exit.PMKey, string(exit.Stage))
+	deps.noteAuthRefusal(exit.PMKey, kind, reason)
 	if handleOutageExit(ctx, exit, commenter, deps, kind, reason) {
 		return
 	}

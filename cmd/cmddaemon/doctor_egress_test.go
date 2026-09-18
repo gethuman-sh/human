@@ -83,7 +83,7 @@ func TestBuildDoctorChecks_egressIsGating(t *testing.T) {
 
 	reg, err := daemon.NewProjectRegistry([]string{t.TempDir()})
 	require.NoError(t, err)
-	egress := findCheck(t, buildDoctorChecks(reg, nil, doctorPersistence{}), "egress")
+	egress := findCheck(t, buildDoctorChecks(reg, nil, doctorPersistence{}, nil), "egress")
 	assert.True(t, egress.Gating)
 	assert.False(t, egress.Transient, "a local policy read cannot blip")
 }

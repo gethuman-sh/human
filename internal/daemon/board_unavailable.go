@@ -19,6 +19,11 @@ const (
 	endingNeedsPerson                   // a wall that does not self-heal: uncharged red, names the action
 )
 
+// authRefusedReason is the substrate phrase for a run the model API refused to
+// authenticate. Named because the exit path also acts on it beyond the card:
+// it is the evidence the claude-auth doctor check needs (SC-5036).
+const authRefusedReason = "model API authentication was refused"
+
 // classifyUnavailability folds the hook errorType and the model-boundary
 // outcome class into one verdict, so a refusal that kills the agent before it
 // records an exit is still recognised (the SC-2856 incident: a session-limit
@@ -63,7 +68,7 @@ func classifyErrorType(errorType string) (endingKind, string) {
 	case t == "server_error" || t == "api_error":
 		return endingPaused, "model API returned an error"
 	case t == "authentication_error" || t == "auth":
-		return endingNeedsPerson, "model API authentication was refused"
+		return endingNeedsPerson, authRefusedReason
 	case strings.Contains(t, "billing") || strings.Contains(t, "credit"):
 		return endingNeedsPerson, "model API billing/credit limit reached"
 	default:
@@ -84,7 +89,7 @@ func classifyOutcomeClass(class string) (endingKind, string) {
 	case proxy.ClassNetwork:
 		return endingPaused, "could not reach the model API"
 	case proxy.ClassAuth:
-		return endingNeedsPerson, "model API authentication was refused"
+		return endingNeedsPerson, authRefusedReason
 	case proxy.ClassSpendLimit:
 		return endingNeedsPerson, "model API billing/credit limit reached"
 	default:
