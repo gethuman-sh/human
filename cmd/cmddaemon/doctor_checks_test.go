@@ -43,7 +43,7 @@ func TestBuildDoctorChecks_Classification(t *testing.T) {
 	reg, err := daemon.NewProjectRegistry([]string{t.TempDir()})
 	require.NoError(t, err)
 
-	checks := buildDoctorChecks(reg, nil, doctorPersistence{})
+	checks := buildDoctorChecks(reg, nil, doctorPersistence{}, nil)
 
 	byID := make(map[string]daemon.DoctorCheckDef, len(checks))
 	for _, c := range checks {
@@ -124,7 +124,7 @@ func TestClaudeReauthRemedy_doesNotDocumentAgentStop(t *testing.T) {
 // red and names the re-authenticate fix so the daemon stops sniping board work.
 func TestCheckClaudeAuth_expired(t *testing.T) {
 	reg := claudeAuthRegistry(t, time.Now().Add(-time.Hour).UnixMilli())
-	ok, detail := checkClaudeAuth(reg)
+	ok, detail := checkClaudeAuth(reg, nil)
 	assert.False(t, ok)
 	assert.Contains(t, detail, "container credential store")
 }
@@ -132,7 +132,7 @@ func TestCheckClaudeAuth_expired(t *testing.T) {
 // A session whose expiresAt is in the future is fresh — the daemon may serve work.
 func TestCheckClaudeAuth_valid(t *testing.T) {
 	reg := claudeAuthRegistry(t, time.Now().Add(time.Hour).UnixMilli())
-	ok, detail := checkClaudeAuth(reg)
+	ok, detail := checkClaudeAuth(reg, nil)
 	assert.True(t, ok)
 	assert.Equal(t, "session valid", detail)
 }
@@ -145,7 +145,7 @@ func TestCheckClaudeAuth_absentStoreIsUnauthenticated(t *testing.T) {
 	dir := t.TempDir()
 	reg, err := daemon.NewProjectRegistry([]string{dir})
 	require.NoError(t, err)
-	ok, detail := checkClaudeAuth(reg)
+	ok, detail := checkClaudeAuth(reg, nil)
 	assert.False(t, ok)
 	assert.Contains(t, detail, dir)
 	assert.Contains(t, detail, "container credential store")
@@ -160,7 +160,7 @@ func TestCheckClaudeAuth_unreadableStoreFailsOpen(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".devcontainer", "claude", ".credentials.json"), 0o755))
 	reg, err := daemon.NewProjectRegistry([]string{dir})
 	require.NoError(t, err)
-	ok, detail := checkClaudeAuth(reg)
+	ok, detail := checkClaudeAuth(reg, nil)
 	assert.True(t, ok)
 	assert.Equal(t, "session valid", detail)
 }
@@ -174,7 +174,7 @@ func TestCheckClaudeAuth_unparseableStoreFailsOpen(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(credDir, ".credentials.json"), []byte("not json at all"), 0o600))
 	reg, err := daemon.NewProjectRegistry([]string{dir})
 	require.NoError(t, err)
-	ok, detail := checkClaudeAuth(reg)
+	ok, detail := checkClaudeAuth(reg, nil)
 	assert.True(t, ok)
 	assert.Equal(t, "session valid", detail)
 }
@@ -185,7 +185,7 @@ func TestCheckClaudeAuth_unparseableStoreFailsOpen(t *testing.T) {
 // empty — which is why an empty block is NOT treated like an absent store.
 func TestCheckClaudeAuth_missingExpiryFailsOpen(t *testing.T) {
 	reg := claudeAuthRegistry(t, 0)
-	ok, _ := checkClaudeAuth(reg)
+	ok, _ := checkClaudeAuth(reg, nil)
 	assert.True(t, ok)
 }
 
@@ -194,7 +194,7 @@ func TestCheckClaudeAuth_missingExpiryFailsOpen(t *testing.T) {
 // must not block launches (the "but Claude IS authenticated" false positive).
 func TestCheckClaudeAuth_expiredAccessTokenWithRefreshTokenIsHealthy(t *testing.T) {
 	reg := claudeAuthRegistryRefresh(t, time.Now().Add(-time.Hour).UnixMilli(), "rt-present")
-	ok, detail := checkClaudeAuth(reg)
+	ok, detail := checkClaudeAuth(reg, nil)
 	assert.True(t, ok)
 	assert.Equal(t, "session valid", detail)
 }

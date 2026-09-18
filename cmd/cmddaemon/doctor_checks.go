@@ -31,7 +31,7 @@ type doctorPersistence struct {
 // because they become the board LED tooltip and launch-refusal messages —
 // infrastructure failures must be attributed to infrastructure, never to a
 // ticket (SC-514; regressions 428/478 are the motivating incidents).
-func buildDoctorChecks(reg *daemon.ProjectRegistry, resolver *vault.Resolver, persist doctorPersistence) []daemon.DoctorCheckDef {
+func buildDoctorChecks(reg *daemon.ProjectRegistry, resolver *vault.Resolver, persist doctorPersistence, refusals *claudeAuthRefusals) []daemon.DoctorCheckDef {
 	diagnose := trackerDiagnoserFunc(reg, resolver)
 	checks := []daemon.DoctorCheckDef{
 		// The credential check reaches out to tracker APIs and the vault agent,
@@ -50,7 +50,13 @@ func buildDoctorChecks(reg *daemon.ProjectRegistry, resolver *vault.Resolver, pe
 			return checkAgentSkills(reg)
 		}},
 		{ID: "claude-auth", Name: "Claude authentication", Run: func(context.Context) (bool, string) {
-			return checkClaudeAuth(reg)
+			return checkClaudeAuth(reg, refusals)
+		}},
+		// The host login serves only the description editor, never a board
+		// launch, so it is advisory: a dead host login must not stop the
+		// containers, which sign in with their own store.
+		{ID: "host-claude-auth", Name: "host Claude authentication", Run: func(ctx context.Context) (bool, string) {
+			return checkHostClaudeAuth(refusals, hostClaudeStoreStamp(ctx))
 		}},
 		{ID: "egress", Name: "container egress", Run: func(context.Context) (bool, string) {
 			return checkEgress(reg)
@@ -286,26 +292,33 @@ func claudeStoreAt(path string, nowMS int64) claudeStoreState {
 	return claudeStoreOK
 }
 
-// checkClaudeAuth catches the two states in which every launched agent dies at
+// checkClaudeAuth catches the three states in which every launched agent dies at
 // Claude auth while the daemon keeps competing for board work: a session that
-// expired past refreshing (SC-912, ~15s deaths) and a credential store that was
+// expired past refreshing (SC-912, ~15s deaths), a credential store that was
 // never signed in at all (SC-4686, ~7s deaths with "Not logged in · Please run
-// /login"). Both are launch-critical, so reporting them refuses the pickup
-// instead of spending a stage's retry budget on a container that cannot work.
+// /login"), and a refresh token the auth server rejects (SC-5036). The last
+// looks healthy on disk, so it is judged from refusals: a board run on the
+// store that died at authentication, with the store unchanged since. All three
+// are launch-critical, so reporting them refuses the pickup instead of spending
+// a stage's retry budget on a container that cannot work.
 //
 // The in-container Claude store is bind-mounted from the host at
 // <entry.Dir>/.devcontainer/claude/ → ~/.claude, so the probe reads the host
 // copy of .credentials.json. claudeStoreAt holds which states are judgeable.
-func checkClaudeAuth(reg *daemon.ProjectRegistry) (bool, string) {
+func checkClaudeAuth(reg *daemon.ProjectRegistry, refusals *claudeAuthRefusals) (bool, string) {
 	nowMS := time.Now().UnixMilli()
-	var absent, expired []string
+	var absent, expired, refused []string
 	for _, entry := range reg.Entries() {
-		switch claudeStoreAt(filepath.Join(entry.Dir, ".devcontainer", "claude", ".credentials.json"), nowMS) {
+		store := containerClaudeStore(entry.Dir)
+		switch claudeStoreAt(store, nowMS) {
 		case claudeStoreAbsent:
 			absent = append(absent, entry.Dir)
 		case claudeStoreExpired:
 			expired = append(expired, entry.Dir)
 		case claudeStoreOK:
+			if refusals.refused(store, fileStamp(store)) {
+				refused = append(refused, entry.Dir)
+			}
 		}
 	}
 	var faults []string
@@ -315,10 +328,25 @@ func checkClaudeAuth(reg *daemon.ProjectRegistry) (bool, string) {
 	if len(expired) > 0 {
 		faults = append(faults, "Claude session expired for "+strings.Join(expired, ", "))
 	}
+	if len(refused) > 0 {
+		faults = append(faults, "Claude refused the login of "+strings.Join(refused, ", ")+" (its refresh token was rejected)")
+	}
 	if len(faults) > 0 {
 		return false, strings.Join(faults, "; ") + " — " + claudeReauthRemedy
 	}
 	return true, "session valid"
+}
+
+// checkHostClaudeAuth reports the host's own Claude login dead once a headless
+// turn on it was refused authentication and the login has not been renewed
+// since. `claude auth status` cannot answer this — it reports loggedIn for a
+// store whose refresh token the server already rejects (SC-5036).
+func checkHostClaudeAuth(refusals *claudeAuthRefusals, stamp time.Time) (bool, string) {
+	if refusals.refused(hostClaudeStore, stamp) {
+		return false, "the host's Claude login was refused (its refresh token was rejected), so the description editor cannot run — " +
+			"run 'claude' on the host and /login inside it"
+	}
+	return true, "no refusal observed"
 }
 
 // claudeReauthRemedy is the one procedure that fixes every state checkClaudeAuth

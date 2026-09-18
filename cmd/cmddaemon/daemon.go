@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -192,6 +193,7 @@ type daemonState struct {
 	auditWriter           *audit.Writer
 	confirmDB             *daemon.ConfirmDB
 	daemonID              string
+	claudeRefusals        *claudeAuthRefusals
 	// info is the on-disk identity this process will claim once it is actually
 	// serving. It is built here but written only after readiness, so a stalled
 	// startup never records a process that is not yet answering.
@@ -402,11 +404,15 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	// it (SC-781).
 	go runCodenavIndexLoop(ctx, projectRegistry, codenav.DefaultDBPath(), logger)
 
+	// One record of Claude auth refusals, shared by the runs that observe them
+	// (the description editor's host turns, board exits) and the doctor that
+	// reports them: a rejected refresh token is invisible in the store itself.
+	claudeRefusals := newClaudeAuthRefusals()
 	doctor := daemon.NewDoctorRunner(buildDoctorChecks(projectRegistry, vaultResolver, doctorPersistence{
 		stats:    statsStore != nil,
 		audit:    auditStore != nil,
 		confirms: confirmDB != nil,
-	}))
+	}, claudeRefusals))
 	// launchGate lets the autonomous stage launcher refuse work when this host
 	// fails a launch-critical doctor check (docker, agent-skills, claude-auth, egress): it
 	// leaves the handoff for a healthy daemon rather than claiming and failing it
@@ -500,7 +506,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		MockupChooser:     mockupChooserFunc(projectRegistry),
 		MockupPruner:      mockupPrunerFunc(projectRegistry),
 		IdeaCreator:       ideaCreator(projectRegistry, vaultResolver, hookStore),
-		DescEdit:          descEditEngine(projectRegistry, vaultResolver, daemonID, logger),
+		DescEdit:          descEditEngine(projectRegistry, vaultResolver, daemonID, claudeRefusals, logger),
 		LeaseChecker:      leaseChecker,
 	}
 
@@ -523,6 +529,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		auditWriter:           auditWriter,
 		confirmDB:             confirmDB,
 		daemonID:              daemonID,
+		claudeRefusals:        claudeRefusals,
 		info:                  info,
 	}, nil
 }
@@ -871,6 +878,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		OnHandoff:        onHandoff,
 		Retry:            stageRetry,
 		LatestClass:      ds.modelSink.LatestClass,
+		OnAuthRefused:    containerAuthRefusedFunc(ds.srv.Projects, ds.claudeRefusals),
 		DaemonID:         ds.daemonID,
 		Logger:           logger,
 	})
@@ -4280,13 +4288,18 @@ func variationSubtree(mockupsDir, root string) []string {
 // daemon holds no conversation state beyond the resume id.
 type hostClaudeChatRunner struct {
 	reg *daemon.ProjectRegistry
+	// refusals and storeStamp feed the host-claude-auth doctor check: a turn is
+	// the only thing that learns the host login's refresh token was rejected.
+	refusals   *claudeAuthRefusals
+	storeStamp func(context.Context) time.Time
 }
 
 // claudeTurnOutput is the subset of `claude -p --output-format json` we need.
 type claudeTurnOutput struct {
-	Result    string `json:"result"`
-	SessionID string `json:"session_id"`
-	IsError   bool   `json:"is_error"`
+	Result         string `json:"result"`
+	SessionID      string `json:"session_id"`
+	IsError        bool   `json:"is_error"`
+	APIErrorStatus int    `json:"api_error_status"`
 }
 
 func (r hostClaudeChatRunner) Run(ctx context.Context, resumeID, prompt string) (daemon.ChatTurn, error) {
@@ -4311,6 +4324,9 @@ func (r hostClaudeChatRunner) Run(ctx context.Context, resumeID, prompt string) 
 	// true exec failures (binary missing, process killed).
 	var parsed claudeTurnOutput
 	parseErr := json.Unmarshal(out, &parsed)
+	if parseErr == nil {
+		r.noteAuth(ctx, parsed)
+	}
 	if parseErr == nil && parsed.IsError {
 		return daemon.ChatTurn{}, errors.WithDetails("agent turn failed", "result", parsed.Result)
 	}
@@ -4328,6 +4344,38 @@ func (r hostClaudeChatRunner) Run(ctx context.Context, resumeID, prompt string) 
 		return daemon.ChatTurn{}, errors.WrapWithDetails(parseErr, "parsing agent turn output")
 	}
 	return daemon.ChatTurn{Reply: parsed.Result, ResumeID: parsed.SessionID}, nil
+}
+
+// noteAuth records what a turn learned about the host login. A 401 is the only
+// evidence that a refresh token which looks present was rejected; a successful
+// turn got past authentication, so it retires an earlier refusal. Other
+// failures say nothing about the login and leave the record as it is.
+func (r hostClaudeChatRunner) noteAuth(ctx context.Context, turn claudeTurnOutput) {
+	switch {
+	case turn.IsError && turn.APIErrorStatus == http.StatusUnauthorized:
+		stamp := time.Time{}
+		if r.storeStamp != nil {
+			stamp = r.storeStamp(ctx)
+		}
+		r.refusals.record(hostClaudeStore, stamp)
+	case !turn.IsError:
+		r.refusals.clear(hostClaudeStore)
+	}
+}
+
+// containerAuthRefusedFunc records a board run that died at Claude
+// authentication against its project's container store, so the claude-auth
+// check refuses the next launch instead of letting it die the same way. The
+// project is resolved from the key, exactly as the launch itself resolves it.
+func containerAuthRefusedFunc(reg *daemon.ProjectRegistry, refusals *claudeAuthRefusals) daemon.OnAuthRefused {
+	return func(pmKey string) {
+		entry, err := reg.EntryForKey(pmKey)
+		if err != nil {
+			return
+		}
+		store := containerClaudeStore(entry.Dir)
+		refusals.record(store, fileStamp(store))
+	}
 }
 
 // resolvePMCreator resolves the PM-role tracker.Creator and its first
@@ -4406,12 +4454,12 @@ func ideaCreator(reg *daemon.ProjectRegistry, resolver *vault.Resolver, hookStor
 // role-resolved PM tracker.Editor as the sole write path. No hook-store Notify: applying a description edit does
 // not move the card between stages, so there is nothing for the board's
 // subscribe loop to react to.
-func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, logger zerolog.Logger) *daemon.DescEditEngine {
+func descEditEngine(reg *daemon.ProjectRegistry, resolver *vault.Resolver, daemonID string, refusals *claudeAuthRefusals, logger zerolog.Logger) *daemon.DescEditEngine {
 	firstEntry := func() (daemon.ProjectEntry, error) {
 		return reg.SoleEntry()
 	}
 	return &daemon.DescEditEngine{
-		Runner: hostClaudeChatRunner{reg: reg},
+		Runner: hostClaudeChatRunner{reg: reg, refusals: refusals, storeStamp: hostClaudeStoreStamp},
 		ResolveEditor: func() (tracker.Editor, error) {
 			entry, err := firstEntry()
 			if err != nil {
