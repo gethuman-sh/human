@@ -4328,7 +4328,7 @@ func (r hostClaudeChatRunner) Run(ctx context.Context, resumeID, prompt string) 
 		r.noteAuth(ctx, parsed)
 	}
 	if parseErr == nil && parsed.IsError {
-		return daemon.ChatTurn{}, errors.WithDetails("agent turn failed", "result", parsed.Result)
+		return daemon.ChatTurn{}, errors.WithDetails(turnFailureMessage(parsed), "result", parsed.Result)
 	}
 	if err != nil {
 		if ctx.Err() != nil {
@@ -4338,12 +4338,48 @@ func (r hostClaudeChatRunner) Run(ctx context.Context, resumeID, prompt string) 
 		if ee, ok := goerrors.AsType[*exec.ExitError](err); ok {
 			detail = strings.TrimSpace(string(ee.Stderr))
 		}
-		return daemon.ChatTurn{}, errors.WrapWithDetails(err, "running agent turn", "stderr", detail)
+		return daemon.ChatTurn{}, errors.WrapWithDetails(err, "running agent turn"+withCause(detail), "stderr", detail)
 	}
 	if parseErr != nil {
 		return daemon.ChatTurn{}, errors.WrapWithDetails(parseErr, "parsing agent turn output")
 	}
 	return daemon.ChatTurn{Reply: parsed.Result, ResumeID: parsed.SessionID}, nil
+}
+
+// turnFailureMessage renders a failed turn as one line for the editor's status
+// line, which shows the error's message and nothing else — the cause used to
+// reach the daemon log alone, leaving "agent turn failed" as the whole story a
+// person got (SC-5041). A 401 additionally names the remedy, because the
+// session that must be renewed is the host's, not anything the editor holds.
+func turnFailureMessage(turn claudeTurnOutput) string {
+	msg := "agent turn failed" + withCause(turn.Result)
+	if turn.APIErrorStatus == http.StatusUnauthorized {
+		msg += " — run 'claude' on the host and /login inside it"
+	}
+	return msg
+}
+
+// withCause appends a cause to a message as one line: its first non-empty
+// line, bounded, since the reader is a single-line status field.
+func withCause(cause string) string {
+	line := firstLine(cause)
+	if line == "" {
+		return ""
+	}
+	const maxCause = 200
+	if len(line) > maxCause {
+		line = strings.TrimSpace(line[:maxCause]) + "…"
+	}
+	return ": " + line
+}
+
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // noteAuth records what a turn learned about the host login. A 401 is the only
