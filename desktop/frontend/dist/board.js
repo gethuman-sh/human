@@ -607,7 +607,7 @@ function renderColumn(queue) {
 }
 // renderIdeaSpace builds the Ideas queue as five gradient sub-columns (the
 // idea space). It replaces renderColumn("ideas"): one shared header keeps the
-// familiar Ideas title, `+` quick-add and total count, while each sub-column
+// familiar Ideas title, the capture control and total count, while each sub-column
 // is a local-reorder drop target (data-drop="idea") — dropping there saves a
 // placement, it never launches an agent, so no Docker gate applies.
 function renderIdeaSpace() {
@@ -619,7 +619,6 @@ function renderIdeaSpace() {
     const ideas = current.cards.filter((c) => queueOf(c) === "ideas" && !c.bug && !c.security && cardVisible(c));
     const grid = document.createElement("div");
     grid.className = "idea-space-grid";
-    const subcols = [];
     for (let i = 0; i < IDEA_COL_COUNT; i++) {
         const col = document.createElement("section");
         col.className = "column idea-subcol";
@@ -637,30 +636,30 @@ function renderIdeaSpace() {
         for (const card of colCards)
             body.appendChild(renderCard(card));
         if (i === 0) {
-            // Quick-add writes into the leftmost sub-column, so captures awaiting
-            // their ticket number sit on top of it — where the input just was.
+            // New ideas are loose by definition, so a capture lands in the leftmost
+            // sub-column and its placeholder waits for a ticket number on top of it.
             for (const idea of pendingIdeas)
                 body.prepend(renderPendingCard(idea.title));
         }
         col.appendChild(body);
-        subcols.push(col);
         grid.appendChild(col);
     }
     const header = document.createElement("div");
     header.className = "column-header idea-space-header";
     // Ideas capture is deliberately dumb: a title becomes a labeled ticket in
-    // one keystroke — the thinking happens later, at promotion. New ideas are
-    // loose by definition, so quick-add writes into the leftmost sub-column.
-    // The control is deliberately not an .add-card like the bug and security
-    // quick-adds: every ticket on this board begins as a captured idea, so this
-    // is the one control that must not read as neutral chrome (SC-4725). It says
-    // what it does in words because a bare `+` is what users failed to read as
-    // "capture an idea".
+    // one keystroke — the thinking happens later, at promotion. The composer it
+    // opens is a centered overlay on document.body rather than an input in this
+    // column (SC-4818): a column child is one line wide and reachable only from
+    // this view. The control is deliberately not an .add-card like the bug and
+    // security quick-adds: every ticket on this board begins as a captured idea,
+    // so this is the one control that must not read as neutral chrome (SC-4725).
+    // It says what it does in words because a bare `+` is what users failed to
+    // read as "capture an idea".
     header.innerHTML =
         `<span>${QUEUE_LABELS["ideas"]}</span>` +
             `<button class="capture-idea"><span class="capture-idea-glyph" aria-hidden="true">+</span>Capture an idea</button>` +
             `<span class="column-count">${ideas.length + pendingIdeas.length}</span>`;
-    header.querySelector(".capture-idea").addEventListener("click", () => showIdeaQuickAdd(subcols[0]));
+    header.querySelector(".capture-idea").addEventListener("click", () => showIdeaCaptureModal());
     space.appendChild(header);
     space.appendChild(grid);
     return space;
@@ -963,31 +962,21 @@ let findbugsHunting = false;
 // Security pane's scan indicator. Refreshed in reconcile() and set
 // optimistically on a Find Security click so the button responds instantly.
 let securityHunting = false;
-// showBugModal opens the file-a-bug dialog: a title and a free-text
-// description. Filing is optimistic like the idea quick-add — the placeholder
-// card appears immediately; a failed create reopens the dialog with the text
-// intact so nothing typed is lost.
-function showBugModal(prefillTitle = "", prefillDescription = "") {
+// buildModal creates the centered dialog every filing surface on this board
+// shares: the scrim, the .modal box, and the three ways out that must behave
+// identically wherever a dialog appears (a click on the scrim, Escape, Cancel).
+// Extracted when idea capture became the third dialog built this way — a third
+// paste is where the three stop agreeing (SC-4818). The caller owns its own
+// fields and its own confirm gesture, which is where the three legitimately
+// differ.
+function buildModal(className, html) {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     const modal = document.createElement("div");
-    modal.className = "modal bug-modal";
-    modal.innerHTML = `
-    <div class="modal-title">File a bug</div>
-    <input class="modal-input" type="text" placeholder="What is broken?" />
-    <textarea class="modal-textarea" rows="6" placeholder="What did you see, what did you expect?"></textarea>
-    <div class="modal-actions">
-      <button class="modal-cancel" type="button">Cancel</button>
-      <button class="modal-confirm" type="button">Create bug</button>
-    </div>
-  `;
+    modal.className = className;
+    modal.innerHTML = html;
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
-    const titleInput = modal.querySelector(".modal-input");
-    const descInput = modal.querySelector(".modal-textarea");
-    const confirm = modal.querySelector(".modal-confirm");
-    titleInput.value = prefillTitle;
-    descInput.value = prefillDescription;
     const close = () => overlay.remove();
     overlay.addEventListener("click", (e) => {
         if (e.target === overlay)
@@ -998,6 +987,27 @@ function showBugModal(prefillTitle = "", prefillDescription = "") {
             close();
     });
     modal.querySelector(".modal-cancel").addEventListener("click", close);
+    return { modal, close };
+}
+// showBugModal opens the file-a-bug dialog: a title and a free-text
+// description. Filing is optimistic like idea capture — the placeholder
+// card appears immediately; a failed create reopens the dialog with the text
+// intact so nothing typed is lost.
+function showBugModal(prefillTitle = "", prefillDescription = "") {
+    const { modal, close } = buildModal("modal bug-modal", `
+    <div class="modal-title">File a bug</div>
+    <input class="modal-input" type="text" placeholder="What is broken?" />
+    <textarea class="modal-textarea" rows="6" placeholder="What did you see, what did you expect?"></textarea>
+    <div class="modal-actions">
+      <button class="modal-cancel" type="button">Cancel</button>
+      <button class="modal-confirm" type="button">Create bug</button>
+    </div>
+  `);
+    const titleInput = modal.querySelector(".modal-input");
+    const descInput = modal.querySelector(".modal-textarea");
+    const confirm = modal.querySelector(".modal-confirm");
+    titleInput.value = prefillTitle;
+    descInput.value = prefillDescription;
     confirm.addEventListener("click", () => {
         const title = titleInput.value.trim();
         if (!title) {
@@ -1036,11 +1046,7 @@ async function createBug(title, description) {
 // half's counterpart to showBugModal, same optimistic-filing contract (the
 // placeholder appears at once; a failed create reopens the dialog intact).
 function showSecurityModal(prefillTitle = "", prefillDescription = "") {
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    const modal = document.createElement("div");
-    modal.className = "modal bug-modal";
-    modal.innerHTML = `
+    const { modal, close } = buildModal("modal bug-modal", `
     <div class="modal-title">File a security issue</div>
     <input class="modal-input" type="text" placeholder="What is the vulnerability?" />
     <textarea class="modal-textarea" rows="6" placeholder="What is exposed, and how could it be exploited?"></textarea>
@@ -1048,24 +1054,12 @@ function showSecurityModal(prefillTitle = "", prefillDescription = "") {
       <button class="modal-cancel" type="button">Cancel</button>
       <button class="modal-confirm" type="button">Create security issue</button>
     </div>
-  `;
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
+  `);
     const titleInput = modal.querySelector(".modal-input");
     const descInput = modal.querySelector(".modal-textarea");
     const confirm = modal.querySelector(".modal-confirm");
     titleInput.value = prefillTitle;
     descInput.value = prefillDescription;
-    const close = () => overlay.remove();
-    overlay.addEventListener("click", (e) => {
-        if (e.target === overlay)
-            close();
-    });
-    modal.addEventListener("keydown", (e) => {
-        if (e.key === "Escape")
-            close();
-    });
-    modal.querySelector(".modal-cancel").addEventListener("click", close);
     confirm.addEventListener("click", () => {
         const title = titleInput.value.trim();
         if (!title) {
@@ -1192,72 +1186,90 @@ async function deployReady(side) {
 // never captured a key, so even a stale in-flight fetch cannot blink the
 // capture away.
 let pendingIdeas = [];
-// showIdeaQuickAdd swaps an inline title input into an idea-space sub-column.
-// Enter creates the idea-labeled ticket via CreateIdea; Escape or blur
-// dismisses. prefill restores the title after a failed create so the text is
-// not lost with the error.
-function showIdeaQuickAdd(col, prefill = "") {
-    const body = col.querySelector(".column-body");
-    if (!body || body.querySelector(".idea-quick-add"))
+// showIdeaCaptureModal opens the idea composer: a centered overlay on
+// document.body, not an input inside a sub-column. Being a column child is
+// what made the old quick-add one line wide in a narrow lane (SC-4818); a
+// standalone surface has room to type and no column to belong to. The gesture
+// is unchanged — Enter captures — only the box is bigger: Shift+Enter breaks a
+// line, Escape and the scrim discard. prefill restores the title after a failed
+// create so the text is not lost with the error.
+function showIdeaCaptureModal(prefill = "") {
+    const open = document.querySelector(".idea-modal .modal-textarea");
+    if (open) {
+        // A second click must put the caret back in the composer already open,
+        // never stack a second one over it.
+        open.focus();
         return;
-    const input = document.createElement("input");
-    input.className = "idea-quick-add";
-    input.type = "text";
-    input.placeholder = "Idea title — Enter to capture";
+    }
+    const { modal, close } = buildModal("modal idea-modal", `
+    <div class="modal-title">Capture an idea</div>
+    <textarea class="modal-textarea" rows="6" placeholder="What is the idea?"></textarea>
+    <div class="modal-body">Enter captures · Shift+Enter starts a new line</div>
+    <div class="modal-actions">
+      <button class="modal-cancel" type="button">Cancel</button>
+      <button class="modal-confirm" type="button">Capture</button>
+    </div>
+  `);
+    const input = modal.querySelector(".modal-textarea");
+    // Assigned, never interpolated: a title carrying a quote or an angle bracket
+    // must not be able to rewrite the markup on a failed-create reopen.
     input.value = prefill;
-    body.prepend(input);
-    input.focus();
-    input.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") {
-            input.remove();
+    const submit = () => {
+        // A textarea can hold newlines; the wire is a single-line title
+        // (IdeaCreateRequest) and nothing downstream normalizes one, so several
+        // typed lines become one line here — the same string the placeholder card
+        // shows, which is what lets it hand over to the fetched card by title.
+        const title = input.value.replace(/\s+/g, " ").trim();
+        if (!title) {
+            input.focus();
             return;
         }
-        if (e.key !== "Enter")
+        close();
+        void captureIdea(title);
+    };
+    input.addEventListener("keydown", (e) => {
+        if (e.isComposing)
             return;
-        const title = input.value.trim();
-        if (!title)
+        if (e.key !== "Enter" || e.shiftKey)
             return;
-        // The capture is visible immediately as a placeholder card; the ticket
-        // number arrives with the next fetch. render() rebuilds the board, which
-        // also disposes of the input.
-        const pending = { title };
-        pendingIdeas.push(pending);
-        render();
-        void (async () => {
-            try {
-                pending.key = await go().CreateIdea(title);
-            }
-            catch (err) {
-                // The ticket does not exist, so the placeholder must not pretend it
-                // does — put the title back into a fresh input instead.
-                pendingIdeas = dropPending(pendingIdeas, pending);
-                showError(errMessage(err));
-                const retryCol = document.querySelector(".idea-subcol");
-                if (retryCol)
-                    showIdeaQuickAdd(retryCol, title);
-                return;
-            }
-            // Invalidate fetches already in flight — their pre-create snapshot
-            // would miss the new ticket (same guard as closeTicket).
-            reconcileEpoch++;
-            await reconcile();
-        })();
+        // Enter is the capture gesture, so it must not also leave a newline in the
+        // box it is closing.
+        e.preventDefault();
+        submit();
     });
-    input.addEventListener("blur", () => {
-        if (!input.disabled && input.value.trim() === "")
-            input.remove();
-    });
+    modal.querySelector(".modal-confirm").addEventListener("click", submit);
+    input.focus();
+}
+// captureIdea files the title-only idea ticket and keeps the grid honest:
+// placeholder first, rollback plus a reopened composer on failure — the same
+// contract createBug and createSecurity hold.
+async function captureIdea(title) {
+    const pending = { title };
+    pendingIdeas.push(pending);
+    render();
+    try {
+        pending.key = await go().CreateIdea(title);
+    }
+    catch (err) {
+        // The ticket does not exist, so the placeholder must not pretend it does —
+        // give the title back to a fresh composer instead.
+        pendingIdeas = dropPending(pendingIdeas, pending);
+        showError(errMessage(err));
+        showIdeaCaptureModal(title);
+        return;
+    }
+    // Invalidate fetches already in flight — their pre-create snapshot would
+    // miss the new ticket (same guard as closeTicket).
+    reconcileEpoch++;
+    await reconcile();
 }
 // captureFirstIdea is what the post-import "Create first ticket" prompt does:
 // the first ticket is an idea like every other one — a title, captured, drafted
-// in the background, promoted when the user is ready. It opens the Ideas
-// column's own quick-add rather than a chat panel, so there is exactly one way
-// into ticket creation. A board that has not rendered its columns yet leaves
-// the user the "Capture an idea" button, which is the same gesture.
+// in the background, promoted when the user is ready. It opens the same
+// composer the Ideas header opens, so there is exactly one way into ticket
+// creation, and it no longer depends on the board having rendered its columns.
 function captureFirstIdea() {
-    const col = document.querySelector(".idea-subcol");
-    if (col)
-        showIdeaQuickAdd(col);
+    showIdeaCaptureModal();
 }
 // renderPendingCard builds the placeholder card for a ticket (idea or bug)
 // still being created: a spinner sits where the ticket number will land. No

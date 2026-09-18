@@ -139,15 +139,21 @@ The desktop artifact must never be published through a goreleaser `builds:` entr
 
 ## Creating tickets — capture, draft, promote (SC-4608)
 
-There is one way into ticket creation and it is a text field: the idea
-space's "Capture an idea" button quick-captures a title-only ticket
+There is one way into ticket creation and it is a centered composer: the
+idea space's "Capture an idea" button opens an overlay — a multi-line
+text area, focused on open, Enter to capture, Shift+Enter for a new line,
+Escape or the scrim to discard — and quick-captures a title-only ticket
 labeled `human/idea` into the leftmost sub-column. The
-post-project-import "Create first ticket" prompt opens that same
-quick-add — a first ticket is an idea like every other one. (SC-4485 had
-already removed the Backlog column's own '+' and the left rail's "new
-ticket" action; SC-4725 then gave the surviving control the accent fill
-and the written label it carries today, since the one action that starts
-all work should not read as chrome.)
+post-project-import "Create first ticket" prompt opens that same composer
+— a first ticket is an idea like every other one. What it captures is a
+title and only a title: a description typed here would stand the
+background drafter down (`internal/ideadraft`), so the extra room is room
+for a longer title, not a body. (SC-4485 had already removed the Backlog
+column's own '+' and the left rail's "new ticket" action; SC-4725 then
+gave the surviving control the accent fill and the written label it
+carries today, since the one action that starts all work should not read
+as chrome; SC-4818 moved the capture surface off the sub-column and onto
+`document.body`, which is what bought it the space.)
 
 What used to be an interview at promotion time is now background work
 while the idea sits in Ideas. Capture fires a containerized
