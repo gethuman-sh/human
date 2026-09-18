@@ -116,6 +116,40 @@ func TestHandleBoardAgentExit_AuthRoutesToUnchargedRed(t *testing.T) {
 	require.Contains(t, failureReason(failedBody), "re-authenticate", "the reason must name the human action")
 }
 
+// An exit refused at authentication is the only evidence that a credential
+// store whose refresh token looks present is dead, so it must reach the
+// doctor's record (SC-5036). A billing wall is also needs-person but says
+// nothing about the login, and must not be recorded as a refused one.
+func TestHandleBoardAgentExit_AuthRefusalReachesRecorder(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	for _, tc := range []struct {
+		errorType string
+		want      []string
+	}{
+		{"authentication_error", []string{"SC-1"}},
+		{"billing_error", nil},
+		{"rate_limit", nil},
+	} {
+		t.Run(tc.errorType, func(t *testing.T) {
+			c := &syncCommenter{}
+			commenterFor := func() (tracker.Commenter, error) { return c, nil }
+			var relaunched, resets []BoardStage
+			var attemptCalls int
+			var refused []string
+			deps := FailureDeps{
+				CommenterFor:  commenterFor,
+				Reachable:     alwaysReachable,
+				Retry:         countingPolicy("", false, &relaunched, &resets, &attemptCalls),
+				OnAuthRefused: func(pmKey string) { refused = append(refused, pmKey) },
+				DaemonID:      "d1",
+				Logger:        zerolog.Nop(),
+			}
+			handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-implementation", ErrorType: tc.errorType, EventName: "StopFailure"}, deps)
+			require.Equal(t, tc.want, refused)
+		})
+	}
+}
+
 // classifyUnavailability folds the hook errorType and the model-boundary class
 // into one verdict: rate/overload/network are transient and self-heal
 // (paused); auth/spend are walls that do not (needs-person); anything else is
