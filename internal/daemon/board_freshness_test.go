@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -226,5 +227,72 @@ func TestRunBoardFreshnessPoll_PokesOnChange(t *testing.T) {
 	case <-poked:
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected a poke after the ticket set changed")
+	}
+}
+
+// A tracker that can say "nothing changed" is not listed again until it says
+// otherwise (SC-5083). The first tick lists regardless, so the fingerprint
+// baseline exists; every tick after that costs one token while the token holds.
+func TestRunBoardFreshnessPoll_UnchangedVersionSkipsListing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	oldJitter := BoardFreshnessJitter
+	BoardFreshnessJitter = 0
+	defer func() { BoardFreshnessJitter = oldJitter }()
+
+	var listed atomic.Int32
+	var version atomic.Int32
+	poked := make(chan struct{}, 4)
+	go RunBoardFreshnessPoll(ctx, BoardFreshnessOpts{
+		List: func() ([]TrackerIssuesResult, error) {
+			listed.Add(1)
+			return resultsFor(tracker.Issue{Key: "SC-1", Title: "v" + strconv.Itoa(int(version.Load()))}), nil
+		},
+		Version:     func() (string, bool) { return strconv.Itoa(int(version.Load())), true },
+		Poke:        func() { poked <- struct{}{} },
+		HasWatchers: func() bool { return true },
+		Interval:    2 * time.Millisecond,
+		Logger:      zerolog.Nop(),
+	})
+
+	time.Sleep(30 * time.Millisecond)
+	if got := listed.Load(); got != 1 {
+		t.Fatalf("an unchanged version must list exactly once for the baseline, listed %d times", got)
+	}
+
+	version.Store(1)
+	select {
+	case <-poked:
+	case <-time.After(time.Second):
+		t.Fatal("a changed version must list again and poke")
+	}
+	if got := listed.Load(); got != 2 {
+		t.Fatalf("a changed version lists once more, listed %d times", got)
+	}
+}
+
+// A tracker that cannot answer (ok=false) is polled by listing, exactly as before.
+func TestRunBoardFreshnessPoll_UnknownVersionListsEveryTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	oldJitter := BoardFreshnessJitter
+	BoardFreshnessJitter = 0
+	defer func() { BoardFreshnessJitter = oldJitter }()
+
+	var listed atomic.Int32
+	go RunBoardFreshnessPoll(ctx, BoardFreshnessOpts{
+		List: func() ([]TrackerIssuesResult, error) {
+			listed.Add(1)
+			return resultsFor(tracker.Issue{Key: "SC-1"}), nil
+		},
+		Version:     func() (string, bool) { return "", false },
+		Poke:        func() {},
+		HasWatchers: func() bool { return true },
+		Interval:    2 * time.Millisecond,
+		Logger:      zerolog.Nop(),
+	})
+	time.Sleep(30 * time.Millisecond)
+	if listed.Load() < 3 {
+		t.Fatalf("without a usable version the poll lists every tick, listed %d times", listed.Load())
 	}
 }

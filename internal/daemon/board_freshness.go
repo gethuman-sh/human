@@ -33,7 +33,13 @@ type IssueLister func() ([]TrackerIssuesResult, error)
 // a call site that has to pass nil in the middle of six positions is where the
 // next argument goes in the wrong slot.
 type BoardFreshnessOpts struct {
-	List        IssueLister
+	List IssueLister
+	// Version, when set, answers "did anything change" for the price of one
+	// token per tracker (tracker.ChangeCursor). ok=false means at least one
+	// tracker cannot say, and the poll lists as before. An unchanged token skips
+	// the listing entirely: on a metered backend that is the whole hourly budget
+	// the board used to spend confirming nothing had happened.
+	Version     func() (token string, ok bool)
 	Poke        func()
 	HasWatchers func() bool
 	// Observe, when set, is handed every successful listing — the same one the
@@ -86,6 +92,11 @@ func RunBoardFreshnessPoll(ctx context.Context, opts BoardFreshnessOpts) {
 			st.haveBaseline = false
 			continue
 		}
+		if opts.Version != nil {
+			if token, ok := opts.Version(); ok && st.sameVersion(token) {
+				continue
+			}
+		}
 		results, err := opts.List()
 		if err != nil {
 			opts.Logger.Debug().Err(err).Msg("board freshness poll: listing tickets failed; retrying next tick")
@@ -106,6 +117,19 @@ func RunBoardFreshnessPoll(ctx context.Context, opts BoardFreshnessOpts) {
 type freshnessState struct {
 	baseline     string
 	haveBaseline bool
+	// version is the last change token seen; the first tick always lists so
+	// the fingerprint baseline exists before any skip.
+	version     string
+	haveVersion bool
+}
+
+// sameVersion records the token and reports whether it equals the last one.
+// Without a fingerprint baseline it never claims sameness: a skipped first
+// listing would leave the poke with nothing to compare against.
+func (st *freshnessState) sameVersion(token string) bool {
+	same := st.haveVersion && st.haveBaseline && token == st.version
+	st.version, st.haveVersion = token, true
+	return same
 }
 
 // step folds one tick's fingerprint into the baseline and reports whether
