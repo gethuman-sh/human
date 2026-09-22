@@ -334,7 +334,7 @@
         "stage": "done",
         "state": "running"
       },
-      "holds": "The review converged and every check must be green before the merge. If the base moved on, the branch is rebased and CI re-gated on the new head first.",
+      "holds": "The review converged and every check must be green before the merge. A head that reports no checks at all is not green: it is pending until DeployNoChecksGrace has elapsed, because a freshly pushed head (a freshness rebase, a deploy-fixer push) has none for the minute or two its CI takes to register, and only past the grace does absence mean a repository without CI. If the base moved on, the branch is rebased and CI re-gated on the new head first.",
       "who_may_act": [
         "daemon"
       ],
@@ -1219,6 +1219,7 @@
       "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)",
       "MaxSilenceReaps": "3 — silence reaps of one stage before the machine stops relaunching and asks for a person (internal/daemon/board_failure.go). Uncharged against DefaultStageRetries, which is why it needs its own bound.",
       "PlanRedriveBound": "3 — refusals of one unplanned implementation launch before the machine stops driving planning and escalates to a person (internal/daemon/board_transition.go). Counted from the ticket thread rather than daemon state, so it survives a restart; the escalation itself is excluded from the count by its escalation: plan-stuck field.",
+      "DeployNoChecksGrace": "3m — how long a pull request head may report NO checks before the gate reads the absence as a repository without CI and proceeds (internal/daemon/board_transition.go deployNoChecksGrace). Below it, absence is pending: the rebased candidate of SC-5083's campaign merged three seconds ahead of its own checks because absence used to read as green (F19).",
       "deploy-card grace (stuckGraceFor, not a named constant)": "60m = deployTimeout (45m) + StuckRunningGrace (15m) — how long a card recorded as deploying is left alone before the stuck-running sweep judges it (stuckPastGrace, internal/daemon/board_reconcile.go). The deploy registers no agent for the sweep to probe, so the evidence is the engine's own clock where this machine is running it (its dequeue past deployGate, or the last time the queue moved while it waits), and the marker clock everywhere else."
     }
   },

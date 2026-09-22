@@ -2392,3 +2392,63 @@ func TestApplyTransition_AResolvedCardIsNotRetriedWithoutReopen(t *testing.T) {
 	require.Error(t, err, "an unflagged same-stage move on a resolved card is not a retry the machine may make")
 	assert.Zero(t, l.calls)
 }
+
+// F19 (SC-5083 campaign): a head with NO checks reported is not green. The
+// rebased candidate's checks had not registered when the gate looked, and the
+// old contract read the absence as passing, so it merged three seconds ahead
+// of its own CI. Absence is pending until the grace has elapsed.
+func TestApplyTransitionDeployNoChecksYetWaitsForThemToAppear(t *testing.T) {
+	syncDeploy(t)
+	origGrace := deployNoChecksGrace
+	deployNoChecksGrace = time.Hour
+	t.Cleanup(func() { deployNoChecksGrace = origGrace })
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/19", Number: 19},
+		checks: []forge.ChecksState{forge.ChecksNone, forge.ChecksNone, forge.ChecksPending, forge.ChecksPassing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	require.NoError(t, deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage}))
+	assert.Equal(t, 4, p.checkCall, "the gate polled through the absence until the checks appeared")
+	assert.Equal(t, 1, p.merged)
+}
+
+// The same absence that never resolves is a repository without CI: past the
+// grace the gate has nothing to block on and the deploy proceeds, as before.
+func TestApplyTransitionDeployNoChecksEverMergesAfterGrace(t *testing.T) {
+	syncDeploy(t)
+	origGrace := deployNoChecksGrace
+	deployNoChecksGrace = 20 * time.Millisecond
+	t.Cleanup(func() { deployNoChecksGrace = origGrace })
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/20", Number: 20},
+		checks: []forge.ChecksState{forge.ChecksNone}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	require.NoError(t, deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage}))
+	assert.GreaterOrEqual(t, p.checkCall, 2, "absence is polled at least once more before it counts as no CI")
+	assert.Equal(t, 1, p.merged)
+}
+
+// Checks that appear after an absence and then fail must fail the gate: the
+// grace never converts a late red into a green.
+func TestApplyTransitionDeployNoChecksThenFailingDoesNotMerge(t *testing.T) {
+	syncDeploy(t)
+	origGrace := deployNoChecksGrace
+	deployNoChecksGrace = time.Hour
+	t.Cleanup(func() { deployNoChecksGrace = origGrace })
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt("[human:review-complete]", time.Unix(2, 0)),
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/21", Number: 21},
+		checks: []forge.ChecksState{forge.ChecksNone, forge.ChecksFailing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	deps.Launcher = nil
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+	assert.Equal(t, 0, p.merged)
+}
