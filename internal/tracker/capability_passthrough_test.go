@@ -56,6 +56,10 @@ var optionalCapabilities = map[string]func(any) bool{
 	"CurrentUserGetter": func(p any) bool { _, ok := p.(CurrentUserGetter); return ok },
 	"ReporterAssigner":  func(p any) bool { _, ok := p.(ReporterAssigner); return ok },
 	"Transitioner":      func(p any) bool { _, ok := p.(Transitioner); return ok },
+	"MarkerIndexer":     func(p any) bool { _, ok := p.(MarkerIndexer); return ok },
+	"EventLister":       func(p any) bool { _, ok := p.(EventLister); return ok },
+	"ChangeCursor":      func(p any) bool { _, ok := p.(ChangeCursor); return ok },
+	"PlacementRecorder": func(p any) bool { _, ok := p.(PlacementRecorder); return ok },
 }
 
 // Forwarding must actually reach the inner provider, not merely type-assert.
@@ -84,5 +88,14 @@ type fullyCapableProvider struct {
 
 func (f *fullyCapableProvider) AssignToReporter(_ context.Context, key string) error {
 	f.reporterAssigned = append(f.reporterAssigned, key)
+	return nil
+}
+
+func (f *fullyCapableProvider) ListMarkers(context.Context, string) ([]IndexedMarker, error) {
+	return nil, nil
+}
+func (f *fullyCapableProvider) ListEvents(context.Context, string) ([]Event, error) { return nil, nil }
+func (f *fullyCapableProvider) Version(context.Context) (string, error)             { return "1", nil }
+func (f *fullyCapableProvider) RecordPlacement(context.Context, string, string, string) error {
 	return nil
 }

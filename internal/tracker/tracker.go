@@ -300,6 +300,11 @@ type Issue struct {
 	UpdatedAt   time.Time `json:"updated_at"`           // last modification timestamp
 	ParentKey   string    `json:"parent_key,omitempty"` // parent issue key (subtask support)
 	Labels      []string  `json:"labels,omitempty"`     // tags/labels on the issue
+	// Attributes are backend-native facts with no universal field: a backend
+	// that knows a ticket's kind, maturity or pipeline placement reports them
+	// here (see AttrKind and friends). Backends that know none leave it nil,
+	// so nothing about their output changes.
+	Attributes map[string]string `json:"attributes,omitempty"`
 	// Links are this issue's relationships to others. Empty on backends that
 	// cannot report them, which is a correct answer rather than a gap.
 	Links []IssueLink `json:"links,omitempty"`
