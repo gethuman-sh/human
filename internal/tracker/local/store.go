@@ -81,6 +81,10 @@ func openStore(path string, now func() time.Time) (*store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.ensurePipelineSchema(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 

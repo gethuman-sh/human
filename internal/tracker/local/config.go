@@ -36,6 +36,9 @@ type Config struct {
 	// User is the name writes are attributed to. Defaults to the first `me:`
 	// name in the same config, then to the OS user.
 	User string `mapstructure:"user"`
+	// Strict refuses marker posts the pipeline state machine does not allow.
+	// Off by default; on for test fixtures and acceptance runs.
+	Strict bool `mapstructure:"strict"`
 }
 
 // LoadConfigs reads the legacy section only; LoadInstances also reads the
@@ -85,7 +88,7 @@ func buildInstance(dir string, cfg Config) (tracker.Instance, error) {
 	if err != nil {
 		return tracker.Instance{}, err
 	}
-	client, err := sharedClient(path, prefix, resolveUser(dir, cfg))
+	client, err := sharedClient(path, prefix, resolveUser(dir, cfg), cfg.Strict)
 	if err != nil {
 		return tracker.Instance{}, err
 	}
@@ -208,7 +211,7 @@ var (
 // A second entry pointing the same file at a different prefix is refused: the
 // keys already in the file are the first prefix's, and rereading them under
 // another would silently produce keys nothing else recognises.
-func sharedClient(path, prefix, user string) (*Client, error) {
+func sharedClient(path, prefix, user string, strict bool) (*Client, error) {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	if c, ok := clients[path]; ok {
@@ -217,9 +220,14 @@ func sharedClient(path, prefix, user string) (*Client, error) {
 				"path", path, "open", c.prefix, "requested", prefix)
 		}
 		c.user = user
+		c.strict = strict
 		return c, nil
 	}
-	c, err := Open(path, prefix, user)
+	var opts []Option
+	if strict {
+		opts = append(opts, Strict())
+	}
+	c, err := Open(path, prefix, user, opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -88,7 +88,7 @@ func TestSharedClient_reusedAcrossLoads_refusesSecondPrefix(t *testing.T) {
 	require.Len(t, second, 1)
 	assert.Same(t, first[0].Provider, second[0].Provider, "every load reuses the one open handle")
 
-	_, err = sharedClient(filepath.Join(dir, "shared.db"), "OTHER", "x")
+	_, err = sharedClient(filepath.Join(dir, "shared.db"), "OTHER", "x", false)
 	assert.Error(t, err, "the same file under another prefix would relabel every key in it")
 }
 
