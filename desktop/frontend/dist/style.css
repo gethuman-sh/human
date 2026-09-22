@@ -541,6 +541,7 @@ body {
 }
 
 .modal {
+  position: relative;
   width: 320px;
   max-width: calc(100vw - 32px);
   background: var(--col-bg);
@@ -549,9 +550,30 @@ body {
   padding: 18px;
 }
 
+/* The corner x every dismissible dialog carries (SC-5033). Absolute, so a
+   dialog does not have to make room for it in its own markup — including the
+   description editor, whose header used to carry a copy. */
+.modal-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.modal-close:hover {
+  color: var(--text);
+}
+
 .modal-title {
   font-weight: 600;
   font-size: 15px;
+  padding-right: 24px;
 }
 
 .modal-body {
@@ -568,12 +590,25 @@ body {
   gap: 8px;
 }
 
-.modal-actions button {
+/* The shared dialog-button treatment. It lives on the button classes, not on
+   .modal-actions, so the description editor's send button takes it inside the
+   chat form too — one rule instead of the fourth copy .chat-form carried
+   (SC-5033). */
+.modal-cancel,
+.modal-confirm,
+.modal-secondary {
   border: none;
   border-radius: 6px;
   padding: 8px 14px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.modal-cancel:disabled,
+.modal-confirm:disabled,
+.modal-secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .modal-cancel {
@@ -586,9 +621,18 @@ body {
   border-color: var(--muted) !important;
 }
 
+/* The confirm is CONSTRUCTIVE by default. It was destructive-red because it
+   was written for close-ticket confirmation, and every constructive dialog
+   then opted out of it separately — four selectors covering five dialogs, and
+   a fifth dialog (the launch notice) that silently kept the red. A destructive
+   confirm now says so; nothing has to say it is not a delete (SC-5033). */
 .modal-confirm {
-  background: var(--failed);
+  background: var(--accent);
   color: #fff;
+}
+
+.modal-confirm.modal-destructive {
+  background: var(--failed);
 }
 
 .modal-confirm:hover {
@@ -597,8 +641,8 @@ body {
 
 /* The busy-close dialog (SC-3015) has three choices instead of the usual two,
    so "Wait and close" needs a third, non-destructive style sitting between
-   the neutral Cancel and the destructive "Stop anyway" (which keeps the
-   shared .modal-confirm red). */
+   the neutral Cancel and the destructive "Stop anyway" (which now says so with
+   .modal-destructive). */
 .modal-secondary {
   background: var(--accent);
   color: #fff;
@@ -609,8 +653,7 @@ body {
 }
 
 /* File-a-bug dialog: a .modal variant with a title input and a description
-   textarea. Creating is constructive, so the confirm uses the accent color,
-   not the destructive red of close-ticket confirmation. */
+   textarea. */
 .bug-modal {
   width: 420px;
 }
@@ -650,11 +693,6 @@ body {
   min-height: 90px;
 }
 
-.bug-modal .modal-confirm,
-.idea-modal .modal-confirm {
-  background: var(--accent);
-}
-
 /* Product-Backlog description-edit modal (SC-2873): a centered split-view
    modal — deliberately NOT the fixed-edge .detail-panel pattern, so its click
    target is visibly distinct per the ticket's AC.
@@ -675,22 +713,11 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
+  /* After the padding shorthand, or the shorthand wins and the ticket key runs
+     under the shared corner x. */
+  padding-right: 28px;
   font-weight: 600;
   border-bottom: 1px solid var(--col-border);
-}
-
-.descedit-close {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 4px;
-}
-
-.descedit-close:hover {
-  color: var(--text);
 }
 
 .descedit-body {
@@ -764,32 +791,17 @@ body {
   min-height: 0;
 }
 
+/* The footer is .modal-actions; only the strip it sits in is this dialog's,
+   because .descedit-modal has no padding of its own. */
 .descedit-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  margin-top: 0;
   padding: 10px 14px;
   border-top: 1px solid var(--col-border);
 }
 
-.descedit-apply {
-  background: var(--accent);
-}
-
-.descedit-apply:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* Start Project wizard: a .modal variant. Its confirm action is constructive
-   (create/scaffold), so it uses the accent color instead of the destructive
-   red the shared .modal-confirm carries for close-ticket confirmation. */
+/* Start Project wizard: a .modal variant. */
 .wizard {
   width: 380px;
-}
-
-.wizard .modal-confirm {
-  background: var(--accent);
 }
 
 .wizard-options {
@@ -1510,42 +1522,63 @@ body {
 
 .chat-form {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding: 10px 12px;
   border-top: 1px solid var(--col-border);
 }
 
-.chat-form input {
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+/* One line to start, growing with the text (board.ts autoGrowChatInput), and
+   scrolling once it reaches six lines — the idea composer's rows="6" borrowed
+   as a ceiling rather than a starting size. 124px is that height at this
+   element's own metrics, not the composer's 112px: the composer sets no
+   line-height. max-height is the single source of the ceiling — the script
+   reads it back rather than carrying its own copy, and CHAT_INPUT_MAX_PX in
+   board.ts is only the fallback for when it cannot. */
+.chat-form textarea {
   flex: 1;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: 6px;
   padding: 8px 10px;
   color: var(--text);
+  font: inherit;
   font-size: 13px;
+  line-height: 1.35;
+  resize: none;
+  overflow-y: auto;
+  max-height: 124px; /* six lines: 6 x (13px x 1.35) + 16px padding + 2px border = 123.3, rounded up */
 }
 
-.chat-form input:disabled {
+.chat-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chat-form textarea:disabled {
   opacity: 0.5;
 }
 
-.chat-form button {
-  background: var(--accent);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  padding: 8px 14px;
-  font-weight: 600;
-  cursor: pointer;
+/* The send button takes its colour, radius and weight from .modal-confirm;
+   only an icon button's proportions are its own. */
+.chat-send {
+  padding: 8px 12px;
+  font-size: 15px;
+  line-height: 1.35;
+  flex-shrink: 0;
 }
 
-.chat-form button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.chat-form input.hidden {
-  display: none;
+/* The gesture hint, in the idea composer's treatment (.modal-body) minus the
+   top margin the composer's vertical stack needs. */
+.chat-hint {
+  margin-top: 0;
+  font-size: 12px;
 }
 
 /* --- Ticket detail slide-out -----------------------------------------------
@@ -2375,7 +2408,9 @@ body {
 [data-theme="fancy"] .rail-item:active:not(:disabled) {
   transform: scale(0.88);
 }
-[data-theme="fancy"] .modal-actions button:active,
+[data-theme="fancy"] .modal-cancel:active,
+[data-theme="fancy"] .modal-confirm:active,
+[data-theme="fancy"] .modal-secondary:active,
 [data-theme="fancy"] .add-card:active,
 [data-theme="fancy"] .capture-idea:active {
   transform: scale(0.92);

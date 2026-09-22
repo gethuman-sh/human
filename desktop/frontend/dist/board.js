@@ -20,7 +20,8 @@ import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, reworkKind, isRevie
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
-import { descEditInputEnabled, descEditApplyEnabled, descEditAllowedFor, buildDescriptionPreview, descEditShouldDiscardOnClose, draftNotice, } from "./board-descedit.js";
+import { descEditInputEnabled, descEditApplyEnabled, descEditAllowedFor, descEditSendDefers, descEditHasUnappliedRewrite, descEditStatusLine, chatInputHeight, buildDescriptionPreview, descEditShouldDiscardOnClose, draftNotice, } from "./board-descedit.js";
+import { confirmButtonClass, isTopmostOverlay } from "./board-modal.js";
 import { recreateAllowedFor, recreateConfirmBody } from "./board-recreate.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
@@ -962,32 +963,61 @@ let findbugsHunting = false;
 // Security pane's scan indicator. Refreshed in reconcile() and set
 // optimistically on a Find Security click so the button responds instantly.
 let securityHunting = false;
-// buildModal creates the centered dialog every filing surface on this board
-// shares: the scrim, the .modal box, and the three ways out that must behave
-// identically wherever a dialog appears (a click on the scrim, Escape, Cancel).
-// Extracted when idea capture became the third dialog built this way — a third
-// paste is where the three stop agreeing (SC-4818). The caller owns its own
-// fields and its own confirm gesture, which is where the three legitimately
+const MODAL_CLOSE_HTML = `<button type="button" class="modal-close" aria-label="Close" title="Close"><span aria-hidden="true">×</span></button>`;
+// buildModal creates the centered dialog every dialog on this board shares:
+// the scrim, the .modal box, the corner ×, and the ways out that must behave
+// identically wherever a dialog appears (scrim click, Escape, ×, Cancel).
+// Extracted when idea capture became the third dialog built this way
+// (SC-4818); SC-5033 moved the remaining five onto it. The caller owns its own
+// fields and its own confirm gesture, which is where dialogs legitimately
 // differ.
-function buildModal(className, html) {
+function buildModal(className, html, opts = {}) {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     const modal = document.createElement("div");
     modal.className = className;
-    modal.innerHTML = html;
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
-    const close = () => overlay.remove();
+    const canDismiss = () => opts.canDismiss?.() ?? true;
+    let closed = false;
+    const close = () => {
+        if (closed)
+            return;
+        closed = true;
+        document.removeEventListener("keydown", onKey);
+        overlay.remove();
+        opts.onClose?.();
+    };
+    const dismiss = () => {
+        if (closed || !canDismiss())
+            return;
+        (opts.onDismiss ?? close)();
+    };
+    // Escape is bound on document, not on the box: the wizard's first two
+    // screens focus nothing, so a modal-scoped listener would never fire there.
+    // Dialogs stack, so only the top one may answer it.
+    function onKey(e) {
+        if (e.key !== "Escape")
+            return;
+        if (!isTopmostOverlay(Array.from(document.querySelectorAll(".modal-overlay")), overlay))
+            return;
+        dismiss();
+    }
+    // setContent re-renders the box and re-attaches the ×, so a dialog that
+    // rewrites its own innerHTML per step (the wizard) cannot lose it.
+    const setContent = (next) => {
+        modal.innerHTML = (canDismiss() ? MODAL_CLOSE_HTML : "") + next;
+        modal.querySelector(".modal-close")?.addEventListener("click", dismiss);
+        // A dialog with no Cancel is normal — the launch notice has one button.
+        modal.querySelector(".modal-cancel")?.addEventListener("click", dismiss);
+    };
     overlay.addEventListener("click", (e) => {
         if (e.target === overlay)
-            close();
+            dismiss();
     });
-    modal.addEventListener("keydown", (e) => {
-        if (e.key === "Escape")
-            close();
-    });
-    modal.querySelector(".modal-cancel").addEventListener("click", close);
-    return { modal, close };
+    document.addEventListener("keydown", onKey);
+    setContent(html);
+    return { modal, close, setContent };
 }
 // showBugModal opens the file-a-bug dialog: a title and a free-text
 // description. Filing is optimistic like idea capture — the placeholder
@@ -1722,47 +1752,43 @@ async function recreateDescription(card) {
         return;
     }
     if (description.trim() !== "") {
-        const ok = await confirmDialog(`Recreate description for ${card.key}?`, recreateConfirmBody(card.key), "Recreate description");
+        const ok = await confirmDialog(`Recreate description for ${card.key}?`, recreateConfirmBody(card.key), "Recreate description", "Cancel", "constructive");
         if (!ok)
             return;
     }
     await runGuardedAction(() => go().RecreateDescription(card.key, card.title), (err) => showError(errMessage(err)), reconcile);
 }
 // confirmDialog renders a small modal overlay and resolves true/false on the
-// user's choice. Overlay-click and Escape count as cancel. Built with the same
-// imperative-DOM approach as the rest of the app (no framework).
-function confirmDialog(title, body, confirmLabel, cancelLabel = "Cancel") {
+// user's choice. Overlay-click and Escape count as cancel. valence says what
+// the confirm DOES, which is what colours it: it defaults to destructive
+// because a confirmation is usually asked before something irreversible, and
+// because that keeps close-ticket and the orphan-daemon stop unchanged
+// (SC-5033).
+function confirmDialog(title, body, confirmLabel, cancelLabel = "Cancel", valence = "destructive") {
     return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.className = "modal-overlay";
-        const modal = document.createElement("div");
-        modal.className = "modal";
-        modal.innerHTML = `
+        let settled = false;
+        const finish = (result) => {
+            if (settled)
+                return;
+            settled = true;
+            resolve(result);
+        };
+        const { modal, close } = buildModal("modal", `
       <div class="modal-title">${escapeHtml(title)}</div>
       <div class="modal-body">${escapeHtml(body)}</div>
       <div class="modal-actions">
         <button class="modal-cancel" type="button">${escapeHtml(cancelLabel)}</button>
-        <button class="modal-confirm" type="button">${escapeHtml(confirmLabel)}</button>
+        <button class="${confirmButtonClass(valence)}" type="button">${escapeHtml(confirmLabel)}</button>
       </div>
-    `;
-        overlay.appendChild(modal);
-        document.body.appendChild(overlay);
-        const cleanup = (result) => {
-            document.removeEventListener("keydown", onKey);
-            overlay.remove();
-            resolve(result);
-        };
-        const onKey = (e) => {
-            if (e.key === "Escape")
-                cleanup(false);
-        };
-        overlay.addEventListener("click", (e) => {
-            if (e.target === overlay)
-                cleanup(false);
+    `, {
+            // Scrim, Escape, the x and Cancel are all "no".
+            onDismiss: () => close(),
+            onClose: () => finish(false),
         });
-        modal.querySelector(".modal-cancel").addEventListener("click", () => cleanup(false));
-        modal.querySelector(".modal-confirm").addEventListener("click", () => cleanup(true));
-        document.addEventListener("keydown", onKey);
+        modal.querySelector(".modal-confirm").addEventListener("click", () => {
+            finish(true);
+            close();
+        });
         modal.querySelector(".modal-confirm").focus();
     });
 }
@@ -1773,38 +1799,30 @@ function confirmDialog(title, body, confirmLabel, cancelLabel = "Cancel") {
 // the safest default when work is in flight.
 function busyCloseDialog() {
     return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.className = "modal-overlay";
-        const modal = document.createElement("div");
-        modal.className = "modal";
-        modal.innerHTML = `
+        let settled = false;
+        let choice = "cancel";
+        const { modal, close } = buildModal("modal", `
       <div class="modal-title">human is still working</div>
       <div class="modal-body">An agent is actively running, or a stage is still leased. Closing now would leave that work unsupervised — choose what to do.</div>
       <div class="modal-actions">
         <button class="modal-cancel" type="button">Cancel</button>
         <button class="modal-secondary" type="button">Wait and close</button>
-        <button class="modal-confirm" type="button">Stop anyway</button>
+        <button class="modal-confirm modal-destructive" type="button">Stop anyway</button>
       </div>
-    `;
-        overlay.appendChild(modal);
-        document.body.appendChild(overlay);
-        const cleanup = (result) => {
-            document.removeEventListener("keydown", onKey);
-            overlay.remove();
-            resolve(result);
-        };
-        const onKey = (e) => {
-            if (e.key === "Escape")
-                cleanup("cancel");
-        };
-        overlay.addEventListener("click", (e) => {
-            if (e.target === overlay)
-                cleanup("cancel");
+    `, {
+            // Three buttons, one dismissal: the scrim, Escape and the x all mean
+            // Cancel — the safest choice when work is in flight, and the only one
+            // that changes nothing (SC-3015, SC-5033).
+            onDismiss: () => close(),
+            onClose: () => resolve(settled ? choice : "cancel"),
         });
-        modal.querySelector(".modal-cancel").addEventListener("click", () => cleanup("cancel"));
-        modal.querySelector(".modal-secondary").addEventListener("click", () => cleanup("wait"));
-        modal.querySelector(".modal-confirm").addEventListener("click", () => cleanup("stop"));
-        document.addEventListener("keydown", onKey);
+        const finish = (result) => {
+            choice = result;
+            settled = true;
+            close();
+        };
+        modal.querySelector(".modal-secondary").addEventListener("click", () => finish("wait"));
+        modal.querySelector(".modal-confirm").addEventListener("click", () => finish("stop"));
         modal.querySelector(".modal-cancel").focus();
     });
 }
@@ -2374,34 +2392,16 @@ async function offerOrphanCleanup(project) {
 // (SC-3346's conflict signal — see offerProjectConflict below).
 function noticeDialog(title, body, buttonLabel = "OK") {
     return new Promise((resolve) => {
-        const overlay = document.createElement("div");
-        overlay.className = "modal-overlay";
-        const modal = document.createElement("div");
-        modal.className = "modal";
-        modal.innerHTML = `
+        const { modal, close } = buildModal("modal", `
       <div class="modal-title">${escapeHtml(title)}</div>
       <div class="modal-body">${escapeHtml(body)}</div>
       <div class="modal-actions">
         <button class="modal-confirm" type="button">${escapeHtml(buttonLabel)}</button>
       </div>
-    `;
-        overlay.appendChild(modal);
-        document.body.appendChild(overlay);
-        const cleanup = () => {
-            document.removeEventListener("keydown", onKey);
-            overlay.remove();
-            resolve();
-        };
-        const onKey = (e) => {
-            if (e.key === "Escape")
-                cleanup();
-        };
-        overlay.addEventListener("click", (e) => {
-            if (e.target === overlay)
-                cleanup();
-        });
-        modal.querySelector(".modal-confirm").addEventListener("click", () => cleanup());
-        document.addEventListener("keydown", onKey);
+    `, { onClose: () => resolve() });
+        // No Cancel at all — an acknowledgement has nothing to decline. The shared
+        // shell tolerates its absence; dismissal is the acknowledgement.
+        modal.querySelector(".modal-confirm").addEventListener("click", () => close());
         modal.querySelector(".modal-confirm").focus();
     });
 }
@@ -2453,6 +2453,35 @@ let descEditDraftState = "";
 let descEditDraftFailureHTML = "";
 let descEditTimer = null;
 const DESCEDIT_POLL_MS = 1000;
+// Text typed while a turn was in flight. The daemon refuses a reply to a
+// session that is not awaiting one, so holding it here is what lets the input
+// stay live mid-turn without either dropping the text or interrupting the
+// answer (SC-5033).
+let descEditQueued = "";
+// The dialog opens before its session exists, so the input is disabled on the
+// first render and focus() on it is a silent no-op. This flag carries "the
+// cursor still owes this box" across renders until the input is live, which is
+// the AC: the cursor is in the chat input when the dialog opens.
+let descEditPendingFocus = false;
+// The fallback ceiling for the growing chat input, in px — used only if the
+// element reports no computed max-height. CSS owns the real value
+// (.chat-form textarea), and the two must stay equal.
+const CHAT_INPUT_MAX_PX = 124;
+// The shared shell's close for the open dialog, held so every in-app close
+// path goes through the same teardown the scrim and Escape take.
+let descEditClose = null;
+// requestDescEditClose is the dismiss path: it asks before destroying an
+// unapplied rewrite and does nothing if the answer is no.
+function requestDescEditClose() {
+    if (!descEditHasUnappliedRewrite(descEdit.state, descEdit.proposal)) {
+        closeDescEditModal();
+        return;
+    }
+    void confirmDialog("Discard the proposed rewrite?", "The rewrite in the left pane has not been applied. Closing discards it and ends this chat — the ticket's description is unchanged.", "Discard", "Keep editing").then((ok) => {
+        if (ok)
+            closeDescEditModal();
+    });
+}
 function stopDescEditPoll() {
     if (descEditTimer !== null) {
         clearInterval(descEditTimer);
@@ -2463,6 +2492,63 @@ function startDescEditPoll() {
     if (descEditTimer !== null)
         return;
     descEditTimer = window.setInterval(() => void pollDescEdit(), DESCEDIT_POLL_MS);
+}
+function autoGrowChatInput(el) {
+    el.style.height = "auto";
+    const cs = getComputedStyle(el);
+    // scrollHeight is content + padding and excludes the border, but everything
+    // on this board is border-box (style.css:33) — so the border has to be added
+    // back or the box is 2px short and scrolls from the very first line.
+    const borders = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    const max = parseFloat(cs.maxHeight);
+    const content = el.scrollHeight + (Number.isFinite(borders) ? borders : 0);
+    el.style.height = `${chatInputHeight(content, Number.isFinite(max) ? max : CHAT_INPUT_MAX_PX)}px`;
+}
+function descEditInputEl() {
+    return document.getElementById("descedit-input");
+}
+// submitDescEditInput is the one send path: the keydown gesture and the send
+// button both run it.
+function submitDescEditInput() {
+    const input = descEditInputEl();
+    if (!input)
+        return;
+    // Only trimmed — never whitespace-collapsed. Idea capture flattens because
+    // its wire is a single-line title; a chat instruction's line breaks are the
+    // user's and must reach the daemon intact.
+    const text = input.value.trim();
+    if (!text)
+        return;
+    input.value = "";
+    autoGrowChatInput(input);
+    if (descEditSendDefers(descEdit.state)) {
+        descEditQueued = descEditQueued ? `${descEditQueued}\n${text}` : text;
+        renderDescEdit();
+        return;
+    }
+    void sendDescEditMessage(text);
+}
+// flushDescEditQueue runs when a turn lands. A turn that ended in an error
+// never got to carry the held text, so it goes back into the box rather than
+// into a session that cannot accept it.
+function flushDescEditQueue() {
+    if (!descEditQueued)
+        return;
+    if (descEdit.state === "awaiting_reply") {
+        const text = descEditQueued;
+        descEditQueued = "";
+        void sendDescEditMessage(text);
+        return;
+    }
+    if (descEdit.state === "error") {
+        const input = descEditInputEl();
+        if (!input)
+            return;
+        input.value = input.value ? `${descEditQueued}\n${input.value}` : descEditQueued;
+        descEditQueued = "";
+        autoGrowChatInput(input);
+        renderDescEdit();
+    }
 }
 async function openDescEditModal(card, opts = {}) {
     // A promotion opens this on a card the board is still rendering in Ideas: the
@@ -2475,15 +2561,9 @@ async function openDescEditModal(card, opts = {}) {
     descEditSavedHTML = null;
     descEditDraftState = "";
     descEditDraftFailureHTML = "";
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    overlay.id = "descedit-overlay";
-    const modal = document.createElement("div");
-    modal.className = "modal descedit-modal";
-    modal.innerHTML = `
+    const { modal, close } = buildModal("modal descedit-modal", `
     <div class="descedit-header">
       <span class="descedit-key">${escapeHtml(card.key)}</span>
-      <button type="button" class="descedit-close" title="Close">×</button>
     </div>
     <div class="descedit-body">
       <div class="descedit-desc-pane">
@@ -2494,40 +2574,51 @@ async function openDescEditModal(card, opts = {}) {
         <div id="descedit-transcript" class="descedit-transcript chat-transcript"></div>
         <div id="descedit-status-line" class="descedit-status chat-status hidden"></div>
         <form id="descedit-form" class="descedit-form chat-form">
-          <input id="descedit-input" type="text" autocomplete="off" placeholder="How should this description change?" />
-          <button id="descedit-send" type="submit">Send</button>
+          <div class="chat-input-row">
+            <textarea id="descedit-input" rows="1" autocomplete="off" placeholder="How should this description change?"></textarea>
+            <button id="descedit-send" class="modal-confirm chat-send" type="submit"
+                    aria-label="Send — Enter sends, Shift+Enter starts a new line"
+                    title="Enter sends · Shift+Enter starts a new line"><span aria-hidden="true">↵</span></button>
+          </div>
+          <div class="chat-hint modal-body">Enter sends · Shift+Enter starts a new line</div>
         </form>
       </div>
     </div>
-    <div class="descedit-actions">
-      <button type="button" class="descedit-cancel modal-cancel">Close</button>
-      <button type="button" id="descedit-apply" class="descedit-apply modal-confirm" disabled>Apply</button>
+    <div class="modal-actions descedit-actions">
+      <button type="button" class="modal-cancel">Cancel</button>
+      <button type="button" id="descedit-apply" class="modal-confirm" disabled>Apply</button>
     </div>
-  `;
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    const close = () => closeDescEditModal();
-    overlay.addEventListener("click", (e) => {
-        if (e.target === overlay)
-            close();
+  `, {
+        // All four ways out go through the same question, so a stray click on the
+        // backdrop cannot cost a finished rewrite (SC-5033).
+        onDismiss: () => requestDescEditClose(),
+        // Closing still ends the daemon-side chat session (SC-2873 AC6) — the one
+        // real difference between this dialog and the others, now expressed as a
+        // hook rather than as a second shell.
+        onClose: () => teardownDescEdit(),
     });
-    modal.addEventListener("keydown", (e) => {
-        if (e.key === "Escape")
-            close();
-    });
-    modal.querySelector(".descedit-close").addEventListener("click", close);
-    modal.querySelector(".descedit-cancel").addEventListener("click", close);
+    descEditClose = close;
     modal.querySelector("#descedit-apply").addEventListener("click", () => void applyDescEdit());
+    const input = modal.querySelector("#descedit-input");
+    input.addEventListener("input", () => autoGrowChatInput(input));
+    input.addEventListener("keydown", (e) => {
+        if (e.isComposing)
+            return;
+        if (e.key !== "Enter" || e.shiftKey)
+            return;
+        // Enter is the send gesture, so it must not also leave a newline behind.
+        e.preventDefault();
+        submitDescEditInput();
+    });
     modal.querySelector("#descedit-form").addEventListener("submit", (e) => {
         e.preventDefault();
-        const input = document.getElementById("descedit-input");
-        const text = input.value.trim();
-        if (!text)
-            return;
-        input.value = "";
-        void sendDescEditMessage(text);
+        submitDescEditInput();
     });
+    // Focus is owed, not taken: at this point the session does not exist yet, so
+    // the input renders disabled and a focus() here would be discarded.
+    descEditPendingFocus = true;
     renderDescEdit();
+    autoGrowChatInput(input);
     try {
         const detail = await go().GetIssueDetail(card.trackerKind ?? "", card.tracker ?? "", card.key);
         if (descEditCard?.key !== card.key)
@@ -2559,10 +2650,23 @@ async function openDescEditModal(card, opts = {}) {
         startDescEditPoll();
 }
 function closeDescEditModal() {
+    const close = descEditClose;
+    descEditClose = null;
+    if (close) {
+        close(); // teardownDescEdit runs from the shell's onClose
+        return;
+    }
+    teardownDescEdit();
+}
+// teardownDescEdit ends everything the open dialog owned. Called from the
+// shell's onClose so it runs however the dialog went away.
+function teardownDescEdit() {
     stopDescEditPoll();
     const { state, sessionId } = descEdit;
-    document.getElementById("descedit-overlay")?.remove();
     descEditCard = null;
+    descEditQueued = "";
+    descEditPendingFocus = false;
+    descEditClose = null;
     // AC6: discard the daemon-side session so a later reopen of the same
     // ticket never reattaches to this proposal/chat history.
     discardDescEditSession(state, sessionId);
@@ -2618,28 +2722,26 @@ function renderDescEdit() {
     }
     const statusLine = document.getElementById("descedit-status-line");
     if (statusLine) {
-        statusLine.classList.remove("hidden", "error");
-        if (descEdit.state === "thinking") {
-            statusLine.textContent = "Thinking…";
-        }
-        else if (descEdit.state === "error") {
-            statusLine.textContent = descEdit.error || "Description chat failed";
-            statusLine.classList.add("error");
-        }
-        else if (descEdit.state === "applied") {
-            statusLine.textContent = "Saved.";
-        }
-        else {
-            statusLine.classList.add("hidden");
-        }
+        const line = descEditStatusLine(descEdit.state, descEdit.error, descEditQueued !== "");
+        statusLine.textContent = line.text;
+        statusLine.classList.toggle("hidden", line.kind === "none");
+        statusLine.classList.toggle("error", line.kind === "error");
     }
-    const input = document.getElementById("descedit-input");
+    const input = descEditInputEl();
     const send = document.getElementById("descedit-send");
     const inputEnabled = descEditInputEnabled(descEdit.state);
     if (input)
         input.disabled = !inputEnabled;
     if (send)
         send.disabled = !inputEnabled;
+    // Focus lands the moment the box becomes usable — on this render if the
+    // session already exists, otherwise on the render that follows
+    // StartDescEdit. A disabled control cannot take focus, so doing it on open
+    // alone would silently do nothing.
+    if (input && inputEnabled && descEditPendingFocus) {
+        descEditPendingFocus = false;
+        input.focus();
+    }
     const apply = document.getElementById("descedit-apply");
     if (apply)
         apply.disabled = !descEditApplyEnabled(descEdit.state, descEdit.proposal);
@@ -2656,11 +2758,13 @@ async function pollDescEdit() {
         descEdit = { ...descEdit, state: "error", error: errMessage(err) };
         stopDescEditPoll();
         renderDescEdit();
+        flushDescEditQueue();
         return;
     }
     renderDescEdit();
     if (descEdit.state !== "thinking")
         stopDescEditPoll();
+    flushDescEditQueue();
 }
 async function sendDescEditMessage(text) {
     if (!descEditCard || !text || descEdit.state === "thinking")
@@ -2674,6 +2778,9 @@ async function sendDescEditMessage(text) {
     catch (err) {
         descEdit = { ...descEdit, state: "error", error: errMessage(err) };
         stopDescEditPoll();
+        renderDescEdit();
+        flushDescEditQueue();
+        return;
     }
     renderDescEdit();
 }
@@ -2689,7 +2796,11 @@ async function applyDescEdit() {
         descEdit = await go().ApplyDescEdit(descEdit.sessionId);
         descEditSavedDescription = descEdit.proposal || descEditSavedDescription;
         descEditSavedHTML = null;
-        renderDescEdit();
+        // Apply is this dialog's main button and it closes it, like every other
+        // dialog's. Leaving it open on a terminal session was the state in which
+        // nothing inside it could be used (SC-5033). The session is already
+        // "applied", so this close discards nothing the daemon still needs.
+        closeDescEditModal();
         reconcileEpoch++;
         await reconcile();
     }
@@ -2965,7 +3076,9 @@ function renderTicketDetail() {
 // maybeOfferStartProject so overlapping reconciles (board:changed storms)
 // cannot probe or open twice. Dismissal therefore lasts for the session.
 let wizardChecked = false;
-let wizardOverlay = null;
+let wizardModal = null;
+let wizardSetContent = null;
+let wizardClose = null;
 let wizardTemplates = [];
 let wizardStep = "type";
 let wizardType = "";
@@ -3009,56 +3122,48 @@ function wizardLanguageChoices(type) {
     return wizardTemplates.filter((t) => t.type === type);
 }
 function openStartWizard() {
-    if (wizardOverlay)
+    if (wizardModal)
         return;
     wizardStep = "type";
     wizardType = "";
     wizardError = "";
     wizardCreated = 0;
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    const modal = document.createElement("div");
-    modal.className = "modal wizard";
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    wizardOverlay = overlay;
-    const onKey = (e) => {
+    const { modal, setContent, close } = buildModal("modal wizard", "", {
         // No escape while the download runs: the state is not cancellable from
-        // here and a hidden in-flight scaffold would be surprising.
-        if (e.key === "Escape" && wizardStep !== "creating")
-            closeStartWizard();
-    };
-    overlay.addEventListener("click", (e) => {
-        if (e.target === overlay && wizardStep !== "creating")
-            closeStartWizard();
+        // here and a hidden in-flight scaffold would be surprising. The same
+        // predicate now also withholds the corner x.
+        canDismiss: () => wizardStep !== "creating",
+        // However the wizard goes away — Cancel, Escape, the scrim, the x or
+        // closeStartWizard — the handles must be dropped here. The old code could
+        // only reach that reset through closeStartWizard; under the shell, Escape
+        // and the scrim no longer pass through it, and a stale wizardModal makes
+        // the re-entry guard above refuse every reopen for the rest of the session.
+        onClose: () => {
+            wizardModal = null;
+            wizardSetContent = null;
+            wizardClose = null;
+        },
     });
-    document.addEventListener("keydown", onKey);
-    overlay.dataset.bound = "true";
-    // Store the handler so closeStartWizard can unbind it.
-    overlay._onKey = onKey;
+    wizardModal = modal;
+    wizardSetContent = setContent;
+    wizardClose = close;
     renderStartWizard();
 }
 function closeStartWizard() {
-    if (!wizardOverlay)
-        return;
-    const onKey = wizardOverlay._onKey;
-    if (onKey)
-        document.removeEventListener("keydown", onKey);
-    wizardOverlay.remove();
-    wizardOverlay = null;
+    // The handles are dropped by the shell's onClose, which runs for this path
+    // and for the scrim, Escape and the x alike — so there is exactly one reset.
+    wizardClose?.();
 }
 function renderStartWizard() {
-    if (!wizardOverlay)
+    if (!wizardModal || !wizardSetContent)
         return;
-    const modal = wizardOverlay.querySelector(".wizard");
-    if (!modal)
-        return;
+    const modal = wizardModal;
     if (wizardStep === "type") {
-        modal.innerHTML = `
+        wizardSetContent(`
       <div class="modal-title">Start a new project</div>
       <div class="modal-body">This folder has no project yet. What do you want to build?</div>
       <div class="wizard-options"></div>
-    `;
+    `);
         const options = modal.querySelector(".wizard-options");
         wizardTypeChoices().forEach((choice) => {
             const btn = document.createElement("button");
@@ -3075,12 +3180,12 @@ function renderStartWizard() {
         return;
     }
     if (wizardStep === "language") {
-        modal.innerHTML = `
+        wizardSetContent(`
       <div class="modal-title">Choose a language</div>
       <div class="modal-body">The project is set up ready to run.</div>
       <div class="wizard-options"></div>
       <div class="wizard-nav"><button class="wizard-back" type="button">Back</button></div>
-    `;
+    `);
         const options = modal.querySelector(".wizard-options");
         wizardLanguageChoices(wizardType).forEach((tpl) => {
             const btn = document.createElement("button");
@@ -3097,22 +3202,21 @@ function renderStartWizard() {
         return;
     }
     if (wizardStep === "creating") {
-        modal.innerHTML = `
+        wizardSetContent(`
       <div class="modal-title">Creating project…</div>
       <div class="wizard-status"><span class="spinner"></span><span>Downloading starter template</span></div>
-    `;
+    `);
         return;
     }
     if (wizardStep === "done") {
-        modal.innerHTML = `
+        wizardSetContent(`
       <div class="modal-title">Project created</div>
       <div class="modal-body">${escapeHtml(`${wizardCreated} files added. Create a first ticket to start working on it.`)}</div>
       <div class="modal-actions">
         <button class="modal-cancel" type="button">Close</button>
         <button class="modal-confirm" type="button">Create first ticket</button>
       </div>
-    `;
-        modal.querySelector(".modal-cancel").addEventListener("click", () => closeStartWizard());
+    `);
         modal.querySelector(".modal-confirm").addEventListener("click", () => {
             closeStartWizard();
             captureFirstIdea();
@@ -3120,15 +3224,14 @@ function renderStartWizard() {
         return;
     }
     // error
-    modal.innerHTML = `
+    wizardSetContent(`
     <div class="modal-title">Could not create project</div>
     <div class="modal-body wizard-error">${escapeHtml(wizardError)}</div>
     <div class="modal-actions">
       <button class="modal-cancel" type="button">Close</button>
       <button class="modal-confirm" type="button">Try again</button>
     </div>
-  `;
-    modal.querySelector(".modal-cancel").addEventListener("click", () => closeStartWizard());
+  `);
     modal.querySelector(".modal-confirm").addEventListener("click", () => {
         wizardStep = "language";
         renderStartWizard();

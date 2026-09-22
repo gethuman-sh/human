@@ -57,7 +57,7 @@ const renderIdeaSpaceBody = functionBody(src, "function renderIdeaSpace(): HTMLE
 // that opens on it, and the filing that follows a capture.
 const buildModalBody = functionBody(
   src,
-  "function buildModal(className: string, html: string): { modal: HTMLElement; close: () => void } {",
+  "function buildModal(\n  className: string,\n  html: string,\n  opts: ModalOptions = {},\n): { modal: HTMLElement; close: () => void; setContent: (html: string) => void } {",
 );
 const composerBody = functionBody(src, 'function showIdeaCaptureModal(prefill = ""): void {');
 const captureIdeaBody = functionBody(src, "async function captureIdea(title: string): Promise<void> {");
@@ -157,17 +157,26 @@ test("the composer opens focused (SC-4818)", () => {
 
 // The three ways out live in buildModal exactly once. A copy in the composer
 // would be the third paste this extraction exists to prevent.
-test("Escape, the scrim and Cancel all close, once, in the shared builder (SC-4818)", () => {
-  assert.match(buildModalBody, /e\.key === "Escape"/, "Escape must close the dialog");
+test("Escape, the scrim, Cancel and the × all dismiss, once, in the shared builder (SC-4818, SC-5033)", () => {
+  // The shell answers Escape with an early return on everything else, so the
+  // assertion is the guard's shape, not the old equality. The property is
+  // unchanged: Escape is handled here and nowhere else.
+  assert.match(buildModalBody, /e\.key !== "Escape"/, "Escape must dismiss the dialog");
   assert.match(buildModalBody, /e\.target === overlay/, "a click on the scrim, not inside the box, must close it");
+  // Optional-chained since SC-5033: a dialog with no Cancel (the launch
+  // notice) is legal, and the shell must not throw on it.
   assert.match(
-    buildModalBody, /querySelector\("\.modal-cancel"\)!\.addEventListener\("click", close\)/,
-    "Cancel must close the dialog",
+    buildModalBody, /querySelector\("\.modal-cancel"\)\?\.addEventListener\("click", dismiss\)/,
+    "Cancel must dismiss the dialog, and its absence must be tolerated",
+  );
+  assert.match(
+    buildModalBody, /querySelector\("\.modal-close"\)\?\.addEventListener\("click", dismiss\)/,
+    "the corner × must dismiss the dialog, from the shell rather than from each caller",
   );
   for (const [re, what] of [
-    [/e\.key === "Escape"/, "Escape"],
+    [/e\.key !== "Escape"/, "Escape"],
     [/e\.target === overlay/, "the scrim click"],
-    [/\.modal-cancel"\)!\.addEventListener/, "Cancel"],
+    [/\.modal-cancel"\)\??\.addEventListener/, "Cancel"],
   ]) {
     assert.doesNotMatch(composerBody, re, `the composer must not re-implement ${what} — buildModal owns it`);
   }

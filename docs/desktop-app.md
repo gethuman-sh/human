@@ -108,6 +108,29 @@ The app has two exit paths, and they answer to different people.
 
 **Closing the window** goes through the confirmation flow (`desktop/closeflow.go`): an idle daemon is stopped silently, a busy one raises the three-way dialog (Cancel / Stop anyway / Wait and close), and the app clears its session marker so a cleanly stopped daemon is never later reported orphaned.
 
+### One dialog shell
+
+Every dialog on the board — file a bug, file a security issue, capture an idea,
+the generic confirm, this three-way close dialog, the launch-time project
+notice, the Start Project wizard and the description editor — is built through
+`buildModal` (SC-4818, extended in SC-5033). The scrim, Escape, the footer's
+Cancel and a corner `×` therefore behave identically wherever a dialog appears,
+and a dialog says only what is genuinely its own: what dismissal means, what to
+tear down on close, and whether it may be dismissed at all. The wizard's
+"Creating project…" step is the single dialog with no `×`, matching its
+existing refusal of Escape and the backdrop — an in-flight scaffold is not
+cancellable from there. In the three-way close dialog the `×` means Cancel, the
+only choice that changes nothing. The settings command palette is deliberately
+excluded: it is not a dialog and its way out is already visible in its own
+footer.
+
+The confirm button is **constructive by default** and a destructive one says so
+with `.modal-destructive`. It used to be the other way round — red, because the
+first one written was close-ticket confirmation — which made every constructive
+dialog opt out of the red in its own selector, and left a dialog that forgot to
+with a red OK. Close-ticket, the orphan-daemon "Stop it" and "Stop anyway" are
+the three that carry the opt-in.
+
 **Ctrl-C (or SIGTERM) in the terminal** ends the process immediately and leaves the daemon running (`desktop/signalexit.go`). It performs no busy check, shows no dialog, and never stops the daemon: whoever starts the app from a console manages their own daemon. A dialog inside the window is no answer to a question asked from a shell — and Wails' own signal handler replaces Go's default terminate and routes signals into `OnBeforeClose`, so without this the app could not be ended from the terminal it was started in at all.
 
 ## Desktop-ticket verification template
@@ -214,17 +237,35 @@ user has not answered. It still proposes description text and nothing else.
 A rewrite the agent proposes appears in the left pane as a visibly distinct
 "Proposed rewrite (unsaved)" preview; nothing reaches the tracker until the user clicks
 Apply. Applying also records the description as the human's words, so the
-background drafter never writes over an applied edit. Closing this modal without
-Apply/Save **discards the daemon-side chat session outright** (AC6): the
-modal's close path (Close button, Escape, backdrop click) calls
+background drafter never writes over an applied edit. Apply also closes the dialog once the
+tracker write lands, the way every other dialog's main button closes its own;
+the session it leaves behind is `applied`, which `descedit-start` never
+reattaches to, so the next open of that ticket is a fresh chat against the
+saved text. Closing this modal without
+Apply/Save **discards the daemon-side chat session outright** (AC6): all four
+ways out — the footer's Cancel, Escape, the backdrop and the corner `×` — call
 `descedit-discard` on whatever session was live, so reopening the SAME ticket
 always starts a genuinely fresh session — no stale proposal, no stale chat
-history. A close that races the opening `descedit-start` is discarded on the
+history. All four also **ask first** when an unapplied "Proposed rewrite
+(unsaved)" is on screen (SC-5033): declining returns to the dialog with the
+rewrite and the chat intact, and a dismissal with nothing unapplied closes
+straight away with no question. A close that races the opening `descedit-start` is discarded on the
 same route: the session exists on the daemon before its id ever reaches the
 UI, so the open path re-checks which ticket the modal still belongs to when
 `start` returns and discards a session no modal owns, rather than adopting it.
 The session is also **not** persisted across a daemon restart (an
 in-progress, unsaved edit is cheap to lose since nothing was ever written).
+
+The chat box is a textarea, not a one-line input (SC-5033). It starts at one
+line, grows with the text to a six-line ceiling and scrolls past it; Enter
+sends and Shift+Enter starts a new line, stated by a permanently visible hint
+under the box and by the `↵` send button's tooltip. Line breaks are only
+trimmed at the ends, so a multi-line instruction reaches the agent — and the
+transcript — with its newlines intact. The box stays usable while a turn is in
+flight: the daemon refuses a reply to a session that is not awaiting one, so a
+message typed mid-answer is held and sent when that turn lands, and a turn that
+ends in an error puts the held text back in the box rather than into a session
+that cannot accept it.
 
 The panel talks to five dedicated daemon routes — `descedit-start`,
 `descedit-reply`, `descedit-apply`, `descedit-discard`, `descedit-status` —

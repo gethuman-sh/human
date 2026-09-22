@@ -1,17 +1,59 @@
 // Pure predicates/builders for the Product-Backlog description-edit chat
 // modal (SC-2873), kept free of DOM and Wails bindings so they can be unit-
 // tested directly (mirrors board-detail.ts).
-// descEditInputEnabled: the chat input/send are live only while the session is
-// idle and interactive. "applied" is terminal for THIS session — the user
-// closes and reopens to start a fresh chat against the now-saved description.
+// descEditInputEnabled: the chat input/send are live whenever there is a
+// session to type into. They stay live THROUGH a turn (SC-5033): a correction
+// that occurs to you mid-answer must be typeable, and descEditSendDefers says
+// what happens to it. "none" has no session yet and "applied" is terminal —
+// Apply closes the dialog, so it is never a state the user sits in.
 export function descEditInputEnabled(state) {
-    return state === "awaiting_reply" || state === "error";
+    return state !== "none" && state !== "applied";
 }
 // descEditApplyEnabled: Apply/Save is live only when a proposal exists, the
 // session isn't mid-turn, and it hasn't already been applied this session —
 // the disable-on-click guard mirrors the detail panel's decision buttons.
 export function descEditApplyEnabled(state, proposal) {
     return !!proposal && proposal.trim() !== "" && state !== "thinking" && state !== "applied";
+}
+// descEditSendDefers: a message typed mid-turn is held, not sent. The daemon
+// refuses a reply to a session that is not awaiting one
+// (internal/daemon/descedit.go Reply), so sending now would surface an error
+// on top of the answer still being written.
+export function descEditSendDefers(state) {
+    return state === "thinking";
+}
+// descEditHasUnappliedRewrite: leaving with one of these on screen destroys
+// work the dialog itself labels "Proposed rewrite (unsaved)", so the dismiss
+// path asks first. "applied" is not unapplied — Apply already landed it.
+export function descEditHasUnappliedRewrite(state, proposal) {
+    return !!proposal && proposal.trim() !== "" && state !== "applied";
+}
+// descEditStatusLine resolves what the line under the transcript says. It is
+// the one place that knows a held message exists, because the transcript
+// cannot show it: it has not been sent yet.
+export function descEditStatusLine(state, error, queued) {
+    if (state === "thinking") {
+        return {
+            text: queued ? "Thinking… — the message you typed sends when this answer lands." : "Thinking…",
+            kind: "info",
+        };
+    }
+    if (state === "error")
+        return { text: error || "Description chat failed", kind: "error" };
+    if (state === "applied")
+        return { text: "Saved.", kind: "info" };
+    return { text: "", kind: "none" };
+}
+// chatInputHeight: the grown height of the chat input, capped. One line to
+// start, growing with the text, scrolling past the ceiling — the ceiling is
+// six lines at THIS input's metrics (124px; the composer's rows="6" is ~112px
+// because it sets no line-height, so the two are the same six lines and not
+// the same pixels). Read from the element's own computed max-height so CSS
+// stays the single source of it.
+export function chatInputHeight(scrollHeight, maxPx) {
+    if (!(maxPx > 0))
+        return scrollHeight;
+    return Math.min(scrollHeight, maxPx);
 }
 // descEditShouldDiscardOnClose: AC6 — closing the modal without Apply/Save
 // must discard the pending session, so a later reopen of the same ticket
