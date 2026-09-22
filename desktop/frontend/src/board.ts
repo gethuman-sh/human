@@ -3199,9 +3199,9 @@ async function openDescEditModal(card: Card, opts: { promoted?: boolean } = {}):
         </form>
       </div>
     </div>
-    <div class="descedit-actions">
-      <button type="button" class="descedit-cancel modal-cancel">Close</button>
-      <button type="button" id="descedit-apply" class="descedit-apply modal-confirm" disabled>Apply</button>
+    <div class="modal-actions descedit-actions">
+      <button type="button" class="descedit-cancel modal-cancel">Cancel</button>
+      <button type="button" id="descedit-apply" class="modal-confirm" disabled>Apply</button>
     </div>
   `;
   overlay.appendChild(modal);
@@ -3397,7 +3397,11 @@ async function applyDescEdit(): Promise<void> {
     descEdit = await go().ApplyDescEdit(descEdit.sessionId!);
     descEditSavedDescription = descEdit.proposal || descEditSavedDescription;
     descEditSavedHTML = null;
-    renderDescEdit();
+    // Apply is this dialog's main button and it closes it, like every other
+    // dialog's. Leaving it open on a terminal session was the state in which
+    // nothing inside it could be used (SC-5033). The session is already
+    // "applied", so this close discards nothing the daemon still needs.
+    closeDescEditModal();
     reconcileEpoch++;
     await reconcile();
   } catch (err) {
