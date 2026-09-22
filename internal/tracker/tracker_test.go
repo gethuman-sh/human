@@ -324,6 +324,25 @@ func TestDetectCandidateKinds_numericGatedByConfig(t *testing.T) {
 	assert.Contains(t, DetectCandidateKinds("SC-1", "clickup"), "shortcut")
 }
 
+// A local tracker mints Jira/Linear-shaped keys, so the shape offers "local"
+// only when one is configured: a setup without it must resolve exactly as
+// before, and a setup with it must be able to route its own keys.
+func TestDetectCandidateKinds_localGatedByConfig(t *testing.T) {
+	assert.Equal(t, []string{"jira", "linear"}, DetectCandidateKinds("LOC-12"))
+	assert.Equal(t, []string{"jira", "linear"}, DetectCandidateKinds("LOC-12", "jira"))
+	assert.Equal(t, []string{"jira", "linear", "local"}, DetectCandidateKinds("LOC-12", "local"))
+	assert.NotContains(t, DetectCandidateKinds("octocat/repo#1", "local"), "local")
+}
+
+// With only a local tracker configured, its keys resolve to it without a
+// --tracker flag, which is the whole no-setup promise.
+func TestResolve_localOnlyResolvesItsKeys(t *testing.T) {
+	instances := []Instance{{Name: "tickets", Kind: "local"}}
+	inst, err := Resolve("", instances, "LOC-3")
+	assert.NoError(t, err)
+	assert.Equal(t, "local", inst.Kind)
+}
+
 // --- ExtractProject tests ---
 
 func TestExtractProject(t *testing.T) {

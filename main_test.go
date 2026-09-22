@@ -835,7 +835,7 @@ func TestRootCmd_defaultShowsHelp(t *testing.T) {
 // the sixteen flags that used to be here.
 func TestRootCmd_hasNoPerTrackerCredentialFlags(t *testing.T) {
 	pf := newRootCmd().PersistentFlags()
-	for _, kind := range []string{"jira", "github", "gitlab", "linear", "azure", "shortcut", "clickup"} {
+	for _, kind := range []string{"jira", "github", "gitlab", "linear", "azure", "shortcut", "clickup", "local"} {
 		for _, suffix := range []string{"token", "url", "key", "user", "org"} {
 			name := kind + "-" + suffix
 			assert.Nil(t, pf.Lookup(name), "per-tracker credential flag --%s must not exist", name)

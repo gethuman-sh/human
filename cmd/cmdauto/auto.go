@@ -135,7 +135,7 @@ func BuildAutoLinkCmd(deps cmdutil.Deps) *cobra.Command {
 			}
 			defer result.Cleanup()
 
-			if !slices.Contains(tracker.DetectCandidateKinds(args[1]), result.Kind) {
+			if !slices.Contains(tracker.DetectCandidateKinds(args[1], result.Kind), result.Kind) {
 				return errors.WithDetails(
 					"keys resolve to different trackers; a link needs both issues in the same tracker",
 					"key", args[0], "otherKey", args[1], "tracker", result.Kind)
@@ -171,7 +171,7 @@ func BuildAutoUnlinkCmd(deps cmdutil.Deps) *cobra.Command {
 			}
 			defer result.Cleanup()
 
-			if !slices.Contains(tracker.DetectCandidateKinds(args[1]), result.Kind) {
+			if !slices.Contains(tracker.DetectCandidateKinds(args[1], result.Kind), result.Kind) {
 				return errors.WithDetails(
 					"keys resolve to different trackers; a link only ever existed within one tracker",
 					"key", args[0], "otherKey", args[1], "tracker", result.Kind)

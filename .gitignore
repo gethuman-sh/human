@@ -2,6 +2,8 @@ bin/
 dist/
 /human
 local/
+# The tracker provider package shares the name of the config override dir above.
+!internal/tracker/local/
 *.out
 *.cov
 /logo/

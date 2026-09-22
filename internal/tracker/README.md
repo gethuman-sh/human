@@ -1,6 +1,6 @@
 # Cross-Tracker Operations
 
-`human` talks to every supported issue tracker — Jira, Linear, GitHub, GitLab, Shortcut, Azure DevOps, ClickUp — through one consistent set of commands. You work with issues the same way no matter which backend a team uses.
+`human` talks to every supported issue tracker — Jira, Linear, GitHub, GitLab, Shortcut, Azure DevOps, ClickUp, and a local tracker that keeps tickets in a SQLite file on this machine — through one consistent set of commands. You work with issues the same way no matter which backend a team uses.
 
 - List a project's open or all issues anywhere
 - Read full issue details by key or pasted URL
@@ -20,4 +20,14 @@
 - Is configured in one `trackers:` list where each entry names its `kind:`, so the section says what a backend does rather than who makes it ([SC-3874]). The per-vendor sections still load, unchanged and indefinitely; env var names are untouched because they were always derived from the kind (`JIRA_MYORG_KEY`, `SHORTCUT_BOARD_TOKEN`)
 - Configures issue trackers, and only issue trackers. A `githubs:` entry is a tracker; the code host that opens pull requests is a `forges:` entry, loaded by `internal/forge` into its own type. Nothing here carries a forge, so nothing here has to ask whether a backend is one — the predicate, the filter and the credential skip that used to keep the two apart are gone with the union that needed them ([SC-3876]). A config predating the split is migrated by `human config migrate`, and a `githubs:` entry still declaring `role: forge` fails the load with that instruction rather than becoming a tracker with a role that no longer exists
 - Refuses a listing that is too expensive to repeat. A caller marks a poll loop with `ListOptions.Unattended` — the board refresh, the reconcile sweep, the scheduled record sync all do — and a backend may then decline. GitHub declines an **unscoped** listing: with no `projects:`, "show all work" means a search across every issue the token can see, on the search endpoint's own rate limit, once per refresh forever. The refusal costs no request, names the entry and the one line that fixes it, and surfaces on the board where the tickets would have been. A hand-run `human list` is unaffected: someone who typed it is waiting for the answer and may have what they asked for ([SC-3888])
+- Runs with no tracker account at all: `kind: local` keeps tickets in a SQLite file under `~/.human/local/`, keyed `LOC-1`, `LOC-2`, … (the prefix is configurable). Ideas, plans, markers, handoffs and reviews all work as on any other backend because they are comments; the board is its only UI, and the CLI (`human local issue create …`, `human get LOC-1`, `human marker post …`) its only write path. What it cannot do is open a pull request — deploying still needs a `forges:` entry.
+
+  ```yaml
+  trackers:
+    - kind: local
+      name: tickets
+      # prefix: LOC          # key prefix; uppercase letters and digits
+      # path: .human/tickets.db   # relative to the project; default is under ~/.human/local
+      # user: Ada            # author of writes; defaults to the first me: name
+  ```
 - Guards deletes and edits with safe-mode policies

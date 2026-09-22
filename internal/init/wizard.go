@@ -40,9 +40,12 @@ type ServiceType struct {
 	// rather than only who makes it ([SC-3874]). Empty for the services that are
 	// not trackers (docs, analytics, chat); they keep their own sections.
 	Kind        string
-	ConfigKey   string   // legacy per-vendor YAML key, e.g. "jiras"; still read
-	DefaultURL  string   // empty means user must provide it
-	URLRequired bool     // if true and DefaultURL is empty, prompt for URL
+	ConfigKey   string // legacy per-vendor YAML key, e.g. "jiras"; still read
+	DefaultURL  string // empty means user must provide it
+	URLRequired bool   // if true and DefaultURL is empty, prompt for URL
+	// NoURL marks a service with nothing to point at (the local tracker). The
+	// wizard then asks for no URL at all, rather than an empty one.
+	NoURL       bool
 	ExtraFields []string // additional fields beyond name+description, e.g. "user", "org"
 	EnvVars     []string // env var suffixes, e.g. ["KEY"] → JIRA_{NAME}_KEY
 	EnvPrefix   string   // e.g. "JIRA"
@@ -97,6 +100,12 @@ func ServiceRegistry() []ServiceType {
 			DefaultURL:  "https://amplitude.com",
 			URLRequired: true,
 			EnvVars:     []string{"KEY", "SECRET"}, EnvPrefix: "AMPLITUDE",
+		},
+		// Listed last so the indices of the services above stay what existing
+		// configs and tests were written against.
+		{
+			Label: "Local (SQLite on this machine, no account needed)", Kind: "local", ConfigKey: "locals",
+			NoURL: true,
 		},
 	}
 }

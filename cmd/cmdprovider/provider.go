@@ -116,7 +116,11 @@ func buildIssueCreateCmd(kind string, deps cmdutil.Deps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Project key (Jira: KAN, GitHub: owner/repo, GitLab: group/project, Linear: ENG)")
-	_ = cmd.MarkFlagRequired("project")
+	// A local tracker has exactly one project, its key prefix, so asking for it
+	// would be asking the user to repeat the config; the provider fills it in.
+	if kind != "local" {
+		_ = cmd.MarkFlagRequired("project")
+	}
 	cmd.Flags().StringVar(&typ, "type", "Task", "Issue type (e.g. Task, Bug, Story) — Bug maps to every tracker's native defect marker: issue type on Jira/Azure DevOps, story type on Shortcut, the bug label elsewhere")
 	cmd.Flags().StringVar(&description, "description", "", "Issue description in markdown (separate from title)")
 	cmd.Flags().StringVar(&parent, "parent", "", "Parent issue key to create this as a subtask (Linear, Jira, Shortcut, Azure DevOps, GitHub, ClickUp; not supported on GitLab)")

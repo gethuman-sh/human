@@ -90,6 +90,7 @@ var KindToSection = map[string]string{
 	"linear":      "linears",
 	"azuredevops": "azuredevops",
 	"shortcut":    "shortcuts",
+	"local":       "locals",
 }
 
 // sectionToKind is the inverse of KindToSection, derived at init time.

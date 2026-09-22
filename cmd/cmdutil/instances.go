@@ -17,6 +17,7 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker/gitlab"
 	"github.com/gethuman-sh/human/internal/tracker/jira"
 	"github.com/gethuman-sh/human/internal/tracker/linear"
+	"github.com/gethuman-sh/human/internal/tracker/local"
 	"github.com/gethuman-sh/human/internal/tracker/shortcut"
 	"github.com/gethuman-sh/human/internal/vault"
 )
@@ -34,6 +35,7 @@ var allLoadersWithResolver = []instanceLoaderWithResolver{
 	azuredevops.LoadInstancesWithResolver,
 	shortcut.LoadInstancesWithResolver,
 	clickup.LoadInstancesWithResolver,
+	local.LoadInstancesWithResolver,
 }
 
 // LoadAllInstances collects tracker instances from all provider configs.

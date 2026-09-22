@@ -34,5 +34,10 @@ func init() {
 			Required: []string{"TOKEN"},
 			HelpURL:  "https://app.shortcut.com/settings/account/api-tokens",
 		},
+		// A local tracker has nothing to authenticate against, so an entry with
+		// no credential fields is complete as configured.
+		"local": {
+			Kind: "local", EnvPrefix: "LOCAL", Label: "Local",
+		},
 	}
 }

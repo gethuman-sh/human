@@ -16,6 +16,8 @@ main.go ──→ azuredevops ──→ tracker  (Instance)
                         ──→ config   (UnmarshalSection)
 main.go ──→ shortcut    ──→ tracker  (Instance)
                         ──→ config   (UnmarshalSection)
+main.go ──→ local       ──→ tracker  (Instance)
+                        ──→ config   (UnmarshalSection)
 ```
 
 `config` is a leaf package — no tracker types, no provider knowledge.

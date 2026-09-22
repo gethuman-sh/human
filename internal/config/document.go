@@ -243,6 +243,7 @@ var TrackerSections = map[string]string{
 	"shortcuts":   "shortcut",
 	"azuredevops": "azuredevops",
 	"clickups":    "clickup",
+	"locals":      "local",
 }
 
 // ForgeSection is where code hosts are configured. A forge is not a tracker and
