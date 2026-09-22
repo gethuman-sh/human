@@ -7,6 +7,10 @@ import {
   descEditInputEnabled,
   descEditApplyEnabled,
   descEditAllowedFor,
+  descEditSendDefers,
+  descEditHasUnappliedRewrite,
+  descEditStatusLine,
+  chatInputHeight,
   buildDescriptionPreview,
   descEditShouldDiscardOnClose,
   draftNotice,
@@ -27,6 +31,65 @@ test("chat input is live whenever there is a session to type into", () => {
 test("chat input is disabled with no session and after applying", () => {
   assert.equal(descEditInputEnabled("applied"), false);
   assert.equal(descEditInputEnabled("none"), false);
+});
+
+// SC-5033: the input stays live through a turn, so the rules that used to be
+// one predicate are now two — may you type (descEditInputEnabled), and does
+// what you typed go out now or wait (descEditSendDefers). The daemon refuses a
+// reply to a session that is not awaiting one, which is why waiting exists.
+test("a message typed mid-turn is held, not sent", () => {
+  assert.equal(descEditSendDefers("thinking"), true);
+  assert.equal(descEditSendDefers("awaiting_reply"), false);
+  assert.equal(descEditSendDefers("error"), false);
+});
+
+// The dismiss path asks before destroying work the dialog itself labels
+// "Proposed rewrite (unsaved)" — a stray click on the backdrop used to cost the
+// whole session.
+test("an unapplied rewrite is what makes leaving ask first", () => {
+  assert.equal(descEditHasUnappliedRewrite("awaiting_reply", "new text"), true);
+  assert.equal(descEditHasUnappliedRewrite("thinking", "new text"), true);
+  assert.equal(descEditHasUnappliedRewrite("applied", "new text"), false);
+  assert.equal(descEditHasUnappliedRewrite("awaiting_reply", "   "), false);
+  assert.equal(descEditHasUnappliedRewrite("awaiting_reply", undefined), false);
+});
+
+// The status line is the only place a held message is visible: the transcript
+// cannot show it, because it has not been sent.
+test("descEditStatusLine names a held message while thinking", () => {
+  const line = descEditStatusLine("thinking", undefined, true);
+  assert.equal(line.kind, "info");
+  assert.match(line.text, /sends when this answer lands/);
+});
+
+test("descEditStatusLine is plain while thinking with nothing held", () => {
+  assert.deepEqual(descEditStatusLine("thinking", undefined, false), { text: "Thinking…", kind: "info" });
+});
+
+test("descEditStatusLine prefers the daemon's error text and falls back", () => {
+  assert.deepEqual(descEditStatusLine("error", "boom", false), { text: "boom", kind: "error" });
+  assert.deepEqual(descEditStatusLine("error", undefined, false), {
+    text: "Description chat failed",
+    kind: "error",
+  });
+});
+
+test("descEditStatusLine says Saved after applying and is silent when idle", () => {
+  assert.deepEqual(descEditStatusLine("applied", undefined, false), { text: "Saved.", kind: "info" });
+  assert.deepEqual(descEditStatusLine("awaiting_reply", undefined, false), { text: "", kind: "none" });
+});
+
+// The ceiling comes from CSS (.chat-form textarea max-height) and is passed in,
+// so the growth rule has exactly one copy of the number and this helper has
+// none. A missing/unparseable max-height must not collapse the box to zero.
+test("chatInputHeight grows to the content and caps at the ceiling", () => {
+  assert.equal(chatInputHeight(48, 124), 48);
+  assert.equal(chatInputHeight(400, 124), 124);
+});
+
+test("chatInputHeight survives a missing ceiling", () => {
+  assert.equal(chatInputHeight(400, Number.NaN), 400);
+  assert.equal(chatInputHeight(400, 0), 400);
 });
 
 test("apply is enabled only with a live proposal, not mid-turn, not already applied", () => {
