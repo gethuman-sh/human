@@ -93,7 +93,7 @@ func (h huhPrompter) PromptInstance(svc initpkg.ServiceType) (map[string]string,
 			Value(&name),
 	}
 
-	if svc.URLRequired || svc.DefaultURL == "" {
+	if !svc.NoURL && (svc.URLRequired || svc.DefaultURL == "") {
 		fields = append(fields, huh.NewInput().
 			Title("URL").
 			Placeholder(svc.DefaultURL).

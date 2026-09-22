@@ -198,7 +198,7 @@ func (s *mockStep) Run(w io.Writer, fw claude.FileWriter) ([]string, error) {
 
 func TestServiceRegistry_AllServices(t *testing.T) {
 	reg := ServiceRegistry()
-	assert.Len(t, reg, 9)
+	assert.Len(t, reg, 10)
 
 	labels := make([]string, len(reg))
 	for i, s := range reg {
@@ -213,6 +213,7 @@ func TestServiceRegistry_AllServices(t *testing.T) {
 	assert.Contains(t, labels, "Notion")
 	assert.Contains(t, labels, "Figma")
 	assert.Contains(t, labels, "Amplitude")
+	assert.Contains(t, labels, "Local (SQLite on this machine, no account needed)")
 }
 
 func TestEnvVarName(t *testing.T) {
@@ -1451,4 +1452,28 @@ func TestGenerateConfig_unifiedOutputLoads(t *testing.T) {
 	require.Len(t, doc.Trackers(), 1)
 	assert.Equal(t, "shortcut", doc.Trackers()[0].Kind)
 	assert.Equal(t, "board", doc.Trackers()[0].Name)
+}
+
+// The local tracker has nothing to point at, so the wizard must neither ask
+// for a URL nor print an env var to export: a developer trying the tool with
+// no account gets a config that works as written.
+func TestServiceRegistry_LocalNeedsNoURLAndNoToken(t *testing.T) {
+	var local *ServiceType
+	for _, s := range ServiceRegistry() {
+		if s.Kind == "local" {
+			svc := s
+			local = &svc
+		}
+	}
+	if assert.NotNil(t, local) {
+		assert.True(t, local.NoURL)
+		assert.Empty(t, local.EnvVars)
+		assert.Empty(t, local.DefaultURL)
+		assert.False(t, local.URLRequired)
+	}
+	yaml, err := GenerateConfig([]serviceInstance{{Service: *local, Values: map[string]string{"name": "tickets"}}})
+	assert.NoError(t, err)
+	assert.Contains(t, yaml, "trackers:\n  - kind: local\n    name: tickets\n")
+	assert.NotContains(t, yaml, "url:")
+	assert.NotContains(t, yaml, "export ")
 }
