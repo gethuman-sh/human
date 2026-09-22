@@ -21,6 +21,7 @@ import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
 import { descEditInputEnabled, descEditApplyEnabled, descEditAllowedFor, buildDescriptionPreview, descEditShouldDiscardOnClose, draftNotice, } from "./board-descedit.js";
+import { confirmButtonClass } from "./board-modal.js";
 import { recreateAllowedFor, recreateConfirmBody } from "./board-recreate.js";
 import { initProjectsView, showProjectsOverview } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
@@ -1722,16 +1723,19 @@ async function recreateDescription(card) {
         return;
     }
     if (description.trim() !== "") {
-        const ok = await confirmDialog(`Recreate description for ${card.key}?`, recreateConfirmBody(card.key), "Recreate description");
+        const ok = await confirmDialog(`Recreate description for ${card.key}?`, recreateConfirmBody(card.key), "Recreate description", "Cancel", "constructive");
         if (!ok)
             return;
     }
     await runGuardedAction(() => go().RecreateDescription(card.key, card.title), (err) => showError(errMessage(err)), reconcile);
 }
 // confirmDialog renders a small modal overlay and resolves true/false on the
-// user's choice. Overlay-click and Escape count as cancel. Built with the same
-// imperative-DOM approach as the rest of the app (no framework).
-function confirmDialog(title, body, confirmLabel, cancelLabel = "Cancel") {
+// user's choice. Overlay-click and Escape count as cancel. valence says what
+// the confirm DOES, which is what colours it: it defaults to destructive
+// because a confirmation is usually asked before something irreversible, and
+// because that keeps close-ticket and the orphan-daemon stop unchanged
+// (SC-5033).
+function confirmDialog(title, body, confirmLabel, cancelLabel = "Cancel", valence = "destructive") {
     return new Promise((resolve) => {
         const overlay = document.createElement("div");
         overlay.className = "modal-overlay";
@@ -1742,7 +1746,7 @@ function confirmDialog(title, body, confirmLabel, cancelLabel = "Cancel") {
       <div class="modal-body">${escapeHtml(body)}</div>
       <div class="modal-actions">
         <button class="modal-cancel" type="button">${escapeHtml(cancelLabel)}</button>
-        <button class="modal-confirm" type="button">${escapeHtml(confirmLabel)}</button>
+        <button class="${confirmButtonClass(valence)}" type="button">${escapeHtml(confirmLabel)}</button>
       </div>
     `;
         overlay.appendChild(modal);
@@ -1783,7 +1787,7 @@ function busyCloseDialog() {
       <div class="modal-actions">
         <button class="modal-cancel" type="button">Cancel</button>
         <button class="modal-secondary" type="button">Wait and close</button>
-        <button class="modal-confirm" type="button">Stop anyway</button>
+        <button class="modal-confirm modal-destructive" type="button">Stop anyway</button>
       </div>
     `;
         overlay.appendChild(modal);

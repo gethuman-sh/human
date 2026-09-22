@@ -80,6 +80,7 @@ import {
   descEditShouldDiscardOnClose,
   draftNotice,
 } from "./board-descedit.js";
+import { confirmButtonClass, type ConfirmValence } from "./board-modal.js";
 import { recreateAllowedFor, recreateConfirmBody } from "./board-recreate.js";
 import { initProjectsView, showProjectsOverview, type RecentProject } from "./projectsview.js";
 import { runGuardedAction } from "./board-actions.js";
@@ -2291,6 +2292,8 @@ async function recreateDescription(card: Card): Promise<void> {
       `Recreate description for ${card.key}?`,
       recreateConfirmBody(card.key),
       "Recreate description",
+      "Cancel",
+      "constructive",
     );
     if (!ok) return;
   }
@@ -2302,13 +2305,17 @@ async function recreateDescription(card: Card): Promise<void> {
 }
 
 // confirmDialog renders a small modal overlay and resolves true/false on the
-// user's choice. Overlay-click and Escape count as cancel. Built with the same
-// imperative-DOM approach as the rest of the app (no framework).
+// user's choice. Overlay-click and Escape count as cancel. valence says what
+// the confirm DOES, which is what colours it: it defaults to destructive
+// because a confirmation is usually asked before something irreversible, and
+// because that keeps close-ticket and the orphan-daemon stop unchanged
+// (SC-5033).
 function confirmDialog(
   title: string,
   body: string,
   confirmLabel: string,
   cancelLabel = "Cancel",
+  valence: ConfirmValence = "destructive",
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
@@ -2321,7 +2328,7 @@ function confirmDialog(
       <div class="modal-body">${escapeHtml(body)}</div>
       <div class="modal-actions">
         <button class="modal-cancel" type="button">${escapeHtml(cancelLabel)}</button>
-        <button class="modal-confirm" type="button">${escapeHtml(confirmLabel)}</button>
+        <button class="${confirmButtonClass(valence)}" type="button">${escapeHtml(confirmLabel)}</button>
       </div>
     `;
     overlay.appendChild(modal);
@@ -2364,7 +2371,7 @@ function busyCloseDialog(): Promise<"cancel" | "stop" | "wait"> {
       <div class="modal-actions">
         <button class="modal-cancel" type="button">Cancel</button>
         <button class="modal-secondary" type="button">Wait and close</button>
-        <button class="modal-confirm" type="button">Stop anyway</button>
+        <button class="modal-confirm modal-destructive" type="button">Stop anyway</button>
       </div>
     `;
     overlay.appendChild(modal);

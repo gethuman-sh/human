@@ -568,12 +568,25 @@ body {
   gap: 8px;
 }
 
-.modal-actions button {
+/* The shared dialog-button treatment. It lives on the button classes, not on
+   .modal-actions, so the description editor's send button takes it inside the
+   chat form too — one rule instead of the fourth copy .chat-form carried
+   (SC-5033). */
+.modal-cancel,
+.modal-confirm,
+.modal-secondary {
   border: none;
   border-radius: 6px;
   padding: 8px 14px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.modal-cancel:disabled,
+.modal-confirm:disabled,
+.modal-secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .modal-cancel {
@@ -586,9 +599,18 @@ body {
   border-color: var(--muted) !important;
 }
 
+/* The confirm is CONSTRUCTIVE by default. It was destructive-red because it
+   was written for close-ticket confirmation, and every constructive dialog
+   then opted out of it separately — four selectors covering five dialogs, and
+   a fifth dialog (the launch notice) that silently kept the red. A destructive
+   confirm now says so; nothing has to say it is not a delete (SC-5033). */
 .modal-confirm {
-  background: var(--failed);
+  background: var(--accent);
   color: #fff;
+}
+
+.modal-confirm.modal-destructive {
+  background: var(--failed);
 }
 
 .modal-confirm:hover {
@@ -597,8 +619,8 @@ body {
 
 /* The busy-close dialog (SC-3015) has three choices instead of the usual two,
    so "Wait and close" needs a third, non-destructive style sitting between
-   the neutral Cancel and the destructive "Stop anyway" (which keeps the
-   shared .modal-confirm red). */
+   the neutral Cancel and the destructive "Stop anyway" (which now says so with
+   .modal-destructive). */
 .modal-secondary {
   background: var(--accent);
   color: #fff;
@@ -609,8 +631,7 @@ body {
 }
 
 /* File-a-bug dialog: a .modal variant with a title input and a description
-   textarea. Creating is constructive, so the confirm uses the accent color,
-   not the destructive red of close-ticket confirmation. */
+   textarea. */
 .bug-modal {
   width: 420px;
 }
@@ -648,11 +669,6 @@ body {
 .idea-modal .modal-textarea {
   resize: vertical;
   min-height: 90px;
-}
-
-.bug-modal .modal-confirm,
-.idea-modal .modal-confirm {
-  background: var(--accent);
 }
 
 /* Product-Backlog description-edit modal (SC-2873): a centered split-view
@@ -772,24 +788,9 @@ body {
   border-top: 1px solid var(--col-border);
 }
 
-.descedit-apply {
-  background: var(--accent);
-}
-
-.descedit-apply:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* Start Project wizard: a .modal variant. Its confirm action is constructive
-   (create/scaffold), so it uses the accent color instead of the destructive
-   red the shared .modal-confirm carries for close-ticket confirmation. */
+/* Start Project wizard: a .modal variant. */
 .wizard {
   width: 380px;
-}
-
-.wizard .modal-confirm {
-  background: var(--accent);
 }
 
 .wizard-options {
@@ -2375,7 +2376,9 @@ body {
 [data-theme="fancy"] .rail-item:active:not(:disabled) {
   transform: scale(0.88);
 }
-[data-theme="fancy"] .modal-actions button:active,
+[data-theme="fancy"] .modal-cancel:active,
+[data-theme="fancy"] .modal-confirm:active,
+[data-theme="fancy"] .modal-secondary:active,
 [data-theme="fancy"] .add-card:active,
 [data-theme="fancy"] .capture-idea:active {
   transform: scale(0.92);
