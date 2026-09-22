@@ -56,6 +56,12 @@ func DetectCandidateKinds(key string, configuredKinds ...string) []string {
 
 	if jiraLinearIssueRe.MatchString(key) {
 		kinds = append(kinds, "jira", "linear")
+		// A local tracker mints keys in this same shape. It is offered only when
+		// one is configured, so a setup without it keeps resolving exactly as
+		// before (mirrors the numeric-Shortcut gate below).
+		if slices.Contains(configuredKinds, "local") {
+			kinds = append(kinds, "local")
+		}
 	}
 
 	if githubIssueRe.MatchString(key) {
@@ -972,7 +978,7 @@ func resolveByName(name string, instances []Instance) (*Instance, error) {
 // If multiple kinds remain an error is returned asking the user to specify --tracker.
 func resolveAutoDetect(instances []Instance, keyHint string) (*Instance, error) {
 	if len(instances) == 0 {
-		return nil, errors.WithDetails("no tracker configured, add jiras:, githubs:, gitlabs:, linears:, shortcuts:, or clickups: to .humanconfig.yaml")
+		return nil, errors.WithDetails("no tracker configured, add jiras:, githubs:, gitlabs:, linears:, shortcuts:, clickups:, or locals: to .humanconfig.yaml")
 	}
 
 	// Narrow by key format. A key shape can be valid for several kinds
