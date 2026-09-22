@@ -16,13 +16,15 @@ import {
 // helpers gate the modal's input/Apply controls and resolve which text the
 // left pane shows (saved vs. unsaved proposed rewrite).
 
-test("chat input is enabled only while awaiting a reply or after an error", () => {
+test("chat input is live whenever there is a session to type into", () => {
   assert.equal(descEditInputEnabled("awaiting_reply"), true);
   assert.equal(descEditInputEnabled("error"), true);
+  // SC-5033: a correction that occurs to you mid-answer must be typeable; the
+  // message is held by descEditSendDefers rather than refused at the keyboard.
+  assert.equal(descEditInputEnabled("thinking"), true);
 });
 
-test("chat input is disabled while thinking, applied, or with no session", () => {
-  assert.equal(descEditInputEnabled("thinking"), false);
+test("chat input is disabled with no session and after applying", () => {
   assert.equal(descEditInputEnabled("applied"), false);
   assert.equal(descEditInputEnabled("none"), false);
 });

@@ -780,10 +780,10 @@ body {
   min-height: 0;
 }
 
+/* The footer is .modal-actions; only the strip it sits in is this dialog's,
+   because .descedit-modal has no padding of its own. */
 .descedit-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  margin-top: 0;
   padding: 10px 14px;
   border-top: 1px solid var(--col-border);
 }
@@ -1511,42 +1511,63 @@ body {
 
 .chat-form {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding: 10px 12px;
   border-top: 1px solid var(--col-border);
 }
 
-.chat-form input {
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+/* One line to start, growing with the text (board.ts autoGrowChatInput), and
+   scrolling once it reaches six lines — the idea composer's rows="6" borrowed
+   as a ceiling rather than a starting size. 124px is that height at this
+   element's own metrics, not the composer's 112px: the composer sets no
+   line-height. max-height is the single source of the ceiling — the script
+   reads it back rather than carrying its own copy, and CHAT_INPUT_MAX_PX in
+   board.ts is only the fallback for when it cannot. */
+.chat-form textarea {
   flex: 1;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
   border-radius: 6px;
   padding: 8px 10px;
   color: var(--text);
+  font: inherit;
   font-size: 13px;
+  line-height: 1.35;
+  resize: none;
+  overflow-y: auto;
+  max-height: 124px; /* six lines: 6 x (13px x 1.35) + 16px padding + 2px border = 123.3, rounded up */
 }
 
-.chat-form input:disabled {
+.chat-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chat-form textarea:disabled {
   opacity: 0.5;
 }
 
-.chat-form button {
-  background: var(--accent);
-  border: none;
-  border-radius: 6px;
-  color: #fff;
-  padding: 8px 14px;
-  font-weight: 600;
-  cursor: pointer;
+/* The send button takes its colour, radius and weight from .modal-confirm;
+   only an icon button's proportions are its own. */
+.chat-send {
+  padding: 8px 12px;
+  font-size: 15px;
+  line-height: 1.35;
+  flex-shrink: 0;
 }
 
-.chat-form button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.chat-form input.hidden {
-  display: none;
+/* The gesture hint, in the idea composer's treatment (.modal-body) minus the
+   top margin the composer's vertical stack needs. */
+.chat-hint {
+  margin-top: 0;
+  font-size: 12px;
 }
 
 /* --- Ticket detail slide-out -----------------------------------------------

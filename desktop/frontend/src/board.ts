@@ -76,6 +76,9 @@ import {
   descEditInputEnabled,
   descEditApplyEnabled,
   descEditAllowedFor,
+  descEditSendDefers,
+  descEditStatusLine,
+  chatInputHeight,
   buildDescriptionPreview,
   descEditShouldDiscardOnClose,
   draftNotice,
@@ -3070,6 +3073,23 @@ let descEditDraftFailureHTML = "";
 let descEditTimer: number | null = null;
 const DESCEDIT_POLL_MS = 1000;
 
+// Text typed while a turn was in flight. The daemon refuses a reply to a
+// session that is not awaiting one, so holding it here is what lets the input
+// stay live mid-turn without either dropping the text or interrupting the
+// answer (SC-5033).
+let descEditQueued = "";
+
+// The dialog opens before its session exists, so the input is disabled on the
+// first render and focus() on it is a silent no-op. This flag carries "the
+// cursor still owes this box" across renders until the input is live, which is
+// the AC: the cursor is in the chat input when the dialog opens.
+let descEditPendingFocus = false;
+
+// The fallback ceiling for the growing chat input, in px — used only if the
+// element reports no computed max-height. CSS owns the real value
+// (.chat-form textarea), and the two must stay equal.
+const CHAT_INPUT_MAX_PX = 124;
+
 function stopDescEditPoll(): void {
   if (descEditTimer !== null) {
     clearInterval(descEditTimer);
@@ -3080,6 +3100,63 @@ function stopDescEditPoll(): void {
 function startDescEditPoll(): void {
   if (descEditTimer !== null) return;
   descEditTimer = window.setInterval(() => void pollDescEdit(), DESCEDIT_POLL_MS);
+}
+
+function autoGrowChatInput(el: HTMLTextAreaElement): void {
+  el.style.height = "auto";
+  const cs = getComputedStyle(el);
+  // scrollHeight is content + padding and excludes the border, but everything
+  // on this board is border-box (style.css:33) — so the border has to be added
+  // back or the box is 2px short and scrolls from the very first line.
+  const borders = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  const max = parseFloat(cs.maxHeight);
+  const content = el.scrollHeight + (Number.isFinite(borders) ? borders : 0);
+  el.style.height = `${chatInputHeight(content, Number.isFinite(max) ? max : CHAT_INPUT_MAX_PX)}px`;
+}
+
+function descEditInputEl(): HTMLTextAreaElement | null {
+  return document.getElementById("descedit-input") as HTMLTextAreaElement | null;
+}
+
+// submitDescEditInput is the one send path: the keydown gesture and the send
+// button both run it.
+function submitDescEditInput(): void {
+  const input = descEditInputEl();
+  if (!input) return;
+  // Only trimmed — never whitespace-collapsed. Idea capture flattens because
+  // its wire is a single-line title; a chat instruction's line breaks are the
+  // user's and must reach the daemon intact.
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  autoGrowChatInput(input);
+  if (descEditSendDefers(descEdit.state)) {
+    descEditQueued = descEditQueued ? `${descEditQueued}\n${text}` : text;
+    renderDescEdit();
+    return;
+  }
+  void sendDescEditMessage(text);
+}
+
+// flushDescEditQueue runs when a turn lands. A turn that ended in an error
+// never got to carry the held text, so it goes back into the box rather than
+// into a session that cannot accept it.
+function flushDescEditQueue(): void {
+  if (!descEditQueued) return;
+  if (descEdit.state === "awaiting_reply") {
+    const text = descEditQueued;
+    descEditQueued = "";
+    void sendDescEditMessage(text);
+    return;
+  }
+  if (descEdit.state === "error") {
+    const input = descEditInputEl();
+    if (!input) return;
+    input.value = input.value ? `${descEditQueued}\n${input.value}` : descEditQueued;
+    descEditQueued = "";
+    autoGrowChatInput(input);
+    renderDescEdit();
+  }
 }
 
 async function openDescEditModal(card: Card, opts: { promoted?: boolean } = {}): Promise<void> {
@@ -3112,8 +3189,13 @@ async function openDescEditModal(card: Card, opts: { promoted?: boolean } = {}):
         <div id="descedit-transcript" class="descedit-transcript chat-transcript"></div>
         <div id="descedit-status-line" class="descedit-status chat-status hidden"></div>
         <form id="descedit-form" class="descedit-form chat-form">
-          <input id="descedit-input" type="text" autocomplete="off" placeholder="How should this description change?" />
-          <button id="descedit-send" type="submit">Send</button>
+          <div class="chat-input-row">
+            <textarea id="descedit-input" rows="1" autocomplete="off" placeholder="How should this description change?"></textarea>
+            <button id="descedit-send" class="modal-confirm chat-send" type="submit"
+                    aria-label="Send — Enter sends, Shift+Enter starts a new line"
+                    title="Enter sends · Shift+Enter starts a new line"><span aria-hidden="true">↵</span></button>
+          </div>
+          <div class="chat-hint modal-body">Enter sends · Shift+Enter starts a new line</div>
         </form>
       </div>
     </div>
@@ -3135,16 +3217,25 @@ async function openDescEditModal(card: Card, opts: { promoted?: boolean } = {}):
   modal.querySelector(".descedit-close")!.addEventListener("click", close);
   modal.querySelector(".descedit-cancel")!.addEventListener("click", close);
   modal.querySelector("#descedit-apply")!.addEventListener("click", () => void applyDescEdit());
+  const input = modal.querySelector("#descedit-input") as HTMLTextAreaElement;
+  input.addEventListener("input", () => autoGrowChatInput(input));
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.isComposing) return;
+    if (e.key !== "Enter" || e.shiftKey) return;
+    // Enter is the send gesture, so it must not also leave a newline behind.
+    e.preventDefault();
+    submitDescEditInput();
+  });
   modal.querySelector("#descedit-form")!.addEventListener("submit", (e: Event) => {
     e.preventDefault();
-    const input = document.getElementById("descedit-input") as HTMLInputElement;
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = "";
-    void sendDescEditMessage(text);
+    submitDescEditInput();
   });
 
+  // Focus is owed, not taken: at this point the session does not exist yet, so
+  // the input renders disabled and a focus() here would be discarded.
+  descEditPendingFocus = true;
   renderDescEdit();
+  autoGrowChatInput(input);
 
   try {
     const detail = await go().GetIssueDetail(card.trackerKind ?? "", card.tracker ?? "", card.key);
@@ -3178,6 +3269,8 @@ function closeDescEditModal(): void {
   const { state, sessionId } = descEdit;
   document.getElementById("descedit-overlay")?.remove();
   descEditCard = null;
+  descEditQueued = "";
+  descEditPendingFocus = false;
   // AC6: discard the daemon-side session so a later reopen of the same
   // ticket never reattaches to this proposal/chat history.
   discardDescEditSession(state, sessionId);
@@ -3234,24 +3327,25 @@ function renderDescEdit(): void {
 
   const statusLine = document.getElementById("descedit-status-line");
   if (statusLine) {
-    statusLine.classList.remove("hidden", "error");
-    if (descEdit.state === "thinking") {
-      statusLine.textContent = "Thinking…";
-    } else if (descEdit.state === "error") {
-      statusLine.textContent = descEdit.error || "Description chat failed";
-      statusLine.classList.add("error");
-    } else if (descEdit.state === "applied") {
-      statusLine.textContent = "Saved.";
-    } else {
-      statusLine.classList.add("hidden");
-    }
+    const line = descEditStatusLine(descEdit.state, descEdit.error, descEditQueued !== "");
+    statusLine.textContent = line.text;
+    statusLine.classList.toggle("hidden", line.kind === "none");
+    statusLine.classList.toggle("error", line.kind === "error");
   }
 
-  const input = document.getElementById("descedit-input") as HTMLInputElement | null;
+  const input = descEditInputEl();
   const send = document.getElementById("descedit-send") as HTMLButtonElement | null;
   const inputEnabled = descEditInputEnabled(descEdit.state);
   if (input) input.disabled = !inputEnabled;
   if (send) send.disabled = !inputEnabled;
+  // Focus lands the moment the box becomes usable — on this render if the
+  // session already exists, otherwise on the render that follows
+  // StartDescEdit. A disabled control cannot take focus, so doing it on open
+  // alone would silently do nothing.
+  if (input && inputEnabled && descEditPendingFocus) {
+    descEditPendingFocus = false;
+    input.focus();
+  }
 
   const apply = document.getElementById("descedit-apply") as HTMLButtonElement | null;
   if (apply) apply.disabled = !descEditApplyEnabled(descEdit.state, descEdit.proposal);
@@ -3268,10 +3362,12 @@ async function pollDescEdit(): Promise<void> {
     descEdit = { ...descEdit, state: "error", error: errMessage(err) };
     stopDescEditPoll();
     renderDescEdit();
+    flushDescEditQueue();
     return;
   }
   renderDescEdit();
   if (descEdit.state !== "thinking") stopDescEditPoll();
+  flushDescEditQueue();
 }
 
 async function sendDescEditMessage(text: string): Promise<void> {
@@ -3284,6 +3380,9 @@ async function sendDescEditMessage(text: string): Promise<void> {
   } catch (err) {
     descEdit = { ...descEdit, state: "error", error: errMessage(err) };
     stopDescEditPoll();
+    renderDescEdit();
+    flushDescEditQueue();
+    return;
   }
   renderDescEdit();
 }
