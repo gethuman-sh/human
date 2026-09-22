@@ -36,6 +36,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdhandoff"
 	"github.com/gethuman-sh/human/cmd/cmdindex"
 	"github.com/gethuman-sh/human/cmd/cmdinit"
+	"github.com/gethuman-sh/human/cmd/cmdlocal"
 	"github.com/gethuman-sh/human/cmd/cmdmarker"
 	"github.com/gethuman-sh/human/cmd/cmdmockups"
 	"github.com/gethuman-sh/human/cmd/cmdnotion"
@@ -299,6 +300,13 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 		// Add ClickUp-specific commands (hierarchy browsing, custom fields, members).
 		if kind == "clickup" {
 			for _, sub := range cmdclickup.BuildClickUpCommands(deps) {
+				providerCmd.AddCommand(sub)
+			}
+		}
+		// The local tracker indexes the pipeline's markers and records every
+		// change; `human local history` reads that back.
+		if kind == "local" {
+			for _, sub := range cmdlocal.BuildLocalCommands(deps) {
 				providerCmd.AddCommand(sub)
 			}
 		}

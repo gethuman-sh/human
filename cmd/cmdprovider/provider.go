@@ -459,6 +459,13 @@ func RunGetIssue(ctx context.Context, p tracker.Provider, out io.Writer, key str
 	if len(issue.Labels) > 0 {
 		_, _ = fmt.Fprintf(out, "| Labels   | %s |\n", strings.Join(issue.Labels, ", "))
 	}
+	// Backend-native facts (kind, maturity, pipeline placement) in a fixed
+	// order, so a local ticket reads the same way on every run.
+	for _, attr := range []string{tracker.AttrKind, tracker.AttrMaturity, tracker.AttrStage, tracker.AttrState} {
+		if v := issue.Attributes[attr]; v != "" {
+			_, _ = fmt.Fprintf(out, "| %-8s | %s |\n", strings.ToUpper(attr[:1])+attr[1:], v)
+		}
+	}
 
 	if issue.Description != "" {
 		_, _ = fmt.Fprintf(out, "\n## Description\n\n%s", issue.Description)

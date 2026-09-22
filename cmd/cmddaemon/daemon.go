@@ -960,6 +960,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	ideaDrafts := &daemon.IdeaDraftWatcher{Launch: ds.srv.IdeaDraftLauncher, Logger: logger}
 	go daemon.RunBoardFreshnessPoll(ctx, daemon.BoardFreshnessOpts{
 		List:        ds.srv.LiteIssueFetcher,
+		Version:     changeVersionFunc(ds.srv.Projects, ds.vaultResolver),
 		Poke:        ds.srv.PokeBoard,
 		HasWatchers: boardHasWatchers(ds.srv.HookEvents),
 		Observe:     ideaDrafts.Observe,
@@ -2517,6 +2518,14 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult, l
 					return
 				}
 				card := daemon.DeriveBoardCard(comments, statusType, false)
+				// A backend that can remember the placement gets told what was just
+				// derived, so its own listing shows where the work is. Best effort:
+				// the card is the answer, the write-back is a courtesy.
+				if rec, ok := c.(tracker.PlacementRecorder); ok {
+					if err := rec.RecordPlacement(ctx, key, string(card.Stage), string(card.State)); err != nil {
+						logger.Debug().Err(err).Str("key", key).Msg("board: recording placement on the tracker failed")
+					}
+				}
 				keys, pr := latestReadyKeys(comments)
 				mu.Lock()
 				cards[key] = card
@@ -4814,5 +4823,39 @@ func whereCommentsFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) da
 			return nil, "", false, err
 		}
 		return comments, issue.StatusType, issue.IsIdea(), nil
+	}
+}
+
+// changeVersionFunc asks every configured tracker for its change token
+// (tracker.ChangeCursor) and joins them into one. ok is false as soon as one
+// tracker cannot answer, and the freshness poll then lists as it always did;
+// a project on the local tracker alone pays one integer read per tick instead
+// of a listing plus a comment fetch per card.
+func changeVersionFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func() (string, bool) {
+	return func() (string, bool) {
+		var parts []string
+		for _, entry := range reg.Entries() {
+			instances, failures := cmdutil.LoadAllInstancesTolerant(entry.Dir, entry.EnvLookup(), resolver)
+			if len(failures) > 0 {
+				return "", false
+			}
+			for _, inst := range instances {
+				cursor, ok := inst.Provider.(tracker.ChangeCursor)
+				if !ok {
+					return "", false
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				v, err := cursor.Version(ctx)
+				cancel()
+				if err != nil {
+					return "", false
+				}
+				parts = append(parts, entry.Name+"/"+inst.Kind+"/"+inst.Name+"="+v)
+			}
+		}
+		if len(parts) == 0 {
+			return "", false
+		}
+		return strings.Join(parts, ";"), true
 	}
 }

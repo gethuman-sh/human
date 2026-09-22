@@ -8,8 +8,11 @@ import (
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 // Kind is the tracker kind this package implements.
 const Kind = "local"
@@ -72,6 +75,10 @@ type Client struct {
 	prefix string
 	user   string
 	path   string
+	// strict makes marker posts answer to the pipeline state machine; see
+	// admitMarker. Off by default so the lenient behaviour matches every other
+	// backend.
+	strict bool
 }
 
 var (
@@ -84,7 +91,13 @@ var (
 type Option func(*options)
 
 type options struct {
-	now func() time.Time
+	now    func() time.Time
+	strict bool
+}
+
+// Strict turns on marker validation against the pipeline state machine.
+func Strict() Option {
+	return func(o *options) { o.strict = true }
 }
 
 // WithClock injects the time source so tests can assert timestamps.
@@ -111,7 +124,14 @@ func Open(path, prefix, user string, opts ...Option) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{st: st, prefix: prefix, user: strings.TrimSpace(user), path: path}, nil
+	c := &Client{st: st, prefix: prefix, user: strings.TrimSpace(user), path: path, strict: o.strict}
+	for _, backfill := range []func(context.Context) error{c.backfillMarkers, c.backfillFacets} {
+		if err := backfill(context.Background()); err != nil {
+			_ = st.close()
+			return nil, err
+		}
+	}
+	return c, nil
 }
 
 // Close releases the database.
@@ -151,7 +171,7 @@ func (c *Client) checkProject(project string) error {
 	return errors.WithDetails("local tracker has one project, its prefix", "project", project, "prefix", c.prefix)
 }
 
-func (c *Client) issueFrom(r row, links []link) tracker.Issue {
+func (c *Client) issueFrom(r row, links []link, facets [4]string) tracker.Issue {
 	st, _ := statusNamed(r.Status)
 	issue := tracker.Issue{
 		Key:         c.key(r.Number),
@@ -166,6 +186,7 @@ func (c *Client) issueFrom(r row, links []link) tracker.Issue {
 		Description: r.Description,
 		UpdatedAt:   r.UpdatedAt,
 		Labels:      r.Labels,
+		Attributes:  attributes(facets[0], facets[1], facets[2], facets[3]),
 	}
 	if r.Parent > 0 {
 		issue.ParentKey = c.key(r.Parent)
@@ -218,9 +239,13 @@ func (c *Client) ListIssuesPage(ctx context.Context, opts tracker.ListOptions) (
 	if err != nil {
 		return tracker.IssuePage{}, err
 	}
+	facets, err := c.st.facetsFor(ctx, numbers)
+	if err != nil {
+		return tracker.IssuePage{}, err
+	}
 	issues := make([]tracker.Issue, len(rows))
 	for i, r := range rows {
-		issues[i] = c.issueFrom(r, links)
+		issues[i] = c.issueFrom(r, links, facets[r.Number])
 	}
 	return tracker.IssuePage{Issues: issues, Truncated: truncated}, nil
 }
@@ -235,7 +260,11 @@ func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, erro
 	if err != nil {
 		return nil, err
 	}
-	issue := c.issueFrom(*r, links)
+	kind, maturity, stage, state, err := c.st.facets(ctx, r.Number)
+	if err != nil {
+		return nil, err
+	}
+	issue := c.issueFrom(*r, links, [4]string{kind, maturity, stage, state})
 	return &issue, nil
 }
 
@@ -287,6 +316,12 @@ func (c *Client) CreateIssue(ctx context.Context, issue *tracker.Issue) (*tracke
 	if err != nil {
 		return nil, err
 	}
+	if err := c.st.record(ctx, number, eventCreated, c.user, r.Title); err != nil {
+		return nil, err
+	}
+	if err := c.refreshFacets(ctx, number); err != nil {
+		return nil, err
+	}
 	return c.GetIssue(ctx, c.key(number))
 }
 
@@ -314,8 +349,16 @@ func (c *Client) AddComment(ctx context.Context, issueKey string, body string) (
 	if err != nil {
 		return nil, err
 	}
+	if m, ok := marker.ParseBody(body); ok {
+		if err := c.admitMarker(ctx, r.Number, issueKey, m); err != nil {
+			return nil, err
+		}
+	}
 	cr, err := c.st.insertComment(ctx, r.Number, c.user, body)
 	if err != nil {
+		return nil, err
+	}
+	if err := c.indexComment(ctx, r.Number, cr); err != nil {
 		return nil, err
 	}
 	if err := c.st.touch(ctx, r.Number); err != nil {
@@ -353,6 +396,9 @@ func (c *Client) LinkIssues(ctx context.Context, key string, otherKey string, ki
 	if err := c.st.insertLink(ctx, l); err != nil {
 		return err
 	}
+	if err := c.st.record(ctx, a.Number, eventLinked, c.user, string(kind)+" "+c.key(b.Number)); err != nil {
+		return err
+	}
 	if err := c.st.touch(ctx, a.Number); err != nil {
 		return err
 	}
@@ -372,6 +418,9 @@ func (c *Client) UnlinkIssues(ctx context.Context, key string, otherKey string) 
 	if err := c.st.deleteLinks(ctx, a.Number, b.Number); err != nil {
 		return err
 	}
+	if err := c.st.record(ctx, a.Number, eventUnlinked, c.user, c.key(b.Number)); err != nil {
+		return err
+	}
 	if err := c.st.touch(ctx, a.Number); err != nil {
 		return err
 	}
@@ -384,6 +433,9 @@ func (c *Client) UnlinkIssues(ctx context.Context, key string, otherKey string) 
 func (c *Client) DeleteIssue(ctx context.Context, key string) error {
 	r, err := c.mustRow(ctx, key)
 	if err != nil {
+		return err
+	}
+	if err := c.st.record(ctx, r.Number, eventDeleted, c.user, r.Title); err != nil {
 		return err
 	}
 	return c.st.deleteRow(ctx, r.Number)
@@ -402,7 +454,10 @@ func (c *Client) TransitionIssue(ctx context.Context, key string, targetStatus s
 			"available", strings.Join(statusNames(), ", "))
 	}
 	r.Status = st.Name
-	return c.st.updateRow(ctx, *r)
+	if err := c.st.updateRow(ctx, *r); err != nil {
+		return err
+	}
+	return c.st.record(ctx, r.Number, eventStatus, c.user, st.Name)
 }
 
 // AssignIssue implements tracker.Assigner. An empty userID unassigns.
@@ -412,7 +467,10 @@ func (c *Client) AssignIssue(ctx context.Context, key string, userID string) err
 		return err
 	}
 	r.Assignee = strings.TrimSpace(userID)
-	return c.st.updateRow(ctx, *r)
+	if err := c.st.updateRow(ctx, *r); err != nil {
+		return err
+	}
+	return c.st.record(ctx, r.Number, eventAssigned, c.user, r.Assignee)
 }
 
 // GetCurrentUser implements tracker.CurrentUserGetter.
@@ -446,6 +504,12 @@ func (c *Client) EditIssue(ctx context.Context, key string, opts tracker.EditOpt
 	}
 	r.Labels = editLabels(r.Labels, opts.AddLabels, opts.RemoveLabels)
 	if err := c.st.updateRow(ctx, *r); err != nil {
+		return nil, err
+	}
+	if err := c.st.record(ctx, r.Number, eventEdited, c.user, ""); err != nil {
+		return nil, err
+	}
+	if err := c.refreshFacets(ctx, r.Number); err != nil {
 		return nil, err
 	}
 	return c.GetIssue(ctx, key)

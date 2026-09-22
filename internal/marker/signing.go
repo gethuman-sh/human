@@ -159,3 +159,34 @@ func (s *SigningCommenter) ListComments(ctx context.Context, key string) ([]trac
 func (s *SigningCommenter) AddComment(ctx context.Context, key, body string) (*tracker.Comment, error) {
 	return s.inner.AddComment(ctx, key, Sign(body, s.machine, s.build))
 }
+
+// The pipeline capabilities (SC-5083) forwarded for the same reason as
+// AssignToReporter above: a signing wrapper sits in front of the local tracker
+// on the CLI path, and without these the indexed history is unreachable there.
+func (s *SigningProvider) ListMarkers(ctx context.Context, key string) ([]tracker.IndexedMarker, error) {
+	if idx, ok := s.Provider.(tracker.MarkerIndexer); ok {
+		return idx.ListMarkers(ctx, key)
+	}
+	return nil, tracker.ErrPipelineUnsupported
+}
+
+func (s *SigningProvider) ListEvents(ctx context.Context, key string) ([]tracker.Event, error) {
+	if l, ok := s.Provider.(tracker.EventLister); ok {
+		return l.ListEvents(ctx, key)
+	}
+	return nil, tracker.ErrPipelineUnsupported
+}
+
+func (s *SigningProvider) Version(ctx context.Context) (string, error) {
+	if c, ok := s.Provider.(tracker.ChangeCursor); ok {
+		return c.Version(ctx)
+	}
+	return "", tracker.ErrPipelineUnsupported
+}
+
+func (s *SigningProvider) RecordPlacement(ctx context.Context, key, stage, state string) error {
+	if rec, ok := s.Provider.(tracker.PlacementRecorder); ok {
+		return rec.RecordPlacement(ctx, key, stage, state)
+	}
+	return tracker.ErrPipelineUnsupported
+}
