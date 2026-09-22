@@ -119,6 +119,15 @@ const deployWaitHeartbeat = 10
 var (
 	deployCheckInterval = 30 * time.Second
 	deployTimeout       = 45 * time.Minute
+	// deployNoChecksGrace is how long a head may report NO checks before the
+	// gate accepts that the repository has no CI. A head pushed moments ago
+	// has none because its CI has not registered yet — the freshness rebase and
+	// the deploy-fixer both produce exactly that head — and reading that absence
+	// as green is how a candidate merged on its previous head's result while the
+	// new head's checks were three seconds old (SC-5083 campaign, F19). Actions
+	// registers within a minute or two of a push; a repository with no CI pays
+	// the grace once per deploy.
+	deployNoChecksGrace = 3 * time.Minute
 	// Mergeability-recompute pacing: after a freshness rebase re-pushes the
 	// branch, the forge recomputes the PR's mergeability asynchronously and the
 	// merge endpoint 405s until it settles (ticket 910's deploy hit exactly
@@ -1862,6 +1871,7 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 	// enough to tell the two apart without a line per poll.
 	d.Logger.Info().Int("pr", res.Number).Msg("deploy: waiting for CI checks")
 	polls := 0
+	var noneSince time.Time
 	for {
 		state, err := d.Deployer.PullRequestChecks(ctx, d.WorkspaceDir, res.Number)
 		if err != nil {
@@ -1878,6 +1888,22 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Msg("deploy: CI checks failed")
 			return errors.WithDetails("CI checks failed", "pr", res.URL,
 				deployFailingChecksDetail, d.checkNames(res.Number, forge.ChecksFailing))
+		case forge.ChecksNone:
+			// Absence is pending until it has lasted the grace: the head may be
+			// too young for its CI to have registered. Past the grace it is a
+			// repository without CI, and the gate has nothing to block on.
+			if noneSince.IsZero() {
+				noneSince = time.Now()
+			}
+			if time.Since(noneSince) >= deployNoChecksGrace {
+				d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Dur("grace", deployNoChecksGrace).
+					Msg("deploy: no CI checks reported within the grace; treating the repository as having no CI")
+				return nil
+			}
+		default:
+			// A reported check is evidence the CI is alive: a later absence (a
+			// re-push that wiped the head's runs) restarts the grace.
+			noneSince = time.Time{}
 		}
 		polls++
 		if polls%deployWaitHeartbeat == 0 {

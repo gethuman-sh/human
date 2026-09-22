@@ -220,10 +220,10 @@ func TestPullRequestChecks_verdicts(t *testing.T) {
 			`{"state":"failure","total_count":2}`, forge.ChecksFailing},
 		{"legacy status pending", `{"check_runs":[]}`,
 			`{"state":"pending","total_count":2}`, forge.ChecksPending},
-		// GitHub reports "pending" with zero statuses when only check runs
-		// exist — no signal, must not hold the gate.
+		// Nothing reported at all is an absence, not a verdict: the head may be
+		// seconds old with its CI not yet registered. The gate decides (F19).
 		{"no CI at all", `{"check_runs":[]}`,
-			`{"state":"pending","total_count":0}`, forge.ChecksPassing},
+			`{"state":"pending","total_count":0}`, forge.ChecksNone},
 		{"skipped and neutral pass", `{"check_runs":[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"neutral"}]}`,
 			`{"state":"pending","total_count":0}`, forge.ChecksPassing},
 		// SC-2602: a superseded build is called off, not failed. A cancelled run with

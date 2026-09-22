@@ -386,6 +386,9 @@ func (c *Client) PullRequestChecks(ctx context.Context, repoName string, number 
 // stopped for good. Runs are judged latest-per-name so a passed re-run overrides
 // the cancelled attempt it replaced.
 func combineChecks(runs checkRunsResponse, combined combinedStatusResponse) forge.ChecksState {
+	if len(runs.CheckRuns) == 0 && combined.TotalCount == 0 {
+		return forge.ChecksNone
+	}
 	state := forge.ChecksPassing
 	for _, run := range latestRunPerName(runs.CheckRuns) {
 		switch runVerdict(run) {
