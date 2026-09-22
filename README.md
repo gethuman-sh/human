@@ -80,7 +80,7 @@ devcontainer up --workspace-folder .
 
 | Category | Services |
 |----------|----------|
-| Issue Trackers | Jira, GitHub, GitLab, Linear, Azure DevOps, Shortcut |
+| Issue Trackers | Jira, GitHub, GitLab, Linear, Azure DevOps, Shortcut, ClickUp, or a local SQLite tracker with no account |
 | Docs & Knowledge | Notion (search, pages, databases), ClickUp (Docs, wikis, knowledge base) |
 | Design | Figma (files, components, comments, export) |
 | Analytics | Amplitude (events, funnels, retention, cohorts) |
@@ -96,7 +96,7 @@ Each module ships a short `README.md` describing what it does for you, in plain 
 
 **Issue trackers & forges**
 
-- [Issue Trackers](internal/tracker/README.md) — Jira, Linear, GitHub, GitLab, Shortcut, Azure DevOps, ClickUp
+- [Issue Trackers](internal/tracker/README.md) — Jira, Linear, GitHub, GitLab, Shortcut, Azure DevOps, ClickUp, and a local SQLite tracker
 - [Code Forges](internal/forge/README.md) — open pull requests (GitHub)
 - [Marker Protocol](internal/marker/README.md) — post/read the structured `[human:*]` pipeline handoff comments
 - [Pipeline Runtime](internal/pipeline/README.md) — shared state, race-free finding IDs, and cleanup for multi-agent scans
