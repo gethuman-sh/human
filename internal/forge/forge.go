@@ -114,11 +114,18 @@ const (
 	ChecksPending ChecksState = "pending"
 	ChecksPassing ChecksState = "passing"
 	ChecksFailing ChecksState = "failing"
+	// ChecksNone means the head reports no check runs and no statuses at all.
+	// It is not a verdict: a head pushed moments ago has none because the CI
+	// has not registered yet, and a repository without CI never has any. Only
+	// the caller can tell those apart (by waiting), so the forge reports the
+	// absence instead of calling it green — which is how a rebased candidate
+	// shipped on its previous head's result (SC-5083 campaign, F19).
+	ChecksNone ChecksState = "none"
 )
 
-// ChecksReader reports the combined CI state of a pull request. A repository
-// with no CI configured reports ChecksPassing — the deploy gate only blocks on
-// evidence of failure or of checks still running, never on absence of CI.
+// ChecksReader reports the combined CI state of a pull request. A head with
+// nothing reported yet is ChecksNone; the deploy gate decides how long absence
+// may stand before it counts as "no CI configured".
 type ChecksReader interface {
 	PullRequestChecks(ctx context.Context, repo string, number int) (ChecksState, error)
 }
