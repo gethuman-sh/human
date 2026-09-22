@@ -29,5 +29,8 @@
       # prefix: LOC          # key prefix; uppercase letters and digits
       # path: .human/tickets.db   # relative to the project; default is under ~/.human/local
       # user: Ada            # author of writes; defaults to the first me: name
+      # strict: true         # refuse markers the pipeline state machine does not allow
   ```
+
+  Because the store is ours it also understands the protocol it carries ([SC-5083]). Every `[human:*]` comment is indexed as it is posted and every change is recorded as an event, so `human local history KEY` prints a ticket's pipeline history without parsing a thread. The daemon writes the board placement it derived back to the ticket, and `human get` shows it with the ticket's kind and maturity (`Attributes` on the issue; other backends leave it empty). With `strict: true` a marker post is refused when the grammar rejects it, when it repeats the previous `*-started`/`*-failed` marker, or when the state machine (`internal/pipelinefsm/pipeline-fsm.json`) allows it nowhere the ticket can currently be — a pipeline bug then fails at the write, not in a later test; a history that already left the machine is admitted and logged rather than stranded. The board's freshness poll asks the store for one change token (`tracker.ChangeCursor`) and lists only when it moved. Tests open one on `:memory:` (`local.OpenMemory`, `local.SeedMarkers`, `local.SeedTrace`) and drive the real daemon passes against it instead of a stubbed commenter.
 - Guards deletes and edits with safe-mode policies
