@@ -541,6 +541,7 @@ body {
 }
 
 .modal {
+  position: relative;
   width: 320px;
   max-width: calc(100vw - 32px);
   background: var(--col-bg);
@@ -549,9 +550,30 @@ body {
   padding: 18px;
 }
 
+/* The corner x every dismissible dialog carries (SC-5033). Absolute, so a
+   dialog does not have to make room for it in its own markup — including the
+   description editor, whose header used to carry a copy. */
+.modal-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.modal-close:hover {
+  color: var(--text);
+}
+
 .modal-title {
   font-weight: 600;
   font-size: 15px;
+  padding-right: 24px;
 }
 
 .modal-body {
@@ -691,22 +713,11 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
+  /* After the padding shorthand, or the shorthand wins and the ticket key runs
+     under the shared corner x. */
+  padding-right: 28px;
   font-weight: 600;
   border-bottom: 1px solid var(--col-border);
-}
-
-.descedit-close {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 4px;
-}
-
-.descedit-close:hover {
-  color: var(--text);
 }
 
 .descedit-body {
