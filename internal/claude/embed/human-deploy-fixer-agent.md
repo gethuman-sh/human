@@ -59,6 +59,10 @@ human state set <WORK_KEY> stage.deploy-fix --json --body-file - <<'EOF'
 {"exit":"<done|needs-input|needs-human-work>",
  "pushed":<true|false>,
  "addressed":"<what you rebased/fixed>",
+ "blocker":{"kind":"<missing-permission|unavailable-dependency|exhausted-fix-rounds|conflicting-requirements|other — needs-human-work only>",
+   "evidence":"<what you observed, verbatim — the command and its output, the file and line>",
+   "attempted":"<what you tried before stopping>",
+   "release":"<the condition under which the work can proceed>"},
  "dependents":"<one line per dependent: examined-and-unchanged / examined-and-changed — empty when the change touched no shared thing>",
  "unchecked":"<dependent kinds whose query could not be run, and why — empty if none>",
  "deferred":"<what you could not fix and why — empty when done>",
@@ -66,9 +70,9 @@ human state set <WORK_KEY> stage.deploy-fix --json --body-file - <<'EOF'
 EOF
 ```
 
-- `done` — rebased current on the branch ref, the deploy-relevant checks pass locally; the daemon publishes the branch and re-runs Deploy. Record `"pushed":false` in board context — that is the expected shape, not a shortfall.
-- `needs-input` — a conflict or failure hinges on a decision only a human can make. State it and stop.
-- `needs-human-work` — the blocker is real and beyond an agent (an infra/secret the branch cannot change). Name it. A missing push credential is NOT such a blocker — see "Why you do NOT push".
+- `done` — rebased current on the branch ref, the deploy-relevant checks pass locally; the daemon publishes the branch and re-runs Deploy. Record `"pushed":false` in board context — that is the expected shape, not a shortfall. Omit `blocker`.
+- `needs-input` — a conflict or failure hinges on a decision only a human can make. State it and stop. Omit `blocker`.
+- `needs-human-work` — the blocker is real and beyond an agent (an infra/secret the branch cannot change). Name it in the `blocker` object above, per the exit contract below — this loop step posts no board marker, so the stage record is the only place the four fields land. A missing push credential is NOT such a blocker — see "Why you do NOT push".
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
 
