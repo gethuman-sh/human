@@ -72,7 +72,7 @@ EOF
   - **2 or more directions** — the board asks the human, showing exactly your labels.
   - **exactly 1** — the daemon takes it without asking, because one answer is not a choice. Write one only when you mean "do this"; write two when the point is that a human must pick.
   - **none** — the card reds with your `summary` as the reason. That is the right outcome for a fixer that is genuinely stuck, so make `summary` say what you were stuck on; it is all the human gets.
-- There is no `needs-human-work` exit for this step, and no `blocker` object: a finding beyond an agent goes into `deferred`, and the loop escalates on the round budget with the reviewer's findings as the evidence on the ticket.
+- There is no `needs-human-work` exit for this step, and no `blocker` object. Neither `deferred` nor the reviewer's findings reach the ticket: on the round budget the loop reds the card with a canned headline. A finding that genuinely needs a person is a `needs-input` stop with 2+ `options` — the only route that puts the question on the ticket.
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
 
