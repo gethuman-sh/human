@@ -1,10 +1,15 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/stretchr/testify/require"
 
@@ -238,4 +243,23 @@ func TestRecoveryBackoff_doublesToTheCap(t *testing.T) {
 	require.True(t, b.due("k", now.Add(5*time.Minute)), "capped at five minutes")
 	b.clear("k")
 	require.True(t, b.due("k", now))
+}
+
+// The bound is observable exactly once: the first tick past it logs, later
+// ticks do not, and the card is otherwise untouched.
+func TestReconcileFailedStages_LogsTheBoundOnce(t *testing.T) {
+	resetRecoveryBackoff(t)
+	recoveryBoundWarned = sync.Map{}
+	now := time.Unix(100_000, 0)
+	cards := []ReconcileCard{failedCard("SC-1", BoardImplementation, now, FailedRecoveryBound+time.Hour)}
+	var relaunched []BoardStage
+	attempts := 0
+	var buf bytes.Buffer
+	deps := ReconcileDeps{LiveAgents: liveAgents(), Retry: recoveryRetry("", false, &relaunched, &attempts, nil), DaemonID: "d1", Logger: zerolog.New(&buf)}
+
+	require.Zero(t, reconcileFailedStages(context.Background(), takeoverSet(cards, alwaysReachable), deps, now))
+	require.Zero(t, reconcileFailedStages(context.Background(), takeoverSet(cards, alwaysReachable), deps, now.Add(time.Hour)))
+
+	require.Equal(t, 1, strings.Count(buf.String(), "past the recovery bound"))
+	require.Empty(t, relaunched)
 }

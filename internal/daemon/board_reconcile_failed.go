@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -73,6 +75,31 @@ func (b *recoveryBackoff) clear(key string) {
 	delete(b.wait, key)
 }
 
+// recoveryBoundWarned holds the stages whose bound the pass has already
+// logged, so the moment a card goes from "probed every backoff tick" to
+// "never touched again" leaves exactly one line in this host's log rather
+// than none, or one per tick forever. A log line, not a marker: a marker at
+// the bound collided with the sentinel scanners twice (SC-5170).
+var recoveryBoundWarned sync.Map
+
+// warnRecoveryBoundOnce logs, once per stage, that a failure has aged past
+// FailedRecoveryBound and the pass has stopped considering it.
+func warnRecoveryBoundOnce(comments []tracker.Comment, derived BoardCard, now time.Time, pmKey string, logger zerolog.Logger) {
+	if derived.State != BoardFailed {
+		return
+	}
+	state, failed := latestStateInStage(comments, derived.Stage)
+	if state != BoardFailed || now.Sub(failed.Created) <= FailedRecoveryBound {
+		return
+	}
+	key := pmKey + "/" + string(derived.Stage) + "/" + failed.Created.UTC().Format(time.RFC3339)
+	if _, seen := recoveryBoundWarned.LoadOrStore(key, struct{}{}); seen {
+		return
+	}
+	logger.Warn().Str("pm", pmKey).Str("stage", string(derived.Stage)).Dur("age", now.Sub(failed.Created)).
+		Msg("board reconcile: failed stage is past the recovery bound; leaving it to a person")
+}
+
 func (b *recoveryBackoff) reset() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -137,6 +164,7 @@ func reconcileFailedStages(ctx context.Context, drivable DrivableCards, deps Rec
 			continue
 		}
 		if !recoverableFailure(card.Comments, derived, now) {
+			warnRecoveryBoundOnce(card.Comments, derived, now, card.Key, logger)
 			continue
 		}
 		key := card.Key + "/" + string(derived.Stage)
