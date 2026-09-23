@@ -251,6 +251,23 @@ func TestFailureBody(t *testing.T) {
 	t.Run("header-only marker falls back to the header", func(t *testing.T) {
 		assert.Equal(t, "[human:planning-failed]", failureBody("[human:planning-failed]"))
 	})
+	// The blocker fields are the evidence the stop recorded so nobody re-runs
+	// the investigation; the card shows them under the reason, labelled, in
+	// the contract's order, before the prose (SC-5249). Fields are joined with
+	// a blank line, not a single "\n": the pane renders this markdown through
+	// goldmark with no hard-wraps, so a bare "\n" collapses into one run-on
+	// paragraph and the labels are lost mid-sentence.
+	t.Run("blocker fields are shown between the reason and the detail", func(t *testing.T) {
+		body := "[human:implementation-failed]\nreason: cannot push\nrelease: token gains write\nkind: missing-permission\nevidence: remote: 403\n\nwhat was tried"
+		assert.Equal(t, "cannot push\n\nkind: missing-permission\n\nevidence: remote: 403\n\nrelease: token gains write\n\nwhat was tried", failureBody(body))
+	})
+	t.Run("all four blocker fields each render as their own paragraph", func(t *testing.T) {
+		body := "[human:implementation-failed]\nreason: cannot push\nkind: missing-permission\nevidence: remote: 403\nattempted: retried once\nrelease: token gains write"
+		assert.Equal(t, "cannot push\n\nkind: missing-permission\n\nevidence: remote: 403\n\nattempted: retried once\n\nrelease: token gains write", failureBody(body))
+	})
+	t.Run("a marker without blocker fields reads as before", func(t *testing.T) {
+		assert.Equal(t, "reason only\n\ndetail", failureBody("[human:deploy-failed]\nreason: reason only\n\ndetail"))
+	})
 }
 
 // SC-1701: two classified markers for one stage sharing a one-second Created

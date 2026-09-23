@@ -495,6 +495,14 @@ func deriveShippedPartial(comments []tracker.Comment) (followOn string, ok bool)
 // marker: the first line of its prose body, skipping the signature fields the
 // posting daemon splices in. Falls back to the header for markers posted
 // without a reason, so a failed card never shows empty.
+//
+// If a marker carried blocker fields but no `reason` (both are optional on
+// planning-failed/implementation-failed — marker.go's specs), the badge would
+// show "kind: <value>" instead of a headline, because blockerLines now
+// precedes the prose in failureBody. Every current writer sets reason
+// alongside the blocker fields, so this is unreached today; it stays a
+// comment rather than a guard because there is no better one-line fallback to
+// substitute.
 func failureReason(body string) string {
 	return firstLine(failureBody(body))
 }
@@ -506,6 +514,36 @@ func failureReason(body string) string {
 // reconcile pass's own backoff.
 func parseResumeLine(body string) string {
 	return parsePrefixedLine(body, "resume:")
+}
+
+// blockerLines renders the blocker fields a *-failed marker may carry, one
+// labelled paragraph each in the contract's order, or "" when it carries none.
+// Joined with a blank line, not a single "\n": the pane renders this through
+// goldmark with no hard-wraps and CSS that keeps white-space normal, so a bare
+// "\n" between fields disappears into one run-on paragraph and the labels end
+// up buried mid-sentence instead of on their own line (SC-5249).
+func blockerLines(fields map[string]string) string {
+	var lines []string
+	for _, f := range marker.BlockerFields() {
+		if v := strings.TrimSpace(fields[f]); v != "" {
+			lines = append(lines, f+": "+v)
+		}
+	}
+	return strings.Join(lines, "\n\n")
+}
+
+// nonEmptyParts drops the blank sections (a reason-less marker, a marker with
+// no blocker fields, an empty prose body) before failureBody joins what is
+// left with blank lines — so a section that was never populated does not
+// leave a stray gap in the rendered diagnosis.
+func nonEmptyParts(parts ...string) []string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // failureBody returns everything after a *-failed marker's header line — the
@@ -526,15 +564,14 @@ func failureBody(body string) string {
 		// this is where they are put back together. Either half alone is still a
 		// diagnosis: a marker posted before the field existed carries prose only,
 		// and a one-line failure carries a reason only.
-		reason := strings.TrimSpace(m.Fields["reason"])
-		rest := strings.TrimSpace(m.Body)
-		switch {
-		case reason != "" && rest != "":
-			return reason + "\n\n" + rest
-		case reason != "":
-			return reason
-		case rest != "":
-			return rest
+		// The blocker a needs-human-work stop recorded (kind, evidence,
+		// attempted, release) sits between the two: it is why the evidence was
+		// put on the marker at all — so the person on the red card is not sent
+		// to the tracker comment to learn what the machine already found
+		// (SC-5249).
+		parts := nonEmptyParts(strings.TrimSpace(m.Fields["reason"]), blockerLines(m.Fields), strings.TrimSpace(m.Body))
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n\n")
 		}
 		// A marker carrying neither has no diagnosis to give: show the header.
 		return firstLine(trimmed)
