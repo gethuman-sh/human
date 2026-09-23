@@ -342,7 +342,7 @@ REVIEW_EOF
 
 ## Step 8 — Phase 6: Deploy — end with a merged PR
 
-Only after a passing review. This is the board's deploy pipeline (push → PR → CI gate → merge → close) driven from the skill:
+Only after a passing review. This is the board's deploy pipeline (push → draft PR → machine PR review → CI gate → merge → close) driven from the skill:
 
 1. Run the deploy gate:
 
@@ -350,7 +350,7 @@ Only after a passing review. This is the board's deploy pipeline (push → PR �
    human deploy <SEC_KEY> --branch autofix/<work-key> --title "[<SEC_KEY>] [<ENG_KEY>] <short summary>"
    ```
 
-   (single-tracker: only `[<SEC_KEY>]` in the title). Keep the title and PR body free of exploit detail. The command owns the whole gate: push + PR, the CI wait, rebase-if-stale, merge, remote-branch cleanup, the `[human:deployed]` marker with its `pr:` line, and the ticket close. A `[human:deploy-failed]` is an honest needs-human end state, not a first-failure stop: do NOT merge by hand and do NOT re-implement the reviewed work; the PR stays open for a human with the named blocker.
+   (single-tracker: only `[<SEC_KEY>]` in the title). Keep the title and PR body free of exploit detail. The command pushes the branch, opens its pull request in **draft**, launches the machine PR reviewer on it, and exits once that review has started (`Review started for <SEC_KEY> (<branch>): <PR_URL>`). The daemon's review→fix loop owns the rest: un-draft on approval, the CI wait, rebase-if-stale, merge, remote-branch cleanup, the `[human:deployed]` marker with its `pr:` line, and the ticket close — none of it happens in this run. A branch already merged into the base is a clean success. Never pass `--ready`: it ships without the machine PR review and is a person's override, not an agent's. A `[human:deploy-failed]` — from the command's own push/PR step, or from the loop later — is an honest needs-human end state, not a first-failure stop: do NOT merge by hand and do NOT re-implement the reviewed work; the PR stays open for a human with the named blocker.
 
    `human deploy` records the start on the ticket itself (`[human:deploy-started]`) before it touches the forge — do **not** post that marker by hand.
 
@@ -404,8 +404,8 @@ Verdict: confirmed (<severity>) — review: <verdict> — shipped
 - Plan:       <ENG_TRACKER> <ENG_KEY> (split topology) — or [human:plan] comment on <SEC_KEY>
 - Branch:     autofix/<work-key>
 - Review:     [human:review-complete] verdict: <verdict> on <SEC_KEY>
-- PR:         <PR_URL> — merged, branch deleted
-- Ticket:     closed by the deploy gate (`human deploy`)
+- PR:         <PR_URL> — draft, machine PR review running; the loop merges on approval
+- Ticket:     closed by the deploy loop once merged
 ```
 
 For a board-context run (exception in Step 7.1) or a failed review/deploy gate, report where the pipeline stopped, which marker records it, and what a human needs to do next.

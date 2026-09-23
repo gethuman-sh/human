@@ -65,9 +65,9 @@ func stubEngine(t *testing.T, err error) *[]engineCall {
 	t.Helper()
 	var calls []engineCall
 	prevEntry, prevDeps := deployEntry, newTransitionDeps
-	deployEntry = func(_ context.Context, _ daemon.BoardTransitionDeps, req daemon.StartDeployRequest) error {
+	deployEntry = func(_ context.Context, _ daemon.BoardTransitionDeps, req daemon.StartDeployRequest) (daemon.StartDeployResult, error) {
 		calls = append(calls, engineCall{req.PMKey, req.Title, req.PRBody, req.Branch, req.OverrideDecision})
-		return err
+		return daemon.StartDeployResult{}, err
 	}
 	newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
 		return daemon.BoardTransitionDeps{}
@@ -139,7 +139,7 @@ func realRoute(t *testing.T, comments []tracker.Comment) (*recordingProvider, *[
 		issue: &tracker.Issue{Key: "SC-1", Title: "T"}}, events: events}
 	prev := newTransitionDeps
 	newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
-		return daemon.BoardTransitionDeps{Commenter: p, Deployer: &stubDeployer{events: events}, Logger: zerolog.Nop(), WorkspaceDir: "."}
+		return daemon.BoardTransitionDeps{Commenter: p, Deployer: &stubDeployer{events: events}, Launcher: stubLauncher{}, Logger: zerolog.Nop(), WorkspaceDir: "."}
 	}
 	t.Cleanup(func() { newTransitionDeps = prev })
 	return p, events
@@ -304,9 +304,9 @@ func TestRunDeploy_readyCarriesTheDraftOverrideThroughThePrelude(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var got daemon.BoardTransitionDeps
 			prevEntry, prevDeps := deployEntry, newTransitionDeps
-			deployEntry = func(_ context.Context, d daemon.BoardTransitionDeps, _ daemon.StartDeployRequest) error {
+			deployEntry = func(_ context.Context, d daemon.BoardTransitionDeps, _ daemon.StartDeployRequest) (daemon.StartDeployResult, error) {
 				got = d
-				return nil
+				return daemon.StartDeployResult{}, nil
 			}
 			newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
 				return daemon.BoardTransitionDeps{}
@@ -319,4 +319,54 @@ func TestRunDeploy_readyCarriesTheDraftOverrideThroughThePrelude(t *testing.T) {
 			assert.Equal(t, tc.ready, got.MergeDraftPR)
 		})
 	}
+}
+
+// stubLauncher stands in for the daemon's launcher so the production route can
+// enter the review; it never actually starts anything.
+type stubLauncher struct{}
+
+func (stubLauncher) Launch(context.Context, string, string, string, string, string) error { return nil }
+
+// Forwarded to the daemon, the command must use the daemon's own engine wiring
+// — that is what carries the launcher the machine review needs. The bare
+// wiring is only for a run with no daemon at all.
+func TestTransitionDepsFor_prefersTheDaemonsWiring(t *testing.T) {
+	prev := newTransitionDeps
+	newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps {
+		return daemon.BoardTransitionDeps{WorkspaceDir: "bare"}
+	}
+	t.Cleanup(func() { newTransitionDeps = prev })
+	resolver := daemon.TransitionDepsResolver(func(pmKey string) (daemon.BoardTransitionDeps, error) {
+		return daemon.BoardTransitionDeps{WorkspaceDir: "daemon:" + pmKey}, nil
+	})
+
+	got := transitionDepsFor(daemon.WithTransitionDeps(context.Background(), resolver), &stubProvider{}, "SC-1")
+	assert.Equal(t, "daemon:SC-1", got.WorkspaceDir)
+
+	bare := transitionDepsFor(context.Background(), &stubProvider{}, "SC-1")
+	assert.Equal(t, "bare", bare.WorkspaceDir, "no daemon on the context means the bare wiring")
+
+	failing := daemon.TransitionDepsResolver(func(string) (daemon.BoardTransitionDeps, error) {
+		return daemon.BoardTransitionDeps{}, errors.WithDetails("no project for key")
+	})
+	fallback := transitionDepsFor(daemon.WithTransitionDeps(context.Background(), failing), &stubProvider{}, "SC-1")
+	assert.Equal(t, "bare", fallback.WorkspaceDir, "a resolver that cannot place the key falls back rather than failing the command")
+}
+
+// The two outcomes leave the work in different places, and the line a person
+// reads must say which: "Deployed" for work held in a draft the review has
+// not approved would be the record misstating the outcome.
+func TestRunDeploy_reportsAStartedReviewAsSuch(t *testing.T) {
+	prevEntry, prevDeps := deployEntry, newTransitionDeps
+	deployEntry = func(context.Context, daemon.BoardTransitionDeps, daemon.StartDeployRequest) (daemon.StartDeployResult, error) {
+		return daemon.StartDeployResult{Outcome: daemon.DeployOutcomeReviewStarted, PRURL: "https://example/pr/9", PRNumber: 9}, nil
+	}
+	newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps { return daemon.BoardTransitionDeps{} }
+	t.Cleanup(func() { deployEntry, newTransitionDeps = prevEntry, prevDeps })
+	var buf bytes.Buffer
+
+	require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf, "SC-1", "release/x", "T", false, false))
+
+	assert.Contains(t, buf.String(), "Review started for SC-1 (release/x): https://example/pr/9")
+	assert.NotContains(t, buf.String(), "Deployed")
 }

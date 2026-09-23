@@ -361,9 +361,9 @@ REVIEW_EOF
 - **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the **human-bug-fixer** and do NOT post `[human:review-complete] verdict: fail` (that would badge the card "review found problems" and point a rework run at phantom findings). Instead post `[human:review-failed]` on the bug ticket naming the unreachable ref — `human marker post <BUG_KEY> review-failed --field reason="<reachability reason>"` — then record the stage outcome (`stage.implementation`, exit `retryable`, per "Recording the board stage outcome") and STOP (report per Step 9). No PR is merged. The card shows an honest, retryable stage failure. The board-context 7.1 stop is unchanged.
 - **fail** or **incomplete** — feed the reviewer's findings back: re-dispatch the **human-bug-fixer** (Step 5) with the review findings appended to the prompt, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). An `incomplete` verdict means a ticket acceptance criterion was not built; route it identically to `fail` — re-dispatch the fixer with the unmet criterion appended, re-verify, and re-review under the same `budget.review.attempts`. This loops under the retry budget (`budget.review.attempts`) — a review that fails for a *different* reason each round is progress, while the same finding surviving twice is not. When the budget is spent, STOP honestly as `needs-human-work`: the `[human:ready-for-review]` handoff stays standing for a human, and NO pull request is merged.
 
-## Step 8 — Phase 6: Deploy — end with a merged PR
+## Step 8 — Phase 6: Deploy — hand the branch to the merge gate
 
-Only after a passing review. This is the board's deploy pipeline (push → PR → CI gate → merge → close) driven from the skill:
+Only after a passing review. This is the board's deploy pipeline (push → draft PR → machine PR review → CI gate → merge → close) driven from the skill:
 
 1. Run the deploy gate:
 
@@ -371,13 +371,13 @@ Only after a passing review. This is the board's deploy pipeline (push → PR �
    human deploy <BUG_KEY> --branch autofix/<work-key> --title "[<BUG_KEY>] [<ENG_KEY>] <short summary>"
    ```
 
-   (single-tracker: only `[<BUG_KEY>]` in the title; `--branch` defaults to the ticket's newest review-handoff branch and `--title` to the ticket title). The command owns the whole gate: push + PR, the CI wait (blocks up to 45 minutes), rebase-if-stale with a lease push, merge, remote-branch cleanup, the `[human:deployed]` marker with its `pr:` line, and the ticket close. A branch already merged into the base is a clean success. It runs a recovery ladder internally: a racy merge refusal (the PR is mergeable but the forge is still reconciling fresh checks) is waited out and retried, and it only posts `[human:deploy-failed]` — with the specific unresolved blocker named — once that ladder is exhausted, exiting non-zero. A `[human:deploy-failed]` is therefore an honest needs-human end state, not a first-failure stop: do NOT merge by hand and do NOT re-implement the already-reviewed work; the PR stays open for a human with the named blocker. The one thing you must never do is end the run with the card in a non-terminal state and no live agent — the only acceptable ends are (a) deployed/closed, (b) a `[human:deploy-failed]` naming the blocker, or (c) a deploy refused because an open `[human:options]` decision is waiting: report it as `needs-input` and leave the card paused — it is neither a failure nor a card to force.
+   (single-tracker: only `[<BUG_KEY>]` in the title; `--branch` defaults to the ticket's newest review-handoff branch and `--title` to the ticket title). The command pushes the branch, opens its pull request in **draft**, and launches the machine PR reviewer on it; it exits as soon as that review has started, printing `Review started for <BUG_KEY> (<branch>): <PR_URL>`. From there the daemon's review→fix loop owns the merge: it un-drafts and merges the PR when the reviewer approves, runs the CI gate (rebase-if-stale with a lease push, the merge, remote-branch cleanup), posts the `[human:deployed]` marker with its `pr:` line, and closes the ticket — none of that happens inside this run, and none of it is yours to do by hand. A branch already merged into the base is a clean success (`Deployed …`, marker posted, ticket closed). When the command itself fails before the review starts (the push, the PR), it posts `[human:deploy-failed]` with the blocker named and exits non-zero; a `[human:deploy-failed]` posted later by the loop is likewise an honest needs-human end state, not a first-failure stop: do NOT merge by hand and do NOT re-implement the already-reviewed work; the PR stays open for a human with the named blocker. Never pass `--ready`: it ships without the machine PR review and is a person's override, not an agent's. The one thing you must never do is end the run with the card in a non-terminal state and no live agent — the only acceptable ends are (a) the review started (the loop's agent is live and owns the card), (b) deployed/closed, (c) a `[human:deploy-failed]` naming the blocker, or (d) a deploy refused because an open `[human:options]` decision is waiting: report it as `needs-input` and leave the card paused — it is neither a failure nor a card to force.
 
    `human deploy` records the start on the ticket itself (`[human:deploy-started]`) before it touches the forge — do **not** post that marker by hand.
 
-   One outcome is neither success nor failure: if the command exits with **`deploy refused: this ticket is waiting on a decision`**, an open `[human:options]` block is waiting on a person. That is not a crash and not a deploy failure — no `[human:deploy-failed]` is posted and the card is not red. Do **not** re-run with `--override-decision` (only a person may decide to ship past their own open question) and do **not** merge by hand. Post the Step 9 run summary, record the stage outcome as `needs-input` (per "Recording the board stage outcome"), and STOP, leaving the card paused where it is.
+   One outcome is neither success nor failure: if the command exits with **`deploy refused: this ticket is waiting on a decision`**, an open `[human:options]` block is waiting on a person. That is not a crash and not a deploy failure — no `[human:deploy-failed]` is posted and the card is not red. Do **not** re-run with `--override-decision` (only a person may decide to ship past their own open question) and do **not** merge by hand. Post the Step 9 run summary, record the stage outcome as `needs-input` (per "Recording the board stage outcome"), and STOP, leaving the card paused where it is. A second refusal of the same kind, **`deploy refused: the review verdict blocks the deploy`**, cannot happen after Step 7.3 let you through — if it does, the ticket carries a newer failing `[human:review-complete]` than the one you read; treat it as that review's `fail` branch.
 2. In split topology, close `<ENG_KEY>` as well: `human done <ENG_KEY>`.
-3. For the Step 9 report, read `<PR_URL>` from the deployed marker if needed: `human marker show <BUG_KEY> deployed`.
+3. For the Step 9 report, `<PR_URL>` is on the command's output line and on the `[human:pr-review-started]` marker (`human marker show <BUG_KEY> pr-review-started`); a `[human:deployed]` marker exists only once the loop has merged.
 
 ## Step 9 — Run summary: ticket comment, then report
 
@@ -406,7 +406,7 @@ human marker post <BUG_KEY> fix-summary --body-file - <<'SUMMARY_EOF'
 <the story of the run when it was not straight: a re-dispatched triage, a first verify that came back not-DONE, review findings that were addressed, infrastructure trouble. If the run went straight through, say exactly that: "Nothing notable — triage, fix, verify, and review went through on the first pass.">
 
 ## Where it ended
-<board: handoff posted, the Deploy button ships it | standalone: PR merged, ticket closed by the deploy gate | stopped at <step>: what a human needs to do next>
+<board: handoff posted, the Deploy button ships it | standalone: draft PR open, machine PR review running, the loop merges and closes the ticket on approval | stopped at <step>: what a human needs to do next>
 SUMMARY_EOF
 ```
 
@@ -417,14 +417,14 @@ Then report the verdict. For a confirmed, shipped fix, present the traceability 
 ```
 Autofix complete for <BUG_KEY>
 
-Verdict: confirmed — review: <verdict> — shipped
+Verdict: confirmed — review: <verdict> — handed to the merge gate
 - PM bug:     <tracker> <BUG_KEY>
 - Root cause: [human:bug-verdict] comment on <BUG_KEY> (explanation + cause chain)
 - Plan:       <ENG_TRACKER> <ENG_KEY> (split topology) — or [human:plan] comment on <BUG_KEY>
 - Branch:     autofix/<work-key>
 - Review:     [human:review-complete] verdict: <verdict> on <BUG_KEY>
-- PR:         <PR_URL> — merged, branch deleted
-- Ticket:     closed by the deploy gate (`human deploy`)
+- PR:         <PR_URL> — draft, machine PR review running; the loop merges on approval
+- Ticket:     closed by the deploy loop once merged
 ```
 
 For a board-context run (exception in Step 7.1) or a failed review/deploy gate, report where the pipeline stopped, which marker records it, and what a human needs to do next.

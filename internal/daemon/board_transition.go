@@ -1001,24 +1001,38 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 		d.closeTicketBestEffort(pmKey)
 		return nil
 	}
-	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
-		WorkspaceDir: d.WorkspaceDir,
-		Branch:       card.Branch,
-		Title:        pmKey, // adopted on the approval path; title only used on fresh create
-		Body:         doneBody(pmKey, card),
-		Draft:        true,
-	})
+	// The title is only used on a fresh create; the approval path adopts.
+	res, err := d.openDraftPR(ctx, pmKey, card.Branch, pmKey, doneBody(pmKey, card))
 	if err != nil {
-		if reason, ok := secretStoreFailureHeadline(err); ok {
-			return d.deployFailed(pmKey, "", deployReason(reason, err))
-		}
-		return d.deployFailed(pmKey, "", deployReason(
-			"could not push "+card.Branch+" and open its draft pull request — check the branch and forge access, then re-run Deploy", err))
+		return err
 	}
 	_, err = d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
 		prReviewDispatch(pmKey, res.Number, card.Branch),
 		prReviewStartedBody(res.URL, res.Number, card.Branch))
 	return err
+}
+
+// openDraftPR pushes the branch and opens its pull request in draft, or adopts
+// the one already open for it. Shared by both routes into the review loop — the
+// board's Deploy drop and `human deploy` — so the interlock is opened the same
+// way wherever the loop begins. A failure is recorded as the deploy's failure,
+// because to the ticket that is what it is.
+func (d BoardTransitionDeps) openDraftPR(ctx context.Context, pmKey, branch, title, body string) (PRResult, error) {
+	res, err := d.Deployer.PushAndCreatePR(ctx, PRRequest{
+		WorkspaceDir: d.WorkspaceDir,
+		Branch:       branch,
+		Title:        title,
+		Body:         body,
+		Draft:        true,
+	})
+	if err == nil {
+		return res, nil
+	}
+	if reason, ok := secretStoreFailureHeadline(err); ok {
+		return res, d.deployFailed(pmKey, "", deployReason(reason, err))
+	}
+	return res, d.deployFailed(pmKey, "", deployReason(
+		"could not push "+branch+" and open its draft pull request — check the branch and forge access, then re-run Deploy", err))
 }
 
 // prReviewStartedBody carries the loop's PR binding on the started marker so the
@@ -1028,6 +1042,20 @@ func prReviewStartedBody(url string, number int, branch string) string {
 		Type:   MarkerPRReviewStarted,
 		Fields: fields("pr", url, "number", strconv.Itoa(number), "branch", branch),
 	}, "pr", "number", "branch")
+}
+
+// prReviewPassedBody binds the loop's approval to what it approved: the branch
+// and the head the reviewer read. An approval is evidence about one revision,
+// and a later `human deploy` may reuse it only for that revision — a bare
+// header would say "approved" about whatever the branch carries by then. The
+// head is omitted when the reviewer recorded none, which leaves the marker as
+// the record of convergence it always was and makes it reusable by nothing.
+func prReviewPassedBody(branch, head string) string {
+	f := fields("branch", branch)
+	if head = strings.TrimSpace(head); head != "" {
+		f["head"] = head
+	}
+	return markerBody(marker.Marker{Type: MarkerPRReviewPassed, Fields: f}, "branch", "head")
 }
 
 func prReviewDispatch(pmKey string, number int, branch string) string {
@@ -1135,7 +1163,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		// the CI gate, rebase and merge that follow. A failure to post is not
 		// fatal: the merge is the work, and refusing to ship over a missing
 		// comment would trade a lost sentence for lost code.
-		if _, err := d.Commenter.AddComment(ctx, pmKey, PRReviewPassedHeader); err != nil {
+		if _, err := d.Commenter.AddComment(ctx, pmKey, prReviewPassedBody(branch, outcome.ReviewHead)); err != nil {
 			d.Logger.Warn().Err(err).Str("pm", pmKey).
 				Msg("board PR loop: could not record the passing review; continuing to the merge")
 		}

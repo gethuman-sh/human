@@ -433,8 +433,10 @@ place that distinction lived.
 Everything above is the machine ending an agent on purpose. The other way work
 ends is the daemon process going away underneath it — and the work that dies
 there is not in a container at all. A forwarded command executes **inside** the
-daemon (`Server.executeCommand`), and the long one is `human deploy`, which can
-sit up to `deployTimeout` = **45 minutes** on its CI gate. It leaves no
+daemon (`Server.executeCommand`), and the long one is `human deploy --ready`,
+which can sit up to `deployTimeout` = **45 minutes** on its CI gate (without
+`--ready` the command returns once it has opened the draft PR and launched the
+reviewer, and the merge runs later on the loop's own hook path). It leaves no
 container and no execution log; since SC-3852 it does leave a marker — the
 entry point (`internal/daemon.StartDeploy`) posts `[human:deploy-started]`
 before anything is pushed — so an interrupted deploy is now visible on the

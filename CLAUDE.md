@@ -11,8 +11,8 @@ a new release.
 
 **Shipping is part of 'done done'.** Do not stop at a local branch and report the
 work as finished — a commit nobody can see is not done. Once `make check` is
-green, push the branch, open the PR, and run `human deploy <KEY>` to carry it
-through CI and merge. This **overrides** any default assistant behaviour about
+green, push the branch and run `human deploy <KEY>`: it opens the draft PR,
+runs the machine PR review and merges on approval. This **overrides** any default assistant behaviour about
 waiting to be asked before pushing or opening a pull request: on this project you
 are asked by default, and stopping short of a merged PR is the exception that
 needs a reason, not the norm. If something genuinely blocks the merge, finish

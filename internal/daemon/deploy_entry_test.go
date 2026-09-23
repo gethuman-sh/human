@@ -4,6 +4,7 @@ import (
 	"context"
 	stderrors "errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,15 +13,33 @@ import (
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
+// reviewableDeps is the daemon's wiring: a launcher exists, so the route can
+// enter the machine review. The bare CLI has none — that case is pinned apart.
+func reviewableDeps(c *fakeCommenter, p *fakeDeployer) (BoardTransitionDeps, *fakeLauncher) {
+	l := &fakeLauncher{}
+	return newDeps(c, l, p), l
+}
+
+// bareDeps is the wiring a run with no daemon builds: no launcher at all, not a
+// nil pointer inside the interface, which is what newDeps(c, nil, p) produces.
+func bareDeps(c *fakeCommenter, p *fakeDeployer) BoardTransitionDeps {
+	return BoardTransitionDeps{Commenter: c, Deployer: p, WorkspaceDir: "/ws", ConfigDir: "/ws"}
+}
+
+func runStartDeploy(t *testing.T, deps BoardTransitionDeps, req StartDeployRequest) (StartDeployResult, error) {
+	t.Helper()
+	return deps.StartDeploy(context.Background(), req)
+}
+
 // Could not READ the state being gated on — an ordinary failure, not a
 // refusal and not a reason to run the engine.
 func TestStartDeploy_listCommentsErrorStopsBeforeTheEngine(t *testing.T) {
 	c := listErrCommenter{&fakeCommenter{}}
 	p := &fakeDeployer{}
-	deps := newDeps(&fakeCommenter{}, nil, p)
+	deps, _ := reviewableDeps(&fakeCommenter{}, p)
 	deps.Commenter = c
 
-	err := deps.StartDeploy(context.Background(), StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
 
 	require.Error(t, err)
 	assert.False(t, stderrors.Is(err, ErrDeployAwaitingDecision), "a load failure is not the awaiting-decision refusal")
@@ -36,9 +55,9 @@ func TestStartDeploy_refusalIsNotAFailure(t *testing.T) {
 		{Body: "[human:options]\nstage: implementation\ncontext: c\n1: a\n2: b", ID: "2"},
 	}}
 	p := &fakeDeployer{}
-	deps := newDeps(c, nil, p)
+	deps, _ := reviewableDeps(c, p)
 
-	err := deps.StartDeploy(context.Background(), StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
 
 	require.Error(t, err)
 	assert.True(t, stderrors.Is(err, ErrDeployAwaitingDecision))
@@ -46,27 +65,240 @@ func TestStartDeploy_refusalIsNotAFailure(t *testing.T) {
 	assert.Zero(t, p.call, "the engine (fakeDeployer's PushAndCreatePR) must never run on a refusal")
 }
 
-// The ticket's own record of a deploy must begin before the engine touches the
-// forge — a start recorded after the fact is not a record of the work starting.
-func TestStartDeploy_recordsTheStartThenRunsTheEngine(t *testing.T) {
+// The CLI route enters the machine: the start is recorded, the branch pushed
+// with its PR in DRAFT, and the reviewer launched — nothing merges yet. This
+// is the F10 fix: SC-4406 reached main through `human deploy` with no
+// reviewer ever having read it.
+func TestStartDeploy_recordsTheStartThenEntersTheReviewLoop(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{res: PRResult{Number: 42, URL: "https://example/pr/42", Draft: true}}
+	deps, l := reviewableDeps(c, p)
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{
+		PMKey: "SC-1", Title: "t", PRBody: "body", Branch: "feat/x",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeReviewStarted, res.Outcome)
+	assert.Equal(t, "https://example/pr/42", res.PRURL)
+	require.NotEmpty(t, c.added)
+	assert.Contains(t, c.added[0], DeployStartedHeader)
+	assert.Contains(t, c.added[0], "branch: feat/x")
+	assert.NotContains(t, c.added[0], "override:", "a plain deploy records no override")
+	assert.Equal(t, 1, p.call, "PushAndCreatePR must run exactly once, after the start marker")
+	assert.True(t, p.req.Draft, "the PR must open in draft so a half-reviewed change cannot merge")
+	assert.Equal(t, "board-SC-1-prreview", l.name)
+	assert.Equal(t, "/human-pr-review SC-1 --pr=42 --branch=feat/x", l.prompt)
+	started, ok := posted(c, PRReviewStartedHeader)
+	require.True(t, ok, "the loop's own start marker must be posted so its Stop-hook driver can find the PR")
+	assert.Contains(t, started, "number: 42")
+	assert.Zero(t, p.merged, "nothing merges before the review approves")
+	assert.Zero(t, p.markReadyCall, "nothing un-drafts before the review approves")
+}
+
+// A blocking verification verdict is refused before any push, with no marker:
+// the ticket already says what has to happen. The board's own route has
+// refused this since the verdict gate existed; the CLI route walked past it.
+func TestStartDeploy_blockingVerdictRefusesBeforePush(t *testing.T) {
+	base := time.Now()
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1", Created: base},
+		{Body: "[human:review-complete]\nverdict: fail", ID: "2", Created: base.Add(time.Minute)},
+	}}
+	p := &fakeDeployer{}
+	deps, l := reviewableDeps(c, p)
+
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.Error(t, err)
+	assert.True(t, stderrors.Is(err, ErrDeployVerdictBlocks))
+	assert.Empty(t, c.added, "a refusal posts no marker")
+	assert.Zero(t, p.call, "nothing is pushed on a blocking verdict")
+	assert.Zero(t, l.calls)
+}
+
+// A verdict judges the round it was posted against: a newer handoff retires it
+// (SC-4958), so the rebuilt work is reviewed rather than refused on the old
+// verdict.
+func TestStartDeploy_verdictRetiredByALaterHandoffProceeds(t *testing.T) {
+	base := time.Now()
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1", Created: base},
+		{Body: "[human:review-complete]\nverdict: fail", ID: "2", Created: base.Add(time.Minute)},
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "3", Created: base.Add(2 * time.Minute)},
+	}}
+	p := &fakeDeployer{res: PRResult{Number: 7, URL: "u", Draft: true}}
+	deps, l := reviewableDeps(c, p)
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeReviewStarted, res.Outcome)
+	assert.Equal(t, 1, l.calls)
+}
+
+// A process with no launcher cannot run the review the merge depends on, and
+// must not pretend it did: refused, no marker, nothing pushed. This is the
+// bare CLI with no daemon.
+func TestStartDeploy_noLauncherRefusesWithoutReady(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{}
+	deps := bareDeps(c, p)
+
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.Error(t, err)
+	assert.True(t, stderrors.Is(err, ErrDeployReviewUnavailable))
+	assert.Empty(t, c.added)
+	assert.Zero(t, p.call)
+}
+
+// --ready is the person's override of the review interlock: it runs the engine
+// directly, needs no launcher, and the start marker says the review was
+// skipped — an unrecorded override would read as a reviewed merge.
+func TestStartDeploy_readyShipsWithoutTheReviewAndRecordsIt(t *testing.T) {
 	c := &fakeCommenter{}
 	p := &fakeDeployer{
 		res:       PRResult{Number: 42, URL: "https://example/pr/42"},
 		checks:    []forge.ChecksState{forge.ChecksPassing},
 		mergeable: true,
 	}
-	deps := newDeps(c, nil, p)
+	deps, l := reviewableDeps(c, p)
+	deps.MergeDraftPR = true
 
-	err := deps.StartDeploy(context.Background(), StartDeployRequest{
-		PMKey: "SC-1", Title: "t", PRBody: "body", Branch: "feat/x",
-	})
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Title: "t", PRBody: "b", Branch: "feat/x"})
 
 	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeShipped, res.Outcome)
 	require.NotEmpty(t, c.added)
-	assert.Contains(t, c.added[0], DeployStartedHeader)
-	assert.Contains(t, c.added[0], "branch: feat/x")
-	assert.Equal(t, 1, p.call, "PushAndCreatePR must run exactly once, after the start marker")
-	assert.Equal(t, "feat/x", p.req.Branch)
+	assert.Contains(t, c.added[0], "override: shipped with --ready")
+	assert.Zero(t, l.calls, "--ready runs no reviewer")
+	assert.False(t, p.req.Draft, "--ready ships a mergeable PR")
+	assert.Equal(t, 1, p.merged)
+}
+
+// --ready without a launcher is the bare CLI shipping by hand: allowed, because
+// it is a person's explicit call, and still recorded.
+func TestStartDeploy_readyNeedsNoLauncher(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{alreadyMerged: true}
+	deps := bareDeps(c, p)
+	deps.MergeDraftPR = true
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeShipped, res.Outcome)
+	assert.Contains(t, c.added[0], "override: shipped with --ready")
+}
+
+// A still-current approval of exactly this head is reused: the draft is
+// un-drafted and the engine runs, exactly as the loop's own merge step does.
+// No second review round is spent on work the reviewer already judged.
+func TestStartDeploy_reusesAnApprovalBoundToThisHead(t *testing.T) {
+	const head = "0123456789abcdef0123456789abcdef01234567"
+	base := time.Now()
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 42\nbranch: feat/x", ID: "1", Created: base},
+		{Body: prReviewPassedBody("feat/x", head), ID: "2", Created: base.Add(time.Minute)},
+		{Body: "[human:deploy-failed]\nreason: CI checks failed", ID: "3", Created: base.Add(2 * time.Minute)},
+	}}
+	p := &fakeDeployer{
+		res:       PRResult{Number: 42, URL: "u", Draft: true},
+		prState:   &forge.PullRequestState{Number: 42, HeadSHA: head},
+		checks:    []forge.ChecksState{forge.ChecksPassing},
+		mergeable: true,
+	}
+	deps, l := reviewableDeps(c, p)
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Title: "t", PRBody: "b", Branch: "feat/x"})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeShipped, res.Outcome)
+	assert.Zero(t, l.calls, "an approval of this exact head needs no new review")
+	assert.Equal(t, 42, p.markedReady, "the draft is released on the strength of the bound approval")
+	assert.Equal(t, 1, p.merged)
+}
+
+// Approval is evidence about one revision. Anything that fails to bind it to
+// the head being shipped runs the review: a later round, a different head, a
+// PR the forge cannot report, or an older marker that recorded no head.
+func TestStartDeploy_unboundApprovalRunsTheReview(t *testing.T) {
+	const head = "0123456789abcdef0123456789abcdef01234567"
+	base := time.Now()
+	approved := tracker.Comment{Body: prReviewPassedBody("feat/x", head), ID: "2", Created: base.Add(time.Minute)}
+	for _, tc := range []struct {
+		name     string
+		comments []tracker.Comment
+		deployer *fakeDeployer
+	}{
+		{"a later review round supersedes it",
+			[]tracker.Comment{approved, {Body: "[human:pr-review-started]\npr: u\nnumber: 42\nbranch: feat/x", ID: "3", Created: base.Add(2 * time.Minute)}},
+			&fakeDeployer{res: PRResult{Number: 42, URL: "u", Draft: true}, prState: &forge.PullRequestState{HeadSHA: head}}},
+		{"a later handoff supersedes it",
+			[]tracker.Comment{approved, {Body: "[human:ready-for-review]\nbranch: feat/x", ID: "3", Created: base.Add(2 * time.Minute)}},
+			&fakeDeployer{res: PRResult{Number: 42, URL: "u", Draft: true}, prState: &forge.PullRequestState{HeadSHA: head}}},
+		{"the branch moved past the approved head",
+			[]tracker.Comment{approved},
+			&fakeDeployer{res: PRResult{Number: 42, URL: "u", Draft: true}, prState: &forge.PullRequestState{HeadSHA: "fedcba9876543210fedcba9876543210fedcba98"}}},
+		{"the approval names another branch",
+			[]tracker.Comment{{Body: prReviewPassedBody("feat/other", head), ID: "2", Created: base.Add(time.Minute)}},
+			&fakeDeployer{res: PRResult{Number: 42, URL: "u", Draft: true}, prState: &forge.PullRequestState{HeadSHA: head}}},
+		{"the forge cannot report the head",
+			[]tracker.Comment{approved},
+			&fakeDeployer{res: PRResult{Number: 42, URL: "u", Draft: true}, prStateErr: stderrors.New("forge unreachable")}},
+		{"an older approval recorded no head",
+			[]tracker.Comment{{Body: PRReviewPassedHeader, ID: "2", Created: base.Add(time.Minute)}},
+			&fakeDeployer{res: PRResult{Number: 42, URL: "u", Draft: true}, prState: &forge.PullRequestState{HeadSHA: head}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &fakeCommenter{comments: tc.comments}
+			deps, l := reviewableDeps(c, tc.deployer)
+
+			res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+			require.NoError(t, err)
+			assert.Equal(t, DeployOutcomeReviewStarted, res.Outcome)
+			assert.Equal(t, 1, l.calls, "the reviewer must run")
+			assert.Zero(t, tc.deployer.merged)
+			assert.Zero(t, tc.deployer.markReadyCall, "the draft stays until the loop approves")
+		})
+	}
+}
+
+// Already-merged work has nothing to review: the engine's carve-out records the
+// terminal marker and closes the ticket, and no PR or reviewer is started.
+func TestStartDeploy_alreadyMergedIsShippedWithoutAReview(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{alreadyMerged: true}
+	deps, l := reviewableDeps(c, p)
+	var closed string
+	deps.CloseTicket = func(pmKey string) error { closed = pmKey; return nil }
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeShipped, res.Outcome)
+	assert.Zero(t, p.call)
+	assert.Zero(t, l.calls)
+	assert.Equal(t, "SC-1", closed)
+	_, ok := posted(c, DeployedHeader)
+	assert.True(t, ok)
+}
+
+// A push that fails is the deploy failing, on the ticket and to the caller.
+func TestStartDeploy_pushFailureIsADeployFailure(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{prErr: stderrors.New("remote rejected")}
+	deps, l := reviewableDeps(c, p)
+
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.Error(t, err)
+	failed, ok := posted(c, DeployFailedHeader)
+	require.True(t, ok)
+	assert.Contains(t, failed, "could not push feat/x")
+	assert.Zero(t, l.calls)
 }
 
 // A missing comment post is a lost sentence, not a reason to withhold the
@@ -75,36 +307,47 @@ func TestStartDeploy_recordsTheStartThenRunsTheEngine(t *testing.T) {
 func TestStartDeploy_aFailedMarkerPostStillShips(t *testing.T) {
 	c := &fakeCommenter{addErr: stderrors.New("tracker unavailable")}
 	p := &fakeDeployer{alreadyMerged: true}
-	deps := newDeps(c, nil, p)
+	deps, _ := reviewableDeps(c, p)
 
-	err := deps.StartDeploy(context.Background(), StartDeployRequest{
+	_, err := runStartDeploy(t, deps, StartDeployRequest{
 		PMKey: "SC-1", Title: "t", PRBody: "body", Branch: "feat/x",
 	})
 
 	assert.NoError(t, err)
 }
 
-// The override line is the only record that a ship walked past an open
-// decision. Nothing has been pushed at that point, so a lost post there must
-// stop the deploy rather than ship an unrecorded override — the one case
-// where the record IS the point, unlike the best-effort plain start marker.
+// The override line is the only record that a ship walked past a guard.
+// Nothing has been pushed at that point, so a lost post there must stop the
+// deploy rather than ship an unrecorded override — the one case where the
+// record IS the point, unlike the best-effort plain start marker. Both
+// overrides are pinned: the decision one and the review one.
 func TestStartDeploy_aFailedOverrideRecordStopsTheShip(t *testing.T) {
-	c := &fakeCommenter{
-		comments: []tracker.Comment{
+	for _, tc := range []struct {
+		name     string
+		comments []tracker.Comment
+		ready    bool
+		override bool
+	}{
+		{"open decision", []tracker.Comment{
 			{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1"},
 			{Body: "[human:options]\nstage: implementation\ncontext: c\n1: a\n2: b", ID: "2"},
-		},
-		addErr: stderrors.New("tracker unavailable"),
+		}, false, true},
+		{"--ready", nil, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &fakeCommenter{comments: tc.comments, addErr: stderrors.New("tracker unavailable")}
+			p := &fakeDeployer{alreadyMerged: true}
+			deps, _ := reviewableDeps(c, p)
+			deps.MergeDraftPR = tc.ready
+
+			_, err := runStartDeploy(t, deps, StartDeployRequest{
+				PMKey: "SC-1", Branch: "feat/x", OverrideDecision: tc.override,
+			})
+
+			require.Error(t, err)
+			assert.Zero(t, p.call, "the engine must never run when the override record could not be posted")
+		})
 	}
-	p := &fakeDeployer{alreadyMerged: true}
-	deps := newDeps(c, nil, p)
-
-	err := deps.StartDeploy(context.Background(), StartDeployRequest{
-		PMKey: "SC-1", Branch: "feat/x", OverrideDecision: true,
-	})
-
-	require.Error(t, err)
-	assert.Zero(t, p.call, "the engine must never run when the override record could not be posted")
 }
 
 // --override-decision is a person deciding to ship past their own open
@@ -115,9 +358,9 @@ func TestStartDeploy_overrideShipsPastAnOpenDecision(t *testing.T) {
 		{Body: "[human:options]\nstage: implementation\ncontext: c\n1: a\n2: b", ID: "2"},
 	}}
 	p := &fakeDeployer{alreadyMerged: true}
-	deps := newDeps(c, nil, p)
+	deps, _ := reviewableDeps(c, p)
 
-	err := deps.StartDeploy(context.Background(), StartDeployRequest{
+	_, err := runStartDeploy(t, deps, StartDeployRequest{
 		PMKey: "SC-1", Branch: "feat/x", OverrideDecision: true,
 	})
 
@@ -134,12 +377,37 @@ func TestStartDeploy_overrideShipsPastAnOpenDecision(t *testing.T) {
 func TestDeployStartedHeader_hasAProductionPoster(t *testing.T) {
 	c := &fakeCommenter{}
 	p := &fakeDeployer{alreadyMerged: true}
-	deps := newDeps(c, nil, p)
+	deps, _ := reviewableDeps(c, p)
 
-	require.NoError(t, deps.StartDeploy(context.Background(), StartDeployRequest{
-		PMKey: "SC-1", Branch: "feat/x",
-	}))
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+	require.NoError(t, err)
 
 	require.NotEmpty(t, c.added)
 	assert.Contains(t, c.added[0], DeployStartedHeader)
+}
+
+// The loop's converging marker binds what it approved: branch and head. A
+// later `human deploy` reuses it only for that head, so the record has to
+// carry it.
+func TestAdvancePRLoop_approvalRecordsTheReviewedHead(t *testing.T) {
+	const head = "0123456789abcdef0123456789abcdef01234567"
+	// The thread predates the loop's own post, which the fake stamps with now.
+	base := time.Now().Add(-time.Minute)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1", Created: base},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "2", Created: base.Add(time.Second)},
+	}}
+	p := &fakeDeployer{res: PRResult{Number: 7, URL: "u"}, checks: []forge.ChecksState{forge.ChecksPassing}, mergeable: true}
+	deps, _ := reviewableDeps(c, p)
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewVerdict: PRVerdictApproved, ReviewRecorded: true, ReviewHead: head}))
+
+	passed, ok := posted(c, PRReviewPassedHeader)
+	require.True(t, ok)
+	assert.Contains(t, passed, "branch: feat/x")
+	assert.Contains(t, passed, "head: "+head)
+	got, bound := currentApproval(c.comments, "feat/x")
+	assert.True(t, bound)
+	assert.Equal(t, head, got)
 }

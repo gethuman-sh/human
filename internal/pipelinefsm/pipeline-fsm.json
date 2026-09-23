@@ -17,7 +17,7 @@
       "bug-verify",
       "pipeline",
       "close-failed",
-  "run-cancelled",
+      "run-cancelled",
       "related-started",
       "related",
       "idea-draft-started",
@@ -293,7 +293,7 @@
         "stage": "done",
         "state": "running"
       },
-      "holds": "A deploy is under way and recorded on the ticket. One engine run holds the process-wide deploy gate, so no second deploy for any card runs beside it. On the board's PR-loop entry the branch is pushed and a DRAFT pull request is open; on the `human deploy` entry the marker is posted first and the push follows.",
+      "holds": "A deploy is under way and recorded on the ticket. One engine run holds the process-wide deploy gate, so no second deploy for any card runs beside it. On the board's PR-loop entry the branch is pushed and a DRAFT pull request is open; on the `human deploy` entry the marker is posted first and the push follows — and since F10 that push also opens the pull request in DRAFT and hands it to the machine reviewer (pr-opened), unless a still-current approval already names the exact head being shipped (approval-reused) or the person passed --ready (deploy-skips-review). The start marker carries an `override:` line for every guard the deploy walked past, so a merge that skipped the review says so on the ticket.",
       "who_may_act": [
         "daemon"
       ],
@@ -530,7 +530,7 @@
       "actor": "user",
       "runs": "human-autofix",
       "marker": "[human:implementation-started]",
-      "where": "board_transition.go ApplyFix; board_options.go launchDecidedStage \u2192 launchFixPipeline when the stage was queued by a decision",
+      "where": "board_transition.go ApplyFix; board_options.go launchDecidedStage → launchFixPipeline when the stage was queued by a decision",
       "doc": "Dropping a bug on Fix. The run is self-planning — it produces its own plan rather than requiring one."
     },
     {
@@ -776,8 +776,8 @@
       "actor": "user",
       "marker": "[human:deploy-started]",
       "command": "human deploy <KEY>",
-      "where": "cmd/cmddeploy/deploy.go RunDeploy → internal/daemon/deploy_entry.go StartDeploy — the shared pre-deploy entry that refuses on an open decision and records the start before the engine (DeployBranch) runs",
-      "doc": "`human deploy KEY`. The one edge into deploying that a person takes, and it is taken by a command rather than by hand — posting the marker yourself posts it twice, which is why this edge carries its own command. The wide src is the honest list of where a CLI deploy starts from: a card whose handoff names the branch (handed-off, reviewed), a card whose deploy already failed (stopped, substrate-down), and a card with --branch given explicitly and no pipeline history at all (filed, ticket-reviewed, planned) — the 15 Backlog-to-Done histories in the replay corpus. The board's Deploy drop does NOT walk this edge — it fronts the merge with the PR review loop and records pr-review-started (start-pr-review); pre-loop board histories that carry deploy-started walked it before SC-1387. A card in awaiting-decision walks the separate start-deploy-override edge below, not this one — its command differs and offering this one's plain `human deploy <KEY>` there would be advertising a command the runtime refuses."
+      "where": "cmd/cmddeploy/deploy.go RunDeploy → internal/daemon/deploy_entry.go StartDeploy — the shared pre-deploy entry that refuses on an open decision, refuses on a blocking verification verdict (daemon.VerdictFailed, read through the card so a later handoff retires it), records the start, and then enters the review loop (reviewThenShip) instead of running the engine directly",
+      "doc": "`human deploy KEY`. The one edge into deploying that a person takes, and it is taken by a command rather than by hand — posting the marker yourself posts it twice, which is why this edge carries its own command. The wide src is the honest list of where a CLI deploy starts from: a card whose handoff names the branch (handed-off, reviewed), a card whose deploy already failed (stopped, substrate-down), and a card with --branch given explicitly and no pipeline history at all (filed, ticket-reviewed, planned) — the 15 Backlog-to-Done histories in the replay corpus. The board's Deploy drop does NOT walk this edge — it fronts the merge with the PR review loop and records pr-review-started (start-pr-review); pre-loop board histories that carry deploy-started walked it before SC-1387. A card in awaiting-decision walks the separate start-deploy-override edge below, not this one — its command differs and offering this one's plain `human deploy <KEY>` there would be advertising a command the runtime refuses. Since F10 the edge no longer runs the engine on its own: the entry pushes the branch, opens its pull request in draft and launches the machine reviewer, so the item continues along pr-opened exactly as a board deploy does, and the merge is the loop's (pr-review-passed → ci-gate → merged). Two things short-circuit that: an approval the loop already recorded for exactly this head (approval-reused), and the person's --ready (deploy-skips-review). From reviewed the edge is taken only while the verdict does not block; a blocking verdict is refused before any push, with no marker, because the ticket already says what has to happen. A process with no launcher — the bare CLI with no daemon — cannot run the review and refuses without --ready rather than merging on CI alone; forwarded to the daemon, the command borrows the daemon's own engine wiring (Server.TransitionDeps)."
     },
     {
       "name": "start-deploy-override",
@@ -801,8 +801,31 @@
       "actor": "daemon",
       "runs": "human-pr-reviewer",
       "marker": "[human:pr-review-started]",
-      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone.",
-      "where": "internal/daemon/board_transition.go AdvancePRLoop, PRActionReview"
+      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone. This is the `human deploy` route's entry into the loop (F10): the board's Deploy drop records pr-review-started without passing through deploying (start-pr-review), so this edge is walked only by a deploy that started from the CLI — the fix skills' `human deploy <KEY> --branch`, and a person's hand-run ship.",
+      "where": "internal/daemon/deploy_entry.go StartDeploy → reviewThenShip, which opens the draft (openDraftPR, shared with the board's runDoneStage) and launches the reviewer through launchPRLoopAgent"
+    },
+    {
+      "name": "approval-reused",
+      "src": [
+        "deploying"
+      ],
+      "dst": "ci-gate",
+      "actor": "daemon",
+      "guard": "a [human:pr-review-passed] newer than any later pr-review-started or ready-for-review names this branch and a head, and the pull request's head is that head",
+      "where": "internal/daemon/deploy_entry.go StartDeploy → reviewThenShip → approvalCoversPR / currentApproval",
+      "doc": "A re-run `human deploy` on work the loop already approved — a deploy that failed at its CI gate and is being re-driven by hand — does not spend a review round on a head the reviewer already judged: the draft is un-drafted on the strength of the bound approval and the engine runs the CI gate and merge. The binding is the whole of the rule: ticket, branch and head must all match, and the forge must report the head. A start marker, a non-draft pull request, or a passing verification verdict is not approval, and approval of an older revision does not authorise changed work (SC-3852 shipped with none of this and SC-4406 reached main unreviewed)."
+    },
+    {
+      "name": "deploy-skips-review",
+      "src": [
+        "deploying"
+      ],
+      "dst": "ci-gate",
+      "actor": "daemon",
+      "guard": "--ready passed explicitly",
+      "command": "human deploy <KEY> --ready",
+      "where": "internal/daemon/deploy_entry.go StartDeploy — MergeDraftPR runs the engine directly; settleDraft un-drafts a PR the loop is holding",
+      "doc": "The person's override of the review interlock. `--ready` used to mean only 'un-draft the PR the loop is holding' (SC-4027); since F10 it also means 'do not start the machine review', because without it the CLI route always does. It is a person judging the change reviewed enough, never an agent's default path — the fix skills are told not to pass it — and the start marker records it as an override so the ticket never reads as a reviewed merge. It needs no launcher, which is what makes the bare CLI with no daemon still able to ship by hand."
     },
     {
       "name": "pr-changes-requested",
@@ -837,7 +860,7 @@
       "dst": "ci-gate",
       "actor": "daemon",
       "where": "board_transition.go AdvancePRLoop",
-      "doc": "The reviewer approved. The draft is un-drafted and the item goes to the CI gate. This is the approval route, and it is not the only way in: the deploy gate itself now refuses a pull request it finds still in draft, before the CI wait rather than at the merge, and says the review loop is holding it — a person who has judged it reviewed enough overrides that with `human deploy --ready`, which un-drafts and ships (SC-4027). No automatic path clears the interlock, because a machine that can clear its own interlock has none. Recorded as a marker like every other outcome of the loop — success used to be the only transition here that left no trace, so a reader could not tell an approved review whose merge is running from a review still in flight. It also retires the loop sub-phase, so the badge stops reading 'PR review…' through the CI gate, rebase and merge.",
+      "doc": "The reviewer approved. The draft is un-drafted and the item goes to the CI gate. This is the approval route, and it is not the only way in: the deploy gate itself now refuses a pull request it finds still in draft, before the CI wait rather than at the merge, and says the review loop is holding it — a person who has judged it reviewed enough overrides that with `human deploy --ready`, which un-drafts and ships (SC-4027). No automatic path clears the interlock, because a machine that can clear its own interlock has none. Recorded as a marker like every other outcome of the loop — success used to be the only transition here that left no trace, so a reader could not tell an approved review whose merge is running from a review still in flight. It also retires the loop sub-phase, so the badge stops reading 'PR review…' through the CI gate, rebase and merge. The marker binds what was approved: `branch:` and `head:`, the head the reviewer actually read (the fixer's local tip under the local-ref review model). A later `human deploy` reuses the approval only when it is still the newest word on the review — no later round, no later handoff — and the forge reports that exact head on the pull request (approval-reused); a marker with no head, posted before this field existed, is reusable by nothing.",
       "marker": "[human:pr-review-passed]"
     },
     {
@@ -1252,7 +1275,7 @@
     "doc": "Things that look like places an item can be, and are not. Each was proposed as a state at least once; each fails the same test — you cannot tell an item is there by reading its ticket, because nothing about the ticket changed. Recorded so the argument is made once rather than rediscovered, and so removing one does not read as an oversight.",
     "an unreadable source": "The tracker failed to load, so the board cannot see the item. It WAS a declared state (`unknown`, with `source-unreadable` from 26 states and `source-readable-again` back to `filed`) and it was wrong three ways. The code disagrees: BoardCard.Degraded keeps the card's last-known Stage/State so the board renders it locked in place rather than demoting it (SC-1700) — the item does not move. Its own edges were implemented in internal/board/gate.go and internal/board/compose.go, the only two transitions in this document whose where: was the rendering layer. And its exit landed on `filed`, which said a recovered fetch resets every item to the initial state. The item's own doc string already admitted it: `it says the board could not look, not that the item moved`.",
     "a closed ticket": "Closing takes an item OUT of the pipeline rather than moving it within, so there is no state to name and no edge to add. The one real effect — the ticket's agents are stopped — is a container's story, and docs/reaper.md owns it as `close is cancellation` with its code owner. The board renders it by removing the card (BoardHidden), which is the board's business, not the machine's.",
-    "a host that cannot launch": "The daemon refuses to start a stage while a launch-critical doctor check is failing on its host \u2014 docker, agent-skills, claude-auth and egress (internal/daemon.LaunchCriticalChecks, enforced in BoardTransitionDeps.startAgentStage). Nothing is claimed, no marker is posted and the item does not move: the condition belongs to the machine, not to the ticket, and another daemon may serve the same work unimpeded. It is deliberately not `substrate-down` either, which is a stage REPORTING that something it needed was unreachable; here no stage ever started. The two met over SC-4819: a proxy policy that blocked every hostname made every container die at its first model call, and the runs recorded implementation-outage and sat against OutageWaitBound for a local misconfiguration no waiting could clear. The egress check moves that condition here, where the host reports it (doctor / rail LED) and no ticket is blamed for it. claude-auth also fails on evidence the store itself cannot show (SC-5036): a board run that died because the model API refused its login (the exit classified as `model API authentication was refused`, handed to FailureDeps.OnAuthRefused) marks that project's container store refused until the store is rewritten by a fresh /login or a successful refresh, so a rejected refresh token stops the next launch instead of costing it a run.",
+    "a host that cannot launch": "The daemon refuses to start a stage while a launch-critical doctor check is failing on its host — docker, agent-skills, claude-auth and egress (internal/daemon.LaunchCriticalChecks, enforced in BoardTransitionDeps.startAgentStage). Nothing is claimed, no marker is posted and the item does not move: the condition belongs to the machine, not to the ticket, and another daemon may serve the same work unimpeded. It is deliberately not `substrate-down` either, which is a stage REPORTING that something it needed was unreachable; here no stage ever started. The two met over SC-4819: a proxy policy that blocked every hostname made every container die at its first model call, and the runs recorded implementation-outage and sat against OutageWaitBound for a local misconfiguration no waiting could clear. The egress check moves that condition here, where the host reports it (doctor / rail LED) and no ticket is blamed for it. claude-auth also fails on evidence the store itself cannot show (SC-5036): a board run that died because the model API refused its login (the exit classified as `model API authentication was refused`, handed to FailureDeps.OnAuthRefused) marks that project's container store refused until the store is rewritten by a fresh /login or a successful refresh, so a rejected refresh token stops the next launch instead of costing it a run.",
     "an idea": "An idea-labelled ticket is not inside the machine, even though the machine now acts on it. Membership is the label alone (DeriveBoardCard returns the Ideas stage before reading a single comment), the initial state is `filed`, and promotion is still a label edit that posts no transition marker. What changed with SC-4608 is that a daemon-launched drafter writes the ticket's DESCRIPTION and records provenance in [human:idea-draft] — both listed above as recording content, not movement. A drafting run that dies leaves [human:idea-draft-failed], posted by the daemon rather than the run — the third marker an idea can carry, and the third that moves nothing: it says a draft was attempted and failed, which is a fact about the ATTEMPT, not a position for the ticket. So the drafter acts ON an idea without the idea entering the machine: nothing about where the item is is derived from its markers, there is no stage running, and no marker it carries moves it. A state would have to be something you could read off the ticket, and there is still nothing there to read. SC-4923 widened who may start that drafter — a person may run it from a Product-Backlog card's \"Recreate description\" — and widened nothing else: the same three markers are now reachable on a ticket that is inside the machine, where they still record content and still move nothing."
   }
 }

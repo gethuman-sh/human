@@ -159,7 +159,13 @@ func (f *fakeDeployer) PushAndCreatePR(_ context.Context, req PRRequest) (PRResu
 	if f.prErr != nil {
 		return PRResult{}, f.prErr
 	}
-	return f.res, nil
+	res := f.res
+	// An adopted PR reports the forge's current state: once un-drafted it is
+	// un-drafted, whatever state it was scripted to open in.
+	if f.markedReady != 0 && f.markedReady == res.Number {
+		res.Draft = false
+	}
+	return res, nil
 }
 
 func (f *fakeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (forge.ChecksState, error) {
