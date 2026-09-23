@@ -128,8 +128,9 @@ func (b *recoveryBackoff) reset() {
 // cap, the deliberate exits, the outage that goes uncharged.
 //
 // A failure older than FailedRecoveryBound is left alone too: the standing
-// *-failed marker and the attempts on record are the trail, and `human fsm
-// where` says the bound has passed. The pass posts nothing at the bound — a
+// *-failed marker and the attempts on record are the trail, the daemon logs
+// the bound once per stage, and `human fsm where` names it. The pass posts
+// nothing at the bound — a
 // second *-failed marker there carried the original reason into a body every
 // sentinel scanner reads, and twice collided with the silence-reap sentinels
 // (SC-5170, rounds 2 and 3); a person's card is a person's card.
