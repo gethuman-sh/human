@@ -34,6 +34,17 @@ import (
 // keep changing; it should be rare for a loop to reach it without repeating.
 const DefaultPRReviewRounds = 8
 
+// MaxSoleDirectionPursuits bounds a DIFFERENT loop that happens to key off the
+// same review-round count: a fix-stage escalation naming exactly one
+// direction is not a fork (SC-3630) and the daemon pursues it in place — a
+// FULL implementation-stage rebuild per pursuit — rather than asking. That
+// budget used to reuse DefaultPRReviewRounds, so raising the review loop's
+// outer cap for SC-5174 would have silently taken sole-direction pursuit from
+// three rebuilds to eight along with it, though its own reasoning (repetition,
+// not count, bounds cost) has nothing to say about a loop that is not the
+// review→fix loop at all. Named and held at the old value on purpose.
+const MaxSoleDirectionPursuits = 3
+
 // PR review/fix outcomes the decider branches on. These mirror the vocabulary
 // the human-pr-reviewer and human-pr-fixer prompts record in state, kept here as
 // the single Go-side source of truth. The fixer's needs-input reuses the shared
@@ -159,31 +170,72 @@ func LatestMarkerTime(comments []tracker.Comment, header string) (time.Time, boo
 	return latest.Created, true
 }
 
+// findingFingerprintEmDash is the separator the reviewer prompt
+// (human-pr-reviewer-agent.md) mandates between a blocking finding's stable
+// anchor+slug and its free-form explanation: `BLOCKING <file>:<line> —
+// <slug> — <explanation>`. Kept as a named constant because it is a contract
+// between this file and that prompt, not an arbitrary formatting choice.
+const findingFingerprintEmDash = "—"
+
 // FindingFingerprint reduces a reviewer's findings text to the identity of its
-// first blocking finding: the first line that names BLOCKING, else the first
-// non-empty line, lower-cased, whitespace-collapsed and cut to 160 characters.
-// Two rounds with the same fingerprint are the same finding surviving a fix,
-// whatever else the reviewer rephrased around it.
+// first blocking finding, so the SAME identity survives a fixer rephrasing
+// its explanation around a surviving problem, or reordering findings.
+//
+// The reviewer's prompt requires a blocking finding to lead with
+// `BLOCKING <file>:<line> — <slug> — <explanation>`, and to keep `<slug>`
+// byte-identical across rounds while the same underlying problem persists —
+// only `<explanation>` is free to vary ("still not fixed", a shifted line,
+// more detail). When the first BLOCKING (or, failing that, first non-empty)
+// line follows that shape, the fingerprint is `<file>:<line> — <slug>`,
+// normalized. Text that does not — an older thread, a verdict with "no
+// blocking issues", a reviewer that skipped the convention — falls back to
+// the whole line, lower-cased, whitespace-collapsed and cut to 160
+// characters, exactly as before: still an identity, just a weaker one, and
+// never a crash.
 func FindingFingerprint(findings string) string {
-	first := ""
+	chosen := ""
 	for _, line := range strings.Split(findings, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		if first == "" {
-			first = line
+		if chosen == "" {
+			chosen = line
 		}
 		if strings.Contains(strings.ToUpper(line), "BLOCKING") {
-			first = line
+			chosen = line
 			break
 		}
 	}
-	first = strings.ToLower(strings.Join(strings.Fields(first), " "))
-	if r := []rune(first); len(r) > 160 {
-		first = string(r[:160])
+	if chosen == "" {
+		return ""
 	}
-	return first
+	if parts := strings.SplitN(chosen, findingFingerprintEmDash, 3); len(parts) >= 2 {
+		anchor := normalizeFingerprintText(parts[0])
+		anchor = strings.TrimSpace(strings.TrimPrefix(anchor, "blocking"))
+		slug := normalizeFingerprintText(parts[1])
+		if anchor != "" && slug != "" {
+			return cutFingerprintRunes(anchor + " " + findingFingerprintEmDash + " " + slug)
+		}
+	}
+	return cutFingerprintRunes(normalizeFingerprintText(chosen))
+}
+
+// normalizeFingerprintText lower-cases and whitespace-collapses a fragment so
+// two rounds' incidental formatting differences (extra spaces, case) never
+// break an otherwise-identical fingerprint.
+func normalizeFingerprintText(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// cutFingerprintRunes bounds a fingerprint's length — 160 runes, the limit
+// this format has always used — so a pathologically long line cannot grow the
+// state store's comparison key without bound.
+func cutFingerprintRunes(s string) string {
+	if r := []rune(s); len(r) > 160 {
+		return string(r[:160])
+	}
+	return s
 }
 
 // lastFixFinding is the fingerprint the newest pr-fix-started marker recorded:

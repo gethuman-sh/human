@@ -116,3 +116,33 @@ func TestAdvancePRLoop_sameFindingTwiceEscalatesAndNamesIt(t *testing.T) {
 	assert.Contains(t, failed, "x.go:10")
 	assert.Zero(t, l.calls, "no third fixer for a finding the fixer did not resolve")
 }
+
+// The production shape blocking-3 describes: a FIX-stage drive still carries
+// the last review's ReviewFinding (advancePRLoopFunc reads it unconditionally
+// off stage.pr-review, and it is the very value that launched this fixer), so
+// naively comparing it here would ALWAYS read as repeated. A fixer that
+// crashed with no recorded exit must escalate on that — not on a finding the
+// loop never re-reviewed.
+func TestAdvancePRLoop_fixStageNeverReadsFindingAsRepeated(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	finding := FindingFingerprint("BLOCKING — internal/daemon/x.go:10 the guard fires only in round 1")
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "0", Created: base},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "1", Created: base.Add(time.Second)},
+		{Body: prFixStartedBody(finding), ID: "2", Created: base.Add(2 * time.Second)},
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	// The fixer died before writing anything: FixRecorded false, the same
+	// ReviewFinding the daemon always carries forward from the last review.
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewFinding: finding, FixRecorded: false, Agent: "board-SC-1-prfix"}))
+
+	failed, ok := posted(c, PRReviewFailedHeader)
+	require.True(t, ok, "an unrecorded fix-stage exit still escalates")
+	assert.NotContains(t, failed, "same blocking problem twice",
+		"the finding the fixer was JUST sent must never read back as a repeat of itself")
+	assert.Contains(t, failed, "stopped before recording",
+		"the real cause — no exit recorded — must be the one named")
+}

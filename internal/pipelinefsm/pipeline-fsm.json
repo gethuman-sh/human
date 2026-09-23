@@ -1201,9 +1201,9 @@
       "dst": "queued",
       "actor": "daemon",
       "marker": "[human:option-chosen]",
-      "guard": "the fixer named exactly one direction, and the review round budget is not spent",
+      "guard": "the fixer named exactly one direction, and sole-direction pursuits are still under MaxSoleDirectionPursuits (3)",
       "where": "internal/daemon/board_transition.go escalatePRLoop → pursueSoleDirection, which shares board_options.go pursueDecision with the human path",
-      "doc": "The fixer named one way forward, so there is nothing to decide and the daemon pursues it. A choice between one thing is not a choice — it is a continue button dressed as a fork, and awaiting-decision is the one state the machine may not resolve for itself, so the item must never enter it on a single answer (SC-3630). The choice is recorded with the same marker a human's click records, which is why this lands in queued exactly like decision-made: the record is the audit trail and the consumption signal both, and the item is queued for the implementation stage before it is running in one. Bounded by the loop's own review-round budget — past it the direction is reported through pr-loop-escalates rather than taken, so this can never drive an unbounded rebuild loop."
+      "doc": "The fixer named one way forward, so there is nothing to decide and the daemon pursues it. A choice between one thing is not a choice — it is a continue button dressed as a fork, and awaiting-decision is the one state the machine may not resolve for itself, so the item must never enter it on a single answer (SC-3630). The choice is recorded with the same marker a human's click records, which is why this lands in queued exactly like decision-made: the record is the audit trail and the consumption signal both, and the item is queued for the implementation stage before it is running in one. Bounded by MaxSoleDirectionPursuits (3) of its own — a FULL implementation-stage rebuild per pursuit is a heavier loop than review→fix, so it keeps its own, smaller cap rather than following DefaultPRReviewRounds (8) up when that one widened for repetition instead of count (SC-5174); past it the direction is reported through pr-loop-escalates rather than taken, so this can never drive an unbounded rebuild loop."
     }
   ],
   "ownership": {

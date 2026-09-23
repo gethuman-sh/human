@@ -66,6 +66,24 @@ If neither the local ref nor origin yields the branch, record `verdict: unreview
    absence is itself an unexamined-dependents finding: run the taxonomy's
    queries for the kinds the diff triggers and report what you find.
 4. **Record every finding in the verdict.** Your `findings` field is the **authoritative channel** the fixer reads — a board reviewer has no GitHub write path, so this, not the PR thread, is what the next fix pass acts on. Make each finding concrete and line-anchored: file, line, what is wrong, what to change.
+
+   **Lead every blocking finding with this exact shape:**
+   ```
+   BLOCKING <file>:<line> — <short, stable slug> — <explanation>
+   ```
+   The daemon bounds the review→fix loop on REPETITION, not a round count: it
+   fingerprints each round's leading blocking line on `<file>:<line>` +
+   `<slug>` and escalates instead of dispatching another fix when a round
+   reports the SAME fingerprint as the one the fixer was just sent. That only
+   works if `<slug>` is your stable identity for the problem — 3–8 words, no
+   punctuation beyond spaces and hyphens — and you keep it byte-identical
+   across rounds for the SAME underlying problem. `<explanation>` is free to
+   vary round to round ("still not fixed", a shifted line, more detail,
+   different wording) without breaking the match. Give a genuinely NEW problem
+   a NEW slug — reusing one across two different problems would make the loop
+   think a fresh finding is the old one repeating, and it would fix the wrong
+   thing forever. Findings that are not BLOCKING (nits, non-blocking notes) are
+   not fingerprinted and need no particular shape.
 5. **Post inline PR comments — best-effort, for humans.** When a `gh` write path exists, also mirror your findings onto the PR so humans reading it see them. Anchor to the origin head, not your local SHA (the local commit may not be pushed yet), and never let a failed post change your verdict:
    ```bash
    ORIGIN_SHA=$(gh pr view <PR> --json headRefOid -q .headRefOid 2>/dev/null) && \
@@ -89,7 +107,7 @@ human state set <WORK_KEY> stage.pr-review --json --body-file - <<'EOF'
  "verdict":"<approved|changes-requested|unreviewable>",
  "head":"<the branch-tip SHA you reviewed>",
  "blocking":<count of blocking findings>,
- "findings":"<the substance of what you found, file:line each, or 'no blocking issues' — this is what the fixer acts on>",
+ "findings":"<each blocking finding leads with 'BLOCKING <file>:<line> — <slug> — <explanation>' (see step 4), or 'no blocking issues' — this is what the fixer acts on>",
  "summary":"<one line>"}
 EOF
 ```

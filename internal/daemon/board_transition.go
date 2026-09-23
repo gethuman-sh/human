@@ -1218,7 +1218,16 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		return nil
 	}
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), prLoopBranch(comments, card)
-	outcome.FindingRepeated = findingRepeated(comments, outcome.ReviewFinding)
+	// FindingRepeated only means something at the review stage: it asks whether
+	// THIS review's finding is the one the fixer was just sent. On a fix-stage
+	// drive outcome.ReviewFinding still carries the LAST review's fingerprint —
+	// the same value that launched this very fixer via prFixStartedBody below —
+	// so comparing it here would always read true and falsely blame a
+	// fix-stage escalation (a crashed fixer, an unclassifiable exit) on a
+	// repeated finding it never re-reviewed (SC-5174).
+	if latestPRLoopStage(comments) == PRStageReview {
+		outcome.FindingRepeated = findingRepeated(comments, outcome.ReviewFinding)
+	}
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
 		_, err := d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
@@ -1326,7 +1335,7 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 		case len(opts) >= marker.MinDecisionOptions:
 			m, order := optionsMarker(BoardImplementation, decisionContext(outcome), opts)
 			return postMarker(ctx, d.Commenter, pmKey, m, order...)
-		case len(opts) == 1 && prReviewRounds(comments) < DefaultPRReviewRounds:
+		case len(opts) == 1 && prReviewRounds(comments) < MaxSoleDirectionPursuits:
 			return d.pursueSoleDirection(ctx, pmKey, comments, opts[0])
 		}
 		// No directions — or one the round budget can no longer afford to
