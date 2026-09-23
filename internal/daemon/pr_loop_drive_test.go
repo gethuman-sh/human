@@ -123,3 +123,70 @@ func TestAdvancePRLoop_mergedPRIsReportedMergedNotFailed(t *testing.T) {
 	assert.False(t, failed, "a merged PR that cannot be un-drafted is merged, not failed")
 	assert.Zero(t, p.markReadyCall, "nothing to un-draft on merged work")
 }
+
+// A loop started by `human deploy --branch` has no ready-for-review handoff;
+// its branch lives on its own pr-review-started marker. The merge step and the
+// approval marker must use it, or the engine pushes an empty branch (SC-5119).
+func TestAdvancePRLoop_cliStartedLoopMergesTheStartMarkersBranch(t *testing.T) {
+	const head = "0123456789abcdef0123456789abcdef01234567"
+	base := time.Now().Add(-time.Minute)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:deploy-started]\nbranch: feat/x", ID: "1", Created: base},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "2", Created: base.Add(time.Second)},
+	}}
+	p := &fakeDeployer{res: PRResult{Number: 7, URL: "u"}, checks: []forge.ChecksState{forge.ChecksPassing}, mergeable: true}
+	deps := newDeps(c, &fakeLauncher{}, p)
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewVerdict: PRVerdictApproved, ReviewRecorded: true, ReviewHead: head}))
+
+	assert.Equal(t, "feat/x", p.req.Branch, "the engine must ship the loop's branch, not an empty handoff branch")
+	assert.Equal(t, 1, p.merged)
+	passed, ok := posted(c, PRReviewPassedHeader)
+	require.True(t, ok)
+	assert.Contains(t, passed, "branch: feat/x")
+	got, bound := currentApproval(c.comments, "feat/x")
+	assert.True(t, bound, "a re-run deploy must be able to reuse this approval")
+	assert.Equal(t, head, got)
+}
+
+// The fixer dispatch carries the same branch, so a CLI-started loop's fixer
+// works the reviewed branch rather than an empty one.
+func TestAdvancePRLoop_cliStartedLoopDispatchesTheFixerOnTheBranch(t *testing.T) {
+	base := time.Now().Add(-time.Minute)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "1", Created: base},
+	}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+		PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true}))
+
+	assert.Equal(t, "/human-pr-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
+}
+
+// prLoopBranch prefers the start marker's own branch, but a marker posted
+// before this fix (or a reconcile pass reading an older thread) may carry
+// none — the handoff-driven, board-started case both existing loops otherwise
+// exercise only through threads where the two sources agree. The fallback must
+// still resolve to the handoff branch rather than an empty string.
+func TestPrLoopBranch_fallsBackToHandoffWhenStartMarkerCarriesNone(t *testing.T) {
+	comments := []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1", Created: time.Unix(1, 0)},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7", ID: "2", Created: time.Unix(2, 0)},
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, "feat/x", prLoopBranch(comments, card))
+}
+
+// The ordinary case: the start marker's own branch wins even when it differs
+// from the handoff, which is the whole point of reading it (SC-5119).
+func TestPrLoopBranch_prefersStartMarkerOverHandoff(t *testing.T) {
+	comments := []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/old", ID: "1", Created: time.Unix(1, 0)},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/new", ID: "2", Created: time.Unix(2, 0)},
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, "feat/new", prLoopBranch(comments, card))
+}

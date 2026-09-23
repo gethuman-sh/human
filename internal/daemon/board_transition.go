@@ -1002,7 +1002,7 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 		return nil
 	}
 	// The title is only used on a fresh create; the approval path adopts.
-	res, err := d.openDraftPR(ctx, pmKey, card.Branch, pmKey, doneBody(pmKey, card))
+	res, err := d.openDraftPR(ctx, pmKey, card.Branch, pmKey, doneBody(pmKey, card, card.Branch))
 	if err != nil {
 		return err
 	}
@@ -1131,6 +1131,20 @@ func prLoopURL(comments []tracker.Comment) string {
 	return latestPrefixedLine(comments, PRReviewStartedHeader, "pr:")
 }
 
+// prLoopBranch is the branch the loop is reviewing: the one its own start
+// marker recorded, and only failing that the card's handoff branch. The loop
+// used to read the handoff alone, and a loop started by `human deploy --branch`
+// has none — so the reviewer approved, the approval marker named no branch,
+// and the merge step pushed an empty branch and reddened the card (SC-5119,
+// the first deploys through the SC-5097 route). The start marker is the
+// binding the loop already trusts for the PR number and URL.
+func prLoopBranch(comments []tracker.Comment, card BoardCard) string {
+	if branch := strings.TrimSpace(latestPrefixedLine(comments, PRReviewStartedHeader, "branch:")); branch != "" {
+		return branch
+	}
+	return card.Branch
+}
+
 // AdvancePRLoop is the deploy-stage loop executor. On each reviewer/fixer exit
 // the failure watcher calls it with the outcome the step recorded in the state
 // store (reviewVerdict or fixExit); it reads the loop's markers, asks the pure
@@ -1149,7 +1163,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		return errors.WrapWithDetails(err, "loading comments for PR loop", "pm", pmKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	number, url, branch := prLoopNumber(comments), prLoopURL(comments), card.Branch
+	number, url, branch := prLoopNumber(comments), prLoopURL(comments), prLoopBranch(comments, card)
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
 		_, err := d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
@@ -1185,7 +1199,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		}
 		// Reuse the untouched deploy engine: it adopts the now-ready open PR
 		// (forge.AdoptOrCreatePullRequest), runs the CI gate, freshness rebase and merge.
-		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), branch)
+		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card, branch), branch)
 	default: // PRActionEscalate
 		return d.escalatePRLoop(ctx, pmKey, comments, outcome)
 	}
@@ -1368,6 +1382,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		return errors.WrapWithDetails(err, "loading comments for deploy fix", "pm", pmKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	branch := prLoopBranch(comments, card)
 	if fixExit == ExitDone {
 		// The fixer resolved the conflict in a container that holds no push
 		// credentials, exactly like every other board fixer — so its deliverable is
@@ -1376,12 +1391,19 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		// reads the branch from origin (branchTip prefers the origin ref), so an
 		// unpublished resolution would be silently discarded and the same conflict
 		// re-hit (SC-2845).
-		if _, err := d.Deployer.PublishResolvedBranch(ctx, d.WorkspaceDir, card.Branch); err != nil {
+		//
+		// The branch comes from prLoopBranch, not card.Branch directly: a
+		// handoff-less loop (`human deploy --branch`) reaches the deploy-fixer with
+		// the correct branch (dispatchDeployFixer takes it as a parameter), but
+		// card.Branch is filled only from the ready-for-review handoff and is empty
+		// here — the same empty-branch failure SC-5119 fixed one step earlier
+		// (SC-5119 follow-up).
+		if _, err := d.Deployer.PublishResolvedBranch(ctx, d.WorkspaceDir, branch); err != nil {
 			return d.deployFailed(pmKey, "", deployReason(
-				"the deploy fixer's resolution could not be published to "+card.Branch+" — check the branch, then re-run Deploy",
+				"the deploy fixer's resolution could not be published to "+branch+" — check the branch, then re-run Deploy",
 				err))
 		}
-		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card), card.Branch)
+		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card, branch), branch)
 	}
 	// SC-3857: the done stage was already declared dead by an earlier escalation
 	// with no relaunch since (a dispatch that actually started a fixer posts
@@ -1470,7 +1492,7 @@ var deployGate sync.Mutex
 func (d BoardTransitionDeps) deploy(ctx context.Context, req BoardTransitionRequest, card BoardCard) {
 	// The board reads the outcome from the posted markers; the returned error
 	// exists for CLI callers that need an exit code.
-	_ = d.DeployBranch(ctx, req.PMKey, req.PMTitle, doneBody(req.PMKey, card), card.Branch)
+	_ = d.DeployBranch(ctx, req.PMKey, req.PMTitle, doneBody(req.PMKey, card, card.Branch), card.Branch)
 }
 
 // settleDraft decides a pull request the machine review loop is still holding,
@@ -2322,14 +2344,18 @@ func isDeployRetry(to BoardStage, card BoardCard) bool {
 }
 
 // doneBody builds the PR description with the PM→engineering→branch trail.
-func doneBody(pmKey string, card BoardCard) string {
+// branch is taken as its own parameter rather than read off card.Branch: a
+// handoff-less loop (`human deploy --branch`) has no card.Branch, and a caller
+// driving the loop's own derived branch (prLoopBranch) would otherwise see it
+// silently dropped from the PR body.
+func doneBody(pmKey string, card BoardCard, branch string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "PM ticket: %s\n", pmKey)
 	if card.EngineeringKey != "" {
 		fmt.Fprintf(&b, "Engineering ticket: %s\n", card.EngineeringKey)
 	}
-	if card.Branch != "" {
-		fmt.Fprintf(&b, "Branch: %s\n", card.Branch)
+	if branch != "" {
+		fmt.Fprintf(&b, "Branch: %s\n", branch)
 	}
 	return b.String()
 }
