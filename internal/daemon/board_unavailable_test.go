@@ -127,6 +127,7 @@ func TestHandleBoardAgentExit_AuthRefusalReachesRecorder(t *testing.T) {
 		want      []string
 	}{
 		{"authentication_error", []string{"SC-1"}},
+		{"authentication_failed", []string{"SC-1"}},
 		{"billing_error", nil},
 		{"rate_limit", nil},
 	} {
@@ -231,6 +232,30 @@ func TestParseResumeTime(t *testing.T) {
 			if tc.ok {
 				require.True(t, got.Equal(tc.want), "got %s want %s", got, tc.want)
 			}
+		})
+	}
+}
+
+// The PR-review, PR-fix and deploy-fix exits are driven by their own executors
+// and return before the generic path records anything — so a reviewer that
+// died at authentication taught the doctor nothing and the loop kept launching
+// reviewers into the same dead login (SC-5108). The refusal reaches the
+// recorder from those paths too.
+func TestLoopExits_AuthRefusalReachesRecorder(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	for _, agent := range []string{"board-SC-1-prreview", "board-SC-1-prfix", "board-SC-1-deployfix"} {
+		t.Run(agent, func(t *testing.T) {
+			var refused []string
+			deps := FailureDeps{
+				CommenterFor:     func() (tracker.Commenter, error) { return &syncCommenter{}, nil },
+				AdvancePRLoop:    func(string, string, string) error { return nil },
+				AdvanceDeployFix: func(string) error { return nil },
+				OnAuthRefused:    func(pmKey string) { refused = append(refused, pmKey) },
+				DaemonID:         "d1",
+				Logger:           zerolog.Nop(),
+			}
+			handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: agent, ErrorType: "authentication_failed", EventName: "StopFailure"}, deps)
+			require.Equal(t, []string{"SC-1"}, refused)
 		})
 	}
 }

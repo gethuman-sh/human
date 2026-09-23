@@ -411,3 +411,77 @@ func TestAdvancePRLoop_approvalRecordsTheReviewedHead(t *testing.T) {
 	assert.True(t, bound)
 	assert.Equal(t, head, got)
 }
+
+// The launch gate is asked before anything is recorded or pushed: a host that
+// cannot launch the reviewer refuses like the other two refusals — no marker,
+// nothing moved — instead of pushing, printing "review started" and leaving
+// the card in deploying with nothing behind it (SC-5108).
+func TestStartDeploy_gateRefusedReviewerRefusesBeforeAnythingIsRecorded(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{res: PRResult{Number: 42, URL: "https://example/pr/42", Draft: true}}
+	deps, l := reviewableDeps(c, p)
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "login wiped"}}
+	}
+
+	_, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.Error(t, err)
+	assert.True(t, stderrors.Is(err, ErrDeployReviewUnavailable))
+	assert.Empty(t, c.added, "a refusal posts no marker")
+	assert.Zero(t, p.call, "nothing is pushed")
+	assert.Zero(t, l.calls)
+}
+
+// --ready needs no reviewer, so the gate does not apply to it.
+func TestStartDeploy_readyIgnoresTheReviewerGate(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{alreadyMerged: true}
+	deps, _ := reviewableDeps(c, p)
+	deps.MergeDraftPR = true
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "login wiped"}}
+	}
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeShipped, res.Outcome)
+}
+
+// A reviewer already owning the step on this machine is a review that is,
+// truthfully, started: its marker stands and its exit drives the loop.
+func TestStartDeploy_reviewerAlreadyRunningIsAStartedReview(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{res: PRResult{Number: 42, URL: "https://example/pr/42", Draft: true}}
+	deps, l := reviewableDeps(c, p)
+	l.err = ErrAgentAlreadyRunning
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeReviewStarted, res.Outcome)
+	_, failed := posted(c, DeployFailedHeader)
+	assert.False(t, failed, "an owned step is not a failure")
+}
+
+// The deploy fixer is only the remedy for a deploy that already failed. When
+// the gate refuses the remedy, the failure itself is recorded — not swallowed
+// as a fixer "already running" (SC-5108, round 4).
+func TestDispatchDeployFixer_gateRefusalRecordsTheDeployFailure(t *testing.T) {
+	c := &fakeCommenter{}
+	deps, l := reviewableDeps(c, &fakeDeployer{})
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "login wiped"}}
+	}
+
+	err := deps.dispatchDeployFixer(context.Background(), "SC-1", PRResult{Number: 7, URL: "u"}, "feat/x", "CI checks failed on the pull request")
+
+	require.Error(t, err)
+	assert.Zero(t, l.calls)
+	failed, ok := posted(c, DeployFailedHeader)
+	require.True(t, ok, "the deploy failure must be on the ticket")
+	assert.Contains(t, failed, "CI checks failed")
+	_, fixStarted := posted(c, DeployFixStartedHeader)
+	assert.False(t, fixStarted)
+}

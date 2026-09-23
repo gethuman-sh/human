@@ -235,11 +235,34 @@ func checkAgentSkills(reg *daemon.ProjectRegistry) (bool, string) {
 // ACCESS token alone is the normal resting state between agent runs — Claude
 // Code refreshes it on launch — so only an expired token WITHOUT a refresh
 // token is a dead session the user must fix (SC-912).
+//
+// AccessToken and RefreshToken are *string, not string, so a KEY ABSENT from
+// the JSON (nil) is distinguishable from a key PRESENT with an empty value
+// (non-nil, ""). Only the latter pair is positive evidence of a wipe; a store
+// whose two token keys are missing — a field rename, exactly the schema drift
+// claudeStoreAt otherwise fails open on — must not read as signed out (SC-5108).
 type claudeCreds struct {
 	ClaudeAiOauth struct {
-		ExpiresAt    int64  `json:"expiresAt"`
-		RefreshToken string `json:"refreshToken"` // #nosec G117 -- read for presence only; the value is never logged, compared, or persisted
+		ExpiresAt    int64   `json:"expiresAt"`
+		AccessToken  *string `json:"accessToken"`  // #nosec G117 -- read for presence only; the value is never logged, compared, or persisted
+		RefreshToken *string `json:"refreshToken"` // #nosec G117 -- read for presence only; the value is never logged, compared, or persisted
+		// SubscriptionType and Scopes are what a signed-OUT store keeps: Claude
+		// Code clears the tokens when the auth server rejects the refresh and
+		// leaves the rest of the block. They are the evidence that the empty
+		// tokens are a wiped login rather than schema drift.
+		SubscriptionType string   `json:"subscriptionType"`
+		Scopes           []string `json:"scopes"`
 	} `json:"claudeAiOauth"`
+}
+
+// strOrEmpty reads a possibly-absent JSON string field as "", collapsing the
+// nil/empty distinction back down for every use EXCEPT the signed-out check,
+// which needs presence, not just value (see claudeCreds).
+func strOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // claudeStoreState is what one project's host credential store says about its
@@ -248,9 +271,10 @@ type claudeCreds struct {
 type claudeStoreState int
 
 const (
-	claudeStoreOK      claudeStoreState = iota // usable, or unjudgeable and therefore not blamed
-	claudeStoreAbsent                          // no store at all — never signed in
-	claudeStoreExpired                         // signed in once, session dead and unrefreshable
+	claudeStoreOK        claudeStoreState = iota // usable, or unjudgeable and therefore not blamed
+	claudeStoreAbsent                            // no store at all — never signed in
+	claudeStoreExpired                           // signed in once, session dead and unrefreshable
+	claudeStoreSignedOut                         // signed in once, tokens since wiped — the block survives, the login does not
 )
 
 // claudeStoreAt classifies one project's host credential store.
@@ -264,7 +288,17 @@ const (
 //
 // An empty claudeAiOauth block stays OK deliberately. It is indistinguishable
 // from schema drift — a renamed field leaves the block looking empty too — and
-// the fields read here are too few to tell the two apart.
+// the fields read here are too few to tell the two apart. A block that still
+// carries the subscription type or scopes of a past login but no tokens is not
+// empty: Claude Code wipes the tokens when the auth server rejects the refresh
+// and leaves the rest, and that store looked "valid" here for a day while every
+// agent launched into it died at authentication (SC-5108).
+//
+// "No tokens" itself has the same ambiguity one level down: accessToken and
+// refreshToken ABSENT from the JSON is schema drift (still not positive
+// evidence — fails open), while both PRESENT and empty is the wipe Claude Code
+// actually performs. claudeCreds keeps that distinction as *string; only the
+// latter, together with surviving account evidence, reads as signed out.
 func claudeStoreAt(path string, nowMS int64) claudeStoreState {
 	raw, err := os.ReadFile(path) // #nosec G304 -- path is built from the daemon's own project registry dirs, not external input
 	if err != nil {
@@ -277,28 +311,36 @@ func claudeStoreAt(path string, nowMS int64) claudeStoreState {
 	if err := json.Unmarshal(raw, &creds); err != nil {
 		return claudeStoreOK // fail-open: schema drift must not block launches
 	}
-	if creds.ClaudeAiOauth.ExpiresAt == 0 {
+	tok := creds.ClaudeAiOauth
+	tokensWiped := tok.AccessToken != nil && tok.RefreshToken != nil &&
+		*tok.AccessToken == "" && *tok.RefreshToken == ""
+	if tokensWiped && (tok.SubscriptionType != "" || len(tok.Scopes) > 0) {
+		return claudeStoreSignedOut
+	}
+	if tok.ExpiresAt == 0 {
 		return claudeStoreOK // fail-open: no expiry recorded → cannot judge freshness
 	}
 	// An expired ACCESS token with a refresh token present is the normal resting
 	// state between agent runs — the next launched Claude refreshes it silently.
 	// Only a session that can no longer refresh is dead.
-	if creds.ClaudeAiOauth.RefreshToken != "" {
+	if strOrEmpty(tok.RefreshToken) != "" {
 		return claudeStoreOK
 	}
-	if creds.ClaudeAiOauth.ExpiresAt <= nowMS {
+	if tok.ExpiresAt <= nowMS {
 		return claudeStoreExpired
 	}
 	return claudeStoreOK
 }
 
-// checkClaudeAuth catches the three states in which every launched agent dies at
+// checkClaudeAuth catches the four states in which every launched agent dies at
 // Claude auth while the daemon keeps competing for board work: a session that
 // expired past refreshing (SC-912, ~15s deaths), a credential store that was
 // never signed in at all (SC-4686, ~7s deaths with "Not logged in · Please run
-// /login"), and a refresh token the auth server rejects (SC-5036). The last
+// /login"), a refresh token the auth server rejects (SC-5036), and a store
+// Claude Code has since wiped the tokens from after that rejection while
+// leaving the account evidence behind (SC-5108). The refresh-rejected state
 // looks healthy on disk, so it is judged from refusals: a board run on the
-// store that died at authentication, with the store unchanged since. All three
+// store that died at authentication, with the store unchanged since. All four
 // are launch-critical, so reporting them refuses the pickup instead of spending
 // a stage's retry budget on a container that cannot work.
 //
@@ -307,7 +349,7 @@ func claudeStoreAt(path string, nowMS int64) claudeStoreState {
 // copy of .credentials.json. claudeStoreAt holds which states are judgeable.
 func checkClaudeAuth(reg *daemon.ProjectRegistry, refusals *claudeAuthRefusals) (bool, string) {
 	nowMS := time.Now().UnixMilli()
-	var absent, expired, refused []string
+	var absent, expired, signedOut, refused []string
 	for _, entry := range reg.Entries() {
 		store := containerClaudeStore(entry.Dir)
 		switch claudeStoreAt(store, nowMS) {
@@ -315,6 +357,8 @@ func checkClaudeAuth(reg *daemon.ProjectRegistry, refusals *claudeAuthRefusals) 
 			absent = append(absent, entry.Dir)
 		case claudeStoreExpired:
 			expired = append(expired, entry.Dir)
+		case claudeStoreSignedOut:
+			signedOut = append(signedOut, entry.Dir)
 		case claudeStoreOK:
 			if refusals.refused(store, fileStamp(store)) {
 				refused = append(refused, entry.Dir)
@@ -327,6 +371,9 @@ func checkClaudeAuth(reg *daemon.ProjectRegistry, refusals *claudeAuthRefusals) 
 	}
 	if len(expired) > 0 {
 		faults = append(faults, "Claude session expired for "+strings.Join(expired, ", "))
+	}
+	if len(signedOut) > 0 {
+		faults = append(faults, "Claude login wiped for "+strings.Join(signedOut, ", ")+" (the store keeps the account but no tokens — the last refresh was rejected)")
 	}
 	if len(refused) > 0 {
 		faults = append(faults, "Claude refused the login of "+strings.Join(refused, ", ")+" (its refresh token was rejected)")

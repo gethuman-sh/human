@@ -659,7 +659,13 @@ func drivePRLoopExit(exit RunExit, deps FailureDeps) bool {
 	if exit.Stage != prReviewAgentStage && exit.Stage != prFixAgentStage {
 		return false
 	}
-	if kind, reason := classifyErrorType(exit.ErrorType); kind == endingPaused {
+	kind, reason := classifyErrorType(exit.ErrorType)
+	// The doctor learns a dead container login only from exits; a reviewer that
+	// died at authentication used to teach it nothing, because this path
+	// returned before the generic one recorded the refusal, and the loop kept
+	// launching reviewers into the same wall (SC-5108).
+	deps.noteAuthRefusal(exit.PMKey, kind, reason)
+	if kind == endingPaused {
 		logger.Info().Str("pm", exit.PMKey).Str("stage", string(exit.Stage)).Str("agent", exit.AgentName).
 			Str("reason", reason).
 			Msg("board PR loop: substrate failure mid-run, not treating it as the step's exit")
@@ -682,6 +688,10 @@ func driveDeployFixExit(exit RunExit, deps FailureDeps) bool {
 	if exit.Stage != deployFixAgentStage {
 		return false
 	}
+	// Same evidence the PR-loop path records: a fixer that died at
+	// authentication is a dead login, not a failed fix (SC-5108).
+	kind, reason := classifyErrorType(exit.ErrorType)
+	deps.noteAuthRefusal(exit.PMKey, kind, reason)
 	deps.handoff(exit.AgentName)
 	if deps.AdvanceDeployFix != nil {
 		if err := deps.AdvanceDeployFix(exit.PMKey); err != nil {

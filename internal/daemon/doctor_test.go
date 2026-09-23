@@ -290,9 +290,13 @@ func TestServer_BoardFixProceedsWhenHealthy(t *testing.T) {
 	assert.True(t, launched)
 }
 
-// Deploy (the done stage) merges and closes without an agent — a red docker
-// LED must not stop shipping already-reviewed work.
-func TestServer_DeployTransitionNotGated(t *testing.T) {
+// SC-5108: the done stage is NOT launch-free — runDoneStage opens the draft PR
+// and launches the reviewer whenever the branch is not already merged, so a
+// red doctor check must refuse a done-stage drag exactly like any other
+// agent-launching transition. (Before SC-5108 this carve-out let the very
+// next Deploy launch a reviewer into a claude-auth store the doctor had
+// already marked dead.)
+func TestServer_DeployTransitionGated(t *testing.T) {
 	var applied bool
 	addr := startDoctorTestServer(t, func(s *Server) {
 		s.Doctor = doctorWithChecks(failing("docker", "engine unreachable"))
@@ -300,11 +304,16 @@ func TestServer_DeployTransitionNotGated(t *testing.T) {
 	})
 
 	resp := sendRequest(t, addr, Request{Token: "tok", Args: []string{"board-transition", `{"pm_key":"1","pm_title":"t","from":"verification","to":"done"}`}})
-	require.Equal(t, 0, resp.ExitCode, resp.Stderr)
-	assert.True(t, applied, "deploy launches no agent and must not be doctor-gated")
-
-	// The same failing docker check DOES gate an agent-launching transition.
-	resp = sendRequest(t, addr, Request{Token: "tok", Args: []string{"board-transition", `{"pm_key":"1","pm_title":"t","from":"backlog","to":"planning"}`}})
 	require.NotEqual(t, 0, resp.ExitCode)
 	assert.Contains(t, resp.Stderr, "engine unreachable")
+	assert.False(t, applied, "a done-stage drag must not run while the launch gate is red")
+
+	// A healthy doctor lets the same transition through.
+	addr = startDoctorTestServer(t, func(s *Server) {
+		s.Doctor = doctorWithChecks(passing("docker"))
+		s.BoardTransitioner = func(BoardTransitionRequest) error { applied = true; return nil }
+	})
+	resp = sendRequest(t, addr, Request{Token: "tok", Args: []string{"board-transition", `{"pm_key":"1","pm_title":"t","from":"verification","to":"done"}`}})
+	require.Equal(t, 0, resp.ExitCode, resp.Stderr)
+	assert.True(t, applied)
 }

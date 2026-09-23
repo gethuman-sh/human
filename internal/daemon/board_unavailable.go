@@ -67,7 +67,13 @@ func classifyErrorType(errorType string) (endingKind, string) {
 	// than a stage that decided something wrong (SC-4026).
 	case t == "server_error" || t == "api_error":
 		return endingPaused, "model API returned an error"
-	case t == "authentication_error" || t == "auth":
+	// "authentication_failed" is what the hook actually sends for a login the
+	// auth server would not refresh ("OAuth session expired and could not be
+	// refreshed"); the two older spellings are kept for events written before
+	// that was measured. Matching the prefix keeps the next spelling from
+	// falling through to an unknown crash that spends the retry budget on a
+	// container that cannot work (SC-5108).
+	case strings.HasPrefix(t, "authentication") || t == "auth":
 		return endingNeedsPerson, authRefusedReason
 	case strings.Contains(t, "billing") || strings.Contains(t, "credit"):
 		return endingNeedsPerson, "model API billing/credit limit reached"

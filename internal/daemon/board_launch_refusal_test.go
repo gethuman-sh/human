@@ -133,6 +133,63 @@ func TestLaunchPRLoopAgent_RefusalPostsNoStartedMarker(t *testing.T) {
 	assert.Empty(t, c.added, "neither a step that did not run nor a failure that did not happen")
 }
 
+// SC-5108: a daemon whose host fails a launch-critical doctor check (a dead
+// claude-auth store) must not launch the NEXT reviewer/fixer either — the
+// gate that stops startAgentStage must stop the no-claim loop steps too, or
+// the very next re-run walks a fresh container into the same refused login.
+func TestLaunchPRLoopAgent_LaunchGateSkipsLaunch(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "session expired"}}
+	}
+
+	launched, err := deps.launchPRLoopAgent(context.Background(), "SC-1", prReviewAgentStage,
+		"/human-pr-review SC-1", PRReviewStartedHeader)
+
+	require.ErrorIs(t, err, ErrLaunchGateRefused, "a gate refusal is reported as its own outcome, never mistaken for a step already owned")
+	assert.False(t, launched)
+	assert.Zero(t, l.calls, "gated daemon must not launch")
+	assert.Empty(t, c.added, "gated daemon must post no started or failed marker")
+}
+
+// Same gate, the deploy-fixer's launch site (SC-5108).
+func TestLaunchDeployFixAgent_LaunchGateSkipsLaunch(t *testing.T) {
+	c := &fakeCommenter{}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "session expired"}}
+	}
+
+	launched, err := deps.launchDeployFixAgent(context.Background(), "SC-1", "/human-deploy-fix SC-1")
+
+	require.ErrorIs(t, err, ErrLaunchGateRefused, "a gate refusal is reported, so no caller mistakes it for a fixer already running")
+	assert.False(t, launched)
+	assert.Zero(t, l.calls, "gated daemon must not launch")
+	assert.Empty(t, c.added, "gated daemon must post no started or failed marker")
+}
+
+// End to end through openDraftPRAndReview: a done-stage drag on a gated
+// daemon must open no reviewer either (SC-5108).
+func TestOpenDraftPRAndReview_LaunchGateSkipsLaunch(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7}}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, p)
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "session expired"}}
+	}
+
+	require.ErrorIs(t, deps.openDraftPRAndReview(context.Background(), "SC-1", BoardCard{Branch: "feat/x"}), ErrLaunchGateRefused)
+
+	assert.Zero(t, l.calls, "gated daemon must not launch the reviewer")
+	for _, body := range c.added {
+		assert.NotContains(t, body, PRReviewStartedHeader)
+	}
+}
+
 // A refused fixer must not advance the loop's stage or spend a review round:
 // the step that is actually running drives the next action from its own exit.
 func TestAdvancePRLoop_RefusedFixLaunchLeavesLoopStageUnchanged(t *testing.T) {

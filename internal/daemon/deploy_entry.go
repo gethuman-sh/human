@@ -112,6 +112,15 @@ func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployReq
 			"deploy refused: the machine pull-request review needs the running daemon — start it and re-run, or re-run with --ready to ship without the review",
 			"pm", req.PMKey)
 	}
+	// The launch gate is asked BEFORE anything is recorded or pushed, like the
+	// other two refusals: a host that cannot launch the reviewer is a condition
+	// of the machine, not of the ticket, so it posts no marker and moves no
+	// item — the same rule the staged launch keeps (SC-5108).
+	if !d.MergeDraftPR && d.launchGateBlocked(ctx, req.PMKey, prReviewAgentStage) {
+		return StartDeployResult{}, errors.WrapWithDetails(ErrDeployReviewUnavailable,
+			"deploy refused: this host cannot launch the machine reviewer right now — see `human doctor` for the blocker, fix it and re-run, or re-run with --ready to ship without the review",
+			"pm", req.PMKey)
+	}
 	if err := d.recordDeployStart(ctx, req, override); err != nil {
 		return StartDeployResult{}, err
 	}
@@ -202,7 +211,16 @@ func (d BoardTransitionDeps) reviewThenShip(ctx context.Context, req StartDeploy
 	_, err = d.launchPRLoopAgent(ctx, req.PMKey, prReviewAgentStage,
 		prReviewDispatch(req.PMKey, res.Number, req.Branch),
 		prReviewStartedBody(res.URL, res.Number, req.Branch))
-	return StartDeployResult{Outcome: DeployOutcomeReviewStarted, PRURL: res.URL, PRNumber: res.Number}, err
+	if err != nil {
+		// A gate that went red between the pre-check above and this launch
+		// surfaces as ErrLaunchGateRefused: a host condition, so no marker — the
+		// caller reports it and the item is left where the start marker put it.
+		return shipped, err
+	}
+	// launched == false with no error is a reviewer already owning this step
+	// on this machine: its marker stands and its exit drives the loop, so the
+	// review is, truthfully, started.
+	return StartDeployResult{Outcome: DeployOutcomeReviewStarted, PRURL: res.URL, PRNumber: res.Number}, nil
 }
 
 // approvalCoversPR reports whether a still-current machine approval judged the

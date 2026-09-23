@@ -27,6 +27,15 @@ import (
 // contract sentinel at the boundary (SC-1419).
 var ErrAgentAlreadyRunning = stderrors.New("agent already running")
 
+// ErrLaunchGateRefused is a launch the doctor's launch gate turned away: the
+// host cannot serve it (a dead claude-auth store, no docker). It is a sentinel
+// so a caller can tell it from the other launch that started nothing — an
+// agent already owning the step — because the two mean opposite things: one is
+// work in progress whose own exit drives the next action, the other is a host
+// condition that belongs to the machine, posts no marker and moves no item
+// (SC-5108).
+var ErrLaunchGateRefused = stderrors.New("the launch gate refused this launch")
+
 // AgentLauncher launches a containerized agent for a board stage. It is an
 // interface so the transition engine is testable without Docker. An
 // implementation returns ErrAgentAlreadyRunning when the stage's agent is
@@ -690,6 +699,29 @@ func (d BoardTransitionDeps) setTicketOwner(pmKey string) {
 	}
 }
 
+// launchGateBlocked reports whether a launch-critical doctor check (docker,
+// agent-skills, claude-auth, egress) is currently failing on this daemon's
+// host, logging the blocking check so the skip is visible in this host's log.
+// EVERY launch path consults this before starting a container — the staged
+// launch (startAgentStage), the no-claim PR-loop steps (launchPRLoopAgent) and
+// the deploy fixer (launchDeployFixAgent) alike — because a claude-auth store
+// the doctor has marked dead stays dead until a fresh login rewrites it: the
+// very next launch on any of these paths would walk a container into the same
+// refused login, exactly the loop SC-5108 exists to stop (SC-912, SC-5036).
+func (d BoardTransitionDeps) launchGateBlocked(ctx context.Context, pmKey string, stage BoardStage) bool {
+	if d.LaunchGate == nil {
+		return false
+	}
+	blockers := d.LaunchGate(ctx)
+	if len(blockers) == 0 {
+		return false
+	}
+	d.Logger.Warn().
+		Str("pm", pmKey).Str("stage", string(stage)).Str("check", blockers[0].ID).
+		Msg("board stage launch skipped: launch-critical doctor check failing; leaving work for a healthy daemon")
+	return true
+}
+
 // requiresPlan declares that this launch executes a pre-written plan, so the
 // stage must not start on a ticket that has none (SC-2596). It is true for every
 // route that carries out a plan (the forward drag into implementation, the
@@ -697,18 +729,11 @@ func (d BoardTransitionDeps) setTicketOwner(pmKey string) {
 // for the self-contained fix pipelines (autofix, security-fix), which produce
 // their plan within the run.
 func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, stage BoardStage, startedHeader, prompt string, cause WaitCause, requiresPlan bool) (launched bool, err error) {
-	// Launch gate: a daemon whose host fails a launch-critical doctor check
-	// (docker, agent-skills, claude-auth, egress) cannot serve this stage. Refuse before
-	// the claim so NO [human:claim] is posted — the work is left unclaimed for a
-	// healthy daemon and the failure surfaces only on this host, never as a ticket
-	// marker (SC-912). Returning nil is a silent skip-and-leave, not an error.
-	if d.LaunchGate != nil {
-		if blockers := d.LaunchGate(ctx); len(blockers) > 0 {
-			d.Logger.Warn().
-				Str("pm", pmKey).Str("stage", string(stage)).Str("check", blockers[0].ID).
-				Msg("board stage launch skipped: launch-critical doctor check failing; leaving work for a healthy daemon")
-			return false, nil
-		}
+	// Launch gate: refuse before the claim so NO [human:claim] is posted — the
+	// work is left unclaimed for a healthy daemon and the failure surfaces only
+	// on this host, never as a ticket marker (SC-912).
+	if d.launchGateBlocked(ctx, pmKey, stage) {
+		return false, nil
 	}
 	// Dependency gate: work someone deliberately sequenced behind another
 	// ticket does not start while that ticket is open. Like the launch gate it
@@ -1105,6 +1130,12 @@ func deployFixRounds(comments []tracker.Comment) int {
 // and nothing performed (SC-4244). A launch failure escalates the card —
 // leaving it spinning would strand the loop.
 func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string, stage BoardStage, prompt, startedBody string) (launched bool, err error) {
+	// Launch gate: same refusal startAgentStage applies, extended to the no-claim
+	// loop steps — a dead claude-auth store must refuse the NEXT reviewer/fixer
+	// launch too, not just the stage that first recorded the refusal (SC-5108).
+	if d.launchGateBlocked(ctx, pmKey, stage) {
+		return false, errors.WrapWithDetails(ErrLaunchGateRefused, "launch gate refused the PR "+string(stage)+" agent", "pm", pmKey, "stage", string(stage))
+	}
 	name := agentNameFor(pmKey, stage)
 	started, err := d.launchAgent(ctx, pmKey, name, prompt)
 	if err != nil {
@@ -2084,6 +2115,13 @@ func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pm
 // exists, so it follows the launch (SC-4244).
 func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string) error {
 	launched, err := d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
+	if stderrors.Is(err, ErrLaunchGateRefused) {
+		// The deploy DID fail — the fixer is only the remedy — and a host that
+		// cannot launch the remedy has no way to record the failure but the
+		// failure itself. Swallowing it left the card on a deploy-fix-started
+		// marker nothing re-drives (SC-5108, round 4).
+		return d.deployFailed(pmKey, res.URL, deployReason(headline, err))
+	}
 	if err != nil {
 		return err
 	}
@@ -2109,6 +2147,10 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 // by this daemon's local Stop event, like the PR-loop agents). A launch failure
 // reds the card — leaving it spinning would strand the deploy.
 func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) (launched bool, err error) {
+	// Launch gate: same refusal as the other two launch paths (SC-5108).
+	if d.launchGateBlocked(ctx, pmKey, deployFixAgentStage) {
+		return false, errors.WrapWithDetails(ErrLaunchGateRefused, "launch gate refused the deploy fixer", "pm", pmKey)
+	}
 	name := agentNameFor(pmKey, deployFixAgentStage)
 	started, err := d.launchAgent(ctx, pmKey, name, prompt)
 	if err != nil {
