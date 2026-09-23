@@ -1570,6 +1570,45 @@ func TestServer_HandleTrackerIssue_ReturnsIssue(t *testing.T) {
 	assert.Contains(t, result.DraftFailureHTML, "the run stopped before finishing this stage")
 }
 
+// TestServer_HandleTrackerIssue_FailureReasonRendersBlockerFieldsAsParagraphs
+// pins the pane's actual rendered surface (SC-5249): a needs-human-work
+// blocker's four fields must survive RenderDescriptionHTML as their own
+// paragraphs, one labelled line each. Asserting only the FailureReason string
+// (as the prior regression test did) missed the bug — goldmark with no
+// hard-wraps collapses a single "\n" between fields into one run-on <p>, so
+// the string can carry the right newlines while the HTML the desktop pane
+// actually shows buries every label mid-sentence.
+func TestServer_HandleTrackerIssue_FailureReasonRendersBlockerFieldsAsParagraphs(t *testing.T) {
+	token := "test-token"
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.IssueGetter = func(_ IssueDetailRequest) (*IssueDetailFetch, error) {
+			return &IssueDetailFetch{
+				Issue: tracker.Issue{Key: "188", Title: "Blocked"},
+				Extras: IssueDetailExtras{
+					FailureReason: failureBody("[human:implementation-failed]\n" +
+						"reason: cannot push\n" +
+						"kind: missing-permission\n" +
+						"evidence: remote: 403\n" +
+						"attempted: retried once\n" +
+						"release: token gains write"),
+				},
+			}, nil
+		}
+	})
+
+	resp := sendRequest(t, addr, Request{Token: token, Args: []string{"tracker-issue", `{"tracker":"human","key":"188"}`}})
+	assert.Equal(t, 0, resp.ExitCode)
+	var result IssueDetailResult
+	err := json.Unmarshal([]byte(strings.TrimSpace(resp.Stdout)), &result)
+	require.NoError(t, err)
+	// Each field is its own paragraph, not run together inside one <p>.
+	assert.Contains(t, result.FailureReasonHTML, "<p>cannot push</p>")
+	assert.Contains(t, result.FailureReasonHTML, "<p>kind: missing-permission</p>")
+	assert.Contains(t, result.FailureReasonHTML, "<p>evidence: remote: 403</p>")
+	assert.Contains(t, result.FailureReasonHTML, "<p>attempted: retried once</p>")
+	assert.Contains(t, result.FailureReasonHTML, "<p>release: token gains write</p>")
+}
+
 // TestServer_HandleTrackerIssue_ExtrasAbsent covers the AD-4 degrade path: a
 // ticket with no review/failure/fix-summary comments yields empty extras, and
 // the three HTML fields must be "" rather than stray empty markup.
