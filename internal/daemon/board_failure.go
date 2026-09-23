@@ -384,13 +384,20 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, evt hookevents
 	}
 	if !alreadyFailed {
 		diagnosis := appendModelOutcomeNote(failureMarkerBody(deps.Diagnose, exit.AgentName, exit.ErrorType), deps.LatestClass, exit.PMKey, string(exit.Stage))
-		if err := postMarker(ctx, commenter, exit.PMKey, failureMarker(failedTypeFor(exit.Stage), diagnosis)); err != nil {
+		failed := failureMarker(failedTypeFor(exit.Stage), diagnosis)
+		if err := postMarker(ctx, commenter, exit.PMKey, failed); err != nil {
 			logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post failed marker")
 			// Without the failed marker the card does not derive to a failed state,
 			// which is precisely what every in-place retry transition requires — so
 			// an automatic relaunch would be rejected. Leave it for a human.
 			return
 		}
+		// The relaunch decides from the thread as the transition layer will see
+		// it — with this marker on it. A failed marker newer than a later stage's
+		// running marker takes the card back to this stage, and a snapshot from
+		// before the post would call that relaunch stale and leave the card red
+		// where no pass reaches it (SC-5104).
+		exit.Comments = append(exit.Comments, tracker.Comment{Body: markerBody(failed), Created: time.Now()})
 	}
 	// A stage that failed for a reason another attempt could fix — a flake, a
 	// dead container — is relaunched here rather than waiting for someone to

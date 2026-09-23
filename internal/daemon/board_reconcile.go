@@ -740,6 +740,9 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 			Msg("board reconcile: cannot red stuck-running card")
 		return false
 	}
+	// The relaunch below decides from the thread with this marker on it, as the
+	// transition layer will see it (SC-5104).
+	card.Comments = append(card.Comments, tracker.Comment{Body: markerBody(failed), Created: now})
 	if silenced {
 		if !givingUp {
 			// A live agent this pass judged hung and stopped itself: uncharged,

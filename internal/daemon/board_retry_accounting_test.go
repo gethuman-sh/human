@@ -155,3 +155,25 @@ func TestTryRelaunch_reworkBuildCrashIsNotStale(t *testing.T) {
 	require.True(t, policy.tryRelaunch(context.Background(), "SC-1", BoardImplementation, thread, rec, "d", zerolog.Nop()))
 	require.Equal(t, []BoardStage{BoardImplementation}, rec.relaunched)
 }
+
+// Both callers hand tryRelaunch the thread WITH the failed marker they just
+// posted, because that is the thread the transition layer will re-read. A
+// verification failure posted over a done/running card takes the card back to
+// verification/failed, where the review retry is sanctioned; judged from the
+// pre-post snapshot the same failure reads as stale and the card is left red
+// where no pass reaches it (SC-5104, round 5).
+func TestStaleFailure_isJudgedOnThePostedThread(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	before := []tracker.Comment{
+		{Body: "[human:review-failed]\nreason: reddened by reconcileStuckRunning", Created: base},
+		{Body: "[human:review-complete]\nverdict: pass", Created: base.Add(time.Minute)},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", Created: base.Add(2 * time.Minute)},
+	}
+	require.True(t, staleFailure(before, BoardVerification), "the pre-post snapshot places the card in the done stage")
+
+	after := append(append([]tracker.Comment{}, before...),
+		tracker.Comment{Body: "[human:review-failed]\nreason: r", Created: base.Add(3 * time.Minute)})
+	card := DeriveBoardCard(after, tracker.CategoryUnstarted, false)
+	require.True(t, isReviewRetry(BoardVerification, card), "precondition: the transition layer would accept the relaunch")
+	require.False(t, staleFailure(after, BoardVerification), "the posted thread sanctions the review retry")
+}
