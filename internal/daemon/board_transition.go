@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1479,10 +1480,21 @@ type Blocker struct {
 // names the marker protocol declares for every *-failed marker
 // (marker.BlockerFields). The field map is copied, so the value semantics the
 // signature promises hold even for a caller that keeps using its own marker.
+//
+// kind is coerced to "other" when it is not one of marker.BlockerKinds(): this
+// is the one machine path that puts an agent-supplied kind on a *-failed
+// marker without going through `human marker post`'s refusal, and postMarker
+// logs-and-posts rather than drops an invalid marker (SC-3889), so a
+// misspelled or invented kind would otherwise reach the ticket looking
+// classified while nothing downstream could group it (SC-5250).
 func (b Blocker) addTo(m marker.Marker) marker.Marker {
 	fields := make(map[string]string, len(m.Fields)+4)
 	maps.Copy(fields, m.Fields)
-	for k, v := range map[string]string{"kind": b.Kind, "evidence": b.Evidence, "attempted": b.Attempted, "release": b.Release} {
+	kind := strings.TrimSpace(b.Kind)
+	if kind != "" && !slices.Contains(marker.BlockerKinds(), kind) {
+		kind = "other"
+	}
+	for k, v := range map[string]string{"kind": kind, "evidence": b.Evidence, "attempted": b.Attempted, "release": b.Release} {
 		if v = strings.TrimSpace(v); v != "" {
 			fields[k] = v
 		}

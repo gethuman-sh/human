@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/marker"
 )
 
 func TestExpandIncludes_SubstitutesAKnownFragment(t *testing.T) {
@@ -112,4 +113,18 @@ func TestExpandIncludes_ExitContractHasBlockerContract(t *testing.T) {
 		require.Contains(t, s, want)
 	}
 	require.NotContains(t, s, "<stage>-failed", "the marker name is concrete; a placeholder posts a comment the board never classifies")
+}
+
+// The exit contract's prose lists the blocker kind vocabulary independently of
+// marker.BlockerKinds() (each pinned by its own test), so nothing catches the
+// two drifting apart. Driving the prose assertion from the enum itself closes
+// that gap: adding or renaming a kind in code without updating the doc fails
+// here (SC-5250).
+func TestExpandIncludes_ExitContractListsEveryBlockerKind(t *testing.T) {
+	out, err := expandIncludes([]byte("<!-- human:include exit-contract -->\n"))
+	require.NoError(t, err)
+	s := string(out)
+	for _, kind := range marker.BlockerKinds() {
+		require.Contains(t, s, "`"+kind+"`", "exit-contract.md is missing the blocker kind %q", kind)
+	}
 }
