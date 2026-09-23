@@ -759,7 +759,7 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	// failed marker is the trail record, so no separate retry note (nil
 	// commenter); the shared per-stage budget bounds this path and the
 	// watcher's together.
-	deps.Retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, deps.DaemonID, logger)
+	deps.Retry.tryRelaunch(ctx, card.Key, derived.Stage, card.Comments, nil, deps.DaemonID, logger)
 	return true
 }
 

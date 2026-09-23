@@ -399,7 +399,7 @@ func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, evt hookevents
 	// the stage's own recorded exit class, not the tracker thread, so the
 	// decision is unaffected by whether this ending's own marker needed
 	// suppressing.
-	deps.Retry.tryRelaunch(ctx, exit.PMKey, exit.Stage, commenter, deps.DaemonID, logger)
+	deps.Retry.tryRelaunch(ctx, exit.PMKey, exit.Stage, exit.Comments, commenter, deps.DaemonID, logger)
 }
 
 // handleCleanStageEnding deals with every way a stage exit is NOT a failure, and
