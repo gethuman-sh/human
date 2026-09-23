@@ -801,7 +801,7 @@
       "actor": "daemon",
       "runs": "human-pr-reviewer",
       "marker": "[human:pr-review-started]",
-      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone. This is the `human deploy` route's entry into the loop (F10): the board's Deploy drop records pr-review-started without passing through deploying (start-pr-review), so this edge is walked only by a deploy that started from the CLI — the fix skills' `human deploy <KEY> --branch`, and a person's hand-run ship.",
+      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone. This is the `human deploy` route's entry into the loop (F10): the board's Deploy drop records pr-review-started without passing through deploying (start-pr-review), so this edge is walked only by a deploy that started from the CLI — the fix skills' `human deploy <KEY> --branch`, and a person's hand-run ship. The start marker's `branch:` is the loop's own binding: the merge step, the fixer dispatch and the approval marker all read the branch from it, falling back to the handoff only when it carries none — a loop started from the CLI has no handoff, and reading the handoff alone pushed an empty branch on approval (SC-5119).",
       "where": "internal/daemon/deploy_entry.go StartDeploy → reviewThenShip, which opens the draft (openDraftPR, shared with the board's runDoneStage) and launches the reviewer through launchPRLoopAgent"
     },
     {

@@ -1131,6 +1131,20 @@ func prLoopURL(comments []tracker.Comment) string {
 	return latestPrefixedLine(comments, PRReviewStartedHeader, "pr:")
 }
 
+// prLoopBranch is the branch the loop is reviewing: the one its own start
+// marker recorded, and only failing that the card's handoff branch. The loop
+// used to read the handoff alone, and a loop started by `human deploy --branch`
+// has none — so the reviewer approved, the approval marker named no branch,
+// and the merge step pushed an empty branch and reddened the card (SC-5119,
+// the first deploys through the SC-5097 route). The start marker is the
+// binding the loop already trusts for the PR number and URL.
+func prLoopBranch(comments []tracker.Comment, card BoardCard) string {
+	if branch := strings.TrimSpace(latestPrefixedLine(comments, PRReviewStartedHeader, "branch:")); branch != "" {
+		return branch
+	}
+	return card.Branch
+}
+
 // AdvancePRLoop is the deploy-stage loop executor. On each reviewer/fixer exit
 // the failure watcher calls it with the outcome the step recorded in the state
 // store (reviewVerdict or fixExit); it reads the loop's markers, asks the pure
@@ -1149,7 +1163,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		return errors.WrapWithDetails(err, "loading comments for PR loop", "pm", pmKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	number, url, branch := prLoopNumber(comments), prLoopURL(comments), card.Branch
+	number, url, branch := prLoopNumber(comments), prLoopURL(comments), prLoopBranch(comments, card)
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
 		_, err := d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
