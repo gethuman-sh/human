@@ -276,7 +276,7 @@ func deployVia(t *testing.T, deps BoardTransitionDeps, req BoardTransitionReques
 	comments, err := deps.Commenter.ListComments(context.Background(), req.PMKey)
 	require.NoError(t, err)
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	return deps.DeployBranch(context.Background(), req.PMKey, req.PMTitle, doneBody(req.PMKey, card), card.Branch)
+	return deps.DeployBranch(context.Background(), req.PMKey, req.PMTitle, doneBody(req.PMKey, card, card.Branch), card.Branch)
 }
 
 func TestApplyTransitionBackwardRejected(t *testing.T) {
@@ -1156,7 +1156,7 @@ func TestApplyTransitionVerificationWithoutEngineeringKey(t *testing.T) {
 func TestDoneBodySingleRef(t *testing.T) {
 	// Regression: without an engineering ticket the PR body carries only the
 	// PM line — no empty "Engineering ticket:" placeholder.
-	body := doneBody("SC-1", BoardCard{Branch: "feat/x"})
+	body := doneBody("SC-1", BoardCard{Branch: "feat/x"}, "feat/x")
 	assert.Contains(t, body, "PM ticket: SC-1")
 	assert.NotContains(t, body, "Engineering ticket:")
 }
@@ -2044,6 +2044,35 @@ func TestAdvanceDeployFix_Done_PublishesResolutionBeforeDeploy(t *testing.T) {
 	assert.Equal(t, []string{"feat/x"}, p.published,
 		"the fixer's local resolution must be published to the card's branch")
 	assert.Equal(t, 1, p.publishCalls, "the resolution is published exactly once per done exit")
+}
+
+// A loop started by `human deploy --branch` has no ready-for-review handoff, so
+// card.Branch is empty; the deploy-fixer is still dispatched with the correct
+// branch (dispatchDeployFixer takes it as a parameter), and its `done` exit must
+// publish and re-deploy THAT branch, not the empty handoff one — the same
+// empty-branch failure SC-5119 fixed one step earlier in the loop (SC-5119
+// follow-up).
+func TestAdvanceDeployFix_Done_HandoffLess_PublishesTheStartMarkersBranch(t *testing.T) {
+	syncDeploy(t)
+	base := time.Now().Add(-time.Minute)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "1", Created: base},
+	}}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/13", Number: 13},
+		checks: []forge.ChecksState{forge.ChecksPassing}}
+	deps := newDeps(c, &fakeLauncher{}, p)
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone))
+	assert.Equal(t, []string{"feat/x"}, p.published,
+		"a handoff-less loop's resolution must still be published to the start marker's branch")
+	assert.Equal(t, "feat/x", p.req.Branch, "the re-run deploy must ship the start marker's branch, not an empty one")
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	assert.Empty(t, failed, "a handoff-less done exit must not red the card: %q", failed)
 }
 
 // A publish the host refuses (the never-publish-behind-origin guard, an
