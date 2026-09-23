@@ -426,8 +426,14 @@ The teardown choke point is `Manager.stopLocked` (`internal/agent/manager.go`):
    yet. A container the prune removes goes through the same choke point as
    every other remove path: when a meta still exists for it, `PreserveExecutionArtifacts`
    (item 1 above) copies the transcript and records the disposition before
-   `ContainerRemove`, so the debris case — the one most likely to have never
-   been preserved by a normal stop — is not the one case that loses it.
+   `ContainerRemove`. **The two halves run in that order — containers, then
+   metas — inside a single pass** (`pruneAgentDebrisWith`): the container prune
+   reads a meta to know what to preserve, and the meta prune is what makes that
+   meta disappear once it is old enough, so retiring metas first would have
+   left aged debris (no prune pass for longer than the retention) with no meta
+   left to preserve from by the time the container prune ran. With containers
+   first, the debris case — the one most likely to have never been preserved by
+   a normal stop — is not the one case that loses it.
    Once preserved, `output.log` and `outcome.json` are not the prune's: they
    follow the 90-day rule in item 6 above (SC-5248). The record delete itself
    is raced against a relaunch under the per-name lock (`lockAgent`): a

@@ -135,6 +135,41 @@ func TestPruneExitedAgentContainersWith_PreservesTranscriptBeforeRemove(t *testi
 	assert.Equal(t, "TRANSCRIPT", string(data))
 }
 
+// Aged debris — a stopped meta older than StoppedMetaRetention whose
+// container was never reaped — must still have its transcript preserved.
+// pruneAgentDebrisWith is what runAgentPrune actually calls each pass; a test
+// against pruneExitedAgentContainersWith alone would not catch a regression
+// in the ordering between it and agent.PruneStoppedMetas, which is exactly
+// what let the meta prune retire the record before the container prune ever
+// read it, skipping PreserveExecutionArtifacts silently (SC-5248 review
+// finding).
+func TestPruneAgentDebrisWith_PreservesAgedDebrisBeforeMetaRetires(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	exe, err := agent.NewExecution(agent.LaunchRecord{ID: "e1", Agent: "board-1-planning", StartedAt: old})
+	require.NoError(t, err)
+	require.NoError(t, agent.WriteMeta(agent.Meta{
+		Name: "board-1-planning", ContainerID: "cid-1", RemoteUser: "vscode",
+		CreatedAt: old, StoppedAt: old, ExecutionID: exe.Launch.ID, Status: agent.StatusStopped,
+	}))
+
+	docker := &pruneDockerMock{containers: []devcontainer.ContainerSummary{
+		{ID: "cid-1", Names: []string{"/" + agent.ContainerPrefix + "board-1-planning"}, State: "exited"},
+	}}
+
+	containersRemoved, metasRemoved, err := pruneAgentDebrisWith(context.Background(), docker, time.Now(), agent.StoppedMetaRetention)
+	require.NoError(t, err)
+	assert.Equal(t, 1, containersRemoved)
+	assert.Equal(t, []string{"board-1-planning"}, metasRemoved)
+
+	require.Equal(t, []string{"copy", "remove"}, docker.calls, "the container prune must read the meta and preserve the transcript before the meta prune retires it")
+
+	data, err := os.ReadFile(exe.TranscriptDir() + "/projects/p/s.jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, "TRANSCRIPT", string(data))
+}
+
 // A container with no meta at all (already deleted, or never one of ours to
 // track) has nothing to preserve; the prune must still remove it rather than
 // getting stuck on a missing record.

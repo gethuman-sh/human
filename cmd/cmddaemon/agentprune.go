@@ -23,19 +23,21 @@ const agentPruneInterval = time.Hour
 // only, and every stop path is best-effort about the container (SC-5248).
 func runAgentPrune(ctx context.Context, logger zerolog.Logger) {
 	prune := func() {
-		removed, err := agent.PruneStoppedMetas(time.Now(), agent.StoppedMetaRetention)
+		docker, err := devcontainer.NewDockerClient()
 		if err != nil {
-			logger.Warn().Err(err).Msg("agent prune: retiring stopped records")
+			logger.Warn().Err(err).Msg("agent prune: connecting to docker")
+			return
 		}
-		if len(removed) > 0 {
-			logger.Info().Strs("agents", removed).Msg("agent prune: retired records of agents that ended over a week ago")
-		}
-		n, err := pruneExitedAgentContainers(ctx)
+		defer func() { _ = docker.Close() }()
+		n, removed, err := pruneAgentDebrisWith(ctx, docker, time.Now(), agent.StoppedMetaRetention)
 		if err != nil {
-			logger.Warn().Err(err).Msg("agent prune: removing exited containers")
+			logger.Warn().Err(err).Msg("agent prune")
 		}
 		if n > 0 {
 			logger.Info().Int("containers", n).Msg("agent prune: removed exited agent containers with no running record")
+		}
+		if len(removed) > 0 {
+			logger.Info().Strs("agents", removed).Msg("agent prune: retired records of agents that ended over a week ago")
 		}
 	}
 	prune()
@@ -51,17 +53,26 @@ func runAgentPrune(ctx context.Context, logger zerolog.Logger) {
 	}
 }
 
-func pruneExitedAgentContainers(ctx context.Context) (int, error) {
-	docker, err := devcontainer.NewDockerClient()
-	if err != nil {
-		return 0, err
+// pruneAgentDebrisWith runs both halves of the prune in the order that keeps
+// preservation possible: containers before metas. pruneExitedAgentContainersWith
+// reads an agent's meta to find what to preserve, and PruneStoppedMetas is
+// what makes that meta disappear once it is old enough. Running the meta
+// prune first retired the record of aged debris (no prune pass for longer
+// than retention) before the container prune ever saw it, so
+// agent.ReadMeta failed, PreserveExecutionArtifacts was skipped, and the
+// container was destroyed with no copy of its transcript ever made (SC-5248
+// review finding). It takes the DockerClient directly so a test can assert
+// the same ordering against a fake.
+func pruneAgentDebrisWith(ctx context.Context, docker devcontainer.DockerClient, now time.Time, retention time.Duration) (int, []string, error) {
+	containersRemoved, containerErr := pruneExitedAgentContainersWith(ctx, docker)
+	metasRemoved, metaErr := agent.PruneStoppedMetas(now, retention)
+	if containerErr != nil {
+		return containersRemoved, metasRemoved, containerErr
 	}
-	defer func() { _ = docker.Close() }()
-	return pruneExitedAgentContainersWith(ctx, docker)
+	return containersRemoved, metasRemoved, metaErr
 }
 
-// pruneExitedAgentContainersWith is the testable body of
-// pruneExitedAgentContainers: it takes the DockerClient rather than building
+// pruneExitedAgentContainersWith takes the DockerClient rather than building
 // one, so a fake can assert both the removal and the preservation call.
 func pruneExitedAgentContainersWith(ctx context.Context, docker devcontainer.DockerClient) (int, error) {
 	containers, err := docker.ContainerList(ctx, devcontainer.ContainerListOptions{All: true, NameFilter: agent.ContainerPrefix})
