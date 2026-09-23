@@ -28,7 +28,6 @@ var (
 	placeholderPattern = regexp.MustCompile(`human state set \S+ stage\.<`)
 )
 
-// readEmbed loads a prompt from the embed directory beside this package.
 // embedMarkdownFiles lists every prompt and shared fragment, as paths relative
 // to embed/, because a rule stated once in embed/shared/ reaches every prompt
 // that includes it and a scan of the top level alone would miss it.
@@ -48,6 +47,7 @@ func embedMarkdownFiles(t *testing.T) []string {
 	return names
 }
 
+// readEmbed loads a prompt from the embed directory beside this package.
 func readEmbed(t *testing.T, name string) string {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join("embed", name))

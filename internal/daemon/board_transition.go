@@ -1465,19 +1465,6 @@ func unrecordedStepReason(stage PRLoopStage, _ PRLoopOutcome, _ BoardFailureDiag
 		" — check the PR and its review, then re-run Deploy"
 }
 
-// AdvanceDeployFix is the deploy-fixer's Stop-event driver. On the fixer's exit the
-// failure watcher calls it with the exit the agent recorded in stage.deploy-fix. A
-// `done` exit publishes the fixer's local resolution and re-runs the deploy pipeline
-// (the branch is then ready for a fresh CI gate + merge); any other exit reds the card
-// with a terminal deploy-failed. The deployFixRounds budget already bounds how many
-// times the pipeline re-enters here, so a genuinely unfixable failure terminates.
-// The blocker is what a needs-human-work stop recorded about itself; the loop
-// carries it onto the marker it posts on the agent's behalf, so the person on
-// the red card is not sent back to re-run the investigation.
-func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit, blocker Blocker) error {
-	return d.advanceDeployFix(ctx, pmKey, fixExit, blocker)
-}
-
 // Blocker is what a needs-human-work stop recorded about itself in the stage
 // record (shared/exit-contract.md, SC-5179): the kind of blocker, the evidence
 // observed, what was attempted, and the condition that releases the work.
@@ -1504,7 +1491,16 @@ func (b Blocker) addTo(m marker.Marker) marker.Marker {
 	return m
 }
 
-func (d BoardTransitionDeps) advanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit, blocker Blocker) error {
+// AdvanceDeployFix is the deploy-fixer's Stop-event driver. On the fixer's exit the
+// failure watcher calls it with the exit the agent recorded in stage.deploy-fix. A
+// `done` exit publishes the fixer's local resolution and re-runs the deploy pipeline
+// (the branch is then ready for a fresh CI gate + merge); any other exit reds the card
+// with a terminal deploy-failed. The deployFixRounds budget already bounds how many
+// times the pipeline re-enters here, so a genuinely unfixable failure terminates.
+// The blocker is what a needs-human-work stop recorded about itself; the loop
+// carries it onto the marker it posts on the agent's behalf, so the person on
+// the red card is not sent back to re-run the investigation.
+func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit, blocker Blocker) error {
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading comments for deploy fix", "pm", pmKey)
@@ -1548,8 +1544,12 @@ func (d BoardTransitionDeps) advanceDeployFix(ctx context.Context, pmKey string,
 	}
 	// The fixer's own blocker evidence rides on the marker: the escalation
 	// line says what the fixer was sent to fix, the four fields say what it
-	// found (SC-5179).
-	m := blocker.addTo(failureMarker(MarkerDeployFailed, deployFixEscalationReason(fixExit, dispatchedFailure(comments))))
+	// found (SC-5179). Only the exit that defines a blocker carries one; a
+	// needs-input stop may leave the template's placeholders in the object.
+	m := failureMarker(MarkerDeployFailed, deployFixEscalationReason(fixExit, dispatchedFailure(comments)))
+	if fixExit == ExitNeedsHumanWork {
+		m = blocker.addTo(m)
+	}
 	_, _ = d.Commenter.AddComment(ctx, pmKey, markerBody(m, "reason", "kind", "evidence", "attempted", "release"))
 	return nil
 }

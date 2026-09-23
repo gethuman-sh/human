@@ -60,7 +60,7 @@ human state set <SEC_KEY> stage.implementation --json --body-file - <<'EOF'
 EOF
 ```
 
-Use the exit vocabulary the board understands (`internal/daemon/board_retry.go`): `retryable`, `outage`, `needs-input`, `needs-human-work`, `done`. A clean resolved terminal (no-fix-needed, Step 3a) records `{"exit":"done", ...}` alongside its `[human:no-fix-needed]` marker; a spent budget records `needs-human-work` with the `blocker` object shown above (per the exit contract); an interrupted-substrate stop records `retryable`/`outage` and carries no `blocker`. This record is additive — it does not replace the phase records. Keep exploit specifics out of the `summary`/`trace`/`blocker.evidence` when the ticket is publicly visible.
+Use the exit vocabulary the board understands (`internal/daemon/board_retry.go`): `retryable`, `outage`, `needs-input`, `needs-human-work`, `done`. A clean resolved terminal (no-fix-needed, Step 3a) records `{"exit":"done", ...}` alongside its `[human:no-fix-needed]` marker; a spent budget records `needs-human-work` with the `blocker` object shown above (per the exit contract); an interrupted-substrate stop records `retryable`/`outage` and carries no `blocker`. This record is additive — it does not replace the phase records. Keep exploit specifics out of the `summary`/`evidence`/`blocker.evidence` when the ticket is publicly visible.
 
 <!-- human:include dependents -->
 

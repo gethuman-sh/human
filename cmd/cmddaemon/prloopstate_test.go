@@ -165,6 +165,18 @@ func TestReadDeployFixExit_readsField(t *testing.T) {
 	assert.Equal(t, daemon.ExitDone, exit)
 }
 
+// The blocker object is what the ticket exists to carry; a wrong tag would
+// drop every field silently, so the decode is pinned field by field.
+func TestReadDeployFixExit_readsTheBlocker(t *testing.T) {
+	isolateState(t)
+	writeRawReport(t, "SC-1", "stage.deploy-fix",
+		`{"exit":"needs-human-work","blocker":{"kind":"missing-permission","evidence":"403 on push","attempted":"retried once","release":"token gains write"}}`)
+
+	exit, blocker := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	assert.Equal(t, daemon.ExitNeedsHumanWork, exit)
+	assert.Equal(t, daemon.Blocker{Kind: "missing-permission", Evidence: "403 on push", Attempted: "retried once", Release: "token gains write"}, blocker)
+}
+
 // A missing deploy-fix report reads as "" — the driver treats a non-done exit,
 // including absence, as red.
 func TestReadDeployFixExit_missingIsEmpty(t *testing.T) {
