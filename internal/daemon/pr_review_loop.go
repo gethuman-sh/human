@@ -23,11 +23,27 @@ import (
 // every transition — including the budget boundary and the defensive
 // escalations — be unit-tested without a daemon.
 
-// DefaultPRReviewRounds bounds the review→fix loop: at most this many review
-// rounds before a still-unresolved review escalates to a human. A budget is
-// mandatory — without it a reviewer and fixer that disagree would ping-pong
-// forever, and each round costs an agent run plus a fresh CI trigger.
-const DefaultPRReviewRounds = 3
+// DefaultPRReviewRounds is the OUTER bound of the review→fix loop: a safety
+// net, not the policy. The policy is repetition — the loop escalates when the
+// reviewer's blocking finding is the one the fixer was already sent, because a
+// finding that survives a fix round is the reviewer and fixer disagreeing, the
+// ping-pong SC-1760 exists to break. A round that finds a different problem is
+// progress: on the first four tickets shipped through the machine review every
+// round found a new, real problem, and a count of three turned five of those
+// rounds into a person's turn (SC-5174). Eight bounds the cost when findings
+// keep changing; it should be rare for a loop to reach it without repeating.
+const DefaultPRReviewRounds = 8
+
+// MaxSoleDirectionPursuits bounds a DIFFERENT loop that happens to key off the
+// same review-round count: a fix-stage escalation naming exactly one
+// direction is not a fork (SC-3630) and the daemon pursues it in place — a
+// FULL implementation-stage rebuild per pursuit — rather than asking. That
+// budget used to reuse DefaultPRReviewRounds, so raising the review loop's
+// outer cap for SC-5174 would have silently taken sole-direction pursuit from
+// three rebuilds to eight along with it, though its own reasoning (repetition,
+// not count, bounds cost) has nothing to say about a loop that is not the
+// review→fix loop at all. Named and held at the old value on purpose.
+const MaxSoleDirectionPursuits = 3
 
 // PR review/fix outcomes the decider branches on. These mirror the vocabulary
 // the human-pr-reviewer and human-pr-fixer prompts record in state, kept here as
@@ -71,7 +87,7 @@ const (
 // changes-requested review at the round budget escalates instead of fixing
 // again, so a disagreement the fixer cannot close reaches a human in bounded
 // time rather than looping.
-func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int) PRLoopAction {
+func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int, repeated bool) PRLoopAction {
 	if budget <= 0 {
 		budget = DefaultPRReviewRounds
 	}
@@ -83,7 +99,7 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int) PRLo
 		case PRVerdictApproved:
 			return PRActionMerge
 		case PRVerdictChanges:
-			if round >= budget {
+			if repeated || round >= budget {
 				return PRActionEscalate
 			}
 			return PRActionFix
@@ -154,6 +170,125 @@ func LatestMarkerTime(comments []tracker.Comment, header string) (time.Time, boo
 	return latest.Created, true
 }
 
+// findingFingerprintEmDash is the separator the reviewer prompt
+// (human-pr-reviewer-agent.md) mandates between a blocking finding's stable
+// anchor+slug and its free-form explanation: `BLOCKING <file>:<line> —
+// <slug> — <explanation>`. Kept as a named constant because it is a contract
+// between this file and that prompt, not an arbitrary formatting choice.
+const findingFingerprintEmDash = "—"
+
+// FindingFingerprint reduces a reviewer's findings text to the identity of its
+// first blocking finding, so the SAME identity survives a fixer rephrasing
+// its explanation around a surviving problem, or reordering findings.
+//
+// The reviewer's prompt requires a blocking finding to lead with
+// `BLOCKING <file>:<line> — <slug> — <explanation>`, and to keep `<file>` and
+// `<slug>` byte-identical across rounds while the same underlying problem
+// persists — the prompt explicitly frees `<explanation>` to vary ("still not
+// fixed", a shifted line, more detail). The line number is part of that free
+// half in practice: a fix round that edits the file and fails to fix the
+// problem is exactly what shifts it, so only `<file>` survives from the
+// anchor. The identity is `<file> — <slug>`, normalized.
+//
+// A finding is recognised wherever a reviewer puts it — as a bullet, a
+// numbered item, under a heading — so leading list and heading markers are
+// stripped before the lead-in test; the lead-in must then be the word
+// BLOCKING itself, so "Non-blocking:" is never mistaken for it. Text with no
+// such line, or a BLOCKING line without the three-part shape (an older thread,
+// "no blocking issues", a reviewer that skipped the convention), yields NO
+// identity: "" is never recorded as a finding and never counts as repeated, so
+// such a round can end only on the outer round cap. A weaker identity stood in
+// here once and made two different findings collide on their shared preamble
+// — the premature escalation this bound exists to remove (SC-5174).
+func FindingFingerprint(findings string) string {
+	for _, line := range strings.Split(findings, "\n") {
+		line = stripListMarkers(strings.TrimSpace(line))
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.EqualFold(strings.TrimRight(fields[0], ":"), "blocking") {
+			continue
+		}
+		parts := strings.SplitN(line, findingFingerprintEmDash, 3)
+		if len(parts) < 2 {
+			return ""
+		}
+		anchor := normalizeFingerprintText(parts[0])
+		anchor = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(anchor, "blocking:"), "blocking"))
+		anchor = anchorFileOnly(anchor)
+		slug := normalizeFingerprintText(parts[1])
+		if anchor == "" || slug == "" {
+			return ""
+		}
+		return cutFingerprintRunes(anchor + " " + findingFingerprintEmDash + " " + slug)
+	}
+	return ""
+}
+
+// stripListMarkers removes the markdown a reviewer may wrap a finding in — a
+// bullet, a numbered item, a heading — so the lead-in test sees the finding
+// itself. Repeated so a bullet under a heading on one line still resolves.
+func stripListMarkers(line string) string {
+	for {
+		trimmed := strings.TrimLeft(line, "#")
+		if trimmed != line {
+			line = strings.TrimSpace(trimmed)
+			continue
+		}
+		if len(line) > 1 && strings.ContainsRune("-*+", rune(line[0])) && line[1] == ' ' {
+			line = strings.TrimSpace(line[2:])
+			continue
+		}
+		if i := strings.IndexAny(line, ".)"); i > 0 && i < 4 && strings.Trim(line[:i], "0123456789") == "" && i+1 < len(line) && line[i+1] == ' ' {
+			line = strings.TrimSpace(line[i+2:])
+			continue
+		}
+		return line
+	}
+}
+
+// anchorFileOnly strips a trailing `:<line>` from a `<file>:<line>` anchor so
+// the fingerprint survives the line moving between rounds — see
+// FindingFingerprint. Anchors without a colon (already just a file, or some
+// other shape) pass through unchanged.
+func anchorFileOnly(anchor string) string {
+	if i := strings.LastIndex(anchor, ":"); i >= 0 {
+		return anchor[:i]
+	}
+	return anchor
+}
+
+// normalizeFingerprintText lower-cases and whitespace-collapses a fragment so
+// two rounds' incidental formatting differences (extra spaces, case) never
+// break an otherwise-identical fingerprint.
+func normalizeFingerprintText(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// cutFingerprintRunes bounds a fingerprint's length — 160 runes, the limit
+// this format has always used — so a pathologically long line cannot grow the
+// state store's comparison key without bound.
+func cutFingerprintRunes(s string) string {
+	if r := []rune(s); len(r) > 160 {
+		return string(r[:160])
+	}
+	return s
+}
+
+// lastFixFinding is the fingerprint the newest pr-fix-started marker recorded:
+// the finding the fixer was last sent. Empty when the loop has not fixed yet
+// or the marker predates the field.
+func lastFixFinding(comments []tracker.Comment) string {
+	return strings.TrimSpace(latestPrefixedLine(comments, PRFixStartedHeader, "finding:"))
+}
+
+// findingRepeated reports that this round's blocking finding is the one the
+// fixer was already sent.
+func findingRepeated(comments []tracker.Comment, finding string) bool {
+	return finding != "" && finding == lastFixFinding(comments)
+}
+
 // prReviewRounds counts completed review rounds — one per pr-review-started
 // marker — the value the decider bounds against DefaultPRReviewRounds.
 func prReviewRounds(comments []tracker.Comment) int {
@@ -199,6 +334,15 @@ type PRLoopOutcome struct {
 	FixSummary string
 	Agent      string
 	ErrorType  string
+	// ReviewFinding is the fingerprint of the reviewer's blocking finding
+	// (FindingFingerprint over the report's findings), the identity the
+	// repetition bound compares across rounds.
+	ReviewFinding string
+	// FindingRepeated reports that ReviewFinding is the finding the fixer was
+	// sent last round — recorded on the pr-fix-started marker — so the round
+	// changed nothing the reviewer could see. Set by the executor from the
+	// thread; the pure decider only reads it.
+	FindingRepeated bool
 	// ReviewStale/FixStale report that the corresponding record above was NOT
 	// confirmed to be this round's own write — the cmd-layer reader raced ahead
 	// of the reviewer/fixer's final write and, after its bounded settle backoff,
@@ -285,7 +429,7 @@ func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAct
 	case PRStageFix:
 		step = outcome.FixExit
 	}
-	action := NextPRLoopAction(stage, step, prReviewRounds(comments), DefaultPRReviewRounds)
+	action := NextPRLoopAction(stage, step, prReviewRounds(comments), DefaultPRReviewRounds, outcome.FindingRepeated)
 	if stage == PRStageFix && action == PRActionReview && outcome.headStalled() {
 		if outcome.ReviewVerdict == PRVerdictApproved {
 			return PRActionMerge

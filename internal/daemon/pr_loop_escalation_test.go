@@ -113,5 +113,5 @@ func TestPREscalation_recognisedVerdictsKeepTheirHeadlines(t *testing.T) {
 	// changes-requested reaches escalation only once the round budget is spent.
 	budgetSpent := escalationBodyAfterRounds(t, DefaultPRReviewRounds,
 		PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true}, nil)
-	assert.Contains(t, budgetSpent, "did not converge within the round budget")
+	assert.Contains(t, budgetSpent, "did not converge within 8 review rounds")
 }
