@@ -1,6 +1,7 @@
 package marker
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -230,4 +231,21 @@ func TestKnownTypes_sortedAndComplete(t *testing.T) {
 	assert.Contains(t, types, "ready-for-review")
 	assert.Contains(t, types, "bug-verify")
 	assert.IsIncreasing(t, types)
+}
+
+// The blocker contract lives in the protocol, not only in prose: every stage's
+// *-failed marker advertises the four fields a needs-human-work stop carries,
+// so `human fsm marker` and the command `fsm where` prints name them (SC-5179).
+func TestFailedMarkers_advertiseTheBlockerFields(t *testing.T) {
+	for _, typ := range []string{"planning-failed", "implementation-failed", "review-failed", "deploy-failed"} {
+		opt := OptionalFields(typ)
+		for _, f := range BlockerFields {
+			if !slices.Contains(opt, f) {
+				t.Errorf("%s: optional fields %v lack %q", typ, opt, f)
+			}
+		}
+		if err := Validate(Marker{Type: typ, Fields: map[string]string{"reason": "r", "kind": "other", "evidence": "e", "attempted": "a", "release": "x"}}); err != nil {
+			t.Errorf("%s: a marker carrying the blocker fields must validate: %v", typ, err)
+		}
+	}
 }
