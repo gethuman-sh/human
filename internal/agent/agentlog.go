@@ -307,8 +307,10 @@ func lookupExecution(meta Meta) *Execution {
 // and records the outcome — the last chance to capture both before a
 // force-remove destroys them. Best-effort by contract: teardown must proceed
 // whether or not anything could be preserved, so failures are swallowed. Every
-// remove path (Manager stop/delete and the daemon's async decommission bypass)
-// funnels through this one preservation step.
+// remove path — Manager stop/delete, the daemon's async decommission bypass,
+// and the hourly agent-container prune (cmd/cmddaemon/agentprune.go, for the
+// case none of the others reached: a run killed with the daemon) — funnels
+// through this one preservation step.
 func PreserveExecutionArtifacts(ctx context.Context, docker devcontainer.DockerClient, meta Meta) {
 	exe := lookupExecution(meta)
 	if exe == nil {

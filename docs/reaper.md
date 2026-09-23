@@ -423,8 +423,17 @@ The teardown choke point is `Manager.stopLocked` (`internal/agent/manager.go`):
    together with the daemon, a teardown that stopped halfway — is removed. A
    running record is never touched whatever its age, and a container whose
    record still says running belongs to the stop path that has not reached it
-   yet. Transcripts, `output.log` and `outcome.json` are not the prune's: they
-   follow the 90-day rule below (SC-5248).
+   yet. A container the prune removes goes through the same choke point as
+   every other remove path: when a meta still exists for it, `PreserveExecutionArtifacts`
+   (item 1 above) copies the transcript and records the disposition before
+   `ContainerRemove`, so the debris case — the one most likely to have never
+   been preserved by a normal stop — is not the one case that loses it.
+   Once preserved, `output.log` and `outcome.json` are not the prune's: they
+   follow the 90-day rule in item 6 above (SC-5248). The record delete itself
+   is raced against a relaunch under the per-name lock (`lockAgent`): a
+   stopped record re-read as running immediately before delete is skipped
+   rather than removed out from under the relaunch, because board agent names
+   are deterministic and reused.
 8. **A late-arriving result is reconciled, not left contradicting the reap.**
    `RunLateResultReconcile` (`internal/daemon/board_latereconcile.go`) scans
    open cards for a stage marked failed followed by that same stage's success
@@ -510,6 +519,8 @@ waiting on.
 | `DefaultStageRetries` | 2 | `internal/daemon/board_retry.go` |
 | `OutageWaitBound` | 6h | `internal/daemon/board_outage.go` |
 | `execRetentionDays` | 90 | `internal/agent/agentlog.go` |
+| `agentPruneInterval` | 1h | `cmd/cmddaemon/agentprune.go` |
+| `StoppedMetaRetention` | 7d | `internal/agent/prune.go` |
 | `deployTimeout` | 45m | `internal/daemon/board_transition.go` |
 | `deployWaitHeartbeat` | 10 polls (~5m) | same |
 | `LateResultReconcileInterval` | 5m | `internal/daemon/board_latereconcile.go` |

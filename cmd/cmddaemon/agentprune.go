@@ -57,6 +57,13 @@ func pruneExitedAgentContainers(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer func() { _ = docker.Close() }()
+	return pruneExitedAgentContainersWith(ctx, docker)
+}
+
+// pruneExitedAgentContainersWith is the testable body of
+// pruneExitedAgentContainers: it takes the DockerClient rather than building
+// one, so a fake can assert both the removal and the preservation call.
+func pruneExitedAgentContainersWith(ctx context.Context, docker devcontainer.DockerClient) (int, error) {
 	containers, err := docker.ContainerList(ctx, devcontainer.ContainerListOptions{All: true, NameFilter: agent.ContainerPrefix})
 	if err != nil {
 		return 0, err
@@ -67,6 +74,18 @@ func pruneExitedAgentContainers(ctx context.Context) (int, error) {
 	}
 	removed := 0
 	for _, c := range exitedAgentDebris(containers, metas) {
+		// The stop paths all persist the transcript and outcome before they
+		// remove the container (agent.PreserveExecutionArtifacts, the one
+		// choke point every remove path funnels through). This is debris
+		// precisely because no stop path reached it, so it is this prune's
+		// job to go through the same choke point rather than destroy the
+		// only copy of a crashed run's transcript. A meta that is already
+		// gone (deleted, or never written) has nothing left to preserve.
+		if name, ok := containerAgentName(c); ok {
+			if meta, err := agent.ReadMeta(name); err == nil {
+				agent.PreserveExecutionArtifacts(ctx, docker, meta)
+			}
+		}
 		// A container the normal stop path is removing at this moment is gone
 		// by the time we get to it; that is the outcome wanted, not an error.
 		if err := docker.ContainerRemove(ctx, c.ID, devcontainer.ContainerRemoveOptions{}); err != nil {
