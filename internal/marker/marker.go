@@ -154,11 +154,21 @@ const (
 	EscalationPlanStuck = "plan-stuck"
 )
 
+// BlockerFields are what a stop an agent chose (`needs-human-work`) carries on
+// its *-failed marker: the blocker's kind, the evidence observed, what was
+// attempted and the condition that releases the work (shared/exit-contract.md,
+// SC-5179). Optional, because the daemon's own failure markers — a crash, a
+// reap — have none of it; declared, so `human fsm marker` advertises them
+// instead of leaving the contract in prose (`fsm where` prints only the
+// required fields). A fresh slice per call, so no two specs share a backing
+// array a caller could sort or append through.
+func BlockerFields() []string { return []string{"kind", "evidence", "attempted", "release"} }
+
 var specs = map[string]spec{
 	"plan":                  {},
 	"plan-ready":            {},
-	"planning-failed":       {},
-	"implementation-failed": {},
+	"planning-failed":       {optional: append([]string{"reason"}, BlockerFields()...)},
+	"implementation-failed": {optional: append([]string{"reason"}, BlockerFields()...)},
 	// Two determinations share this header on purpose (SC-2990): the ordinary
 	// refusal, and the plan-stuck escalation raised once PlanRedriveBound is
 	// spent. Which one a comment is, is the escalation field — optional
@@ -167,11 +177,11 @@ var specs = map[string]spec{
 	"ready-for-review": {required: []string{"branch", "commits"}},
 	"review-started":   {},
 	"review-complete":  {required: []string{"verdict"}},
-	"review-failed":    {required: []string{"reason"}},
+	"review-failed":    {required: []string{"reason"}, optional: BlockerFields()},
 	"no-fix-needed":    {required: []string{"verdict"}},
 	"nothing-to-do":    {required: []string{"evidence"}},
 	"deploy-started":   {},
-	"deploy-failed":    {required: []string{"reason"}},
+	"deploy-failed":    {required: []string{"reason"}, optional: BlockerFields()},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case
@@ -386,37 +396,66 @@ func ParseBody(body string) (Marker, bool) {
 	}
 	m := Marker{Type: header[1], Head: strings.TrimSpace(header[2])}
 
-	fields := map[string]string{}
+	fields, end, blankSeparator := scanFieldBlock(lines, 1)
+	if len(fields) > 0 {
+		m.Fields = fields
+	}
+	// A blank separator line is itself consumed (the body starts after it); a
+	// non-field line that ended the block is already the first body line.
+	bodyStart := end
+	if blankSeparator {
+		bodyStart++
+	}
+	if bodyStart < len(lines) {
+		m.Body = strings.TrimSpace(strings.Join(lines[bodyStart:], "\n"))
+	}
+	return m, true
+}
+
+// scanFieldBlock scans lines[start:] for a marker's field block — the
+// contiguous run of "key: value" lines and their indented continuations that
+// follows the header — and returns the parsed fields plus where the block
+// ends: end is the index of the line that ends it, and blankSeparator says
+// whether that line is a true blank separator ("") rather than a non-field
+// line the tolerant reader treats as the start of the body.
+//
+// Sign's insertFieldLines calls this too (for end alone) so the two
+// functions' notion of "where do the fields end" — in particular the
+// ordering between a continuation line and the blank-line boundary — cannot
+// drift apart the way it did before: insertFieldLines tested the blank-line
+// boundary first, so a signed marker whose field carried an embedded blank
+// line (rendered as a "  " continuation) got its signature spliced inside
+// that field instead of after it.
+func scanFieldBlock(lines []string, start int) (fields map[string]string, end int, blankSeparator bool) {
+	fields = map[string]string{}
 	var currentField string
-	bodyStart := len(lines)
-	for i := 1; i < len(lines); i++ {
+	for i := start; i < len(lines); i++ {
 		line := lines[i]
+		// A continuation line is checked before the blank-line boundary: Render
+		// writes an empty continuation as "  " (the two-space indent with no
+		// content), which trims to "" exactly like the true field/body separator
+		// (a genuinely empty line). Only the separator has zero leading
+		// whitespace, so testing the indent first keeps a verbatim value's
+		// embedded blank line inside the field instead of truncating it and
+		// spilling the rest of the fields into the body.
+		if (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) && currentField != "" {
+			fields[currentField] += "\n" + strings.TrimSpace(line)
+			continue
+		}
 		if strings.TrimSpace(line) == "" {
-			bodyStart = i + 1
-			break
+			return fields, i, true
 		}
 		if match := fieldPattern.FindStringSubmatch(line); match != nil {
 			currentField = match[1]
 			fields[currentField] = match[2]
 			continue
 		}
-		if (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) && currentField != "" {
-			fields[currentField] += "\n" + strings.TrimSpace(line)
-			continue
-		}
 		// A non-field, non-continuation line without a preceding blank line:
 		// treat everything from here as body — tolerant reading beats
 		// rejecting a slightly hand-edited marker.
-		bodyStart = i
-		break
+		return fields, i, false
 	}
-	if len(fields) > 0 {
-		m.Fields = fields
-	}
-	if bodyStart < len(lines) {
-		m.Body = strings.TrimSpace(strings.Join(lines[bodyStart:], "\n"))
-	}
-	return m, true
+	return fields, len(lines), false
 }
 
 // Latest returns the newest marker of markerType among comments, using the

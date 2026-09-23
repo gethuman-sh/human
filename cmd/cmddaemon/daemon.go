@@ -3632,8 +3632,8 @@ func advanceDeployFixFunc(ctx context.Context, ds *daemonState, launchGate func(
 		if comments, cerr := deps.Commenter.ListComments(ctx, pmKey); cerr == nil {
 			anchor, _ = daemon.LatestMarkerTime(comments, daemon.DeployFixStartedHeader)
 		}
-		exit := readDeployFixExit(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, anchor, logger)
-		return deps.AdvanceDeployFix(ctx, pmKey, exit)
+		exit, blocker := readDeployFixExit(ctx, boardStateProject(ds.srv.Projects, pmKey), pmKey, anchor, logger)
+		return deps.AdvanceDeployFix(ctx, pmKey, exit, blocker)
 	}
 }
 

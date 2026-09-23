@@ -1,6 +1,7 @@
 package marker
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -56,6 +57,26 @@ func TestParseBody_multilineFieldRoundTrip(t *testing.T) {
 	parsed, ok := ParseBody(Render(orig, []string{"verdict", "reviews"}))
 	require.True(t, ok)
 	assert.Equal(t, orig, parsed)
+}
+
+func TestParseBody_multilineFieldWithEmbeddedBlankLine(t *testing.T) {
+	orig := Marker{
+		Type: "implementation-failed",
+		Fields: map[string]string{
+			"reason":    "verify budget spent",
+			"kind":      "exhausted-fix-rounds",
+			"evidence":  "$ go test ./...\n\nFAIL: TestX (0.01s)",
+			"attempted": "retried twice",
+			"release":   "a person resolves the flake",
+		},
+	}
+	rendered := Render(orig, []string{"reason", "kind", "evidence", "attempted", "release"})
+	parsed, ok := ParseBody(rendered)
+	require.True(t, ok)
+	// A blank line embedded in a field's value must stay inside that field —
+	// not truncate it and spill the remaining fields into the body.
+	assert.Equal(t, orig, parsed)
+	assert.Empty(t, parsed.Body)
 }
 
 func TestParseBody_notAMarker(t *testing.T) {
@@ -210,4 +231,21 @@ func TestKnownTypes_sortedAndComplete(t *testing.T) {
 	assert.Contains(t, types, "ready-for-review")
 	assert.Contains(t, types, "bug-verify")
 	assert.IsIncreasing(t, types)
+}
+
+// The blocker contract lives in the protocol, not only in prose: every stage's
+// *-failed marker advertises the four fields a needs-human-work stop carries,
+// so `human fsm marker` names them (SC-5179).
+func TestFailedMarkers_advertiseTheBlockerFields(t *testing.T) {
+	for _, typ := range []string{"planning-failed", "implementation-failed", "review-failed", "deploy-failed"} {
+		opt := OptionalFields(typ)
+		for _, f := range BlockerFields() {
+			if !slices.Contains(opt, f) {
+				t.Errorf("%s: optional fields %v lack %q", typ, opt, f)
+			}
+		}
+		if err := Validate(Marker{Type: typ, Fields: map[string]string{"reason": "r", "kind": "other", "evidence": "e", "attempted": "a", "release": "x"}}); err != nil {
+			t.Errorf("%s: a marker carrying the blocker fields must validate: %v", typ, err)
+		}
+	}
 }

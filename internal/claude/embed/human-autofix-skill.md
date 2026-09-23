@@ -47,12 +47,16 @@ human state set <BUG_KEY> stage.implementation --json --body-file - <<'EOF'
 {"exit":"needs-human-work",
  "summary":"one line in the stage's own terms — e.g. verify budget spent after 3 real attempts; gaps: <…>",
  "evidence":"the marker just posted (e.g. [human:implementation-failed]) and the state keys that back it",
+ "blocker":{"kind":"exhausted-fix-rounds",
+   "evidence":"the bug-verify gaps, verbatim — same text as the marker's evidence field",
+   "attempted":"what each of the real attempts tried",
+   "release":"what a person needs to resolve before a re-dispatch could pass verify"},
  "unchecked":"<dependent kinds this run could not determine, and why — empty if none>",
  "next":"what a human must decide or do"}
 EOF
 ```
 
-Use the exit vocabulary the board understands (`internal/daemon/board_retry.go`): `retryable`, `outage`, `needs-input`, `needs-human-work`, `done`. A clean resolved terminal (no-fix-needed, Step 3a) records `{"exit":"done", ...}` alongside its `[human:no-fix-needed]` marker; a spent budget records `needs-human-work`; an interrupted-substrate stop records `retryable`/`outage`. This record is additive — it does not replace the phase records.
+Use the exit vocabulary the board understands (`internal/daemon/board_retry.go`): `retryable`, `outage`, `needs-input`, `needs-human-work`, `done`. A clean resolved terminal (no-fix-needed, Step 3a) records `{"exit":"done", ...}` alongside its `[human:no-fix-needed]` marker; a spent budget records `needs-human-work` with the `blocker` object shown above (per the exit contract); an interrupted-substrate stop records `retryable`/`outage` and carries no `blocker`. This record is additive — it does not replace the phase records.
 
 <!-- human:include dependents -->
 
@@ -267,17 +271,21 @@ human state get <WORK_KEY> stage.verify --field verdict   # DONE | NOT DONE
 human state get <WORK_KEY> stage.verify --field gaps      # what is still missing, when NOT DONE
 ```
 
-If the verdict is NOT DONE, re-run Step 5 to address the gaps, under the retry budget above — charge an attempt only for a failure that reproduced, and keep going while the budget holds. Once the budget is spent, do NOT stop silently — in board context a silent stop freezes the card at "being fixed" forever with no agent and no reconciliation path (1136). Before stopping, post an explicit terminal marker so the board reds the card to a needs-attention/Retry badge instead:
+If the verdict is NOT DONE, re-run Step 5 to address the gaps, under the retry budget above — charge an attempt only for a failure that reproduced, and keep going while the budget holds. Once the budget is spent, do NOT stop silently — in board context a silent stop freezes the card at "being fixed" forever with no agent and no reconciliation path (1136). Before stopping, post an explicit terminal marker carrying the same blocker the exit contract requires, so the board reds the card to a needs-attention/Retry badge instead:
 
 ```bash
-human marker post <BUG_KEY> implementation-failed --body-file - <<'EOF'
-<one-line verdict headline — becomes the card's badge text>
-
-<the bug-verify gaps: what is still NOT DONE and why>
+human marker post <BUG_KEY> implementation-failed \
+  --field reason="<one-line verdict headline — becomes the card's badge text>" \
+  --field kind=exhausted-fix-rounds \
+  --field evidence="<the bug-verify gaps, verbatim: what is still NOT DONE and why>" \
+  --field attempted="<what each of the budget.implementation.attempts real attempts tried>" \
+  --field release="<what a person needs to resolve before a re-dispatch could pass verify>" \
+  --body-file - <<'EOF'
+<the bug-verify gaps: what is still NOT DONE and why, in full>
 EOF
 ```
 
-The first body line becomes the badge headline. This is mandatory in board context — every run must leave a visible, honest outcome behind rather than a card left silently "running". Then record the stage outcome (`stage.implementation`, exit `needs-human-work`, per "Recording the board stage outcome") so the daemon reads the spent budget instead of the generic diagnose line, and STOP and report honestly without posting the handoff.
+The `reason` field becomes the badge headline; the body carries the fuller detail. This is mandatory in board context — every run must leave a visible, honest outcome behind rather than a card left silently "running". Then record the stage outcome (`stage.implementation`, exit `needs-human-work`, with the matching `blocker` object, per "Recording the board stage outcome") so the daemon reads the spent budget instead of the generic diagnose line, and STOP and report honestly without posting the handoff.
 
 ## Step 7 — Phase 5: Hand off and review
 

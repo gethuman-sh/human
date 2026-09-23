@@ -3,7 +3,10 @@ package daemon
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/gethuman-sh/human/internal/marker"
+	"github.com/gethuman-sh/human/internal/tracker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,4 +117,29 @@ func TestPREscalation_recognisedVerdictsKeepTheirHeadlines(t *testing.T) {
 	budgetSpent := escalationBodyAfterRounds(t, DefaultPRReviewRounds,
 		PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true}, nil)
 	assert.Contains(t, budgetSpent, "did not converge within 8 review rounds")
+}
+
+// A deploy fixer that stops for a person recorded what it found in its stage
+// record; the marker the loop posts on its behalf carries those four fields,
+// so the red card says what was observed, tried and needed — not only what
+// the fixer was sent to fix (SC-5179).
+func TestAdvanceDeployFix_escalationCarriesTheFixersBlocker(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1", Created: time.Now().Add(-time.Hour)},
+		{Body: "[human:deploy-fix-started]\npr: u\nnumber: 7\nbranch: feat/x\nCI checks failed on the pull request", ID: "2", Created: time.Now().Add(-time.Minute)},
+	}}
+	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitNeedsHumanWork, Blocker{
+		Kind: "conflicting-requirements", Evidence: "main_test.go:12 pins the old body", Attempted: "rebased; ran the suite", Release: "a person decides which contract wins",
+	}))
+
+	failed, ok := posted(c, DeployFailedHeader)
+	require.True(t, ok)
+	for _, want := range []string{"kind: conflicting-requirements", "evidence: main_test.go:12 pins the old body", "attempted: rebased; ran the suite", "release: a person decides which contract wins"} {
+		assert.Contains(t, failed, want)
+	}
+	m, parsed := marker.ParseBody(failed)
+	require.True(t, parsed)
+	require.NoError(t, marker.Validate(m), "the blocker fields are protocol-legal on deploy-failed")
 }

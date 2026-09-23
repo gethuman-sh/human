@@ -97,3 +97,19 @@ func TestSharedFragments_AreAllPopulated(t *testing.T) {
 		require.NotEmpty(t, strings.TrimSpace(string(body)), "fragment %q is empty", name)
 	}
 }
+
+// The needs-human-work row must carry the blocker contract: a stop the machine
+// takes on an agent's word records what was observed, what was tried and what
+// would release it, and names its marker concretely (SC-5179).
+func TestExpandIncludes_ExitContractHasBlockerContract(t *testing.T) {
+	out, err := expandIncludes([]byte("<!-- human:include exit-contract -->\n"))
+	require.NoError(t, err)
+	s := string(out)
+	for _, want := range []string{"`kind`", "`evidence`", "`attempted`", "`release`",
+		"`missing-permission`", "`unavailable-dependency`", "`exhausted-fix-rounds`", "`conflicting-requirements`", "`other`",
+		"check what can be checked", `"blocker":{"kind":"missing-permission"`,
+		"`planning-failed`", "`implementation-failed`", "`review-failed`", "`deploy-failed`"} {
+		require.Contains(t, s, want)
+	}
+	require.NotContains(t, s, "<stage>-failed", "the marker name is concrete; a placeholder posts a comment the board never classifies")
+}

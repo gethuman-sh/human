@@ -150,9 +150,7 @@ func optionsMarker(stage BoardStage, context string, opts []BoardOption) (marker
 //
 // The split is not cosmetic: the card badge shows one line and the detail pane
 // shows the rest, so the headline goes in `reason` (the field every *-failed
-// spec requires) and the detail stays prose in the body. Keeping the whole
-// diagnosis in `reason` would fold its blank line into a field continuation and
-// silently truncate the field block at the first empty line; keeping it all in
+// spec requires) and the detail stays prose in the body. Keeping it all in
 // the body would post a marker with no reason at all, which is what the daemon
 // did before. failureBody recomposes the two halves for the reader.
 func failureMarker(markerType, diagnosis string) marker.Marker {

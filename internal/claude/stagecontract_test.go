@@ -28,6 +28,25 @@ var (
 	placeholderPattern = regexp.MustCompile(`human state set \S+ stage\.<`)
 )
 
+// embedMarkdownFiles lists every prompt and shared fragment, as paths relative
+// to embed/, because a rule stated once in embed/shared/ reaches every prompt
+// that includes it and a scan of the top level alone would miss it.
+func embedMarkdownFiles(t *testing.T) []string {
+	t.Helper()
+	var names []string
+	for _, dir := range []string{"", "shared"} {
+		entries, err := os.ReadDir(filepath.Join("embed", dir))
+		require.NoError(t, err)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			names = append(names, filepath.Join(dir, e.Name()))
+		}
+	}
+	return names
+}
+
 // readEmbed loads a prompt from the embed directory beside this package.
 func readEmbed(t *testing.T, name string) string {
 	t.Helper()
@@ -115,7 +134,12 @@ func TestStageContract_EveryFieldReadIsAlsoWritten(t *testing.T) {
 }
 
 var (
-	markerPostPattern = regexp.MustCompile(`human marker post \S+ ([a-z][a-z-]*)`)
+	// The type group admits placeholders on purpose: a prompt that tells an
+	// agent to post `<stage>-failed` posts a marker the board never classifies,
+	// and a pattern that required a letter first skipped exactly that line —
+	// which lived in a shared fragment, so the scan below reads embed/shared
+	// as well as the prompts that include it (SC-5179).
+	markerPostPattern = regexp.MustCompile(`human marker post \S+ ([a-z<][a-zA-Z<>_-]*)`)
 	taskModelPattern  = regexp.MustCompile(`Task\(subagent_type="([a-z-]+)", model="([^"]+)"`)
 	// The Task tool accepts model aliases, never full model ids. Verified
 	// against the Claude Code 2.1.218 input schema:
@@ -194,20 +218,14 @@ func TestPrompts_PostOnlyKnownMarkerTypes(t *testing.T) {
 		known[k] = true
 	}
 
-	entries, err := os.ReadDir("embed")
-	require.NoError(t, err)
-
 	posts := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		for _, m := range markerPostPattern.FindAllStringSubmatch(readEmbed(t, e.Name()), -1) {
+	for _, name := range embedMarkdownFiles(t) {
+		for _, m := range markerPostPattern.FindAllStringSubmatch(readEmbed(t, name), -1) {
 			posts++
 			require.True(t, known[m[1]],
 				"%s posts [human:%s], which the marker protocol does not define — "+
 					"add it to internal/marker specs, or use the existing marker for that job",
-				e.Name(), m[1])
+				name, m[1])
 		}
 	}
 	require.Positive(t, posts, "no marker posts found — the regex has drifted from the prompts")
@@ -296,5 +314,21 @@ func TestPrompts_NoUnsubstitutedStageKeys(t *testing.T) {
 		require.NoError(t, err)
 		require.NotRegexp(t, placeholderPattern, string(body),
 			"shared/%s records a stage under a literal placeholder", e.Name())
+	}
+}
+
+// The budget-spent stop in the two fix skills is the pipeline's highest-volume
+// needs-human-work path; its marker template must carry the four blocker
+// fields the shared contract requires (SC-5179).
+func TestPrompts_BudgetSpentStopCarriesTheBlockerFields(t *testing.T) {
+	for _, name := range []string{"human-autofix-skill.md", "human-security-fix-skill.md"} {
+		body := readEmbed(t, name)
+		i := strings.Index(body, "implementation-failed \\")
+		require.Positive(t, i, "%s: the budget-spent implementation-failed template must exist", name)
+		window := body[i:min(len(body), i+900)]
+		for _, field := range []string{"--field kind=", "--field evidence=", "--field attempted=", "--field release="} {
+			require.Contains(t, window, field, "%s: the implementation-failed template must carry %s", name, field)
+		}
+		require.Contains(t, body, `"blocker":{"kind":`, "%s: the stage record must carry the blocker object", name)
 	}
 }

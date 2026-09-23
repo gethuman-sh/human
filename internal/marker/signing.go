@@ -55,9 +55,9 @@ func Sign(body, machine, build string) string {
 
 // insertFieldLines splices sigLines in after the last line of a marker's field
 // block — the contiguous run of key: value / continuation lines following the
-// header, up to the first blank line or the start of the body. It mirrors
-// ParseBody's field-scanning so the fields land exactly where ParseBody will
-// read them back as fields rather than body.
+// header, up to the first blank line or the start of the body. It calls
+// ParseBody's own scanFieldBlock for that boundary — not a hand-mirrored copy
+// of its ordering — so the two cannot drift apart on where a field ends.
 func insertFieldLines(body string, sigLines []string) string {
 	lines := strings.Split(body, "\n")
 	headerIdx := -1
@@ -73,27 +73,7 @@ func insertFieldLines(body string, sigLines []string) string {
 	if headerIdx == -1 {
 		return body
 	}
-	insertAt := len(lines)
-	haveField := false
-	for i := headerIdx + 1; i < len(lines); i++ {
-		line := lines[i]
-		if strings.TrimSpace(line) == "" {
-			insertAt = i
-			break
-		}
-		if fieldPattern.MatchString(line) {
-			haveField = true
-			continue
-		}
-		if (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) && haveField {
-			continue
-		}
-		// First non-field, non-continuation line without a preceding blank line:
-		// the body starts here, so the signature must go before it (ParseBody's
-		// tolerant reading treats this line as the body start too).
-		insertAt = i
-		break
-	}
+	_, insertAt, _ := scanFieldBlock(lines, headerIdx+1)
 	out := make([]string, 0, len(lines)+len(sigLines))
 	out = append(out, lines[:insertAt]...)
 	out = append(out, sigLines...)
