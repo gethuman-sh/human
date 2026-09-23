@@ -68,6 +68,19 @@ func stageExitClass(ctx context.Context, project, pmKey string, stage daemon.Boa
 	return exit, found
 }
 
+// durableStageExitClass is the durable passes' reader: one read, no
+// presence-settle. The settle window in stageExitClass exists for a state
+// write racing an exit hook by seconds, and it costs up to 90 seconds per
+// missing record on the ONE serial reconcile goroutine. The durable passes
+// only ever look at cards already minutes past their failure — the stuck
+// sweep past StuckRunningGrace, the failed-stage pass past
+// FailedRecoveryGrace — where a record still missing is missing for good
+// (the agent never wrote one), so the wait cannot pay off and after a daemon
+// crash it would stall every other pass behind each stranded card (SC-5170).
+func durableStageExitClass(ctx context.Context, project, pmKey string, stage daemon.BoardStage, logger zerolog.Logger) (daemon.StageExit, bool) {
+	return readStageExitOnce(ctx, project, pmKey, stage, logger)
+}
+
 // readStageExitOnce performs a single, non-retrying read of a stage's exit
 // class — extracted so stageExitClass can wrap it in the presence-settle
 // backoff above without duplicating the store/parse logic.

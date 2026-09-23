@@ -292,6 +292,14 @@ func (r StageRetry) relaunchBounded(ctx context.Context, pmKey string, stage Boa
 		return false
 	}
 	if attempt > r.max() {
+		// Attempts() above already charged this call before the cap could be
+		// checked, and nothing was launched — an exhausted card left standing
+		// gets reprobed on every reconcile tick, and without this refund each
+		// tick inflates the persisted counter forever (the durable-recovery
+		// pass reprobes a red card at the reconcile interval for the whole of
+		// FailedRecoveryBound). Roll it back so a spent budget reads the same
+		// whether it was checked once or a thousand times.
+		r.uncount(pmKey, stage)
 		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Int("attempt", attempt).
 			Msg("board retry: attempts exhausted, leaving the card for a human")
 		return false

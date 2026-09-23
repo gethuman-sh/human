@@ -945,7 +945,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		// recovering from is long gone — so it drives the loop with no run identity
 		// and any escalation falls back to its generic line.
 		DriveLoop: func(pmKey string) error { return advancePRLoop(pmKey, "", "") },
-		Retry:     stageRetry,
+		Retry:     durableStageRetry(ctx, stageRetry, ds.srv.Projects, logger),
 		Progress:  agentProgress,
 		StopAgent: stopHungAgent,
 		// A deploy runs in this process and registers no agent, so its progress is
@@ -3556,6 +3556,18 @@ func closeTicketerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver, li
 		}
 		return transitioner.TransitionIssue(context.Background(), req.PMKey, "done")
 	}
+}
+
+// durableStageRetry is the live policy with its exit reader swapped for the
+// non-settling one: same budget, same relaunch, same refund — the durable
+// passes share every rule with the live watcher except the wait for a record
+// that, minutes after the failure, is not coming (SC-5170).
+func durableStageRetry(ctx context.Context, live daemon.StageRetry, reg *daemon.ProjectRegistry, logger zerolog.Logger) daemon.StageRetry {
+	durable := live
+	durable.Outcome = func(pmKey string, stage daemon.BoardStage) (daemon.StageExit, bool) {
+		return durableStageExitClass(ctx, boardStateProject(reg, pmKey), pmKey, stage, logger)
+	}
+	return durable
 }
 
 // advancePRLoopFunc builds the PR review→fix loop's Stop-event driver: on each

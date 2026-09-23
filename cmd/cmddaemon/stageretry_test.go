@@ -165,3 +165,26 @@ func TestTranslateLaunchErr(t *testing.T) {
 		assert.False(t, stderrors.Is(got, daemon.ErrAgentAlreadyRunning))
 	})
 }
+
+// The durable passes read the exit once: a missing record minutes after the
+// failure is not coming, and the presence-settle wait would stall the single
+// reconcile goroutine for up to 90s per stranded card (SC-5170).
+func TestDurableStageExitClass_DoesNotSettle(t *testing.T) {
+	isolateState(t)
+	origStep, origTries := prLoopReadRecheckStep, prLoopReadRecheckTries
+	prLoopReadRecheckStep = 200 * time.Millisecond
+	prLoopReadRecheckTries = 10
+	t.Cleanup(func() { prLoopReadRecheckStep, prLoopReadRecheckTries = origStep, origTries })
+
+	start := time.Now()
+	_, found := durableStageExitClass(context.Background(), "", "SC-1", daemon.BoardImplementation, zerolog.Nop())
+
+	require.False(t, found)
+	require.Less(t, time.Since(start), prLoopReadRecheckStep, "one read, no settle loop")
+
+	live := daemon.StageRetry{Max: 2, Outcome: func(string, daemon.BoardStage) (daemon.StageExit, bool) { return daemon.ExitDone, true }}
+	durable := durableStageRetry(context.Background(), live, nil, zerolog.Nop())
+	require.Equal(t, live.Max, durable.Max, "every rule but the reader is shared")
+	_, found = durable.Outcome("SC-1", daemon.BoardImplementation)
+	require.False(t, found, "the durable reader reads the store, not the live stub")
+}

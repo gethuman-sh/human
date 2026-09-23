@@ -300,6 +300,13 @@ func reconcileOnce(ctx context.Context, deps ReconcileDeps) {
 	if n := reconcileStuckRunning(ctx, gate.forTakeover(cards), deps, time.Now()); n > 0 {
 		logger.Info().Int("reddened", n).Msg("board reconcile: reddened stuck-running cards with no live agent")
 	}
+	// After the stuck pass: a failed stage the live exit path never reached (a
+	// restart between the failure and its handling, a lost launch) is
+	// relaunched here through the same charged retry policy, rather than left
+	// red until a person clicks Retry (SC-5170).
+	if n := reconcileFailedStages(ctx, gate.forTakeover(cards), deps, time.Now()); n > 0 {
+		logger.Info().Int("relaunched", n).Msg("board reconcile: relaunched failed stages the live path did not reach")
+	}
 	// After the stuck pass, because a queued card is the one thing that pass is
 	// built NOT to touch: BoardQueued exists so a just-decided card is not redded
 	// (SC-1320), which left it watched by nothing at all (SC-3865). It takes the
