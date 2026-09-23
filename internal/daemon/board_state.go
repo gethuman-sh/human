@@ -508,6 +508,28 @@ func parseResumeLine(body string) string {
 	return parsePrefixedLine(body, "resume:")
 }
 
+// blockerLines renders the blocker fields a *-failed marker may carry, one
+// labelled line each in the contract's order, or "" when it carries none.
+func blockerLines(fields map[string]string) string {
+	var lines []string
+	for _, f := range marker.BlockerFields() {
+		if v := strings.TrimSpace(fields[f]); v != "" {
+			lines = append(lines, f+": "+v)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func nonEmptyParts(parts ...string) []string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // failureBody returns everything after a *-failed marker's header line — the
 // full diagnosis (headline plus markdown detail) for surfaces that can render
 // more than one line. Falls back to failureReason so a reason-less marker
@@ -526,15 +548,14 @@ func failureBody(body string) string {
 		// this is where they are put back together. Either half alone is still a
 		// diagnosis: a marker posted before the field existed carries prose only,
 		// and a one-line failure carries a reason only.
-		reason := strings.TrimSpace(m.Fields["reason"])
-		rest := strings.TrimSpace(m.Body)
-		switch {
-		case reason != "" && rest != "":
-			return reason + "\n\n" + rest
-		case reason != "":
-			return reason
-		case rest != "":
-			return rest
+		// The blocker a needs-human-work stop recorded (kind, evidence,
+		// attempted, release) sits between the two: it is why the evidence was
+		// put on the marker at all — so the person on the red card is not sent
+		// to the tracker comment to learn what the machine already found
+		// (SC-5249).
+		parts := nonEmptyParts(strings.TrimSpace(m.Fields["reason"]), blockerLines(m.Fields), strings.TrimSpace(m.Body))
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n\n")
 		}
 		// A marker carrying neither has no diagnosis to give: show the header.
 		return firstLine(trimmed)

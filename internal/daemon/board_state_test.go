@@ -251,6 +251,16 @@ func TestFailureBody(t *testing.T) {
 	t.Run("header-only marker falls back to the header", func(t *testing.T) {
 		assert.Equal(t, "[human:planning-failed]", failureBody("[human:planning-failed]"))
 	})
+	// The blocker fields are the evidence the stop recorded so nobody re-runs
+	// the investigation; the card shows them under the reason, labelled, in
+	// the contract's order, before the prose (SC-5249).
+	t.Run("blocker fields are shown between the reason and the detail", func(t *testing.T) {
+		body := "[human:implementation-failed]\nreason: cannot push\nrelease: token gains write\nkind: missing-permission\nevidence: remote: 403\n\nwhat was tried"
+		assert.Equal(t, "cannot push\n\nkind: missing-permission\nevidence: remote: 403\nrelease: token gains write\n\nwhat was tried", failureBody(body))
+	})
+	t.Run("a marker without blocker fields reads as before", func(t *testing.T) {
+		assert.Equal(t, "reason only\n\ndetail", failureBody("[human:deploy-failed]\nreason: reason only\n\ndetail"))
+	})
 }
 
 // SC-1701: two classified markers for one stage sharing a one-second Created
