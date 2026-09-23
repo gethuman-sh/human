@@ -198,3 +198,32 @@ func TestCheckClaudeAuth_expiredAccessTokenWithRefreshTokenIsHealthy(t *testing.
 	assert.True(t, ok)
 	assert.Equal(t, "session valid", detail)
 }
+
+// A store whose OAuth tokens were wiped — Claude Code clears them when the auth
+// server rejects the refresh, leaving the subscription type and scopes behind
+// — read as "session valid" because the expiry it fails open on was gone too,
+// while every agent launched into it died at authentication (SC-5108). The
+// surviving fields are the evidence that this is a dead login, not schema drift.
+func TestCheckClaudeAuth_wipedTokensAreUnauthenticated(t *testing.T) {
+	dir := t.TempDir()
+	credDir := filepath.Join(dir, ".devcontainer", "claude")
+	require.NoError(t, os.MkdirAll(credDir, 0o755))
+	body := `{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0,"scopes":["user:inference"],"subscriptionType":"max"}}`
+	require.NoError(t, os.WriteFile(filepath.Join(credDir, ".credentials.json"), []byte(body), 0o600))
+	reg, err := daemon.NewProjectRegistry([]string{dir})
+	require.NoError(t, err)
+
+	ok, detail := checkClaudeAuth(reg, nil)
+
+	assert.False(t, ok)
+	assert.Contains(t, detail, "login wiped")
+	assert.Contains(t, detail, "human agent start reauth --interactive")
+}
+
+// The genuinely empty block — nothing but braces — stays unjudgeable, exactly
+// as before: it is what schema drift looks like too.
+func TestCheckClaudeAuth_emptyBlockStillFailsOpen(t *testing.T) {
+	reg := claudeAuthRegistryRefresh(t, 0, "")
+	ok, _ := checkClaudeAuth(reg, nil)
+	assert.True(t, ok)
+}
