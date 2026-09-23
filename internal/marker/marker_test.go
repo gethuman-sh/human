@@ -116,6 +116,21 @@ func TestValidate_headEnum(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "bug-verify", Head: "NOT DONE"}))
 }
 
+// A blocker's kind is a closed set the contract names; a value outside it is
+// refused at the post the way a bad head token is, and an absent kind stays
+// legal because the daemon's own failure markers carry no blocker (SC-5250).
+func TestValidate_blockerKindEnum(t *testing.T) {
+	for _, typ := range []string{"planning-failed", "implementation-failed", "review-failed", "deploy-failed"} {
+		err := Validate(Marker{Type: typ, Fields: map[string]string{"reason": "r", "kind": "missing-permision"}})
+		require.Error(t, err, typ)
+		assert.Contains(t, err.Error(), "missing-permission|unavailable-dependency", typ)
+		assert.NoError(t, Validate(Marker{Type: typ, Fields: map[string]string{"reason": "r", "kind": "other"}}), typ)
+		assert.NoError(t, Validate(Marker{Type: typ, Fields: map[string]string{"reason": "r"}}), typ)
+		assert.Equal(t, BlockerKinds(), FieldValues(typ)["kind"], typ)
+	}
+	assert.Nil(t, FieldValues("deployed"))
+}
+
 func TestValidate_relatedHeadEnum(t *testing.T) {
 	// The related record's head names which of the three required statements it
 	// is; a head outside the enum would be a verdict no reader knows (SC-2405).

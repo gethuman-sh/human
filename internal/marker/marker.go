@@ -6,6 +6,7 @@
 package marker
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"sort"
@@ -48,7 +49,13 @@ type spec struct {
 	// marker invalid — but declaring it is what keeps a machine-read
 	// distinction in the protocol instead of in prose, and it is what
 	// `human fsm marker` reports to whoever has to post one.
-	optional  []string
+	optional []string
+	// fieldEnum closes the value set of a field: a value outside it is refused
+	// at the post, the way a head token outside headEnum is. An absent field
+	// is not an error — the field is still optional — but a present one must
+	// mean one of the declared things, so a reader can group and act on it
+	// instead of matching prose (SC-5250).
+	fieldEnum map[string][]string
 	headEnum  []string
 	needsHead bool
 	// validate carries a contract the field lists cannot express.
@@ -164,11 +171,22 @@ const (
 // array a caller could sort or append through.
 func BlockerFields() []string { return []string{"kind", "evidence", "attempted", "release"} }
 
+// BlockerKinds is the closed set a blocker's `kind` may name
+// (shared/exit-contract.md): what a person or a later run can group stops
+// by. A misspelling or an invented kind would land on the ticket looking
+// classified while nothing downstream could act on it, so the set is
+// enforced at the post (SC-5250).
+func BlockerKinds() []string {
+	return []string{"missing-permission", "unavailable-dependency", "exhausted-fix-rounds", "conflicting-requirements", "other"}
+}
+
+func blockerKindEnum() map[string][]string { return map[string][]string{"kind": BlockerKinds()} }
+
 var specs = map[string]spec{
 	"plan":                  {},
 	"plan-ready":            {},
-	"planning-failed":       {optional: append([]string{"reason"}, BlockerFields()...)},
-	"implementation-failed": {optional: append([]string{"reason"}, BlockerFields()...)},
+	"planning-failed":       {optional: append([]string{"reason"}, BlockerFields()...), fieldEnum: blockerKindEnum()},
+	"implementation-failed": {optional: append([]string{"reason"}, BlockerFields()...), fieldEnum: blockerKindEnum()},
 	// Two determinations share this header on purpose (SC-2990): the ordinary
 	// refusal, and the plan-stuck escalation raised once PlanRedriveBound is
 	// spent. Which one a comment is, is the escalation field — optional
@@ -177,11 +195,11 @@ var specs = map[string]spec{
 	"ready-for-review": {required: []string{"branch", "commits"}},
 	"review-started":   {},
 	"review-complete":  {required: []string{"verdict"}},
-	"review-failed":    {required: []string{"reason"}, optional: BlockerFields()},
+	"review-failed":    {required: []string{"reason"}, optional: BlockerFields(), fieldEnum: blockerKindEnum()},
 	"no-fix-needed":    {required: []string{"verdict"}},
 	"nothing-to-do":    {required: []string{"evidence"}},
 	"deploy-started":   {},
-	"deploy-failed":    {required: []string{"reason"}, optional: BlockerFields()},
+	"deploy-failed":    {required: []string{"reason"}, optional: BlockerFields(), fieldEnum: blockerKindEnum()},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case
@@ -298,6 +316,34 @@ func OptionalFields(markerType string) []string {
 	return out
 }
 
+// FieldValues reports the fields of a known type whose values are a closed
+// set, with the set — what `human fsm marker` prints so an agent can check a
+// value without reading prose. nil for a type that closes none.
+func FieldValues(markerType string) map[string][]string {
+	s, known := specs[markerType]
+	if !known || len(s.fieldEnum) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(s.fieldEnum))
+	for f, vals := range s.fieldEnum {
+		out[f] = append([]string(nil), vals...)
+	}
+	return out
+}
+
+// validateFieldEnums refuses a present field whose value is outside its
+// closed set. The set is in the message, not only the details: the agent
+// that posted the marker sees the CLI's one line and must be able to correct
+// the value from it.
+func validateFieldEnums(s spec, m Marker) error {
+	for field, allowed := range s.fieldEnum {
+		if v := strings.TrimSpace(m.Fields[field]); v != "" && !slices.Contains(allowed, v) {
+			return errors.WithDetails(fmt.Sprintf("marker field %s must be one of %s", field, strings.Join(allowed, "|")), "type", m.Type, "field", field, "value", v)
+		}
+	}
+	return nil
+}
+
 // Validate checks m against its type's contract. Unknown types pass — only a
 // syntactically valid type name is required.
 func Validate(m Marker) error {
@@ -324,6 +370,9 @@ func Validate(m Marker) error {
 	}
 	if len(s.headEnum) > 0 && m.Head != "" && !slices.Contains(s.headEnum, m.Head) {
 		return errors.WithDetails("marker head token not in allowed set", "type", m.Type, "head", m.Head, "allowed", strings.Join(s.headEnum, "|"))
+	}
+	if err := validateFieldEnums(s, m); err != nil {
+		return err
 	}
 	if s.validate != nil {
 		return s.validate(m)
