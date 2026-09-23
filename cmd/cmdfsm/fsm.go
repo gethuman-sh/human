@@ -136,6 +136,7 @@ func buildMarkerCmd() *cobra.Command {
 				"required_fields":  marker.RequiredFields(name),
 				"any_of_fields":    marker.AnyOfFields(name),
 				"optional_fields":  marker.OptionalFields(name),
+				"field_values":     marker.FieldValues(name),
 				"moves_an_item":    len(uses) > 0,
 				"moves":            moves,
 				"records_content":  listed,

@@ -47,6 +47,18 @@ func TestMarker_ReportsWhereItMovesAnItem(t *testing.T) {
 	assert.Contains(t, got["any_of_fields"], "merged")
 }
 
+// A closed value set is printed with the marker, so an agent posting a
+// blocker can check its kind against the protocol instead of the prose that
+// paraphrases it (SC-5250).
+func TestMarker_ReportsClosedFieldValues(t *testing.T) {
+	got := run(t, "marker", "implementation-failed")
+
+	values, ok := got["field_values"].(map[string]any)
+	require.True(t, ok, "field_values: %#v", got["field_values"])
+	assert.Contains(t, values["kind"], "missing-permission")
+	assert.Contains(t, values["kind"], "other")
+}
+
 // Either form answers: a caller says a marker the way it posts it, and the
 // document writes it the way it appears on a ticket.
 func TestMarker_AcceptsEitherForm(t *testing.T) {

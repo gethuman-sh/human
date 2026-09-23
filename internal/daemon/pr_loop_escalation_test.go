@@ -143,3 +143,28 @@ func TestAdvanceDeployFix_escalationCarriesTheFixersBlocker(t *testing.T) {
 	require.True(t, parsed)
 	require.NoError(t, marker.Validate(m), "the blocker fields are protocol-legal on deploy-failed")
 }
+
+// A bogus or misspelled kind in the fixer's stage record must not reach the
+// ticket as if it were classified: postMarker logs an invalid marker and
+// posts it anyway (SC-3889), so refusing here would only drop the marker, and
+// the marker is the one place a stalled card gets explained. Coercing to
+// "other" keeps the marker legal and honest about what it does not know
+// (SC-5250).
+func TestAdvanceDeployFix_escalationCoercesAnInvalidBlockerKind(t *testing.T) {
+	c := &fakeCommenter{comments: []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1", Created: time.Now().Add(-time.Hour)},
+	}}
+	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
+
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitNeedsHumanWork, Blocker{
+		Kind: "made-up-kind", Evidence: "e", Attempted: "a", Release: "r",
+	}))
+
+	failed, ok := posted(c, DeployFailedHeader)
+	require.True(t, ok)
+	assert.Contains(t, failed, "kind: other")
+	assert.NotContains(t, failed, "made-up-kind")
+	m, parsed := marker.ParseBody(failed)
+	require.True(t, parsed)
+	require.NoError(t, marker.Validate(m), "the coerced kind is protocol-legal on deploy-failed")
+}
