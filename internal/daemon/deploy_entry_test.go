@@ -411,3 +411,26 @@ func TestAdvancePRLoop_approvalRecordsTheReviewedHead(t *testing.T) {
 	assert.True(t, bound)
 	assert.Equal(t, head, got)
 }
+
+// The launch gate refusing the reviewer is not a review that started: saying so
+// would leave the card in deploying with no loop marker for anything to
+// re-drive. The deploy fails here with the blocker pointed at (SC-5108).
+func TestStartDeploy_gateRefusedReviewerIsADeployFailureNotASuccess(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{res: PRResult{Number: 42, URL: "https://example/pr/42", Draft: true}}
+	deps, l := reviewableDeps(c, p)
+	deps.LaunchGate = func(context.Context) []DoctorCheck {
+		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "login wiped"}}
+	}
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{PMKey: "SC-1", Branch: "feat/x"})
+
+	require.Error(t, err)
+	assert.Equal(t, DeployOutcomeShipped, res.Outcome, "not a started review")
+	assert.Zero(t, l.calls, "the gate refused, so nothing launched")
+	failed, ok := posted(c, DeployFailedHeader)
+	require.True(t, ok, "the card must not sit in deploying with nothing behind it")
+	assert.Contains(t, failed, "launch gate refused")
+	_, started := posted(c, PRReviewStartedHeader)
+	assert.False(t, started)
+}

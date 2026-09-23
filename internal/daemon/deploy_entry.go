@@ -199,10 +199,23 @@ func (d BoardTransitionDeps) reviewThenShip(ctx context.Context, req StartDeploy
 			Msg("deploy: the machine review already approved this head; shipping without a new round")
 		return shipped, d.DeployBranch(ctx, req.PMKey, req.Title, req.PRBody, req.Branch)
 	}
-	_, err = d.launchPRLoopAgent(ctx, req.PMKey, prReviewAgentStage,
+	launched, err := d.launchPRLoopAgent(ctx, req.PMKey, prReviewAgentStage,
 		prReviewDispatch(req.PMKey, res.Number, req.Branch),
 		prReviewStartedBody(res.URL, res.Number, req.Branch))
-	return StartDeployResult{Outcome: DeployOutcomeReviewStarted, PRURL: res.URL, PRNumber: res.Number}, err
+	if err != nil {
+		return shipped, err
+	}
+	if !launched {
+		// The launch gate refused (a dead claude-auth store, no docker) or an
+		// agent already owns the step. Reporting "review started" over nothing
+		// started would leave the card in deploying with no loop marker for the
+		// re-drive to find, until the stuck-running sweep reds it an hour later
+		// with a generic reason (SC-5108). Say what is true instead: the deploy
+		// failed here, and the doctor names the blocker.
+		return shipped, d.deployFailed(req.PMKey, res.URL, deployReason(
+			"the machine reviewer could not be launched on this machine — the launch gate refused it (see `human doctor` for the blocker); fix it and re-run Deploy", nil))
+	}
+	return StartDeployResult{Outcome: DeployOutcomeReviewStarted, PRURL: res.URL, PRNumber: res.Number}, nil
 }
 
 // approvalCoversPR reports whether a still-current machine approval judged the
