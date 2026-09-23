@@ -416,7 +416,16 @@ The teardown choke point is `Manager.stopLocked` (`internal/agent/manager.go`):
    longer depends on which ran first (SC-4820).
 6. **Execution directories are pruned after 90 days** (`execRetentionDays`,
    `PruneExecutions`).
-7. **A late-arriving result is reconciled, not left contradicting the reap.**
+7. **What the stop paths leave behind is pruned hourly** (`runAgentPrune`,
+   `cmd/cmddaemon/agentprune.go`, first pass at daemon start): an agent record
+   that ended more than `StoppedMetaRetention` (7 days) ago is retired, and an
+   agent container that has exited with no *running* record — a run killed
+   together with the daemon, a teardown that stopped halfway — is removed. A
+   running record is never touched whatever its age, and a container whose
+   record still says running belongs to the stop path that has not reached it
+   yet. Transcripts, `output.log` and `outcome.json` are not the prune's: they
+   follow the 90-day rule below (SC-5248).
+8. **A late-arriving result is reconciled, not left contradicting the reap.**
    `RunLateResultReconcile` (`internal/daemon/board_latereconcile.go`) scans
    open cards for a stage marked failed followed by that same stage's success
    with no relaunch in between, and records it with a

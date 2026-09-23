@@ -747,6 +747,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	}
 
 	go daemon.RunAgentCleanup(ctx, ds.srv.HookEvents, &dockerAgentCleaner{}, agentClaudeAlive, logger)
+	go runAgentPrune(ctx, logger)
 	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, agentProgress, func(agentName string, reason daemon.ReapReason) {
 		// A reaped agent died without firing hooks, so no exit event exists
 		// for the board failure watcher to act on; synthesizing one converges
