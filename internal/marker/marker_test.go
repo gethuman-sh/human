@@ -58,6 +58,26 @@ func TestParseBody_multilineFieldRoundTrip(t *testing.T) {
 	assert.Equal(t, orig, parsed)
 }
 
+func TestParseBody_multilineFieldWithEmbeddedBlankLine(t *testing.T) {
+	orig := Marker{
+		Type: "implementation-failed",
+		Fields: map[string]string{
+			"reason":    "verify budget spent",
+			"kind":      "exhausted-fix-rounds",
+			"evidence":  "$ go test ./...\n\nFAIL: TestX (0.01s)",
+			"attempted": "retried twice",
+			"release":   "a person resolves the flake",
+		},
+	}
+	rendered := Render(orig, []string{"reason", "kind", "evidence", "attempted", "release"})
+	parsed, ok := ParseBody(rendered)
+	require.True(t, ok)
+	// A blank line embedded in a field's value must stay inside that field —
+	// not truncate it and spill the remaining fields into the body.
+	assert.Equal(t, orig, parsed)
+	assert.Empty(t, parsed.Body)
+}
+
 func TestParseBody_notAMarker(t *testing.T) {
 	_, ok := ParseBody("just a regular comment")
 	assert.False(t, ok)

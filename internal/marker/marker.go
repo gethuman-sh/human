@@ -391,6 +391,17 @@ func ParseBody(body string) (Marker, bool) {
 	bodyStart := len(lines)
 	for i := 1; i < len(lines); i++ {
 		line := lines[i]
+		// A continuation line is checked before the blank-line boundary: Render
+		// writes an empty continuation as "  " (the two-space indent with no
+		// content), which trims to "" exactly like the true field/body separator
+		// (a genuinely empty line). Only the separator has zero leading
+		// whitespace, so testing the indent first keeps a verbatim value's
+		// embedded blank line inside the field instead of truncating it and
+		// spilling the rest of the fields into the body.
+		if (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) && currentField != "" {
+			fields[currentField] += "\n" + strings.TrimSpace(line)
+			continue
+		}
 		if strings.TrimSpace(line) == "" {
 			bodyStart = i + 1
 			break
@@ -398,10 +409,6 @@ func ParseBody(body string) (Marker, bool) {
 		if match := fieldPattern.FindStringSubmatch(line); match != nil {
 			currentField = match[1]
 			fields[currentField] = match[2]
-			continue
-		}
-		if (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) && currentField != "" {
-			fields[currentField] += "\n" + strings.TrimSpace(line)
 			continue
 		}
 		// A non-field, non-continuation line without a preceding blank line:
