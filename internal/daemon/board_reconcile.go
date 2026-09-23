@@ -305,6 +305,9 @@ func reconcileOnce(ctx context.Context, deps ReconcileDeps) {
 	// (SC-1320), which left it watched by nothing at all (SC-3865). It takes the
 	// same forTakeover gate as the other relaunching passes — starting the stage a
 	// decision queued takes that stage over on this machine.
+	if n := reconcileFailedStages(ctx, gate.forTakeover(cards), deps, time.Now()); n > 0 {
+		logger.Info().Int("relaunched", n).Msg("board reconcile: relaunched failed stages the live path did not reach")
+	}
 	if n := reconcileQueuedLaunch(ctx, gate.forTakeover(cards), deps, time.Now()); n > 0 {
 		logger.Info().Int("launched", n).Msg("board reconcile: started stages left queued by an answered decision")
 	}
