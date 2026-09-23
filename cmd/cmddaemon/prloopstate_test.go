@@ -43,7 +43,7 @@ func TestReadPRReviewVerdict_readsField(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.pr-review", `{"verdict":"approved","blocking":0,"head":"abc123","summary":"clean"}`)
 
-	verdict, head, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	verdict, head, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "approved", verdict)
 	assert.Equal(t, "abc123", head, "the reviewed head feeds the convergence guard")
 	assert.True(t, recorded)
@@ -54,7 +54,7 @@ func TestReadPRReviewVerdict_readsField(t *testing.T) {
 func TestReadPRReviewVerdict_missingIsEmpty(t *testing.T) {
 	isolateState(t)
 	shrinkPRLoopReadBackoff(t)
-	verdict, head, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	verdict, head, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, "", verdict)
 	assert.Equal(t, "", head)
 	assert.False(t, recorded, "absence must be distinguishable from an empty verdict")
@@ -127,7 +127,7 @@ func TestReadPRReviewVerdict_waitsForFreshVerdict(t *testing.T) {
 		close(written)
 	}()
 
-	verdict, head, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
+	verdict, head, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
 	<-written
 
 	assert.True(t, recorded, "the settle backoff must pick up the delayed write")
@@ -146,7 +146,7 @@ func TestReadPRReviewVerdict_staleOnly_notFresh(t *testing.T) {
 	writeRawReport(t, "SC-1", "stage.pr-review", `{"verdict":"changes-requested","head":"abc123"}`)
 	anchor := time.Now().Add(time.Hour) // anchor is "in the future" relative to the write above
 
-	verdict, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
+	verdict, _, _, recorded, fresh := readPRReviewVerdict(context.Background(), "", "SC-1", anchor, zerolog.Nop())
 
 	assert.True(t, recorded, "a stale record was still found")
 	assert.False(t, fresh, "a record older than the round's own anchor is never fresh")

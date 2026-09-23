@@ -23,11 +23,16 @@ import (
 // every transition — including the budget boundary and the defensive
 // escalations — be unit-tested without a daemon.
 
-// DefaultPRReviewRounds bounds the review→fix loop: at most this many review
-// rounds before a still-unresolved review escalates to a human. A budget is
-// mandatory — without it a reviewer and fixer that disagree would ping-pong
-// forever, and each round costs an agent run plus a fresh CI trigger.
-const DefaultPRReviewRounds = 3
+// DefaultPRReviewRounds is the OUTER bound of the review→fix loop: a safety
+// net, not the policy. The policy is repetition — the loop escalates when the
+// reviewer's blocking finding is the one the fixer was already sent, because a
+// finding that survives a fix round is the reviewer and fixer disagreeing, the
+// ping-pong SC-1760 exists to break. A round that finds a different problem is
+// progress: on the first four tickets shipped through the machine review every
+// round found a new, real problem, and a count of three turned five of those
+// rounds into a person's turn (SC-5174). Eight bounds the cost when findings
+// keep changing; it should be rare for a loop to reach it without repeating.
+const DefaultPRReviewRounds = 8
 
 // PR review/fix outcomes the decider branches on. These mirror the vocabulary
 // the human-pr-reviewer and human-pr-fixer prompts record in state, kept here as
@@ -71,7 +76,7 @@ const (
 // changes-requested review at the round budget escalates instead of fixing
 // again, so a disagreement the fixer cannot close reaches a human in bounded
 // time rather than looping.
-func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int) PRLoopAction {
+func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int, repeated bool) PRLoopAction {
 	if budget <= 0 {
 		budget = DefaultPRReviewRounds
 	}
@@ -83,7 +88,7 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int) PRLo
 		case PRVerdictApproved:
 			return PRActionMerge
 		case PRVerdictChanges:
-			if round >= budget {
+			if repeated || round >= budget {
 				return PRActionEscalate
 			}
 			return PRActionFix
@@ -154,6 +159,46 @@ func LatestMarkerTime(comments []tracker.Comment, header string) (time.Time, boo
 	return latest.Created, true
 }
 
+// FindingFingerprint reduces a reviewer's findings text to the identity of its
+// first blocking finding: the first line that names BLOCKING, else the first
+// non-empty line, lower-cased, whitespace-collapsed and cut to 160 characters.
+// Two rounds with the same fingerprint are the same finding surviving a fix,
+// whatever else the reviewer rephrased around it.
+func FindingFingerprint(findings string) string {
+	first := ""
+	for _, line := range strings.Split(findings, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if first == "" {
+			first = line
+		}
+		if strings.Contains(strings.ToUpper(line), "BLOCKING") {
+			first = line
+			break
+		}
+	}
+	first = strings.ToLower(strings.Join(strings.Fields(first), " "))
+	if r := []rune(first); len(r) > 160 {
+		first = string(r[:160])
+	}
+	return first
+}
+
+// lastFixFinding is the fingerprint the newest pr-fix-started marker recorded:
+// the finding the fixer was last sent. Empty when the loop has not fixed yet
+// or the marker predates the field.
+func lastFixFinding(comments []tracker.Comment) string {
+	return strings.TrimSpace(latestPrefixedLine(comments, PRFixStartedHeader, "finding:"))
+}
+
+// findingRepeated reports that this round's blocking finding is the one the
+// fixer was already sent.
+func findingRepeated(comments []tracker.Comment, finding string) bool {
+	return finding != "" && finding == lastFixFinding(comments)
+}
+
 // prReviewRounds counts completed review rounds — one per pr-review-started
 // marker — the value the decider bounds against DefaultPRReviewRounds.
 func prReviewRounds(comments []tracker.Comment) int {
@@ -199,6 +244,15 @@ type PRLoopOutcome struct {
 	FixSummary string
 	Agent      string
 	ErrorType  string
+	// ReviewFinding is the fingerprint of the reviewer's blocking finding
+	// (FindingFingerprint over the report's findings), the identity the
+	// repetition bound compares across rounds.
+	ReviewFinding string
+	// FindingRepeated reports that ReviewFinding is the finding the fixer was
+	// sent last round — recorded on the pr-fix-started marker — so the round
+	// changed nothing the reviewer could see. Set by the executor from the
+	// thread; the pure decider only reads it.
+	FindingRepeated bool
 	// ReviewStale/FixStale report that the corresponding record above was NOT
 	// confirmed to be this round's own write — the cmd-layer reader raced ahead
 	// of the reviewer/fixer's final write and, after its bounded settle backoff,
@@ -285,7 +339,7 @@ func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAct
 	case PRStageFix:
 		step = outcome.FixExit
 	}
-	action := NextPRLoopAction(stage, step, prReviewRounds(comments), DefaultPRReviewRounds)
+	action := NextPRLoopAction(stage, step, prReviewRounds(comments), DefaultPRReviewRounds, outcome.FindingRepeated)
 	if stage == PRStageFix && action == PRActionReview && outcome.headStalled() {
 		if outcome.ReviewVerdict == PRVerdictApproved {
 			return PRActionMerge

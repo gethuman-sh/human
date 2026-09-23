@@ -114,6 +114,7 @@ const (
 	MarkerDeployOutage           = "deploy-outage"
 	MarkerPRReviewStarted        = "pr-review-started"
 	MarkerPRReviewPassed         = "pr-review-passed"
+	MarkerPRFixStarted           = "pr-fix-started"
 	MarkerDeployFixStarted       = "deploy-fix-started"
 	MarkerHandoffCheckUnreadable = "handoff-check-unreadable"
 	// MarkerLateResultReconciled records that a stage's result arrived after the
@@ -175,7 +176,7 @@ const (
 	// live in the done stage rather than a new pipeline stage, so the
 	// verification→done transition adjacency (board_transition.go) is unchanged.
 	PRReviewStartedHeader = "[human:" + MarkerPRReviewStarted + "]"
-	PRFixStartedHeader    = "[human:pr-fix-started]"
+	PRFixStartedHeader    = "[human:" + MarkerPRFixStarted + "]"
 	PRReviewFailedHeader  = "[human:" + MarkerPRReviewFailed + "]"
 	// PRReviewPassedHeader records the loop CONVERGING: the reviewer approved and
 	// the card proceeds to the CI gate and merge. Every other outcome of the loop
@@ -420,6 +421,7 @@ var daemonMarkerTypes = []string{
 	MarkerDeployOutage,
 	MarkerPRReviewStarted,
 	MarkerPRReviewPassed,
+	MarkerPRFixStarted,
 	MarkerDeployFixStarted,
 	MarkerHandoffCheckUnreadable,
 	MarkerLateResultReconciled,

@@ -143,7 +143,7 @@ func TestAdvancePRLoop_budgetExhausted_escalates(t *testing.T) {
 
 	failed, ok := posted(c, PRReviewFailedHeader)
 	require.True(t, ok, "the budget-exhausted loop must escalate")
-	assert.Contains(t, failed, "did not converge within the round budget")
+	assert.Contains(t, failed, "did not converge within 8 review rounds")
 	assert.Zero(t, l.calls, "escalation must launch no agent")
 	assert.Zero(t, p.merged, "escalation must never merge")
 }

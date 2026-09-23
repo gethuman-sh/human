@@ -57,13 +57,14 @@ var (
 // accidentally act on them. The caller (advancePRLoopFunc) maps a recorded-
 // but-not-fresh read to PRLoopOutcome.ReviewStale, which the pure decider
 // escalates on rather than trusting.
-func readPRReviewVerdict(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (verdict, head string, recorded, fresh bool) {
+func readPRReviewVerdict(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (verdict, head, findings string, recorded, fresh bool) {
 	var v struct {
-		Verdict string `json:"verdict"`
-		Head    string `json:"head"`
+		Verdict  string `json:"verdict"`
+		Head     string `json:"head"`
+		Findings string `json:"findings"`
 	}
 	recorded, fresh = readStageReportSettled(ctx, project, pmKey, "stage.pr-review", notBefore, &v, logger)
-	return v.Verdict, v.Head, recorded, fresh
+	return v.Verdict, v.Head, v.Findings, recorded, fresh
 }
 
 // readPRFixReport loads the fixer's stage.pr-fix report: its exit, the optional

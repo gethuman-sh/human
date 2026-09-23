@@ -52,7 +52,7 @@ func TestNextPRLoopAction(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := NextPRLoopAction(tc.stage, tc.outcome, tc.round, tc.budget)
+			got := NextPRLoopAction(tc.stage, tc.outcome, tc.round, tc.budget, false)
 			if got != tc.want {
 				t.Fatalf("NextPRLoopAction(%v, %q, round=%d, budget=%d) = %d, want %d",
 					tc.stage, tc.outcome, tc.round, tc.budget, got, tc.want)
@@ -101,8 +101,12 @@ func TestEvaluatePRLoop(t *testing.T) {
 		{"no loop markers reviews first", nil, PRLoopOutcome{}, PRActionReview},
 		{"review approved merges", []tracker.Comment{rev(t0)}, PRLoopOutcome{ReviewVerdict: PRVerdictApproved}, PRActionMerge},
 		{"review changes below budget fixes", []tracker.Comment{rev(t0)}, PRLoopOutcome{ReviewVerdict: PRVerdictChanges}, PRActionFix},
-		{"review changes at budget escalates",
-			[]tracker.Comment{rev(t0), rev(t1), rev(t2)}, PRLoopOutcome{ReviewVerdict: PRVerdictChanges}, PRActionEscalate},
+		{"review changes at the outer cap escalates",
+			[]tracker.Comment{rev(t0), rev(t1), rev(t2), rev(t2), rev(t2), rev(t2), rev(t2), rev(t2)}, PRLoopOutcome{ReviewVerdict: PRVerdictChanges}, PRActionEscalate},
+		{"review changes below the cap with a new finding fixes",
+			[]tracker.Comment{rev(t0), rev(t1), rev(t2)}, PRLoopOutcome{ReviewVerdict: PRVerdictChanges}, PRActionFix},
+		{"review changes repeating the finding the fixer was sent escalates",
+			[]tracker.Comment{rev(t0), rev(t1)}, PRLoopOutcome{ReviewVerdict: PRVerdictChanges, FindingRepeated: true}, PRActionEscalate},
 		{"fix done re-reviews",
 			[]tracker.Comment{rev(t0), fix(t1)}, PRLoopOutcome{FixExit: PRFixDone}, PRActionReview},
 		{"fix needs-input escalates",

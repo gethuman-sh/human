@@ -1094,6 +1094,17 @@ func prReviewDispatch(pmKey string, number int, branch string) string {
 	return "/human-pr-review " + pmKey + " --pr=" + strconv.Itoa(number) + " --branch=" + branch
 }
 
+// prFixStartedBody records which finding the fixer is being sent, so the next
+// review round can tell "the same problem again" from "a new problem": the
+// former ends the loop, the latter is progress (SC-5174). No finding leaves
+// the bare header, and that round can only end on the outer round cap.
+func prFixStartedBody(finding string) string {
+	if strings.TrimSpace(finding) == "" {
+		return PRFixStartedHeader
+	}
+	return markerBody(marker.Marker{Type: MarkerPRFixStarted, Fields: fields("finding", finding)})
+}
+
 func prFixDispatch(pmKey string, number int, branch string) string {
 	return "/human-pr-fix " + pmKey + " --pr=" + strconv.Itoa(number) + " --branch=" + branch
 }
@@ -1207,6 +1218,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		return nil
 	}
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), prLoopBranch(comments, card)
+	outcome.FindingRepeated = findingRepeated(comments, outcome.ReviewFinding)
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
 		_, err := d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
@@ -1214,7 +1226,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		return err
 	case PRActionFix:
 		_, err := d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage,
-			prFixDispatch(pmKey, number, branch), PRFixStartedHeader)
+			prFixDispatch(pmKey, number, branch), prFixStartedBody(outcome.ReviewFinding))
 		return err
 	case PRActionMerge:
 		// Record the loop converging BEFORE acting on it. Both launches and the
@@ -1378,8 +1390,10 @@ func prEscalationReason(stage PRLoopStage, outcome PRLoopOutcome, diagnose Board
 		return "the PR fixer recorded done but added no commit — the reviewed head is unchanged, so another review would loop; check the fixer's log and the PR, then re-run Deploy"
 	case outcome.FixExit == string(ExitNeedsInput):
 		return needsInputReason(outcome)
+	case outcome.ReviewVerdict == PRVerdictChanges && outcome.FindingRepeated:
+		return "the machine review found the same blocking problem twice and the fixer did not resolve it — " + outcome.ReviewFinding + " — fix it yourself, then re-run Deploy"
 	case outcome.ReviewVerdict == PRVerdictChanges:
-		return "the machine review did not converge within the round budget — review the PR yourself, then re-run Deploy"
+		return "the machine review did not converge within " + strconv.Itoa(DefaultPRReviewRounds) + " review rounds — review the PR yourself, then re-run Deploy"
 	case outcome.ReviewVerdict == PRVerdictUnreviewable:
 		return "the PR could not be reviewed (bad binding or empty diff) — check the PR, then re-run Deploy"
 	case !outcome.stepRecorded(stage):

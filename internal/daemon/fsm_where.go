@@ -122,8 +122,8 @@ type WhereEvent struct {
 
 // DefaultWhereHistory is how many past markers ride along by default.
 //
-// Ten covers a full PR review→fix loop (DefaultPRReviewRounds is 3, two markers
-// a round) plus what preceded it, which is the question history actually
+// Ten covers the common PR review→fix loop (two or three rounds, two markers
+// a round; the outer cap is DefaultPRReviewRounds) plus what preceded it, which is the question history actually
 // answers: not "what happened" — the ticket has that — but "is this my first
 // pass or my third", because a card round the loop twice needs a different move
 // from one on its first attempt, and the retry budget counts stage relaunches

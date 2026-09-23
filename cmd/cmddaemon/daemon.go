@@ -3587,12 +3587,13 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 			fixAnchor, _ = daemon.LatestMarkerTime(comments, daemon.PRFixStartedHeader)
 		}
 
-		verdict, reviewHead, verdictRecorded, verdictFresh := readPRReviewVerdict(ctx, project, pmKey, reviewAnchor, logger)
+		verdict, reviewHead, findings, verdictRecorded, verdictFresh := readPRReviewVerdict(ctx, project, pmKey, reviewAnchor, logger)
 		exit, options, summary, fixHead, exitRecorded, exitFresh := readPRFixReport(ctx, project, pmKey, fixAnchor, logger)
 		return deps.AdvancePRLoop(ctx, pmKey, daemon.PRLoopOutcome{
 			ReviewVerdict:  verdict,
 			ReviewRecorded: verdictRecorded,
 			ReviewHead:     reviewHead,
+			ReviewFinding:  daemon.FindingFingerprint(findings),
 			ReviewStale:    verdictRecorded && !verdictFresh,
 			FixExit:        exit,
 			FixRecorded:    exitRecorded,
