@@ -1226,7 +1226,11 @@ func (d BoardTransitionDeps) loopStepStillRunning(pmKey string, comments []track
 		return false
 	}
 	stage := latestPRLoopStage(comments)
-	if outcome.stepRecorded(stage) {
+	// A record from a PRIOR round still satisfies stepRecorded — those keys are
+	// never cleared between rounds — so a recorded-but-stale outcome must be
+	// treated as unrecorded here too, or every round after the first skips the
+	// alive check and escalates over a live fixer/reviewer (SC-5120).
+	if outcome.stepRecorded(stage) && !outcome.stepStale(stage) {
 		return false
 	}
 	var agentStage BoardStage

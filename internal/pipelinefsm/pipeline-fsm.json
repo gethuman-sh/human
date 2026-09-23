@@ -1267,7 +1267,7 @@
       },
       "pr-loop": {
         "stale_when": "No loop half-agent alive on the machine that owns the stage — the same ownership qualifier the other stage rules carry, and the one this rule was missing. A loop's outcome lives in the owning host's agent state store and is never posted to the tracker, so 'no agent alive HERE' is evidence only on the machine that started it; read as a fleet-wide fact it made a peer red a review that was still running and went on to approve (SC-4025). The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so a loop is recovered by re-driving rather than by redding.",
-        "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by DefaultPRReviewRounds (3); past it the loop escalates rather than merging on a state it cannot read."
+        "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by DefaultPRReviewRounds (3); past it the loop escalates rather than merging on a state it cannot read. Before acting, a re-drive checks whether the step the fresh thread names has its own agent still alive on the machine that owns the stage (BoardTransitionDeps.LoopStepAlive); if so it stands down and leaves the step to finish rather than escalating over work still in flight (SC-5120)."
       }
     }
   },

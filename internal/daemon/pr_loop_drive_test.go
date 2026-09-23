@@ -206,11 +206,17 @@ func TestAdvancePRLoop_redriveStandsDownWhileTheStepsAgentIsAlive(t *testing.T) 
 		name      string
 		alive     bool
 		agent     string
+		fixStale  bool
 		escalates bool
 	}{
-		{"re-drive, fixer alive", true, "", false},
-		{"re-drive, fixer gone", false, "", true},
-		{"the fixer's own exit event", true, "board-SC-1-prfix", true},
+		{"re-drive, fixer alive", true, "", false, false},
+		{"re-drive, fixer gone", false, "", false, true},
+		{"the fixer's own exit event", true, "board-SC-1-prfix", false, true},
+		// A prior round's FixRecorded/FixStale leftover must not read as THIS
+		// round's step already having reported in: stepRecorded alone stays
+		// true forever once round 1 writes it, so from round 2 on only the
+		// staleness check tells a live fixer apart from a finished one (SC-5120).
+		{"re-drive, prior round's stale fix record, fixer alive", true, "", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &fakeCommenter{comments: thread}
@@ -219,7 +225,10 @@ func TestAdvancePRLoop_redriveStandsDownWhileTheStepsAgentIsAlive(t *testing.T) 
 			deps.LoopStepAlive = func(name string) bool { asked = append(asked, name); return tc.alive }
 
 			require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
-				PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true, Agent: tc.agent}))
+				PRLoopOutcome{
+					ReviewVerdict: PRVerdictChanges, ReviewRecorded: true, Agent: tc.agent,
+					FixRecorded: tc.fixStale, FixStale: tc.fixStale,
+				}))
 
 			_, failed := posted(c, PRReviewFailedHeader)
 			assert.Equal(t, tc.escalates, failed)

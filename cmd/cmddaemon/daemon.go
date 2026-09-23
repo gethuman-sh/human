@@ -3699,12 +3699,16 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 		BlockedBy:    blockedByProbeFunc(entry.Dir, lookup, resolver, logger),
 		// The same running-agent metadata the reconcile pass lists, read fresh
 		// at the moment the re-drive decides rather than at the start of the
-		// pass (SC-5120). A listing failure reads as "not alive": that is the
-		// pre-check behaviour, never a reason to leave a dead loop unhandled.
+		// pass (SC-5120). A listing failure reads as "alive": reconcilePRLoops'
+		// own pre-check (board_reconcile.go, deps.aliveAgents) stands down and
+		// re-drives NOTHING when the listing fails, and this probe fails the
+		// same way rather than escalating over a step it could not actually
+		// confirm is dead — one skipped reconcile tick costs less than a human
+		// having to clear a card that was red for no real reason.
 		LoopStepAlive: func(name string) bool {
 			names, err := liveBoardAgents()
 			if err != nil {
-				return false
+				return true
 			}
 			return slices.Contains(names, name)
 		},
