@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
 
@@ -176,4 +177,26 @@ func TestStaleFailure_isJudgedOnThePostedThread(t *testing.T) {
 	card := DeriveBoardCard(after, tracker.CategoryUnstarted, false)
 	require.True(t, isReviewRetry(BoardVerification, card), "precondition: the transition layer would accept the relaunch")
 	require.False(t, staleFailure(after, BoardVerification), "the posted thread sanctions the review retry")
+}
+
+// The caller-level pin for the round-5 fix: handleBoardAgentExit decides the
+// relaunch from the thread WITH the marker it just posted. A verification
+// death over a done/running card (its own verdict never posted) reads as
+// stale from the pre-post snapshot and as the sanctioned review retry from the
+// posted one; removing the append leaves the card permanently red.
+func TestHandleBoardAgentExit_StalenessIsJudgedOnThePostedThread(t *testing.T) {
+	withInstantBoardExitRecheck(t)
+	base := time.Now().Add(-time.Hour)
+	c := &syncCommenter{comments: []tracker.Comment{
+		{Body: "[human:review-started]", Created: base},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", Created: base.Add(time.Minute)},
+	}}
+	commenterFor := func() (tracker.Commenter, error) { return c, nil }
+	var relaunched, resets []BoardStage
+	policy := retryPolicyFor(ExitRetryable, true, &relaunched, &resets)
+
+	handleBoardAgentExit(context.Background(), nil, hookevents.Event{AgentName: "board-SC-1-verification"},
+		FailureDeps{CommenterFor: commenterFor, Reachable: alwaysReachable, Retry: policy, DaemonID: "d1", Logger: zerolog.Nop()})
+
+	require.Equal(t, []BoardStage{BoardVerification}, relaunched, "the posted thread sanctions the review retry")
 }
