@@ -226,6 +226,13 @@ type BoardTransitionDeps struct {
 	// the result — the gate never has to guess what "open" means. nil disables
 	// the gate (the package's "nil disables" convention).
 	BlockedBy func(ctx context.Context, pmKey string) ([]string, error)
+	// LoopStepAlive reports whether the named loop-step agent is running on this
+	// machine. A re-drive from the reconcile pass carries no exit event, only a
+	// snapshot older than the pass itself; when the thread it re-reads names a
+	// step with no record, the step may simply still be running — launched by
+	// the hook path after the snapshot was taken — and escalating it reds a
+	// card over a live fixer (SC-5120). nil disables the check.
+	LoopStepAlive func(agentName string) bool
 	// Getter fetches the PM ticket so a recovery relaunch of the implementation
 	// stage can tell a self-planning fix pipeline (bug/security — which produces
 	// its own plan within the run) from a plan-executing build, and re-dispatch
@@ -1163,6 +1170,11 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 		return errors.WrapWithDetails(err, "loading comments for PR loop", "pm", pmKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	if d.loopStepStillRunning(pmKey, comments, outcome) {
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board PR loop: re-drive found the current step unrecorded but its agent alive; leaving it to finish")
+		return nil
+	}
 	number, url, branch := prLoopNumber(comments), prLoopURL(comments), prLoopBranch(comments, card)
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
@@ -1203,6 +1215,34 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	default: // PRActionEscalate
 		return d.escalatePRLoop(ctx, pmKey, comments, outcome)
 	}
+}
+
+// loopStepStillRunning is the re-drive's liveness check. Only a drive with no
+// exit event behind it (outcome.Agent empty) asks: the hook path's drive is
+// the step's own ending and needs no probe. A step with no record whose agent
+// is alive is work in progress, not a finished step the loop cannot read.
+func (d BoardTransitionDeps) loopStepStillRunning(pmKey string, comments []tracker.Comment, outcome PRLoopOutcome) bool {
+	if d.LoopStepAlive == nil || outcome.Agent != "" {
+		return false
+	}
+	stage := latestPRLoopStage(comments)
+	// A record from a PRIOR round still satisfies stepRecorded — those keys are
+	// never cleared between rounds — so a recorded-but-stale outcome must be
+	// treated as unrecorded here too, or every round after the first skips the
+	// alive check and escalates over a live fixer/reviewer (SC-5120).
+	if outcome.stepRecorded(stage) && !outcome.stepStale(stage) {
+		return false
+	}
+	var agentStage BoardStage
+	switch stage {
+	case PRStageReview:
+		agentStage = prReviewAgentStage
+	case PRStageFix:
+		agentStage = prFixAgentStage
+	default:
+		return false
+	}
+	return d.LoopStepAlive(agentNameFor(pmKey, agentStage))
 }
 
 // escalatePRLoop routes a non-converging loop to the right surface, and what
