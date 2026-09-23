@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,53 +23,6 @@ const FailedRecoveryGrace = 5 * time.Minute
 // OutageWaitBound, which draws the same line for a substrate that never comes
 // back.
 const FailedRecoveryBound = 6 * time.Hour
-
-// failedRecoveryGiveUpSentinel is the fixed substring every failed-recovery
-// give-up marker body carries — how a later pass (or a second daemon reaching
-// the bound at the same time) recognises this pass already said it is done
-// trying, and does not repeat itself. Deliberately NOT "stopped relaunching
-// after waiting": silenceReapGiveUpSentinel ("stopped relaunching after",
-// board_failure.go) is matched with strings.Contains against any *-failed
-// marker regardless of which pass posted it, so a superstring of it here made
-// every give-up this pass posts also read as a silence-reap give-up —
-// disabling the silence-reap relaunch cap and the stuck-running sweep for
-// that stage forever (caught in review; see the two predicates' own tests).
-// The wording must stay disjoint from silenceReapGiveUpSentinel in both
-// directions, not merely different.
-const failedRecoveryGiveUpSentinel = "gave up relaunching after waiting"
-
-// failedRecoveryGiveUpReason composes the line posted once a failed stage has
-// sat past FailedRecoveryBound: the durable pass stops probing it and says a
-// person is needed, naming how long it waited so the record does not read as
-// plain silence. Mirrors outageHandoverBody, the same line drawn for a
-// substrate that never comes back — including carrying the ORIGINAL failure
-// reason (derived.Error, the board badge/tooltip text) into the first line,
-// so the card does not lose its diagnosis the moment the pass gives up on it.
-func failedRecoveryGiveUpReason(stage BoardStage, reason string, waited time.Duration) string {
-	what := strings.TrimSpace(reason)
-	if what == "" {
-		what = "no reason was recorded"
-	}
-	return fmt.Sprintf("the daemon %s %s on the %s stage and is not relaunching again — this needs a "+
-		"person: %s. The attempts already spent stay on record; the wait itself charged nothing further.",
-		failedRecoveryGiveUpSentinel, waited.Round(time.Minute).String(), stage, what)
-}
-
-// failedRecoveryGaveUp reports whether the give-up marker has already been
-// posted for stage, so a second daemon — or the same one on a later tick —
-// reaching the bound for the same stage posts nothing more.
-func failedRecoveryGaveUp(comments []tracker.Comment, stage BoardStage) bool {
-	for _, c := range comments {
-		s, st, ok := ClassifyMarker(c.Body)
-		if !ok || s != stage || st != BoardFailed {
-			continue
-		}
-		if strings.Contains(c.Body, failedRecoveryGiveUpSentinel) {
-			return true
-		}
-	}
-	return false
-}
 
 // failedRecoveryBackoff spaces this pass's attempts on one stage. A relaunch
 // that started nothing charges no budget (SC-5104), so without a clock of its
@@ -149,11 +100,12 @@ func (b *recoveryBackoff) reset() {
 // (the live path's). The retry policy itself supplies the rest: the attempt
 // cap, the deliberate exits, the outage that goes uncharged.
 //
-// A failure older than FailedRecoveryBound is different from the rest of that
-// list: the pass does not merely skip it, it gives up on it once and records
-// that it did (recordFailedRecoveryGiveUp), mirroring handOverOutage — a card
-// the pass tried and stopped on must read differently from one no pass ever
-// reached.
+// A failure older than FailedRecoveryBound is left alone too: the standing
+// *-failed marker and the attempts on record are the trail, and `human fsm
+// where` says the bound has passed. The pass posts nothing at the bound — a
+// second *-failed marker there carried the original reason into a body every
+// sentinel scanner reads, and twice collided with the silence-reap sentinels
+// (SC-5170, rounds 2 and 3); a person's card is a person's card.
 //
 // Known limitation: a rework build's crash is NOT reached here. A crashed
 // rework implementation derives at whatever stage is furthest along (usually
@@ -184,16 +136,7 @@ func reconcileFailedStages(ctx context.Context, drivable DrivableCards, deps Rec
 		if _, ok := alive[agentNameFor(card.Key, derived.Stage)]; ok {
 			continue
 		}
-		switch recoverableFailure(card.Key, card.Comments, derived, deps.Retry, now) {
-		case recoveryLeaveAlone:
-			continue
-		case recoveryBoundExceeded:
-			// The pass has been trying since the failure was fresh; past
-			// FailedRecoveryBound it stops and says so, once, exactly like
-			// handOverOutage does for a substrate that never came back — a
-			// person reading the card must be able to tell the durable pass
-			// gave up from one that never reached it at all.
-			recordFailedRecoveryGiveUp(ctx, card.Key, card.Comments, derived, deps, now)
+		if !recoverableFailure(card.Comments, derived, now) {
 			continue
 		}
 		key := card.Key + "/" + string(derived.Stage)
@@ -214,82 +157,28 @@ func reconcileFailedStages(ctx context.Context, drivable DrivableCards, deps Rec
 	return relaunched
 }
 
-// recordFailedRecoveryGiveUp posts the once-only marker that says the durable
-// pass stopped trying on this stage, so a card past FailedRecoveryBound reads
-// as "the pass tried and gave up" rather than as silence indistinguishable
-// from a card no pass ever reached. Deduplicated by failedRecoveryGaveUp so a
-// second daemon — or the same one on a later tick — says nothing further.
-//
-// derived is the caller's already-computed card, read for two things: Stage,
-// and Error — the board badge/tooltip text (failureReason of the newest
-// failed marker, board_state.go) — carried into the give-up body exactly as
-// outageHandoverBody carries it, so the card does not lose its original
-// diagnosis the moment the pass gives up on it.
-func recordFailedRecoveryGiveUp(ctx context.Context, pmKey string, comments []tracker.Comment, derived BoardCard, deps ReconcileDeps, now time.Time) {
-	logger := deps.Logger
-	stage := derived.Stage
-	if deps.PostFailed == nil || failedRecoveryGaveUp(comments, stage) {
-		return
-	}
-	failedType := failedTypeFor(stage)
-	if failedType == "" {
-		return
-	}
-	_, failed := latestStateInStage(comments, stage)
-	waited := now.Sub(failed.Created)
-	body := markerBody(failureMarker(failedType, failedRecoveryGiveUpReason(stage, derived.Error, waited)))
-	if err := deps.PostFailed(ctx, pmKey, body); err != nil {
-		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
-			Msg("board reconcile: cannot record failed-recovery give-up, leaving the card as-is")
-		return
-	}
-	logger.Warn().Str("pm", pmKey).Str("stage", string(stage)).Dur("waited", waited).
-		Msg("board reconcile: failed-recovery bound exceeded, giving up and recording it")
-}
-
-// recoveryVerdict is recoverableFailure's judgement of a failed stage's card.
-type recoveryVerdict int
-
-const (
-	// recoveryLeaveAlone: not this pass's to touch — a decision is open, a
-	// give-up (silence-reap's or this pass's own) already stands, the state or
-	// stage is not one it drives, or the failure is younger than
-	// FailedRecoveryGrace and still the live path's to handle.
-	recoveryLeaveAlone recoveryVerdict = iota
-	// recoveryEligible: within the grace..bound window — the caller may relaunch it.
-	recoveryEligible
-	// recoveryBoundExceeded: failed, and older than FailedRecoveryBound — the
-	// pass gives up and records that it did, exactly once.
-	recoveryBoundExceeded
-)
-
 // recoverableFailure is the pure half of the pass's decision: whether this
 // card's failure is one the machine may still act on, judged from the thread
-// and the retry policy's own verdict on the recorded exit. Liveness and
-// pacing are the caller's. retry is read once, only for the bound branch (see
-// below) — it never changes anything within the grace..bound window, where
-// the caller's own tryRelaunch already applies the identical policy and a
-// non-retryable exit there is simply left red, charging and posting nothing.
-func recoverableFailure(pmKey string, comments []tracker.Comment, derived BoardCard, retry StageRetry, now time.Time) recoveryVerdict {
+// alone. Liveness and pacing are the caller's; the retry policy's own rules
+// (the attempt cap, the deliberate exits, the outage that goes uncharged)
+// apply inside tryRelaunch, unchanged.
+func recoverableFailure(comments []tracker.Comment, derived BoardCard, now time.Time) bool {
 	if derived.State != BoardFailed {
-		return recoveryLeaveAlone
+		return false
 	}
 	stage := derived.Stage
 	if stageRank[stage] < stageRank[BoardPlanning] || stage == BoardDoneStage {
-		return recoveryLeaveAlone
+		return false
 	}
 	if awaitingDecision(derived) || stagePausedOnOptions(comments, stage) {
-		return recoveryLeaveAlone
+		return false
 	}
 	if silenceReapGaveUp(comments, stage) {
-		return recoveryLeaveAlone
-	}
-	if failedRecoveryGaveUp(comments, stage) {
-		return recoveryLeaveAlone
+		return false
 	}
 	state, failed := latestStateInStage(comments, stage)
 	if state != BoardFailed {
-		return recoveryLeaveAlone
+		return false
 	}
 	// A standing plan-stuck escalation classifies to (BoardPlanning, BoardFailed)
 	// exactly like an ordinary refusal, and both are seen here as a planning-stage
@@ -301,26 +190,8 @@ func recoverableFailure(pmKey string, comments []tracker.Comment, derived BoardC
 	// Reads the same marker refuseIfUnplanned's dedup guard does, so the two
 	// never disagree about what "the standing escalation" is.
 	if stage == BoardPlanning && isPlanStuck(failed.Body) {
-		return recoveryLeaveAlone
+		return false
 	}
 	age := now.Sub(failed.Created)
-	if age < FailedRecoveryGrace {
-		return recoveryLeaveAlone
-	}
-	if age > FailedRecoveryBound {
-		// A give-up says "the pass tried and stopped" — that must not be
-		// posted on a card this pass was never going to touch. decisionOpen is
-		// always false here (an open decision already left via
-		// awaitingDecision/stagePausedOnOptions above), so classifyRelaunch
-		// reads only the recorded exit: relaunchNone means a deliberate stop
-		// (needs-human-work) or an exit this policy does not recognise — the
-		// ticket's own "left alone" list — and the card is left exactly as a
-		// pass that never reached it would leave it, with no marker at all.
-		outcome, recorded := retry.Outcome(pmKey, stage)
-		if classifyRelaunch(outcome, recorded, false) == relaunchNone {
-			return recoveryLeaveAlone
-		}
-		return recoveryBoundExceeded
-	}
-	return recoveryEligible
+	return age >= FailedRecoveryGrace && age <= FailedRecoveryBound
 }
