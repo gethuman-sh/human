@@ -146,7 +146,7 @@ func parseExitTrailer(lines []string) (int, bool) {
 var errorLineRes = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^(error|fatal|panic)[:\s]`),
 	regexp.MustCompile(`(?i)api.?error|overloaded_error|rate.?limit`),
-	regexp.MustCompile(`(?i)invalid_request_error|authentication_error|permission_error|billing`),
+	regexp.MustCompile(`(?i)invalid_request_error|authentication_error|authentication_failed|permission_error|billing`),
 	regexp.MustCompile(`(?i)context deadline exceeded|connection refused|no space left on device|out of memory|\bkilled\b`),
 }
 

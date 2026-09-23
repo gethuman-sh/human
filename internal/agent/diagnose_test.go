@@ -358,6 +358,10 @@ func TestLastErrorLine(t *testing.T) {
 		{"latest wins", []string{"Error: first", "Error: second"}, "Error: second"},
 		{"trailer skipped", []string{"Error: real", execExitTrailerPrefix + "1"}, "Error: real"},
 		{"oom", []string{"process was Killed by the kernel"}, "process was Killed by the kernel"},
+		// SC-5108: the hook reports a dead login as authentication_failed, not the
+		// authentication_error already matched — same closed vocabulary, so the
+		// evidence line must be picked up under either spelling.
+		{"authentication_failed", []string{`{"hook_event_name":"Stop","errorType":"authentication_failed"}`}, `{"hook_event_name":"Stop","errorType":"authentication_failed"}`},
 		{"none", []string{"all good", "done"}, ""},
 	}
 	for _, c := range cases {

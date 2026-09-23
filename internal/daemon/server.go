@@ -911,13 +911,19 @@ func (s *Server) handleBoardTransition(conn net.Conn, args []string) {
 		s.writeError(conn, "invalid board-transition request: "+err.Error(), 1)
 		return
 	}
-	// The done stage merges and closes without launching an agent, so only
-	// agent-launching targets are gated on substrate health.
-	if req.To != BoardDoneStage {
-		if err := s.launchBlockedByDoctor(); err != nil {
-			s.writeError(conn, err.Error(), 1)
-			return
-		}
+	// Every transition target is gated on substrate health. The done stage is
+	// NOT the launch-free case its own comment used to claim: runDoneStage opens
+	// the draft PR and launches the reviewer (openDraftPRAndReview →
+	// launchPRLoopAgent) whenever the branch is not already merged, so a
+	// done-stage drag can start a container exactly like any other stage. This
+	// call is defense in depth alongside the gate BoardTransitionDeps.launchAgent
+	// callers now enforce themselves (startAgentStage, launchPRLoopAgent,
+	// launchDeployFixAgent) — it additionally reports the refusal synchronously
+	// to the caller, which the done stage's async goroutine dispatch cannot do
+	// (SC-5108).
+	if err := s.launchBlockedByDoctor(); err != nil {
+		s.writeError(conn, err.Error(), 1)
+		return
 	}
 	if err := s.BoardTransitioner(req); err != nil {
 		s.writeError(conn, err.Error(), 1)
