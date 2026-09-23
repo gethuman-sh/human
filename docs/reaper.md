@@ -109,6 +109,11 @@ So the event is a prompt to check, not a verdict:
 - **the agent cannot be probed** → treated as ended. Unreachable is not evidence
   of a live run, and sparing it would strand containers on any docker hiccup.
 
+The board failure watcher (`handleBoardAgentExit`) runs the same wait before it
+claims the run record and declares the stage dead. Without it a Stop from a
+turn that was not the last one consumed the record, reddened a working card,
+and made the run's real exit read as "already handled" (SC-5088).
+
 Events are tracked by monotonic sequence, not by agent name: board stage agents
 reuse the same deterministic name on every rebuild, and a name-keyed dedupe
 leaked the re-run's container and worktree (SC-201).
@@ -318,7 +323,10 @@ above.
 Collected in one place, because the spares are the load-bearing part:
 
 - **A run whose claude is still running when an exit event names it.** The event
-  was a subagent's; the run keeps working (SC-3785).
+  was a subagent's; the run keeps working (SC-3785). The board failure watcher
+  makes the same check before it consumes the run record and posts a *-failed
+  marker, so such an event neither reds the card nor uses up the one exit the
+  run gets to act on (SC-5088).
 - **An agent blocked on a permission prompt.** It is waiting for a person; a
   relaunch discards the question instead of answering it.
 - **An interactive (non-board) agent that is silent.** Only a board stage agent's
