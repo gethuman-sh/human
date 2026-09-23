@@ -27,6 +27,15 @@ import (
 // contract sentinel at the boundary (SC-1419).
 var ErrAgentAlreadyRunning = stderrors.New("agent already running")
 
+// ErrLaunchGateRefused is a launch the doctor's launch gate turned away: the
+// host cannot serve it (a dead claude-auth store, no docker). It is a sentinel
+// so a caller can tell it from the other launch that started nothing — an
+// agent already owning the step — because the two mean opposite things: one is
+// work in progress whose own exit drives the next action, the other is a host
+// condition that belongs to the machine, posts no marker and moves no item
+// (SC-5108).
+var ErrLaunchGateRefused = stderrors.New("the launch gate refused this launch")
+
 // AgentLauncher launches a containerized agent for a board stage. It is an
 // interface so the transition engine is testable without Docker. An
 // implementation returns ErrAgentAlreadyRunning when the stage's agent is
@@ -1125,7 +1134,7 @@ func (d BoardTransitionDeps) launchPRLoopAgent(ctx context.Context, pmKey string
 	// loop steps — a dead claude-auth store must refuse the NEXT reviewer/fixer
 	// launch too, not just the stage that first recorded the refusal (SC-5108).
 	if d.launchGateBlocked(ctx, pmKey, stage) {
-		return false, nil
+		return false, errors.WrapWithDetails(ErrLaunchGateRefused, "launch gate refused the PR "+string(stage)+" agent", "pm", pmKey, "stage", string(stage))
 	}
 	name := agentNameFor(pmKey, stage)
 	started, err := d.launchAgent(ctx, pmKey, name, prompt)
@@ -2106,6 +2115,13 @@ func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pm
 // exists, so it follows the launch (SC-4244).
 func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string) error {
 	launched, err := d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
+	if stderrors.Is(err, ErrLaunchGateRefused) {
+		// The deploy DID fail — the fixer is only the remedy — and a host that
+		// cannot launch the remedy has no way to record the failure but the
+		// failure itself. Swallowing it left the card on a deploy-fix-started
+		// marker nothing re-drives (SC-5108, round 4).
+		return d.deployFailed(pmKey, res.URL, deployReason(headline, err))
+	}
 	if err != nil {
 		return err
 	}
@@ -2133,7 +2149,7 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 func (d BoardTransitionDeps) launchDeployFixAgent(ctx context.Context, pmKey, prompt string) (launched bool, err error) {
 	// Launch gate: same refusal as the other two launch paths (SC-5108).
 	if d.launchGateBlocked(ctx, pmKey, deployFixAgentStage) {
-		return false, nil
+		return false, errors.WrapWithDetails(ErrLaunchGateRefused, "launch gate refused the deploy fixer", "pm", pmKey)
 	}
 	name := agentNameFor(pmKey, deployFixAgentStage)
 	started, err := d.launchAgent(ctx, pmKey, name, prompt)

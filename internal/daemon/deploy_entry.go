@@ -112,6 +112,15 @@ func (d BoardTransitionDeps) StartDeploy(ctx context.Context, req StartDeployReq
 			"deploy refused: the machine pull-request review needs the running daemon — start it and re-run, or re-run with --ready to ship without the review",
 			"pm", req.PMKey)
 	}
+	// The launch gate is asked BEFORE anything is recorded or pushed, like the
+	// other two refusals: a host that cannot launch the reviewer is a condition
+	// of the machine, not of the ticket, so it posts no marker and moves no
+	// item — the same rule the staged launch keeps (SC-5108).
+	if !d.MergeDraftPR && d.launchGateBlocked(ctx, req.PMKey, prReviewAgentStage) {
+		return StartDeployResult{}, errors.WrapWithDetails(ErrDeployReviewUnavailable,
+			"deploy refused: this host cannot launch the machine reviewer right now — see `human doctor` for the blocker, fix it and re-run, or re-run with --ready to ship without the review",
+			"pm", req.PMKey)
+	}
 	if err := d.recordDeployStart(ctx, req, override); err != nil {
 		return StartDeployResult{}, err
 	}
@@ -199,22 +208,18 @@ func (d BoardTransitionDeps) reviewThenShip(ctx context.Context, req StartDeploy
 			Msg("deploy: the machine review already approved this head; shipping without a new round")
 		return shipped, d.DeployBranch(ctx, req.PMKey, req.Title, req.PRBody, req.Branch)
 	}
-	launched, err := d.launchPRLoopAgent(ctx, req.PMKey, prReviewAgentStage,
+	_, err = d.launchPRLoopAgent(ctx, req.PMKey, prReviewAgentStage,
 		prReviewDispatch(req.PMKey, res.Number, req.Branch),
 		prReviewStartedBody(res.URL, res.Number, req.Branch))
 	if err != nil {
+		// A gate that went red between the pre-check above and this launch
+		// surfaces as ErrLaunchGateRefused: a host condition, so no marker — the
+		// caller reports it and the item is left where the start marker put it.
 		return shipped, err
 	}
-	if !launched {
-		// The launch gate refused (a dead claude-auth store, no docker) or an
-		// agent already owns the step. Reporting "review started" over nothing
-		// started would leave the card in deploying with no loop marker for the
-		// re-drive to find, until the stuck-running sweep reds it an hour later
-		// with a generic reason (SC-5108). Say what is true instead: the deploy
-		// failed here, and the doctor names the blocker.
-		return shipped, d.deployFailed(req.PMKey, res.URL, deployReason(
-			"the machine reviewer could not be launched on this machine — the launch gate refused it (see `human doctor` for the blocker); fix it and re-run Deploy", nil))
-	}
+	// launched == false with no error is a reviewer already owning this step
+	// on this machine: its marker stands and its exit drives the loop, so the
+	// review is, truthfully, started.
 	return StartDeployResult{Outcome: DeployOutcomeReviewStarted, PRURL: res.URL, PRNumber: res.Number}, nil
 }
 

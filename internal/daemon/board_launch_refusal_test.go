@@ -148,7 +148,7 @@ func TestLaunchPRLoopAgent_LaunchGateSkipsLaunch(t *testing.T) {
 	launched, err := deps.launchPRLoopAgent(context.Background(), "SC-1", prReviewAgentStage,
 		"/human-pr-review SC-1", PRReviewStartedHeader)
 
-	require.NoError(t, err, "a launch-gated step leaves the work silently, not an error")
+	require.ErrorIs(t, err, ErrLaunchGateRefused, "a gate refusal is reported as its own outcome, never mistaken for a step already owned")
 	assert.False(t, launched)
 	assert.Zero(t, l.calls, "gated daemon must not launch")
 	assert.Empty(t, c.added, "gated daemon must post no started or failed marker")
@@ -165,7 +165,7 @@ func TestLaunchDeployFixAgent_LaunchGateSkipsLaunch(t *testing.T) {
 
 	launched, err := deps.launchDeployFixAgent(context.Background(), "SC-1", "/human-deploy-fix SC-1")
 
-	require.NoError(t, err, "a launch-gated fixer leaves the work silently, not an error")
+	require.ErrorIs(t, err, ErrLaunchGateRefused, "a gate refusal is reported, so no caller mistakes it for a fixer already running")
 	assert.False(t, launched)
 	assert.Zero(t, l.calls, "gated daemon must not launch")
 	assert.Empty(t, c.added, "gated daemon must post no started or failed marker")
@@ -182,7 +182,7 @@ func TestOpenDraftPRAndReview_LaunchGateSkipsLaunch(t *testing.T) {
 		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "session expired"}}
 	}
 
-	require.NoError(t, deps.openDraftPRAndReview(context.Background(), "SC-1", BoardCard{Branch: "feat/x"}))
+	require.ErrorIs(t, deps.openDraftPRAndReview(context.Background(), "SC-1", BoardCard{Branch: "feat/x"}), ErrLaunchGateRefused)
 
 	assert.Zero(t, l.calls, "gated daemon must not launch the reviewer")
 	for _, body := range c.added {
