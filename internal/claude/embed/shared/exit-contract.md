@@ -8,7 +8,7 @@ Every run ends in exactly **one** of five ways. Anything else — a silent stop,
 | `retryable` | A flaky test or a container that died — the run itself can just be tried again. | Say what failed and that it is retryable. Do **not** charge it against a retry budget. |
 | `outage` | The substrate a run depends on was unreachable — a credential store that timed out, a tracker it could not reach. Nothing was attempted. | Record `exit:"outage"`. It is not charged against any budget; the daemon retries with backoff until the substrate returns. |
 | `needs-input` | A decision only a human can make, and you can name what you already checked. | State the question and stop. Never guess a product decision to avoid stopping. For a board stage (planning, implementation, verification), this exit recorded with no matching open `[human:options]` block on the ticket is read as an incomplete stop rather than a real question, and the board relaunches the stage instead of leaving the card waiting on nobody — post the block before recording the exit. The PR-fix and deploy-fix loop steps are not board stages and never relaunch: the loop raises the block itself from the `options` in your stage record, so record your directions there and do not post a block of your own. |
-| `needs-human-work` | The work is beyond this run: the blocker is real, named, and not something more attempts would fix. | Name the blocker and what a human needs to do next. |
+| `needs-human-work` | The work is beyond this run: the blocker is real, named, and not something more attempts would fix. | Name the blocker and what a human needs to do next — with evidence, not a verdict. Record a `blocker` object in the stage record and the same four as fields on the `*-failed` marker: `kind` (one of `missing-permission`, `unavailable-dependency`, `exhausted-fix-rounds`, `conflicting-requirements`, `other`), `evidence` (what you observed, verbatim — the command and its output, the file and line), `attempted` (what you tried before stopping), `release` (the condition under which the work can proceed, stated so a person or a later run can check it). Before choosing this exit, check what can be checked: a branch or commit you cannot resolve is a discovery step (`human commits for`, `git fetch`), not a blocker; a credential store or tracker that could not be reached is an `outage`; a permission the container lacks is a blocker only if you name the permission. A stop with no evidence is read as an unexplained stop, and a person who cannot tell from the ticket what to do will re-run the investigation you already did. |
 
 `retryable` and `needs-human-work` are the two most often confused. Ask: *would running this again, unchanged, plausibly succeed?* If yes it is `retryable`; if no it is `needs-human-work`. A failure you have not diagnosed is not automatically retryable — say so honestly rather than inviting an endless loop.
 
@@ -23,6 +23,21 @@ human state set <TICKET_KEY> stage.fix --json --body-file - <<'EOF'
  "evidence":"file:line, command output, or the marker that backs it",
  "next":"what the next stage or the human should do"}
 EOF
+```
+
+A `needs-human-work` record carries the blocker as data, so the stop can be audited and, when its release condition is checkable, lifted without a person:
+
+```bash
+human state set <TICKET_KEY> stage.fix --json --body-file - <<'EOF'
+{"exit":"needs-human-work",
+ "summary":"cannot push: the forge refuses the branch",
+ "blocker":{"kind":"missing-permission",
+   "evidence":"git push origin autofix/x → remote: Permission to gethuman-sh/human.git denied to humanbot (403)",
+   "attempted":"retried once; checked `human doctor` (forge token resolves); confirmed the branch exists locally",
+   "release":"the forge token gains write access to gethuman-sh/human, or a person pushes the branch"},
+ "next":"grant the token write access, then Retry the stage"}
+EOF
+human marker post <TICKET_KEY> <stage>-failed --field reason="cannot push: the forge refuses the branch" --field kind=missing-permission --field evidence="…" --field attempted="…" --field release="…"
 ```
 
 This record is in addition to, not instead of, the `[human:*]` marker your stage already posts: the marker is the ticket's public trail, this is the machine-readable handoff.
