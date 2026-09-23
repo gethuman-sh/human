@@ -46,7 +46,7 @@ So: **a board-context run must never exit without writing `stage.implementation`
 human state set <BUG_KEY> stage.implementation --json --body-file - <<'EOF'
 {"exit":"needs-human-work",
  "summary":"one line in the stage's own terms — e.g. verify budget spent after 3 real attempts; gaps: <…>",
- "trace":"the marker just posted (e.g. [human:implementation-failed]) and the state keys that back it",
+ "evidence":"the marker just posted (e.g. [human:implementation-failed]) and the state keys that back it",
  "blocker":{"kind":"exhausted-fix-rounds",
    "evidence":"the bug-verify gaps, verbatim — same text as the marker's evidence field",
    "attempted":"what each of the real attempts tried",

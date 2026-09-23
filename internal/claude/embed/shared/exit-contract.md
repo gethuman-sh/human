@@ -37,7 +37,9 @@ human state set <TICKET_KEY> stage.fix --json --body-file - <<'EOF'
    "release":"the forge token gains write access to gethuman-sh/human, or a person pushes the branch"},
  "next":"grant the token write access, then Retry the stage"}
 EOF
-human marker post <TICKET_KEY> <stage>-failed --field reason="cannot push: the forge refuses the branch" --field kind=missing-permission --field evidence="…" --field attempted="…" --field release="…"
+human marker post <TICKET_KEY> implementation-failed --field reason="cannot push: the forge refuses the branch" --field kind=missing-permission --field evidence="…" --field attempted="…" --field release="…"
 ```
+
+The marker is the one the board reads for your stage — `planning-failed` for planning, `implementation-failed` for implementation (the example above), `review-failed` for verification, `deploy-failed` for the deploy stage. There is no stage placeholder to substitute: a name the protocol does not define posts a comment the board never classifies, and the card keeps running with nothing behind it. The PR-fix and deploy-fix loop steps post no failed marker of their own; they record the blocker in the stage record and the loop posts. `human fsm where <TICKET_KEY>` prints the command for the state you are in.
 
 This record is in addition to, not instead of, the `[human:*]` marker your stage already posts: the marker is the ticket's public trail, this is the machine-readable handoff.
