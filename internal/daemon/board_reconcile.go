@@ -740,6 +740,9 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 			Msg("board reconcile: cannot red stuck-running card")
 		return false
 	}
+	// The relaunch below decides from the thread with this marker on it, as the
+	// transition layer will see it (SC-5104).
+	card.Comments = append(card.Comments, tracker.Comment{Body: markerBody(failed), Created: now})
 	if silenced {
 		if !givingUp {
 			// A live agent this pass judged hung and stopped itself: uncharged,
@@ -759,7 +762,14 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	// failed marker is the trail record, so no separate retry note (nil
 	// commenter); the shared per-stage budget bounds this path and the
 	// watcher's together.
-	deps.Retry.tryRelaunch(ctx, card.Key, derived.Stage, nil, deps.DaemonID, logger)
+	//
+	// staleFailure inside tryRelaunch recomputes DeriveBoardCard(card.Comments,
+	// ...) — the same derivation as `derived` above — so current == failed
+	// always on this call and the stale-failure guard is a no-op here. It only
+	// fires from handleBoardAgentExit, where the stage compared is the run's
+	// own recorded exit.Stage rather than a fresh derivation from these same
+	// comments.
+	deps.Retry.tryRelaunch(ctx, card.Key, derived.Stage, card.Comments, nil, deps.DaemonID, logger)
 	return true
 }
 

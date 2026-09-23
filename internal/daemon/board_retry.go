@@ -121,8 +121,8 @@ const (
 	relaunchOutage                      // substrate down: uncharged, reconcile-backoff relaunch
 )
 
-// classifyRelaunch decides, from the recorded exit alone, how (if at all) a
-// failed stage is relaunched.
+// classifyRelaunch decides, from the recorded exit and whether a decision is
+// open on the ticket, how (if at all) a failed stage is relaunched.
 //
 // An UNRECORDED outcome stays bounded: the agent died before it could write one,
 // which is exactly the crash an automatic retry exists to absorb, and the
@@ -144,7 +144,17 @@ const (
 // that had produced a perfectly good plan and only missed the marker. The
 // attempt cap bounds it, and a stage that really had finished re-posts a
 // latest-wins marker rather than duplicating work.
-func classifyRelaunch(outcome StageExit, recorded bool) relaunchKind {
+//
+// ExitNeedsInput is a claim about the ticket — "a person has a question to
+// answer" — and it is only true while an open, unanswered [human:options] block
+// stands there. Recorded with no such block it is a stop with nothing behind
+// it: the agent meant to ask and never posted, and the card sat red with no
+// decision open, no agent running and no pass that reaches an implementation
+// failure (SC-4244, F3). So decisionOpen is what maps it to relaunchNone; without
+// one the stage takes the bounded relaunch like any other incomplete ending, and
+// reds past the budget with the attempts on record. ExitNeedsHumanWork stays a
+// person's: it names a blocker, not a question, and no marker can verify it.
+func classifyRelaunch(outcome StageExit, recorded, decisionOpen bool) relaunchKind {
 	if !recorded {
 		return relaunchBounded
 	}
@@ -158,7 +168,12 @@ func classifyRelaunch(outcome StageExit, recorded bool) relaunchKind {
 		return relaunchOutage
 	case ExitRetryable, ExitDone:
 		return relaunchBounded
-	case ExitNeedsInput, ExitNeedsHumanWork:
+	case ExitNeedsInput:
+		if decisionOpen {
+			return relaunchNone
+		}
+		return relaunchBounded
+	case ExitNeedsHumanWork:
 		return relaunchNone
 	default:
 		return relaunchNone
@@ -188,12 +203,34 @@ func (r StageRetry) uncount(pmKey string, stage BoardStage) {
 // transitions all require a card that derives to a failed state, and the
 // ticket's trail should record what actually happened rather than hiding a
 // crash behind a silent re-run.
-func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardStage, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) bool {
+//
+// comments is the thread as the caller read it. Two decisions are made from it
+// rather than from the recorded exit: whether a needs-input exit has an open
+// question behind it, and whether the card has already left the failed stage.
+func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardStage, comments []tracker.Comment, commenter tracker.Commenter, daemonID string, logger zerolog.Logger) bool {
 	if !r.enabled() {
 		return false
 	}
+	if staleFailure(comments, stage) {
+		// The card is past this stage: the stage completed after its failure was
+		// recorded (a review verdict, a PR loop started) and the failure is a
+		// stale fact about a finished round. A relaunch would be rejected by the
+		// forward-only rule and, before this, charged for the rejection (SC-3853:
+		// a verification relaunch two hours after the PR loop had started). There
+		// is nothing to move, so it is handled by leaving it — uncharged.
+		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+			Msg("board retry: the card has moved past the failed stage; stale failure, nothing to relaunch")
+		return true
+	}
 	outcome, recorded := r.Outcome(pmKey, stage)
-	switch classifyRelaunch(outcome, recorded) {
+	// stagePausedOnOptions, not the raw openOptionsBlock: the exit path's own
+	// definition of "a person is being asked" additionally requires the block
+	// name this stage or an earlier one (stageRank check) and be well-formed
+	// (SC-1669/SC-2137). A block naming a later stage, or malformed, must not
+	// read as a decision open on THIS stage — using the raw predicate here made
+	// the two disagree on exactly that case.
+	decisionOpen := stagePausedOnOptions(comments, stage)
+	switch classifyRelaunch(outcome, recorded, decisionOpen) {
 	case relaunchNone:
 		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("exit", string(outcome)).
 			Msg("board retry: stage exit is not retryable, leaving the card for a human")
@@ -206,10 +243,31 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 
 // relaunchReason says, for the retry note, why this relaunch is happening.
 func relaunchReason(outcome StageExit, recorded bool) string {
-	if recorded {
-		return "the stage recorded exit: " + string(outcome)
+	if !recorded {
+		return "the agent exited without recording an outcome"
 	}
-	return "the agent exited without recording an outcome"
+	if outcome == ExitNeedsInput {
+		return "the stage recorded exit: needs-input, but no open decision stands on the ticket"
+	}
+	return "the stage recorded exit: " + string(outcome)
+}
+
+// staleFailure reports that the card derives to a stage ranked past the failed
+// one, so the failure describes a round the item has already left. Only ranked
+// placements compare: a hidden card (closed ticket) or an idea is off the
+// pipeline rather than ahead of the stage, and must not take this branch.
+func staleFailure(comments []tracker.Comment, stage BoardStage) bool {
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	// The rework build is the one sanctioned run of a stage BEHIND the card: a
+	// failing verdict leaves the card at verification/done while implementation
+	// runs again in place, and a crash there must relaunch through the same
+	// rework dispatch — the card being "ahead" is the rework's normal shape, not
+	// evidence the stage completed.
+	if isReworkTransition(stage, card) {
+		return false
+	}
+	current, failed := stageRank[card.Stage], stageRank[stage]
+	return current > 0 && failed > 0 && current > failed
 }
 
 // relaunchBounded is the charged, capped path: a flake, a dead container, an
@@ -240,9 +298,22 @@ func (r StageRetry) relaunchBounded(ctx context.Context, pmKey string, stage Boa
 	}
 
 	launched, err := r.Relaunch(pmKey, stage)
+	if err != nil && launched {
+		// The agent IS running and only its started marker is missing
+		// (startAgentStage reports exactly this). The attempt was spent on a
+		// real launch, so it stays charged; the live run is what is watched now,
+		// and the marker gap is the trail's problem, not a reason to launch again.
+		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).Int("attempt", attempt).
+			Msg("board retry: stage relaunched but its started marker could not be posted; the attempt stands")
+		return true
+	}
 	if err != nil {
+		// Nothing started, so nothing was tried: an errored relaunch used to keep
+		// its charge, and two of them spent the whole budget on launches that
+		// never happened (F4). The refund follows launched, not err.
+		r.uncount(pmKey, stage)
 		logger.Warn().Err(err).Str("pm", pmKey).Str("stage", string(stage)).
-			Msg("board retry: relaunch failed, leaving the card as failed")
+			Msg("board retry: relaunch failed before anything started; attempt not charged, leaving the card as failed")
 		return false
 	}
 	if !launched {

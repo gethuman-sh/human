@@ -108,7 +108,7 @@ func TestRelaunchBounded_SingleFlightRefusalRollsBackTheAttempt(t *testing.T) {
 			BoardTransitionRequest{PMKey: pmKey, From: s, To: s})
 	}
 
-	ok := policy.tryRelaunch(context.Background(), "SC-1", BoardPlanning, rec, "daemon-1", zerolog.Nop())
+	ok := policy.tryRelaunch(context.Background(), "SC-1", BoardPlanning, nil, rec, "daemon-1", zerolog.Nop())
 
 	require.False(t, ok, "nothing was relaunched")
 	assert.Zero(t, rec.attempts, "the charged attempt is rolled back")
