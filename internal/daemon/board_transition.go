@@ -1470,7 +1470,30 @@ func unrecordedStepReason(stage PRLoopStage, _ PRLoopOutcome, _ BoardFailureDiag
 // (the branch is then ready for a fresh CI gate + merge); any other exit reds the card
 // with a terminal deploy-failed. The deployFixRounds budget already bounds how many
 // times the pipeline re-enters here, so a genuinely unfixable failure terminates.
-func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit) error {
+// Blocker is what a needs-human-work stop recorded about itself in the stage
+// record (shared/exit-contract.md, SC-5179): the kind of blocker, the evidence
+// observed, what was attempted, and the condition that releases the work. The
+// loop carries it onto the marker it posts on the agent's behalf, so the
+// person on the red card is not sent back to re-run the investigation.
+type Blocker struct {
+	Kind      string `json:"kind"`
+	Evidence  string `json:"evidence"`
+	Attempted string `json:"attempted"`
+	Release   string `json:"release"`
+}
+
+// addTo copies the non-empty blocker fields onto a marker, under the names the
+// marker protocol declares for every *-failed marker (marker.BlockerFields).
+func (b Blocker) addTo(m marker.Marker) marker.Marker {
+	for k, v := range map[string]string{"kind": b.Kind, "evidence": b.Evidence, "attempted": b.Attempted, "release": b.Release} {
+		if v = strings.TrimSpace(v); v != "" {
+			m.Fields[k] = v
+		}
+	}
+	return m
+}
+
+func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit, blocker Blocker) error {
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading comments for deploy fix", "pm", pmKey)
@@ -1512,8 +1535,11 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 	if stageAlreadyFailed(comments, BoardDoneStage) {
 		return nil
 	}
-	_, _ = d.Commenter.AddComment(ctx, pmKey,
-		markerBody(failureMarker(MarkerDeployFailed, deployFixEscalationReason(fixExit, dispatchedFailure(comments)))))
+	// The fixer's own blocker evidence rides on the marker: the escalation
+	// line says what the fixer was sent to fix, the four fields say what it
+	// found (SC-5179).
+	m := blocker.addTo(failureMarker(MarkerDeployFailed, deployFixEscalationReason(fixExit, dispatchedFailure(comments))))
+	_, _ = d.Commenter.AddComment(ctx, pmKey, markerBody(m, "reason", "kind", "evidence", "attempted", "release"))
 	return nil
 }
 

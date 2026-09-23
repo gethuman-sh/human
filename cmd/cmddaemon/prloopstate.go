@@ -96,14 +96,17 @@ func readPRFixReport(ctx context.Context, project, pmKey string, notBefore time.
 // ("" when absent — the driver treats a non-done exit, including absence, as red).
 //
 // notBefore anchors freshness the same way as the loop reads above.
-func readDeployFixExit(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) daemon.StageExit {
+func readDeployFixExit(ctx context.Context, project, pmKey string, notBefore time.Time, logger zerolog.Logger) (daemon.StageExit, daemon.Blocker) {
 	var v struct {
-		Exit string `json:"exit"`
+		Exit    string         `json:"exit"`
+		Blocker daemon.Blocker `json:"blocker"`
 	}
 	_, _ = readStageReportSettled(ctx, project, pmKey, "stage.deploy-fix", notBefore, &v, logger)
 	// The state store hands back a bare string; this is the one place it becomes
-	// a StageExit, so the parse boundary is explicit rather than implied.
-	return daemon.StageExit(v.Exit)
+	// a StageExit, so the parse boundary is explicit rather than implied. The
+	// blocker object travels with it so the loop's marker can carry the
+	// fixer's evidence (SC-5179).
+	return daemon.StageExit(v.Exit), v.Blocker
 }
 
 // readStageReportSettled loads one loop step's JSON report from the agent

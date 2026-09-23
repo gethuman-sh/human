@@ -161,7 +161,7 @@ func TestReadDeployFixExit_readsField(t *testing.T) {
 	isolateState(t)
 	writeRawReport(t, "SC-1", "stage.deploy-fix", `{"exit":"done"}`)
 
-	exit := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	exit, _ := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Equal(t, daemon.ExitDone, exit)
 }
 
@@ -171,7 +171,7 @@ func TestReadDeployFixExit_missingIsEmpty(t *testing.T) {
 	isolateState(t)
 	shrinkPRLoopReadBackoff(t)
 
-	exit := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
+	exit, _ := readDeployFixExit(context.Background(), "", "SC-1", time.Time{}, zerolog.Nop())
 	assert.Empty(t, exit)
 }
 
