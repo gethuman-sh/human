@@ -1471,11 +1471,16 @@ func unrecordedStepReason(stage PRLoopStage, _ PRLoopOutcome, _ BoardFailureDiag
 // (the branch is then ready for a fresh CI gate + merge); any other exit reds the card
 // with a terminal deploy-failed. The deployFixRounds budget already bounds how many
 // times the pipeline re-enters here, so a genuinely unfixable failure terminates.
+// The blocker is what a needs-human-work stop recorded about itself; the loop
+// carries it onto the marker it posts on the agent's behalf, so the person on
+// the red card is not sent back to re-run the investigation.
+func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit, blocker Blocker) error {
+	return d.advanceDeployFix(ctx, pmKey, fixExit, blocker)
+}
+
 // Blocker is what a needs-human-work stop recorded about itself in the stage
 // record (shared/exit-contract.md, SC-5179): the kind of blocker, the evidence
-// observed, what was attempted, and the condition that releases the work. The
-// loop carries it onto the marker it posts on the agent's behalf, so the
-// person on the red card is not sent back to re-run the investigation.
+// observed, what was attempted, and the condition that releases the work.
 type Blocker struct {
 	Kind      string `json:"kind"`
 	Evidence  string `json:"evidence"`
@@ -1499,7 +1504,7 @@ func (b Blocker) addTo(m marker.Marker) marker.Marker {
 	return m
 }
 
-func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit, blocker Blocker) error {
+func (d BoardTransitionDeps) advanceDeployFix(ctx context.Context, pmKey string, fixExit StageExit, blocker Blocker) error {
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading comments for deploy fix", "pm", pmKey)

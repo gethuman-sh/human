@@ -926,7 +926,7 @@
       "required_fields": [
         "reason"
       ],
-      "doc": "The deploy gave up. The marker names the condition that is blocking — for a deploy-fixer escalation it quotes the failure the fixer was dispatched to fix, which for CI names the red checks — and it does not offer a gesture that cannot work: where re-running Deploy would hit the same failure, it says so instead of advising the retry.",
+      "doc": "The deploy gave up. The marker names the condition that is blocking — for a deploy-fixer escalation it quotes the failure the fixer was dispatched to fix, which for CI names the red checks — and it does not offer a gesture that cannot work: where re-running Deploy would hit the same failure, it says so instead of advising the retry. When the deploy fixer stopped needs-human-work, the marker also carries the fixer's blocker as the optional fields kind, evidence, attempted and release, copied from stage.deploy-fix (SC-5179).",
       "where": "internal/daemon/board_transition.go deployFailed (NOT guarded by stageAlreadyFailed — it can fire before any running done-stage marker exists at all, e.g. a push failure ahead of pr-review-started, so a guard there would swallow a genuine new failure on a board Deploy re-drop, SC-3857 AD5), and AdvanceDeployFix for a fixer that did not converge (guarded by stageAlreadyFailed: a dispatch that actually started a fixer posts deploy-fix-started first, so the guard cannot hide that dispatch's own failure; a dispatch REFUSED because a fixer is already running posts nothing and leaves the guard on, deliberately — see deploy-fixer-launch-refused, SC-4244)"
     },
     {
