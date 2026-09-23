@@ -149,6 +149,19 @@ type FailureDeps struct {
 	LatestClass      LatestOutcomeClass
 	OnAuthRefused    OnAuthRefused
 	// DaemonID stamps this daemon's identity on every marker the exit path posts.
+	// Alive reports whether the exiting agent's claude process is still running.
+	// A Stop event is not a run's ending: claude fires one at the end of every
+	// main-agent turn, and a board run has many — one per dispatched subagent it
+	// waits for — all under the parent's agent name and run id. Acting on the
+	// first one consumed the run's record, posted its *-failed marker while it
+	// was working, and then ignored its real exit as "already handled", which is
+	// how a planner that finished its plan ended as a red card nobody was
+	// watching (SC-5088, campaign LOC-7). The cleanup listener already asks the
+	// container this question before tearing it down (SC-3785); the watcher
+	// asks it before declaring the run dead. nil disables — the pre-SC-5088
+	// behaviour — so a partially wired daemon still acts on exits.
+	Alive AgentProcessAlive
+
 	DaemonID string
 	Logger   zerolog.Logger
 }
@@ -275,6 +288,16 @@ func claimExit(runs *RunRegistry, runID, agentName string, logger zerolog.Logger
 // raced its own review-complete propagation as a mid-review crash (SC-2133).
 func handleBoardAgentExit(ctx context.Context, runs *RunRegistry, evt hookevents.Event, deps FailureDeps) {
 	logger := deps.Logger
+	// Before the record is consumed, not after: a claim is irreversible, and a
+	// Stop from a run still working is somebody else's ending — a subagent's, or
+	// the turn before the next one. The wait returns as soon as claude is gone,
+	// so a real ending costs one poll; a run provably alive past the bound is
+	// left alone, and its own ending arrives later carrying the same run id.
+	if deps.Alive != nil && !waitForAgentExit(ctx, deps.Alive, evt.AgentName, logger) {
+		logger.Info().Str("agent", evt.AgentName).Str("event", evt.EventName).
+			Msg("board exit: claude still running past the exit event; not this run's ending, leaving its record standing")
+		return
+	}
 	pmKey, stage, ok := claimExit(runs, evt.RunID, evt.AgentName, logger)
 	if !ok {
 		return

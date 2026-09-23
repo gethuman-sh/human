@@ -885,6 +885,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		Retry:            stageRetry,
 		LatestClass:      ds.modelSink.LatestClass,
 		OnAuthRefused:    containerAuthRefusedFunc(ds.srv.Projects, ds.claudeRefusals),
+		Alive:            agentClaudeAlive,
 		DaemonID:         ds.daemonID,
 		Logger:           logger,
 	})
