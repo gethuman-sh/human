@@ -258,6 +258,14 @@ func relaunchReason(outcome StageExit, recorded bool) string {
 // pipeline rather than ahead of the stage, and must not take this branch.
 func staleFailure(comments []tracker.Comment, stage BoardStage) bool {
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	// The rework build is the one sanctioned run of a stage BEHIND the card: a
+	// failing verdict leaves the card at verification/done while implementation
+	// runs again in place, and a crash there must relaunch through the same
+	// rework dispatch — the card being "ahead" is the rework's normal shape, not
+	// evidence the stage completed.
+	if isReworkTransition(stage, card) {
+		return false
+	}
 	current, failed := stageRank[card.Stage], stageRank[stage]
 	return current > 0 && failed > 0 && current > failed
 }

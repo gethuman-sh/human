@@ -130,3 +130,28 @@ func TestStaleFailure_OnlyPlacementsPastTheFailedStageQualify(t *testing.T) {
 	require.False(t, staleFailure([]tracker.Comment{{Body: "[human:planning-failed]\nreason: r", Created: time.Now()}}, BoardPlanning))
 	require.True(t, staleFailure([]tracker.Comment{{Body: "[human:implementation-started]", Created: time.Now()}}, BoardPlanning))
 }
+
+// A failing verdict leaves the card at verification/done while the rework
+// build runs implementation again in place. That card is "ahead" of the
+// failed stage by rank, but the rework dispatch relaunches exactly this shape:
+// a crash of the rework agent must relaunch, not be retired as stale.
+func TestTryRelaunch_reworkBuildCrashIsNotStale(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	thread := []tracker.Comment{
+		{Body: "[human:implementation-started]", Created: base},
+		{Body: "[human:ready-for-review]\nbranch: feat/x", Created: base.Add(time.Minute)},
+		{Body: "[human:review-started]", Created: base.Add(2 * time.Minute)},
+		{Body: "[human:review-complete]\nverdict: fail", Created: base.Add(3 * time.Minute)},
+		{Body: "[human:implementation-started]", Created: base.Add(4 * time.Minute)},
+		{Body: "[human:implementation-failed]\nreason: r", Created: base.Add(5 * time.Minute)},
+	}
+	card := DeriveBoardCard(thread, tracker.CategoryUnstarted, false)
+	require.Equal(t, BoardVerification, card.Stage, "precondition: the rework leaves the card at verification")
+	require.True(t, isReworkTransition(BoardImplementation, card), "precondition: this is the rework shape")
+	require.False(t, staleFailure(thread, BoardImplementation))
+
+	rec := &retryRecorder{}
+	policy := rec.policy("", false)
+	require.True(t, policy.tryRelaunch(context.Background(), "SC-1", BoardImplementation, thread, rec, "d", zerolog.Nop()))
+	require.Equal(t, []BoardStage{BoardImplementation}, rec.relaunched)
+}
