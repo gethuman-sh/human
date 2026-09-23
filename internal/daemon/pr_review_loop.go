@@ -182,16 +182,21 @@ const findingFingerprintEmDash = "—"
 // its explanation around a surviving problem, or reordering findings.
 //
 // The reviewer's prompt requires a blocking finding to lead with
-// `BLOCKING <file>:<line> — <slug> — <explanation>`, and to keep `<slug>`
-// byte-identical across rounds while the same underlying problem persists —
-// only `<explanation>` is free to vary ("still not fixed", a shifted line,
-// more detail). When the first BLOCKING (or, failing that, first non-empty)
-// line follows that shape, the fingerprint is `<file>:<line> — <slug>`,
-// normalized. Text that does not — an older thread, a verdict with "no
-// blocking issues", a reviewer that skipped the convention — falls back to
-// the whole line, lower-cased, whitespace-collapsed and cut to 160
-// characters, exactly as before: still an identity, just a weaker one, and
-// never a crash.
+// `BLOCKING <file>:<line> — <slug> — <explanation>`, and to keep `<file>` and
+// `<slug>` byte-identical across rounds while the same underlying problem
+// persists — the prompt explicitly frees `<explanation>` to vary ("still not
+// fixed", a shifted line, more detail). The line number is part of that free
+// half in practice: a fix round that edits the file and fails to fix the
+// problem is exactly what shifts it, so the line number is dropped from the
+// anchor before comparing — only `<file>` survives from that segment. When
+// the first line that STARTS WITH "BLOCKING" (matching the prompt's mandated
+// lead-in, not merely containing the word — "Non-blocking:" must never be
+// mistaken for it) follows the `<file>:<line> — <slug>` shape, the
+// fingerprint is `<file> — <slug>`, normalized. Text that does not — an
+// older thread, a verdict with "no blocking issues", a reviewer that skipped
+// the convention — falls back to the whole line, lower-cased,
+// whitespace-collapsed and cut to 160 characters, exactly as before: still an
+// identity, just a weaker one, and never a crash.
 func FindingFingerprint(findings string) string {
 	chosen := ""
 	for _, line := range strings.Split(findings, "\n") {
@@ -202,7 +207,7 @@ func FindingFingerprint(findings string) string {
 		if chosen == "" {
 			chosen = line
 		}
-		if strings.Contains(strings.ToUpper(line), "BLOCKING") {
+		if strings.HasPrefix(strings.ToUpper(line), "BLOCKING") {
 			chosen = line
 			break
 		}
@@ -213,12 +218,24 @@ func FindingFingerprint(findings string) string {
 	if parts := strings.SplitN(chosen, findingFingerprintEmDash, 3); len(parts) >= 2 {
 		anchor := normalizeFingerprintText(parts[0])
 		anchor = strings.TrimSpace(strings.TrimPrefix(anchor, "blocking"))
+		anchor = anchorFileOnly(anchor)
 		slug := normalizeFingerprintText(parts[1])
 		if anchor != "" && slug != "" {
 			return cutFingerprintRunes(anchor + " " + findingFingerprintEmDash + " " + slug)
 		}
 	}
 	return cutFingerprintRunes(normalizeFingerprintText(chosen))
+}
+
+// anchorFileOnly strips a trailing `:<line>` from a `<file>:<line>` anchor so
+// the fingerprint survives the line moving between rounds — see
+// FindingFingerprint. Anchors without a colon (already just a file, or some
+// other shape) pass through unchanged.
+func anchorFileOnly(anchor string) string {
+	if i := strings.LastIndex(anchor, ":"); i >= 0 {
+		return anchor[:i]
+	}
+	return anchor
 }
 
 // normalizeFingerprintText lower-cases and whitespace-collapses a fragment so

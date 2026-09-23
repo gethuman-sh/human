@@ -24,6 +24,40 @@ func TestFindingFingerprint(t *testing.T) {
 	assert.Len(t, []rune(FindingFingerprint(long)), 160)
 }
 
+// The mandated three-part shape (`BLOCKING <file>:<line> — <slug> —
+// <explanation>`, human-pr-reviewer-agent.md:72): the anchor drops its line
+// number and the fingerprint is `<file> — <slug>`, normalized.
+func TestFindingFingerprint_threePartShape(t *testing.T) {
+	got := FindingFingerprint("BLOCKING internal/daemon/x.go:10 — the guard fires only in round 1 — still not fixed")
+	assert.Equal(t, "internal/daemon/x.go — the guard fires only in round 1", got)
+}
+
+// The invariant the repetition bound exists for: the SAME problem, reported
+// again after a fix round that moved the line and reworded the explanation
+// (exactly what a failed fix round produces), must fingerprint EQUAL — and a
+// genuinely different problem, even at the same file, must not.
+func TestFindingFingerprint_sameProblemAcrossAShiftedLineAndRewordedExplanation(t *testing.T) {
+	round1 := "BLOCKING internal/daemon/pr_review_loop.go:167 — fingerprint ignores explanation — x"
+	round2 := "BLOCKING internal/daemon/pr_review_loop.go:171 — fingerprint ignores explanation — the fix round shifted the line and reworded this, but it's still not fixed"
+	assert.Equal(t, FindingFingerprint(round1), FindingFingerprint(round2),
+		"same file, same slug, moved line and reworded explanation must still match")
+
+	different := "BLOCKING internal/daemon/pr_review_loop.go:167 — a completely different problem — x"
+	assert.NotEqual(t, FindingFingerprint(round1), FindingFingerprint(different),
+		"a different slug at the same anchor must never collide")
+}
+
+// human-pr-reviewer-agent.md:82-85 reserves "Non-blocking:" for nits that must
+// never be fingerprinted as the finding. A body that opens with a non-blocking
+// note followed by two DIFFERENT blocking findings must fingerprint each
+// finding, never the shared non-blocking preamble.
+func TestFindingFingerprint_nonBlockingPreambleIsNeverTheIdentity(t *testing.T) {
+	roundA := "Non-blocking: the test names are long.\n\nBLOCKING a.go:1 — alpha — x"
+	roundB := "Non-blocking: the test names are long.\n\nBLOCKING b.go:9 — beta — y"
+	assert.NotEqual(t, FindingFingerprint(roundA), FindingFingerprint(roundB),
+		"two different blocking findings must never collide on a shared non-blocking preamble")
+}
+
 // The loop's own record of what it sent the fixer: the fingerprint rides on the
 // pr-fix-started marker and reads back; a bare header (older threads) reads as
 // no finding, which can never count as repeated.
