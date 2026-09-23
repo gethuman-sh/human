@@ -190,3 +190,44 @@ func TestPrLoopBranch_prefersStartMarkerOverHandoff(t *testing.T) {
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	assert.Equal(t, "feat/new", prLoopBranch(comments, card))
 }
+
+// A re-drive from the reconcile pass carries no exit event and evidence older
+// than the pass. When the thread names a step with no record and that step's
+// agent is alive, the step is running, not unreadable: the re-drive stands
+// down instead of redding a card over a live fixer (SC-5120).
+func TestAdvancePRLoop_redriveStandsDownWhileTheStepsAgentIsAlive(t *testing.T) {
+	base := time.Now().Add(-time.Minute)
+	thread := []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1", Created: base},
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "2", Created: base.Add(time.Second)},
+		{Body: "[human:pr-fix-started]", ID: "3", Created: base.Add(2 * time.Second)},
+	}
+	for _, tc := range []struct {
+		name      string
+		alive     bool
+		agent     string
+		escalates bool
+	}{
+		{"re-drive, fixer alive", true, "", false},
+		{"re-drive, fixer gone", false, "", true},
+		{"the fixer's own exit event", true, "board-SC-1-prfix", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &fakeCommenter{comments: thread}
+			var asked []string
+			deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
+			deps.LoopStepAlive = func(name string) bool { asked = append(asked, name); return tc.alive }
+
+			require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1",
+				PRLoopOutcome{ReviewVerdict: PRVerdictChanges, ReviewRecorded: true, Agent: tc.agent}))
+
+			_, failed := posted(c, PRReviewFailedHeader)
+			assert.Equal(t, tc.escalates, failed)
+			if tc.agent == "" {
+				assert.Equal(t, []string{"board-SC-1-prfix"}, asked, "the re-drive asks about the step the fresh thread names")
+			} else {
+				assert.Empty(t, asked, "an exit event needs no probe")
+			}
+		})
+	}
+}

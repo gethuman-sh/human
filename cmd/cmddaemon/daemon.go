@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3696,6 +3697,17 @@ func boardTransitionDepsFor(reg *daemon.ProjectRegistry, pmKey string, resolver 
 		Logger:       logger,
 		LaunchGate:   launchGate,
 		BlockedBy:    blockedByProbeFunc(entry.Dir, lookup, resolver, logger),
+		// The same running-agent metadata the reconcile pass lists, read fresh
+		// at the moment the re-drive decides rather than at the start of the
+		// pass (SC-5120). A listing failure reads as "not alive": that is the
+		// pre-check behaviour, never a reason to leave a dead loop unhandled.
+		LoopStepAlive: func(name string) bool {
+			names, err := liveBoardAgents()
+			if err != nil {
+				return false
+			}
+			return slices.Contains(names, name)
+		},
 	}, nil
 }
 
