@@ -386,10 +386,40 @@ func ParseBody(body string) (Marker, bool) {
 	}
 	m := Marker{Type: header[1], Head: strings.TrimSpace(header[2])}
 
-	fields := map[string]string{}
+	fields, end, blankSeparator := scanFieldBlock(lines, 1)
+	if len(fields) > 0 {
+		m.Fields = fields
+	}
+	// A blank separator line is itself consumed (the body starts after it); a
+	// non-field line that ended the block is already the first body line.
+	bodyStart := end
+	if blankSeparator {
+		bodyStart++
+	}
+	if bodyStart < len(lines) {
+		m.Body = strings.TrimSpace(strings.Join(lines[bodyStart:], "\n"))
+	}
+	return m, true
+}
+
+// scanFieldBlock scans lines[start:] for a marker's field block — the
+// contiguous run of "key: value" lines and their indented continuations that
+// follows the header — and returns the parsed fields plus where the block
+// ends: end is the index of the line that ends it, and blankSeparator says
+// whether that line is a true blank separator ("") rather than a non-field
+// line the tolerant reader treats as the start of the body.
+//
+// Sign's insertFieldLines calls this too (for end alone) so the two
+// functions' notion of "where do the fields end" — in particular the
+// ordering between a continuation line and the blank-line boundary — cannot
+// drift apart the way it did before: insertFieldLines tested the blank-line
+// boundary first, so a signed marker whose field carried an embedded blank
+// line (rendered as a "  " continuation) got its signature spliced inside
+// that field instead of after it.
+func scanFieldBlock(lines []string, start int) (fields map[string]string, end int, blankSeparator bool) {
+	fields = map[string]string{}
 	var currentField string
-	bodyStart := len(lines)
-	for i := 1; i < len(lines); i++ {
+	for i := start; i < len(lines); i++ {
 		line := lines[i]
 		// A continuation line is checked before the blank-line boundary: Render
 		// writes an empty continuation as "  " (the two-space indent with no
@@ -403,8 +433,7 @@ func ParseBody(body string) (Marker, bool) {
 			continue
 		}
 		if strings.TrimSpace(line) == "" {
-			bodyStart = i + 1
-			break
+			return fields, i, true
 		}
 		if match := fieldPattern.FindStringSubmatch(line); match != nil {
 			currentField = match[1]
@@ -414,16 +443,9 @@ func ParseBody(body string) (Marker, bool) {
 		// A non-field, non-continuation line without a preceding blank line:
 		// treat everything from here as body — tolerant reading beats
 		// rejecting a slightly hand-edited marker.
-		bodyStart = i
-		break
+		return fields, i, false
 	}
-	if len(fields) > 0 {
-		m.Fields = fields
-	}
-	if bodyStart < len(lines) {
-		m.Body = strings.TrimSpace(strings.Join(lines[bodyStart:], "\n"))
-	}
-	return m, true
+	return fields, len(lines), false
 }
 
 // Latest returns the newest marker of markerType among comments, using the

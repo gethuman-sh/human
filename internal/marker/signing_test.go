@@ -67,6 +67,40 @@ func TestSign_partialSignature(t *testing.T) {
 	assert.False(t, hasBuild)
 }
 
+// A field with an embedded blank line (rendered as a "  " continuation, e.g.
+// evidence carrying a blank line from command output) must still be signed
+// correctly: the signature belongs after the field block, not spliced inside
+// the field whose blank line insertFieldLines used to mistake for the
+// separator. This is the actual path production markers take — Render, then
+// Sign (every marker post is signed), then ParseBody on read-back — and it is
+// the fixture TestParseBody_multilineFieldWithEmbeddedBlankLine already uses
+// without the Sign step in between.
+func TestSign_withEmbeddedBlankLineInField(t *testing.T) {
+	orig := Marker{
+		Type: "implementation-failed",
+		Fields: map[string]string{
+			"reason":    "verify budget spent",
+			"kind":      "exhausted-fix-rounds",
+			"evidence":  "$ go test ./...\n\nFAIL: TestX (0.01s)",
+			"attempted": "retried twice",
+			"release":   "a person resolves the flake",
+		},
+	}
+	rendered := Render(orig, []string{"reason", "kind", "evidence", "attempted", "release"})
+	signed := Sign(rendered, "d1", "rev1")
+
+	m, ok := ParseBody(signed)
+	require.True(t, ok)
+	assert.Equal(t, orig.Fields["evidence"], m.Fields["evidence"], "evidence must not be truncated at its embedded blank line")
+	assert.Equal(t, orig.Fields["reason"], m.Fields["reason"])
+	assert.Equal(t, orig.Fields["kind"], m.Fields["kind"])
+	assert.Equal(t, orig.Fields["attempted"], m.Fields["attempted"])
+	assert.Equal(t, orig.Fields["release"], m.Fields["release"])
+	assert.Equal(t, "d1", m.Fields[MachineField])
+	assert.Equal(t, "rev1", m.Fields[BuildField])
+	assert.Empty(t, m.Body, "the signature must land at the end of the field block, not spill provenance into the body")
+}
+
 // Existing field order is preserved — the signature is appended after the last
 // field, never reordering the handoff's engineering/branch/commits block.
 func TestSign_preservesFieldOrder(t *testing.T) {
