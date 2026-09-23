@@ -118,9 +118,14 @@ func TestTryRelaunch_FailureForAStageTheCardHasLeftIsRetired(t *testing.T) {
 	require.Empty(t, rec.comments)
 }
 
-// Only ranked placements compare. An idea or a hidden (closed) card is off the
-// pipeline, not ahead of the stage, and takes the ordinary path.
-func TestStaleFailure_UnrankedPlacementsNeverQualify(t *testing.T) {
+// staleFailure only compares ranked placements: backlog and the failed stage
+// itself rank at or below the failed stage and never qualify as stale, only a
+// placement genuinely past it does. staleFailure calls DeriveBoardCard with
+// CategoryUnstarted/isIdea hardcoded false, so a hidden (closed) or idea
+// placement can never arise from its comments-only input in the first place —
+// that guarantee is structural, at the call site, not something this test can
+// exercise by varying the thread.
+func TestStaleFailure_OnlyPlacementsPastTheFailedStageQualify(t *testing.T) {
 	require.False(t, staleFailure(nil, BoardPlanning), "an empty thread derives to backlog, below any stage")
 	require.False(t, staleFailure([]tracker.Comment{{Body: "[human:planning-failed]\nreason: r", Created: time.Now()}}, BoardPlanning))
 	require.True(t, staleFailure([]tracker.Comment{{Body: "[human:implementation-started]", Created: time.Now()}}, BoardPlanning))

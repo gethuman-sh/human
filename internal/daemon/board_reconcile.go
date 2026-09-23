@@ -759,6 +759,13 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	// failed marker is the trail record, so no separate retry note (nil
 	// commenter); the shared per-stage budget bounds this path and the
 	// watcher's together.
+	//
+	// staleFailure inside tryRelaunch recomputes DeriveBoardCard(card.Comments,
+	// ...) — the same derivation as `derived` above — so current == failed
+	// always on this call and the stale-failure guard is a no-op here. It only
+	// fires from handleBoardAgentExit, where the stage compared is the run's
+	// own recorded exit.Stage rather than a fresh derivation from these same
+	// comments.
 	deps.Retry.tryRelaunch(ctx, card.Key, derived.Stage, card.Comments, nil, deps.DaemonID, logger)
 	return true
 }

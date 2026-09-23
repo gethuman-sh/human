@@ -223,7 +223,13 @@ func (r StageRetry) tryRelaunch(ctx context.Context, pmKey string, stage BoardSt
 		return true
 	}
 	outcome, recorded := r.Outcome(pmKey, stage)
-	_, decisionOpen := openOptionsBlock(comments)
+	// stagePausedOnOptions, not the raw openOptionsBlock: the exit path's own
+	// definition of "a person is being asked" additionally requires the block
+	// name this stage or an earlier one (stageRank check) and be well-formed
+	// (SC-1669/SC-2137). A block naming a later stage, or malformed, must not
+	// read as a decision open on THIS stage — using the raw predicate here made
+	// the two disagree on exactly that case.
+	decisionOpen := stagePausedOnOptions(comments, stage)
 	switch classifyRelaunch(outcome, recorded, decisionOpen) {
 	case relaunchNone:
 		logger.Info().Str("pm", pmKey).Str("stage", string(stage)).Str("exit", string(outcome)).
