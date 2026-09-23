@@ -1138,6 +1138,12 @@ func prLoopURL(comments []tracker.Comment) string {
 // fixer, un-draft + merge via the existing DeployBranch, or red the card for a
 // human. Human PR review runs out of band and never enters here.
 func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, outcome PRLoopOutcome) error {
+	if !beginPRLoopDrive(pmKey) {
+		d.Logger.Info().Str("pm", pmKey).
+			Msg("board PR loop: a drive is already in flight for this ticket; standing down")
+		return nil
+	}
+	defer endPRLoopDrive(pmKey)
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
 		return errors.WrapWithDetails(err, "loading comments for PR loop", "pm", pmKey)
@@ -1167,9 +1173,15 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 			d.Logger.Warn().Err(err).Str("pm", pmKey).
 				Msg("board PR loop: could not record the passing review; continuing to the merge")
 		}
-		if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, number); err != nil {
-			return d.deployFailed(pmKey, url, deployReason(
-				"the reviewed PR could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
+		// A branch already on the base has no draft left to release: the forge
+		// refuses to un-draft a merged pull request, and reporting that refusal
+		// as a deploy failure reds a card whose work shipped. The engine's own
+		// already-merged carve-out records the outcome instead.
+		if !d.Deployer.BranchMerged(ctx, d.WorkspaceDir, branch) {
+			if err := d.Deployer.MarkReadyForReview(ctx, d.WorkspaceDir, number); err != nil {
+				return d.deployFailed(pmKey, url, deployReason(
+					"the reviewed PR could not be marked ready for merge — open the PR and mark it ready, then re-run Deploy", err))
+			}
 		}
 		// Reuse the untouched deploy engine: it adopts the now-ready open PR
 		// (forge.AdoptOrCreatePullRequest), runs the CI gate, freshness rebase and merge.
