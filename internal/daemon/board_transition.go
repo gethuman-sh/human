@@ -4,6 +4,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -1482,14 +1483,19 @@ type Blocker struct {
 	Release   string `json:"release"`
 }
 
-// addTo copies the non-empty blocker fields onto a marker, under the names the
-// marker protocol declares for every *-failed marker (marker.BlockerFields).
+// addTo returns the marker with the non-empty blocker fields added, under the
+// names the marker protocol declares for every *-failed marker
+// (marker.BlockerFields). The field map is copied, so the value semantics the
+// signature promises hold even for a caller that keeps using its own marker.
 func (b Blocker) addTo(m marker.Marker) marker.Marker {
+	fields := make(map[string]string, len(m.Fields)+4)
+	maps.Copy(fields, m.Fields)
 	for k, v := range map[string]string{"kind": b.Kind, "evidence": b.Evidence, "attempted": b.Attempted, "release": b.Release} {
 		if v = strings.TrimSpace(v); v != "" {
-			m.Fields[k] = v
+			fields[k] = v
 		}
 	}
+	m.Fields = fields
 	return m
 }
 

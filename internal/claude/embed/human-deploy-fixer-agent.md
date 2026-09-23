@@ -72,7 +72,7 @@ EOF
 
 - `done` — rebased current on the branch ref, the deploy-relevant checks pass locally; the daemon publishes the branch and re-runs Deploy. Record `"pushed":false` in board context — that is the expected shape, not a shortfall. Omit `blocker`.
 - `needs-input` — a conflict or failure hinges on a decision only a human can make. State it and stop. Omit `blocker`.
-- `needs-human-work` — the blocker is real and beyond an agent (an infra/secret the branch cannot change). Name it in the `blocker` object above, per the exit contract below — this loop step posts no board marker, so the stage record is the only place the four fields land. A missing push credential is NOT such a blocker — see "Why you do NOT push".
+- `needs-human-work` — the blocker is real and beyond an agent (an infra/secret the branch cannot change). Name it in the `blocker` object above, per the exit contract below — you post no board marker yourself; the loop copies the four fields from your record onto the `deploy-failed` marker it posts, so the evidence reaches the ticket. A missing push credential is NOT such a blocker — see "Why you do NOT push".
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
 

@@ -235,11 +235,11 @@ func TestKnownTypes_sortedAndComplete(t *testing.T) {
 
 // The blocker contract lives in the protocol, not only in prose: every stage's
 // *-failed marker advertises the four fields a needs-human-work stop carries,
-// so `human fsm marker` and the command `fsm where` prints name them (SC-5179).
+// so `human fsm marker` names them (SC-5179).
 func TestFailedMarkers_advertiseTheBlockerFields(t *testing.T) {
 	for _, typ := range []string{"planning-failed", "implementation-failed", "review-failed", "deploy-failed"} {
 		opt := OptionalFields(typ)
-		for _, f := range BlockerFields {
+		for _, f := range BlockerFields() {
 			if !slices.Contains(opt, f) {
 				t.Errorf("%s: optional fields %v lack %q", typ, opt, f)
 			}

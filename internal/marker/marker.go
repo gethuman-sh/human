@@ -158,15 +158,17 @@ const (
 // its *-failed marker: the blocker's kind, the evidence observed, what was
 // attempted and the condition that releases the work (shared/exit-contract.md,
 // SC-5179). Optional, because the daemon's own failure markers — a crash, a
-// reap — have none of it; declared, so `human fsm marker` and the command
-// `fsm where` prints advertise them instead of leaving the contract in prose.
-var BlockerFields = []string{"kind", "evidence", "attempted", "release"}
+// reap — have none of it; declared, so `human fsm marker` advertises them
+// instead of leaving the contract in prose (`fsm where` prints only the
+// required fields). A fresh slice per call, so no two specs share a backing
+// array a caller could sort or append through.
+func BlockerFields() []string { return []string{"kind", "evidence", "attempted", "release"} }
 
 var specs = map[string]spec{
 	"plan":                  {},
 	"plan-ready":            {},
-	"planning-failed":       {optional: append([]string{"reason"}, BlockerFields...)},
-	"implementation-failed": {optional: append([]string{"reason"}, BlockerFields...)},
+	"planning-failed":       {optional: append([]string{"reason"}, BlockerFields()...)},
+	"implementation-failed": {optional: append([]string{"reason"}, BlockerFields()...)},
 	// Two determinations share this header on purpose (SC-2990): the ordinary
 	// refusal, and the plan-stuck escalation raised once PlanRedriveBound is
 	// spent. Which one a comment is, is the escalation field — optional
@@ -175,11 +177,11 @@ var specs = map[string]spec{
 	"ready-for-review": {required: []string{"branch", "commits"}},
 	"review-started":   {},
 	"review-complete":  {required: []string{"verdict"}},
-	"review-failed":    {required: []string{"reason"}, optional: BlockerFields},
+	"review-failed":    {required: []string{"reason"}, optional: BlockerFields()},
 	"no-fix-needed":    {required: []string{"verdict"}},
 	"nothing-to-do":    {required: []string{"evidence"}},
 	"deploy-started":   {},
-	"deploy-failed":    {required: []string{"reason"}, optional: BlockerFields},
+	"deploy-failed":    {required: []string{"reason"}, optional: BlockerFields()},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case
