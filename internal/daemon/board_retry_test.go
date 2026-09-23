@@ -148,6 +148,30 @@ func TestTryRelaunch_StopsAtTheAttemptCap(t *testing.T) {
 	require.Len(t, rec.relaunched, 2)
 }
 
+// A card whose budget is already spent is reprobed on every reconcile tick
+// (the durable-recovery pass has no other way to notice a launch has become
+// possible again). Each of those probes must leave the persisted counter
+// exactly where it was: Attempts() charges before the cap can be checked, and
+// without a refund every reprobe of an already-exhausted card inflates the
+// counter forever, which is user-visible via `human fsm where`.
+func TestTryRelaunch_ExhaustedCardIsNotInflatedByRepeatedProbes(t *testing.T) {
+	rec := &retryRecorder{}
+	policy := rec.policy(ExitRetryable, true)
+	ctx := context.Background()
+
+	require.True(t, policy.tryRelaunch(ctx, "SC-1", BoardImplementation, nil, rec, "d", zerolog.Nop()))
+	require.True(t, policy.tryRelaunch(ctx, "SC-1", BoardImplementation, nil, rec, "d", zerolog.Nop()))
+	require.Equal(t, 2, rec.attempts, "two genuine launches charge two attempts")
+
+	for i := 0; i < 5; i++ {
+		require.False(t, policy.tryRelaunch(ctx, "SC-1", BoardImplementation, nil, rec, "d", zerolog.Nop()))
+	}
+
+	require.Equal(t, 2, rec.attempts,
+		"reprobing an exhausted card must not inflate the counter past what was actually spent")
+	require.Len(t, rec.relaunched, 2)
+}
+
 // An outage is relaunched but must NEVER touch the attempt budget: it retries
 // indefinitely on the reconcile backoff until the substrate returns (SC-2307).
 func TestTryRelaunch_OutageDoesNotChargeBudget(t *testing.T) {

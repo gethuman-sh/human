@@ -108,6 +108,10 @@ func TestReconcileFailedStages_LeavesWhatItMustLeave(t *testing.T) {
 			cmt(ImplementationFailedHeader+"\nreason: "+silenceReapGiveUpReason(BoardImplementation, 3), now.Add(-10*time.Minute)),
 		}}, liveAgents()},
 		{"past the bound", failedCard("SC-1", BoardImplementation, now, FailedRecoveryBound+time.Hour), liveAgents()},
+		{"standing plan-stuck escalation", ReconcileCard{Key: "SC-1", Comments: []tracker.Comment{
+			cmt(PlanningStartedHeader, now.Add(-2*time.Hour)),
+			cmt(planStuckBody(PlanRedriveBound, cmt("", now.Add(-2*time.Hour))), now.Add(-10*time.Minute)),
+		}}, liveAgents()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resetRecoveryBackoff(t)
@@ -167,6 +171,64 @@ func TestReconcileFailedStages_BacksOffAfterARefusedLaunch(t *testing.T) {
 	require.Equal(t, 1, reconcileFailedStages(context.Background(), takeoverSet(cards, alwaysReachable), deps, now.Add(10*time.Minute)))
 	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
 	require.Equal(t, 1, attempts, "the launch that started is the one charged")
+}
+
+// An ordinary (non-stuck) needs-planning refusal is a ping-pong drive back
+// into planning, not a standing escalation, and stays eligible for the
+// durable pass exactly like any other planning failure — only the plan-stuck
+// escalation itself (SC-2990) is left alone.
+func TestReconcileFailedStages_OrdinaryPlanRefusalIsStillRelaunched(t *testing.T) {
+	resetRecoveryBackoff(t)
+	now := time.Unix(100_000, 0)
+	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
+		cmt(PlanningStartedHeader, now.Add(-time.Hour)),
+		cmt(markerBody(failureMarker(MarkerNeedsPlanning, needsPlanningReason)), now.Add(-10*time.Minute)),
+	}}}
+	var relaunched []BoardStage
+	attempts := 0
+	retry := recoveryRetry("", false, &relaunched, &attempts, nil)
+
+	n := reconcileFailedStages(context.Background(), takeoverSet(cards, alwaysReachable), ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}, now)
+
+	require.Equal(t, 1, n)
+	require.Equal(t, []BoardStage{BoardPlanning}, relaunched)
+}
+
+// Past FailedRecoveryBound the pass does not just skip the card — it records
+// that it gave up, once, mirroring handOverOutage: a card the pass tried and
+// stopped on must read differently from one no pass ever reached.
+func TestReconcileFailedStages_RecordsGiveUpPastTheBound(t *testing.T) {
+	resetRecoveryBackoff(t)
+	now := time.Unix(100_000, 0)
+	card := failedCard("SC-1", BoardImplementation, now, FailedRecoveryBound+time.Hour)
+	var relaunched []BoardStage
+	attempts := 0
+	var posted []string
+	deps := ReconcileDeps{
+		LiveAgents: liveAgents(),
+		Retry:      recoveryRetry("", false, &relaunched, &attempts, nil),
+		DaemonID:   "d1",
+		PostFailed: func(_ context.Context, _, body string) error {
+			posted = append(posted, body)
+			return nil
+		},
+	}
+
+	n := reconcileFailedStages(context.Background(), takeoverSet([]ReconcileCard{card}, alwaysReachable), deps, now)
+
+	require.Zero(t, n, "a card past the bound is not relaunched")
+	require.Empty(t, relaunched)
+	require.Zero(t, attempts, "the give-up record spends no budget")
+	require.Len(t, posted, 1)
+	require.Contains(t, posted[0], failedRecoveryGiveUpSentinel)
+
+	// The give-up marker is now on the thread; a second pass — a peer daemon,
+	// or the same one on a later tick — must not repost it.
+	card.Comments = append(card.Comments, cmt(posted[0], now))
+	n = reconcileFailedStages(context.Background(), takeoverSet([]ReconcileCard{card}, alwaysReachable), deps, now.Add(time.Minute))
+
+	require.Zero(t, n)
+	require.Len(t, posted, 1, "the give-up is recorded once")
 }
 
 // Backoff doubles up to the cap and never below the floor.
