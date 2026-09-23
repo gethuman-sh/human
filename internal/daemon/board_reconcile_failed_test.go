@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -229,6 +230,120 @@ func TestReconcileFailedStages_RecordsGiveUpPastTheBound(t *testing.T) {
 
 	require.Zero(t, n)
 	require.Len(t, posted, 1, "the give-up is recorded once")
+}
+
+// The give-up marker this pass posts must never read as the DIFFERENT
+// give-up silenceReapGaveUp watches for: a superstring sentinel here made
+// every failed-recovery give-up also satisfy silenceReapGaveUp, which
+// silently disabled the silence-reap relaunch cap (SC-3074) and the
+// stuck-running sweep's own reddening for that stage — both keyed off the
+// same *-failed marker thread. Pinned in both directions so a future reword
+// of either sentinel cannot reintroduce the collision undetected.
+func TestReconcileFailedStages_GiveUpSentinelDoesNotCrossMatchSilenceReap(t *testing.T) {
+	body := markerBody(failureMarker(failedTypeFor(BoardImplementation),
+		failedRecoveryGiveUpReason(BoardImplementation, "the container died", 7*time.Hour)))
+	comments := []tracker.Comment{cmt(body, time.Unix(0, 0))}
+
+	require.False(t, silenceReapGaveUp(comments, BoardImplementation),
+		"a failed-recovery give-up must not read as a silence-reap give-up")
+
+	silenceBody := markerBody(failureMarker(failedTypeFor(BoardImplementation),
+		silenceReapGiveUpReason(BoardImplementation, MaxSilenceReaps)))
+	silenceComments := []tracker.Comment{cmt(silenceBody, time.Unix(0, 0))}
+
+	require.False(t, failedRecoveryGaveUp(silenceComments, BoardImplementation),
+		"a silence-reap give-up must not read as a failed-recovery give-up")
+}
+
+// A card past FailedRecoveryBound whose recorded exit this pass would never
+// have relaunched (a deliberate needs-human-work stop, exactly like the ones
+// SC-5170's acceptance lists under "left alone") is left alone at the bound
+// too — not given a "the daemon stopped relaunching after waiting" marker
+// implying an attempt that never happened.
+func TestReconcileFailedStages_DoesNotGiveUpOnACardItNeverTried(t *testing.T) {
+	resetRecoveryBackoff(t)
+	now := time.Unix(100_000, 0)
+	card := failedCard("SC-1", BoardImplementation, now, FailedRecoveryBound+time.Hour)
+	var relaunched []BoardStage
+	attempts := 0
+	var posted []string
+	deps := ReconcileDeps{
+		LiveAgents: liveAgents(),
+		Retry:      recoveryRetry(ExitNeedsHumanWork, true, &relaunched, &attempts, nil),
+		DaemonID:   "d1",
+		PostFailed: func(_ context.Context, _, body string) error {
+			posted = append(posted, body)
+			return nil
+		},
+	}
+
+	n := reconcileFailedStages(context.Background(), takeoverSet([]ReconcileCard{card}, alwaysReachable), deps, now)
+
+	require.Zero(t, n)
+	require.Empty(t, relaunched)
+	require.Zero(t, attempts)
+	require.Empty(t, posted, "a card this pass was never eligible to relaunch gets no give-up marker")
+}
+
+// The give-up body carries the ORIGINAL failure reason — the board badge and
+// tooltip read the newest failed marker's first line (failureReason,
+// board_state.go), so a give-up that omits it erases the diagnosis a person
+// needs the moment the card most needs their attention.
+func TestReconcileFailedStages_GiveUpBodyCarriesTheOriginalFailureReason(t *testing.T) {
+	resetRecoveryBackoff(t)
+	now := time.Unix(100_000, 0)
+	card := failedCard("SC-1", BoardImplementation, now, FailedRecoveryBound+time.Hour)
+	var relaunched []BoardStage
+	attempts := 0
+	var posted []string
+	deps := ReconcileDeps{
+		LiveAgents: liveAgents(),
+		Retry:      recoveryRetry("", false, &relaunched, &attempts, nil),
+		DaemonID:   "d1",
+		PostFailed: func(_ context.Context, _, body string) error {
+			posted = append(posted, body)
+			return nil
+		},
+	}
+
+	n := reconcileFailedStages(context.Background(), takeoverSet([]ReconcileCard{card}, alwaysReachable), deps, now)
+
+	require.Zero(t, n)
+	require.Len(t, posted, 1)
+	require.Contains(t, posted[0], "the container died", "the give-up body must not drop the original diagnosis")
+	require.Contains(t, failureReason(posted[0]), "the container died",
+		"the board badge (failureReason of the newest marker) must still show the original diagnosis")
+}
+
+// A relaunch that errors out before anything started is retried with
+// backoff exactly like an outright refusal — the pacing must not be
+// conditioned on ok/err distinctly, only on nothing having launched.
+func TestReconcileFailedStages_BacksOffAfterAnErroredLaunch(t *testing.T) {
+	resetRecoveryBackoff(t)
+	now := time.Unix(100_000, 0)
+	cards := []ReconcileCard{failedCard("SC-1", BoardImplementation, now, 10*time.Minute)}
+	var relaunched []BoardStage
+	attempts, launches := 0, 0
+	fail := true
+	retry := recoveryRetry("", false, &relaunched, &attempts, func() (bool, error) {
+		launches++
+		if fail {
+			return false, errors.New("container start failed")
+		}
+		return true, nil
+	})
+	deps := ReconcileDeps{LiveAgents: liveAgents(), Retry: retry, DaemonID: "d1"}
+
+	require.Zero(t, reconcileFailedStages(context.Background(), takeoverSet(cards, alwaysReachable), deps, now))
+	require.Equal(t, 1, launches)
+	require.Zero(t, attempts, "an errored launch that started nothing charges no budget")
+
+	require.Zero(t, reconcileFailedStages(context.Background(), takeoverSet(cards, alwaysReachable), deps, now.Add(time.Minute)))
+	require.Equal(t, 1, launches, "inside the backoff the pass does not retry the error")
+
+	fail = false
+	require.Equal(t, 1, reconcileFailedStages(context.Background(), takeoverSet(cards, alwaysReachable), deps, now.Add(3*time.Minute)))
+	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
 }
 
 // Backoff doubles up to the cap and never below the floor.
