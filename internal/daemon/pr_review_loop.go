@@ -187,44 +187,65 @@ const findingFingerprintEmDash = "—"
 // persists — the prompt explicitly frees `<explanation>` to vary ("still not
 // fixed", a shifted line, more detail). The line number is part of that free
 // half in practice: a fix round that edits the file and fails to fix the
-// problem is exactly what shifts it, so the line number is dropped from the
-// anchor before comparing — only `<file>` survives from that segment. When
-// the first line that STARTS WITH "BLOCKING" (matching the prompt's mandated
-// lead-in, not merely containing the word — "Non-blocking:" must never be
-// mistaken for it) follows the `<file>:<line> — <slug>` shape, the
-// fingerprint is `<file> — <slug>`, normalized. Text that does not — an
-// older thread, a verdict with "no blocking issues", a reviewer that skipped
-// the convention — falls back to the whole line, lower-cased,
-// whitespace-collapsed and cut to 160 characters, exactly as before: still an
-// identity, just a weaker one, and never a crash.
+// problem is exactly what shifts it, so only `<file>` survives from the
+// anchor. The identity is `<file> — <slug>`, normalized.
+//
+// A finding is recognised wherever a reviewer puts it — as a bullet, a
+// numbered item, under a heading — so leading list and heading markers are
+// stripped before the lead-in test; the lead-in must then be the word
+// BLOCKING itself, so "Non-blocking:" is never mistaken for it. Text with no
+// such line, or a BLOCKING line without the three-part shape (an older thread,
+// "no blocking issues", a reviewer that skipped the convention), yields NO
+// identity: "" is never recorded as a finding and never counts as repeated, so
+// such a round can end only on the outer round cap. A weaker identity stood in
+// here once and made two different findings collide on their shared preamble
+// — the premature escalation this bound exists to remove (SC-5174).
 func FindingFingerprint(findings string) string {
-	chosen := ""
 	for _, line := range strings.Split(findings, "\n") {
-		line = strings.TrimSpace(line)
+		line = stripListMarkers(strings.TrimSpace(line))
 		if line == "" {
 			continue
 		}
-		if chosen == "" {
-			chosen = line
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.EqualFold(strings.TrimRight(fields[0], ":"), "blocking") {
+			continue
 		}
-		if strings.HasPrefix(strings.ToUpper(line), "BLOCKING") {
-			chosen = line
-			break
+		parts := strings.SplitN(line, findingFingerprintEmDash, 3)
+		if len(parts) < 2 {
+			return ""
 		}
-	}
-	if chosen == "" {
-		return ""
-	}
-	if parts := strings.SplitN(chosen, findingFingerprintEmDash, 3); len(parts) >= 2 {
 		anchor := normalizeFingerprintText(parts[0])
-		anchor = strings.TrimSpace(strings.TrimPrefix(anchor, "blocking"))
+		anchor = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(anchor, "blocking:"), "blocking"))
 		anchor = anchorFileOnly(anchor)
 		slug := normalizeFingerprintText(parts[1])
-		if anchor != "" && slug != "" {
-			return cutFingerprintRunes(anchor + " " + findingFingerprintEmDash + " " + slug)
+		if anchor == "" || slug == "" {
+			return ""
 		}
+		return cutFingerprintRunes(anchor + " " + findingFingerprintEmDash + " " + slug)
 	}
-	return cutFingerprintRunes(normalizeFingerprintText(chosen))
+	return ""
+}
+
+// stripListMarkers removes the markdown a reviewer may wrap a finding in — a
+// bullet, a numbered item, a heading — so the lead-in test sees the finding
+// itself. Repeated so a bullet under a heading on one line still resolves.
+func stripListMarkers(line string) string {
+	for {
+		trimmed := strings.TrimLeft(line, "#")
+		if trimmed != line {
+			line = strings.TrimSpace(trimmed)
+			continue
+		}
+		if len(line) > 1 && strings.ContainsRune("-*+", rune(line[0])) && line[1] == ' ' {
+			line = strings.TrimSpace(line[2:])
+			continue
+		}
+		if i := strings.IndexAny(line, ".)"); i > 0 && i < 4 && strings.Trim(line[:i], "0123456789") == "" && i+1 < len(line) && line[i+1] == ' ' {
+			line = strings.TrimSpace(line[i+2:])
+			continue
+		}
+		return line
+	}
 }
 
 // anchorFileOnly strips a trailing `:<line>` from a `<file>:<line>` anchor so

@@ -15,18 +15,41 @@ import (
 )
 
 func TestFindingFingerprint(t *testing.T) {
-	report := "Round-1's blocker is fixed.\n\nBLOCKING — internal/daemon/x.go:10   the guard fires only in round 1.\n- detail\nNon-blocking: more"
-	got := FindingFingerprint(report)
-	assert.Equal(t, "blocking — internal/daemon/x.go:10 the guard fires only in round 1.", got)
-	assert.Equal(t, "no blocking issues", FindingFingerprint("\n  no blocking issues  \n"), "without a BLOCKING line the first line is the identity")
+	report := "Round-1's blocker is fixed.\n\nBLOCKING internal/daemon/x.go:10 — the guard fires only in round 1 — detail\n- detail\nNon-blocking: more"
+	assert.Equal(t, "internal/daemon/x.go — the guard fires only in round 1", FindingFingerprint(report))
+	assert.Equal(t, "", FindingFingerprint("\n  no blocking issues  \n"), "no finding, no identity")
 	assert.Equal(t, "", FindingFingerprint("  \n"))
-	long := "BLOCKING " + strings.Repeat("x", 300)
+	assert.Equal(t, "", FindingFingerprint("BLOCKING — internal/daemon/x.go:10   the guard fires only in round 1."),
+		"a BLOCKING line without the three-part shape has no identity, so it can never read as repeated")
+	long := "BLOCKING a.go:1 — " + strings.Repeat("x", 300) + " — y"
 	assert.Len(t, []rune(FindingFingerprint(long)), 160)
 }
 
-// The mandated three-part shape (`BLOCKING <file>:<line> — <slug> —
-// <explanation>`, human-pr-reviewer-agent.md:72): the anchor drops its line
-// number and the fingerprint is `<file> — <slug>`, normalized.
+// A reviewer that formats its findings as markdown — a heading, a bullet, a
+// numbered item — is the common shape, and two DIFFERENT findings under the
+// same heading must never collide on the heading (SC-5174, round 3).
+func TestFindingFingerprint_markdownWrappedFindings(t *testing.T) {
+	a := FindingFingerprint("## Findings\n\n- BLOCKING a.go:10 — guard fires once — detail one")
+	b := FindingFingerprint("## Findings\n\n- BLOCKING b.go:99 — a totally different problem — detail two")
+	assert.Equal(t, "a.go — guard fires once", a)
+	assert.Equal(t, "b.go — a totally different problem", b)
+	assert.Equal(t, "a.go — guard fires once", FindingFingerprint("1. BLOCKING a.go:12 — guard fires once — reworded"))
+	assert.Equal(t, "a.go — guard fires once", FindingFingerprint("### BLOCKING: a.go:12 — guard fires once — reworded"))
+}
+
+// A stable non-finding first line — a preamble, a heading that happens to
+// begin with the word Blocking — is not an identity: it yields "", which the
+// loop never records and never compares.
+func TestFindingFingerprint_nonFindingLinesAreNeverAnIdentity(t *testing.T) {
+	a := FindingFingerprint("Two blocking findings below.\n- BLOCKING a.go:1 — alpha — x")
+	b := FindingFingerprint("Two blocking findings below.\n- BLOCKING b.go:2 — beta — y")
+	assert.NotEqual(t, a, b)
+	assert.Equal(t, "", FindingFingerprint("Blocking findings:\nsomething without the shape"))
+	assert.Equal(t, "", FindingFingerprint("Non-blocking: only nits"))
+	assert.False(t, findingRepeated([]tracker.Comment{cmt(prFixStartedBody(""), time.Unix(1, 0))}, ""),
+		"an empty identity on both sides is not a repeat")
+}
+
 func TestFindingFingerprint_threePartShape(t *testing.T) {
 	got := FindingFingerprint("BLOCKING internal/daemon/x.go:10 — the guard fires only in round 1 — still not fixed")
 	assert.Equal(t, "internal/daemon/x.go — the guard fires only in round 1", got)
@@ -131,7 +154,7 @@ func TestAdvancePRLoop_replaySC5104ConvergesWithoutAPerson(t *testing.T) {
 // review reports the same one. The loop stops there and says which finding.
 func TestAdvancePRLoop_sameFindingTwiceEscalatesAndNamesIt(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
-	finding := FindingFingerprint("BLOCKING — internal/daemon/x.go:10 the guard fires only in round 1")
+	finding := FindingFingerprint("BLOCKING internal/daemon/x.go:10 — the guard fires only in round 1 — still not fixed")
 	c := &fakeCommenter{comments: []tracker.Comment{
 		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "0", Created: base},
 		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "1", Created: base.Add(time.Second)},
@@ -147,7 +170,7 @@ func TestAdvancePRLoop_sameFindingTwiceEscalatesAndNamesIt(t *testing.T) {
 	failed, ok := posted(c, PRReviewFailedHeader)
 	require.True(t, ok, "the same finding twice is the reviewer and fixer disagreeing")
 	assert.Contains(t, failed, "same blocking problem twice")
-	assert.Contains(t, failed, "x.go:10")
+	assert.Contains(t, failed, "x.go — the guard fires only in round 1")
 	assert.Zero(t, l.calls, "no third fixer for a finding the fixer did not resolve")
 }
 
@@ -159,7 +182,7 @@ func TestAdvancePRLoop_sameFindingTwiceEscalatesAndNamesIt(t *testing.T) {
 // loop never re-reviewed.
 func TestAdvancePRLoop_fixStageNeverReadsFindingAsRepeated(t *testing.T) {
 	base := time.Now().Add(-time.Hour)
-	finding := FindingFingerprint("BLOCKING — internal/daemon/x.go:10 the guard fires only in round 1")
+	finding := FindingFingerprint("BLOCKING internal/daemon/x.go:10 — the guard fires only in round 1 — still not fixed")
 	c := &fakeCommenter{comments: []tracker.Comment{
 		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "0", Created: base},
 		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "1", Created: base.Add(time.Second)},
