@@ -785,6 +785,12 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		return ds.srv.Doctor.Blockers(ctx, daemon.LaunchRefusalChecks())
 	}
 	boardTransition := boardTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds))
+	// A forwarded `human deploy` runs inside this process; handing it the same
+	// deps the board routes use is what lets it open the draft and launch the
+	// reviewer instead of merging on CI alone (F10).
+	ds.srv.TransitionDeps = func(pmKey string) (daemon.BoardTransitionDeps, error) {
+		return boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds))
+	}
 	boardRetryTransition := boardRetryTransitionerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds))
 	// A finished build chains straight into its review — the board's
 	// auto-review; the transition engine re-derives and validates. Shared by

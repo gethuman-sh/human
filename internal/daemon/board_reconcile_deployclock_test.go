@@ -53,13 +53,14 @@ func TestReconcileStuckRunning_sparesAQueuedDeploy(t *testing.T) {
 	deployGate.Lock() // stand in for a deploy already running
 	c := &gatedCommenter{posted: make(chan string, 4)}
 	p := &fakeDeployer{alreadyMerged: true}
-	deps := newDeps(nil, nil, p)
+	deps := newDeps(nil, &fakeLauncher{}, p)
 	deps.Commenter = c
 
 	done := make(chan error, 1)
 	go func() {
-		done <- deps.StartDeploy(context.Background(),
+		_, err := deps.StartDeploy(context.Background(),
 			StartDeployRequest{PMKey: "SC-1", Title: "t", PRBody: "b", Branch: "feat/x"})
+		done <- err
 	}()
 	require.Contains(t, <-c.posted, DeployStartedHeader)
 	// The marker is posted BEFORE DeployBranch registers, so wait for the

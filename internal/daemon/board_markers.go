@@ -113,6 +113,7 @@ const (
 	MarkerReviewOutage           = "review-outage"
 	MarkerDeployOutage           = "deploy-outage"
 	MarkerPRReviewStarted        = "pr-review-started"
+	MarkerPRReviewPassed         = "pr-review-passed"
 	MarkerDeployFixStarted       = "deploy-fix-started"
 	MarkerHandoffCheckUnreadable = "handoff-check-unreadable"
 	// MarkerLateResultReconciled records that a stage's result arrived after the
@@ -185,7 +186,7 @@ const (
 	// newest done-stage marker the badge reads "PR review…", so without this the
 	// card kept claiming a review was in flight for the whole of the CI gate,
 	// rebase and merge.
-	PRReviewPassedHeader = "[human:pr-review-passed]" // #nosec G101 -- a marker header; "Passed" trips the credential-name heuristic
+	PRReviewPassedHeader = "[human:" + MarkerPRReviewPassed + "]"
 
 	// DeployFixStartedHeader marks the deploy stage's automated fixer sub-phase
 	// (SC-1557): a CI failure or rebase conflict at the deploy gate dispatches the
@@ -418,6 +419,7 @@ var daemonMarkerTypes = []string{
 	MarkerReviewOutage,
 	MarkerDeployOutage,
 	MarkerPRReviewStarted,
+	MarkerPRReviewPassed,
 	MarkerDeployFixStarted,
 	MarkerHandoffCheckUnreadable,
 	MarkerLateResultReconciled,

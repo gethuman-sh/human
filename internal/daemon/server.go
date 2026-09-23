@@ -108,6 +108,12 @@ type Server struct {
 	// BoardFixer launches the autonomous bug-fix pipeline on a bug ticket for
 	// the Bugs pane's Fix drop. nil disables the board-fix route.
 	BoardFixer func(req BoardFixRequest) error
+	// TransitionDeps resolves the transition engine's collaborators for a ticket,
+	// handed to forwarded commands on their context so a `human deploy` running
+	// inside the daemon can launch the machine reviewer with the daemon's own
+	// launcher and signed commenter (F10). nil leaves forwarded commands on
+	// their own wiring.
+	TransitionDeps TransitionDepsResolver
 	// BoardSecurityFixer launches the security-fix pipeline on a security ticket
 	// for the Security section's Fix drop. nil disables the security-fix route.
 	BoardSecurityFixer func(req SecurityFixRequest) error
@@ -422,6 +428,7 @@ func (s *Server) executeCommand(conn net.Conn, req Request, projectDir string) {
 	cmd.SetIn(strings.NewReader(req.Stdin))
 	ctx := env.WithEnv(context.Background(), req.Env)
 	ctx = vault.WithResolver(ctx, s.VaultResolver)
+	ctx = WithTransitionDeps(ctx, s.TransitionDeps)
 	cmd.SetContext(ctx)
 
 	exitCode := 0

@@ -67,6 +67,8 @@ func TestDaemonPostedMarkersSatisfyTheirContract(t *testing.T) {
 		{MarkerReviewOutage, markerBody(pausedOutageMarker(outageTypeFor(BoardVerification), nil, "", "", ""))},
 		{MarkerDeployOutage, markerBody(pausedOutageMarker(outageTypeFor(BoardDoneStage), nil, "", "", ""))},
 		{MarkerPRReviewStarted, prReviewStartedBody("https://example/pr/7", 7, "feat/x")},
+		{MarkerPRReviewPassed, prReviewPassedBody("feat/x", "0123456789abcdef0123456789abcdef01234567")},
+		{MarkerPRReviewPassed, prReviewPassedBody("feat/x", "")},
 		{MarkerDeployFixStarted, markerBody(marker.Marker{
 			Type:   MarkerDeployFixStarted,
 			Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x"),
