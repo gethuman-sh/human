@@ -9,6 +9,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/costledger"
+	"github.com/gethuman-sh/human/internal/env"
 )
 
 // defaultTicketLimit is the list length when the caller names none. It is
@@ -48,7 +49,15 @@ func buildTicketsCmd() *cobra.Command {
 				renderTicketCost(out, rollup)
 				return nil
 			}
-			spend, err := client.QueryTicketSpend(rng, limit)
+			// HUMAN_PROJECT_DIR is set on this command's context only when it
+			// is itself already running forwarded, inside the daemon (a
+			// multi-project install) — the case where QueryTicketSpend's own
+			// reentrant call would otherwise derive the wrong project from
+			// the daemon's cwd. A direct, non-forwarded run has no such
+			// value and sends "", leaving the connection-derived project in
+			// place.
+			project := env.Lookup(cmd.Context(), "HUMAN_PROJECT_DIR")
+			spend, err := client.QueryTicketSpend(rng, limit, project)
 			if err != nil {
 				return errors.WrapWithDetails(err, "failed to query ticket statistics")
 			}

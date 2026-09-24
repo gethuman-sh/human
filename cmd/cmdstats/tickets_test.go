@@ -2,6 +2,7 @@ package cmdstats
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/env"
 )
 
 func TestRenderTicketSpend_empty(t *testing.T) {
@@ -192,6 +194,48 @@ func TestTicketsCmd_listFormRoutesToTicketStats(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, out.String(), "SC-2")
 	assert.Contains(t, out.String(), "$12.50")
+	require.NotNil(t, *captured)
+	assert.Equal(t, []string{"ticket-stats", "--range", "30d", "--limit", "5"}, *captured)
+}
+
+// When this command's own context carries HUMAN_PROJECT_DIR — the case where
+// "stats tickets" is itself a forwarded call already running inside the
+// daemon — the list form must carry it explicitly as --project, so the
+// reentrant connection QueryTicketSpend opens does not fall back to
+// resolving the daemon's own cwd as the project (SC-5516 review).
+func TestTicketsCmd_listFormCarriesProjectFromContext(t *testing.T) {
+	captured := startCapturingDaemon(t, daemon.Response{
+		Stdout: `[]` + "\n",
+	})
+
+	cmd := buildTicketsCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--range=30d", "--limit=5"})
+
+	ctx := env.WithEnv(context.Background(), map[string]string{"HUMAN_PROJECT_DIR": "/caller-project"})
+	require.NoError(t, cmd.ExecuteContext(ctx))
+	require.NotNil(t, *captured)
+	assert.Equal(t, []string{"ticket-stats", "--range", "30d", "--limit", "5", "--project", "/caller-project"}, *captured)
+}
+
+// A direct (non-forwarded) invocation has no per-request env map on its
+// context, so it must send no --project and rely on the connection's own
+// project resolution exactly as before.
+func TestTicketsCmd_listFormOmitsProjectWithoutContext(t *testing.T) {
+	t.Setenv("HUMAN_PROJECT_DIR", "") // env.Lookup falls back to os.Getenv; pin it absent
+	captured := startCapturingDaemon(t, daemon.Response{
+		Stdout: `[]` + "\n",
+	})
+
+	cmd := buildTicketsCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--range=30d", "--limit=5"})
+
+	require.NoError(t, cmd.Execute())
 	require.NotNil(t, *captured)
 	assert.Equal(t, []string{"ticket-stats", "--range", "30d", "--limit", "5"}, *captured)
 }

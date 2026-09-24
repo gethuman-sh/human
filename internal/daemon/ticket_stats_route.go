@@ -19,7 +19,18 @@ const defaultTicketStatsLimit = 20
 // write side stores (initCostLedger resolves a ticket to entry.Dir), so a
 // listing and the board's card detail read one record. A nil ledger yields an
 // empty list — the degrade-to-empty contract of the other read routes.
+//
+// projectDir is the CONNECTION's resolved project — right for a direct
+// request, but wrong for the reentrant one the "stats tickets" CLI form makes
+// from inside the daemon: that inner connection's cwd is the daemon process's
+// own, not the original caller's. An explicit --project argument, carried by
+// the caller from its own HUMAN_PROJECT_DIR, overrides it; the connection-
+// derived projectDir remains the fallback so a direct (non-forwarded) caller
+// that never sends --project keeps working unchanged.
 func (s *Server) handleTicketStats(conn net.Conn, args []string, projectDir string) {
+	if explicit := parseProjectArg(args); explicit != "" {
+		projectDir = explicit
+	}
 	spend := []costledger.TicketSpend{}
 	if s.CostLedger != nil {
 		now := time.Now().UTC()
@@ -61,4 +72,22 @@ func parseLimitArg(args []string) int {
 		return defaultTicketStatsLimit
 	}
 	return defaultTicketStatsLimit
+}
+
+// parseProjectArg reads --project the way parseLimitArg reads --limit. Empty
+// (the value or the whole flag missing) means "no explicit project" — the
+// caller falls back to the connection-derived one.
+func parseProjectArg(args []string) string {
+	for i := 0; i < len(args); i++ {
+		name, value, consumed := auditFlagValue(args, i)
+		if name != "--project" {
+			if name == "" {
+				continue
+			}
+			i += consumed
+			continue
+		}
+		return value
+	}
+	return ""
 }

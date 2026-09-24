@@ -61,3 +61,47 @@ func TestParseLimitArg(t *testing.T) {
 	assert.Equal(t, defaultTicketStatsLimit, parseLimitArg([]string{"--limit", "0"}))
 	assert.Equal(t, defaultTicketStatsLimit, parseLimitArg([]string{"--limit", "many"}))
 }
+
+func TestParseProjectArg(t *testing.T) {
+	assert.Equal(t, "", parseProjectArg(nil))
+	assert.Equal(t, "", parseProjectArg([]string{"--range", "7d"}))
+	assert.Equal(t, "/proj", parseProjectArg([]string{"--range", "7d", "--project", "/proj"}))
+	assert.Equal(t, "/proj", parseProjectArg([]string{"--project=/proj"}))
+}
+
+// TestHandleTicketStats_explicitProjectOverridesConnection pins the fix: the
+// "stats tickets" CLI form re-enters the daemon over a fresh connection whose
+// own cwd is the daemon process's, not the original caller's project. An
+// explicit --project — sent by a caller that already knows its own
+// HUMAN_PROJECT_DIR — must win over that connection-derived projectDir, so a
+// multi-project daemon answers from the caller's project rather than its own.
+func TestHandleTicketStats_explicitProjectOverridesConnection(t *testing.T) {
+	now := time.Now().UTC()
+	store := seededCostStore(t, func(s *costledger.Store) {
+		ctx := context.Background()
+		require.NoError(t, s.InsertCall(ctx, costledger.CallRecord{Project: "/caller-project", Ticket: "SC-9", Stage: "planning", Model: "claude-opus-4-8", OutputTokens: 500, DurationMs: 1000, StartedAt: now}))
+		require.NoError(t, s.InsertCall(ctx, costledger.CallRecord{Project: "/daemon-cwd", Ticket: "SC-8", Stage: "planning", Model: "claude-opus-4-8", OutputTokens: 700, DurationMs: 1000, StartedAt: now}))
+	})
+	srv := &Server{Logger: zerolog.Nop(), CostLedger: store}
+
+	// The connection resolved "/daemon-cwd" (the reentrant call's own
+	// process cwd), but the caller carried its real project explicitly.
+	spend := decodeTicketStats(t, srv, []string{"--range", "7d", "--project", "/caller-project"}, "/daemon-cwd")
+	require.Len(t, spend, 1)
+	assert.Equal(t, "SC-9", spend[0].Ticket)
+}
+
+// TestHandleTicketStats_fallsBackToConnectionWhenNoExplicitProject keeps a
+// direct (non-forwarded) caller — which never sends --project — answered
+// from the connection-derived project exactly as before.
+func TestHandleTicketStats_fallsBackToConnectionWhenNoExplicitProject(t *testing.T) {
+	now := time.Now().UTC()
+	store := seededCostStore(t, func(s *costledger.Store) {
+		require.NoError(t, s.InsertCall(context.Background(), costledger.CallRecord{Project: "/proj", Ticket: "SC-9", Stage: "planning", Model: "claude-opus-4-8", OutputTokens: 500, DurationMs: 1000, StartedAt: now}))
+	})
+	srv := &Server{Logger: zerolog.Nop(), CostLedger: store}
+
+	spend := decodeTicketStats(t, srv, []string{"--range", "7d"}, "/proj")
+	require.Len(t, spend, 1)
+	assert.Equal(t, "SC-9", spend[0].Ticket)
+}

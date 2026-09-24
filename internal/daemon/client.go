@@ -875,8 +875,21 @@ func (c *Client) QueryContainerResources(rng string) (ContainerResourceReport, e
 
 // QueryTicketSpend fetches the tickets that cost the most over a range
 // ("24h" | "7d" | "30d"), most expensive first, at most limit rows.
-func (c *Client) QueryTicketSpend(rng string, limit int) ([]costledger.TicketSpend, error) {
-	out, err := c.RunRemoteCapture([]string{"ticket-stats", "--range", rng, "--limit", strconv.Itoa(limit)})
+//
+// project, when non-empty, is sent explicitly and overrides the project the
+// receiving connection would otherwise derive from its own cwd. This command
+// runs from inside the daemon's own process when "stats tickets" is a
+// forwarded call re-entering the daemon (server.go executeCommand runs the
+// whole cobra tree in-process): the reentrant connection this method opens
+// then reports the DAEMON's cwd, not the original caller's, so a caller with
+// a real project to carry (env.Lookup(ctx, "HUMAN_PROJECT_DIR")) must pass it
+// here rather than rely on cwd. A direct (non-forwarded) caller passes "".
+func (c *Client) QueryTicketSpend(rng string, limit int, project string) ([]costledger.TicketSpend, error) {
+	args := []string{"ticket-stats", "--range", rng, "--limit", strconv.Itoa(limit)}
+	if project != "" {
+		args = append(args, "--project", project)
+	}
+	out, err := c.RunRemoteCapture(args)
 	if err != nil {
 		return nil, err
 	}
