@@ -873,6 +873,20 @@ func (c *Client) QueryContainerResources(rng string) (ContainerResourceReport, e
 	return report, nil
 }
 
+// QueryTicketSpend fetches the tickets that cost the most over a range
+// ("24h" | "7d" | "30d"), most expensive first, at most limit rows.
+func (c *Client) QueryTicketSpend(rng string, limit int) ([]costledger.TicketSpend, error) {
+	out, err := c.RunRemoteCapture([]string{"ticket-stats", "--range", rng, "--limit", strconv.Itoa(limit)})
+	if err != nil {
+		return nil, err
+	}
+	var spend []costledger.TicketSpend
+	if err := json.Unmarshal(out, &spend); err != nil {
+		return nil, errors.WrapWithDetails(err, "invalid ticket stats JSON")
+	}
+	return spend, nil
+}
+
 // GetTicketCost fetches the durable per-ticket cost/time rollup from the daemon.
 func (c *Client) GetTicketCost(key string) (costledger.TicketCost, error) {
 	out, err := c.RunRemoteCapture([]string{"ticket-cost", key})

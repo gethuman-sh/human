@@ -565,6 +565,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"stats-overview":      func() { s.handleStatsOverview(conn, args[1:]) },
 		"subagent-stats":      func() { s.handleSubagentStats(conn, args[1:]) },
 		"container-stats":     func() { s.handleContainerStats(conn, args[1:]) },
+		"ticket-stats":        func() { s.handleTicketStats(conn, args[1:], projectDir) },
 		"audit-query":         func() { s.handleAuditQuery(conn, args[1:]) },
 		"agent-stop-async":    func() { s.handleAgentStopAsync(conn, args[1:]) },
 		"subscribe":           func() { s.handleSubscribe(conn) },
