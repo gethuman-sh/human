@@ -69,7 +69,7 @@ If neither the local ref nor origin yields the branch, record `verdict: unreview
 
    **Lead every blocking finding with this exact shape:**
    ```
-   BLOCKING <file>:<line> — <short, stable slug> — <explanation>
+   BLOCKING <file>:<line> — <short, stable slug> — [<class>] <explanation>
    ```
    The daemon bounds the review→fix loop on REPETITION, not a round count: it
    fingerprints each round's leading blocking line on `<file>:<line>` +
@@ -82,8 +82,23 @@ If neither the local ref nor origin yields the branch, record `verdict: unreview
    different wording) without breaking the match. Give a genuinely NEW problem
    a NEW slug — reusing one across two different problems would make the loop
    think a fresh finding is the old one repeating, and it would fix the wrong
-   thing forever. Findings that are not BLOCKING (nits, non-blocking notes) are
-   not fingerprinted and need no particular shape.
+   thing forever.
+
+   `[<class>]` is the finding's category, one token from this set:
+   `dependents` (a caller, reader or sibling prompt the change missed),
+   `tests` (a behaviour without a test that pins it), `correctness` (wrong
+   result, crash, race), `security` (injection, secrets, permissions),
+   `contract` (an agent instruction or marker the change contradicts),
+   `design` (structure or layering), `docs` (documentation or the FSM
+   document out of step with the code), `process` (commit, ticket or gate
+   hygiene). The loop also reads the class: the same class in the same file
+   as the finding the fixer was just sent counts as REPEATED even under a new
+   slug — one defect described three ways is one defect, not three rounds of
+   progress — and the fixer is told to close the class, not the line. Every
+   round's findings are kept, with the class, in the daemon's findings record,
+   so a class that keeps coming back is a number rather than an impression.
+   Findings that are not BLOCKING (nits, non-blocking notes) are not
+   fingerprinted, need no class, and need no particular shape.
 5. **Post inline PR comments — best-effort, for humans.** When a `gh` write path exists, also mirror your findings onto the PR so humans reading it see them. Anchor to the origin head, not your local SHA (the local commit may not be pushed yet), and never let a failed post change your verdict:
    ```bash
    ORIGIN_SHA=$(gh pr view <PR> --json headRefOid -q .headRefOid 2>/dev/null) && \
@@ -107,7 +122,7 @@ human state set <WORK_KEY> stage.pr-review --json --body-file - <<'EOF'
  "verdict":"<approved|changes-requested|unreviewable>",
  "head":"<the branch-tip SHA you reviewed>",
  "blocking":<count of blocking findings>,
- "findings":"<each blocking finding leads with 'BLOCKING <file>:<line> — <slug> — <explanation>' (see step 4), or 'no blocking issues' — this is what the fixer acts on>",
+ "findings":"<each blocking finding leads with 'BLOCKING <file>:<line> — <slug> — [<class>] <explanation>' (see step 4), or 'no blocking issues' — this is what the fixer acts on>",
  "summary":"<one line>"}
 EOF
 ```
