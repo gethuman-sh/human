@@ -1,6 +1,7 @@
 package cmddaemon
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	goerrors "errors"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -3059,6 +3061,220 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 		return true, errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
 	}
 	return true, nil
+}
+
+// FreshenBranch merges an advanced base into the LOCAL branch ref before a
+// review round (SC-5279). The local ref is what the loop's reviewer and fixer
+// read, so that is the ref that must carry the base — origin is caught up by
+// the publish at merge time. The merge runs in a detached ephemeral worktree
+// and the ref is moved afterwards with a compare-and-swap, so a branch no
+// loop step is committing on moves atomically and one another writer touched
+// is left alone. A conflict aborts the merge and reports FreshnessConflict;
+// the branch is exactly as it was.
+func (p forgeDeployer) FreshenBranch(ctx context.Context, req daemon.PRRequest) (daemon.BranchFreshness, error) {
+	dir, branch := req.WorkspaceDir, req.Branch
+	base := gitrepo.DefaultBranch(ctx, dir)
+	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	originBase := "origin/" + base
+	tip, local, err := localOrOriginTip(ctx, dir, branch)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	if gitrepo.IsAncestor(ctx, dir, originBase, tip) {
+		return daemon.FreshnessCurrent, nil
+	}
+	wt, cleanup, err := addEphemeralWorktree(ctx, dir, tip)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	defer cleanup()
+	id, loadErr := botidentity.Load(dir)
+	if loadErr != nil {
+		id = botidentity.Identity{Name: botidentity.DefaultName, Email: botidentity.DefaultEmail}
+	}
+	conflict, err := gitrepo.MergeIntoHead(ctx, wt, originBase, id.Name, id.Email)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	if conflict {
+		return daemon.FreshnessConflict, nil
+	}
+	merged, err := gitrepo.RevParse(ctx, wt, "HEAD")
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	// The merge is textually clean but that says nothing about whether the
+	// result builds: a symbol renamed on the base against a new call site on
+	// the branch merges without a conflict and still does not compile. Run
+	// the fast tier against the merged commit, still in the ephemeral
+	// worktree, before the ref moves — only a result the tier passed is a
+	// reviewable integrated candidate (SC-5279 acceptance criterion 1). A
+	// tooling failure (no toolchain, no `make` on the host) is not a verdict
+	// on the code, so it is reported like any other freshen error above: the
+	// ref stays untouched and the caller falls back to reviewing the branch
+	// as it is.
+	passed, err := fastTierRunner(ctx, wt)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	if !passed {
+		return p.attributeRedFastTier(ctx, dir, tip, branch)
+	}
+	// A branch known only on origin has no local ref yet: create it, so the
+	// reviewer's local-first binding finds the integrated head.
+	expected := tip
+	if !local {
+		expected = ""
+	}
+	if err := gitrepo.UpdateBranchRef(ctx, dir, branch, merged, expected); err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	return daemon.FreshnessMerged, nil
+}
+
+// fastTierRunner runs the project's fast feedback tier — its tests, never
+// the heavier bundled quality gate — against the commit checked out in dir
+// and reports whether it passed. The daemon runs this against arbitrary
+// registered projects, not just this repository, so the command is detected
+// per detectFastTierTestCommand rather than assumed (SC-5279, following
+// build-gate.md). Package var so tests can stub it without a real toolchain.
+// A command that could not even be started — no recognised test runner for
+// the project, no toolchain on the host, or the run's own time budget
+// expiring mid-process — is a tooling condition and returns a non-nil error;
+// a command that ran to completion and exited non-zero is a genuine
+// fast-tier failure and returns (false, nil) — the caller's two outcomes are
+// deliberately distinct.
+var fastTierRunner = func(ctx context.Context, dir string) (passed bool, err error) {
+	cmdName, args, detectErr := detectFastTierTestCommand(dir)
+	if detectErr != nil {
+		return false, detectErr
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, cmdName, args...) // #nosec G204 -- cmdName/args come from a fixed per-ecosystem table, never user input
+	cmd.Dir = dir
+	runErr := cmd.Run()
+	// A killed process also unwraps to *exec.ExitError, so the deadline is
+	// checked first: a run cut off by the time budget says nothing about
+	// whether the code passes and must not be reported as a fast-tier
+	// failure.
+	if runCtx.Err() != nil {
+		return false, errors.WrapWithDetails(runCtx.Err(), "fast test tier exceeded its time budget", "dir", dir)
+	}
+	if runErr != nil {
+		var exitErr *exec.ExitError
+		if goerrors.As(runErr, &exitErr) {
+			return false, nil
+		}
+		return false, errors.WrapWithDetails(runErr, "running the fast test tier", "dir", dir)
+	}
+	return true, nil
+}
+
+// attributeRedFastTier decides whether a red fast tier on the merged commit
+// is the merge's fault. The ephemeral worktree the tier ran in carries
+// tracked files only — no node_modules, no venv, no other gitignored
+// dependency tree — so a Node or Python project's tier can be red there
+// regardless of what the merge did, and reporting that as FreshnessTestsFailed
+// would spend the deploy-fix budget on a checkout no fixer can repair.
+// Rerunning the identical tier against the branch tip ALONE, before the base
+// is merged in, is what makes the result attributable to the merge at all:
+// only a tier that passes unmerged and fails merged is the merge's doing.
+func (p forgeDeployer) attributeRedFastTier(ctx context.Context, dir, tip, branch string) (daemon.BranchFreshness, error) {
+	preWT, cleanup, err := addEphemeralWorktree(ctx, dir, tip)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	defer cleanup()
+	preMergePassed, err := fastTierRunner(ctx, preWT)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	if !preMergePassed {
+		return daemon.FreshnessCurrent, errors.WithDetails(
+			"fast test tier is also red on the branch without the base merged in; not attributable to the merge, reviewing as-is",
+			"branch", branch)
+	}
+	return daemon.FreshnessTestsFailed, nil
+}
+
+// hasMakeTargetTest reports whether dir's Makefile declares a `test` target,
+// so `make test` is only attempted when it can plausibly do something —
+// `make` itself exits non-zero (an *exec.ExitError indistinguishable from a
+// genuine test failure) when the target is simply absent, which is how a
+// missing target was previously misreported as a failing fast tier.
+func hasMakeTargetTest(dir string) bool {
+	f, err := os.Open(filepath.Join(dir, "Makefile")) // #nosec G304 -- dir is the project's own ephemeral worktree
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if makeTestTargetLine.MatchString(scanner.Text()) {
+			return true
+		}
+	}
+	return false
+}
+
+// makeTestTargetLine matches a `test:` target declaration, with or without
+// prerequisites, but not a `test` appearing mid-line (a shell command, a
+// comment) or as a prefix of another target name (e.g. `testdata:`).
+var makeTestTargetLine = regexp.MustCompile(`^test\s*:`)
+
+// fastTierTestManifests maps a project manifest file to the test command it
+// implies, tried in order after the Makefile check — the same probe order
+// build-gate.md gives a human fixer: Makefile test target first, then
+// per-ecosystem tooling. Package var so a test can extend it without editing
+// detectFastTierTestCommand.
+var fastTierTestManifests = []struct {
+	manifest string
+	cmdName  string
+	args     []string
+}{
+	{"go.mod", "go", []string{"test", "./..."}},
+	{"package.json", "npm", []string{"test"}},
+	{"Cargo.toml", "cargo", []string{"test"}},
+	{"pyproject.toml", "pytest", nil},
+	{"requirements.txt", "pytest", nil},
+	{"setup.py", "pytest", nil},
+}
+
+// detectFastTierTestCommand picks the project's test runner the way
+// build-gate.md instructs a human fixer to: a Makefile `test` target first,
+// then common per-ecosystem tooling in reading order. It never assumes this
+// repository's own tooling — the daemon runs against arbitrary registered
+// projects (SC-5279). Returns an error when no runner is found at all,
+// matching human-done's own fallback for the same case.
+func detectFastTierTestCommand(dir string) (cmdName string, args []string, err error) {
+	if hasMakeTargetTest(dir) {
+		return "make", []string{"test"}, nil
+	}
+	for _, m := range fastTierTestManifests {
+		if _, statErr := os.Stat(filepath.Join(dir, m.manifest)); statErr == nil {
+			return m.cmdName, m.args, nil
+		}
+	}
+	return "", nil, errors.WithDetails("no fast test tier runner found for project", "dir", dir)
+}
+
+// localOrOriginTip resolves the branch the way the loop's own agents do —
+// the local ref first, because it carries the fixer's unpublished commits,
+// and origin only when no local ref exists. It is the mirror image of
+// branchTip, which the deploy gate uses because origin is what it merges.
+func localOrOriginTip(ctx context.Context, dir, branch string) (sha string, local bool, err error) {
+	if gitrepo.BranchExistsLocal(ctx, dir, branch) {
+		sha, err = gitrepo.RevParse(ctx, dir, branch)
+		return sha, true, err
+	}
+	if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
+		return "", false, err
+	}
+	sha, err = gitrepo.RevParse(ctx, dir, "origin/"+branch)
+	return sha, false, err
 }
 
 // PublishResolvedBranch carries a deploy-fixer's conflict resolution from the

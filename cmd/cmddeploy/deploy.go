@@ -167,15 +167,20 @@ func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, bran
 	return err
 }
 
-// outcomeLine says where the work is now, because the two outcomes leave it in
-// different places: merged, or held in a draft the machine review will merge.
-// Reporting "Deployed" for the second would be the record misstating the
-// outcome.
+// outcomeLine says where the work is now, because the outcomes leave it in
+// different places: merged, held in a draft the machine review will merge, or
+// held for a mechanical fixer to resolve a stale base before any review runs.
+// Reporting "Deployed" for the others, or "Review started" for the fixer
+// dispatch, would be the record misstating the outcome (SC-5279).
 func outcomeLine(key, branch string, res daemon.StartDeployResult) string {
-	if res.Outcome == daemon.DeployOutcomeReviewStarted {
+	switch res.Outcome {
+	case daemon.DeployOutcomeReviewStarted:
 		return fmt.Sprintf("Review started for %s (%s): %s — the machine review loop merges it on approval\n", key, branch, res.PRURL)
+	case daemon.DeployOutcomeFixDispatched:
+		return fmt.Sprintf("Base merge needs a fixer for %s (%s): %s — the deploy fixer resolves it before the machine review runs\n", key, branch, res.PRURL)
+	default:
+		return fmt.Sprintf("Deployed %s (%s)\n", key, branch)
 	}
-	return fmt.Sprintf("Deployed %s (%s)\n", key, branch)
 }
 
 // prBody builds the PR description with the PM→engineering→branch trail,

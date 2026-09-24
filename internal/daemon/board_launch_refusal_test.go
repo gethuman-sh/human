@@ -231,7 +231,7 @@ func TestDispatchDeployFixer_RefusalPostsNoStartedMarker(t *testing.T) {
 	deps := newDeps(c, l, &fakeDeployer{})
 
 	require.NoError(t, deps.dispatchDeployFixer(context.Background(), "SC-1",
-		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed"))
+		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed", false))
 
 	assert.Equal(t, 1, l.calls)
 	assert.Empty(t, c.added)
