@@ -284,13 +284,13 @@ Only after a DONE verdict.
 Post the review handoff on the security (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically:
 
 ```bash
-human handoff post <SEC_KEY> --engineering <ENG_KEY> --branch autofix/<work-key>   # split topology
-human handoff post <SEC_KEY> --branch autofix/<work-key>                           # single-tracker: omit --engineering
+human handoff post <SEC_KEY> --engineering <ENG_KEY> --branch autofix/<work-key> --review inline   # split topology
+human handoff post <SEC_KEY> --branch autofix/<work-key> --review inline                           # single-tracker: omit --engineering
 ```
 
-The command derives `commits:` and `daemon:`, verifies every SHA is reachable on the branch (fetching origin first), and refuses to post otherwise. If the handoff cannot be posted (non-zero exit), STOP with an honest status report — **do not report success**.
+The command derives `commits:` and `daemon:`, verifies every SHA is reachable on the branch (fetching origin first), and refuses to post otherwise. `--review inline` is **mandatory here and in every context**: this skill reviews the fix itself in Step 7.2, and the handoff is the only thing the daemon can read before your own `[human:review-started]` lands. Without it the daemon starts a second reviewer whose verdict overwrites yours. If the handoff cannot be posted (non-zero exit), STOP with an honest status report — **do not report success**.
 
-**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review (do not run Step 8 / deploy). Do NOT push or `git ls-remote` — the branch is intentionally local.
+**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review (do not run Step 8 / deploy). Do NOT push or `git ls-remote` — the branch is intentionally local. The `review: inline` line you posted in 7.1 is what stops the daemon launching a second review container.
 
 ### 7.2 Security review by the reviewer agent
 

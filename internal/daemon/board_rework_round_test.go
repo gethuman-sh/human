@@ -89,7 +89,7 @@ func TestReconcileOrphanedHandoffs_RecoversAHandoffPostedAfterAVerdict(t *testin
 
 	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{
 		ChainReview: func(pmKey string) error { chained = append(chained, pmKey); return nil },
-	})
+	}, time.Now())
 
 	require.Equal(t, 1, n)
 	assert.Equal(t, []string{"SC-4923"}, chained)

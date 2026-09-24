@@ -483,6 +483,9 @@ func handleCleanStageEnding(ctx context.Context, exit RunExit, commenter tracker
 // own exit is the correct evidence, so this path posts nothing and lets it be.
 // Otherwise it flows into chainReviewAfterBuild's branch/commit-gated chain. A
 // nil chainReview disables chaining entirely.
+//
+// A handoff carrying `review: inline` whose implementation container is still
+// alive is left alone entirely — the container is the reviewer (SC-5476).
 func chainReviewAfterCleanBuild(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps) {
 	logger := deps.Logger
 	if deps.ChainReview == nil {
@@ -519,6 +522,19 @@ func chainReviewAfterCleanBuild(ctx context.Context, exit RunExit, commenter tra
 				logger.Warn().Err(err).Str("pm", exit.PMKey).Msg("board merged-stage: cannot post review-failed after mid-review exit")
 			}
 		}
+		return
+	}
+	// A handoff that says its own container is reviewing the work, posted by a
+	// container that is still alive, is a review in flight — not a finished
+	// build waiting for one. Reading it as the latter is what started a second
+	// reviewer one second after the handoff on SC-5396 (SC-5476). The liveness
+	// half is load-bearing: an inline handoff whose container has genuinely gone
+	// falls straight through to chainReviewAfterBuild, so a run that died
+	// between its handoff and its review is still recovered.
+	alive, aliveKnown := aliveAgentSet(deps.LiveAgents, logger, "inline-review chain")
+	if inlineReviewerOwnsHandoff(exit.Comments, exit.PMKey, alive, aliveKnown, time.Now()) {
+		logger.Debug().Str("pm", exit.PMKey).
+			Msg("board chain: handoff is reviewed in its own live container, not chaining a second review")
 		return
 	}
 	chainReviewAfterBuild(ctx, exit, commenter, deps)

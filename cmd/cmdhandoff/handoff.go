@@ -32,6 +32,7 @@ type Handoff struct {
 	Engineering []string `json:"engineering,omitempty"`
 	Branch      string   `json:"branch"`
 	Commits     []string `json:"commits"`
+	Review      string   `json:"review,omitempty"`
 	Daemon      string   `json:"daemon,omitempty"`
 }
 
@@ -46,7 +47,7 @@ func BuildHandoffCmd(deps cmdutil.Deps) *cobra.Command {
 }
 
 func buildPostCmd(deps cmdutil.Deps) *cobra.Command {
-	var engineering, branch, commits, notes string
+	var engineering, branch, commits, notes, review string
 	var noVerify bool
 	cmd := &cobra.Command{
 		Use:   "post KEY",
@@ -63,6 +64,7 @@ func buildPostCmd(deps cmdutil.Deps) *cobra.Command {
 				Branch:      branch,
 				Commits:     splitList(commits),
 				Notes:       notes,
+				Review:      review,
 				DaemonID:    os.Getenv("HUMAN_DAEMON_ID"),
 				Verify:      !noVerify,
 			}
@@ -73,6 +75,7 @@ func buildPostCmd(deps cmdutil.Deps) *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch the commits live on (default: current branch)")
 	cmd.Flags().StringVar(&commits, "commits", "", "Short SHAs, comma-separated (default: commits referencing the work keys)")
 	cmd.Flags().StringVar(&notes, "notes", "", "Open items / caveats to record in the handoff body")
+	cmd.Flags().StringVar(&review, "review", "", "Who reviews this work: \"inline\" when this run reviews it itself, so the daemon chains no second reviewer (default: the daemon chains one)")
 	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "Skip verifying the commits are reachable on the branch")
 	return cmd
 }
@@ -101,8 +104,11 @@ type PostOptions struct {
 	Branch      string
 	Commits     []string
 	Notes       string
-	DaemonID    string
-	Verify      bool
+	// Review is the reviewer the poster is handing to — "inline" when the
+	// poster reviews the work itself, empty when the daemon must chain one.
+	Review   string
+	DaemonID string
+	Verify   bool
 }
 
 // RunHandoffPost derives missing fields, verifies commit reachability, and
@@ -145,6 +151,9 @@ func RunHandoffPost(ctx context.Context, p tracker.Provider, out io.Writer, dir,
 	if len(opts.Engineering) > 0 {
 		fields["engineering"] = strings.Join(opts.Engineering, ", ")
 	}
+	if r := strings.TrimSpace(opts.Review); r != "" {
+		fields["review"] = r
+	}
 	if strings.TrimSpace(opts.DaemonID) != "" {
 		fields["daemon"] = opts.DaemonID
 	}
@@ -152,7 +161,13 @@ func RunHandoffPost(ctx context.Context, p tracker.Provider, out io.Writer, dir,
 	if strings.TrimSpace(opts.Notes) != "" {
 		m.Body = strings.TrimSpace(opts.Notes)
 	}
-	rendered := marker.Render(m, []string{"engineering", "branch", "commits", "daemon"})
+	// The spec's fieldEnum is only enforced by something that calls it, and
+	// this command is the only writer of this marker type — a typo in
+	// --review must be refused here rather than posted and read as prose.
+	if err := marker.Validate(m); err != nil {
+		return err
+	}
+	rendered := marker.Render(m, []string{"engineering", "branch", "commits", "review", "daemon"})
 	if _, err := p.AddComment(ctx, key, rendered); err != nil {
 		return err
 	}
@@ -174,6 +189,7 @@ func RunHandoffShow(ctx context.Context, p tracker.Provider, out io.Writer, key 
 		Engineering: splitList(m.Fields["engineering"]),
 		Branch:      m.Fields["branch"],
 		Commits:     splitList(m.Fields["commits"]),
+		Review:      m.Fields["review"],
 		Daemon:      m.Fields["daemon"],
 	}
 	if h.Commits == nil {

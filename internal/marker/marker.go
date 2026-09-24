@@ -219,15 +219,24 @@ var specs = map[string]spec{
 	// refusal, and the plan-stuck escalation raised once PlanRedriveBound is
 	// spent. Which one a comment is, is the escalation field — optional
 	// because an ordinary refusal legitimately has none (SC-4245).
-	"needs-planning":   {optional: []string{EscalationField}},
-	"ready-for-review": {required: []string{"branch", "commits"}},
-	"review-started":   {},
-	"review-complete":  {required: []string{"verdict"}},
-	"review-failed":    {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
-	"no-fix-needed":    {required: []string{"verdict"}},
-	"nothing-to-do":    {required: []string{"evidence", "reason"}, fieldEnum: nothingToDoReasonEnum()},
-	"deploy-started":   {},
-	"deploy-failed":    {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
+	"needs-planning": {optional: []string{EscalationField}},
+	// `review` is optional and closed to one value on purpose: a handoff that
+	// says nothing about who reviews it is the original contract — the daemon
+	// chains a reviewer — and a handoff whose poster reviews the work itself
+	// must say so in a word the daemon can check, not in prose it cannot
+	// (SC-5476). A misspelt value is refused here rather than read as silence.
+	"ready-for-review": {
+		required:  []string{"branch", "commits"},
+		optional:  []string{"review"},
+		fieldEnum: map[string][]string{"review": {"inline"}},
+	},
+	"review-started":  {},
+	"review-complete": {required: []string{"verdict"}},
+	"review-failed":   {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
+	"no-fix-needed":   {required: []string{"verdict"}},
+	"nothing-to-do":   {required: []string{"evidence", "reason"}, fieldEnum: nothingToDoReasonEnum()},
+	"deploy-started":  {},
+	"deploy-failed":   {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case

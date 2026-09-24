@@ -45,6 +45,18 @@ func TestWithCallerFacts_handoffPostAppendsBranchAndCommits(t *testing.T) {
 	assert.Equal(t, []string{"SC-1@fix/sc-1+"}, g.derivedFrom, "commits are anchored at the caller's branch")
 }
 
+// SC-5476: --review takes a value like --engineering/--branch/--commits; an
+// unlisted value flag would have its value read as the NEXT positional and
+// silently dropped (parse's fallback: unknown dash-prefixed token consumed
+// alone, "inline" then never bound to it — see parse's valueFlags contract).
+func TestWithCallerFacts_reviewFlagTakesItsValue(t *testing.T) {
+	g := &fakeGit{branch: "fix/sc-1", commits: map[string][]string{"fix/sc-1": {"aaa"}}}
+	got, err := WithCallerFacts(context.Background(), []string{"handoff", "post", "SC-1", "--review", "inline"}, ".", g.git())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"handoff", "post", "SC-1", "--review", "inline", "--branch", "fix/sc-1", "--commits", "aaa"}, got)
+	assert.Equal(t, []string{"SC-1@fix/sc-1+"}, g.derivedFrom, "derivation is called with key SC-1, not with \"inline\" mistaken for it")
+}
+
 func TestWithCallerFacts_handoffPostHonoursEngineeringKeys(t *testing.T) {
 	g := &fakeGit{branch: "fix/sc-1", commits: map[string][]string{"fix/sc-1": {"aaa"}}}
 	_, err := WithCallerFacts(context.Background(), []string{"handoff", "post", "SC-1", "--engineering", "HUM-1,HUM-2"}, ".", g.git())

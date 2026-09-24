@@ -80,7 +80,7 @@ func TestReconcileOrphanedHandoffs_LaunchesReviewForOrphan(t *testing.T) {
 	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(pmKey string) error {
 		chained = append(chained, pmKey)
 		return nil
-	}})
+	}}, time.Now())
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, []string{"SC-1"}, chained)
@@ -98,7 +98,7 @@ func TestReconcileOrphanedHandoffs_SkipsWhenReviewStarted(t *testing.T) {
 		},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }})
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }}, time.Now())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -115,7 +115,7 @@ func TestReconcileOrphanedHandoffs_SkipsWhenReviewComplete(t *testing.T) {
 		},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }})
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }}, time.Now())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -129,7 +129,7 @@ func TestReconcileOrphanedHandoffs_SkipsRunningBuild(t *testing.T) {
 		Comments: []tracker.Comment{cmt("[human:implementation-started]", time.Unix(1, 0))},
 	}}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }})
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }}, time.Now())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -146,7 +146,7 @@ func TestReconcileOrphanedHandoffs_SkipsUnreachableBranch(t *testing.T) {
 	}}
 	unreachable := func(string) ProbeResult { return ProbeResult{Status: ProbeAbsent} }
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, unreachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }})
+	n := reconcileOrphanedHandoffs(reviewSet(cards, unreachable), ReconcileDeps{ChainReview: func(string) error { called = true; return nil }}, time.Now())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called)
@@ -161,7 +161,7 @@ func TestReconcileOrphanedHandoffs_PassesHandoffBranchToProbe(t *testing.T) {
 	}}
 	var probed string
 	reachable := func(branch string) ProbeResult { probed = branch; return ProbeResult{Status: ProbePresent} }
-	n := reconcileOrphanedHandoffs(reviewSet(cards, reachable), ReconcileDeps{ChainReview: func(string) error { return nil }})
+	n := reconcileOrphanedHandoffs(reviewSet(cards, reachable), ReconcileDeps{ChainReview: func(string) error { return nil }}, time.Now())
 
 	assert.Equal(t, 1, n)
 	assert.Equal(t, "autofix/sc-1", probed)
@@ -182,7 +182,7 @@ func TestReconcileOrphanedHandoffs_SkipsPhantomCommits(t *testing.T) {
 		return ProbeResult{Status: ProbeAbsent}
 	}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }})
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }}, time.Now())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called, "a phantom-commit handoff must not chain a review")
@@ -199,7 +199,7 @@ func TestReconcileOrphanedHandoffs_ChainsWhenCommitsPresent(t *testing.T) {
 	}}
 	commitsPresent := func(string, []string) ProbeResult { return ProbeResult{Status: ProbePresent} }
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }})
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }}, time.Now())
 
 	assert.Equal(t, 1, n)
 	assert.True(t, called)
@@ -219,7 +219,7 @@ func TestReconcileOrphanedHandoffs_LeavesUnreadableCommits(t *testing.T) {
 		return ProbeResult{Status: ProbeUnreadable, Detail: "probe timed out"}
 	}
 	called := false
-	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }})
+	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{CommitsPresent: commitsPresent, ChainReview: func(string) error { called = true; return nil }}, time.Now())
 
 	assert.Equal(t, 0, n)
 	assert.False(t, called, "an unreadable commit check must not chain a review")
