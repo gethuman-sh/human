@@ -836,7 +836,7 @@
       "actor": "daemon",
       "runs": "human-pr-fixer",
       "marker": "[human:pr-fix-started]",
-      "guard": "bounded: the same blocking finding twice, or DefaultPRReviewRounds (8) rounds",
+      "guard": "bounded: the same class of blocking finding in the same file twice (SC-5278; identity fingerprint or class+file, whichever repeats), or DefaultPRReviewRounds (8) rounds",
       "doc": "The fixer commits to the LOCAL branch and never pushes, so the reviewer reads the new commit rather than a stale pushed head. The pr-fix-started marker carries `finding:`, the fingerprint of the blocking finding the fixer was sent, which is what the next round compares against (SC-5174). It also carries `class:`, the file and the reviewer's category for that finding; the next round compares both, so the same class in the same file under a fresh slug is the same finding again (SC-5278). The round's blocking findings are written to the durable findings record in the recall index (review_findings) by the loop driver (cmd/cmddaemon/prloopstate.go recordReviewRound), and the fixer's exit is attached to them when it reports.",
       "where": "internal/daemon/board_transition.go AdvancePRLoop, PRActionFix"
     },
@@ -1238,7 +1238,7 @@
       "WorkingIdleGrace": "30m — how long an agent with outstanding work may stay silent: inside a tool call, waiting on a dispatched subagent, a model request open, OR the model-request state unknown. A dispatch counts because a subagent's events arrive under its parent's name and used to be read as the parent finishing its own work (SC-4900). Unknown takes the generous bound on purpose — the machine must not kill live work because it lost its own bookkeeping (SC-3853).",
       "QueuedLaunchGrace": "2m — how long a card whose decision was answered may sit unstarted before the machine starts it (internal/daemon/board_reconcile_queued.go). Short because the launch is the same call that recorded the choice; it exists only so a tick landing inside that call does not race it.",
       "DefaultStageRetries": "2 — automatic in-place relaunches of one stage (internal/daemon/board_retry.go)",
-      "DefaultPRReviewRounds": "8 — the OUTER cap on review→fix rounds (internal/daemon/pr_review_loop.go); the policy bound is repetition — the same blocking finding twice escalates at any round (SC-5174)",
+      "DefaultPRReviewRounds": "8 — the OUTER cap on review→fix rounds (internal/daemon/pr_review_loop.go); the policy bound is repetition — the same blocking finding twice escalates at any round (SC-5174), and since SC-5278 that repeat also fires on the same class of finding recurring in the same file under a fresh slug",
       "DefaultDeployFixRounds": "2 — deploy-fixer dispatches before escalating (internal/daemon/board_transition.go)",
       "OutageWaitBound": "6h — how long an outage may be relaunched before it is handed to a person (internal/daemon/board_outage.go)",
       "MaxSilenceReaps": "3 — silence reaps of one stage before the machine stops relaunching and asks for a person (internal/daemon/board_failure.go). Uncharged against DefaultStageRetries, which is why it needs its own bound.",
@@ -1270,7 +1270,7 @@
       },
       "pr-loop": {
         "stale_when": "No loop half-agent alive on the machine that owns the stage — the same ownership qualifier the other stage rules carry, and the one this rule was missing. A loop's outcome lives in the owning host's agent state store and is never posted to the tracker, so 'no agent alive HERE' is evidence only on the machine that started it; read as a fleet-wide fact it made a peer red a review that was still running and went on to approve (SC-4025). The generic stuck-running pass deliberately SKIPS a loop card (doneStageLoopActive), so a loop is recovered by re-driving rather than by redding.",
-        "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by repetition — the same blocking finding twice escalates — and by DefaultPRReviewRounds (8) as the outer cap; past either the loop escalates rather than merging on a state it cannot read (SC-5174). Before acting, a re-drive checks whether the step the fresh thread names has its own agent still alive on the machine that owns the stage (BoardTransitionDeps.LoopStepAlive); if so it stands down and leaves the step to finish rather than escalating over work still in flight (SC-5120)."
+        "if_nothing_happens": "reconcilePRLoops re-reads the recorded state and advances or escalates, idempotently. Bounded by repetition — the same blocking finding twice, or the same class of finding recurring in the same file (SC-5278), escalates — and by DefaultPRReviewRounds (8) as the outer cap; past either the loop escalates rather than merging on a state it cannot read (SC-5174). Before acting, a re-drive checks whether the step the fresh thread names has its own agent still alive on the machine that owns the stage (BoardTransitionDeps.LoopStepAlive); if so it stands down and leaves the step to finish rather than escalating over work still in flight (SC-5120)."
       }
     }
   },
