@@ -60,7 +60,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
    `unchecked: <kind> — <why>`, never silence.
 5. **Done checkpoint** — invoke the **human-done** agent via the Task tool to produce a Definition of Done report. This is a self-check (tests pass, acceptance criteria met). Peer review happens later via the pickup-review skill — do not invoke human-reviewer inline:
    ```
-   Task(subagent_type="human-done", prompt="Evaluate whether ticket <ENG_KEY> is done")
+   Task(subagent_type="human-done", model="sonnet", prompt="Evaluate whether ticket <ENG_KEY> is done")
    ```
 6. **Hand off for review.** If the human-done verdict is pass, post the structured handoff comment on the **PM ticket** so a separate reviewer (today: another `human` user runs `/human-pickup-review`; later: the daemon polls for it) can pick the work up:
    ```bash

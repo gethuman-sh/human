@@ -141,6 +141,10 @@ var (
 	// as well as the prompts that include it (SC-5179).
 	markerPostPattern = regexp.MustCompile(`human marker post \S+ ([a-z<][a-zA-Z<>_-]*)`)
 	taskModelPattern  = regexp.MustCompile(`Task\(subagent_type="([a-z-]+)", model="([^"]+)"`)
+	// anyTaskPattern matches every dispatch, tiered or not. taskModelPattern
+	// cannot answer "which agent was dispatched without a model", because a site
+	// that names none does not match it at all — the silence AC1 is about.
+	anyTaskPattern = regexp.MustCompile(`Task\(subagent_type="([a-z-]+)"(, model="([^"]+)")?`)
 	// The Task tool accepts model aliases, never full model ids. Verified
 	// against the Claude Code 2.1.218 input schema:
 	//   model: z.enum(["sonnet","opus","haiku","fable"]).optional()
@@ -183,9 +187,63 @@ func TestPrompts_DispatchModelsAreValidAliases(t *testing.T) {
 	require.Positive(t, dispatches, "no tiered dispatches found — the pipeline pays for a model it did not choose")
 }
 
+// policyTopTier names every agent whose work embed/shared/model-tiers.md puts
+// at or above `opus`, with the phrase from the table that puts it there. It is
+// written out rather than derived from the agent's name because a pattern would
+// sweep in agents that produce no verdict (human-ready, human-ideator) and would
+// release one that gets renamed. Centralizing the stage->tier map in Go is
+// SC-3583; this is the test's own fixture.
+var policyTopTier = map[string]string{
+	"human-planner":         "planning",
+	"human-reviewer":        "review verdicts",
+	"human-pr-reviewer":     "review verdicts (pre-merge adversarial gate)",
+	"human-ticket-reviewer": "review verdicts, on a ticket",
+	"human-bug-analyzer":    "root-cause analysis",
+	"human-bug-triage":      "root-cause analysis",
+	"human-security-triage": "root-cause analysis",
+	"human-preflight":       "decides what a person must answer — a wrong answer stops nothing and is silent",
+	"gardening-triage":      "finding verdicts",
+	"brainstorm-triage":     "finding verdicts",
+	"findbugs-triage":       "finding verdicts",
+	"security-triage":       "finding verdicts",
+	"human-second-opinion":  "adversarial challenges",
+	"human-verdict-skeptic": "adversarial challenges",
+}
+
+// `inherited` is not a tier, it is the absence of a decision: a dispatch that
+// names no model runs on whatever the account defaults to, which stays expensive
+// by accident today and goes cheap by accident the moment a project sets
+// agent.model. Pin that every top-tier agent names its tier, and never below
+// opus (SC-5474).
+func TestPrompts_TopTierAgentsNameTheirTier(t *testing.T) {
+	opus := modelRank("opus")
+	require.Positive(t, opus, "the model card must rank opus")
+
+	seen := map[string]bool{}
+	for _, name := range embedMarkdownFiles(t) {
+		for _, m := range anyTaskPattern.FindAllStringSubmatch(readEmbed(t, name), -1) {
+			agent, model := m[1], m[3]
+			why, top := policyTopTier[agent]
+			if !top {
+				continue
+			}
+			seen[agent] = true
+			require.NotEmptyf(t, model,
+				"%s dispatches %s (%s) with no model, so it runs on the account default — name opus or fable",
+				name, agent, why)
+			require.GreaterOrEqualf(t, modelRank(model), opus,
+				"%s dispatches %s (%s) at %q, below opus", name, agent, why, model)
+		}
+	}
+	for agent := range policyTopTier {
+		require.Truef(t, seen[agent], "%s is in the top-tier set but no prompt dispatches it", agent)
+	}
+}
+
 // An adversarial check that runs on a weaker model gets argued out of its
 // objection, which turns the gate into a rubber stamp — worse than no gate,
-// because it manufactures confidence. Pin the adversaries to the top tier.
+// because it manufactures confidence. Pin the adversaries at or above the top
+// tier — fable is a move up and must not fail this.
 func TestPrompts_AdversarialChecksAreNotTieredDown(t *testing.T) {
 	skill := readEmbed(t, "human-autofix-skill.md")
 
@@ -197,7 +255,8 @@ func TestPrompts_AdversarialChecksAreNotTieredDown(t *testing.T) {
 				continue
 			}
 			found = true
-			require.Equal(t, "opus", m[2], "%s must run at the top tier", agent)
+			require.GreaterOrEqual(t, modelRank(m[2]), modelRank("opus"),
+				"%s must run at opus or above; it is dispatched at %q", agent, m[2])
 		}
 		require.True(t, found, "%s is never dispatched with an explicit model", agent)
 	}

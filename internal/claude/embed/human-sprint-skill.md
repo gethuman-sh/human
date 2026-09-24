@@ -95,7 +95,7 @@ Run `human tracker topology` and check where the plan will live:
 Delegate to the **human-planner** agent to create the plan. The planner returns the plan as output (no files written):
 
 ```
-Task(subagent_type="human-planner", prompt="Create an implementation plan for the idea described in .human/ideation/<slug>.md. The PM ticket is <PM_TICKET_KEY> on <PM_TRACKER>. Return the complete plan as your output. Do not write any files or create any tickets.")
+Task(subagent_type="human-planner", model="opus", prompt="Create an implementation plan for the idea described in .human/ideation/<slug>.md. The PM ticket is <PM_TICKET_KEY> on <PM_TRACKER>. Return the complete plan as your output. Do not write any files or create any tickets.")
 ```
 
 If the planner returns a `DECISION REQUIRED:` verdict instead of a plan, it hit a genuine product/UX or ambiguity fork. Because a human is present here, surface the fork directly via `AskUserQuestion` (one option per `N:` line), then re-run the planner with the chosen direction appended to its prompt (e.g. `… The human chose: <chosen option>.`). Loop until the planner returns a plan. Do NOT attach a plan or proceed to execution while a `DECISION REQUIRED:` verdict is outstanding.
@@ -107,9 +107,9 @@ Capture the output as `<PLAN_CONTENT>`.
 Launch both verification agents in a single message, passing the plan inline:
 
 ```
-Task(subagent_type="plan-verify-code", prompt="Verify all code references in the following implementation plan against the actual codebase. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---")
+Task(subagent_type="plan-verify-code", model="sonnet", prompt="Verify all code references in the following implementation plan against the actual codebase. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---")
 
-Task(subagent_type="plan-verify-docs", prompt="Verify all library, framework, and API assumptions in the following implementation plan against actual documentation and source. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---")
+Task(subagent_type="plan-verify-docs", model="sonnet", prompt="Verify all library, framework, and API assumptions in the following implementation plan against actual documentation and source. Return your verification report as output. Do not write any files.\n\n---BEGIN PLAN---\n<PLAN_CONTENT>\n---END PLAN---")
 ```
 
 ### Step 4c: Finalize and attach the plan
@@ -168,7 +168,7 @@ Before executing, load the plan — `human get <WORK_KEY>` for a plan in an engi
 Delegate to the **human-executor** agent:
 
 ```
-Task(subagent_type="human-executor", prompt="Execute <WORK_KEY> as a plan")
+Task(subagent_type="human-executor", model="sonnet", prompt="Execute <WORK_KEY> as a plan")
 ```
 
 The executor fetches the ticket, reads the plan from the description or the `[human:plan]` comment, and implements it.
@@ -184,7 +184,7 @@ The executor fetches the ticket, reads the plan from the description or the `[hu
 Delegate to the **human-reviewer** agent:
 
 ```
-Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>")
+Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for ticket <WORK_KEY>")
 ```
 
 The first line under the review's `## Summary` is the outcome: `pass`, `pass with notes`, `fail`, or `unreviewable: <reason>`.
@@ -197,7 +197,7 @@ If the review finds issues, ask the user via `AskUserQuestion`: "The review foun
 
 If the user chooses to fix:
 - Address each issue found by the reviewer
-- Re-run the review: `Task(subagent_type="human-reviewer", prompt="Review changes for ticket <WORK_KEY>")`
+- Re-run the review: `Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for ticket <WORK_KEY>")`
 
 ## Step 8 — Summary
 
