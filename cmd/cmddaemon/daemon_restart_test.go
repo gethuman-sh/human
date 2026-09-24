@@ -41,6 +41,74 @@ func TestDaemonRestartCmd_Flags(t *testing.T) {
 	}
 }
 
+// restart with no --project must carry forward the outgoing daemon's OWN
+// recorded registration rather than falling back to cwd: production always
+// starts the daemon with explicit --project dirs (internal/daemon/lifecycle.go,
+// internal/agent/manager.go), so a restart run from an unrelated cwd used to
+// silently replace a daemon serving those projects with one serving only its
+// own cwd (SC-5397 review).
+func TestDaemonRestart_CarriesForwardRegisteredProjects(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	pid := livePID(t)
+	require.NoError(t, WritePidFile(pid))
+	require.NoError(t, daemon.WriteInfo(daemon.DaemonInfo{
+		Projects: []daemon.ProjectInfo{
+			{Name: "one", Dir: "/work/one"},
+			{Name: "two", Dir: "/work/two"},
+		},
+	}))
+
+	origInFlight := inFlightOps
+	inFlightOps = func() (int, bool) { return 0, true }
+	t.Cleanup(func() { inFlightOps = origInFlight })
+
+	var gotDirs []string
+	origStart := startDaemonBackground
+	startDaemonBackground = func(_ *cobra.Command, _, _, _ string, _, _ bool, dirs []string) error {
+		gotDirs = dirs
+		return nil
+	}
+	t.Cleanup(func() { startDaemonBackground = origStart })
+
+	cmd := buildDaemonRestartCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	require.NoError(t, cmd.Execute())
+
+	assert.Equal(t, []string{"/work/one", "/work/two"}, gotDirs)
+}
+
+// An explicit --project overrides the recorded registration rather than
+// merging with it — the operator asked for something specific.
+func TestDaemonRestart_ExplicitProjectFlagOverridesRecorded(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	pid := livePID(t)
+	require.NoError(t, WritePidFile(pid))
+	require.NoError(t, daemon.WriteInfo(daemon.DaemonInfo{
+		Projects: []daemon.ProjectInfo{{Name: "old", Dir: "/work/old"}},
+	}))
+
+	origInFlight := inFlightOps
+	inFlightOps = func() (int, bool) { return 0, true }
+	t.Cleanup(func() { inFlightOps = origInFlight })
+
+	var gotDirs []string
+	origStart := startDaemonBackground
+	startDaemonBackground = func(_ *cobra.Command, _, _, _ string, _, _ bool, dirs []string) error {
+		gotDirs = dirs
+		return nil
+	}
+	t.Cleanup(func() { startDaemonBackground = origStart })
+
+	cmd := buildDaemonRestartCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--project", "/work/explicit"})
+	require.NoError(t, cmd.Execute())
+
+	assert.Equal(t, []string{"/work/explicit"}, gotDirs)
+}
+
 // restart must fully stop whatever is currently running before it starts a
 // replacement — never overlap the two, or two daemons briefly hold the same
 // ports/PID file.

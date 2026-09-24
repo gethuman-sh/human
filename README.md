@@ -185,6 +185,8 @@ On the host:
 human daemon start          # prints token, listens on :19285
 human daemon token          # print token for copy/paste
 human daemon status         # check if daemon is reachable
+human daemon stop           # stop the running daemon
+human daemon restart        # stop it and start the binary now on disk in its place
 ```
 
 In `devcontainer.json`, add the [devcontainer Feature](https://github.com/gethuman-sh/treehouse) to install `human` and configure the daemon connection:

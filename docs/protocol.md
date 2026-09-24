@@ -53,7 +53,9 @@ whether the daemon is involved at all:
 - A local command that nevertheless sends a request asks the question itself:
   `human hook` (local only so stdin stays available) calls
   `daemon.DaemonProtocolError` in `deliverHookEvent`, and `human doctor` reports
-  the refusal as a failing check rather than dying on it.
+  the refusal as a named, structured failing check — still exiting non-zero,
+  same as any other blocking check — rather than the bare unknown-command error
+  a forwarded command gets.
 
 `daemon.NewClient` keeps the gate for every caller that sends a request (the
 desktop, the proxy, `human audit`, `human stats`). `daemon.NewClientUnchecked`

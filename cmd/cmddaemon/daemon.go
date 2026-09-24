@@ -1561,6 +1561,24 @@ command running on the machine, including a deploy someone is waiting on.`,
 // runDaemonBackground re-execs the on-disk binary directly, so restart needs
 // no cmdFactory/version of its own — those exist only for the foreground path
 // buildDaemonStartCmd takes and restart never does.
+//
+// --project defaults to the outgoing daemon's OWN recorded registration
+// (daemon.json's Projects, read before stopDaemon deletes the file) rather
+// than to nil, which buildProjectRegistry would then read as "just cwd". In
+// production the daemon is always started with explicit --project dirs
+// (internal/daemon/lifecycle.go, internal/agent/manager.go), so a restart run
+// from an unrelated cwd — or with two projects registered — would otherwise
+// silently replace the running daemon with one serving only its own cwd,
+// which is not what "replace whatever build is currently running" promises.
+// An operator who passes --project explicitly is trusted over the recording,
+// same as buildDaemonStatusCmd already trusts an explicit --addr over it.
+//
+// The listen addresses are deliberately NOT fed back the same way: daemon.json
+// records the post-replaceHost bind address (already resolved to a concrete
+// host, e.g. a container-reachable IP), not the flag form a listener expects,
+// so echoing it back could hand runDaemonBackground a host it cannot bind
+// rather than the wildcard/loopback default. An operator who bound a
+// non-default address passes --addr again, same as any other daemon start.
 func buildDaemonRestartCmd() *cobra.Command {
 	var addr string
 	var chromeAddr string
@@ -1582,6 +1600,16 @@ this client sends is refused once the daemon's protocol falls behind
 anything, only signals it by PID and starts a fresh process — as the way out.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
+			// Read BEFORE stopDaemon, which calls daemon.RemoveInfo() and
+			// destroys this: it is the only record of what the outgoing
+			// daemon had registered, and stop's success does not depend on it.
+			if !cmd.Flags().Changed("project") {
+				if info, err := daemon.ReadInfo(); err == nil {
+					for _, p := range info.Projects {
+						projectDirs = append(projectDirs, p.Dir)
+					}
+				}
+			}
 			if err := stopDaemon(out, force, wait); err != nil {
 				return err
 			}

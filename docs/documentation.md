@@ -138,6 +138,8 @@ When running AI agents inside devcontainers, credentials should stay on the host
 human daemon start [--addr=:19285]   # start listening, print token, block until Ctrl-C
 human daemon token                    # print current token (generate if needed)
 human daemon status [--addr=...]      # check if daemon is reachable
+human daemon stop                     # stop the running daemon
+human daemon restart                  # stop it and start the binary now on disk in its place
 ```
 
 ### Authentication
