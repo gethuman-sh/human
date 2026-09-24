@@ -110,6 +110,7 @@ commits: 2037e40, 64bb370
 - `engineering:` is comma-separated — one PM ticket can spawn multiple engineering tickets. **Single-tracker topology omits this line entirely**: the review target is the PM ticket the comment sits on.
 - `branch:` is the branch the commits live on.
 - `commits:` is the short SHAs attributed to the referenced keys (what `human commits for <KEY>` returns).
+- `review:` is optional and takes one value, `inline`: the run that posted the handoff is reviewing the work itself, so the daemon chains no reviewer of its own. Omit it and the daemon chains one — which is what every handoff means without the line.
 
 The `human-executor` agent posts this comment automatically as its final step. A reviewer (today: another user runs `/human-pickup-review <PM_KEY>`; future: daemon polling) reads the binding via `human handoff show`, runs `human-reviewer` against each engineering key (or against the PM key when the `engineering:` line is absent), and posts a `[human:review-complete]` follow-up marker (`human marker post`) on the same PM ticket with the verdict.
 
