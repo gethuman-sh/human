@@ -374,3 +374,23 @@ func TestRunDeploy_reportsAStartedReviewAsSuch(t *testing.T) {
 	assert.Contains(t, buf.String(), "Review started for SC-1 (release/x): https://example/pr/9")
 	assert.NotContains(t, buf.String(), "Deployed")
 }
+
+// A fixer dispatched before any reviewer runs (a stale-base conflict, or a
+// clean merge that leaves the fast test tier red) must not be reported as a
+// review in progress: that would tell a person watching `human deploy` that
+// the reviewer is working when the fixer is (SC-5279).
+func TestRunDeploy_reportsAFixDispatchNotAReview(t *testing.T) {
+	prevEntry, prevDeps := deployEntry, newTransitionDeps
+	deployEntry = func(context.Context, daemon.BoardTransitionDeps, daemon.StartDeployRequest) (daemon.StartDeployResult, error) {
+		return daemon.StartDeployResult{Outcome: daemon.DeployOutcomeFixDispatched, PRURL: "https://example/pr/9", PRNumber: 9}, nil
+	}
+	newTransitionDeps = func(tracker.Provider) daemon.BoardTransitionDeps { return daemon.BoardTransitionDeps{} }
+	t.Cleanup(func() { deployEntry, newTransitionDeps = prevEntry, prevDeps })
+	var buf bytes.Buffer
+
+	require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf, "SC-1", "release/x", "T", false, false))
+
+	assert.Contains(t, buf.String(), "https://example/pr/9")
+	assert.NotContains(t, buf.String(), "Review started")
+	assert.NotContains(t, buf.String(), "Deployed")
+}

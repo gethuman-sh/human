@@ -96,6 +96,31 @@ func TestStartDeploy_recordsTheStartThenEntersTheReviewLoop(t *testing.T) {
 	assert.Zero(t, p.markReadyCall, "nothing un-drafts before the review approves")
 }
 
+// The base advanced past the freshly-opened branch and the merge conflicts:
+// the deploy fixer is dispatched BEFORE any reviewer runs, and the caller
+// must be told a fixer — not a reviewer — owns the step (SC-5279). Reporting
+// DeployOutcomeReviewStarted here would tell `human deploy`'s caller a
+// reviewer is working when a fixer is.
+func TestStartDeploy_staleBaseConflict_reportsFixDispatchedNotReviewStarted(t *testing.T) {
+	c := &fakeCommenter{}
+	p := &fakeDeployer{res: PRResult{Number: 42, URL: "https://example/pr/42", Draft: true}, freshness: FreshnessConflict}
+	deps, l := reviewableDeps(c, p)
+
+	res, err := runStartDeploy(t, deps, StartDeployRequest{
+		PMKey: "SC-1", Title: "t", PRBody: "body", Branch: "feat/x",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, DeployOutcomeFixDispatched, res.Outcome)
+	assert.Equal(t, "https://example/pr/42", res.PRURL)
+	_, reviewStarted := posted(c, PRReviewStartedHeader)
+	assert.False(t, reviewStarted, "no review round starts on a conflicting branch")
+	started, ok := posted(c, DeployFixStartedHeader)
+	require.True(t, ok, "the deploy fixer is dispatched instead")
+	assert.Contains(t, started, "before: review")
+	assert.Equal(t, "/human-deploy-fix SC-1 --pr=42 --branch=feat/x", l.prompt)
+}
+
 // A blocking verification verdict is refused before any push, with no marker:
 // the ticket already says what has to happen. The board's own route has
 // refused this since the verdict gate existed; the CLI route walked past it.

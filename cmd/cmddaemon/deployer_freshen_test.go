@@ -23,17 +23,33 @@ type freshenGitStubs struct {
 	current     bool
 	conflict    bool
 	mergeErr    error
+
+	// fastTierFails/fastTierErr stub the post-merge fast-tier check
+	// (fastTierRunner). Both default false/nil — a clean pass — so the
+	// merge/conflict-focused tests predating SC-5279's fast-tier check need
+	// not know it exists.
+	fastTierFails bool
+	fastTierErr   error
 }
 
 func (s *freshenGitStubs) install() {
 	prevDefault, prevFetch, prevExistsLocal, prevRevParse := gitrepo.DefaultBranch, gitrepo.Fetch, gitrepo.BranchExistsLocal, gitrepo.RevParse
 	prevIsAncestor, prevAdd, prevRemove := gitrepo.IsAncestor, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove
 	prevMerge, prevUpdate := gitrepo.MergeIntoHead, gitrepo.UpdateBranchRef
+	prevFastTier := fastTierRunner
 	s.t.Cleanup(func() {
 		gitrepo.DefaultBranch, gitrepo.Fetch, gitrepo.BranchExistsLocal, gitrepo.RevParse = prevDefault, prevFetch, prevExistsLocal, prevRevParse
 		gitrepo.IsAncestor, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove = prevIsAncestor, prevAdd, prevRemove
 		gitrepo.MergeIntoHead, gitrepo.UpdateBranchRef = prevMerge, prevUpdate
+		fastTierRunner = prevFastTier
 	})
+	fastTierRunner = func(_ context.Context, _ string) (bool, error) {
+		s.calls = append(s.calls, "fast-tier")
+		if s.fastTierErr != nil {
+			return false, s.fastTierErr
+		}
+		return !s.fastTierFails, nil
+	}
 	gitrepo.DefaultBranch = func(_ context.Context, _ string) string { return "main" }
 	gitrepo.Fetch = func(_ context.Context, _, branch string) error {
 		s.calls = append(s.calls, "fetch "+branch)
@@ -135,6 +151,45 @@ func TestFreshenBranch_conflictLeavesRefUntouched(t *testing.T) {
 	}
 	if !s.saw("worktree-remove") {
 		t.Fatalf("the ephemeral worktree must be removed: %v", s.calls)
+	}
+}
+
+// A clean merge that fails the fast tier is a red result, not a reviewable
+// candidate: the ref stays untouched exactly like a textual conflict, and the
+// caller routes it to the deploy fixer before any reviewer runs (SC-5279
+// acceptance criterion 1).
+func TestFreshenBranch_fastTierFailureLeavesRefUntouched(t *testing.T) {
+	s := &freshenGitStubs{t: t, localBranch: true, localTip: "local1", fastTierFails: true}
+	got, err := freshen(t, s)
+	if err != nil || got != daemon.FreshnessTestsFailed {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if !s.saw("merge origin/main") || !s.saw("fast-tier") {
+		t.Fatalf("expected the merge and the fast tier to both run: %v", s.calls)
+	}
+	if s.saw("update-ref") {
+		t.Fatalf("a red fast tier must not move the ref: %v", s.calls)
+	}
+	if !s.saw("worktree-remove") {
+		t.Fatalf("the ephemeral worktree must still be removed: %v", s.calls)
+	}
+}
+
+// The fast tier could not even run (no toolchain, no `make` on the host) —
+// that is a tooling failure, not a verdict on the merged code, so it is
+// surfaced like any other freshen error: the ref is left untouched and the
+// caller falls back to reviewing the branch as it is.
+func TestFreshenBranch_fastTierToolingFailureIsAnError(t *testing.T) {
+	s := &freshenGitStubs{t: t, localBranch: true, localTip: "local1", fastTierErr: errors.New("exec: \"make\": executable file not found in $PATH")}
+	got, err := freshen(t, s)
+	if err == nil {
+		t.Fatal("a fast tier that could not run must surface as an error")
+	}
+	if got != daemon.FreshnessCurrent {
+		t.Fatalf("got %v", got)
+	}
+	if s.saw("update-ref") {
+		t.Fatalf("no ref move when the fast tier could not run: %v", s.calls)
 	}
 }
 

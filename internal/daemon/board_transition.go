@@ -77,8 +77,13 @@ type Deployer interface {
 	// recorded head and the reviewer's head binding stay ancestors) and moves
 	// the local ref. A textual conflict leaves the branch untouched and is
 	// reported as FreshnessConflict for the caller to hand to the deploy fixer
-	// before any reviewer runs (SC-5279). It never pushes: the daemon publishes
-	// the branch at merge time exactly as it does the fixer's commits.
+	// before any reviewer runs (SC-5279). On a clean merge it also runs the
+	// project's fast test tier against the merged result, still in the
+	// ephemeral worktree; a red tier is reported as FreshnessTestsFailed,
+	// routed to the deploy fixer exactly like a conflict, so a merge that is
+	// textually clean but does not build is never handed to the reviewer as
+	// the integrated candidate. It never pushes: the daemon publishes the
+	// branch at merge time exactly as it does the fixer's commits.
 	FreshenBranch(ctx context.Context, req PRRequest) (BranchFreshness, error)
 	// PullRequestMergeable reports the forge's own end-state (three-way) merge
 	// verdict for the PR. It is the fallback signal when the mechanical rebase in
@@ -118,6 +123,12 @@ const (
 	// FreshnessConflict: the base merge conflicts; the branch is untouched and
 	// a fixer must resolve it before a reviewer can read an integrated result.
 	FreshnessConflict
+	// FreshnessTestsFailed: the base merged cleanly and moved the ref, but the
+	// project's fast test tier is red on the integrated result — a symbol
+	// renamed on the base against a new call site on the branch, the commonest
+	// form of this drift. A fixer must resolve it before a reviewer reads a
+	// candidate that does not build (SC-5279 acceptance criterion 1).
+	FreshnessTestsFailed
 )
 
 // PRRequest carries everything needed to push a branch and open its PR.
@@ -1108,24 +1119,39 @@ const deployFixBeforeReviewValue = "review"
 // the branch as it was pushed. Run 3 of the campaign spent a review round on
 // "branch behind main" on four of six pull requests: the reviewer found the
 // drift, the fixer merged the base, the reviewer read everything again. That
-// round is mechanical, and a conflict on it is the deploy fixer's job, not a
-// finding. A freshen that fails for any reason other than a conflict is
-// logged and the review runs on the branch as it is: the CI gate's own
-// freshness rebase still stands behind it, so nothing merges stale.
-func (d BoardTransitionDeps) launchPRReview(ctx context.Context, pmKey string, res PRResult, branch string) (launched bool, err error) {
+// round is mechanical, and a conflict on it — or a clean merge that leaves
+// the fast test tier red — is the deploy fixer's job, not a finding. A
+// freshen that fails for any reason other than those two is logged and the
+// review runs on the branch as it is: the CI gate's own freshness rebase
+// still stands behind it, so nothing merges stale.
+//
+// dispatchedFixer tells the caller which step actually started: true means
+// the deploy fixer was dispatched INSTEAD of a reviewer (or the card reds
+// when the launch or the fix budget refuses it — either way no review round
+// started), false means a reviewer step is the owner of the stage, whether
+// freshly launched here or already running from an earlier call. A caller
+// that reports "review started" on every nil error — as reviewThenShip once
+// did — misreports the fixer-dispatch case as a review in progress.
+func (d BoardTransitionDeps) launchPRReview(ctx context.Context, pmKey string, res PRResult, branch string) (dispatchedFixer bool, err error) {
 	fresh, freshErr := d.Deployer.FreshenBranch(ctx, PRRequest{WorkspaceDir: d.WorkspaceDir, Branch: branch})
 	if freshErr != nil {
 		d.Logger.Warn().Err(freshErr).Str("pm", pmKey).Str("branch", branch).
 			Msg("board PR loop: could not bring the branch current with the base; reviewing it as it is")
 	}
-	if fresh == FreshnessConflict {
+	switch fresh {
+	case FreshnessConflict:
 		conflict := errors.WithDetails("the base advanced past the branch and the merge conflicts", "pm", pmKey, "branch", branch)
-		return false, d.deployFailedOrDispatchFixer(ctx, pmKey, res,
+		return true, d.deployFailedOrDispatchFixer(ctx, pmKey, res,
 			"branch behind the base with a conflict — resolving it before the review", conflict, branch, true)
+	case FreshnessTestsFailed:
+		redTier := errors.WithDetails("the fast test tier failed on the branch merged with the current base", "pm", pmKey, "branch", branch)
+		return true, d.deployFailedOrDispatchFixer(ctx, pmKey, res,
+			"the fast test tier failed on the branch merged with the current base — resolving it before the review", redTier, branch, true)
 	}
-	return d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
+	_, err = d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
 		prReviewDispatch(pmKey, res.Number, branch),
 		prReviewStartedBody(res.URL, res.Number, branch))
+	return false, err
 }
 
 // deployFixWasBeforeReview reports whether the newest deploy-fix-started
@@ -1255,6 +1281,28 @@ func prLoopNumber(comments []tracker.Comment) int {
 // prLoopURL recovers the loop's PR URL from the latest pr-review-started marker.
 func prLoopURL(comments []tracker.Comment) string {
 	return latestPrefixedLine(comments, PRReviewStartedHeader, "pr:")
+}
+
+// deployFixLoopNumber recovers the PR number a before-review deploy-fix
+// handback should review against: the deploy-fix-started marker that
+// dispatched this very fixer carries the real (number, url) binding
+// (dispatchDeployFixer), so read that first. A conflict found before the
+// FIRST review round leaves no pr-review-started marker behind — no reviewer
+// has launched yet, so prLoopNumber alone reads 0 and the handback would
+// dispatch the reviewer against PR #0 (SC-5279 follow-up to SC-5119).
+func deployFixLoopNumber(comments []tracker.Comment) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(latestPrefixedLine(comments, DeployFixStartedHeader, "number:"))); err == nil {
+		return n
+	}
+	return prLoopNumber(comments)
+}
+
+// deployFixLoopURL is deployFixLoopNumber's URL counterpart.
+func deployFixLoopURL(comments []tracker.Comment) string {
+	if url := strings.TrimSpace(latestPrefixedLine(comments, DeployFixStartedHeader, "pr:")); url != "" {
+		return url
+	}
+	return prLoopURL(comments)
 }
 
 // prLoopBranch is the branch the loop is reviewing: the one its own start
@@ -1622,7 +1670,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		// reviewer has not read yet: the review is what comes next, on the
 		// integrated branch. Only the CI gate's fixer re-runs the deploy (SC-5279).
 		if deployFixWasBeforeReview(comments) {
-			_, err := d.launchPRReview(ctx, pmKey, PRResult{Number: prLoopNumber(comments), URL: prLoopURL(comments)}, branch)
+			_, err := d.launchPRReview(ctx, pmKey, PRResult{Number: deployFixLoopNumber(comments), URL: deployFixLoopURL(comments)}, branch)
 			return err
 		}
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card, branch), branch)

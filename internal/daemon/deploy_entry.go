@@ -44,9 +44,10 @@ type StartDeployRequest struct {
 	OverrideDecision bool
 }
 
-// DeployOutcome says how far StartDeploy carried the work. The two outcomes end
-// in different places — one on main, the other in a review whose approval will
-// put it there — and a caller reporting to a person has to say which.
+// DeployOutcome says how far StartDeploy carried the work. The outcomes end in
+// different places — one on main, one in a review whose approval will put it
+// there, one with a mechanical fixer resolving a stale base before any review
+// runs — and a caller reporting to a person has to say which.
 type DeployOutcome int
 
 const (
@@ -57,13 +58,20 @@ const (
 	// open in draft, and the machine reviewer owns it. The review→fix loop
 	// un-drafts and merges the PR when it approves; nothing merged yet.
 	DeployOutcomeReviewStarted
+	// DeployOutcomeFixDispatched means the branch's base had advanced and the
+	// merge conflicted, or merged clean but left the fast test tier red: the
+	// deploy fixer was dispatched to resolve it BEFORE any reviewer ran, and no
+	// review round was spent (SC-5279). The fixer hands back to the reviewer on
+	// its own done exit; reporting this as "review started" would tell the
+	// caller a reviewer is working when a fixer is (SC-5279 review round 1).
+	DeployOutcomeFixDispatched
 )
 
 // StartDeployResult reports where StartDeploy left the work.
 type StartDeployResult struct {
 	Outcome DeployOutcome
 	// PRURL and PRNumber identify the pull request the review loop holds; set
-	// only for DeployOutcomeReviewStarted.
+	// for DeployOutcomeReviewStarted and DeployOutcomeFixDispatched.
 	PRURL    string
 	PRNumber int
 }
@@ -208,16 +216,24 @@ func (d BoardTransitionDeps) reviewThenShip(ctx context.Context, req StartDeploy
 			Msg("deploy: the machine review already approved this head; shipping without a new round")
 		return shipped, d.DeployBranch(ctx, req.PMKey, req.Title, req.PRBody, req.Branch)
 	}
-	_, err = d.launchPRReview(ctx, req.PMKey, res, req.Branch)
+	dispatched, err := d.launchPRReview(ctx, req.PMKey, res, req.Branch)
 	if err != nil {
 		// A gate that went red between the pre-check above and this launch
 		// surfaces as ErrLaunchGateRefused: a host condition, so no marker — the
 		// caller reports it and the item is left where the start marker put it.
 		return shipped, err
 	}
-	// launched == false with no error is a reviewer already owning this step
-	// on this machine: its marker stands and its exit drives the loop, so the
-	// review is, truthfully, started.
+	if dispatched {
+		// The base merge conflicted, or merged clean but left the fast test
+		// tier red: the deploy fixer owns this step, not a reviewer — its
+		// marker stands and its done exit hands back to the reviewer
+		// (SC-5279). Reporting DeployOutcomeReviewStarted here would tell the
+		// caller a reviewer is working when the fixer is.
+		return StartDeployResult{Outcome: DeployOutcomeFixDispatched, PRURL: res.URL, PRNumber: res.Number}, nil
+	}
+	// dispatched == false with no error is a reviewer owning this step on this
+	// machine — freshly launched here, or already running from an earlier
+	// call — so the review is, truthfully, started.
 	return StartDeployResult{Outcome: DeployOutcomeReviewStarted, PRURL: res.URL, PRNumber: res.Number}, nil
 }
 

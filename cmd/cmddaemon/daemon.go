@@ -3103,6 +3103,23 @@ func (p forgeDeployer) FreshenBranch(ctx context.Context, req daemon.PRRequest) 
 	if err != nil {
 		return daemon.FreshnessCurrent, err
 	}
+	// The merge is textually clean but that says nothing about whether the
+	// result builds: a symbol renamed on the base against a new call site on
+	// the branch merges without a conflict and still does not compile. Run
+	// the fast tier against the merged commit, still in the ephemeral
+	// worktree, before the ref moves — only a result the tier passed is a
+	// reviewable integrated candidate (SC-5279 acceptance criterion 1). A
+	// tooling failure (no toolchain, no `make` on the host) is not a verdict
+	// on the code, so it is reported like any other freshen error above: the
+	// ref stays untouched and the caller falls back to reviewing the branch
+	// as it is.
+	passed, err := fastTierRunner(ctx, wt)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	if !passed {
+		return daemon.FreshnessTestsFailed, nil
+	}
 	// A branch known only on origin has no local ref yet: create it, so the
 	// reviewer's local-first binding finds the integrated head.
 	expected := tip
@@ -3113,6 +3130,29 @@ func (p forgeDeployer) FreshenBranch(ctx context.Context, req daemon.PRRequest) 
 		return daemon.FreshnessCurrent, err
 	}
 	return daemon.FreshnessMerged, nil
+}
+
+// fastTierRunner runs the project's fast feedback tier — `make test`, the
+// pre-push test gate, never the heavier bundled quality gate — against the
+// commit checked out in dir and reports whether it passed. Package var so
+// tests can stub it without a real toolchain. A command that could not even
+// be started (no `make` on the host, no toolchain) is a tooling failure and
+// returns a non-nil error; a command that ran to completion and exited
+// non-zero is a genuine fast-tier failure and returns (false, nil) — the
+// caller's two outcomes are deliberately distinct (SC-5279).
+var fastTierRunner = func(ctx context.Context, dir string) (passed bool, err error) {
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, "make", "test") // #nosec G204 -- fixed command, no user input
+	cmd.Dir = dir
+	if runErr := cmd.Run(); runErr != nil {
+		var exitErr *exec.ExitError
+		if goerrors.As(runErr, &exitErr) {
+			return false, nil
+		}
+		return false, errors.WrapWithDetails(runErr, "running the fast test tier", "dir", dir)
+	}
+	return true, nil
 }
 
 // localOrOriginTip resolves the branch the way the loop's own agents do —

@@ -57,6 +57,28 @@ func TestAdvancePRLoop_staleBaseConflict_dispatchesFixerBeforeReview(t *testing.
 	assert.Equal(t, "/human-deploy-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
 }
 
+// The merge is textually clean but the fast tier is red on the integrated
+// result: the deploy fixer is dispatched BEFORE any reviewer runs, exactly
+// like a textual conflict, and no review round is spent on a candidate that
+// does not build (SC-5279 acceptance criterion 1).
+func TestAdvancePRLoop_staleBaseTestsFailed_dispatchesFixerBeforeReview(t *testing.T) {
+	c := &fakeCommenter{comments: fixDoneThread()}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{freshness: FreshnessTestsFailed}
+	deps := newDeps(c, l, p)
+
+	require.NoError(t, deps.AdvancePRLoop(context.Background(), "SC-1", fixDoneOutcome))
+
+	assert.Equal(t, 1, p.freshened, "the base merge runs once before the launch")
+	assert.Equal(t, 0, countPosted(c, PRReviewStartedHeader), "no review round starts on a merge that fails the fast tier")
+	started, ok := posted(c, DeployFixStartedHeader)
+	require.True(t, ok, "the deploy fixer is dispatched instead")
+	m, parsed := marker.ParseBody(started)
+	require.True(t, parsed)
+	assert.Equal(t, deployFixBeforeReviewValue, m.Fields[DeployFixBeforeReviewField], "the marker records that the fixer preceded the review")
+	assert.Equal(t, "/human-deploy-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
+}
+
 // A clean base merge moves the local branch and the reviewer reads the
 // integrated candidate: the review round starts as before.
 func TestAdvancePRLoop_staleBaseMerged_reviewsIntegratedBranch(t *testing.T) {
@@ -114,6 +136,34 @@ func TestAdvanceDeployFix_doneBeforeReview_launchesReviewerNotDeploy(t *testing.
 	assert.Equal(t, 1, p.publishCalls, "the fixer's resolution is still published")
 	assert.Equal(t, 1, countPosted(c, PRReviewStartedHeader), "the reviewer is launched on the resolved branch")
 	assert.Equal(t, "/human-pr-review SC-1 --pr=7 --branch=feat/x", l.prompt)
+	_, failed := posted(c, DeployFailedHeader)
+	assert.False(t, failed)
+}
+
+// The conflict is found before the FIRST review round: no reviewer has ever
+// launched, so no pr-review-started marker exists to recover the PR binding
+// from. The deploy-fix-started marker that dispatched this fixer already
+// carries the real (number, url) — the handback must read it from there
+// rather than default to PR #0 (SC-5279 follow-up to SC-5119).
+func TestAdvanceDeployFix_doneBeforeFirstReview_recoversPRBindingFromDeployFixMarker(t *testing.T) {
+	syncDeploy(t)
+	before := markerBody(marker.Marker{
+		Type:   MarkerDeployFixStarted,
+		Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x", DeployFixBeforeReviewField, deployFixBeforeReviewValue),
+		Body:   "branch behind the base with a conflict — resolving it before the review",
+	}, "pr", "number", "branch", DeployFixBeforeReviewField)
+	c := &fakeCommenter{comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", time.Unix(1, 0)),
+		cmt(before, time.Unix(2, 0)),
+	}}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/7", Number: 7}}
+	deps := newDeps(c, l, p)
+
+	require.NoError(t, deps.AdvanceDeployFix(context.Background(), "SC-1", ExitDone, Blocker{}))
+
+	assert.Equal(t, 1, countPosted(c, PRReviewStartedHeader), "the reviewer is launched on the resolved branch")
+	assert.Equal(t, "/human-pr-review SC-1 --pr=7 --branch=feat/x", l.prompt, "PR #0 is never dispatched")
 	_, failed := posted(c, DeployFailedHeader)
 	assert.False(t, failed)
 }

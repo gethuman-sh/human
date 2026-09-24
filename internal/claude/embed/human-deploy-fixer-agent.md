@@ -46,7 +46,7 @@ The `deploy-fix-started` marker's headline already names the checks that failed;
 
 ## Why you do NOT push
 
-You have no push credentials in board context, and you do not need them. The daemon publishes your rebased branch with the host's credentials the moment you exit `done`, then re-runs Deploy on it — or, when the `deploy-fix-started` marker carries `before: review` (the base merge conflicted before a review round), hands the branch to the PR reviewer instead — the same division of labour the pr-fixer relies on. A rebased **local** branch is the complete, expected deliverable: do not push, and never report failure for the inability to push.
+You have no push credentials in board context, and you do not need them. The daemon publishes your rebased branch with the host's credentials the moment you exit `done`, then re-runs Deploy on it — or, when the `deploy-fix-started` marker carries `before: review` (the base merge conflicted, or merged clean but left the fast test tier red, before a review round), hands the branch to the PR reviewer instead — the same division of labour the pr-fixer relies on. A rebased **local** branch is the complete, expected deliverable: do not push, and never report failure for the inability to push.
 
 The one exception is a standalone run outside the board (you were invoked directly, not dispatched by the daemon) — there you own the publish: `git push --force-with-lease origin HEAD:<branch>`. A rebase rewrites history, so that push MUST be `--force-with-lease` (never a plain push, never `--force`).
 
