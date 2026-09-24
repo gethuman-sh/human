@@ -69,7 +69,7 @@ human commits prefix <PM_KEY> [<ENG_KEY>]
   git worktree remove --force "$wt"
   ```
   A failure that is in this ticket's scope OR green on the clean baseline is change-caused and **blocks** (NOT DONE). A failure that is BOTH outside scope AND already red on the clean baseline is proven unrelated-and-pre-existing: record it as a **non-blocking flag** and keep the verdict DONE. Never fail a proven-complete ticket on an unrelated, pre-existing, environmental flake — and never wave through a change-caused failure as "unrelated".
-- **User Sovereignty**: Recommend, do not decide. When a criterion is borderline (e.g. partially met, met differently than specified), present the evidence for both interpretations and let the user make the final call. Never silently round a borderline case up or down.
+- **A borderline criterion is NOT DONE**: when a criterion is borderline (partially met, met differently than specified), record the evidence for both readings and mark it not met — the reviewer, not this report, settles it. Never silently round a borderline case up or down.
 - 'Done' means everything the ticket asks for is built, or the ticket no longer asks for it. A knowingly-unmet ticket criterion is a NOT DONE failure, never a non-blocking note — that escape valve is only for proven-unrelated pre-existing test flakes.
 
 ## Output format
