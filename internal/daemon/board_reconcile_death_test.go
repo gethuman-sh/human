@@ -1,0 +1,128 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/gethuman-sh/human/internal/tracker"
+)
+
+// youngRunningCard is a running implementation card one minute into its stage
+// — far inside StuckRunningGrace, so only a recorded death may red it.
+func youngRunningCard(now time.Time) []ReconcileCard {
+	return []ReconcileCard{{
+		Key:      "SC-1",
+		Comments: []tracker.Comment{cmt("[human:implementation-started]", now.Add(-2*time.Minute))},
+	}}
+}
+
+func stoppedAgents(m map[string]time.Time) StoppedAgentLister {
+	return func() (map[string]time.Time, error) { return m, nil }
+}
+
+func chargedRetry(attemptsCalled *bool, relaunched *[]BoardStage) StageRetry {
+	return StageRetry{
+		Max:      2,
+		Outcome:  func(string, BoardStage) (StageExit, bool) { return "", false },
+		Attempts: func(string, BoardStage) (int, error) { *attemptsCalled = true; return 1, nil },
+		Relaunch: func(_ string, s BoardStage) (bool, error) { *relaunched = append(*relaunched, s); return true, nil },
+	}
+}
+
+// The defect: a SIGKILLed agent is written as stopped within seconds, but the
+// pass only judged cards past StuckRunningGrace, so the card sat fifteen
+// minutes on a death the machine already knew about (SC-5327). A stop recorded
+// after the stage began is an exit event: reddened and relaunched on this
+// tick, on the charged path a real death takes.
+func TestReconcileStuckRunning_RecordedDeathSkipsTheGrace(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	var posted []struct{ Key, Body string }
+	var attemptsCalled bool
+	var relaunched []BoardStage
+	deps := ReconcileDeps{
+		LiveAgents:    liveAgents(),
+		StoppedAgents: stoppedAgents(map[string]time.Time{"board-SC-1-implementation": now.Add(-time.Minute)}),
+		PostFailed:    capturingPoster(&posted),
+		Retry:         chargedRetry(&attemptsCalled, &relaunched),
+		DaemonID:      "d1",
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(youngRunningCard(now), alwaysReachable), deps, now)
+
+	require.Equal(t, 1, n, "a recorded death is reddened without waiting out the grace")
+	require.Equal(t, []BoardStage{BoardImplementation}, relaunched)
+	require.True(t, attemptsCalled, "a recorded death is a real death and stays charged")
+	require.Len(t, posted, 1)
+	require.NotContains(t, posted[0].Body, "not charged")
+}
+
+// A stop older than the stage belongs to an earlier run of the same stage whose
+// exit was already handled; it says nothing about the run the card shows.
+func TestReconcileStuckRunning_StopBeforeStageEntryKeepsTheGrace(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	var posted []struct{ Key, Body string }
+	deps := ReconcileDeps{
+		LiveAgents:    liveAgents(),
+		StoppedAgents: stoppedAgents(map[string]time.Time{"board-SC-1-implementation": now.Add(-10 * time.Minute)}),
+		PostFailed:    capturingPoster(&posted),
+		Retry:         StageRetry{Max: 2},
+		DaemonID:      "d1",
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(youngRunningCard(now), alwaysReachable), deps, now)
+
+	require.Equal(t, 0, n)
+	require.Empty(t, posted)
+}
+
+// A live agent is never a recorded death, whatever an older record says: the
+// live listing is the newer fact.
+func TestReconcileStuckRunning_AliveAgentKeepsTheGraceDespiteOldStopRecord(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	var posted []struct{ Key, Body string }
+	deps := ReconcileDeps{
+		LiveAgents:    liveAgents("board-SC-1-implementation"),
+		StoppedAgents: stoppedAgents(map[string]time.Time{"board-SC-1-implementation": now.Add(-time.Minute)}),
+		PostFailed:    capturingPoster(&posted),
+		Retry:         StageRetry{Max: 2},
+		Progress:      progressAt(now, true, false),
+		StopAgent:     func(string) error { t.Fatal("a live, working agent must not be stopped"); return nil },
+		DaemonID:      "d1",
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(youngRunningCard(now), alwaysReachable), deps, now)
+
+	require.Equal(t, 0, n)
+	require.Empty(t, posted)
+}
+
+// No lister, or a lister that fails, is absent evidence: the card keeps the
+// ordinary grace rather than being judged on a fact that could not be read.
+func TestRecordedDeath_AbsentEvidenceIsNotADeath(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	entered := now.Add(-2 * time.Minute)
+	alive := map[string]struct{}{}
+
+	died, _ := recordedDeath(ReconcileDeps{}, "board-SC-1-implementation", alive, entered)
+	require.False(t, died, "nil lister disables the shortcut")
+
+	failing := ReconcileDeps{StoppedAgents: func() (map[string]time.Time, error) { return nil, errors.New("boom") }}
+	died, _ = recordedDeath(failing, "board-SC-1-implementation", alive, entered)
+	require.False(t, died, "a lister error is not evidence")
+
+	unnamed := ReconcileDeps{StoppedAgents: stoppedAgents(map[string]time.Time{"board-SC-2-implementation": now})}
+	died, _ = recordedDeath(unnamed, "board-SC-1-implementation", alive, entered)
+	require.False(t, died, "a record for another agent says nothing about this one")
+
+	noEntry := ReconcileDeps{StoppedAgents: stoppedAgents(map[string]time.Time{"board-SC-1-implementation": now})}
+	died, _ = recordedDeath(noEntry, "board-SC-1-implementation", alive, time.Time{})
+	require.False(t, died, "without a stage entry time the stop cannot be placed in this stage")
+
+	died, at := recordedDeath(noEntry, "board-SC-1-implementation", alive, entered)
+	require.True(t, died)
+	require.Equal(t, now, at)
+}

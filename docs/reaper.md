@@ -285,6 +285,21 @@ The deploy grace above applies here too — a `human deploy` on its CI gate has
 *no* agent by construction, so a vanished agent is not evidence a deploy is dead
 until its own timeout has passed.
 
+**A recorded death skips the grace** (`recordedDeath`, SC-5327). A container
+that exits with no Stop hook — a kill, an OOM stop, a crash — is written as
+`stopped` by the agent manager within seconds (`Start` finding a dead container,
+`Refresh` on its sweep, `Stop` itself), but a stopped record simply leaves the
+live listing, so this pass used to wait the full `StuckRunningGrace` on a fact
+the machine already held. Now, when the stage's agent is absent from the live
+listing AND this machine's record says it stopped *after* the stage was entered,
+the card is judged on the next tick instead of after the grace. The record must
+postdate the stage: a stop older than the stage belongs to an earlier run whose
+exit was already adjudicated. Nothing else changes — it is the same charged
+vanished-agent path, with the same failed marker and the same retry budget; only
+the wait is gone. Absent evidence keeps the grace: no lister, a lister error, a
+record naming no such agent, or an agent still alive all leave the card to the
+ordinary rule. The `StoppedAgents` dep is nil-disabled like `LiveAgents`.
+
 ### 7. Reconcile — orphaned on a closed ticket
 
 **Owner:** `reconcileOrphanedAgents` (`internal/daemon/board_reconcile_orphan.go`).

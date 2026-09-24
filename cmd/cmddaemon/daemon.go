@@ -941,6 +941,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		MergedProbe:    prMerged,
 		PostDeployed:   postDeployed,
 		LiveAgents:     liveBoardAgents,
+		StoppedAgents:  stoppedBoardAgents,
 		PostFailed:     postFailedMarkerFunc(ds.srv.Projects, ds.vaultResolver, ds.daemonID),
 		ClosedProbe:    closedTicketProbeFunc(ds.srv.Projects, ds.vaultResolver),
 		ChainReview:    durableChainReview,
@@ -1021,6 +1022,26 @@ func liveBoardAgents() ([]string, error) {
 		names = append(names, m.Name)
 	}
 	return names, nil
+}
+
+// stoppedBoardAgents reads the agents this machine's manager has recorded as no
+// longer running, with the moment each stop was written. It is the manager's
+// own view of a death — Refresh and Start both mark a vanished container stopped
+// within seconds — handed to the reconcile pass so a card whose agent it knows is
+// dead is not left to wait out the grace meant for silence (SC-5327).
+func stoppedBoardAgents() (map[string]time.Time, error) {
+	metas, err := agent.ListMetas()
+	if err != nil {
+		return nil, err
+	}
+	stopped := make(map[string]time.Time, len(metas))
+	for _, m := range metas {
+		if m.Status == agent.StatusRunning || m.StoppedAt.IsZero() {
+			continue
+		}
+		stopped[m.Name] = m.StoppedAt
+	}
+	return stopped, nil
 }
 
 // postFailedMarkerFunc builds the reconcile pass's marker poster. A stuck-running
