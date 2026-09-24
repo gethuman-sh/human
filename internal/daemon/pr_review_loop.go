@@ -268,7 +268,7 @@ func parseFindingLine(line string) (Finding, bool) {
 	}
 	anchor := normalizeFingerprintText(parts[0])
 	anchor = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(anchor, "blocking:"), "blocking"))
-	anchor = anchorFileOnly(anchor)
+	anchor = NormalizeFindingFile(anchor)
 	slug := normalizeFingerprintText(parts[1])
 	if anchor == "" || slug == "" {
 		return Finding{}, false
@@ -352,6 +352,16 @@ func anchorFileOnly(anchor string) string {
 		return anchor[:i]
 	}
 	return anchor
+}
+
+// NormalizeFindingFile renders a path the way a recorded finding's `file`
+// column holds it. The record is written from the reviewer's anchor, which is
+// lower-cased, whitespace-collapsed and stripped of its `:<line>` suffix, so a
+// reader that asks with a raw path matches nothing on any capitalised path and
+// nothing at all on `file.go:42`. Writer and reader call this one function so
+// the two cannot answer differently (SC-5398).
+func NormalizeFindingFile(path string) string {
+	return anchorFileOnly(normalizeFingerprintText(path))
 }
 
 // normalizeFingerprintText lower-cases and whitespace-collapses a fragment so
