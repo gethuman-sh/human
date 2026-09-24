@@ -82,7 +82,10 @@ func (s *StatsStore) ensureSchema() error {
 	if err != nil {
 		return errors.WrapWithDetails(err, "create stats schema")
 	}
-	return s.ensureColumns()
+	if err := s.ensureColumns(); err != nil {
+		return err
+	}
+	return s.ensureContainerSchema()
 }
 
 // ensureColumns additively migrates a pre-existing tool_events table to carry
@@ -135,7 +138,12 @@ func (s *StatsStore) Prune(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, errors.WrapWithDetails(err, "prune tool events")
 	}
-	return result.RowsAffected()
+	events, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	samples, err := s.pruneContainerSamples(ctx, cutoff)
+	return events + samples, err
 }
 
 // ToolCount holds a tool name and its event count.

@@ -10,3 +10,4 @@ Keeps a rolling record of what AI agents do through `human`, so you can look bac
 - Stores everything locally in SQLite
 - Splits a range's tool calls into ok vs error counts for the board's stats headline (`QueryToolOutcomes`), feeding the daemon's consolidated `stats-overview` aggregation
 - Answers which sub-agent types ran on which model over a time range (`QuerySubagentModels`), surfaced as `human stats subagents`
+- Records what each agent container costs the machine: memory, CPU and process count sampled every 30 seconds while it runs and once more before the daemon removes it, with the exit code and the engine's out-of-memory verdict, against the engine's own ceiling (`container_samples`, surfaced as `human stats containers`)
