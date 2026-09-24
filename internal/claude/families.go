@@ -77,4 +77,20 @@ var ruleFamilies = []ruleFamily{
 			"human-security-fix-skill.md",
 		},
 	},
+	{
+		// The three stages that change code must ask the same question of the
+		// findings record, in the same words, before they edit a file — the
+		// planner when it names the files, the executor when it changes them,
+		// the PR fixer when it answers a finding in one. Registered as a family
+		// so a fourth code-changing stage cannot be added without it, which is
+		// exactly how the dependents instruction came to exist in seven prompts
+		// with seven phrasings.
+		name:    "code-changing-prior-findings",
+		include: "prior-findings",
+		members: []string{
+			"human-planner-agent.md",
+			"human-executor-agent.md",
+			"human-pr-fixer-agent.md",
+		},
+	},
 }

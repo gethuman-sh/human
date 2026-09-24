@@ -22,6 +22,7 @@ If a codenav query says the repo is not indexed, the daemon is still building th
 - `human done <KEY>` / `human close <KEY>` — finish or close a ticket without knowing the workflow's status names
 - `human assign <KEY>` — take ownership of a ticket as the current identity; sets the owner only, so unlike `issue start` it never trips a status-change gate
 - `human plan show <KEY>` — print the ticket's engineering plan; attach one with `human marker post <KEY> plan --body-file -`
+- `human review findings <path> … --key <KEY>` — what past machine reviews found in these files, with the class, the ticket and round, and what the fixer did; ask before you change a file, and never paste a finding's text into a commit message
 
 ## Pipeline protocol — use these instead of hand-building comments or git incantations
 - `human marker post|show|list <KEY> [TYPE]` — post/read the structured `[human:*]` handoff comments (plan, review verdicts, deploy results); validated, latest-wins
