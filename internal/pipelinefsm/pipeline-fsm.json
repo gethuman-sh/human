@@ -334,7 +334,7 @@
         "stage": "done",
         "state": "running"
       },
-      "holds": "The review converged and every check must be green before the merge. A head that reports no checks at all is not green: it is pending until DeployNoChecksGrace has elapsed, because a freshly pushed head (a freshness rebase, a deploy-fixer push) has none for the minute or two its CI takes to register, and only past the grace does absence mean a repository without CI. If the base moved on, the branch is rebased and CI re-gated on the new head first.",
+      "holds": "The review converged and every check must be green before the merge. A head that reports no checks at all is not green: it is pending until DeployNoChecksGrace has elapsed, because a freshly pushed head (a freshness rebase, a deploy-fixer push) has none for the minute or two its CI takes to register, and only past the grace does absence mean a repository without CI. If the base moved on, the branch is rebased and CI re-gated on the new head first. The re-gate after a freshness rebase is bound to the commit the rebase PUBLISHED: while the forge still reports a different head on the pull request, there is no verdict to read — never passing, never failing — because the checks it would answer with belong to the tip that was just replaced (SC-5395). Past DeployHeadWaitTimeout the gate stops rather than reading them, and that stop is not a code failure, so it never dispatches a fixer.",
       "who_may_act": [
         "daemon"
       ],
@@ -352,7 +352,7 @@
         "daemon"
       ],
       "inherits": "done",
-      "note": "Rounds are separately bounded by DefaultDeployFixRounds (2); past that the escalation names the condition that is blocking rather than advising a retry that would hit the same wall."
+      "note": "Rounds are separately bounded by DefaultDeployFixRounds (2); past that the escalation names the condition that is blocking rather than advising a retry that would hit the same wall. Its agent is board-<key>-deployfix and the 15-minute grace applies to it: the deploy engine's own 60-minute clock does not cover a running fixer, because DeployBranch unregisters its run (deployRunFinished) as soon as it dispatches one. What spares a working fixer is the liveness join, not the grace."
     },
     {
       "name": "merged",
@@ -943,7 +943,7 @@
       "required_fields": [
         "pr"
       ],
-      "doc": "If the base moved on, the branch is rebased and CI re-gated on the new head before merging. Past the merge, branch cleanup and closing the ticket are best-effort and never fail the item. A branch already merged into the base is the same outcome reached without a PR at all: the engine records it and stops, which is why the merge is reachable directly from deploying.",
+      "doc": "If the base moved on, the branch is rebased and CI re-gated on the new head before merging. Past the merge, branch cleanup and closing the ticket are best-effort and never fail the item. A branch already merged into the base is the same outcome reached without a PR at all: the engine records it and stops, which is why the merge is reachable directly from deploying. A merge the forge refuses because the head is out of date (409) is not a failure: it means the base moved under the gate, usually a sibling deploy landing seconds earlier. The forge's own lag clears inside the merge-retry window; a refusal that outlives it re-runs the freshness stage, re-gates CI on the head it publishes and merges, bounded by DeployMergeReintegrations.",
       "where": "internal/daemon/board_transition.go DeployBranch — one engine, entered from the board and from `human deploy` (cmd/cmddeploy/deploy.go RunDeploy)"
     },
     {
@@ -1279,7 +1279,9 @@
       "DeployNoChecksGrace": "3m — how long a pull request head may report NO checks before the gate reads the absence as a repository without CI and proceeds (internal/daemon/board_transition.go deployNoChecksGrace). Below it, absence is pending: the rebased candidate of SC-5083's campaign merged three seconds ahead of its own checks because absence used to read as green (F19).",
       "deploy-card grace (stuckGraceFor, not a named constant)": "60m = deployTimeout (45m) + StuckRunningGrace (15m) — how long a card recorded as deploying is left alone before the stuck-running sweep judges it (stuckPastGrace, internal/daemon/board_reconcile.go). The deploy registers no agent for the sweep to probe, so the evidence is the engine's own clock where this machine is running it (its dequeue past deployGate, or the last time the queue moved while it waits), and the marker clock everywhere else.",
       "FailedRecoveryGrace": "5m — how long a failed stage is left to the live exit path before the durable pass may relaunch it (internal/daemon/board_reconcile_failed.go)",
-      "FailedRecoveryBound": "6h — how long after its failure a stage may still be relaunched by the durable pass; past it the card is a person's, with the attempts on record"
+      "FailedRecoveryBound": "6h — how long after its failure a stage may still be relaunched by the durable pass; past it the card is a person's, with the attempts on record",
+      "DeployHeadWaitTimeout": "5m — how long the deploy waits for the forge's pull-request resource to report the head the freshness rebase published, before the gate stops instead of reading the replaced tip's verdict (internal/daemon/board_transition.go)",
+      "DeployMergeReintegrations": "2 — how often a merge refused for an out-of-date head re-runs the freshness stage and re-gates before the card reds (internal/daemon/board_transition.go)"
     }
   },
   "stage_defaults": {
@@ -1298,7 +1300,7 @@
         "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:review-failed] and relaunches in place. TWO budgets bound that, and which one is spent depends on how the stage died. A vanished agent is an unexplained death and is charged: DefaultStageRetries (2). An agent this pass judged hung and stopped itself is NOT charged — the work did not fail, a judgement about it did — but repetition is bounded separately by MaxSilenceReaps (3), past which the machine stops relaunching and says a person is needed."
       },
       "done": {
-        "stale_when": "Past StuckRunningGrace (15 minutes) with no agent for (key, done) alive on the machine that owns the stage — or one alive but recording no new phase, which the reconcile pass judges hung and stops before redding. Both halves apply to every stage: reconcileOneStuckCard branches on neither. recordedDeath's shortcut (SC-5327) is inert for every state that inherits this rule: it looks up agentNameFor(key, done) = board-<key>-done, but runDoneStage never launches an agent under that name — openDraftPRAndReview launches board-<key>-prreview instead, and deploying/ci-gate run no board agent at all — so a vanished agent in this state always waits the full grace regardless of what stoppedBoardAgents reports.",
+        "stale_when": "Past StuckRunningGrace (15 minutes) with NONE of the done stage's agents alive on the machine that owns the stage — or one alive but recording no new phase, which the reconcile pass judges hung and stops before redding. Both halves apply to every stage: reconcileOneStuckCard branches on neither. The done stage is the one stage whose agent name is not derivable from the stage: three agents run under it — board-<key>-prreview (openDraftPRAndReview and each review round), board-<key>-prfix (each fix round) and board-<key>-deployfix (the deploy fixer) — and deploying/ci-gate run no board agent at all. All three are asked (stageAgentNames, internal/daemon/board_stageagents.go), and any one of them alive spares the card; the progress probe is then handed the name that is actually alive. Composing board-<key>-done instead asked about an agent nothing launches, so every deploy fixer that outlived the grace was redded and charged a retry while its container worked (SC-5396). recordedDeath's shortcut (SC-5327) reads the same three names, so a done-stage agent recorded as stopped after the stage was entered is judged on the next tick like any other stage's — EXCEPT while deployEngineActive reports this machine's DeployBranch currently running for the card: the PR loop's merge action and the deploy fixer's post-fix retry both call DeployBranch synchronously with no started marker posted first, so the newest started marker still names the PREVIOUS sub-agent, whose normal, successful exit would otherwise be misread as this window's death and bypass the CI-gate grace above (SC-5396).",
         "if_nothing_happens": "The durable reconcile pass (every ~2 minutes) posts [human:deploy-failed] and relaunches in place. TWO budgets bound that, and which one is spent depends on how the stage died. A vanished agent is an unexplained death and is charged: DefaultStageRetries (2). An agent this pass judged hung and stopped itself is NOT charged — the work did not fail, a judgement about it did — but repetition is bounded separately by MaxSilenceReaps (3), past which the machine stops relaunching and says a person is needed."
       },
       "pr-loop": {
