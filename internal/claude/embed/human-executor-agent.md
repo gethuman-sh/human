@@ -43,6 +43,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
    - `**Engineering ticket**: <ENG_KEY>` — present only in split topology
    Record what exists. Get the canonical commit-subject prefix with `human commits prefix <PM_KEY> [<ENG_KEY>]` (pass the engineering key only when one exists; it prints e.g. `[<PM_KEY>] [<ENG_KEY>]`) and start every commit subject with it — that preserves the PM → engineering → commit trail. If the plan came from a `[human:plan]` comment without header lines, the key you were given IS the PM key. If no PM key can be determined, stop and ask the user before making commits.
 3. **Parse** the plan's changes section into ordered tasks
+3a. **Ask what past reviews found** for the files the plan changes: `human review findings <path> … --key <PM_KEY>`. The plan's `## Prior Review Findings` section may already list them; run it anyway for files the plan named only in passing.
 4. **Execute** each task sequentially:
    - Read the target file before modifying it
    - Make the change described in the plan
@@ -63,9 +64,10 @@ human <TRACKER> issue comment list <TICKET_KEY>
    ```
 6. **Hand off for review.** If the human-done verdict is pass, post the structured handoff comment on the **PM ticket** so a separate reviewer (today: another `human` user runs `/human-pickup-review`; later: the daemon polls for it) can pick the work up:
    ```bash
-   human handoff post <PM_KEY> --branch <feature-branch> --engineering <ENG_KEY>
+   human handoff post <PM_KEY> --branch <feature-branch> --engineering <ENG_KEY> --notes "<prior-findings lines>"
    ```
    - Always pass `--branch` explicitly with the branch you committed on — commit derivation anchors at that branch, so the command works no matter which ref the workspace happens to have checked out.
+   - `--notes` carries one `prior-finding:` line per file you touched that the record had something to say about, or the single line `prior-findings: none recorded for the files touched`. Never the recorded finding text itself.
    - Single-tracker topology (no engineering ticket): omit `--engineering` entirely — the reviewer works from the PM key the comment sits on.
    - If multiple engineering tickets were executed in this run, pass them all: `--engineering <K1>,<K2>` (the command unions their commit SHAs).
    - **Board context** (the dispatch prompt contains "BOARD CONTEXT"): do NOT push — the container holds no push credentials and the daemon's Deploy stage ships the local branch. A local-only branch is a VALID handoff: the reachability check accepts local refs. Post the handoff and stop; never end the run asking whether to push — there is no user, and an unanswered question fails the stage.
@@ -84,7 +86,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
       ```bash
       human handoff post <PM_KEY> --notes "Open items: <one line each — what is unfinished or needs a human eye>"
       ```
-      (Single-tracker topology: omit `--engineering`. `--notes` is optional; omit it when nothing is open.) `human handoff post` refuses to post if nothing is committed, so commit first. This is the correct end state even when the plan is only partially done — commit the partial work and note the gaps rather than asking.
+      (Single-tracker topology: omit `--engineering`. `--notes` always carries the prior-findings line from step 6, and additionally lists the open items when there are any.) `human handoff post` refuses to post if nothing is committed, so commit first. This is the correct end state even when the plan is only partially done — commit the partial work and note the gaps rather than asking.
 
    b. **Options block — only for a genuine human fork.** If continuing genuinely requires a human choice between distinct directions (not "may I proceed?", but "build path X or remove feature Y?"), stop cleanly and post a machine-readable decision block the board renders as clickable options:
       ```bash
@@ -149,6 +151,8 @@ human state get  <PM_KEY> budget.implementation.attempts --default 0
 ```
 
 Infrastructure trouble is never a real attempt — it is a `retryable` ending, not a spent budget.
+
+<!-- human:include prior-findings -->
 
 <!-- human:include dependents -->
 

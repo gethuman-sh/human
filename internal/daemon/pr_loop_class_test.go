@@ -114,3 +114,15 @@ func TestAdvancePRLoop_newClassSameFileDispatchesFixerWithClass(t *testing.T) {
 	assert.Contains(t, started, "class: internal/daemon/x.go — tests")
 	assert.Equal(t, 1, l.calls)
 }
+
+// The reader of the findings record must normalize a path exactly as the
+// writer did, or a query on a capitalised path — or on `file.go:42` — matches
+// nothing and answers "no prior findings" forever (SC-5398).
+func TestNormalizeFindingFile_matchesTheWriter(t *testing.T) {
+	got := ParseFindings("BLOCKING Internal/Daemon/Foo.go:42 — slug — [tests] x")
+	require.Len(t, got, 1)
+	assert.Equal(t, "internal/daemon/foo.go", got[0].File)
+	assert.Equal(t, got[0].File, NormalizeFindingFile("Internal/Daemon/Foo.go"))
+	assert.Equal(t, got[0].File, NormalizeFindingFile("internal/daemon/foo.go:42"))
+	assert.Equal(t, got[0].File, NormalizeFindingFile("  Internal/Daemon/Foo.go  "))
+}

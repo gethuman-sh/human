@@ -54,6 +54,14 @@ var outcomeNotMechanismFragment []byte
 //go:embed embed/shared/dependents.md
 var dependentsFragment []byte
 
+// The three stages that change code must ask the findings record the same
+// question in the same words, so the question is one fragment rather than three
+// paraphrases. A per-prompt copy is what SC-2404 cost: a rule fixed on one
+// agent and left to drift on its siblings, with nothing failing when it did.
+//
+//go:embed embed/shared/prior-findings.md
+var priorFindingsFragment []byte
+
 // The machine an agent runs inside was written down and invisible to it: no
 // prompt mentioned it, so every agent decided what to post, and whether it was
 // stuck, from its own prompt alone. This fragment is the half of `human fsm`
@@ -80,6 +88,7 @@ var sharedFragments = map[string][]byte{
 	"build-gate":            buildGateFragment,
 	"outcome-not-mechanism": outcomeNotMechanismFragment,
 	"dependents":            dependentsFragment,
+	"prior-findings":        priorFindingsFragment,
 	"fsm":                   fsmFragment,
 }
 

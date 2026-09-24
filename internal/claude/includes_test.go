@@ -2,6 +2,8 @@ package claude
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -127,4 +129,29 @@ func TestExpandIncludes_ExitContractListsEveryBlockerKind(t *testing.T) {
 	for _, kind := range marker.BlockerKinds() {
 		require.Contains(t, s, "`"+kind+"`", "exit-contract.md is missing the blocker kind %q", kind)
 	}
+}
+
+// The prior-findings rule is one fragment carried by the three code-changing
+// stages, so its load-bearing clauses are asserted here on the single source
+// rather than re-checked per agent — the family registry guarantees the reach
+// (SC-5398).
+func TestPriorFindingsFragmentCarriesTheRule(t *testing.T) {
+	out, err := expandIncludes([]byte("<!-- human:include prior-findings -->\n"))
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s, "human review findings", "the fragment must name the command to run")
+	require.Contains(t, s, "--key", "without the key the answer reads the wrong project")
+	require.Contains(t, s, "prior-finding:", "the line the stage's artifact must carry")
+	require.Contains(t, s, "none recorded for the files touched", "the empty answer is still an answer")
+	require.Contains(t, s, "Never quote the recorded finding text",
+		"the commit log is public; a finding can describe a reachable defect")
+	require.Contains(t, s, "no gate reads it", "the record advises and gates nothing")
+}
+
+// The planner's output format must have somewhere to put what it consulted, or
+// the instruction to consult has no artifact and cannot be audited.
+func TestPlannerPlanFormatHasPriorFindingsSection(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("embed", "human-planner-agent.md"))
+	require.NoError(t, err)
+	require.Contains(t, string(body), "## Prior Review Findings")
 }

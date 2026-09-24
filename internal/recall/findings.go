@@ -3,6 +3,7 @@ package recall
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
@@ -44,6 +45,18 @@ type FindingsRecorder interface {
 	// SetFindingDisposition attaches the fixer's exit and note to every
 	// finding of the round it answered.
 	SetFindingDisposition(ctx context.Context, project, key string, pr, round int, disposition, note string) error
+}
+
+// FindingsReader is the read side of the findings record. It is a separate
+// interface from FindingsRecorder and from Store for the same reason those are
+// separate: a caller that only asks questions should not be able to write, and
+// the search index's fakes stay untouched by either.
+type FindingsReader interface {
+	// FindingsForFiles returns the findings recorded against any of files,
+	// newest first. Each element of files must already be normalized the way
+	// the record holds it (daemon.NormalizeFindingFile); this store matches
+	// strings and does not know the reviewer's anchor format.
+	FindingsForFiles(ctx context.Context, project string, files []string, limit int) ([]ReviewFinding, error)
 }
 
 const reviewFindingsCreate = `
@@ -137,6 +150,61 @@ func (s *SQLiteStore) FindingsForKey(ctx context.Context, project, key string) (
 		return nil, errors.WrapWithDetails(err, "read review findings", "key", key)
 	}
 	defer func() { _ = rows.Close() }()
+	return scanReviewFindings(rows)
+}
+
+// FindingsForFiles implements FindingsReader.
+//
+// A row's `file` is whatever the reviewer anchored on: usually repo-relative,
+// occasionally absolute. The exact match answers the first (and is what
+// idx_review_findings_file serves); the `/`-anchored suffix answers the second
+// without matching `xfoo.go` when asked about `foo.go`.
+func (s *SQLiteStore) FindingsForFiles(ctx context.Context, project string, files []string, limit int) ([]ReviewFinding, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	clauses := make([]string, 0, len(files))
+	args := []any{project}
+	for _, f := range files {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		clauses = append(clauses, `(file = ? OR file LIKE ? ESCAPE '\')`)
+		args = append(args, f, "%/"+escapeLike(f))
+	}
+	if len(clauses) == 0 {
+		return nil, nil
+	}
+	args = append(args, limit)
+	// #nosec G202 -- every clause is the same literal built above; the paths are bound
+	query := `
+		SELECT project, key, pr, round, head, file, slug, class, text, disposition, note, recorded_at
+		FROM review_findings
+		WHERE project = ? AND (` + strings.Join(clauses, " OR ") + `)
+		ORDER BY recorded_at DESC, id DESC
+		LIMIT ?`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "read review findings by file", "files", strings.Join(files, ","))
+	}
+	defer func() { _ = rows.Close() }()
+	return scanReviewFindings(rows)
+}
+
+// escapeLike neutralises the LIKE metacharacters in a path so a literal `_`
+// (common in Go filenames) cannot match an arbitrary character.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
+// scanReviewFindings reads the twelve-column projection both finding queries
+// select, so the two cannot disagree about column order.
+func scanReviewFindings(rows *sql.Rows) ([]ReviewFinding, error) {
 	var out []ReviewFinding
 	for rows.Next() {
 		var f ReviewFinding
