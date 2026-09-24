@@ -142,3 +142,38 @@ func TestDoneStageBranch_ARepostedHandoffDoesNotRevertTheDeploysBranch(t *testin
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	assert.Equal(t, "autofix/override", doneStageBranch(comments, card))
 }
+
+// An ordinary rework round must still outrank a stale PR-loop start marker
+// from a round the ticket has already moved past, even though the review that
+// judges the rework names EXACTLY the handoff's commits — which every current
+// prompt does on a pass. handoffNamesUnjudgedCommit alone cannot tell this
+// apart from a bookkeeping repost, because both end with a handoff naming
+// what the verdict judged; only handoff-precedes-verdict order does
+// (SC-5475 follow-up — this thread regressed doneStageBranch to "feat/a").
+func TestDoneStageBranch_AReworkHandoffJudgedByATimelyVerdictStillOutranksAStaleStartMarker(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(PRReviewStartedHeader+"\npr: u\nnumber: 7\nbranch: feat/a", time.Unix(1, 0)),
+		cmt(ImplementationStartedHeader, time.Unix(2, 0)),
+		cmt(ReadyForReviewHeader+"\nbranch: feat/b\ncommits: def456", time.Unix(3, 0)),
+		cmt(ReviewStartedHeader, time.Unix(4, 0)),
+		cmt(ReviewCompleteHeader+"\nverdict: pass\ncommits: def456", time.Unix(5, 0)),
+	}
+
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, "feat/b", doneStageBranch(comments, card))
+}
+
+// The currentApproval mirror of the test above: a rework round's handoff,
+// judged by a verdict posted after it and naming exactly its commits, must
+// still void a stale approval from the round the ticket has moved past.
+func TestCurrentApproval_AReworkHandoffJudgedByATimelyVerdictStillVoidsAStaleApproval(t *testing.T) {
+	const head = "df4beda7f8cf2371c60ecb892b7864247740e1ff"
+	comments := []tracker.Comment{
+		cmt(PRReviewPassedHeader+"\nbranch: feat/a\nhead: "+head, time.Unix(1, 0)),
+		cmt(ReadyForReviewHeader+"\nbranch: feat/b\ncommits: def456", time.Unix(2, 0)),
+		cmt(ReviewCompleteHeader+"\nverdict: pass\ncommits: def456", time.Unix(3, 0)),
+	}
+
+	_, ok := currentApproval(comments, "feat/a")
+	assert.False(t, ok)
+}

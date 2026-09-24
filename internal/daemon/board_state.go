@@ -454,6 +454,35 @@ func handoffNamesUnjudgedCommit(comments []tracker.Comment) bool {
 	return false
 }
 
+// handoffIsBookkeepingRepost reports whether the ticket's newest handoff is a
+// repost that only records what a verdict has already judged, rather than a
+// new round: the handoff must be POSTED AFTER the newest [human:review-complete]
+// verdict — not merely name commits that verdict happens to match.
+//
+// Ordinary rework posts the handoff BEFORE the verdict that judges it (the
+// commits matching is the whole point of a passing review), and
+// handoffNamesUnjudgedCommit alone cannot tell that case apart from a genuine
+// late repost, because both end up with a handoff naming exactly what the
+// verdict judged. Recency of handoff-over-verdict is the missing half — a
+// repost is written to record a commit a review has ALREADY passed, so it can
+// only exist after that verdict; a rework's handoff necessarily precedes the
+// verdict it results in. Without this, a fresh rework round handed off and
+// re-reviewed (verdict now names exactly the handoff's commits, as every
+// current prompt does) was misread as a repost and a stale PR-loop marker
+// from a round the ticket had already moved past kept winning the branch
+// (SC-5475 follow-up).
+func handoffIsBookkeepingRepost(comments []tracker.Comment) bool {
+	handoff, ok := latestCommentWithHeader(comments, ReadyForReviewHeader)
+	if !ok {
+		return false
+	}
+	verdict, ok := latestCommentWithHeader(comments, ReviewCompleteHeader)
+	if !ok || !commentNewer(handoff, verdict) {
+		return false
+	}
+	return !handoffNamesUnjudgedCommit(comments)
+}
+
 // commitJudged matches short SHAs against full ones in either direction: the
 // handoff writes eight characters and a verdict may quote forty, and reading
 // those as different commits would re-open exactly the bug this closes.

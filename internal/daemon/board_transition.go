@@ -1361,12 +1361,15 @@ func deployFixLoopURL(comments []tracker.Comment) string {
 // identical case for the approval marker (deploy_entry.go:265-280); a binding
 // older than the newest [human:ready-for-review] handoff is ignored the same
 // way here, before source precedence is applied (SC-5396) — but only when
-// that handoff IS a later round. One re-posted to record the reviewer's own
-// commit names nothing the verdict did not judge, and letting it win reverts
-// a live deploy to the branch implementation handed over (SC-5475).
+// that handoff IS a later round. One re-posted AFTER a verdict, to record the
+// reviewer's own commit, names nothing that verdict did not judge, and
+// letting it win reverts a live deploy to the branch implementation handed
+// over (SC-5475) — handoffIsBookkeepingRepost is what tells that repost apart
+// from an ordinary rework's handoff, which precedes the verdict it results in
+// and so must still win.
 func doneStageBranch(comments []tracker.Comment, card BoardCard) string {
 	handoff, hasHandoff := latestCommentWithHeader(comments, ReadyForReviewHeader)
-	newRound := hasHandoff && handoffNamesUnjudgedCommit(comments)
+	newRound := hasHandoff && !handoffIsBookkeepingRepost(comments)
 	for _, header := range []string{PRReviewStartedHeader, DeployFixStartedHeader, DeployStartedHeader} {
 		c, ok := latestCommentWithHeader(comments, header)
 		if !ok || (newRound && commentNewer(handoff, c)) {
