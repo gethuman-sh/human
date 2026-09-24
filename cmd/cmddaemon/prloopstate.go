@@ -202,6 +202,28 @@ func recordReviewRound(ctx context.Context, rec recall.FindingsRecorder, project
 	}
 }
 
+// fixDispositionIsFresh reports whether a fixer's report just read may be
+// attributed to the newest review round in comments.
+//
+// exitFresh alone is not enough: it says only that the record postdates the
+// fixer's OWN most recent pr-fix-started marker, which stays true of a PRIOR
+// round's still-present report on every LATER review exit — until a new
+// fixer's write overwrites it. On the review exit of round N>=2 the newest
+// pr-fix-started marker is still round N-1's, so round N-1's report reads as
+// recorded+fresh while the round being recorded is N. Writing under exitFresh
+// alone therefore attributes round N-1's exit to round N's findings — wrong
+// every time the loop terminates on round N without a round-N fixer ever
+// running (the class-repeat/identity-repeat escalations and the round cap).
+//
+// The additional guard mirrors the one AdvancePRLoop already trusts the fix
+// report under (board_transition.go: `latestPRLoopStage(comments) ==
+// PRStageReview`/`PRStageFix`): a disposition is only this round's when the
+// fix step is actually the newest loop step, i.e. a fixer ran since the last
+// review started (SC-5278).
+func fixDispositionIsFresh(comments []tracker.Comment, exitRecorded, exitFresh bool) bool {
+	return exitRecorded && exitFresh && daemon.LatestPRLoopStage(comments) == daemon.PRStageFix
+}
+
 // recordFixDisposition attaches the fixer's exit and its one-line account to
 // the findings of the round it answered — the round whose review dispatched it,
 // which is the newest review round in the thread.

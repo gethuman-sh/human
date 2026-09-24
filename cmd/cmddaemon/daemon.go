@@ -3613,7 +3613,10 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 		if verdictRecorded && verdictFresh {
 			recordReviewRound(ctx, findingsRecord, project, pmKey, comments, findings, reviewHead, logger)
 		}
-		if exitRecorded && exitFresh {
+		// See fixDispositionIsFresh: exitFresh alone is not enough on a
+		// review exit, where the newest pr-fix-started marker is the
+		// PREVIOUS round's (SC-5278).
+		if fixDispositionIsFresh(comments, exitRecorded, exitFresh) {
 			recordFixDisposition(ctx, findingsRecord, project, pmKey, comments, exit, summary, logger)
 		}
 		parsed := daemon.ParseFindings(findings)

@@ -1231,7 +1231,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	// so comparing it here would always read true and falsely blame a
 	// fix-stage escalation (a crashed fixer, an unclassifiable exit) on a
 	// repeated finding it never re-reviewed (SC-5174).
-	if latestPRLoopStage(comments) == PRStageReview {
+	if LatestPRLoopStage(comments) == PRStageReview {
 		byIdentity := findingRepeated(comments, outcome.ReviewFinding)
 		byClass := classRepeated(comments, outcome.ReviewClass)
 		outcome.FindingRepeated = byIdentity || byClass
@@ -1286,7 +1286,7 @@ func (d BoardTransitionDeps) loopStepStillRunning(pmKey string, comments []track
 	if d.LoopStepAlive == nil || outcome.Agent != "" {
 		return false
 	}
-	stage := latestPRLoopStage(comments)
+	stage := LatestPRLoopStage(comments)
 	// A record from a PRIOR round still satisfies stepRecorded — those keys are
 	// never cleared between rounds — so a recorded-but-stale outcome must be
 	// treated as unrecorded here too, or every round after the first skips the
@@ -1338,7 +1338,7 @@ func (d BoardTransitionDeps) escalatePRLoop(ctx context.Context, pmKey string, c
 	if _, latest := latestStateInStage(comments, BoardDoneStage); strings.HasPrefix(strings.TrimSpace(latest.Body), PRReviewFailedHeader) {
 		return nil
 	}
-	stage := latestPRLoopStage(comments)
+	stage := LatestPRLoopStage(comments)
 	if stage == PRStageFix && outcome.FixExit != PRFixDone {
 		switch opts := outcome.FixOptions; {
 		case len(opts) >= marker.MinDecisionOptions:

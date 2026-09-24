@@ -116,13 +116,13 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int, repe
 	}
 }
 
-// latestPRLoopStage reports which loop step most recently started — and so just
+// LatestPRLoopStage reports which loop step most recently started — and so just
 // finished, when its agent's Stop fires the evaluation. It scans the comment
 // thread for the newest pr-review-started / pr-fix-started marker; PRStageNone
 // means the loop has not run yet (the draft PR is freshly opened). Deploy-stage
 // markers that share the done stage are ignored: only the loop's own markers
 // move the loop.
-func latestPRLoopStage(comments []tracker.Comment) PRLoopStage {
+func LatestPRLoopStage(comments []tracker.Comment) PRLoopStage {
 	stage := PRStageNone
 	var latest tracker.Comment
 	found := false
@@ -521,7 +521,7 @@ func (o PRLoopOutcome) stepStale(stage PRLoopStage) bool {
 // non-convergence and still escalates rather than re-reviewing forever
 // (SC-1760).
 func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAction {
-	stage := latestPRLoopStage(comments)
+	stage := LatestPRLoopStage(comments)
 	if outcome.stepStale(stage) {
 		return PRActionEscalate
 	}
