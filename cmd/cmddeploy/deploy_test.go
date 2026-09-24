@@ -115,8 +115,8 @@ func (s *stubDeployer) FreshenBranch(context.Context, daemon.PRRequest) (daemon.
 	return daemon.FreshnessCurrent, nil
 }
 
-func (s *stubDeployer) EnsureMergeable(context.Context, daemon.PRRequest) (bool, error) {
-	return false, nil
+func (s *stubDeployer) EnsureMergeable(context.Context, daemon.PRRequest) (string, error) {
+	return "", nil
 }
 func (s *stubDeployer) PullRequestMergeable(context.Context, string, int) (bool, error) {
 	return true, nil

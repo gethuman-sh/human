@@ -102,9 +102,28 @@ type fakeDeployer struct {
 	// ensured counts EnsureMergeable calls so a test can assert the freshness
 	// stage ran exactly once before the merge.
 	ensured int
-	// rebased is EnsureMergeable's report that it rewrote and re-pushed the
-	// branch — the deploy must then wait out the forge's mergeability recompute.
-	rebased bool
+	// head is the tip EnsureMergeable reports it published; "" means the branch
+	// was already current and nothing moved. secondHead, when set, is what a
+	// SECOND EnsureMergeable publishes — a base that advanced under the gate.
+	head, secondHead string
+	// preHead is the tip the PR carried before the rebase, and forgeHeadLag is
+	// how many head reads the forge's PR resource keeps reporting it after the
+	// publish — the lag that let the gate read the replaced tip's green checks.
+	preHead      string
+	forgeHeadLag int
+	headReads    int
+	// lastReportedHead is the head reportedHead() last returned, so
+	// PullRequestChecks and MergePullRequest can tell whether the forge is still
+	// answering about the replaced tip.
+	lastReportedHead string
+	// checksReadAtStaleHead counts check reads taken while the forge was still
+	// reporting preHead after a publish: the defect, counted.
+	checksReadAtStaleHead int
+	// refuseMergeUntilEnsured / mergeRefusalUntilHeadCurrent model the 409:
+	// the forge refuses while the head it serves is not the published one, or
+	// until the deploy has re-integrated this many times.
+	refuseMergeUntilEnsured      int
+	mergeRefusalUntilHeadCurrent error
 	// mergeUntil models GitHub's 405 on a stale branch: MergePullRequest fails
 	// with a merge-conflict error until EnsureMergeable has run, then succeeds.
 	mergeUntil bool
@@ -153,11 +172,44 @@ type fakeDeployer struct {
 	prStateErr error
 }
 
+// publishedHead returns the tip the most recent EnsureMergeable published:
+// secondHead once a second call has happened (if set), else head.
+func (f *fakeDeployer) publishedHead() string {
+	if f.ensured >= 2 && f.secondHead != "" {
+		return f.secondHead
+	}
+	return f.head
+}
+
+// reportedHead models the forge's pull-request resource lagging a publish:
+// it keeps answering preHead for forgeHeadLag reads after a publish, then
+// catches up to the published head.
+func (f *fakeDeployer) reportedHead() string {
+	f.headReads++
+	if f.ensured > 0 && f.headReads <= f.forgeHeadLag {
+		f.lastReportedHead = f.preHead
+		return f.preHead
+	}
+	head := f.publishedHead()
+	if head == "" {
+		head = f.preHead
+	}
+	f.lastReportedHead = head
+	return head
+}
+
 func (f *fakeDeployer) ReadPullRequest(_ context.Context, _ string, _ int) (*forge.PullRequestState, error) {
 	if f.prStateErr != nil {
 		return nil, f.prStateErr
 	}
-	return f.prState, nil
+	if f.prState == nil {
+		return &forge.PullRequestState{Number: f.res.Number, HeadSHA: f.reportedHead()}, nil
+	}
+	state := *f.prState
+	if state.HeadSHA == "" {
+		state.HeadSHA = f.reportedHead()
+	}
+	return &state, nil
 }
 
 func (f *fakeDeployer) PublishResolvedBranch(_ context.Context, _, branch string) (bool, error) {
@@ -188,6 +240,12 @@ func (f *fakeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (fo
 	if f.checksErr != nil {
 		return "", f.checksErr
 	}
+	// A check read taken while the forge's PR resource is still answering about
+	// the pre-rebase head is the defect being regression-tested: it must never
+	// happen once the gate waits for the published head first (SC-5395).
+	if f.ensured > 0 && f.preHead != "" && f.lastReportedHead == f.preHead {
+		f.checksReadAtStaleHead++
+	}
 	i := f.checkCall
 	if i >= len(f.checks) {
 		i = len(f.checks) - 1
@@ -207,9 +265,9 @@ func (f *fakeDeployer) FreshenBranch(_ context.Context, _ PRRequest) (BranchFres
 	return f.freshness, f.freshenErr
 }
 
-func (f *fakeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (bool, error) {
+func (f *fakeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (string, error) {
 	f.ensured++
-	return f.rebased, f.ensureErr
+	return f.publishedHead(), f.ensureErr
 }
 
 func (f *fakeDeployer) PullRequestMergeable(_ context.Context, _ string, _ int) (bool, error) {
@@ -239,6 +297,15 @@ func (f *fakeDeployer) MergePullRequest(_ context.Context, _ string, _ int) erro
 	// for a beat after the re-push, then accepts the merge.
 	if f.merged <= f.mergeTransientUntil {
 		return errors.New(`405 Pull Request is not mergeable`)
+	}
+	// Models a 409 "head is out of date": the forge refuses while the head it
+	// serves is not the one this deploy last published, or until the deploy has
+	// re-integrated the configured number of times (SC-5395).
+	if f.refuseMergeUntilEnsured > 0 && f.ensured < f.refuseMergeUntilEnsured {
+		return fakeForge409()
+	}
+	if f.mergeRefusalUntilHeadCurrent != nil && f.lastReportedHead != f.publishedHead() {
+		return f.mergeRefusalUntilHeadCurrent
 	}
 	return f.mergeErr
 }
@@ -1529,8 +1596,8 @@ func (f *gateProbeDeployer) FreshenBranch(_ context.Context, _ PRRequest) (Branc
 	return FreshnessCurrent, nil
 }
 
-func (f *gateProbeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (bool, error) {
-	return false, nil
+func (f *gateProbeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (string, error) {
+	return "", nil
 }
 
 func (f *gateProbeDeployer) PullRequestMergeable(_ context.Context, _ string, _ int) (bool, error) {
@@ -1595,8 +1662,8 @@ func TestApplyTransitionDeployWaitsOutMergeabilityRecompute(t *testing.T) {
 		cmt("[human:review-complete]", time.Unix(2, 0)),
 	}}
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/14", Number: 14},
-		checks:  []forge.ChecksState{forge.ChecksPassing},
-		rebased: true, mergeableAfter: 3}
+		checks: []forge.ChecksState{forge.ChecksPassing},
+		head:   "50358b7b", mergeableAfter: 3}
 	deps := newDeps(c, &fakeLauncher{}, p)
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
@@ -1620,8 +1687,8 @@ func TestApplyTransitionDeployRecomputeStaysUnmergeable(t *testing.T) {
 		cmt("[human:review-complete]", time.Unix(2, 0)),
 	}}
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/15", Number: 15},
-		checks:  []forge.ChecksState{forge.ChecksPassing},
-		rebased: true, mergeable: false}
+		checks: []forge.ChecksState{forge.ChecksPassing},
+		head:   "50358b7b", mergeable: false}
 	deps := newDeps(c, &fakeLauncher{}, p)
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
 	require.Error(t, err)
@@ -1664,7 +1731,7 @@ func TestApplyTransitionDeployReGatesCIAfterRebase(t *testing.T) {
 			forge.ChecksPassing,
 			forge.ChecksPending, forge.ChecksPending, forge.ChecksPassing,
 		},
-		rebased: true, mergeable: true, mergeBlockedUntilRegate: true}
+		head: "50358b7b", mergeable: true, mergeBlockedUntilRegate: true}
 	deps := newDeps(c, &fakeLauncher{}, p)
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", PMTitle: "My feature", From: BoardVerification, To: BoardDoneStage})
 	require.NoError(t, err)
@@ -2243,7 +2310,7 @@ func TestWaitForChecks_failingNamesChecks(t *testing.T) {
 		}},
 	}
 	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, p)
-	err := deps.waitForChecks(context.Background(), PRResult{Number: 21, URL: "https://example/pr/21"})
+	err := deps.waitForChecks(context.Background(), PRResult{Number: 21, URL: "https://example/pr/21"}, "")
 	require.Error(t, err)
 	names, _ := humanerrors.AllDetails(err)[deployFailingChecksDetail].(string)
 	assert.Equal(t, "build", names)
@@ -2261,7 +2328,7 @@ func TestWaitForChecks_failingReadErrorDegrades(t *testing.T) {
 		prStateErr: errors.New("read failed"),
 	}
 	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, p)
-	err := deps.waitForChecks(context.Background(), PRResult{Number: 21, URL: "https://example/pr/21"})
+	err := deps.waitForChecks(context.Background(), PRResult{Number: 21, URL: "https://example/pr/21"}, "")
 	require.Error(t, err)
 	assert.Equal(t,
 		"CI checks failed on the pull request — fix the failing checks, then re-run Deploy",
@@ -2369,7 +2436,7 @@ func TestDeployBranch_AwaitMergeableUnreadable_ReportsCredentialFailure(t *testi
 	c := &fakeCommenter{comments: deployFixReadyComments()}
 	p := &fakeDeployer{res: PRResult{URL: "https://example/pr/23", Number: 23},
 		checks:       []forge.ChecksState{forge.ChecksPassing},
-		rebased:      true,
+		head:         "50358b7b",
 		mergeableErr: errors.New("resolving 1Password secret via CLI: exit status 1")}
 	deps := newDeps(c, &fakeLauncher{}, p)
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})

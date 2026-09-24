@@ -3131,25 +3131,25 @@ func describeCommits(commits []gitrepo.Commit) string {
 // branch out under the user (SC-1000). A rebase error is a real conflict the
 // mechanical path cannot resolve — the deploy must fail loudly rather than
 // merge blind (735).
-func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) (bool, error) {
+func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest) (string, error) {
 	dir, branch := req.WorkspaceDir, req.Branch
 	base := gitrepo.DefaultBranch(ctx, dir)
 	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
-		return false, err
+		return "", err
 	}
 	originBase := "origin/" + base
 	tip, onOrigin, err := branchTip(ctx, dir, branch)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	// Already current: the branch contains the base tip, so its PR is mergeable
 	// without touching it.
 	if gitrepo.IsAncestor(ctx, dir, originBase, tip) {
-		return false, nil
+		return "", nil
 	}
 	wt, cleanup, err := addEphemeralWorktree(ctx, dir, tip)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	defer cleanup()
 	id, loadErr := botidentity.Load(dir)
@@ -3157,11 +3157,11 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 		id = botidentity.Identity{Name: botidentity.DefaultName, Email: botidentity.DefaultEmail}
 	}
 	if err := gitrepo.RebaseHead(ctx, wt, originBase, id.Name, id.Email); err != nil {
-		return false, err
+		return "", err
 	}
 	newTip, err := gitrepo.RevParse(ctx, wt, "HEAD")
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	// The worktree rebased a detached HEAD, so publishing is a refspec push of
 	// the worktree's HEAD — the branch itself is never checked out anywhere.
@@ -3171,20 +3171,52 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 		// Same never-publish-behind-origin invariant as pushBranch: refuse before
 		// the lease push if the rebased tip is strictly behind origin (SC-2322).
 		if err := refuseIfBehind(ctx, dir, branch, newTip); err != nil {
-			return false, err
+			return "", err
 		}
 		if err := gitrepo.PushHeadWithLease(ctx, wt, branch, tip); err != nil {
-			return false, err
+			return "", err
 		}
 	} else if err := gitrepo.PushHead(ctx, wt, branch); err != nil {
-		return false, err
+		return "", err
+	}
+	// The published tip is what the forge now serves, so this machine's copy of
+	// the branch must be it. The review loop's freshen reads the LOCAL ref
+	// first (localOrOriginTip), so a ref left at the replaced tip merges the
+	// base into work that no longer exists — a conflict the forge's branch does
+	// not have — and the next pushBranch force-pushes that over the published
+	// rebase, because the behind-guard catches a strict ancestor and a rebased
+	// history is diverged, not behind (SC-5395).
+	if err := adoptPublishedTip(ctx, dir, branch, newTip); err != nil {
+		return newTip, err
 	}
 	// A clean rebase that still does not contain the base tip means the branch
 	// could not be made mergeable — surface it rather than merge into a conflict.
 	if !gitrepo.IsAncestor(ctx, dir, originBase, newTip) {
-		return true, errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
+		return newTip, errors.WithDetails("branch still not mergeable after rebase", "branch", branch, "base", base)
 	}
-	return true, nil
+	return newTip, nil
+}
+
+// adoptPublishedTip moves refs/heads/<branch> to the tip just published, with
+// the same compare-and-swap FreshenBranch uses: the ref is read immediately
+// before the update, so a writer that moves it in between is refused rather
+// than clobbered — and a ref left lagging by an earlier run is healed, which a
+// swap against the pre-rebase ORIGIN tip could never do. A refused swap means
+// another step owns the branch right now and its commits are not in what was
+// published, so it is reported rather than swallowed.
+func adoptPublishedTip(ctx context.Context, dir, branch, newTip string) error {
+	expected := ""
+	if gitrepo.BranchExistsLocal(ctx, dir, branch) {
+		local, err := gitrepo.RevParse(ctx, dir, branch)
+		if err != nil {
+			return err
+		}
+		if local == newTip {
+			return nil
+		}
+		expected = local
+	}
+	return gitrepo.UpdateBranchRef(ctx, dir, branch, newTip, expected)
 }
 
 // FreshenBranch merges an advanced base into the LOCAL branch ref before a
@@ -3452,11 +3484,11 @@ func (p forgeDeployer) PublishResolvedBranch(ctx context.Context, dir, branch st
 }
 
 // branchTip resolves the commit the freshness rebase starts from, preferring
-// the origin ref: the deploy serves the PR (which lives on origin), and the
-// local ref may lag a prior deploy's rebase — the ephemeral-worktree rebase
-// publishes to origin without rewriting local branches. The origin ref is
-// fetched first so the recorded tip is the actual remote state, not a stale
-// tracking ref.
+// the origin ref: origin is what the forge will merge, and this is the source
+// of truth the rebase must build on. The origin ref is fetched first so the
+// recorded tip is the actual remote state, not a stale tracking ref. Since
+// SC-5395 the local ref is moved to match after every publish (adoptPublishedTip),
+// so it no longer lags a prior deploy's rebase the way it once did.
 func branchTip(ctx context.Context, dir, branch string) (sha string, onOrigin bool, err error) {
 	if gitrepo.BranchExistsRemote(ctx, dir, branch) {
 		if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
