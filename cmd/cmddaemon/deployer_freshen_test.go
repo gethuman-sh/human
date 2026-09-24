@@ -30,6 +30,12 @@ type freshenGitStubs struct {
 	// not know it exists.
 	fastTierFails bool
 	fastTierErr   error
+
+	// fastTierPreMergeAlsoFails stubs the attribution rerun that only happens
+	// when the post-merge tier is red: fastTierRunner called a second time
+	// against the branch tip alone, unmerged. Defaults false — the common
+	// case is a genuine merge-caused break, where the branch alone is clean.
+	fastTierPreMergeAlsoFails bool
 }
 
 func (s *freshenGitStubs) install() {
@@ -43,12 +49,18 @@ func (s *freshenGitStubs) install() {
 		gitrepo.MergeIntoHead, gitrepo.UpdateBranchRef = prevMerge, prevUpdate
 		fastTierRunner = prevFastTier
 	})
+	fastTierCalls := 0
 	fastTierRunner = func(_ context.Context, _ string) (bool, error) {
 		s.calls = append(s.calls, "fast-tier")
+		fastTierCalls++
 		if s.fastTierErr != nil {
 			return false, s.fastTierErr
 		}
-		return !s.fastTierFails, nil
+		if fastTierCalls == 1 {
+			return !s.fastTierFails, nil
+		}
+		// The attribution rerun against the unmerged branch tip.
+		return !s.fastTierPreMergeAlsoFails, nil
 	}
 	gitrepo.DefaultBranch = func(_ context.Context, _ string) string { return "main" }
 	gitrepo.Fetch = func(_ context.Context, _, branch string) error {
@@ -172,6 +184,36 @@ func TestFreshenBranch_fastTierFailureLeavesRefUntouched(t *testing.T) {
 	}
 	if !s.saw("worktree-remove") {
 		t.Fatalf("the ephemeral worktree must still be removed: %v", s.calls)
+	}
+}
+
+// A fast tier that is equally red without the base merged in — the ephemeral
+// worktree carries tracked files only, so a Node/Python project missing its
+// installed node_modules/venv fails there regardless of the merge — is not
+// attributable to the merge: reporting it as FreshnessTestsFailed would spend
+// the deploy-fix budget on a checkout no fixer can repair. It surfaces as an
+// ordinary freshen error instead, and the caller reviews the branch as-is
+// (SC-5279 review).
+func TestFreshenBranch_fastTierRedBothSidesIsNotAttributable(t *testing.T) {
+	s := &freshenGitStubs{t: t, localBranch: true, localTip: "local1", fastTierFails: true, fastTierPreMergeAlsoFails: true}
+	got, err := freshen(t, s)
+	if err == nil {
+		t.Fatal("a fast tier red on both sides of the merge must surface as an error, not a genuine failure")
+	}
+	if got != daemon.FreshnessCurrent {
+		t.Fatalf("got %v", got)
+	}
+	if s.saw("update-ref") {
+		t.Fatalf("no ref move when the fast tier is not attributable to the merge: %v", s.calls)
+	}
+	var worktreeAdds int
+	for _, c := range s.calls {
+		if strings.HasPrefix(c, "worktree-add") {
+			worktreeAdds++
+		}
+	}
+	if worktreeAdds != 2 {
+		t.Fatalf("expected two ephemeral worktrees (merged + pre-merge attribution check): %v", s.calls)
 	}
 }
 

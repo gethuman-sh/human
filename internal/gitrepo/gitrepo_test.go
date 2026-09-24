@@ -859,27 +859,51 @@ func TestMergeIntoHead_argv(t *testing.T) {
 		"merge", "--no-ff", "--no-edit", "origin/main"})
 }
 
+// endsWith reports whether args' last two elements are a, b — used below to
+// recognise a specific git invocation regardless of its leading "-C dir" etc.
+func endsWith(args []string, a, b string) bool {
+	return len(args) >= 2 && args[len(args)-2] == a && args[len(args)-1] == b
+}
+
+// indexOfCall returns the position of the first call in calls ending in a, b,
+// or -1 if none does.
+func indexOfCall(calls [][]string, a, b string) int {
+	for i, c := range calls {
+		if endsWith(c, a, b) {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestMergeIntoHead_conflictIsAnOutcomeAndAborts(t *testing.T) {
+	// The merge's own stdout is intentionally in a locale git would never
+	// produce for "CONFLICT" (SC-5279 review): classification must come from
+	// `ls-files --unmerged`, not from an English substring of the merge output.
 	var calls [][]string
 	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		calls = append(calls, args)
 		if len(args) > 0 && args[len(args)-1] == "origin/main" {
-			return []byte("Auto-merging a.go\nCONFLICT (content): Merge conflict in a.go\n"), errors.New("exit status 1")
+			return []byte("Auto-merging a.go\nKONFLIKT (Inhalt): Merge-Konflikt in a.go\n"), errors.New("exit status 1")
+		}
+		if endsWith(args, "ls-files", "--unmerged") {
+			return []byte("100644 abc123 2\ta.go\n100644 def456 3\ta.go\n"), nil
 		}
 		return nil, nil
 	})
 	conflict, err := MergeIntoHead(context.Background(), "/wt", "origin/main", "humanbot", "h@example.com")
 	if err != nil || !conflict {
-		t.Fatalf("conflict must be reported as an outcome: conflict=%v err=%v", conflict, err)
+		t.Fatalf("conflict must be reported as an outcome regardless of locale: conflict=%v err=%v", conflict, err)
 	}
-	var sawAbort bool
-	for _, c := range calls {
-		if len(c) >= 2 && c[len(c)-2] == "merge" && c[len(c)-1] == "--abort" {
-			sawAbort = true
-		}
+	unmergedAt, abortAt := indexOfCall(calls, "ls-files", "--unmerged"), indexOfCall(calls, "merge", "--abort")
+	if unmergedAt < 0 {
+		t.Fatal("ls-files --unmerged must be read to classify the conflict")
 	}
-	if !sawAbort {
-		t.Error("a conflicting merge must be aborted so the worktree is clean")
+	if abortAt < 0 {
+		t.Fatal("a conflicting merge must be aborted so the worktree is clean")
+	}
+	if unmergedAt > abortAt {
+		t.Error("ls-files --unmerged must be read before the abort clears the conflict")
 	}
 }
 
@@ -888,6 +912,7 @@ func TestMergeIntoHead_otherFailureIsAnError(t *testing.T) {
 		if len(args) > 0 && args[len(args)-1] == "origin/main" {
 			return []byte("fatal: not a git repository"), errors.New("exit status 128")
 		}
+		// No unmerged entries: the failure is not a conflict.
 		return nil, nil
 	})
 	conflict, err := MergeIntoHead(context.Background(), "/wt", "origin/main", "humanbot", "h@example.com")

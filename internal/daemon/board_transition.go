@@ -1139,6 +1139,12 @@ func (d BoardTransitionDeps) launchPRReview(ctx context.Context, pmKey string, r
 		d.Logger.Warn().Err(freshErr).Str("pm", pmKey).Str("branch", branch).
 			Msg("board PR loop: could not bring the branch current with the base; reviewing it as it is")
 	}
+	// FreshnessCurrent and FreshnessMerged both mean the branch is ready to
+	// review as it now stands and need no case body — but they are named
+	// here rather than left to a `default`, so a fifth BranchFreshness member
+	// fails the build instead of silently falling into "launch the reviewer"
+	// (SC-3376 is exactly this failure mode for a different closed set).
+	//exhaustive:enforce
 	switch fresh {
 	case FreshnessConflict:
 		conflict := errors.WithDetails("the base advanced past the branch and the merge conflicts", "pm", pmKey, "branch", branch)
@@ -1148,6 +1154,7 @@ func (d BoardTransitionDeps) launchPRReview(ctx context.Context, pmKey string, r
 		redTier := errors.WithDetails("the fast test tier failed on the branch merged with the current base", "pm", pmKey, "branch", branch)
 		return true, d.deployFailedOrDispatchFixer(ctx, pmKey, res,
 			"the fast test tier failed on the branch merged with the current base — resolving it before the review", redTier, branch, true)
+	case FreshnessCurrent, FreshnessMerged:
 	}
 	_, err = d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
 		prReviewDispatch(pmKey, res.Number, branch),

@@ -3120,7 +3120,7 @@ func (p forgeDeployer) FreshenBranch(ctx context.Context, req daemon.PRRequest) 
 		return daemon.FreshnessCurrent, err
 	}
 	if !passed {
-		return daemon.FreshnessTestsFailed, nil
+		return p.attributeRedFastTier(ctx, dir, tip, branch)
 	}
 	// A branch known only on origin has no local ref yet: create it, so the
 	// reviewer's local-first binding finds the integrated head.
@@ -3171,6 +3171,33 @@ var fastTierRunner = func(ctx context.Context, dir string) (passed bool, err err
 		return false, errors.WrapWithDetails(runErr, "running the fast test tier", "dir", dir)
 	}
 	return true, nil
+}
+
+// attributeRedFastTier decides whether a red fast tier on the merged commit
+// is the merge's fault. The ephemeral worktree the tier ran in carries
+// tracked files only — no node_modules, no venv, no other gitignored
+// dependency tree — so a Node or Python project's tier can be red there
+// regardless of what the merge did, and reporting that as FreshnessTestsFailed
+// would spend the deploy-fix budget on a checkout no fixer can repair.
+// Rerunning the identical tier against the branch tip ALONE, before the base
+// is merged in, is what makes the result attributable to the merge at all:
+// only a tier that passes unmerged and fails merged is the merge's doing.
+func (p forgeDeployer) attributeRedFastTier(ctx context.Context, dir, tip, branch string) (daemon.BranchFreshness, error) {
+	preWT, cleanup, err := addEphemeralWorktree(ctx, dir, tip)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	defer cleanup()
+	preMergePassed, err := fastTierRunner(ctx, preWT)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	if !preMergePassed {
+		return daemon.FreshnessCurrent, errors.WithDetails(
+			"fast test tier is also red on the branch without the base merged in; not attributable to the merge, reviewing as-is",
+			"branch", branch)
+	}
+	return daemon.FreshnessTestsFailed, nil
 }
 
 // hasMakeTargetTest reports whether dir's Makefile declares a `test` target,

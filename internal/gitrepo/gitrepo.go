@@ -485,22 +485,29 @@ var TouchedSince = func(ctx context.Context, dir, boundary string, paths []strin
 
 // MergeIntoHead merges ref into the worktree's current HEAD as a merge commit
 // under the caller-supplied committer identity, so a headless worktree with no
-// global git config can still commit (SC-1135). It reports a textual conflict
-// as conflict=true with a nil error — a conflict is an outcome the caller
+// global git config can still commit (SC-1135). It reports a conflict as
+// conflict=true with a nil error — a conflict is an outcome the caller
 // decides on (dispatch a fixer), not a failure of the merge command — and any
 // other failure as an error. Either way a half-applied merge is aborted first,
 // so a retry starts from a clean worktree. Package var so callers can stub git
 // access in tests.
 var MergeIntoHead = func(ctx context.Context, dir, ref, name, email string) (conflict bool, err error) {
-	out, runErr := runner(ctx, "git", "-C", dir,
+	_, runErr := runner(ctx, "git", "-C", dir,
 		"-c", "user.name="+name,
 		"-c", "user.email="+email,
 		"merge", "--no-ff", "--no-edit", ref)
 	if runErr == nil {
 		return false, nil
 	}
+	// git's merge conflict wording goes through gettext, so a host running a
+	// localised git (LANG=de_DE.UTF-8 -> "KONFLIKT (Inhalt)" instead of
+	// "CONFLICT (content)") never matches an English substring of stdout.
+	// `ls-files --unmerged` reports unmerged index entries independent of
+	// locale, and is read before the abort clears them.
+	unmerged, lsErr := runner(ctx, "git", "-C", dir, "ls-files", "--unmerged")
+	conflict = lsErr == nil && len(strings.TrimSpace(string(unmerged))) > 0
 	_, _ = runner(ctx, "git", "-C", dir, "merge", "--abort")
-	if strings.Contains(string(out), "CONFLICT") {
+	if conflict {
 		return true, nil
 	}
 	return false, errors.WrapWithDetails(runErr, "merging ref into HEAD", "dir", dir, "ref", ref)
