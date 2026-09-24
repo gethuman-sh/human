@@ -1,10 +1,11 @@
 {
-  "doc": "The single source of record for model identity, price and what is not a model. Correcting a rate, adding a family, or excluding a new non-model entry is an edit to THIS FILE and nothing else (SC-3580). Rates are USD per 1,000,000 tokens. cache_create_per_m is the ONE-HOUR cache-write rate (2x input), not the five-minute rate (1.25x input): Claude Code writes 1h caches the overwhelming majority of the time, and the measured opus row below is a 1h figure — mixing the two tiers in one card understates every cache write. A family absent from `families` prices at `fallback_family` — the most expensive row — so an unrecognised model is never understated. Lookup is by family word, and internal/claude/modelcard.go normalises whatever a caller holds (a raw vendor id, a short display name, a bare family) onto it, because the cost ledger stores raw ids while the transcript scan stores classified names.",
+  "doc": "The single source of record for model identity, price and what is not a model. Correcting a rate, adding a family, or excluding a new non-model entry is an edit to THIS FILE and nothing else (SC-3580). Rates are USD per 1,000,000 tokens. cache_create_per_m is the ONE-HOUR cache-write rate (2x input), not the five-minute rate (1.25x input): Claude Code writes 1h caches the overwhelming majority of the time, and the measured opus row below is a 1h figure — mixing the two tiers in one card understates every cache write. A family absent from `families` prices at `fallback_family` — the most expensive row — so an unrecognised model is never understated. Lookup is by family word, and internal/claude/modelcard.go normalises whatever a caller holds (a raw vendor id, a short display name, a bare family) onto it, because the cost ledger stores raw ids while the transcript scan stores classified names. rank is the tier ORDER, lowest-capability first. It exists so a rule like 'an adversarial check never runs below opus' is checkable against data instead of against a price comparison that only happens to agree today (SC-5474).",
   "fallback_family": "fable",
   "families": [
     {
       "family": "opus",
       "display": "Opus",
+      "rank": 3,
       "input_per_m": 5.00,
       "output_per_m": 25.00,
       "cache_create_per_m": 10.00,
@@ -14,6 +15,7 @@
     {
       "family": "sonnet",
       "display": "Sonnet",
+      "rank": 2,
       "input_per_m": 3.00,
       "output_per_m": 15.00,
       "cache_create_per_m": 6.00,
@@ -23,6 +25,7 @@
     {
       "family": "haiku",
       "display": "Haiku",
+      "rank": 1,
       "input_per_m": 1.00,
       "output_per_m": 5.00,
       "cache_create_per_m": 2.00,
@@ -32,6 +35,7 @@
     {
       "family": "fable",
       "display": "Fable",
+      "rank": 4,
       "input_per_m": 10.00,
       "output_per_m": 50.00,
       "cache_create_per_m": 20.00,

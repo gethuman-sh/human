@@ -19,8 +19,12 @@ var rawModelCard []byte
 // ModelFamily is one priced family. Rates are USD per 1e6 tokens of each class;
 // the four classes are priced very differently, so they are never blended.
 type ModelFamily struct {
-	Family          string  `json:"family"`
-	Display         string  `json:"display"`
+	Family  string `json:"family"`
+	Display string `json:"display"`
+	// Rank is the tier ORDER, lowest first. A rule like "an adversary never runs
+	// below opus" is a comparison, and comparing prices would make the rule true
+	// only while capability and cost happen to agree (SC-5474).
+	Rank            int     `json:"rank"`
 	InputPerM       float64 `json:"input_per_m"`
 	OutputPerM      float64 `json:"output_per_m"`
 	CacheCreatePerM float64 `json:"cache_create_per_m"`
@@ -101,6 +105,7 @@ func parseModelCard(raw []byte) (*ModelCard, error) {
 // word derived from a transcript, which carries whatever casing the vendor used.
 func (c *ModelCard) indexFamilies() error {
 	c.byFamily = make(map[string]ModelFamily, len(c.Families))
+	ranks := make(map[int]string, len(c.Families))
 	for _, f := range c.Families {
 		name := strings.ToLower(strings.TrimSpace(f.Family))
 		if name == "" {
@@ -112,6 +117,11 @@ func (c *ModelCard) indexFamilies() error {
 		if err := f.validate(name); err != nil {
 			return err
 		}
+		if other, dup := ranks[f.Rank]; dup {
+			return errors.WithDetails("model card families share a rank — the tier order is then undefined",
+				"family", name, "other", other, "rank", f.Rank)
+		}
+		ranks[f.Rank] = name
 		c.byFamily[name] = f
 	}
 	return nil
@@ -125,6 +135,9 @@ func (f ModelFamily) validate(name string) error {
 	}
 	if f.Provenance == "" {
 		return errors.WithDetails("model card family has no provenance", "family", name)
+	}
+	if f.Rank <= 0 {
+		return errors.WithDetails("model card family has no positive rank — a tier with no order cannot be compared", "family", name)
 	}
 	if f.InputPerM <= 0 || f.OutputPerM <= 0 || f.CacheCreatePerM <= 0 || f.CacheReadPerM <= 0 {
 		return errors.WithDetails("model card family has a non-positive rate", "family", name)
@@ -245,4 +258,41 @@ func taskModelAliases() []string {
 	out := make([]string, len(modelCard.TaskAliases))
 	copy(out, modelCard.TaskAliases)
 	return out
+}
+
+// modelRank returns a model's tier order, 0 when the card does not know it. A
+// caller comparing two ranks must reject 0 rather than treat it as "lowest":
+// an unknown model is unordered, not cheap.
+func modelRank(model string) int {
+	f, ok := familyFor(model)
+	if !ok {
+		return 0
+	}
+	return f.Rank
+}
+
+// IsTaskModelAlias reports whether model is one of the Task tool's aliases. It
+// is the check a project-level model setting is held to, so a typo falls back
+// to the account default instead of breaking every container launch (SC-5474).
+func IsTaskModelAlias(model string) bool {
+	want := strings.ToLower(strings.TrimSpace(model))
+	if want == "" {
+		return false
+	}
+	for _, alias := range modelCard.TaskAliases {
+		if strings.ToLower(strings.TrimSpace(alias)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// ModelFamilyName reduces any shape of model identity — a raw vendor id, a
+// display name, a bare alias — to the card's family word, so two spellings of
+// one model aggregate into one row instead of two (SC-5474). Empty in, empty out.
+func ModelFamilyName(model string) string {
+	if strings.TrimSpace(model) == "" {
+		return ""
+	}
+	return familyOf(model)
 }
