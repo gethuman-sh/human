@@ -27,8 +27,8 @@ human underway <PM_KEY>
 human search --file <path> --json --limit 10   # tickets whose plans name this exact file
 human search "<terms from the title>" --json --limit 10
 
-# Ordering is decided by the fork below (`waits-for-<id>`), and the machine holds the
-# work itself. A link is for a dependency you are RECORDING, not for one being decided:
+# A dependency the ticket itself states — not one this run is choosing; ordering
+# between colliding work is never decided here, the merge gate settles it:
 human link <BLOCKER_KEY> <PM_KEY> --blocks
 
 # What this run may do
@@ -122,9 +122,9 @@ human state get <PM_KEY> <name> --field <field> --default '(unset)'
    human search "<an error string or symptom involved>" --json --limit 20
    ```
 
-   A hit is only a reason to act when the **other ticket has real open work**. For a candidate that looks like the same problem or touches the same file, confirm it against the forge: run `human underway <OTHER_KEY>`. Only if that is `underway` does the ordering fork apply — the two may need merging, this run may need to stop, or one may simply go first. Which goes first is a judgement about intent, and an agent silently reordering someone's backlog is worse than one that asks: use the verdict below and **propose, never create** — the ordering is settled by the human's answer, and the machine holds the work from that answer alone (step 4). **A ticket that merely overlaps in wording, with nothing open against it, is recorded as a hint in `assumptions` and does not stop the run** — record its key, status, and the shared file(s), so the plan is built to accommodate the coming work instead of the run halting to ask about it. A closed ticket may be the *reason* this one exists; read what you find.
+   A hit is only a reason to act when the **other ticket has real open work**. For a candidate that looks like the same problem or touches the same file, confirm it against the forge: run `human underway <OTHER_KEY>`. A confirmed collision is **recorded, never asked about**: write the other key, its branch or PR, and the file and function both changes rewrite into `assumptions`, and continue. Which lands first is not a product question — both are built, and the merge gate integrates the second with the base that already carries the first and verifies the combined result before it merges; a conflict or a red check there goes to `human-deploy-fixer`, not to a person. **A ticket that merely overlaps in wording, with nothing open against it, is recorded the same way and does not stop the run** — its key, status, and the shared file(s), so the plan is built to accommodate the coming work. A closed ticket may be the *reason* this one exists; read what you find.
 
-   The forge cannot see a run that has started but has not branched yet, so one text signal still counts: a `[human:claim]` or `[human:implementation-started]` marker in the other ticket's comments means a run holds it right now. Treat that exactly as `underway` — it is the same fact, arriving before there is a branch to find. A **status** alone is not that fact and does not order anything.
+   The forge cannot see a run that has started but has not branched yet, so one text signal still counts: a `[human:claim]` or `[human:implementation-started]` marker in the other ticket's comments means a run holds it right now. Treat that exactly as `underway` — it is the same fact, arriving before there is a branch to find. A **status** alone is not that fact.
 
    **If a search fails, you have not searched.** The record reports when it cannot be trusted — empty, or too stale to rely on — as an error rather than as an empty result. Treating that as "nothing found" is the failure this step exists to prevent: say the check could not be made, and do not record that there are no siblings.
 
@@ -144,19 +144,11 @@ A question is admissible **only** if all three hold:
 
 Ask about **scope forks and product intent**. Never about implementation choices you can make yourself.
 
-Ordering is admissible on the same terms, but only when the other ticket is **actively in progress** AND
-you can **name the collision**: the file, and the function or section inside it, that both changes rewrite.
-Two live runs landing in the same function are a fork about which one the product wants first, and the
-options read as *"<TICKET_KEY> goes first"* / *"this goes first"*. An option that defers to another ticket
-carries a `waits-for-<id>` line naming it (see the Verdict below) — without one the machine reads it as an
-ordinary direction and starts the work the answer put second.
-
-**"Both touch this repo" is not a collision, and neither is "both touch this file".** If your own reading
-shows the hunks are disjoint — different functions, different sections of a document — there is nothing to
-decide: git merges them, and asking anyway spends a person's attention on a conflict that will not happen.
-Record what you compared and run. If you find yourself writing *"they do not overlap — run both"* as one of
-the answers, you have already done the work the question was for: take that answer yourself. An open ticket
-that has **not started** is never an ordering fork — record it in the verdict below, do not ask about it.
+**Ordering is never asked.** Another ticket's open work on the same file, the same function, even the same
+lines is a fact for `assumptions`, not a fork: both are built, and the merge gate settles the order by
+integrating the second with the base that carries the first and verifying the result. An open ticket that has
+**not started** is recorded the same way. The one open-work question this step may raise is 6a's — a person's
+own branch or PR on THIS ticket.
 
 If you cannot name what you searched, you have not earned the question. Go read more.
 
@@ -183,22 +175,10 @@ DECISION REQUIRED: <one line: what must be decided and why>
 
 (add `3:`, `4:` … for more options).
 
-An option that means **this ticket goes second** must say so in a form the machine
-can act on, because "<OTHER_KEY> goes first" and "do it this way" are the same sentence
-to a parser — and the machine's one move on an answer is to start the work. Name the ticket
-being waited for on its own line under the option:
-
-```
-DECISION REQUIRED: <OTHER_KEY> has an open branch on the same files — which goes first?
-1: <OTHER_KEY> goes first
-waits-for-1: <OTHER_KEY>
-2: this goes first — supersede the open work on <OTHER_KEY>
-```
-
-The orchestrator passes that line through to the `[human:options]` block. Picking such
-an answer records the decision and **holds this ticket**: no stage is started, the card
-says what it waits for, and the work resumes on its own once that ticket is done. Never
-declare a wait on the ticket you are running — nothing could ever clear it.
+An option that would make **this ticket go second** to another carries a `waits-for-<id>: <OTHER_KEY>`
+line under it; picking it records the decision and holds this ticket instead of starting a stage. This run
+raises no such option — ordering is never asked, above — and the orchestrator refuses one that waits on the
+ticket you are running or on a ticket already held on this one, because nothing could ever clear either.
 
 Then record:
 
