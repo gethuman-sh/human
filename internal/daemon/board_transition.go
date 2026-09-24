@@ -2410,7 +2410,7 @@ func planPrompt(key string) string {
 		" (a reframed verdict's corrected framing is in the [human:ticket-review] marker; plan against that, not the description)." +
 		" If the verdict is superseded, escalated or rejected, there is nothing to plan on this ticket:" +
 		" post the terminal marker — human marker post " + key + " nothing-to-do --field \"evidence=<the verdict, and the key that carries the work>\"" +
-		" --field reason=<duplicate for superseded, escalated for escalated, rejected for rejected> —" +
+		" --field reason=<duplicate|escalated|rejected> (duplicate for a superseded verdict, escalated for escalated, rejected for rejected — never merged, that reason is the planner's) —" +
 		" and then stop. Without it the board reads this run as a crash and re-plans the ticket forever." +
 		" Skip the review and go straight to /human-plan " + key + " when the ticket already carries a [human:ticket-review] marker." +
 		" BOARD CONTEXT: there is no user to ask — never end the run with a question; act on what you find and record it."
