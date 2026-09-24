@@ -63,10 +63,11 @@ Your job: read that handoff, run the `human-reviewer` agent against each review 
      --field 2="<second option, one line>"
    ```
    With several affected keys, name the first fork found in `context` and mention the rest in a review key prefix per line, same as the unreviewable branch above. Then STOP — do not run the pass/notes/fail posting below.
- The comment is the canonical record of the review — it must carry the reviewer's full findings inline so a reader (and the board detail panel) sees what was found without opening any local file. The `.human/reviews/<key>.md` files remain as working artifacts, not the source of truth. Post it with:
+ The comment is the canonical record of the review — it must carry the reviewer's full findings inline so a reader (and the board detail panel) sees what was found without opening any local file. The `.human/reviews/<key>.md` files remain as working artifacts, not the source of truth. `commits:` is the handoff's own commit list (step 2's `commits`), so the verdict records which round it judged — a later handoff naming nothing beyond it is not a new round. Post it with:
    ```bash
    human marker post <PM_KEY> review-complete \
      --field verdict="<overall-verdict>" \
+     --field commits="<the handoff's commits: from step 2, comma-separated>" \
      --field reviews="<REVIEW_KEY_1>: <verdict> — .human/reviews/<review_key_1>.md\n<REVIEW_KEY_2>: <verdict> — .human/reviews/<review_key_2>.md" \
      --body-file - <<'FINDINGS_EOF'
    ## Findings
