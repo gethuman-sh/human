@@ -9,6 +9,8 @@ import (
 
 	"github.com/gethuman-sh/human/internal/agentstate"
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/recall"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // prLoopReadRecheckStep/Tries bound the read-after-write race window for the
@@ -171,4 +173,44 @@ func readStageReportSettled(ctx context.Context, project, pmKey, name string, no
 		return recorded, false
 	}
 	return recorded, fresh
+}
+
+// recordReviewRound writes a round's blocking findings to the durable findings
+// record (SC-5278). The agent state store keeps only the newest report and
+// prunes it after two weeks, so it never answered which classes of finding
+// recur; this record does, per project, ticket, PR and round. Best effort: a
+// record that cannot be written is logged and the loop goes on, because the
+// review's verdict — not its archive — is what the loop runs on.
+func recordReviewRound(ctx context.Context, rec recall.FindingsRecorder, project, pmKey string, comments []tracker.Comment, findingsText, head string, logger zerolog.Logger) {
+	if rec == nil {
+		return
+	}
+	parsed := daemon.ParseFindings(findingsText)
+	if len(parsed) == 0 {
+		return
+	}
+	pr, round := daemon.PRLoopNumber(comments), daemon.PRReviewRounds(comments)
+	rows := make([]recall.ReviewFinding, 0, len(parsed))
+	for _, f := range parsed {
+		rows = append(rows, recall.ReviewFinding{
+			Project: project, Key: pmKey, PR: pr, Round: round, Head: head,
+			File: f.File, Slug: f.Slug, Class: f.Class, Text: f.Text,
+		})
+	}
+	if err := rec.RecordReviewFindings(ctx, rows); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Int("round", round).Msg("board PR loop: findings record not written")
+	}
+}
+
+// recordFixDisposition attaches the fixer's exit and its one-line account to
+// the findings of the round it answered — the round whose review dispatched it,
+// which is the newest review round in the thread.
+func recordFixDisposition(ctx context.Context, rec recall.FindingsRecorder, project, pmKey string, comments []tracker.Comment, exit, note string, logger zerolog.Logger) {
+	if rec == nil || exit == "" {
+		return
+	}
+	pr, round := daemon.PRLoopNumber(comments), daemon.PRReviewRounds(comments)
+	if err := rec.SetFindingDisposition(ctx, project, pmKey, pr, round, exit, note); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Int("round", round).Msg("board PR loop: finding disposition not written")
+	}
 }

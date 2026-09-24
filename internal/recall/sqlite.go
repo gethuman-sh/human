@@ -113,6 +113,8 @@ func (s *SQLiteStore) ensureSchema() error {
 
 		CREATE INDEX IF NOT EXISTS idx_entry_files_path ON entry_files (path);
 
+		` + reviewFindingsCreate + `
+
 		CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
 			key,
 			title,
