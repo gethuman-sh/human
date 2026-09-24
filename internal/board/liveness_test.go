@@ -109,17 +109,108 @@ func TestMarkAgentLiveness_recoveringUntilStuckRunningGraceThenDead(t *testing.T
 	}
 }
 
-// reconcilePRLoops re-drives a done-stage PR review<->fix loop card with NO
-// grace at all (board_reconcile.go:253), unlike the three running stages
-// above. A done-stage loop card must therefore move straight to AgentDead the
-// moment agentLaunchGrace passes — StuckRunningGrace has no bearing on this
-// class, and it must not linger in the machine register longer than before.
-func TestMarkAgentLiveness_doneStageLoopStaysDeadNotRecovering(t *testing.T) {
-	c := card("SC-1", string(daemon.BoardDoneStage), string(daemon.BoardRunning), "d1", agentLaunchGrace+time.Second, livenessNow)
-	c.DeployPhase = "pr-review"
+// loopCard builds a done/running PR-loop card: the stage marker landed
+// enteredAgo before now, and the named half's agent stopped stoppedAgo before
+// now. A zero stoppedAgo means no stop was recorded at all.
+func loopCard(phase string, enteredAgo time.Duration) daemon.BoardViewCard {
+	c := card("SC-1", string(daemon.BoardDoneStage), string(daemon.BoardRunning), "d1", enteredAgo, livenessNow)
+	c.DeployPhase = phase
+	return c
+}
+
+// SC-5091: the gap between a PR reviewer's exit and the loop's next re-drive
+// is the machine's turn, not a person's. reconcilePRLoops runs only inside
+// reconcileOnce, on BoardReconcileInterval jittered by ±BoardReconcileJitter —
+// one to three minutes, not instantly — and the card's only other clock,
+// StageEnteredAt, is the pr-review-started marker's time, long past
+// agentLaunchGrace by the time a real review ends. So the window is measured
+// from the recorded stop, and inside it the card must read AgentRecovering:
+// every ticket of the 2026-09-22 campaign showed the amber "agent not running
+// — Retry it" ask over a reviewer that had simply finished.
+func TestMarkAgentLiveness_doneStageLoopRecoversUntilTheRedriveIsDue(t *testing.T) {
+	for _, phase := range []string{daemon.DeployPhasePRReview, daemon.DeployPhasePRFix} {
+		c := loopCard(phase, 20*time.Minute)
+		cards := []daemon.BoardViewCard{c}
+		MarkAgentLiveness(cards, LiveAgents{
+			Names:    map[string]bool{},
+			DaemonID: "d1",
+			Now:      livenessNow,
+			StoppedAt: map[string]time.Time{
+				"board-SC-1-prreview": livenessNow.Add(-30 * time.Second),
+				"board-SC-1-prfix":    livenessNow.Add(-30 * time.Second),
+			},
+		})
+		assert.Equal(t, daemon.AgentRecovering, cards[0].AgentLiveness,
+			"%s: the loop's own re-drive is still due — the card must not ask a person to retry", phase)
+	}
+}
+
+// The window still ends: a loop card whose half stopped longer ago than the
+// re-drive can possibly take has not been re-driven, and that IS a person's
+// turn. Without this the machine register would be unbounded and a dead
+// daemon's card would stay calm forever.
+func TestMarkAgentLiveness_doneStageLoopIsDeadPastTheRedriveWindow(t *testing.T) {
+	c := loopCard(daemon.DeployPhasePRReview, 30*time.Minute)
 	cards := []daemon.BoardViewCard{c}
-	MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+	MarkAgentLiveness(cards, LiveAgents{
+		Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow,
+		StoppedAt: map[string]time.Time{
+			"board-SC-1-prreview": livenessNow.Add(-(prLoopRedriveGrace() + time.Second)),
+		},
+	})
 	assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness)
+}
+
+// Absence of a stop record is not a claim that the agent is alive: with no
+// record, and with a record that predates the stage (an earlier round's half,
+// already adjudicated), the card reads exactly as it did before this existed.
+func TestMarkAgentLiveness_doneStageLoopWithoutAStopRecordIsUnchanged(t *testing.T) {
+	cases := map[string]map[string]time.Time{
+		"never asked":      nil,
+		"asked, nothing":   {},
+		"another agent":    {"board-SC-1-implementation": livenessNow.Add(-30 * time.Second)},
+		"before the stage": {"board-SC-1-prreview": livenessNow.Add(-25 * time.Minute)},
+	}
+	for name, stopped := range cases {
+		c := loopCard(daemon.DeployPhasePRReview, 20*time.Minute)
+		cards := []daemon.BoardViewCard{c}
+		MarkAgentLiveness(cards, LiveAgents{
+			Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow, StoppedAt: stopped,
+		})
+		assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness, name)
+	}
+}
+
+// A stop record must never soften the three agent stages: their recovery is
+// reconcileStuckRunning's, measured from StageEnteredAt, and SC-1542's
+// headline class (verification/done/verdict=failed) is recovered by no pass at
+// all. Both must read exactly as before with StoppedAt populated.
+func TestMarkAgentLiveness_stopRecordDoesNotWidenTheOtherClasses(t *testing.T) {
+	stopped := map[string]time.Time{
+		"board-SC-1-implementation": livenessNow.Add(-30 * time.Second),
+	}
+	past := card("SC-1", string(daemon.BoardImplementation), string(daemon.BoardRunning), "d1", daemon.StuckRunningGrace+time.Second, livenessNow)
+	cards := []daemon.BoardViewCard{past}
+	MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow, StoppedAt: stopped})
+	assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness,
+		"past StuckRunningGrace an implementation card is the person's turn, stop record or not")
+
+	failed := card("SC-1", string(daemon.BoardVerification), string(daemon.BoardDone), "d1", 10*time.Minute, livenessNow)
+	failed.Verdict = "fail"
+	failedCards := []daemon.BoardViewCard{failed}
+	MarkAgentLiveness(failedCards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow, StoppedAt: stopped})
+	assert.Equal(t, daemon.AgentDead, failedCards[0].AgentLiveness, "SC-1542's class must not soften")
+}
+
+// The board must not ask a person to retry a loop card at the same instant the
+// daemon's own re-drive starts one — the SC-1830 rule agentLaunchGrace already
+// carries against QueuedLaunchGrace. reconcilePRLoops runs inside reconcileOnce
+// on a jittered BoardReconcileInterval, so the grace must outlast the worst
+// tick that interval can produce.
+func TestPRLoopRedriveGrace_outlastsTheWorstReconcileTick(t *testing.T) {
+	worst := time.Duration(float64(daemon.BoardReconcileInterval) * (1 + daemon.BoardReconcileJitter))
+	assert.Greater(t, prLoopRedriveGrace(), worst,
+		"a loop card must never read as needing a person while the loop's own re-drive is still due")
 }
 
 // The board must not ask a person to retry a card the daemon is still due to
@@ -224,7 +315,7 @@ func TestMarkAgentLiveness_failedVerdictJoinsTheReworkBuild(t *testing.T) {
 
 // A verification/done/verdict=failed card is never BoardRunning (it derives
 // BoardDone), so stuckRunningCandidate (board_reconcile.go:379-380) never
-// selects it and no daemon reconcile pass ever recovers it. recoverableByStuckRunning
+// selects it and no daemon reconcile pass ever recovers it. machineOwesATry
 // must therefore stay false for this class at every instant inside the
 // agentLaunchGrace..StuckRunningGrace window, not merely outside it — this is
 // the ticket's headline SC-1542 case, and the window is exactly where a

@@ -209,6 +209,11 @@ func modelUsages(summary *claude.UsageSummary) []ModelUsage {
 //
 // A zero LiveAgents (nil Names) is therefore returned for every way of not
 // knowing, and the overlay renders those cards exactly as before.
+//
+// It also fills StoppedAt, this machine's record of when each board agent it
+// once ran has since stopped — the clock that lets a done-stage PR review<->fix
+// loop card whose half has just exited read as machine-owed recovery rather
+// than as a person's turn (SC-5091).
 func liveBoardAgents(daemonID string) board.LiveAgents {
 	unknown := board.LiveAgents{DaemonID: daemonID, Now: time.Now()}
 	dc, err := claude.NewEngineDockerClient()
@@ -227,10 +232,21 @@ func liveBoardAgents(daemonID string) board.LiveAgents {
 	for _, c := range containers {
 		names = append(names, c.Name)
 	}
+	// Read AFTER the container listing, never before: a container that
+	// disappears between the two reads is then seen as absent WITH a stop time,
+	// which renders as the machine's turn. The reverse order would see it
+	// absent with no stop and send a person to retry a run that just ended.
+	// A failure to read leaves the map nil, which is the documented "not asked"
+	// case and preserves the verdicts this overlay produced before (SC-5091).
+	stopped, err := agent.StoppedBoardAgents()
+	if err != nil {
+		stopped = nil
+	}
 	return board.LiveAgents{
-		Names:    board.AgentNamesFromContainers(names),
-		DaemonID: daemonID,
-		Now:      time.Now(),
+		Names:     board.AgentNamesFromContainers(names),
+		StoppedAt: stopped,
+		DaemonID:  daemonID,
+		Now:       time.Now(),
 	}
 }
 
