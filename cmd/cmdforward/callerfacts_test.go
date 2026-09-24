@@ -3,6 +3,8 @@ package cmdforward
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -148,6 +150,66 @@ func TestWithCallerFacts_deployExplicitBranchLeftAlone(t *testing.T) {
 	got, err := WithCallerFacts(context.Background(), args, ".", g.git())
 	require.NoError(t, err)
 	assert.Equal(t, args, got)
+}
+
+// TestWithCallerFacts_realGitFromWorktreeOnADifferentBranch runs the real
+// derivation (RealGit, no fake) against an actual git repository: a linked
+// worktree checked out on its own branch, sitting apart from the primary
+// checkout's "main". This is the exact shape SC-5330 exists for — a caller
+// (an agent's worktree, or a client talking to a daemon whose own checkout is
+// on a different branch) whose branch and commits are not visible from the
+// other checkout — and every other test in this file stubs Git, so none of
+// them would catch a regression in the real git plumbing (gitrepo.CurrentBranch,
+// CommitsForRev, CommitsAnywhere, BranchesContaining, DefaultBranch) wired
+// together.
+func TestWithCallerFacts_realGitFromWorktreeOnADifferentBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	bareDir := t.TempDir()
+	runGit(t, bareDir, "init", "--quiet", "--bare")
+
+	primaryDir := t.TempDir()
+	runGit(t, primaryDir, "init", "--quiet", "-b", "main")
+	runGit(t, primaryDir, "config", "user.email", "test@example.com")
+	runGit(t, primaryDir, "config", "user.name", "test")
+	runGit(t, primaryDir, "commit", "--quiet", "--allow-empty", "-m", "base")
+	runGit(t, primaryDir, "remote", "add", "origin", bareDir)
+	runGit(t, primaryDir, "push", "--quiet", "origin", "main")
+	runGit(t, primaryDir, "remote", "set-head", "origin", "main")
+
+	// The caller's checkout: a linked worktree on a branch of its own, with a
+	// commit the primary checkout (standing in for a daemon) never sees.
+	worktreeDir := filepath.Join(t.TempDir(), "wt")
+	runGit(t, primaryDir, "worktree", "add", "--quiet", "-b", "fix/sc-9", worktreeDir, "main")
+	runGit(t, worktreeDir, "commit", "--quiet", "--allow-empty", "-m", "[SC-9] add the fix")
+	sha := strings.TrimSpace(runGitOut(t, worktreeDir, "rev-parse", "--short", "HEAD"))
+
+	handoffArgs, err := WithCallerFacts(context.Background(), []string{"handoff", "post", "SC-9"}, worktreeDir, RealGit())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"handoff", "post", "SC-9", "--branch", "fix/sc-9", "--commits", sha}, handoffArgs,
+		"branch and commits must come from the worktree, not wherever the process happens to run")
+
+	deployArgs, err := WithCallerFacts(context.Background(), []string{"deploy", "SC-9"}, worktreeDir, RealGit())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"deploy", "SC-9", CandidateBranchesFlag, "fix/sc-9"}, deployArgs,
+		"the unpushed commit is only reachable from fix/sc-9, never from the base main")
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, out)
+}
+
+func runGitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	require.NoError(t, err, "git %v", args)
+	return string(out)
 }
 
 func TestWithCallerFacts_deployGitFailureLeavesArgsAlone(t *testing.T) {

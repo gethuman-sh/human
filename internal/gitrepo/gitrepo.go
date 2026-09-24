@@ -407,9 +407,13 @@ var CommitsAnywhere = func(ctx context.Context, dir, key string) ([]Commit, erro
 // BranchesContaining names the branches, local and remote-tracking, whose
 // history includes sha. Remote-tracking refs are reported under their branch
 // name (origin/fix/x → fix/x) so a branch that exists both locally and on
-// origin is one candidate rather than two, and the symbolic origin/HEAD is
-// dropped because it names no branch of its own. Package var so callers can
-// stub git access in tests.
+// origin is one candidate rather than two. Two shapes name no branch of their
+// own and are dropped: the symbolic origin/HEAD, whose %(refname:short) is the
+// bare remote name "origin" (never the literal "origin/HEAD" — verified
+// against real git), and the "(no branch)" placeholder a detached-HEAD linked
+// worktree prints in place of a name (also verified: a primary checkout's
+// detached HEAD prints nothing here, but a linked worktree's does). Package
+// var so callers can stub git access in tests.
 var BranchesContaining = func(ctx context.Context, dir, sha string) ([]string, error) {
 	out, err := runner(ctx, "git", "-C", dir, "branch", "--all", "--contains", sha, "--format=%(refname:short)")
 	if err != nil {
@@ -419,7 +423,7 @@ var BranchesContaining = func(ctx context.Context, dir, sha string) ([]string, e
 	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		name := strings.TrimSpace(line)
-		if name == "" || name == "origin/HEAD" || name == "HEAD" {
+		if name == "" || name == "HEAD" || name == "origin" || strings.HasPrefix(name, "(") {
 			continue
 		}
 		name = strings.TrimPrefix(name, "origin/")

@@ -960,11 +960,16 @@ func TestCommitsAnywhere_searchesEveryRef(t *testing.T) {
 	}
 }
 
-func TestBranchesContaining_foldsRemoteRefsAndDropsHead(t *testing.T) {
+// The fake output matches what real git actually prints for
+// `%(refname:short)`: the symbolic origin/HEAD comes back as the bare remote
+// name "origin", never "origin/HEAD" (that literal never appears on the
+// wire — see TestBranchesContaining_realGit for the verified shape), and a
+// detached linked worktree contributes a "(no branch)" line.
+func TestBranchesContaining_foldsRemoteRefsAndDropsPlaceholders(t *testing.T) {
 	var gotArgs []string
 	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		gotArgs = args
-		return []byte("fix/x\norigin/HEAD\norigin/fix/x\norigin/main\n\n"), nil
+		return []byte("fix/x\norigin\norigin/fix/x\norigin/main\n(no branch)\n\n"), nil
 	})
 	got, err := BranchesContaining(context.Background(), ".", "abc")
 	if err != nil {
@@ -987,4 +992,71 @@ func TestBranchesContaining_error(t *testing.T) {
 	if _, err := BranchesContaining(context.Background(), ".", "abc"); err == nil {
 		t.Fatal("expected an error from git")
 	}
+}
+
+// TestBranchesContaining_realGit runs the real parser (no runner stub) over a
+// throwaway repository built with actual git: a base commit reachable from
+// both "main" and "fix/x", a remote whose origin/HEAD symbolically tracks
+// "main" (reproducing the shape a real clone carries), and a linked worktree
+// checked out detached at the base commit — queried from inside that
+// worktree, which is where git actually prints the "(no branch)" placeholder
+// (it does not appear when the same query runs from the primary checkout,
+// even with the detached worktree present elsewhere). Both shapes were
+// previously mis-parsed into spurious candidate branches (SC-5330): "origin"
+// survived as a fake branch, and "(no branch)" as another.
+func TestBranchesContaining_realGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	prev := runner
+	runner = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, name, args...).Output()
+	}
+	t.Cleanup(func() { runner = prev })
+
+	bareDir := t.TempDir()
+	run(t, bareDir, "init", "--quiet", "--bare")
+
+	repoDir := t.TempDir()
+	run(t, repoDir, "init", "--quiet", "-b", "main")
+	run(t, repoDir, "config", "user.email", "test@example.com")
+	run(t, repoDir, "config", "user.name", "test")
+	run(t, repoDir, "commit", "--quiet", "--allow-empty", "-m", "base")
+	baseSHA := strings.TrimSpace(runOut(t, repoDir, "rev-parse", "HEAD"))
+	run(t, repoDir, "checkout", "--quiet", "-b", "fix/x")
+	run(t, repoDir, "commit", "--quiet", "--allow-empty", "-m", "feature")
+	run(t, repoDir, "remote", "add", "origin", bareDir)
+	run(t, repoDir, "push", "--quiet", "origin", "main", "fix/x")
+	run(t, repoDir, "remote", "set-head", "origin", "main")
+
+	worktreeDir := t.TempDir()
+	run(t, repoDir, "worktree", "add", "--quiet", "--detach", worktreeDir, baseSHA)
+
+	got, err := BranchesContaining(context.Background(), worktreeDir, baseSHA)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"fix/x", "main"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("branches = %v, want %v (origin's symbolic HEAD and the detached worktree's \"(no branch)\" must not surface as candidates)", got, want)
+	}
+}
+
+func run(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func runOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(out)
 }
