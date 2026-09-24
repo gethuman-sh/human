@@ -1141,6 +1141,30 @@
     ]
   },
   {
+    "key": "SC-5395",
+    "markers": [
+      "claim",
+      "implementation-started",
+      "pipeline",
+      "bug-verdict",
+      "plan",
+      "bug-verify",
+      "ready-for-review",
+      "review-started",
+      "review-complete",
+      "pr-review-started",
+      "ready-for-review",
+      "claim",
+      "review-started",
+      "fix-summary",
+      "pr-fix-started",
+      "review-complete",
+      "pr-review-started",
+      "pr-review-passed",
+      "deployed"
+    ]
+  },
+  {
     "key": "SC-637",
     "markers": [
       "plan-ready",
