@@ -36,7 +36,9 @@ Your job: read that handoff, run the `human-reviewer` agent against each review 
    ```
    Each run writes `.human/reviews/<review_key_lowercased>.md`. Review ONLY the keys named in this handoff, and post markers ONLY on `<PM_KEY>` — never on any ticket the handoff does not name.
 
-4. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the outcome (`pass`, `pass with notes`, `fail`, `incomplete`, or `unreviewable: <reason>`). If ANY reviewed key's Summary starts with `unreviewable`, the reviewer could not obtain that code — skip the roll-up entirely and go to the unreviewable branch of step 5. Otherwise roll them up into an overall verdict:
+4. **Collect verdicts.** Open each `.human/reviews/<key>.md` the reviewer produced. The first line under `## Summary` is the outcome (`pass`, `pass with notes`, `fail`, `incomplete`, `unreviewable: <reason>`, or `decision-required: <one-line fork>`). The last two are not verdicts — they are escapes, handled below BEFORE any roll-up.
+
+   If ANY reviewed key's Summary starts with `unreviewable`, the reviewer could not obtain that code — skip the roll-up entirely and go to the unreviewable branch of step 5. Otherwise, if ANY reviewed key's Summary starts with `decision-required`, the review reached no verdict for that key because the ticket itself admits a genuine product/scope fork — skip the roll-up entirely and go to the decision-required branch of step 5. Otherwise roll them up into an overall verdict:
    - any fail → `fail`
    - else any incomplete → `incomplete` (a ticket acceptance criterion is unmet — blocks deploy and loops the work back to be built, exactly like a fail)
    - else any pass-with-notes → `pass with notes`
@@ -51,6 +53,16 @@ Your job: read that handoff, run the `human-reviewer` agent against each review 
    human marker post <PM_KEY> review-failed --field reason="<REVIEW_KEY>: <reachability reason — e.g. handoff branch feat/x not found — no code was reviewed>"
    ```
    With several affected keys, pass one `reason` value with embedded newlines — one `<REVIEW_KEY>: <reason>` line each; continuation lines are indented automatically. Tell the user how to make the code reachable (push the branch / commit with the ticket key), and STOP — do not run the pass/notes/fail posting below.
+
+   **Decision-required escape.** If any reviewed key was `decision-required` (and none was `unreviewable`), do NOT post `[human:review-complete]` — there is no verdict to roll up, only a choice for a person. Post the fork as an options block on the PM ticket instead, so the board can render the choices and relaunch the picked one:
+   ```bash
+   human marker post <PM_KEY> options \
+     --field stage=implementation \
+     --field context="<REVIEW_KEY>: <the decision-required one-liner>" \
+     --field 1="<first option, one line>" \
+     --field 2="<second option, one line>"
+   ```
+   With several affected keys, name the first fork found in `context` and mention the rest in a review key prefix per line, same as the unreviewable branch above. Then STOP — do not run the pass/notes/fail posting below.
  The comment is the canonical record of the review — it must carry the reviewer's full findings inline so a reader (and the board detail panel) sees what was found without opening any local file. The `.human/reviews/<key>.md` files remain as working artifacts, not the source of truth. Post it with:
    ```bash
    human marker post <PM_KEY> review-complete \

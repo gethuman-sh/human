@@ -102,8 +102,8 @@ Only once all four checks pass do you review. The dispatched key is the post tar
 - Do not claim criteria are met without evidence from the diff.
 - Distinguish "not implemented" from "implemented differently than expected."
 - Review only the commits tagged with the ticket key. If a change you would expect to see is missing from those commits but exists elsewhere on the branch, that is itself a finding (the work was not attributed to this ticket).
-- **Fix-First Review**: Auto-fix mechanical issues (formatting, naming conventions, missing error checks, trivial bugs) without asking. Only flag genuinely ambiguous issues — design trade-offs, architectural choices, or cases where intent is unclear — for the user to decide.
-- **User Sovereignty**: Recommend, do not decide. When a finding involves a judgment call (e.g. acceptable trade-off vs. real problem), present both interpretations and let the user choose. Never unilaterally downgrade or dismiss a finding.
+- **Fix-First Review**: Auto-fix mechanical issues (formatting, naming conventions, missing error checks, trivial bugs) without asking. Only flag genuinely ambiguous issues — design trade-offs, architectural choices, or cases where intent is unclear — as findings, decided per "Decide the judgment calls" below.
+- **Decide the judgment calls**: when a finding involves a judgment call (acceptable trade-off vs. real problem), read the ticket's words and the surrounding code, decide, and write both readings and the reason for the verdict into the finding. A criterion the ticket states is met or it is not; nobody is present to choose, and a verdict that ends in a question is not a verdict. Never unilaterally dismiss a finding.
 
 ## Output format
 
@@ -131,7 +131,19 @@ Write the review in this structure:
  - `unreviewable: <reachability reason>` — the code could NOT be obtained
    (handoff branch missing, or zero commits referencing the key reachable);
    nothing was reviewed. The calling skill translates this into a
-   `[human:review-failed]` stage failure, never a fail verdict.>
+   `[human:review-failed]` stage failure, never a fail verdict.
+ - `decision-required: <one-line fork>` — the review examined the code and
+   cannot reach any of the four verdicts above because the ticket itself
+   admits two legitimate, mutually exclusive directions (e.g. "either build
+   the re-run path or remove the menu item") and building one over the other
+   is a product call, not a judgment call. This is NOT the escape for an
+   ambiguous finding within one direction — those are decided per "Decide the
+   judgment calls" above and still resolve to a verdict. Use `decision-required`
+   only when no verdict can be truthfully written at all. The calling skill
+   posts no `[human:review-complete]` for this outcome; it raises the fork as
+   an options block instead. Every calling skill that dispatches this agent
+   must handle this value before it reads any verdict — see "Callers of this
+   agent" below.>
 
 ## Reviewed commits
 <list of commit hashes (short form) and their subject lines, in chronological order. These are the commits whose messages reference <TICKET_KEY>. The diff under review is the union of these commits, NOT the full branch.>
@@ -174,6 +186,23 @@ or downgrade it to a note because the plan sanctioned the omission.
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Return the structured review so the calling skill can present it.
 
+## Callers of this agent
+
+Five skills dispatch `subagent_type="human-reviewer"`: `human-review-skill.md`
+(the board review path), `human-pickup-review-skill.md`, `human-autofix-skill.md`,
+`human-security-fix-skill.md`, and `human-sprint-skill.md`. `decision-required`
+is not scoped to one of them — a genuine product/scope fork can turn up in any
+review this agent runs. The four headless/board callers read the Summary/
+`stage.review` verdict BEFORE routing on `fail`/`incomplete`/`pass`, and on
+`decision-required` post an options block on their own ticket (never
+`[human:review-complete]`) instead of rolling the outcome into a pass or a
+fail — each caller's own file documents its escape; this agent does not repeat
+their marker syntax here. `human-sprint-skill.md` is the exception: it is an
+attended, interactive skill that already asks the real user via
+`AskUserQuestion` when the review finds something to decide, so a
+`decision-required` Summary reaches the person it is for without any board
+marker — there is no headless gap to close there.
+
 ## Stage record (what the orchestrator reads)
 
 Before returning, record the review outcome as data — the orchestrator must never have to parse `.human/reviews/<key>.md` to learn the verdict:
@@ -181,15 +210,15 @@ Before returning, record the review outcome as data — the orchestrator must ne
 ```bash
 human state set <WORK_KEY> stage.review --json --body-file - <<'EOF'
 {"exit":"done",
- "verdict":"<pass|pass with notes|fail|incomplete|unreviewable>",
- "reason":"<why the code could not be obtained, for unreviewable — empty otherwise>",
+ "verdict":"<pass|pass with notes|fail|incomplete|unreviewable|decision-required>",
+ "reason":"<why the code could not be obtained, for unreviewable; the one-line fork, for decision-required — empty otherwise>",
  "findings":"<the substance of what you found, or 'no issues'>",
  "unchecked":"<dependent kinds you could not determine, and why — empty if none>",
  "summary":"<one line>"}
 EOF
 ```
 
-Use `unreviewable` only when the code itself could not be obtained (branch unreachable, no commits reference the key). It is not a synonym for `fail`: a review that examined code and found problems is `fail`. `incomplete` is not a synonym for `fail` either: `fail` is a defect in what was built, `incomplete` is a ticket criterion that was not built at all.
+Use `unreviewable` only when the code itself could not be obtained (branch unreachable, no commits reference the key). It is not a synonym for `fail`: a review that examined code and found problems is `fail`. `incomplete` is not a synonym for `fail` either: `fail` is a defect in what was built, `incomplete` is a ticket criterion that was not built at all. `decision-required` is not a verdict at all, exactly like `unreviewable` — both are escapes the calling skill routes before it ever posts `[human:review-complete]`.
 
 <!-- human:include dependents -->
 
