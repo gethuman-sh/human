@@ -7,12 +7,18 @@ package daemon
 const (
 	AgentLive = "live"
 	AgentDead = "dead"
-	// AgentRecovering is "dead, but the machine still owes it a try": a running
+	// AgentRecovering is "dead, but the machine still owes it a try". Two
+	// classes, two recovery passes and two clocks: a running
 	// planning/implementation/verification card whose agent is gone, but not
-	// yet past StuckRunningGrace — the window reconcileStuckRunning itself
-	// waits out before relaunching (board_reconcile.go:482). Rendering this the
-	// same as AgentDead would ask a person to retry work the daemon's own
-	// bounded relaunch has not yet had its turn to fix (the SC-1830 rule
+	// yet past StuckRunningGrace measured from its StageEnteredAt — the window
+	// reconcileStuckRunning itself waits out before relaunching
+	// (board_reconcile.go:482); and a done-stage PR review<->fix loop card
+	// whose named half is gone, but not yet past the loop's own reconcile tick
+	// measured from the agent's recorded stop — reconcilePRLoops re-drives it
+	// on no grace of its own, but that means "on the next tick", not
+	// "instantly" (board.prLoopRedriveGrace, SC-5091). Rendering either as
+	// AgentDead would ask a person to retry work the daemon's own bounded
+	// relaunch has not yet had its turn to fix (the SC-1830 rule
 	// board.agentLaunchGrace already applies to the queued class); this value
 	// lets the viewer paint the machine register instead until that turn has
 	// passed (SC-3569 PR review finding).
