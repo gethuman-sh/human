@@ -25,7 +25,7 @@ After the agent finishes:
    human marker post <DISPATCHED_KEY> review-complete --field verdict="<pass | pass with notes | fail>" --body "<summary of the main findings>"
    ```
    This renders the fixed `[human:review-complete]` block with a `verdict:` line, parsed unambiguously across trackers. The findings summary is REQUIRED when the verdict is `fail` — list each blocking finding as a bullet with its file reference; a rebuild is dispatched against exactly this comment, so it must contain everything needed to fix the problems. For `pass` verdicts one line suffices.
-4. **Offer choices when the outcome is a genuine fork.** When the review ends in a decision between alternatives rather than one clear direction (e.g. "either build the re-run path or remove the menu item"), post a SECOND comment on the **dispatched key** with a machine-readable options block so the board can render the choices and relaunch the picked one — options buried in prose are invisible to the pipeline:
+4. **A fail verdict is the answer, never also a question.** A criterion that fails goes back to implementation through the verdict above — the board relaunches the build against your review-complete comment. Never post an options block alongside a `fail` verdict, and never offer "accept as is and file a follow-on" against "fix it now": an unmet criterion is built, not deferred, and a question next to a verdict leaves the card waiting on a person for an answer the machine already has. The one case for an options block is a review that cannot reach a verdict because the outcome is a genuine product fork (e.g. "either build the re-run path or remove the menu item"): then post NO `review-complete` comment, and post the block on the **dispatched key** so the board can render the choices and relaunch the picked one — options buried in prose are invisible to the pipeline:
    ```bash
    human marker post <DISPATCHED_KEY> options \
      --field stage="<planning | implementation | verification>" \
@@ -33,5 +33,5 @@ After the agent finishes:
      --field 1="<first option, one line>" \
      --field 2="<second option, one line>"
    ```
-   This renders the `[human:options]` block with the fields in that order. `stage:` names which stage a choice relaunches (usually `implementation`). One line per option; the full reasoning stays in the review-complete comment above. Use this sparingly — only for real forks the user must decide, never as a substitute for a verdict.
+   This renders the `[human:options]` block with the fields in that order. `stage:` names which stage a choice relaunches (usually `implementation`). One line per option. Use this sparingly — only for real forks the user must decide, never as a substitute for a verdict and never next to one.
 5. **Tell the user** the verdict and that the full review lives at `.human/reviews/<key>.md`.

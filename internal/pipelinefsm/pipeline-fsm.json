@@ -948,7 +948,7 @@
         "stage"
       ],
       "where": "board_state.go pauseOnOpenOptions",
-      "doc": "A stage found a genuine fork and stopped. The item is not working and not dead — it is waiting on a person, and reads as decision-needed rather than running."
+      "doc": "A stage found a genuine fork and stopped. The item is not working and not dead — it is waiting on a person, and reads as decision-needed rather than running. From in-review it is raised only when no [human:review-complete] verdict precedes it in the same stage: a fail verdict is the answer and the rework relaunches implementation, so a review that reached a verdict never also asks (SC-5277)."
     },
     {
       "name": "decision-made",

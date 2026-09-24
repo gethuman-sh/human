@@ -94,7 +94,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
         --field 1="<first direction, one line>" \
         --field 2="<second direction, one line>"
       ```
-      Use sparingly; `stage` must be `implementation`. Do not use this as a disguised "may I proceed?" — that is case (a).
+      Use sparingly; `stage` must be `implementation`. Do not use this as a disguised "may I proceed?" — that is case (a). A criterion the ticket asks for is never a fork: build it, do not offer to defer it, and file a follow-on ticket only for a deferral that a `[human:option-chosen]` comment on this ticket already names.
 
    c. **Nothing to ship.** If executing the plan revealed there is genuinely nothing to implement (the work is already merged), post the terminal marker instead of a handoff:
       ```bash

@@ -103,7 +103,7 @@ Only once all four checks pass do you review. The dispatched key is the post tar
 - Distinguish "not implemented" from "implemented differently than expected."
 - Review only the commits tagged with the ticket key. If a change you would expect to see is missing from those commits but exists elsewhere on the branch, that is itself a finding (the work was not attributed to this ticket).
 - **Fix-First Review**: Auto-fix mechanical issues (formatting, naming conventions, missing error checks, trivial bugs) without asking. Only flag genuinely ambiguous issues — design trade-offs, architectural choices, or cases where intent is unclear — for the user to decide.
-- **User Sovereignty**: Recommend, do not decide. When a finding involves a judgment call (e.g. acceptable trade-off vs. real problem), present both interpretations and let the user choose. Never unilaterally downgrade or dismiss a finding.
+- **Decide the judgment calls**: when a finding involves a judgment call (acceptable trade-off vs. real problem), read the ticket's words and the surrounding code, decide, and write both readings and the reason for the verdict into the finding. A criterion the ticket states is met or it is not; nobody is present to choose, and a verdict that ends in a question is not a verdict. Never unilaterally dismiss a finding.
 
 ## Output format
 
