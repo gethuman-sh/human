@@ -67,12 +67,15 @@ A plan runs in a headless container with no human present. Two hard rules govern
    A plan delivers every acceptance criterion. Delivery order is never a question
    for the human: a plan that could ship a subset first ships the whole instead,
    and "ship the narrow slice now + follow-on ticket for the rest" is not a
-   `DECISION REQUIRED:` fork. The one way scope changes is on the ticket: if the
-   ticket over-asks, or a criterion is wrong or contradicts another, say so
-   plainly in the plan and note that the ticket must be amended so ticket and
-   plan agree — reducing the agreed outcome is a human call, made on the ticket.
-   Recording a reduced scope only under "Architecture Decisions / Trade-off" is
-   forbidden.
+   `DECISION REQUIRED:` fork. But when the ticket cannot be delivered as written —
+   its acceptance criteria contradict each other, or together ask for more than
+   the codebase can carry — that IS the genuine fork rule 2 reserves: do NOT
+   write a plan. Emit the `DECISION REQUIRED:` terminal (rule 2's path) naming
+   the contradiction or over-ask and stating that the ticket must be amended, so
+   the item stops for a human instead of implementation being dispatched on a
+   plan that knowingly falls short. Recording a reduced scope only under
+   "Architecture Decisions / Trade-off" is forbidden — a scope reduction is never
+   decided silently inside a plan.
 
 Prefer deciding over asking: emit `DECISION REQUIRED:` only for a real taste/ambiguity fork, never for a choice you can resolve yourself.
 
@@ -101,7 +104,7 @@ For each non-trivial choice:
 - **Chosen**: <which option and why>
 - **Trade-off**: <what we give up>
 
-Resolve every decision you can here and record the choice — a board plan must arrive with all such decisions made. Never defer a decision into an implementation step. A decision you genuinely cannot make (a product/UX taste call or an ambiguity the codebase cannot settle) is NOT written into the plan at all: stop and emit the `DECISION REQUIRED:` terminal verdict (see "Autonomy contract") so the human chooses up front, before any implementation is dispatched. Scope itself is never such a decision: a choice to build fewer acceptance criteria than the ticket asks for is not recorded here — it is a ticket amendment (Autonomy contract rule 4), never a fork the plan raises.
+Resolve every decision you can here and record the choice — a board plan must arrive with all such decisions made. Never defer a decision into an implementation step. A decision you genuinely cannot make (a product/UX taste call, an ambiguity the codebase cannot settle, or a ticket whose criteria over-ask or contradict each other) is NOT written into the plan at all: stop and emit the `DECISION REQUIRED:` terminal verdict (see "Autonomy contract" rule 4 for the scope case) so the human chooses up front, before any implementation is dispatched. Delivery order is never such a decision: a plan that could ship a subset first ships the whole instead (Autonomy contract rule 4), and is never recorded here as a trade-off.
 
 ## Existing Patterns (Verified)
 
@@ -179,7 +182,7 @@ For each new or modified behavior:
 - Do not plan changes to code you haven't read.
 - Always include the PM ticket key at the top of the plan so the executor can reference the ticket trail in every git commit message: `human commits prefix <PM_KEY> [<ENG_KEY>]` prints the canonical subject prefix — with both keys in split topology (e.g. `[<PM_KEY>] [<ENG_KEY>] Add validation`; the two tickets may live on different trackers, e.g. Shortcut PM + Linear engineering), with the one evolving ticket's key in single-tracker topology (e.g. `[<PM_KEY>] Add validation`).
 - **Search Before Building**: Before designing anything new, search three layers: (1) the current codebase for existing solutions or patterns, (2) the project's history and tickets for prior attempts and decisions, (3) standard approaches in the language/framework ecosystem. Only propose new code when existing code cannot be extended.
-- **User Sovereignty for genuine forks only**: For a trade-off the codebase or ticket can settle, decide it and record the rationale in "Architecture Decisions" — a board plan must arrive decided. Reserve deferral for a real product/UX taste call or an ambiguous requirement, and express that as the up-front `DECISION REQUIRED:` terminal (per the Autonomy contract) so the human chooses BEFORE implementation — never as a sign-off gate baked into a step. Reducing what the ticket asks for is never the plan's call: say so on the ticket (Autonomy contract rule 4), never decide it in the plan and never ask which slice to ship first.
+- **User Sovereignty for genuine forks only**: For a trade-off the codebase or ticket can settle, decide it and record the rationale in "Architecture Decisions" — a board plan must arrive decided. Reserve deferral for a real product/UX taste call or an ambiguous requirement, and express that as the up-front `DECISION REQUIRED:` terminal (per the Autonomy contract) so the human chooses BEFORE implementation — never as a sign-off gate baked into a step. Scope is governed by Autonomy contract rule 4, not decided here: never ask which slice to ship first, and never narrow the ticket without routing an over-ask or contradiction through that rule's `DECISION REQUIRED:` path.
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Either return a complete, gate-free plan or, for a genuine human fork, the `DECISION REQUIRED:` terminal verdict. Then finish.
 
