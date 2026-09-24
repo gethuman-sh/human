@@ -61,6 +61,13 @@ definition of "hung", and it is two numbers, not one:
 | Inside a tool call **or** waiting on a dispatched subagent **or** a model request in flight **or** the model-request state unknown | **30 minutes** of silence | `WorkingIdleGrace` |
 | Waiting on a human (`Notification` — a permission prompt) | **never stalls** | `Blocked` |
 
+The same judgement reaches the board: the daemon overlays `AgentProgress.Stalled`,
+the silence and the budget on each card whose agent it knows
+(`daemon.MarkAgentProgress`), and the desktop renders a present-but-stalled
+agent as "agent silent 4m" in the machine register rather than as a spinner.
+The board computes no budget of its own; a card the daemon has no record for
+renders exactly as before (SC-5328).
+
 Waiting on a local tool call, waiting on a subagent and waiting on the model
 are the same thing from the outside — outstanding work, from three sources — so
 any of them earns the generous bound. Genuine idleness, with none, gets the

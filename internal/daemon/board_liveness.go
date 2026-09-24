@@ -18,6 +18,13 @@ const (
 	// passed (SC-3569 PR review finding).
 	AgentRecovering = "recovering"
 	AgentElsewhere  = "elsewhere"
+	// AgentStalled is "present, and the daemon judges it hung": the container
+	// is running here but the agent has been silent past the budget its
+	// outstanding work grants it (AgentProgress.Stalled). Presence alone
+	// rendered a hung agent and a working one the same, and a person watching
+	// a card could not tell whether to wait (SC-5328). Still the machine's
+	// register: the zombie sweep reaps and relaunches exactly this case.
+	AgentStalled = "stalled"
 )
 
 // agentLaunchStages are the stages that launch a named agent

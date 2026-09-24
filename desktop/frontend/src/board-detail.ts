@@ -163,10 +163,15 @@ function fmtDuration(ms: number): string {
 // the busiest one on the board (SC-3569). "recovering" reads the same as
 // "dead" here: no process is visible either way, and the elapsed clock is
 // honest about that regardless of whether the daemon's own relaunch has come
-// due yet — that distinction belongs to the badge, not this label. Unknown
+// due yet — that distinction belongs to the badge, not this label. "stalled"
+// gets the same wording: the agent is present but the daemon judges it has
+// made no observable progress, so "running" would still be the wrong claim —
+// the badge is what says how long the silence has been (SC-5328). Unknown
 // liveness keeps today's word, because absence of a signal is not proof.
 function elapsedLabel(agentLiveness: string | undefined): string {
-  if (agentLiveness === "dead" || agentLiveness === "recovering") return "since last activity";
+  if (agentLiveness === "dead" || agentLiveness === "recovering" || agentLiveness === "stalled") {
+    return "since last activity";
+  }
   if (agentLiveness === "elsewhere") return "— on another machine";
   return "running";
 }

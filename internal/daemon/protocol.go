@@ -306,12 +306,18 @@ type BoardViewCard struct {
 	// all render at full opacity (dimming is a hint, never applied on a guess).
 	NotMine bool `json:"notMine,omitempty"`
 	// AgentLiveness answers "is an agent actually working this card right now":
-	// AgentLive, AgentDead, AgentRecovering, AgentElsewhere, or "" for unknown.
+	// AgentLive, AgentDead, AgentRecovering, AgentElsewhere, AgentStalled, or ""
+	// for unknown.
 	// AgentRecovering is AgentDead's softer sibling: the agent is gone, but the
 	// daemon's own StuckRunningGrace relaunch is not yet due for this card's
 	// class, so it must render in the machine register rather than ask a
 	// person to retry work the machine hasn't had its turn at yet (SC-3569 PR
-	// review finding). A viewer-local field like NotMine — filled by the
+	// review finding).
+	// AgentStalled is "present, and the daemon judges it hung": the container
+	// is running but the agent has gone silent past the budget its
+	// outstanding work grants it (SC-5328) — still the machine's register,
+	// since the zombie sweep reaps and relaunches exactly this case.
+	// A viewer-local field like NotMine — filled by the
 	// desktop overlay (applyLocal via board.MarkAgentLiveness), NEVER by
 	// Compose, because liveness is a property of the machine looking rather
 	// than of the project.
@@ -322,6 +328,12 @@ type BoardViewCard struct {
 	// then render exactly as it did before this existed. Absence of a signal is
 	// never proof of death.
 	AgentLiveness string `json:"agentLiveness,omitempty"`
+	// AgentProgress is the daemon's own judgement of whether the agent behind
+	// the card is working or hung — filled by the daemon after Compose (the
+	// probe lives nowhere else), applied by the viewer only to an agent it
+	// found running on that daemon's machine. Nil when the daemon has no record
+	// of the agent, which the viewer renders exactly as before (SC-5328).
+	AgentProgress *BoardAgentProgress `json:"agentProgress,omitempty"`
 	// Options carries the card's open decision block: a stage ended in a fork
 	// and a human must pick a direction. OptionsContext is the one-line why.
 	Options        []BoardOption `json:"options,omitempty"`

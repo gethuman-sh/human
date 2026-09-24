@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueOf, isReworkable, reworkKind, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
+import { queueOf, isReworkable, reworkKind, isReopenable, verdictFailed, forwardDropAllowed, planReady, badgeInfo, sinceText, formatSilence, safetyReconcileError, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReviewRetryable, STOP_DECISION_LABELS } from "../build/board-queue.js";
 import { DAEMON_FORWARDED_STATES } from "../build/board-states.js";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -894,4 +894,81 @@ test("a rework handoff awaiting review is not a failed review offering only Rewo
   assert.equal(queueOf(card), "building");
   assert.equal(isReviewRetryable(card), false);
   assert.equal(badgeInfo(card, new Date()).text, "awaiting review…");
+});
+
+// SC-5328: a present agent the daemon judges hung reads as stalled — machine
+// register (the sweep relaunches it), no spinner, and it says how long the
+// silence has been and against which budget.
+test("a stalled agent names its silence and stays in the machine register (SC-5328)", () => {
+  const stalled = badgeInfo({
+    stage: "implementation",
+    state: "running",
+    agentLiveness: "stalled",
+    agentProgress: { stalled: true, idleSeconds: 250, budgetSeconds: 180 },
+  });
+  assert.equal(stalled.cls, "recovering");
+  assert.equal(stalled.spinner, false);
+  assert.match(stalled.text, /agent silent 4m/);
+  assert.match(stalled.title, /past the 3m/);
+  const bare = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "stalled" });
+  assert.match(bare.text, /silent past its budget/);
+  const live = badgeInfo({ stage: "implementation", state: "running", agentLiveness: "live" });
+  assert.equal(live.spinner, true, "a working agent renders as before");
+});
+
+// SC-5328: a stalled agent is still PRESENT for a failed card — the earlier
+// failure is not the last word while a container is running here — but it
+// must not render byte-identical to a healthy live agent: no spinner, and its
+// own silence, so a person can tell a hung fixer from a working one.
+test("a stalled agent on a failed card names its silence and drops the spinner (SC-5328)", () => {
+  const stalled = badgeInfo({
+    stage: "implementation",
+    state: "failed",
+    error: "x",
+    agentLiveness: "stalled",
+    agentProgress: { stalled: true, idleSeconds: 250, budgetSeconds: 180 },
+  });
+  assert.equal(stalled.cls, "recovering");
+  assert.equal(stalled.spinner, false);
+  assert.match(stalled.text, /still working/);
+  assert.match(stalled.text, /agent silent 4m/);
+  const bare = badgeInfo({ stage: "implementation", state: "failed", error: "x", agentLiveness: "stalled" });
+  assert.match(bare.text, /silent past its budget/);
+  const live = badgeInfo({ stage: "implementation", state: "failed", error: "x", agentLiveness: "live" });
+  assert.equal(live.spinner, true, "a genuinely live agent still renders as before");
+  assert.equal(live.cls, "fixing");
+});
+
+// SC-5328: same distinction on the rework badge — a stalled fixer must not
+// read as an ordinary in-progress rework.
+test("a stalled fixer on a rework card names its silence and drops the spinner (SC-5328)", () => {
+  const stalled = badgeInfo({
+    stage: "verification",
+    state: "done",
+    verdict: "fail: x",
+    verdictFailed: true,
+    agentLiveness: "stalled",
+    agentProgress: { stalled: true, idleSeconds: 250, budgetSeconds: 180 },
+  });
+  assert.equal(stalled.cls, "recovering");
+  assert.equal(stalled.spinner, false);
+  assert.match(stalled.text, /agent silent 4m/);
+  const live = badgeInfo({
+    stage: "verification",
+    state: "done",
+    verdict: "fail: x",
+    verdictFailed: true,
+    agentLiveness: "live",
+  });
+  assert.equal(live.spinner, true, "a genuinely live fixer still renders as before");
+  assert.equal(live.cls, "fixing");
+});
+
+test("formatSilence renders the coarsest honest unit (SC-5328)", () => {
+  assert.equal(formatSilence(undefined), "");
+  assert.equal(formatSilence(-1), "");
+  assert.equal(formatSilence(45), "45s");
+  assert.equal(formatSilence(250), "4m");
+  assert.equal(formatSilence(3600), "1h");
+  assert.equal(formatSilence(4200), "1h 10m");
 });

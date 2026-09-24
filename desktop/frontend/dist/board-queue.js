@@ -178,6 +178,24 @@ export const STOP_DECISION_LABELS = {
 // implying it is the failed one (SC-4406).
 function failedBadge(card, runningLabels = RUNNING_LABELS) {
     const reason = card.error || "Stage failed";
+    if (card.agentLiveness === "stalled") {
+        // Present, but the daemon judges it hung — not the same as a working
+        // agent, which is why this is its own arm rather than folded into "live"
+        // below: no spinner (nothing is observably progressing), and the silence
+        // rides the text the way livenessBadge's stalled arm does, so the card
+        // does not read byte-identical to a healthy run (SC-5328).
+        const elsewhere = card.runningStage ? (runningLabels[card.runningStage] ?? "working…") : "";
+        const base = elsewhere ? `still ${elsewhere} — earlier failure recorded` : "still working — earlier failure recorded";
+        const silent = formatSilence(card.agentProgress?.idleSeconds);
+        return {
+            cls: "recovering",
+            text: silent ? `${base} — agent silent ${silent}` : `${base} — agent silent past its budget`,
+            title: `${elsewhere
+                ? `A failure was recorded, but an agent is running this ticket's ${card.runningStage} stage here`
+                : `A failure was recorded for this stage, but an agent is still running it here`}, and has made no observable progress${silent ? ` for ${silent}` : ""}. The daemon stops and relaunches a hung agent on its own; no action needed yet. Recorded reason: ${reason}`,
+            spinner: false,
+        };
+    }
     if (card.agentLiveness === "live") {
         const elsewhere = card.runningStage ? (runningLabels[card.runningStage] ?? "working…") : "";
         return {
@@ -200,7 +218,22 @@ function failedBadge(card, runningLabels = RUNNING_LABELS) {
 // another machine owns says that instead — neither a false spinner nor a false
 // death, because this machine genuinely cannot see a peer's containers.
 // Unknown liveness returns the base badge untouched (SC-3569).
-function livenessBadge(base, liveness, deadText, deadTitle) {
+function livenessBadge(base, liveness, deadText, deadTitle, progress) {
+    if (liveness === "stalled") {
+        // Present but hung, on the daemon's own judgement: the agent has been
+        // silent past the budget its outstanding work grants it. Still the
+        // machine's turn — the zombie sweep reaps and relaunches exactly this
+        // case — so it stays in the machine register, and says how long the
+        // silence has been so a person can tell waiting from wondering (SC-5328).
+        const silent = formatSilence(progress?.idleSeconds);
+        const budget = formatSilence(progress?.budgetSeconds);
+        return {
+            cls: "recovering",
+            text: silent ? `${base.text} — agent silent ${silent}` : `${base.text} — agent silent past its budget`,
+            title: `The agent is running here but has made no observable progress${silent ? ` for ${silent}` : ""}${budget ? `, past the ${budget} the daemon allows it` : ""}. The daemon stops and relaunches a hung agent on its own; no action needed yet.`,
+            spinner: false,
+        };
+    }
     if (liveness === "dead") {
         return { cls: "stalled", text: deadText, title: deadTitle, spinner: false };
     }
@@ -246,6 +279,18 @@ function livenessBadge(base, liveness, deadText, deadTitle) {
 // dropped, whose implementation-started marker has not yet landed.
 function reworkBadge(card) {
     const verdict = card.verdict ?? "";
+    if (card.agentLiveness === "stalled") {
+        // Same distinction as failedBadge's stalled arm: a fixer is present but
+        // the daemon judges it hung, so this must not read as an ordinary
+        // in-progress rework (SC-5328).
+        const silent = formatSilence(card.agentProgress?.idleSeconds);
+        return {
+            cls: "recovering",
+            text: silent ? `review found problems — fixing… — agent silent ${silent}` : "review found problems — fixing… — agent silent past its budget",
+            title: `Review found problems — a fixer is reworking the code (verdict: ${verdict}), but has made no observable progress${silent ? ` for ${silent}` : ""}. The daemon stops and relaunches a hung agent on its own; no action needed yet.`,
+            spinner: false,
+        };
+    }
     if (card.agentLiveness === "live") {
         return {
             cls: "fixing",
@@ -359,7 +404,7 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
         const title = card.activity
             ? `Agent running — ${card.activity}${card.activityAt ? `, last recorded ${sinceText(card.activityAt, nowMs)}` : ""}`
             : "Agent running";
-        return livenessBadge({ cls: "running", text, title, spinner: true }, card.agentLiveness, `${text} — agent not running`, "No agent is running this stage on this machine — the run died or was stopped. Retry it, or drop the card on its stage again.");
+        return livenessBadge({ cls: "running", text, title, spinner: true }, card.agentLiveness, `${text} — agent not running`, "No agent is running this stage on this machine — the run died or was stopped. Retry it, or drop the card on its stage again.", card.agentProgress);
     }
     // A recorded decision has (re)queued the chosen stage but the relaunched
     // agent has not posted its started marker yet — or the launch was deferred to
@@ -384,7 +429,7 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
             text: `decision recorded — ${verb} picked up`,
             title: "A direction was chosen — a fresh agent will pick up the work",
             spinner: true,
-        }, card.agentLiveness, `decision recorded — ${verb} never started`, "A direction was chosen but no agent picked the work up on this machine. Retry the stage.");
+        }, card.agentLiveness, `decision recorded — ${verb} never started`, "A direction was chosen but no agent picked the work up on this machine. Retry the stage.", card.agentProgress);
     }
     // A paused (outage) card is the do-nothing register: a substrate the run
     // depends on is unavailable, the work stays written and safe on the ticket,
@@ -440,6 +485,21 @@ export function badgeInfo(card, nowMs = Date.now(), runningLabels = RUNNING_LABE
         return { cls: "done", text: "deployed", title: "Merged and shipped" };
     }
     return null;
+}
+// formatSilence renders a silence or a budget in the coarsest honest unit —
+// "4m", "1h 10m" — or "" when absent, so the badge falls back to wording
+// with no number rather than "silent NaN".
+export function formatSilence(seconds) {
+    if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0)
+        return "";
+    const m = Math.floor(seconds / 60);
+    if (m < 1)
+        return `${Math.floor(seconds)}s`;
+    if (m < 60)
+        return `${m}m`;
+    const h = Math.floor(m / 60);
+    const rest = m % 60;
+    return rest ? `${h}h ${rest}m` : `${h}h`;
 }
 // formatResume renders a paused card's stated resume instant in the reader's
 // own local timezone as "HH:MM", or "" when absent/unparseable — the badge

@@ -452,7 +452,10 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 	// built, the cached route serves it back.
 	boardCache := boardcache.NewStore(boardcache.DefaultPath())
 
-	srv := &daemon.Server{
+	// Declared before it is built so the board fetcher can read the progress
+	// probe the server is handed only once the proxy is listening.
+	var srv *daemon.Server
+	srv = &daemon.Server{
 		Addr:              addr,
 		Token:             token,
 		SafeMode:          safe,
@@ -467,7 +470,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		CostLedgerProject: resolveProject,
 		IssueFetcher:      issueFetcher,
 		LiteIssueFetcher:  fetchTrackerIssuesLiteFunc(projectRegistry, vaultResolver),
-		BoardViewFetcher:  boardViewFunc(issueFetcher, doctor, projectRegistry, boardCache, logger),
+		BoardViewFetcher:  boardViewFunc(issueFetcher, doctor, projectRegistry, boardCache, func() daemon.AgentProgressProbe { return srv.AgentProgress }, daemonID, logger),
 		// Shares the store the live composer writes to, rather than opening a
 		// second one on the same path: the store serializes its own
 		// read-modify-write, and two of them would each hold half a lock.
@@ -2067,7 +2070,12 @@ func issueGetterFunc(reg *daemon.ProjectRegistry, resolver *vault.Resolver) func
 // by whoever renders the board. Docker matters because it is where agents
 // launch, which is this machine — a client probing its own engine answers a
 // question about the wrong computer (SC-2132).
-func boardViewFunc(fetch func() ([]daemon.TrackerIssuesResult, error), doctor *daemon.DoctorRunner, reg *daemon.ProjectRegistry, cache *boardcache.Store, logger zerolog.Logger) func() (daemon.BoardView, error) {
+//
+// progress is read through a closure because the probe is assembled after the
+// server is (it needs the proxy's in-flight counter); the judgement it yields
+// is overlaid after the composed view is remembered, so a cached board served
+// during an outage never replays a verdict that was true minutes ago (SC-5328).
+func boardViewFunc(fetch func() ([]daemon.TrackerIssuesResult, error), doctor *daemon.DoctorRunner, reg *daemon.ProjectRegistry, cache *boardcache.Store, progress func() daemon.AgentProgressProbe, daemonID string, logger zerolog.Logger) func() (daemon.BoardView, error) {
 	return func() (daemon.BoardView, error) {
 		project := boardProjectKey(reg)
 		results, err := fetch()
@@ -2080,6 +2088,7 @@ func boardViewFunc(fetch func() ([]daemon.TrackerIssuesResult, error), doctor *d
 		view := board.Compose(results, dockerOK)
 		attachActivity(ctx, reg, &view, logger)
 		rememberBoardView(cache, project, view, logger)
+		daemon.MarkAgentProgress(view.Cards, progress(), daemonID, time.Now())
 		return view, nil
 	}
 }
