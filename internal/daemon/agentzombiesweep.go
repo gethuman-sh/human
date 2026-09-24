@@ -19,6 +19,8 @@ type AgentInfo struct {
 	// for it — otherwise a deliberately idle agent is killed within seconds
 	// of coming up (SC-236).
 	Idle bool
+	// ProjectDir attributes the run's resource record to its project.
+	ProjectDir string
 }
 
 // AgentZombieSweeper checks for orphaned agent containers whose main
@@ -101,6 +103,9 @@ type zombieSweep struct {
 	// nil value keeps every existing call site compiling and behaving
 	// unchanged (SC-1600).
 	progress AgentProgressProbe
+	// exitRecorder takes the container's last reading before DeleteAgent
+	// removes it (SC-5369). Nil records nothing.
+	exitRecorder *AgentExitRecorder
 }
 
 func newZombieSweep() *zombieSweep {
@@ -126,7 +131,7 @@ func newZombieSweep() *zombieSweep {
 // progress additionally catches a board agent whose claude process is still
 // up but has gone silent past its idle budget (SC-1600) — process liveness
 // alone reports such an agent as healthy forever. nil disables this check.
-func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, progress AgentProgressProbe, onReaped func(agentName string, reason ReapReason), logger zerolog.Logger) {
+func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, progress AgentProgressProbe, exitRecorder *AgentExitRecorder, onReaped func(agentName string, reason ReapReason), logger zerolog.Logger) {
 	if sweeper == nil {
 		return
 	}
@@ -138,6 +143,7 @@ func RunAgentZombieSweep(ctx context.Context, sweeper AgentZombieSweeper, progre
 
 	sweep := newZombieSweep()
 	sweep.progress = progress
+	sweep.exitRecorder = exitRecorder
 
 	for {
 		select {
@@ -202,7 +208,7 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 				logger.Warn().Str("agent", a.Name).Dur("idle", silence.Idle).Dur("budget", silence.Budget).
 					Str("outstanding", silence.Outstanding).Str("model_request", modelReq.String()).
 					Msg("zombie sweep: board agent silent past its idle budget, reaping")
-				z.reap(ctx, sweeper, a.Name, ReapReason{Silent: true, Idle: silence.Idle, Budget: silence.Budget, Outstanding: silence.Outstanding}, onReaped, logger)
+				z.reap(ctx, sweeper, a, ReapReason{Silent: true, Idle: silence.Idle, Budget: silence.Budget, Outstanding: silence.Outstanding}, onReaped, logger)
 				continue
 			}
 		}
@@ -214,7 +220,7 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 			continue
 		}
 
-		z.reap(ctx, sweeper, a.Name, ReapReason{}, onReaped, logger)
+		z.reap(ctx, sweeper, a, ReapReason{}, onReaped, logger)
 	}
 }
 
@@ -252,8 +258,12 @@ func (z *zombieSweep) hungBoardAgent(name string, now time.Time) (bool, SilenceR
 // (SC-427). The abandoned goroutine still finishes into the buffered channel,
 // and the agent's cross-tick memory is intentionally left so a later tick
 // retries it.
-func (z *zombieSweep) reap(ctx context.Context, sweeper AgentZombieSweeper, name string, reason ReapReason, onReaped func(agentName string, reason ReapReason), logger zerolog.Logger) {
+func (z *zombieSweep) reap(ctx context.Context, sweeper AgentZombieSweeper, a AgentInfo, reason ReapReason, onReaped func(agentName string, reason ReapReason), logger zerolog.Logger) {
+	name := a.Name
 	logger.Info().Str("agent", name).Msg("zombie sweep: cleaning orphaned agent")
+	// The exit row needs the container: after DeleteAgent there is nothing
+	// left to read, and the OOM verdict lives on the container's state.
+	z.exitRecorder.RecordExit(ctx, a, reason)
 
 	deleteCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	// Buffered so an abandoned reap goroutine can always send and exit even

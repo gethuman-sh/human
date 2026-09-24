@@ -39,6 +39,7 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/codenav"
 	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/containerres"
 	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
@@ -483,6 +484,7 @@ func initDaemon(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, de
 		PendingConfirms:        confirmStore,
 		StatsWriter:            statsWriter,
 		StatsStore:             statsStore,
+		ResourceProber:         &engineResourceProber{},
 		AuditSink:              auditWriter,
 		AuditStore:             auditStore,
 		AgentCleaner:           &dockerAgentCleaner{},
@@ -753,7 +755,17 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 
 	go daemon.RunAgentCleanup(ctx, ds.srv.HookEvents, &dockerAgentCleaner{}, agentClaudeAlive, logger)
 	go runAgentPrune(ctx, logger)
-	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, agentProgress, func(agentName string, reason daemon.ReapReason) {
+	// The resource record (SC-5369): a reading of every running container on
+	// a timer, and a last reading before the sweep removes one. Both go to the
+	// stats store the daemon already owns; without it nothing is recorded.
+	resourceProber := &engineResourceProber{}
+	var sampleSink daemon.ContainerSampleSink
+	if ds.statsStore != nil {
+		sampleSink = ds.statsStore
+	}
+	go daemon.RunAgentResourceSampler(ctx, &dockerAgentSweeper{}, resourceProber, sampleSink, daemon.AgentResourceSampleInterval, logger)
+	exitRecorder := &daemon.AgentExitRecorder{Prober: resourceProber, Sink: sampleSink, Logger: logger}
+	go daemon.RunAgentZombieSweep(ctx, &dockerAgentSweeper{}, agentProgress, exitRecorder, func(agentName string, reason daemon.ReapReason) {
 		// A reaped agent died without firing hooks, so no exit event exists
 		// for the board failure watcher to act on; synthesizing one converges
 		// the reap path with the hook-driven exit paths — one marker-posting
@@ -5027,6 +5039,47 @@ func boardReconcileListerFunc(reg *daemon.ProjectRegistry, resolver *vault.Resol
 // dockerAgentSweeper implements daemon.AgentZombieSweeper using real Docker and agent metadata.
 type dockerAgentSweeper struct{}
 
+// engineResourceProber opens a docker client per call, as dockerAgentSweeper
+// does, so a restarted engine is picked up without a daemon restart.
+type engineResourceProber struct{}
+
+func (engineResourceProber) withProber(fn func(containerres.Prober) error) error {
+	docker, err := devcontainer.NewDockerClient()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = docker.Close() }()
+	prober, ok := docker.(containerres.Prober)
+	if !ok {
+		return errors.WithDetails("docker client cannot read container resources")
+	}
+	return fn(prober)
+}
+
+func (p engineResourceProber) ContainerStats(ctx context.Context, containerID string) (sample containerres.Sample, err error) {
+	err = p.withProber(func(pr containerres.Prober) error {
+		sample, err = pr.ContainerStats(ctx, containerID)
+		return err
+	})
+	return sample, err
+}
+
+func (p engineResourceProber) ContainerExitState(ctx context.Context, containerID string) (state containerres.ExitState, err error) {
+	err = p.withProber(func(pr containerres.Prober) error {
+		state, err = pr.ContainerExitState(ctx, containerID)
+		return err
+	})
+	return state, err
+}
+
+func (p engineResourceProber) EngineCapacity(ctx context.Context) (capacity containerres.Capacity, err error) {
+	err = p.withProber(func(pr containerres.Prober) error {
+		capacity, err = pr.EngineCapacity(ctx)
+		return err
+	})
+	return capacity, err
+}
+
 func (s *dockerAgentSweeper) RunningAgents() ([]daemon.AgentInfo, error) {
 	metas, err := agent.ListMetas()
 	if err != nil {
@@ -5045,7 +5098,8 @@ func (s *dockerAgentSweeper) RunningAgents() ([]daemon.AgentInfo, error) {
 			// launches claude (agent.Manager.Start only execs claude when a
 			// prompt is present), so an empty Prompt marks an idle-by-design
 			// agent the sweep must not mistake for a crashed one (SC-236).
-			Idle: m.Prompt == "",
+			Idle:       m.Prompt == "",
+			ProjectDir: m.ProjectDir,
 		})
 	}
 	return result, nil

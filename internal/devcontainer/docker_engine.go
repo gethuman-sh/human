@@ -187,6 +187,7 @@ func containerStateFrom(s *container.State) ContainerState {
 		Status:    string(s.Status),
 		Running:   s.Running,
 		ExitCode:  s.ExitCode,
+		OOMKilled: s.OOMKilled,
 		Error:     s.Error,
 		StartedAt: parseContainerTime(s.StartedAt),
 	}

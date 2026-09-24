@@ -143,7 +143,7 @@ func TestSweepZombieAgents_MixedAgents(t *testing.T) {
 
 func TestRunAgentZombieSweep_NilSweeper(t *testing.T) {
 	// Should return immediately without panic.
-	RunAgentZombieSweep(context.Background(), nil, nil, nil, zerolog.Nop())
+	RunAgentZombieSweep(context.Background(), nil, nil, nil, nil, zerolog.Nop())
 }
 
 // SC-236: a deliberately idle agent (bare `human agent start NAME`, empty

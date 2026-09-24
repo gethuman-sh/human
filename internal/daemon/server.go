@@ -26,6 +26,7 @@ import (
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/cliflags"
 	"github.com/gethuman-sh/human/internal/config"
+	"github.com/gethuman-sh/human/internal/containerres"
 	"github.com/gethuman-sh/human/internal/costledger"
 	"github.com/gethuman-sh/human/internal/env"
 	"github.com/gethuman-sh/human/internal/proxy"
@@ -98,6 +99,7 @@ type Server struct {
 	PendingConfirms    *PendingConfirmStore                     // pending destructive operation confirmations; nil disables
 	StatsWriter        *stats.Writer                            // async SQLite writer for tool event persistence; nil disables
 	StatsStore         *stats.StatsStore                        // for query-time aggregation; nil disables tool-stats route
+	ResourceProber     containerres.Prober                      // engine capacity for the container-stats route; nil reports it unknown
 	AuditSink          *audit.Writer                            // records mutating tracker actions for the audit trail; nil disables
 	AuditStore         *audit.Store                             // serves audit-query reads; nil disables audit-query route
 	AgentCleaner       AgentCleaner                             // async agent cleanup; nil disables agent-stop-async route
@@ -560,6 +562,7 @@ func (s *Server) routeSimpleCommand(conn net.Conn, args []string, projectDir str
 		"tool-stats":          func() { s.handleToolStats(conn) },
 		"stats-overview":      func() { s.handleStatsOverview(conn, args[1:]) },
 		"subagent-stats":      func() { s.handleSubagentStats(conn, args[1:]) },
+		"container-stats":     func() { s.handleContainerStats(conn, args[1:]) },
 		"audit-query":         func() { s.handleAuditQuery(conn, args[1:]) },
 		"agent-stop-async":    func() { s.handleAgentStopAsync(conn, args[1:]) },
 		"subscribe":           func() { s.handleSubscribe(conn) },

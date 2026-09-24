@@ -438,6 +438,19 @@ the cap leaves the blocker record that quotes every one of them — the only
 place a person can tell, without the daemon log, whether the stops were a hang
 or a liveness input the machine was missing (SC-5329).
 
+In `~/.human/stats.db`, every reap (`zombieSweep.reap`, `internal/daemon/agentzombiesweep.go`)
+also leaves a `phase="exit"` row in `container_samples` — the container's last
+reading, taken by `AgentExitRecorder.RecordExit` while the container still
+exists, before `DeleteAgent` removes it. The row carries the process exit code
+when the engine could still report one, the engine's own OOM verdict
+(`oom_killed`), and `reason` — `died` for a genuine death, `silent` for a
+silence reap (SC-5369) — the same charged/uncharged distinction as the table
+above, but attached to the resource reading instead of the ticket. An
+OOM-killed container also gets a warn-level daemon log line (`container killed
+for memory: the engine ran out, not the agent`) with usage against limit, so
+the log does not read like an ordinary crash. `human stats containers` rolls
+these rows up per stage.
+
 The teardown choke point is `Manager.stopLocked` (`internal/agent/manager.go`):
 
 1. **Transcript and outcome are persisted first**, before the container (and its
@@ -574,8 +587,9 @@ waiting on.
 | `zombieGracePeriod` | 10s | same |
 | `zombieMaxProcessCheckFailures` | 3 (~15s) | same |
 | `zombieReapHardDeadline` | 45s | same |
+| `containerProbeTimeout` | 5s | `internal/daemon/agentresources.go` |
 | `execSettleTimeout` | 5s | `internal/devcontainer/exec_probe.go` |
-| delete timeout inside a reap | 30s | same |
+| delete timeout inside a reap | 30s | `internal/daemon/agentzombiesweep.go` |
 | `IdleGrace` | 3m | `internal/daemon/agentprogress.go` |
 | `WorkingIdleGrace` | 30m | same |
 | `agentIPRepairInterval` | 30s | `internal/daemon/agentiprepair.go` |
@@ -604,6 +618,15 @@ One sweep goroutine reaps every agent, so a stalled `CopyTranscript` inside
 background — the goroutine keeps its own 30s delete budget and finishes into a
 buffered channel — and the loop advances. The agent's cross-tick memory is
 deliberately left in place so the next tick retries it.
+
+`AgentExitRecorder.RecordExit` (§ What a reap leaves behind) runs synchronously
+in front of that guard, before `DeleteAgent` even starts, so its own engine
+round-trips are bounded too: each `ContainerStats`/`ContainerExitState` call
+gets its own `containerProbeTimeout` = 5s (`internal/daemon/agentresources.go`).
+Without that bound an unreachable engine would stall every reap forever at the
+one call the hard deadline was never reached to cover (SC-5369). The resource
+sampler's own per-container reads (`RunAgentResourceSampler`) are bounded the
+same way, for the same reason on its own loop.
 
 The liveness check has the same property: its exec stream is drained to EOF with
 a watchdog that closes the attachment on context cancellation, so a stalled

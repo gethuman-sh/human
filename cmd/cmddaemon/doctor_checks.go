@@ -11,6 +11,7 @@ import (
 
 	"github.com/gethuman-sh/human/internal/codenav"
 	"github.com/gethuman-sh/human/internal/codenav/store"
+	"github.com/gethuman-sh/human/internal/containerres"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 	"github.com/gethuman-sh/human/internal/proxy"
@@ -130,7 +131,22 @@ func checkDocker(ctx context.Context) (bool, string) {
 	if _, err := dc.ImageList(ctx, devcontainer.ImageListOptions{}); err != nil {
 		return false, "docker engine unreachable: " + err.Error() + " — start Docker"
 	}
-	return true, "engine reachable"
+	return true, "engine reachable" + engineCapacityDetail(ctx, dc)
+}
+
+// engineCapacityDetail names the engine's ceiling so a user on a small VM sees
+// the number their agents run against, in the same line that says the engine
+// is up (SC-5369). An engine that cannot say leaves the line as it was.
+func engineCapacityDetail(ctx context.Context, dc any) string {
+	prober, ok := dc.(containerres.Prober)
+	if !ok {
+		return ""
+	}
+	capacity, err := prober.EngineCapacity(ctx)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf(" — %d CPUs, %.1f GB memory", capacity.NCPU, float64(capacity.MemTotal)/float64(1<<30))
 }
 
 // checkCACert catches ticket 428's failure mode: a present-but-unparseable
