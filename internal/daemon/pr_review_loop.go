@@ -291,10 +291,28 @@ func splitFindingClass(text string) (class, rest string) {
 		return "", text
 	}
 	token := strings.ToLower(strings.TrimSpace(text[1:end]))
-	if token == "" || strings.ContainsAny(token, " \t") {
+	if !isClassToken(token) {
 		return "", text
 	}
 	return token, strings.TrimSpace(text[end+1:])
+}
+
+// isClassToken reports whether token is a class the way the reviewer prompt
+// defines one: one word of lowercase letters and hyphens, nothing else. A
+// looser check (rejecting only whitespace) let a multi-word bracket like
+// `[SC-5174] regression` parse as the class `sc-5174` — a real ticket
+// reference mistaken for a vocabulary member, corrupting criterion 4's
+// per-class counts (SC-5278).
+func isClassToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if (r < 'a' || r > 'z') && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // stripListMarkers removes the markdown a reviewer may wrap a finding in — a

@@ -35,6 +35,13 @@ func TestParseFindings_missingClassIsNotAnIdentity(t *testing.T) {
 	assert.Equal(t, "the explanation has [brackets] later", got[0].Text)
 	got = ParseFindings("BLOCKING a.go:1 — alpha — [not a token] text")
 	assert.Equal(t, "", got[0].Class, "a class is one token; a bracketed phrase is explanation")
+	// A bracketed ticket reference has no internal space, so the old check
+	// (reject only whitespace) let it through as a class — "sc-5174" landing
+	// in criterion 4's per-class counts as if it were a real vocabulary
+	// member (SC-5278).
+	got = ParseFindings("BLOCKING a.go:1 — alpha — [SC-5174] regression")
+	assert.Equal(t, "", got[0].Class, "a class is letters and hyphens only, never digits")
+	assert.Equal(t, "[SC-5174] regression", got[0].Text)
 	assert.Empty(t, ParseFindings("no blocking issues"))
 }
 
