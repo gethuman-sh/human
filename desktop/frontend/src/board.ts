@@ -217,6 +217,10 @@ interface Card {
   stopDecision?: string;
   stopLinkedKey?: string;
   stopReasoning?: string;
+  // "merged" | "duplicate" | "escalated" | "rejected" — the nothing-to-do
+  // record's reason. Absent on a record posted before the reason existed,
+  // which renders unlabelled rather than as shipped (SC-5326).
+  resolvedReason?: string;
   // The ticket shipped with acceptance criteria deliberately deferred to a
   // follow-on ticket (SC-2910): shippedPartial marks it, shippedPartialFollowOn
   // names the follow-on key. Rendered as a "partial scope → <key>" card badge and

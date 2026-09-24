@@ -81,15 +81,27 @@ func CommandFor(e Event, key string) string {
 	}
 	markerType := MarkerType(markers[0])
 	cmd := "human marker post " + key + " " + markerType
+	values := marker.FieldValues(markerType)
 	for _, f := range marker.RequiredFields(markerType) {
-		cmd += " --field " + f + "=<" + f + ">"
+		cmd += " --field " + f + "=" + placeholderFor(f, values)
 	}
 	// A one-of contract still has to produce ONE runnable command, so it names
 	// the contract's preferred field. The alternatives are reported by
 	// `human fsm marker`, which is where a caller looks when the default is not
 	// the case they are in.
 	if anyOf := marker.AnyOfFields(markerType); len(anyOf) > 0 {
-		cmd += " --field " + anyOf[0] + "=<" + anyOf[0] + ">"
+		cmd += " --field " + anyOf[0] + "=" + placeholderFor(anyOf[0], values)
 	}
 	return cmd
+}
+
+// placeholderFor renders the placeholder for one --field: the closed set of
+// values when the field has one, so the command CommandFor hands back is
+// runnable as written rather than a guess Validate then refuses — the failure
+// CommandFor exists to move earlier (see its doc comment).
+func placeholderFor(field string, values map[string][]string) string {
+	if allowed, ok := values[field]; ok && len(allowed) > 0 {
+		return "<" + strings.Join(allowed, "|") + ">"
+	}
+	return "<" + field + ">"
 }
