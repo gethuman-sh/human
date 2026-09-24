@@ -88,8 +88,10 @@ func metaFromContext(ctx context.Context, agentOverride string) agentstate.Meta 
 }
 
 // projectFromContext resolves which project's state namespace this command
-// touches. The daemon injects HUMAN_STATE_PROJECT per request (empty for
-// single-project and direct-CLI use — the default namespace). No prompt names
+// touches. The daemon injects HUMAN_STATE_PROJECT per request for every
+// project-scoped forwarded command — "human state" here and "human review
+// findings" — resolved from the ticket key in its arguments, and empty for
+// single-project and direct-CLI use (the default namespace). No prompt names
 // the project; the agent's forwarded request carries it.
 func projectFromContext(ctx context.Context) string {
 	return agentstate.NormalizeProject(env.Lookup(ctx, "HUMAN_STATE_PROJECT"))

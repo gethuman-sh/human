@@ -935,6 +935,9 @@ func TestIsLocalSubcommand(t *testing.T) {
 		// bug/security create call the daemon route directly and must run locally.
 		{[]string{"bug", "create", "x"}, true},
 		{[]string{"security", "create", "x"}, true},
+		// The findings record lives in the daemon host's database, like the
+		// search index and unlike the index writer — so it forwards.
+		{[]string{"review", "findings", "a.go"}, false},
 	}
 	for _, tt := range tests {
 		got := isLocalSubcommand(tt.args)
