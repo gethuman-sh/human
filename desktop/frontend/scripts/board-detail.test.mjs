@@ -377,6 +377,25 @@ test("a recovering card's elapsed time reads the same as a dead one (SC-3569)", 
   assert.match(html, /since last activity/);
 });
 
+// PR review finding on SC-5328: agentLiveness gained a "stalled" member
+// (present, but the daemon judges it hung) and elapsedLabel fell through to
+// "running" for it, so the detail panel contradicted the badge's "agent
+// silent Nm" on the very card this ticket is about.
+test("a stalled card's elapsed time is not labelled running (SC-5328)", () => {
+  const now = Date.now();
+  const html = buildCostSection(
+    { ticket: "SC-1", hasSpend: true, totalCostUSD: 1.0, contextCostUSD: 0.5, answersCostUSD: 0.5, totalDurationMs: 1000, stages: [] },
+    "implementation",
+    new Date(now - 240_000).toISOString(), // 4m ago
+    now,
+    undefined,
+    "stalled",
+  );
+  assert.match(html, /4m 0s/);
+  assert.doesNotMatch(html, /running/, "a stalled card must not claim work is in progress either");
+  assert.match(html, /since last activity/);
+});
+
 test("an elsewhere card names the other machine rather than claiming local progress (SC-3569)", () => {
   const now = Date.now();
   const html = buildCostSection(

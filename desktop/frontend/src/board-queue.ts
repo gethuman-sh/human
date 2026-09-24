@@ -54,8 +54,9 @@ export interface QueueCard {
   // yet due (a running planning/implementation/verification card before
   // StuckRunningGrace) — dead, but still the machine's turn, not the person's;
   // "elsewhere" = another machine's daemon owns the stage, so it cannot be seen
-  // from here. ABSENT means unknown — render exactly as before, because absence
-  // of a signal is never proof.
+  // from here; "stalled" = present, but the daemon judges it hung (derived from
+  // agentProgress below). ABSENT means unknown — render exactly as before,
+  // because absence of a signal is never proof.
   agentLiveness?: string;
   // The daemon's own judgement of the agent behind the card — the same
   // AgentProgress.Stalled rule the zombie sweep reaps with — so a card can say

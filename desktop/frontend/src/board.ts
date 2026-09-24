@@ -67,7 +67,7 @@ import {
   safetyReconcileError,
   RUNNING_LABELS,
 } from "./board-queue.js";
-import type { DeploySide } from "./board-queue.js";
+import type { DeploySide, AgentProgress } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import type { Box, Drawn, Side } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
@@ -145,12 +145,20 @@ interface Card {
   // working instead of asking a person to intervene (SC-4406).
   runningStage?: string;
   // What this viewer's machine could see of the agent behind the card:
-  // "live" | "dead" | "recovering" | "elsewhere", absent when unknown (SC-3569).
-  // "recovering" is dead-but-not-yet-the-person's-turn: the daemon's own
-  // StuckRunningGrace relaunch is still due for this card's class. Filled by
-  // the desktop overlay (applyLocal → board.MarkAgentLiveness), never by the
+  // "live" | "dead" | "recovering" | "elsewhere" | "stalled", absent when
+  // unknown (SC-3569). "recovering" is dead-but-not-yet-the-person's-turn: the
+  // daemon's own StuckRunningGrace relaunch is still due for this card's
+  // class. "stalled" is present-but-hung: the daemon's own AgentProgress
+  // judgement, carried through agentProgress below (SC-5328). Filled by the
+  // desktop overlay (applyLocal → board.MarkAgentLiveness), never by the
   // daemon.
   agentLiveness?: string;
+  // The daemon's own judgement of the agent behind the card — mirrors
+  // QueueCard.agentProgress (board-queue.ts). "stalled" liveness above is
+  // derived from this by the desktop overlay, never read directly here; kept
+  // on Card so a detail-panel reader can quote the same silence/budget the
+  // badge does (SC-5328).
+  agentProgress?: AgentProgress;
   // Machine id signed onto the card's deciding stage marker. Consumed by the Go
   // overlay to decide agentLiveness; nothing in the frontend reads it. Field
   // name matches the wire tag exactly (protocol.go's BoardViewCard.StageDaemonID
