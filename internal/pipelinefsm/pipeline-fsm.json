@@ -902,7 +902,10 @@
       "name": "stale-base-conflict",
       "src": [
         "deploying",
+        "reviewed",
+        "stopped",
         "pr-fix",
+        "deploy-fixing",
         "substrate-down"
       ],
       "dst": "deploy-fixing",
@@ -914,7 +917,7 @@
       ],
       "guard": "bounded: 2 rounds, shared with ci-red",
       "where": "internal/daemon/board_transition.go launchPRReview → deployFailedOrDispatchFixer with beforeReview — every reviewer launch site (reviewThenShip, openDraftPRAndReview, AdvancePRLoop PRActionReview, AdvanceDeployFix done) passes through it",
-      "doc": "The base advanced past the branch and merging it in conflicts, OR the merge is textually clean but the project's fast test tier fails on the merged result (a symbol renamed on the base against a new call site on the branch, the commonest form of this drift — acceptance criterion 1). Either way the fix is mechanical, so the deploy fixer takes it BEFORE any reviewer runs: run 3 of the campaign spent a review round on \"branch behind main\" on four of six pull requests, with the reviewer finding the drift, the fixer merging the base and the reviewer reading everything again. The marker's `before: review` field is what tells the fixer's done exit to hand back to the reviewer rather than re-run the deploy. A clean merge that also passes the fast tier posts nothing: the local ref moves to the merge commit and the reviewer launch proceeds on the source edge (SC-5279)."
+      "doc": "The base advanced past the branch and merging it in conflicts, OR the merge is textually clean but the project's fast test tier fails on the merged result (a symbol renamed on the base against a new call site on the branch, the commonest form of this drift — acceptance criterion 1). Either way the fix is mechanical, so the deploy fixer takes it BEFORE any reviewer runs: run 3 of the campaign spent a review round on \"branch behind main\" on four of six pull requests, with the reviewer finding the drift, the fixer merging the base and the reviewer reading everything again. The marker's `before: review` field is what tells the fixer's done exit to hand back to the reviewer rather than re-run the deploy. A clean merge that also passes the fast tier posts nothing: the local ref moves to the merge commit and the reviewer launch proceeds on the source edge. `reviewed` and `stopped` cover openDraftPRAndReview (runDoneStage's board-Deploy-drop route, which calls launchPRReview before any pr-review-started marker is posted, so the item is still sitting where start-pr-review found it); `deploy-fixing` covers AdvanceDeployFix's own before-review handback (resolved-before-review) hitting a second conflict on the base it re-merges — the item has not yet reached pr-review when that second freshen runs (SC-5279)."
     },
     {
       "name": "resolved-before-review",

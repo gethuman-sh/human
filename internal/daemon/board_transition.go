@@ -123,11 +123,12 @@ const (
 	// FreshnessConflict: the base merge conflicts; the branch is untouched and
 	// a fixer must resolve it before a reviewer can read an integrated result.
 	FreshnessConflict
-	// FreshnessTestsFailed: the base merged cleanly and moved the ref, but the
-	// project's fast test tier is red on the integrated result — a symbol
-	// renamed on the base against a new call site on the branch, the commonest
-	// form of this drift. A fixer must resolve it before a reviewer reads a
-	// candidate that does not build (SC-5279 acceptance criterion 1).
+	// FreshnessTestsFailed: the base merged cleanly in the ephemeral worktree,
+	// but the project's fast test tier is red on the integrated result — a
+	// symbol renamed on the base against a new call site on the branch, the
+	// commonest form of this drift. The ref is deliberately NOT moved: a
+	// fixer must resolve it before a reviewer reads a candidate that does not
+	// build (SC-5279 acceptance criterion 1).
 	FreshnessTestsFailed
 )
 

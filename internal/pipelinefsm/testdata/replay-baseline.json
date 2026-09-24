@@ -127,7 +127,6 @@
     "doc": "Not yet traced to a code path. Do nothing: a single occurrence can be a one-off — a marker posted by hand, an agent killed mid-write — and widening the document on a guess is how a specification becomes a rubber stamp. Each entry leaves here by being explained, in either direction. What is recorded here instead is what was RULED OUT, so the next reader starts where this one stopped rather than repeating the same three hypotheses.",
     "kinds": {
       "deploy-fix-started@implementing": 1,
-      "deploy-fix-started@stopped": 1,
       "pr-fix-started@stopped": 1,
       "ready-for-review@planned": 1,
       "review-complete@reviewed": 1,
@@ -135,7 +134,7 @@
       "review-started@in-review": 1
     },
     "ruled_out": {
-      "deploy-fix-started@stopped, deploy-fix-started@implementing, pr-fix-started@stopped": "All three sit in histories that never record pr-review-passed, so they were written by the pre-SC-3718 loop and its silence on success is a necessary part of any explanation. It is not a sufficient one: each also shows a marker the retired silence does not account for — a pr-review-failed immediately before the fixer's start, or a deploy-stage marker arriving while an implementation is running. NOT legacy on that evidence alone; the retired silence explains the gap, not the extra marker.",
+      "deploy-fix-started@implementing, pr-fix-started@stopped": "Both sit in histories that never record pr-review-passed, so they were written by the pre-SC-3718 loop and its silence on success is a necessary part of any explanation. It is not a sufficient one: each also shows a marker the retired silence does not account for — a deploy-stage marker arriving while an implementation is running. NOT legacy on that evidence alone; the retired silence explains the gap, not the extra marker. deploy-fix-started@stopped used to sit alongside these on the same reasoning (SC-2990: pr-review-started, pr-review-failed, deploy-fix-started with no relaunch between) but is explained now: stale-base-conflict's src was missing reviewed, stopped and deploy-fixing — three of its own four launch sites run from states it did not list (SC-5279) — and adding them resolves this entry into agreement rather than leaving it unexplained.",
       "review-started@in-review": "A second review launched while one is running. Ruled out: the ordinary retry paths, which cannot produce it — isReviewRetry demands a FAILED or outage card and isDuplicateDrop guards a running one, and reconcileStuckRunning reds the card with a failure marker before any relaunch, which would leave review-failed in the thread. The claim marker sitting between the two starts points at two daemons rather than two drops, but that is a hypothesis and one history.",
       "review-complete@reviewed": "A duplicate success marker. Its history is the only one in the corpus carrying deploy-started, so it was written by the pre-loop machine — but age alone is not the legacy bar, which asks for a change that RETIRED the behaviour, and nothing retired this one."
     }

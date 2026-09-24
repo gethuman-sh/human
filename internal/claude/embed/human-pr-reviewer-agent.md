@@ -41,7 +41,7 @@ If neither the local ref nor origin yields the branch, record `verdict: unreview
 
 ## Review process
 
-1. **Bind.** Resolve the local branch head as above. When the fixer recorded a head, confirm you are reading it: `human state get <WORK_KEY> stage.pr-fix` — if its `head` is set and differs from `HEAD_SHA` above, the branch moved under you; re-resolve rather than reviewing a stale SHA.
+1. **Bind.** Resolve the local branch head as above. When the fixer recorded a head, confirm you are reading it: `human state get <WORK_KEY> stage.pr-fix` — if its `head` is set and differs from `HEAD_SHA` above, re-resolve rather than reviewing a stale SHA. A mismatch is not necessarily a race: every review round first merges an advanced base into the branch (freshening), so the head moving between the fixer's exit and your read is the normal case, not an anomaly — re-resolve either way.
 2. **Context.** Fetch the ticket and its plan for intent: `human get <WORK_KEY>` and `human plan show <WORK_KEY>` (or the ticket description). Read the plan as intent and guidance, not as a checklist — the diff is judged against whether the ticket's outcome became true, plus general correctness, security, and test adequacy.
 3. **Read the diff** (`git diff "$BASE...$BRANCH"`). Read surrounding code with Read/Grep (or `git show "$BRANCH:<path>"`) where a hunk's correctness depends on context the diff does not show.
 3a. **Audit dependents.** When the ticket's plan carries a `## Dependents`
