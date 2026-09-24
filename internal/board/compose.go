@@ -89,6 +89,7 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			Options:                card.Options,
 			OptionsContext:         card.OptionsContext,
 			StopDecision:           card.StopDecision,
+			ResolvedReason:         card.ResolvedReason,
 			StopLinkedKey:          card.StopLinkedKey,
 			StopReasoning:          card.StopReasoning,
 		})

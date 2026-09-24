@@ -91,6 +91,14 @@ type BoardCard struct {
 	// wrote for why it stopped, so the reason is readable from the card without
 	// opening the tracker.
 	StopReasoning string `json:"stop_reasoning,omitempty"`
+	// ResolvedReason is WHY a planning card ended with nothing to plan — the
+	// `reason:` field of the operative [human:nothing-to-do] marker (merged,
+	// duplicate, escalated or rejected). One terminal state stands for four
+	// determinations, and a board that labelled every one of them "already
+	// shipped" told a person a refused ticket's work existed (SC-5326). Empty on
+	// every other card, and on a record posted before the field was required, so
+	// those render as an unlabelled resolution rather than as shipped.
+	ResolvedReason string `json:"resolved_reason,omitempty"`
 	// StageEnteredAt is the Created time of the newest marker in the card's
 	// current stage — for a plan-done card, when the current plan landed. The
 	// board renders it as an age badge so work rotting in a queue is visible.
@@ -234,6 +242,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card.DeployPhase = deployPhaseFor(card, comments)
 	card.RunningStage = runningStageElsewhere(comments, card.placement())
 	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
+	card.ResolvedReason = nothingToDoReason(latest)
 	attachOpenOptions(&card, comments)
 	return card
 }
@@ -302,6 +311,21 @@ func ticketReviewStop(deciding tracker.Comment) (decision, linked, reasoning str
 		return "", "", ""
 	}
 	return m.Head, strings.TrimSpace(m.Fields["linked"]), strings.TrimSpace(m.Body)
+}
+
+// nothingToDoType is NothingToDoHeader as marker.ParseBody reports it.
+const nothingToDoType = "nothing-to-do"
+
+// nothingToDoReason reads why the deciding marker ended the planning stage
+// with nothing to plan. Only the operative marker is consulted: a reason from
+// a nothing-to-do that a later reopen superseded would label a card that is
+// planning again.
+func nothingToDoReason(deciding tracker.Comment) string {
+	m, ok := marker.ParseBody(deciding.Body)
+	if !ok || m.Type != nothingToDoType {
+		return ""
+	}
+	return strings.TrimSpace(m.Fields["reason"])
 }
 
 // applyStateOverrides layers the derivation overrides that must run after

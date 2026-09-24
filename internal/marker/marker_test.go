@@ -264,3 +264,18 @@ func TestFailedMarkers_advertiseTheBlockerFields(t *testing.T) {
 		}
 	}
 }
+
+// A nothing-to-do record must say why, and only from the set the board can
+// label: an absent or invented reason is refused at the post, so no card can
+// again render a refusal as "already shipped" (SC-5326).
+func TestValidate_nothingToDoReason(t *testing.T) {
+	err := Validate(Marker{Type: "nothing-to-do", Fields: map[string]string{"evidence": "PR #1"}})
+	require.Error(t, err, "reason is required")
+	err = Validate(Marker{Type: "nothing-to-do", Fields: map[string]string{"evidence": "PR #1", "reason": "shipped"}})
+	require.Error(t, err, "reason outside the set")
+	assert.Contains(t, err.Error(), "merged|duplicate|escalated|rejected")
+	for _, r := range NothingToDoReasons() {
+		assert.NoError(t, Validate(Marker{Type: "nothing-to-do", Fields: map[string]string{"evidence": "PR #1", "reason": r}}), r)
+	}
+	assert.Equal(t, NothingToDoReasons(), FieldValues("nothing-to-do")["reason"])
+}
