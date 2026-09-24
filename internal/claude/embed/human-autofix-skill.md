@@ -296,9 +296,11 @@ Only after a DONE verdict.
 Post the review handoff on the bug (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically:
 
 ```bash
-human handoff post <BUG_KEY> --engineering <ENG_KEY> --branch autofix/<work-key>   # split topology
-human handoff post <BUG_KEY> --branch autofix/<work-key>                           # single-tracker: omit --engineering
+human handoff post <BUG_KEY> --engineering <ENG_KEY> --branch autofix/<work-key> --review inline   # split topology
+human handoff post <BUG_KEY> --branch autofix/<work-key> --review inline                           # single-tracker: omit --engineering
 ```
+
+`--review inline` is **mandatory here and in every context**: this skill goes on to review the fix itself in Step 7.2, so the handoff must say so. It is the only thing the daemon can read in the seconds between this handoff and your own `[human:review-started]` — without it the daemon reads "finished work, nobody reviewing" and starts a second reviewer whose verdict overwrites yours.
 
 The explicit `--branch` pins the fix branch even when the orchestrating checkout sits elsewhere. The command derives the rest — `commits:` from the commits referencing `<WORK_KEY>`, `daemon:` from the `HUMAN_DAEMON_ID` env var so the handoff is attributed to the machine's bot like every daemon-posted marker (the line is omitted when the var is unset) — then verifies every SHA is reachable on the branch (fetching origin first) and refuses to post otherwise, so a handoff can never name commits that live nowhere. The posted comment looks like:
 
@@ -307,12 +309,13 @@ The explicit `--branch` pins the fix branch even when the orchestrating checkout
 engineering: <ENG_KEY>
 branch: autofix/<work-key>
 commits: <short-shas>
+review: inline
 daemon: <daemon-id>
 ```
 
 When `<BOARD_CONTEXT>` is true the branch is intentionally local (the bind-mounted host repo where Deploy picks it up) — do NOT push. If the handoff cannot be posted (non-zero exit), STOP with an honest status report — **do not report success**.
 
-**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review (do not run Step 8 / deploy, which needs credentials the board container lacks). Do NOT run push-verification and do NOT `git ls-remote` — the branch is intentionally local. The daemon recognizes the in-container `[human:review-complete]` marker and does NOT launch a second review container; the Deploy button ships the reviewed fix.
+**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review (do not run Step 8 / deploy, which needs credentials the board container lacks). Do NOT run push-verification and do NOT `git ls-remote` — the branch is intentionally local. The `review: inline` line you posted in 7.1 is what stops the daemon launching a second review container; the Deploy button ships the reviewed fix.
 
 ### 7.2 Review by the reviewer agent
 
