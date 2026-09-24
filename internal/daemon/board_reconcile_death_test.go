@@ -107,22 +107,22 @@ func TestRecordedDeath_AbsentEvidenceIsNotADeath(t *testing.T) {
 	entered := now.Add(-2 * time.Minute)
 	alive := map[string]struct{}{}
 
-	died, _ := recordedDeath(ReconcileDeps{}, "board-SC-1-implementation", alive, entered)
+	died, _ := recordedDeath(ReconcileDeps{}, []string{"board-SC-1-implementation"}, alive, entered)
 	require.False(t, died, "nil lister disables the shortcut")
 
 	failing := ReconcileDeps{StoppedAgents: func() (map[string]time.Time, error) { return nil, errors.New("boom") }}
-	died, _ = recordedDeath(failing, "board-SC-1-implementation", alive, entered)
+	died, _ = recordedDeath(failing, []string{"board-SC-1-implementation"}, alive, entered)
 	require.False(t, died, "a lister error is not evidence")
 
 	unnamed := ReconcileDeps{StoppedAgents: stoppedAgents(map[string]time.Time{"board-SC-2-implementation": now})}
-	died, _ = recordedDeath(unnamed, "board-SC-1-implementation", alive, entered)
+	died, _ = recordedDeath(unnamed, []string{"board-SC-1-implementation"}, alive, entered)
 	require.False(t, died, "a record for another agent says nothing about this one")
 
 	noEntry := ReconcileDeps{StoppedAgents: stoppedAgents(map[string]time.Time{"board-SC-1-implementation": now})}
-	died, _ = recordedDeath(noEntry, "board-SC-1-implementation", alive, time.Time{})
+	died, _ = recordedDeath(noEntry, []string{"board-SC-1-implementation"}, alive, time.Time{})
 	require.False(t, died, "without a stage entry time the stop cannot be placed in this stage")
 
-	died, at := recordedDeath(noEntry, "board-SC-1-implementation", alive, entered)
+	died, at := recordedDeath(noEntry, []string{"board-SC-1-implementation"}, alive, entered)
 	require.True(t, died)
 	require.Equal(t, now, at)
 }

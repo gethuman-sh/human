@@ -85,7 +85,8 @@ func reconcileQueuedLaunch(ctx context.Context, drivable DrivableCards, deps Rec
 		// A live agent for the stage means the launch did happen and simply has
 		// not posted its started marker yet — the same alive-guard every other
 		// pass uses, and the difference between a slow launch and a missing one.
-		if _, ok := alive[agentNameFor(card.Key, stage)]; ok {
+		// Every agent that can own the stage is asked: the done stage runs three (SC-5396).
+		if _, ok := liveStageAgent(alive, card.Key, stage); ok {
 			continue
 		}
 		if deps.Retry.relaunchBounded(ctx, card.Key, stage,

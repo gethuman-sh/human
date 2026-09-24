@@ -483,23 +483,37 @@ func stuckPastGrace(derived BoardCard, card ReconcileCard, probe DeployRunProbe,
 // stop was already adjudicated. Absent evidence never counts: a nil or failing
 // lister, an agent the record does not name, or a stop older than the stage
 // all answer false and leave the card to the ordinary grace.
-func recordedDeath(deps ReconcileDeps, agentName string, alive map[string]struct{}, stageEnteredAt time.Time) (bool, time.Time) {
-	if deps.StoppedAgents == nil {
+//
+// names is every agent that can own the stage; a done-stage card has three,
+// and a record for any of them that postdates the stage is this stage's death.
+func recordedDeath(deps ReconcileDeps, names []string, alive map[string]struct{}, stageEnteredAt time.Time) (bool, time.Time) {
+	if deps.StoppedAgents == nil || stageEnteredAt.IsZero() {
 		return false, time.Time{}
 	}
-	if _, ok := alive[agentName]; ok {
-		return false, time.Time{}
+	for _, n := range names {
+		if _, ok := alive[n]; ok {
+			return false, time.Time{}
+		}
 	}
 	stopped, err := deps.StoppedAgents()
 	if err != nil {
 		deps.Logger.Warn().Err(err).Msg("board reconcile: cannot list stopped agents, keeping the stuck grace")
 		return false, time.Time{}
 	}
-	at, ok := stopped[agentName]
-	if !ok || at.IsZero() || stageEnteredAt.IsZero() || !at.After(stageEnteredAt) {
+	var newest time.Time
+	for _, n := range names {
+		at, ok := stopped[n]
+		if !ok || at.IsZero() || !at.After(stageEnteredAt) {
+			continue
+		}
+		if at.After(newest) {
+			newest = at
+		}
+	}
+	if newest.IsZero() {
 		return false, time.Time{}
 	}
-	return true, at
+	return true, newest
 }
 
 // reconcilePRLoops re-drives a loop card the live exit hook missed: a
@@ -601,7 +615,9 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, deps Reconcile
 			continue
 		}
 		// A live agent means the relaunch already happened this cycle — leave it.
-		if _, ok := alive[agentNameFor(card.Key, derived.Stage)]; ok {
+		// Every agent that can own the stage is asked, not a name composed from
+		// the stage: the done stage runs three of them (SC-5396).
+		if _, ok := liveStageAgent(alive, card.Key, derived.Stage); ok {
 			continue
 		}
 		if since, ok := outageRunSince(card.Comments, derived.Stage); ok && deps.PostFailed != nil && now.Sub(since) > OutageWaitBound {
@@ -748,8 +764,9 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	if failedType == "" {
 		return false
 	}
-	agentName := agentNameFor(card.Key, derived.Stage)
-	if died, at := recordedDeath(deps, agentName, alive, derived.StageEnteredAt); died {
+	names := stageAgentNames(card.Key, derived.Stage)
+	liveName, isLive := liveStageAgent(alive, card.Key, derived.Stage)
+	if died, at := recordedDeath(deps, names, alive, derived.StageEnteredAt); died {
 		// The manager already recorded this stage's agent as stopped after the
 		// stage began, and nothing handled the exit (the card is still running).
 		// That is a death the machine has evidence for, so waiting out a grace
@@ -769,8 +786,10 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	// on the charged path unchanged.
 	var silenced bool
 	var reap SilenceReap
-	if _, ok := alive[agentName]; ok {
-		proceed, s, r := hungLiveAgent(deps, agentName, now, card.Key, derived.Stage)
+	if isLive {
+		// hungLiveAgent is handed the name that is actually alive, so the
+		// progress probe asks about the right container (SC-5396).
+		proceed, s, r := hungLiveAgent(deps, liveName, now, card.Key, derived.Stage)
 		if !proceed {
 			return false
 		}
