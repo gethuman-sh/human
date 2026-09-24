@@ -1025,10 +1025,14 @@ func liveBoardAgents() ([]string, error) {
 }
 
 // stoppedBoardAgents reads the agents this machine's manager has recorded as no
-// longer running, with the moment each stop was written. It is the manager's
-// own view of a death — Refresh and Start both mark a vanished container stopped
-// within seconds — handed to the reconcile pass so a card whose agent it knows is
-// dead is not left to wait out the grace meant for silence (SC-5327).
+// longer running, with the moment each stop was written. A stopped record only
+// persists from Manager.Stop (only caller: `human agent stop`) or
+// Manager.Refresh (only caller: `human agent list`, which writes stopped when
+// it finds the container already dead) — the automatic zombie sweep deletes a
+// killed/OOM-stopped/crashed agent's meta outright rather than leaving it
+// stopped, so this shortens the grace only for the narrower case where one of
+// those two commands ran against the stage's agent after the stage was
+// entered (SC-5327).
 func stoppedBoardAgents() (map[string]time.Time, error) {
 	metas, err := agent.ListMetas()
 	if err != nil {

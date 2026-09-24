@@ -285,12 +285,19 @@ The deploy grace above applies here too — a `human deploy` on its CI gate has
 *no* agent by construction, so a vanished agent is not evidence a deploy is dead
 until its own timeout has passed.
 
-**A recorded death skips the grace** (`recordedDeath`, SC-5327). A container
-that exits with no Stop hook — a kill, an OOM stop, a crash — is written as
-`stopped` by the agent manager within seconds (`Start` finding a dead container,
-`Refresh` on its sweep, `Stop` itself), but a stopped record simply leaves the
-live listing, so this pass used to wait the full `StuckRunningGrace` on a fact
-the machine already held. Now, when the stage's agent is absent from the live
+**A recorded death skips the grace** (`recordedDeath`, SC-5327). A stopped
+record persists only from `Manager.Stop` (only caller: `human agent stop`) or
+`Manager.Refresh` (only caller: `human agent list`, which writes `stopped` when
+it finds the container already dead) — not from the automatic zombie sweep,
+which reaps a killed, OOM-stopped or crashed container within seconds by
+deleting its meta outright (`DeleteAgent` → `Manager.Delete` → `DeleteMeta`),
+leaving no stopped record for this pass to find. So the kill/OOM/crash case is
+still judged on the ordinary, unshortened `StuckRunningGrace`; the shortcut
+fires only for the narrower case where a person ran `human agent stop` or
+`human agent list` against the stage's agent after the stage was entered — a
+stopped record otherwise simply leaves the live listing, so this pass used to
+wait the full `StuckRunningGrace` on a fact the machine already held in that
+case. Now, when the stage's agent is absent from the live
 listing AND this machine's record says it stopped *after* the stage was entered,
 the card is judged on the next tick instead of after the grace. The record must
 postdate the stage: a stop older than the stage belongs to an earlier run whose
