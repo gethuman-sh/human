@@ -1,18 +1,16 @@
-package cmddaemon
+package agent
 
 import (
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/gethuman-sh/human/internal/agent"
 )
 
 // The defect: a SIGKILLed/OOM-killed/crashed board agent is reaped within
 // seconds by the zombie sweep, which writes StatusFailed to the meta and then
 // deletes it outright (Manager.Delete = stopLocked + DeleteMeta) — so by the
-// time stoppedBoardAgents runs, the meta this function used to read alone is
+// time StoppedBoardAgents runs, the meta this function used to read alone is
 // already gone and the kill/OOM/crash case it exists for was invisible
 // (SC-5327). PreserveExecutionArtifacts writes the same outcome to the
 // execution log BEFORE DeleteMeta erases the meta, so that record survives.
@@ -25,7 +23,7 @@ func TestStoppedBoardAgents_ReapedExecutionSurvivesMetaDeletion(t *testing.T) {
 	writeReapedExecution(t, name, endedAt)
 	// No meta file at all: DeleteMeta already ran.
 
-	stopped, err := stoppedBoardAgents()
+	stopped, err := StoppedBoardAgents()
 	require.NoError(t, err)
 	require.Contains(t, stopped, name)
 	require.True(t, stopped[name].Equal(endedAt), "want %v, got %v", endedAt, stopped[name])
@@ -39,9 +37,9 @@ func TestStoppedBoardAgents_RunningAgentIsNeverReported(t *testing.T) {
 
 	name := "board-sc-1-implementation"
 	writeReapedExecution(t, name, time.Now().Add(-time.Hour))
-	require.NoError(t, agent.WriteMeta(agent.Meta{Name: name, Status: agent.StatusRunning}))
+	require.NoError(t, WriteMeta(Meta{Name: name, Status: StatusRunning}))
 
-	stopped, err := stoppedBoardAgents()
+	stopped, err := StoppedBoardAgents()
 	require.NoError(t, err)
 	require.NotContains(t, stopped, name)
 }
@@ -55,9 +53,9 @@ func TestStoppedBoardAgents_MetaOnlyStopIsStillReported(t *testing.T) {
 
 	name := "board-sc-1-planning"
 	stoppedAt := time.Now().Add(-2 * time.Minute).Truncate(time.Second)
-	require.NoError(t, agent.WriteMeta(agent.Meta{Name: name, Status: agent.StatusStopped, StoppedAt: stoppedAt}))
+	require.NoError(t, WriteMeta(Meta{Name: name, Status: StatusStopped, StoppedAt: stoppedAt}))
 
-	stopped, err := stoppedBoardAgents()
+	stopped, err := StoppedBoardAgents()
 	require.NoError(t, err)
 	require.True(t, stopped[name].Equal(stoppedAt))
 }
@@ -70,7 +68,7 @@ func TestStoppedBoardAgents_NonBoardExecutionIsSkipped(t *testing.T) {
 
 	writeReapedExecution(t, "adhoc-session", time.Now().Add(-time.Minute))
 
-	stopped, err := stoppedBoardAgents()
+	stopped, err := StoppedBoardAgents()
 	require.NoError(t, err)
 	require.NotContains(t, stopped, "adhoc-session")
 }
@@ -81,7 +79,7 @@ func TestStoppedBoardAgents_NonBoardExecutionIsSkipped(t *testing.T) {
 // remove choke point.
 func writeReapedExecution(t *testing.T, name string, endedAt time.Time) {
 	t.Helper()
-	exe, err := agent.NewExecution(agent.LaunchRecord{ID: "exec1", Agent: name, StartedAt: endedAt.Add(-time.Hour)})
+	exe, err := NewExecution(LaunchRecord{ID: "exec1", Agent: name, StartedAt: endedAt.Add(-time.Hour)})
 	require.NoError(t, err)
-	require.NoError(t, exe.RecordDisposition(agent.DispositionReaped, endedAt, time.Hour))
+	require.NoError(t, exe.RecordDisposition(DispositionReaped, endedAt, time.Hour))
 }
