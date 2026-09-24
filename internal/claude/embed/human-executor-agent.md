@@ -98,7 +98,7 @@ human <TRACKER> issue comment list <TICKET_KEY>
 
    c. **Nothing to ship.** If executing the plan revealed there is genuinely nothing to implement (the work is already merged), post the terminal marker instead of a handoff:
       ```bash
-      human marker post <PM_KEY> nothing-to-do --field "evidence=<merged PR/commit that already satisfies the ticket>"
+      human marker post <PM_KEY> nothing-to-do --field "evidence=<merged PR/commit that already satisfies the ticket>" --field reason=merged
       ```
 
    Never end a session with uncommitted work and a question. If `human-done` (step 5) failed, you still owe one of these three: commit the in-progress work and hand off with the failures listed in `--notes`, OR post an options block if the failure is a real fork, OR `nothing-to-do` if the work was already shipped — but do not exit with a dead-card question.

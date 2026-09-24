@@ -112,14 +112,14 @@
     },
     {
       "name": "nothing-to-do",
-      "doc": "The planner proved the work is already merged. Clean terminal.",
+      "doc": "The planning stage ended with nothing to plan, and the marker's required reason says why: merged (the planner proved the work is already on the base), duplicate (the ticket-review gate found another ticket carries it), escalated (the gate created a design ticket that has to be decided first) or rejected (not a real problem). Clean terminal; the board labels each reason on its own and renders only merged as shipped (SC-5326).",
       "board": {
         "stage": "planning",
         "state": "resolved"
       },
       "terminal": true,
       "reopenable": true,
-      "holds": "The planner established the work is already merged. Clean terminal.",
+      "holds": "A [human:nothing-to-do] marker with evidence and a reason from the closed set merged|duplicate|escalated|rejected is the newest planning-stage marker. Clean terminal.",
       "who_may_act": [
         "user"
       ],
@@ -504,7 +504,7 @@
       "runs": "human-planner",
       "marker": "[human:nothing-to-do]",
       "prompt": "human-plan-skill.md",
-      "doc": "The planner established the work is already merged, so there is nothing to build. A clean terminal rather than a failure — and reopenable, because it is a judgement and a person may overrule it. The ticket-review gate posts it too: its own verdict marker classifies under the backlog stage and would leave the card reading as planning-in-progress, so a stop verdict posts the planning stage's terminal marker alongside it."
+      "doc": "The planner established the work is already merged (reason: merged), so there is nothing to build. A clean terminal rather than a failure — and reopenable, because it is a judgement and a person may overrule it. The ticket-review gate posts it too, with the reason its verdict maps to (superseded → duplicate, escalated → escalated, rejected → rejected): its own verdict marker classifies under the backlog stage and would leave the card reading as planning-in-progress, so a stop verdict posts the planning stage's terminal marker alongside it. The post refuses a record without a reason (SC-5326)."
     },
     {
       "name": "planning-failed",

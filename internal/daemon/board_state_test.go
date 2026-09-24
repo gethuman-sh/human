@@ -1060,3 +1060,33 @@ func TestDeriveBoardCard_RunningStagePicksTheNewestStart(t *testing.T) {
 
 	assert.Equal(t, BoardImplementation, card.RunningStage)
 }
+
+// SC-5326: the nothing-to-do record's reason rides onto the card so the board
+// can say WHY there is nothing to plan instead of calling every resolution
+// "already shipped"; a record without one (posted before the field existed)
+// leaves the card unlabelled rather than labelled wrong.
+func TestDeriveBoardCard_nothingToDo_carriesReason(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	t1 := time.Unix(2000, 0)
+	comments := []tracker.Comment{
+		cmt(PlanningStartedHeader, t0),
+		cmt(NothingToDoHeader+"\nevidence: SC-100 carries the work\nreason: duplicate", t1),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardPlanning, card.Stage)
+	assert.Equal(t, BoardResolved, card.State)
+	assert.Equal(t, "duplicate", card.ResolvedReason)
+
+	legacy := DeriveBoardCard([]tracker.Comment{
+		cmt(PlanningStartedHeader, t0),
+		cmt(NothingToDoHeader+"\nevidence: PR #12", t1),
+	}, tracker.CategoryUnstarted, false)
+	assert.Equal(t, BoardResolved, legacy.State)
+	assert.Empty(t, legacy.ResolvedReason)
+
+	reopened := DeriveBoardCard([]tracker.Comment{
+		cmt(NothingToDoHeader+"\nevidence: PR #12\nreason: merged", t0),
+		cmt(PlanningStartedHeader, t1),
+	}, tracker.CategoryUnstarted, false)
+	assert.Empty(t, reopened.ResolvedReason, "a reopen supersedes the reason")
+}

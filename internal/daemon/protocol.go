@@ -344,9 +344,13 @@ type BoardViewCard struct {
 	// raw head (frontend maps it to human phrasing); StopLinkedKey is the ticket
 	// the decision names (reachable from the card); StopReasoning is the recorded
 	// evidence. All empty for a card with no such decision (SC-2699).
-	StopDecision  string `json:"stopDecision,omitempty"`
-	StopLinkedKey string `json:"stopLinkedKey,omitempty"`
-	StopReasoning string `json:"stopReasoning,omitempty"`
+	StopDecision string `json:"stopDecision,omitempty"`
+	// ResolvedReason says why a planning card resolved with nothing to plan
+	// (merged, duplicate, escalated, rejected) so the badge can name the
+	// determination instead of calling every one of them shipped (SC-5326).
+	ResolvedReason string `json:"resolvedReason,omitempty"`
+	StopLinkedKey  string `json:"stopLinkedKey,omitempty"`
+	StopReasoning  string `json:"stopReasoning,omitempty"`
 	// MockupSlug/MockupState link the card to a locally generated mockup set:
 	// "ready" once mockups/<slug>/index.json is valid, "creating" while a
 	// launched generation has not produced it yet. Local file state — never

@@ -112,7 +112,16 @@ test("badgeInfo preserves prior classifications", () => {
   // SC-454: a planning card whose work already shipped is resolved with a
   // positive "already shipped" badge — never red, never blank.
   assert.equal(badgeInfo({ stage: "planning", state: "resolved" }).cls, "resolved");
-  assert.equal(badgeInfo({ stage: "planning", state: "resolved" }).text, "already shipped");
+  // SC-5326: only a MERGED resolution reads as shipped; the other reasons name
+  // their determination, and a record with no reason claims nothing.
+  assert.equal(badgeInfo({ stage: "planning", state: "resolved", resolvedReason: "merged" }).text, "already shipped");
+  assert.equal(badgeInfo({ stage: "planning", state: "resolved", resolvedReason: "duplicate" }).text, "carried by another ticket");
+  assert.equal(badgeInfo({ stage: "planning", state: "resolved", resolvedReason: "escalated" }).text, "waiting on a design ticket");
+  assert.equal(badgeInfo({ stage: "planning", state: "resolved", resolvedReason: "rejected" }).text, "rejected");
+  assert.equal(badgeInfo({ stage: "planning", state: "resolved" }).text, "nothing to plan");
+  for (const c of ["merged", "duplicate", "escalated", "rejected", undefined]) {
+    assert.equal(badgeInfo({ stage: "planning", state: "resolved", resolvedReason: c }).cls, "resolved", String(c));
+  }
   assert.equal(
     badgeInfo({ stage: "verification", state: "done", verdict: "fail", branch: "b" }).cls,
     "warning",

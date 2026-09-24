@@ -195,6 +195,21 @@ func stageFailedOptional() []string {
 	return append(append([]string{"reason"}, BlockerFields()...), SilenceReapFields()...)
 }
 
+// NothingToDoReasons is the closed set of answers to WHY a ticket ended with
+// nothing to plan. One terminal state stands for four determinations — the
+// work is merged, another ticket carries it, a design decision has to come
+// first, or it is not a real problem — and the board used to label all of
+// them "already shipped", so a refusal read as delivery (SC-5326). The reason
+// is required rather than optional because a record without one is exactly
+// the lie this exists to stop.
+func NothingToDoReasons() []string {
+	return []string{"merged", "duplicate", "escalated", "rejected"}
+}
+
+func nothingToDoReasonEnum() map[string][]string {
+	return map[string][]string{"reason": NothingToDoReasons()}
+}
+
 var specs = map[string]spec{
 	"plan":                  {},
 	"plan-ready":            {},
@@ -210,7 +225,7 @@ var specs = map[string]spec{
 	"review-complete":  {required: []string{"verdict"}},
 	"review-failed":    {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
 	"no-fix-needed":    {required: []string{"verdict"}},
-	"nothing-to-do":    {required: []string{"evidence"}},
+	"nothing-to-do":    {required: []string{"evidence", "reason"}, fieldEnum: nothingToDoReasonEnum()},
 	"deploy-started":   {},
 	"deploy-failed":    {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
 	// A deployed marker must say HOW the work shipped, and there are two honest

@@ -69,6 +69,11 @@ export interface QueueCard {
   // the "decided" badge that distinguishes it from a card merely waiting.
   stopDecision?: string;
   stopLinkedKey?: string;
+  // Why a planning card resolved with nothing to plan: "merged", "duplicate",
+  // "escalated" or "rejected" — the nothing-to-do record's reason. Absent on a
+  // record posted before the reason existed, which renders unlabelled rather
+  // than as shipped (SC-5326).
+  resolvedReason?: string;
 }
 
 export interface AgentProgress {
@@ -244,6 +249,27 @@ export const STOP_DECISION_LABELS: Record<string, { text: string; title: string 
   rejected: {
     text: "not a real problem",
     title: "The pre-planning gate concluded this is not a real problem, with the evidence on the card",
+  },
+};
+
+// RESOLVED_REASON_LABELS names WHY a planning card ended with nothing to plan.
+// One terminal state stands for four determinations, and only the first is
+// delivery: labelling all four "already shipped" told a person a refused
+// ticket's work existed (SC-5326). Keyed by the nothing-to-do record's reason,
+// which the marker protocol closes to exactly these values.
+export const RESOLVED_REASON_LABELS: Record<string, { text: string; title: string }> = {
+  merged: { text: "already shipped", title: "Work already merged — nothing left to plan" },
+  duplicate: {
+    text: "carried by another ticket",
+    title: "Another ticket carries this work — nothing to plan here; the evidence names it",
+  },
+  escalated: {
+    text: "waiting on a design ticket",
+    title: "A design decision has to come first — the evidence names the ticket that carries it",
+  },
+  rejected: {
+    text: "rejected",
+    title: "Judged not a real problem, with the evidence on the ticket — nothing to plan",
   },
 };
 
@@ -563,10 +589,13 @@ export function badgeInfo(
   if (card.state === "failed") return failedBadge(card, runningLabels);
   if (card.state === "resolved") {
     if (card.stage === "planning") {
-      // The planner verified the ticket's work is already merged, so there is
-      // nothing left to plan: a successful terminal outcome, never red, never
-      // deployable — the right resolution is Done, not re-planning (ticket 454).
-      return { cls: "resolved", text: "already shipped", title: "Work already merged — nothing left to plan" };
+      // Nothing left to plan: a terminal outcome, never red, never deployable
+      // (ticket 454). The badge says WHICH determination it was; a record with
+      // no reason (posted before one was required) is named as a resolution
+      // without claiming the work shipped (SC-5326).
+      const reason = RESOLVED_REASON_LABELS[card.resolvedReason ?? ""];
+      if (reason) return { cls: "resolved", ...reason };
+      return { cls: "resolved", text: "nothing to plan", title: "The planning stage ended with nothing to plan; the ticket's nothing-to-do record has the evidence" };
     }
     // An autofix run whose triage concluded no fix is warranted (not-a-bug or
     // undetermined): a successful terminal outcome, never red, never deployable
