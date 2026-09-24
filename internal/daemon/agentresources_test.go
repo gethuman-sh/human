@@ -202,8 +202,12 @@ func TestRecordExit_boundsAHungEngineCall(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * containerProbeTimeout):
-		t.Fatal("RecordExit did not bound its engine calls: a hung prober blocked it past containerProbeTimeout")
+	case <-time.After(2*containerProbeTimeout + 2*time.Second):
+		// RecordExit makes two sequential bounded calls (probeStats then
+		// probeExitState), so its worst case is 2*containerProbeTimeout; the
+		// guard needs headroom over that or it is a coin flip against
+		// scheduling overhead, not a bound (SC-5369 review round 2).
+		t.Fatal("RecordExit did not bound its engine calls: a hung prober blocked it past 2*containerProbeTimeout")
 	}
 	require.Len(t, sink.rows, 1, "a hung engine still leaves a recorded exit, with nothing learned")
 	assert.Nil(t, sink.rows[0].ExitCode)
