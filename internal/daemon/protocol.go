@@ -322,6 +322,12 @@ type BoardViewCard struct {
 	// then render exactly as it did before this existed. Absence of a signal is
 	// never proof of death.
 	AgentLiveness string `json:"agentLiveness,omitempty"`
+	// AgentProgress is the daemon's own judgement of whether the agent behind
+	// the card is working or hung — filled by the daemon after Compose (the
+	// probe lives nowhere else), applied by the viewer only to an agent it
+	// found running on that daemon's machine. Nil when the daemon has no record
+	// of the agent, which the viewer renders exactly as before (SC-5328).
+	AgentProgress *BoardAgentProgress `json:"agentProgress,omitempty"`
 	// Options carries the card's open decision block: a stage ended in a fork
 	// and a human must pick a direction. OptionsContext is the one-line why.
 	Options        []BoardOption `json:"options,omitempty"`

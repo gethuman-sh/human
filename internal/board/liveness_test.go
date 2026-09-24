@@ -300,3 +300,39 @@ func TestMarkAgentLiveness_FailedCardStaysDeadWhenTheOtherStageIsAMarkerOnly(t *
 	MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
 	assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness)
 }
+
+// SC-5328: a present agent the daemon judges hung reads stalled, not live —
+// but only on the daemon's own word about THIS agent on THIS machine. A
+// judgement about another machine's agent, about a different agent name, or
+// no judgement at all leaves the agent live exactly as it rendered before.
+func TestMarkAgentLiveness_stalledOnTheDaemonsOwnJudgement(t *testing.T) {
+	live := LiveAgents{Names: map[string]bool{"board-SC-1-implementation": true}, DaemonID: "d1", Now: livenessNow}
+	mk := func(p *daemon.BoardAgentProgress) daemon.BoardViewCard {
+		c := card("SC-1", string(daemon.BoardImplementation), string(daemon.BoardRunning), "d1", 3*time.Hour, livenessNow)
+		c.AgentProgress = p
+		return c
+	}
+	cards := []daemon.BoardViewCard{
+		mk(&daemon.BoardAgentProgress{Agent: "board-SC-1-implementation", DaemonID: "d1", Stalled: true, IdleSeconds: 240, BudgetSeconds: 180}),
+		mk(&daemon.BoardAgentProgress{Agent: "board-SC-1-implementation", DaemonID: "d1", Stalled: false, IdleSeconds: 60, BudgetSeconds: 180}),
+		mk(&daemon.BoardAgentProgress{Agent: "board-SC-1-implementation", DaemonID: "d2", Stalled: true}),
+		mk(&daemon.BoardAgentProgress{Agent: "board-SC-1-planning", DaemonID: "d1", Stalled: true}),
+		mk(nil),
+	}
+	MarkAgentLiveness(cards, live)
+	assert.Equal(t, daemon.AgentStalled, cards[0].AgentLiveness, "hung on the daemon's own judgement")
+	assert.Equal(t, daemon.AgentLive, cards[1].AgentLiveness, "silent within budget is working")
+	assert.Equal(t, daemon.AgentLive, cards[2].AgentLiveness, "another machine's judgement is not about this container")
+	assert.Equal(t, daemon.AgentLive, cards[3].AgentLiveness, "a judgement about a different agent")
+	assert.Equal(t, daemon.AgentLive, cards[4].AgentLiveness, "no judgement renders as before")
+}
+
+// SC-5328: a stalled judgement without a container to apply it to says
+// nothing — the absent-agent verdicts are unchanged by it.
+func TestMarkAgentLiveness_stalledJudgementNeedsAPresentAgent(t *testing.T) {
+	c := card("SC-1", string(daemon.BoardImplementation), string(daemon.BoardRunning), "d1", 3*time.Hour, livenessNow)
+	c.AgentProgress = &daemon.BoardAgentProgress{Agent: "board-SC-1-implementation", DaemonID: "d1", Stalled: true}
+	cards := []daemon.BoardViewCard{c}
+	MarkAgentLiveness(cards, LiveAgents{Names: map[string]bool{}, DaemonID: "d1", Now: livenessNow})
+	assert.Equal(t, daemon.AgentDead, cards[0].AgentLiveness)
+}

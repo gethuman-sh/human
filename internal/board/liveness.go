@@ -92,6 +92,9 @@ func livenessOf(card daemon.BoardViewCard, live LiveAgents) string {
 	}
 	for _, n := range names {
 		if live.Names[n] {
+			if stalledHere(card, n, live) {
+				return daemon.AgentStalled
+			}
 			return daemon.AgentLive
 		}
 	}
@@ -118,6 +121,16 @@ func livenessOf(card daemon.BoardViewCard, live LiveAgents) string {
 		return daemon.AgentRecovering
 	}
 	return daemon.AgentDead
+}
+
+// stalledHere reports whether the daemon's own progress judgement says the
+// agent found running is hung. Three joins guard it: the judgement must be
+// about the agent that was found (not a reaped run's namesake), made by this
+// machine's daemon (progress is daemon-local), and say stalled. Absent or
+// foreign judgements leave the agent live, as it rendered before (SC-5328).
+func stalledHere(card daemon.BoardViewCard, agent string, live LiveAgents) bool {
+	p := card.AgentProgress
+	return p != nil && p.Agent == agent && p.DaemonID == live.DaemonID && p.Stalled
 }
 
 // recoverableByStuckRunning reports whether a card belongs to the class
