@@ -36,7 +36,7 @@ You have no push credentials in board context, and you do not need them. The rev
 
 1. **Check out the branch.** Board runs start detached at the default branch — the PR code is on the branch, not HEAD: `git checkout <branch>`.
 2. **Collect the findings.** Read `stage.pr-review` findings and any human PR comments. Treat a human comment with the same weight as the machine reviewer's — a human dropping a comment on the PR is exactly the out-of-band review this loop must answer.
-3. **Address each finding, and close its class.** Each blocking finding carries a `[<class>]` — `dependents`, `tests`, `correctness`, `security`, `contract`, `design`, `docs`, `process`. The reviewer reported one instance; the loop treats the same class in the same file as the SAME finding next round, however it is worded, and ends the loop on it. So fix the reported line, then look for the rest of that class in the file and in the diff — the other unescaped log line, the other caller without a test, the other prompt saying the old thing — and close those in the same commit. The smallest correct change is the one that leaves the class nothing to come back for. If a finding asks for a behavior change, add or update a test that pins it. If you disagree with a finding, do not silently ignore it — record why in your report's `addressed`/`deferred`, and leave the code as is; the next review decides.
+3. **Address each finding, and close its class.** Each blocking finding carries a `[<class>]` — `dependents`, `tests`, `correctness`, `security`, `contract`, `design`, `docs`, `process`. The reviewer reported one instance; the loop treats the same class in the same file as the SAME finding next round, however it is worded, and ends the loop on it. So fix the reported line, then look for the rest of that class in the file and in the diff — the other unescaped log line, the other caller without a test, the other prompt saying the old thing — and close those in the same commit. The smallest correct change is the one that leaves the class nothing to come back for. If a finding asks for a behavior change, add or update a test that pins it. If you disagree with a finding, do not silently ignore it — record why in your report's `addressed`/`deferred`, and leave the code as is; the next review decides. Before you fix, run `human review findings <file> --key <WORK_KEY>` for the file the finding names: a class that was found here before and deferred is a class this round must actually close, not defer again.
 4. **Go green on the fast tier** — for the packages this change touches, not the full quality gate; the deploy CI gate runs the full suite.
 <!-- human:include build-gate -->
 4a. **Dispose of every dependent.** A fix made from a review finding reaches the
@@ -47,7 +47,7 @@ You have no push credentials in board context, and you do not need them. The rev
    <why>` for a query you could not run. Record them in the `dependents` field of
    your stage record. A dependent that is neither examined nor changed is an
    unfinished fix, and the next review reads it as incomplete.
-5. **Commit** on the branch, referencing the key (`human commits prefix <WORK_KEY>` for the subject prefix). This local commit is what the reviewer re-reads. You **must** produce a new commit when you changed anything — a report of `done` with no new commit trips the loop's convergence guard and reds the card. If you genuinely could address nothing, that is `needs-input`, not `done`.
+5. **Commit** on the branch, referencing the key (`human commits prefix <WORK_KEY>` for the subject prefix). This local commit is what the reviewer re-reads. You **must** produce a new commit when you changed anything — a report of `done` with no new commit trips the loop's convergence guard and reds the card. If you genuinely could address nothing, that is `needs-input`, not `done`. The commit message body carries one `prior-finding:` line per file you touched, or `prior-findings: none recorded for the files touched` — never the recorded finding text, because the log is public.
 
 ## Convergence
 
@@ -75,6 +75,8 @@ EOF
 - There is no `needs-human-work` exit for this step, and no `blocker` object. On a `needs-input` stop your `deferred` leads the decision block (or is the failed marker's reason when you give no options); on the round budget the loop reds the card with a canned headline, or with a one-line fingerprint of the finding when the same one repeated (the file and class, when it was the class that repeated); the reviewer's full findings text never reaches the ticket, but every round's findings and your exit are kept in the daemon's findings record. A finding that genuinely needs a person is a `needs-input` stop with 2+ `options` — the only route that puts the question on the ticket.
 
 Do NOT use `AskUserQuestion` — you cannot interact with a human.
+
+<!-- human:include prior-findings -->
 
 <!-- human:include dependents -->
 

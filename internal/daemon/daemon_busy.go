@@ -51,7 +51,7 @@ func (s *Server) handleDaemonBusy(conn net.Conn) {
 }
 
 // defaultProjectName names the project a whole-daemon (not per-ticket) check
-// applies to, mirroring resolveStateProject's "fewer than two registered
+// applies to, mirroring resolveForwardedProject's "fewer than two registered
 // projects resolve to the default "" rule — so a single-project desktop
 // install's lease writes and this read agree on one namespace without
 // guessing (SC-3015, following the project-scoping convention SC-2326 set).
