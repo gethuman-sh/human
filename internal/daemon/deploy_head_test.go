@@ -74,6 +74,11 @@ func TestDeployBranch_LaggingForgeHead_NeverGatesOnTheReplacedTip(t *testing.T) 
 		preHead:      "0aa7fe89",
 		head:         "50358b7b",
 		forgeHeadLag: 2,
+		// The refusal is what makes this test discriminate: the fake merges only
+		// once the head it SERVES is the published one, which happens only if the
+		// gate waited for it. Without it the pre-fix control flow (no head read at
+		// all) satisfies every assertion here and the regression cannot fail.
+		mergeRefusalUntilHeadCurrent: fakeForge409(),
 	}
 	deps := newDeps(c, &fakeLauncher{}, p)
 	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
