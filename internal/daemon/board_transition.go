@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -66,10 +67,13 @@ type Deployer interface {
 	// and, when it is not, rebases the branch, re-pushes (lease), and re-verifies.
 	// A returned error is a real conflict the mechanical path cannot resolve — the
 	// deploy must NOT attempt the merge blind, but fail loudly instead.
-	// rebased reports whether the branch was rewritten and re-pushed: the forge
-	// then recomputes the PR's mergeability asynchronously, and merging inside
-	// that window draws a spurious 405 — the caller must wait it out first.
-	EnsureMergeable(ctx context.Context, req PRRequest) (rebased bool, err error)
+	// It returns the commit it PUBLISHED — "" when the branch was already
+	// current and nothing moved. Naming that commit is the whole contract:
+	// after a re-push the forge's pull-request resource still carries the
+	// previous head for a beat, so every read expressed as "this pull request"
+	// answers about the tip the rebase replaced (SC-5395). The caller waits for
+	// the forge to report this head before reading any verdict from it.
+	EnsureMergeable(ctx context.Context, req PRRequest) (head string, err error)
 	// FreshenBranch brings the LOCAL branch current with the base before a
 	// review round, so the reviewer reads the integrated candidate rather than
 	// the branch as it was pushed: when origin/<base> has advanced past the
@@ -188,6 +192,16 @@ var (
 	// the card (SC-1184).
 	mergeRetryInterval = 3 * time.Second
 	mergeRetryTimeout  = 60 * time.Second
+	// Head-binding pacing: the forge's pull-request resource lags a force-push
+	// by a beat, and every gate read after the freshness rebase is answered
+	// about whatever head it currently carries.
+	headPollInterval      = 3 * time.Second
+	deployHeadWaitTimeout = 5 * time.Minute
+	// mergeReintegrations bounds how often a merge refused for an out-of-date
+	// head re-runs the freshness stage. The forge's own lag clears inside
+	// mergeRetryTimeout; a refusal that outlives it means a sibling deploy
+	// actually landed, and only re-integrating the base clears that (SC-5395).
+	mergeReintegrations = 2
 )
 
 // BoardTransitionRequest is the wire request for advancing a card one stage.
@@ -1825,25 +1839,63 @@ func (d BoardTransitionDeps) settleDraft(ctx context.Context, pmKey string, res 
 //
 // Extracted from DeployBranch to keep that function inside the complexity gate;
 // it is one subject, "the branch moved, so re-check what moving invalidated".
-func (d BoardTransitionDeps) regateAfterRebase(ctx context.Context, pmKey string, res PRResult, branch string, rebased bool, logger zerolog.Logger) error {
-	if !rebased {
+// head is the commit the freshness rebase PUBLISHED — "" is a no-op, since
+// nothing moved and there is nothing to re-gate.
+func (d BoardTransitionDeps) regateAfterRebase(ctx context.Context, pmKey string, res PRResult, branch, head string, logger zerolog.Logger) error {
+	if head == "" {
 		return nil
 	}
-	logger.Info().Int("pr", res.Number).Msg("deploy: branch was stale; rebased onto the base, re-gating CI")
-	if err := d.waitForChecks(ctx, res); err != nil {
+	logger.Info().Int("pr", res.Number).Str("head", head).Msg("deploy: branch was stale; rebased onto the base, re-gating CI")
+	if err := d.waitForChecks(ctx, res, head); err != nil {
 		if ciFailureFixable(err) {
 			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch, false)
 		}
 		return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
 	}
-	if err := d.awaitMergeable(ctx, res.Number); err != nil {
+	if err := d.awaitMergeable(ctx, res, head); err != nil {
 		headline := "the forge still reports the pull request unmergeable after the freshness rebase — open the PR to see why, then re-run Deploy"
 		if stateUnreadable(err) {
 			headline = "could not read the pull request's mergeability — " + credentialRemedy
 		}
+		if headLagged(err) {
+			headline = headLagHeadline
+		}
 		return d.deployFailed(pmKey, res.URL, deployReason(headline, err))
 	}
 	return nil
+}
+
+const mergeRefusedHeadline = "the forge refused the merge — open the PR to see why, then re-run Deploy"
+
+// mergeAfterFreshness re-gates what the freshness rebase invalidated and merges,
+// re-integrating the base when the forge refuses because the head is out of
+// date. head is the commit EnsureMergeable published ("" when nothing moved).
+// Two branches that reach the merge within a minute of each other both land
+// here: the first moves the base, the second is refused, re-integrates, re-gates
+// its new head and merges — instead of redding for a person to re-run (SC-5395).
+func (d BoardTransitionDeps) mergeAfterFreshness(ctx context.Context, pmKey string, res PRResult, branch, head string, logger zerolog.Logger) error {
+	for round := 0; ; round++ {
+		if err := d.regateAfterRebase(ctx, pmKey, res, branch, head, logger); err != nil {
+			return err // regateAfterRebase already posted the failure
+		}
+		err := d.mergeWithRetry(ctx, res.Number)
+		if err == nil {
+			return nil
+		}
+		if !isHeadOutOfDate(err) || round >= mergeReintegrations {
+			return d.deployFailed(pmKey, res.URL, deployReason(mergeRefusedHeadline, err))
+		}
+		logger.Info().Int("pr", res.Number).Int("round", round+1).
+			Msg("deploy: the forge reports the head out of date; re-integrating the base and re-gating")
+		newHead, ensureErr := d.Deployer.EnsureMergeable(ctx, PRRequest{WorkspaceDir: d.WorkspaceDir, Branch: branch})
+		if ensureErr != nil {
+			return d.deployFailedOrDispatchFixer(ctx, pmKey, res,
+				"the branch conflicts with the base — resolve the conflict on "+branch+
+					" (rebase it onto the base branch), then re-run Deploy",
+				ensureErr, branch, false)
+		}
+		head = newHead
+	}
 }
 
 // DeployBranch runs the deterministic deploy gate for pmKey's branch: the
@@ -1906,7 +1958,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	if err := d.settleDraft(ctx, pmKey, res, logger); err != nil {
 		return err
 	}
-	if err := d.waitForChecks(ctx, res); err != nil {
+	if err := d.waitForChecks(ctx, res, ""); err != nil {
 		if ciFailureFixable(err) {
 			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch, false)
 		}
@@ -1917,7 +1969,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	// merge (GitHub 405) and the card would dead-end; rebasing and re-pushing here
 	// turns that terminal failure into a mechanical, human-free recovery. A real
 	// conflict surfaces as a loud deploy-failed instead of a blind merge attempt.
-	rebased, ensureErr := d.Deployer.EnsureMergeable(ctx, PRRequest{
+	head, ensureErr := d.Deployer.EnsureMergeable(ctx, PRRequest{
 		WorkspaceDir: d.WorkspaceDir,
 		Branch:       branch,
 	})
@@ -1940,13 +1992,8 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 				ensureErr, branch, false)
 		}
 	}
-	if err := d.regateAfterRebase(ctx, pmKey, res, branch, rebased, logger); err != nil {
+	if err := d.mergeAfterFreshness(ctx, pmKey, res, branch, head, logger); err != nil {
 		return err
-	}
-	if err := d.mergeWithRetry(ctx, res.Number); err != nil {
-		return d.deployFailed(pmKey, res.URL, deployReason(
-			"the forge refused the merge — open the PR to see why, then re-run Deploy",
-			err))
 	}
 	// Past the merge the work IS shipped: branch cleanup and the ticket close
 	// are best-effort and must never turn the card red. Best-effort here means
@@ -2025,6 +2072,19 @@ func stateUnreadable(err error) bool {
 	return unreadable
 }
 
+// deployHeadLagDetail tags a deploy error whose cause is that the forge never
+// reported the head this deploy published. It is neither a check verdict nor a
+// credential failure, and there is nothing in the branch for a code fixer to
+// change — so it must route to a plain deploy-failed (SC-5395).
+const deployHeadLagDetail = "deployHeadLag"
+
+// headLagged reports whether an error is the forge never catching up to the
+// head a freshness rebase published.
+func headLagged(err error) bool {
+	lagged, _ := errors.AllDetails(err)[deployHeadLagDetail].(bool)
+	return lagged
+}
+
 // secretStoreFailureHeadline returns an actionable deploy-failed headline for a
 // secret-store failure and true when err is one, so a failed secret read is
 // never reported as a branch, forge, or CI failure and is never handed to a code
@@ -2055,6 +2115,9 @@ func ciFailureHeadline(err error) string {
 	if stateUnreadable(err) {
 		return "could not read the pull request's check state — " + credentialRemedy
 	}
+	if headLagged(err) {
+		return headLagHeadline
+	}
 	if strings.Contains(err.Error(), "timed out") {
 		return "CI did not finish within the deploy window" +
 			checkSuffix(err, deployRunningChecksDetail, "still running") +
@@ -2084,18 +2147,66 @@ func ciFailureFixable(err error) bool {
 	if _, ok := secretStoreFailureHeadline(err); ok {
 		return false // a failed secret read is not a code defect
 	}
+	if headLagged(err) {
+		return false // a forge that never moved its PR resource is not a code defect
+	}
 	return err != nil && !strings.Contains(err.Error(), "timed out") && !stateUnreadable(err)
+}
+
+// headLagHeadline is the deploy-failed headline for a forge that never
+// reported the head a freshness rebase published — nothing in the branch for
+// a code fixer to change, so the card reds plainly instead of dispatching one.
+const headLagHeadline = "the forge did not report the rebased head on the pull request — open the PR to see which commit it carries, then re-run Deploy"
+
+// awaitPublishedHead blocks until the forge reports wantHead as the pull
+// request's head. wantHead is "" for the pre-rebase gate, where the PR's head
+// is whatever the branch already was and there is nothing to wait for.
+func (d BoardTransitionDeps) awaitPublishedHead(ctx context.Context, res PRResult, wantHead string) error {
+	if wantHead == "" {
+		return nil
+	}
+	deadline := time.Now().Add(deployHeadWaitTimeout)
+	var reported string
+	for {
+		state, err := d.Deployer.ReadPullRequest(ctx, d.WorkspaceDir, res.Number)
+		if err != nil {
+			return markStateUnreadable(err, "could not read the pull request's head", "pr", res.URL)
+		}
+		if state != nil {
+			reported = strings.TrimSpace(state.HeadSHA)
+			if reported == wantHead {
+				d.Logger.Info().Int("pr", res.Number).Str("head", wantHead).
+					Msg("deploy: the forge reports the head this deploy published")
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return errors.WithDetails(
+				"the forge did not report the rebased head on the pull request",
+				"pr", res.URL, "published", wantHead, "reported", reported, deployHeadLagDetail, true)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(headPollInterval):
+		}
+	}
 }
 
 // awaitMergeable waits for the forge's asynchronous mergeability recompute to
 // settle after a freshness-rebase re-push. Read errors and a false verdict
 // both retry — the recompute window routinely yields either — until the
 // timeout, which is the point where "still computing" and "genuinely
-// unmergeable" can no longer be told apart.
-func (d BoardTransitionDeps) awaitMergeable(ctx context.Context, number int) error {
+// unmergeable" can no longer be told apart. It first waits for the forge to
+// report wantHead so the recompute it polls is the one for the head this
+// deploy just published, never the tip the rebase replaced (SC-5395).
+func (d BoardTransitionDeps) awaitMergeable(ctx context.Context, res PRResult, wantHead string) error {
+	if err := d.awaitPublishedHead(ctx, res, wantHead); err != nil {
+		return err
+	}
 	deadline := time.Now().Add(mergeablePollTimeout)
 	for {
-		mergeable, err := d.Deployer.PullRequestMergeable(ctx, d.WorkspaceDir, number)
+		mergeable, err := d.Deployer.PullRequestMergeable(ctx, d.WorkspaceDir, res.Number)
 		if err == nil && mergeable {
 			return nil
 		}
@@ -2104,9 +2215,9 @@ func (d BoardTransitionDeps) awaitMergeable(ctx context.Context, number int) err
 				// A persistent read error is an unreadable state, not a verdict of
 				// unmergeable — tag it UNKNOWN so the card reports a credential
 				// failure rather than blaming the branch (SC-1996).
-				return markStateUnreadable(err, "could not read the pull request's mergeability", "pr", number)
+				return markStateUnreadable(err, "could not read the pull request's mergeability", "pr", res.URL)
 			}
-			return errors.WithDetails("forge reports the pull request unmergeable", "pr", number)
+			return errors.WithDetails("forge reports the pull request unmergeable", "pr", res.URL)
 		}
 		select {
 		case <-ctx.Done():
@@ -2141,22 +2252,41 @@ func (d BoardTransitionDeps) mergeWithRetry(ctx context.Context, number int) err
 	}
 }
 
-// isTransientMergeRefusal reports whether a merge error is the forge's racy
-// post-rebase refusal (a 405 "Pull Request is not mergeable" while the head is
-// still unstable/behind) rather than a genuine, terminal conflict. Only the
-// former is worth retrying — a real conflict never clears on its own (SC-1184).
+// isTransientMergeRefusal reports whether a merge refusal is one that clears on
+// its own. It classifies on the status the forge answered with — apiclient
+// stamps it on the error as "statusCode" — rather than on a rendered message,
+// because the set was written as an enumeration of one observed response and a
+// second status for the same "the head moved under you" condition (409) fell
+// outside it and dead-ended the card (SC-1184, SC-5395).
 func isTransientMergeRefusal(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	// A draft refusal is also a 405, and it is the opposite of transient: nothing
-	// about the branch changes while it is retried, so matching it here spent the
-	// full retry window on a refusal that was never going to lift (SC-4027).
+	// A draft refusal is also a 405 and is the opposite of transient: nothing
+	// about the branch changes while it is retried (SC-4027).
 	if strings.Contains(msg, "still a draft") {
 		return false
 	}
-	return strings.Contains(msg, "not mergeable") || strings.Contains(msg, "405")
+	if code, ok := errors.AllDetails(err)["statusCode"].(int); ok {
+		return code == http.StatusMethodNotAllowed || code == http.StatusConflict
+	}
+	// A refusal the forge reported inside a 200 body carries no status.
+	return strings.Contains(msg, "not mergeable") || strings.Contains(msg, "405") ||
+		strings.Contains(msg, "out of date")
+}
+
+// isHeadOutOfDate distinguishes the one transient refusal that does NOT clear
+// by waiting: the base advanced under the gate because a sibling deploy landed.
+// Waiting cannot fix it; only re-integrating the base can.
+func isHeadOutOfDate(err error) bool {
+	if err == nil {
+		return false
+	}
+	if code, ok := errors.AllDetails(err)["statusCode"].(int); ok && code == http.StatusConflict {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "out of date")
 }
 
 // forgeMergeableFallback reports whether the deploy may proceed to the merge
@@ -2209,7 +2339,14 @@ func (d BoardTransitionDeps) closeTicketBestEffort(pmKey string) {
 
 // waitForChecks blocks until the PR's CI verdict is conclusive. Passing
 // returns nil; failing and a gate timeout return an error carrying the reason.
-func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) error {
+// wantHead is the commit a freshness rebase published ("" for the pre-rebase
+// gate); the wait first blocks until the forge reports it before reading any
+// verdict, so a verdict is never read for the tip the rebase replaced
+// (SC-5395).
+func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult, wantHead string) error {
+	if err := d.awaitPublishedHead(ctx, res, wantHead); err != nil {
+		return err
+	}
 	ticker := time.NewTicker(deployCheckInterval)
 	defer ticker.Stop()
 	// This wait is the deploy's long silence — minutes with nothing written
@@ -2229,10 +2366,10 @@ func (d BoardTransitionDeps) waitForChecks(ctx context.Context, res PRResult) er
 		}
 		switch state {
 		case forge.ChecksPassing:
-			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Msg("deploy: CI checks passed")
+			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Str("head", wantHead).Msg("deploy: CI checks passed")
 			return nil
 		case forge.ChecksFailing:
-			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Msg("deploy: CI checks failed")
+			d.Logger.Info().Int("pr", res.Number).Int("polls", polls).Str("head", wantHead).Msg("deploy: CI checks failed")
 			return errors.WithDetails("CI checks failed", "pr", res.URL,
 				deployFailingChecksDetail, d.checkNames(res.Number, forge.ChecksFailing))
 		case forge.ChecksNone:

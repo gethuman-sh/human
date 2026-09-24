@@ -33,6 +33,11 @@ type rebaseGitStubs struct {
 	// abort before the lease push. Default false keeps the guard a no-op so the
 	// existing rebase-path assertions are unaffected.
 	behindOrigin bool
+	// branchLocal drives adoptPublishedTip's CAS: whether the branch has a local
+	// ref to read the "expected" value from. updateRefErr models a writer that
+	// moved the ref concurrently (SC-5395).
+	branchLocal  bool
+	updateRefErr error
 }
 
 func (s *rebaseGitStubs) install() {
@@ -40,11 +45,13 @@ func (s *rebaseGitStubs) install() {
 	prevIsAncestor, prevAdd, prevRemove := gitrepo.IsAncestor, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove
 	prevRebaseHead, prevPushHead, prevPushHeadLease := gitrepo.RebaseHead, gitrepo.PushHead, gitrepo.PushHeadWithLease
 	prevCommitsBetween := gitrepo.CommitsBetween
+	prevExistsLocal, prevUpdateRef := gitrepo.BranchExistsLocal, gitrepo.UpdateBranchRef
 	s.t.Cleanup(func() {
 		gitrepo.DefaultBranch, gitrepo.Fetch, gitrepo.BranchExistsRemote, gitrepo.RevParse = prevDefault, prevFetch, prevExistsRemote, prevRevParse
 		gitrepo.IsAncestor, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove = prevIsAncestor, prevAdd, prevRemove
 		gitrepo.RebaseHead, gitrepo.PushHead, gitrepo.PushHeadWithLease = prevRebaseHead, prevPushHead, prevPushHeadLease
 		gitrepo.CommitsBetween = prevCommitsBetween
+		gitrepo.BranchExistsLocal, gitrepo.UpdateBranchRef = prevExistsLocal, prevUpdateRef
 	})
 
 	gitrepo.DefaultBranch = func(_ context.Context, _ string) string { return "main" }
@@ -99,6 +106,11 @@ func (s *rebaseGitStubs) install() {
 		s.calls = append(s.calls, "push-head-lease "+dir+" "+branch+" "+expected)
 		return nil
 	}
+	gitrepo.BranchExistsLocal = func(_ context.Context, _, _ string) bool { return s.branchLocal }
+	gitrepo.UpdateBranchRef = func(_ context.Context, dir, branch, newSHA, expectedSHA string) error {
+		s.calls = append(s.calls, "update-ref "+dir+" "+branch+" "+newSHA+" "+expectedSHA)
+		return s.updateRefErr
+	}
 }
 
 func (s *rebaseGitStubs) sawCall(prefix string) bool {
@@ -113,11 +125,11 @@ func (s *rebaseGitStubs) sawCall(prefix string) bool {
 const rebaseTestWorkspace = "/live/checkout"
 
 func ensureMergeable(t *testing.T, s *rebaseGitStubs) error {
-	_, err := ensureMergeableRebased(t, s)
+	_, err := ensureMergeableHead(t, s)
 	return err
 }
 
-func ensureMergeableRebased(t *testing.T, s *rebaseGitStubs) (bool, error) {
+func ensureMergeableHead(t *testing.T, s *rebaseGitStubs) (string, error) {
 	t.Helper()
 	s.t = t
 	s.install()
@@ -209,6 +221,70 @@ func TestEnsureMergeable_RefusesBehindPublish(t *testing.T) {
 	}
 }
 
+// TestEnsureMergeable_movesLocalRefToPublishedTip is the SC-5395 regression for
+// defect C: after the ephemeral-worktree rebase publishes to origin, this
+// machine's local ref must be moved to the published tip too, with the
+// existing local value as the CAS expected.
+func TestEnsureMergeable_movesLocalRefToPublishedTip(t *testing.T) {
+	s := &rebaseGitStubs{branchOnRemote: true, branchLocal: true, remoteTip: "staletip", localTip: "localstale", ancestorAfter: true}
+	head, err := ensureMergeableHead(t, s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if head != "rebasedtip" {
+		t.Errorf("expected the published head, got %q", head)
+	}
+	if !s.sawCall("update-ref " + rebaseTestWorkspace + " autofix/999 rebasedtip localstale") {
+		t.Errorf("expected the local ref moved with the local tip as CAS expected, calls: %v", s.calls)
+	}
+}
+
+// TestEnsureMergeable_createsMissingLocalRef: a branch known only on origin has
+// no local ref to CAS against — the empty expected creates it.
+func TestEnsureMergeable_createsMissingLocalRef(t *testing.T) {
+	s := &rebaseGitStubs{branchOnRemote: true, branchLocal: false, remoteTip: "staletip", ancestorAfter: true}
+	if _, err := ensureMergeableHead(t, s); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !s.sawCall("update-ref " + rebaseTestWorkspace + " autofix/999 rebasedtip ") {
+		t.Errorf("expected the local ref created with an empty CAS expected, calls: %v", s.calls)
+	}
+}
+
+// TestEnsureMergeable_currentBranchLeavesLocalRefAlone: a branch that already
+// contains the base tip is not rebased, so nothing publishes and the local ref
+// must not be touched.
+func TestEnsureMergeable_currentBranchLeavesLocalRefAlone(t *testing.T) {
+	s := &rebaseGitStubs{branchOnRemote: true, branchLocal: true, remoteTip: "rebasedtip", ancestorAfter: true}
+	head, err := ensureMergeableHead(t, s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if head != "" {
+		t.Errorf("an already-current branch must report no published head, got %q", head)
+	}
+	if s.sawCall("update-ref") {
+		t.Errorf("an already-current branch must not move the local ref, calls: %v", s.calls)
+	}
+}
+
+// TestEnsureMergeable_localRefMovedConcurrently_IsReported: a refused CAS means
+// another writer owns the local ref right now (in practice a deploy-fixer
+// committing on the branch) and its commits are not in what was published —
+// the error must be reported, not swallowed, and the published head is
+// returned alongside it so the caller still knows what was published (SC-5395).
+func TestEnsureMergeable_localRefMovedConcurrently_IsReported(t *testing.T) {
+	s := &rebaseGitStubs{branchOnRemote: true, branchLocal: true, remoteTip: "staletip", localTip: "localstale",
+		ancestorAfter: true, updateRefErr: errors.WithDetails("ref moved")}
+	head, err := ensureMergeableHead(t, s)
+	if err == nil {
+		t.Fatal("expected a concurrently-moved local ref to fail the deploy")
+	}
+	if head != "rebasedtip" {
+		t.Errorf("the published head must still be reported alongside the error, got %q", head)
+	}
+}
+
 // runGit is the real-git test helper: it runs git with a deterministic identity
 // and fails the test on any error, so setup reads as a script.
 func runGit(t *testing.T, dir string, args ...string) string {
@@ -265,12 +341,12 @@ func TestEnsureMergeable_realGit_dirtyWorkspaceUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rebased, err := forgeDeployer{}.EnsureMergeable(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
+	head, err := forgeDeployer{}.EnsureMergeable(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
 	if err != nil {
 		t.Fatalf("EnsureMergeable on a dirty workspace must succeed, got: %v", err)
 	}
-	if !rebased {
-		t.Error("a stale branch that was rebased and re-pushed must report rebased=true")
+	if head == "" {
+		t.Error("a stale branch that was rebased and re-pushed must report the published head")
 	}
 
 	// The published branch contains the advanced base.
@@ -346,12 +422,12 @@ func TestEnsureMergeable_realGit_rebaseSelfContainedIdentity(t *testing.T) {
 	runGit(t, ws, "commit", "-m", "advance")
 	runGit(t, ws, "push", "origin", "main")
 
-	rebased, err := forgeDeployer{}.EnsureMergeable(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
+	head, err := forgeDeployer{}.EnsureMergeable(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
 	if err != nil {
 		t.Fatalf("EnsureMergeable must not depend on an ambient git identity, got: %v", err)
 	}
-	if !rebased {
-		t.Error("a stale branch that was rebased and re-pushed must report rebased=true")
+	if head == "" {
+		t.Error("a stale branch that was rebased and re-pushed must report the published head")
 	}
 
 	// The published branch contains the advanced base tip.
@@ -359,5 +435,95 @@ func TestEnsureMergeable_realGit_rebaseSelfContainedIdentity(t *testing.T) {
 	mainTip := runGit(t, ws, "rev-parse", "origin/main")
 	if out, e := exec.Command("git", "-C", ws, "merge-base", "--is-ancestor", mainTip, "origin/autofix/x").CombinedOutput(); e != nil {
 		t.Errorf("origin/autofix/x must contain the base tip after the deploy rebase: %s", out)
+	}
+}
+
+// TestEnsureMergeable_realGit_localRefFollowsThePublishedTip is the SC-5395
+// defect-C reproduction: before the fix, the local ref stayed at the
+// pre-rebase tip while origin held the rebase, so a following FreshenBranch
+// (which reads the LOCAL ref first) merged the base into work that no longer
+// existed, and a following push force-pushed that stale merge back over the
+// published rebase. After the fix the local ref follows the publish, so
+// FreshenBranch and pushBranch both build on what was actually published.
+func TestEnsureMergeable_realGit_localRefFollowsThePublishedTip(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	runGit(t, root, "init", "--bare", "-b", "main", origin)
+	ws := filepath.Join(root, "ws")
+	runGit(t, root, "clone", origin, ws)
+
+	if err := os.WriteFile(filepath.Join(ws, "a.txt"), []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, ws, "add", "a.txt")
+	runGit(t, ws, "commit", "-m", "base")
+	runGit(t, ws, "push", "-u", "origin", "main")
+
+	runGit(t, ws, "checkout", "-b", "autofix/x")
+	if err := os.WriteFile(filepath.Join(ws, "fix.txt"), []byte("fix\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, ws, "add", "fix.txt")
+	runGit(t, ws, "commit", "-m", "fix")
+	runGit(t, ws, "push", "origin", "autofix/x")
+	// Workspace left on main, exactly as the daemon leaves it between deploys.
+	runGit(t, ws, "checkout", "main")
+
+	if err := os.WriteFile(filepath.Join(ws, "b.txt"), []byte("two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, ws, "add", "b.txt")
+	runGit(t, ws, "commit", "-m", "advance")
+	runGit(t, ws, "push", "origin", "main")
+
+	head, err := forgeDeployer{}.EnsureMergeable(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
+	if err != nil {
+		t.Fatalf("EnsureMergeable must succeed, got: %v", err)
+	}
+	if head == "" {
+		t.Fatal("a stale branch that was rebased and re-pushed must report the published head")
+	}
+
+	runGit(t, ws, "fetch", "origin")
+	if got := runGit(t, ws, "rev-parse", "autofix/x"); got != head {
+		t.Errorf("local ref must follow the published tip: local=%s published=%s", got, head)
+	}
+	if got := runGit(t, ws, "rev-parse", "origin/autofix/x"); got != head {
+		t.Errorf("origin ref must be the published tip: origin=%s published=%s", got, head)
+	}
+
+	// Advance main once more so the follow-up freshen has something to merge.
+	if err := os.WriteFile(filepath.Join(ws, "c.txt"), []byte("three\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, ws, "add", "c.txt")
+	runGit(t, ws, "commit", "-m", "advance again")
+	runGit(t, ws, "push", "origin", "main")
+
+	prevFastTier := fastTierRunner
+	fastTierRunner = func(context.Context, string) (bool, error) { return true, nil }
+	t.Cleanup(func() { fastTierRunner = prevFastTier })
+
+	freshness, err := forgeDeployer{}.FreshenBranch(context.Background(), daemon.PRRequest{WorkspaceDir: ws, Branch: "autofix/x"})
+	if err != nil {
+		t.Fatalf("FreshenBranch must succeed, got: %v", err)
+	}
+	if freshness != daemon.FreshnessMerged {
+		t.Fatalf("expected FreshnessMerged, got %v", freshness)
+	}
+	if out, e := exec.Command("git", "-C", ws, "merge-base", "--is-ancestor", head, "autofix/x").CombinedOutput(); e != nil {
+		t.Errorf("the published rebase must be contained in the freshened branch, not orphaned: %s", out)
+	}
+
+	pushErr := forgeDeployer{}.pushBranch(context.Background(), ws, "autofix/x")
+	if pushErr != nil {
+		t.Fatalf("pushBranch must succeed, got: %v", pushErr)
+	}
+	runGit(t, ws, "fetch", "origin")
+	if out, e := exec.Command("git", "-C", ws, "merge-base", "--is-ancestor", head, "origin/autofix/x").CombinedOutput(); e != nil {
+		t.Errorf("the next publish must not overwrite the published rebase: %s", out)
 	}
 }
