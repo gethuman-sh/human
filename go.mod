@@ -5,6 +5,7 @@ go 1.26.6
 require (
 	fyne.io/systray v1.12.2
 	github.com/Masterminds/semver/v3 v3.5.0
+	github.com/andybalholm/brotli v1.1.2-0.20250424173009-453214e765f3
 	github.com/awnumar/memguard v0.23.0
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -108,7 +109,6 @@ require (
 	github.com/alingse/asasalint v0.0.11 // indirect
 	github.com/alingse/nilnesserr v0.2.0 // indirect
 	github.com/anchore/go-macholibre v0.0.0-20250826193721-3cd206ca93aa // indirect
-	github.com/andybalholm/brotli v1.1.2-0.20250424173009-453214e765f3 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.22.0 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/ashanbrown/forbidigo/v2 v2.3.0 // indirect

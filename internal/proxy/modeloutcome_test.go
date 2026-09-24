@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,14 +59,14 @@ func TestEmitOutcome_SpendLimitFrom400Body(t *testing.T) {
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
 
 	billing := []byte(`{"type":"error","error":{"type":"billing_error","message":"secret prose that must never be read"}}`)
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), nil, billing)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 400, nil, time.Now(), nil, billing)
 	assert.Equal(t, ClassSpendLimit, got.Class, "a billing_error 400 is a spend-limit")
 
 	generic := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`)
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), nil, generic)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 400, nil, time.Now(), nil, generic)
 	assert.Equal(t, ClassOther, got.Class, "a non-billing 400 stays other")
 
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 400, nil, time.Now(), nil, nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 400, nil, time.Now(), nil, nil)
 	assert.Equal(t, ClassOther, got.Class, "a 400 with no body is other, never a panic")
 }
 
@@ -96,17 +97,17 @@ func TestModelAPIHost_DefaultAndOverride(t *testing.T) {
 func TestEmitOutcome_NilRecorderNoOp(t *testing.T) {
 	li := &LoggingInterceptor{}
 	// Must not panic with no recorder wired.
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil, nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 200, nil, time.Now(), nil, nil)
 }
 
 func TestEmitOutcome_GatedOnModelHost(t *testing.T) {
 	var got []ModelCallOutcome
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = append(got, o) }}
 
-	li.emitOutcome("1.2.3.4:5", "example.com", 200, nil, time.Now(), nil, nil)
+	li.emitOutcome("1.2.3.4:5", "example.com", completionRef, 200, nil, time.Now(), nil, nil)
 	assert.Empty(t, got, "a non-model host is never accounted")
 
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil, nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 200, nil, time.Now(), nil, nil)
 	require.Len(t, got, 1, "the model host is accounted")
 	assert.Equal(t, ClassOK, got[0].Class)
 	assert.Equal(t, "api.anthropic.com", got[0].Host)
@@ -121,7 +122,7 @@ func TestEmitOutcome_Attribution(t *testing.T) {
 			return "SC-2555", "implementation", true
 		},
 	}
-	li.emitOutcome("10.0.0.7:44003", "api.anthropic.com", 200, nil, time.Now(), nil, nil)
+	li.emitOutcome("10.0.0.7:44003", "api.anthropic.com", completionRef, 200, nil, time.Now(), nil, nil)
 	assert.Equal(t, "SC-2555", got.Ticket)
 	assert.Equal(t, "implementation", got.Stage)
 }
@@ -133,7 +134,7 @@ func TestEmitOutcome_UnattributedIsStillRecorded(t *testing.T) {
 		RecordOutcome: func(o ModelCallOutcome) { got = o; recorded = true },
 		Attribute:     func(string) (string, string, bool) { return "", "", false },
 	}
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 401, nil, time.Now(), nil, nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 401, nil, time.Now(), nil, nil)
 	require.True(t, recorded, "an unattributed failure is recorded, not dropped")
 	assert.Empty(t, got.Ticket)
 	assert.Empty(t, got.Stage)
@@ -147,7 +148,7 @@ func TestEmitOutcome_PanicInSinkSwallowed(t *testing.T) {
 	}
 	// Constraint 1: a recording fault must never escape to break the call.
 	assert.NotPanics(t, func() {
-		li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil, nil)
+		li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 200, nil, time.Now(), nil, nil)
 	})
 }
 
@@ -198,7 +199,7 @@ func TestUsageFromResponse_empty(t *testing.T) {
 func TestEmitOutcome_recordsTokens(t *testing.T) {
 	var got ModelCallOutcome
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), nil, []byte(streamingUsageBody))
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 200, nil, time.Now(), nil, []byte(streamingUsageBody))
 	assert.Equal(t, "claude-opus-4-8", got.Model)
 	assert.Equal(t, 100, got.InputTokens)
 	assert.Equal(t, 200, got.OutputTokens)
@@ -210,7 +211,7 @@ func TestEmitOutcome_recordsTokens(t *testing.T) {
 func TestEmitOutcome_failureNoTokens(t *testing.T) {
 	var got ModelCallOutcome
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 0, errors.New("dial refused"), time.Now(), nil, nil)
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 0, errors.New("dial refused"), time.Now(), nil, nil)
 	assert.Equal(t, "", got.Model)
 	assert.Equal(t, 0, got.InputTokens+got.OutputTokens+got.CacheCreateTokens+got.CacheReadTokens,
 		"a call that never produced a response has no cost")
@@ -514,7 +515,7 @@ func TestEmitOutcome_unreadableEncodingStillRecordsTheCall(t *testing.T) {
 	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = o }}
 	header := http.Header{"Content-Encoding": {"br"}}
 
-	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", 200, nil, time.Now(), header, []byte("\x1b\x07\x00brotli-ish"))
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 200, nil, time.Now(), header, []byte("\x1b\x07\x00brotli-ish"))
 
 	assert.Equal(t, ClassOK, got.Class)
 	assert.Equal(t, 200, got.StatusCode)
@@ -530,4 +531,56 @@ func TestDecodeBody_corruptGzipFallsBackToRawBytes(t *testing.T) {
 
 	assert.Equal(t, raw, decodeBody(header, raw))
 	assert.Equal(t, raw, decodeBody(nil, raw), "no header is the identity case")
+}
+
+// completionRef is the request every existing outcome test stands for: a
+// Messages API completion, the one call whose body carries usage.
+var completionRef = CallRef{Method: http.MethodPost, Path: CompletionPath}
+
+// A brotli body must yield its usage like a gzip one: the client runtime now
+// offers br and the edge takes it for every JSON response (SC-5533).
+func TestEmitOutcome_brotliBodyYieldsUsage(t *testing.T) {
+	var o ModelCallOutcome
+	li := &LoggingInterceptor{RecordOutcome: func(got ModelCallOutcome) { o = got }}
+	var buf bytes.Buffer
+	w := brotli.NewWriter(&buf)
+	_, err := w.Write([]byte(`{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":7,"cache_creation_input_tokens":50,"cache_read_input_tokens":900}}`))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	header := http.Header{"Content-Encoding": {"br"}}
+
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", completionRef, 200, nil, time.Now(), header, buf.Bytes())
+
+	assert.Equal(t, "claude-opus-4-8", o.Model)
+	assert.Equal(t, 100, o.InputTokens)
+	assert.Equal(t, 7, o.OutputTokens)
+	assert.Equal(t, 50, o.CacheCreateTokens)
+	assert.Equal(t, 900, o.CacheReadTokens)
+}
+
+// The outcome names the endpoint it was recorded for, with the query string
+// dropped, and a pre-request failure carries none.
+func TestEmitOutcome_carriesTheEndpoint(t *testing.T) {
+	var got []ModelCallOutcome
+	li := &LoggingInterceptor{RecordOutcome: func(o ModelCallOutcome) { got = append(got, o) }}
+	req, err := http.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages?beta=true", nil)
+	require.NoError(t, err)
+
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", callRefOf(req), 200, nil, time.Now(), nil, []byte(streamingUsageBody))
+	li.emitOutcome("1.2.3.4:5", "api.anthropic.com", CallRef{}, 0, errors.New("dial refused"), time.Now(), nil, nil)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, http.MethodPost, got[0].Method)
+	assert.Equal(t, "/v1/messages", got[0].Path, "query string is not part of the endpoint")
+	assert.Empty(t, got[1].Method)
+	assert.Empty(t, got[1].Path)
+}
+
+// Only a completion is a hole in the accounting when its usage will not parse;
+// a token count or a startup fetch never carried usage to lose.
+func TestCallRef_IsCompletion(t *testing.T) {
+	assert.True(t, CallRef{Method: http.MethodPost, Path: "/v1/messages"}.IsCompletion())
+	assert.False(t, CallRef{Method: http.MethodPost, Path: "/v1/messages/count_tokens"}.IsCompletion())
+	assert.False(t, CallRef{Method: http.MethodGet, Path: "/v1/messages"}.IsCompletion())
+	assert.False(t, CallRef{}.IsCompletion())
 }
