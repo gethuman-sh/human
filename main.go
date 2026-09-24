@@ -32,6 +32,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmddoctor"
 	"github.com/gethuman-sh/human/cmd/cmdfigma"
 	"github.com/gethuman-sh/human/cmd/cmdforge"
+	"github.com/gethuman-sh/human/cmd/cmdforward"
 	"github.com/gethuman-sh/human/cmd/cmdfsm"
 	"github.com/gethuman-sh/human/cmd/cmdhandoff"
 	"github.com/gethuman-sh/human/cmd/cmdindex"
@@ -683,7 +684,10 @@ func resolveEventName(data []byte, structVal string) string {
 }
 
 // localSubcommands lists commands that must execute locally rather than
-// being forwarded to the daemon.
+// being forwarded to the daemon. A command that forwards but still needs a
+// fact from the caller's checkout — `handoff post` and `deploy` — is not
+// listed here: it stays forwarded for the daemon's credentials, and the git
+// half is settled client-side by cmdforward before the request leaves.
 var localSubcommands = map[string]bool{
 	"daemon":        true,
 	"chrome-bridge": true,
@@ -935,6 +939,15 @@ func main() {
 
 	// "daemon" subcommands must run locally.
 	if client != nil && !isLocalSubcommand(args) {
+		// A forwarded command that needs the caller's branch or commits gets
+		// them settled HERE, in the caller's checkout, and sent as explicit
+		// flags: the daemon's checkout is not where the caller stands, and
+		// reading git there refused work that was right there (SC-5330).
+		args, err := cmdforward.WithCallerFacts(context.Background(), args, ".", cmdforward.RealGit())
+		if err != nil {
+			errors.LogError(err).Msg("command failed")
+			os.Exit(1)
+		}
 		exitCode, err := client.RunRemote(args)
 		if err != nil {
 			errors.LogError(err).Msg("remote execution failed")

@@ -941,3 +941,50 @@ func TestUpdateBranchRef_error(t *testing.T) {
 		t.Fatal("expected error when the ref no longer holds the expected value")
 	}
 }
+
+func TestCommitsAnywhere_searchesEveryRef(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte("abc\x1fab\x1f[SC-1] x\n"), nil
+	})
+	commits, err := CommitsAnywhere(context.Background(), ".", "SC-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotArgs[len(gotArgs)-1] != "--all" {
+		t.Errorf("args = %v, want --all as the rev", gotArgs)
+	}
+	if len(commits) != 1 || commits[0].ShortSHA != "ab" {
+		t.Errorf("commits = %+v, want the one parsed record", commits)
+	}
+}
+
+func TestBranchesContaining_foldsRemoteRefsAndDropsHead(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		gotArgs = args
+		return []byte("fix/x\norigin/HEAD\norigin/fix/x\norigin/main\n\n"), nil
+	})
+	got, err := BranchesContaining(context.Background(), ".", "abc")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"fix/x", "main"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("branches = %v, want %v", got, want)
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "--contains abc") || !strings.Contains(joined, "--all") {
+		t.Errorf("args = %v, want --all --contains abc", gotArgs)
+	}
+}
+
+func TestBranchesContaining_error(t *testing.T) {
+	withRunner(t, func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("boom")
+	})
+	if _, err := BranchesContaining(context.Background(), ".", "abc"); err == nil {
+		t.Fatal("expected an error from git")
+	}
+}
