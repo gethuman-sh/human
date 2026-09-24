@@ -618,6 +618,10 @@ func (s *Server) handleHookEvent(conn net.Conn, args []string) {
 		if evt.EventName == "PostToolUse" || evt.EventName == "PostToolUseFailure" {
 			evt.DurationMs = s.HookEvents.DurationMsSincePre(evt.SessionID, evt.ToolName, evt.Timestamp)
 		}
+		// Before Append, for the same reason the duration is: both sinks must see
+		// one populated event, and Append is what teaches the store this session's
+		// model — resolving after it would resolve a spawn against its own record.
+		s.HookEvents.ResolveInheritedModel(&evt)
 		s.HookEvents.Append(evt)
 		if s.StatsWriter != nil {
 			s.StatsWriter.Send(evt)

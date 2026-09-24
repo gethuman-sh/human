@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
 	"github.com/gethuman-sh/human/internal/redact"
 )
@@ -44,6 +45,12 @@ type HookEventStore struct {
 	// progress is the last sign of life per agent, kept outside the ring so
 	// eviction cannot make a quiet-but-working agent look hung.
 	progress map[string]AgentProgress
+	// sessionModels is the top-level model each live session is running, learned
+	// from SessionStart (the one event that carries model at the top level). It
+	// is kept outside the ring for the same reason progress is: the ring evicts
+	// at 200 events per session, and a session's SessionStart is its oldest
+	// event, so a busy session would lose exactly the entry this needs.
+	sessionModels map[string]string
 	// persist is an optional durable sink invoked for every appended event.
 	// The in-memory ring evicts under load and is empty after a restart, so a
 	// hook event tied to a since-reaped agent run is otherwise lost; the sink
@@ -54,8 +61,9 @@ type HookEventStore struct {
 // NewHookEventStore creates an empty store.
 func NewHookEventStore() *HookEventStore {
 	return &HookEventStore{
-		events:   make([]seqEvent, 0, maxHookEvents),
-		progress: make(map[string]AgentProgress),
+		events:        make([]seqEvent, 0, maxHookEvents),
+		progress:      make(map[string]AgentProgress),
+		sessionModels: make(map[string]string),
 	}
 }
 
@@ -97,6 +105,10 @@ func (s *HookEventStore) Append(evt hookevents.Event) {
 		s.progress = make(map[string]AgentProgress)
 	}
 	trackProgress(s.progress, evt)
+	if s.sessionModels == nil {
+		s.sessionModels = make(map[string]string)
+	}
+	trackSessionModel(s.sessionModels, evt)
 	s.appended++
 	s.events = append(s.events, seqEvent{seq: s.appended, evt: evt})
 	if len(s.events) > maxHookEvents {
@@ -314,4 +326,50 @@ func (s *HookEventStore) DurationMsSincePre(sessionID, toolName string, postTS t
 		}
 	}
 	return 0
+}
+
+// trackSessionModel folds one event into the per-session model map. An event
+// with a model and NO subagent type is the session speaking about itself —
+// SessionStart — whereas a spawn's model belongs to the spawn. The entry is
+// dropped on IsRunEnd, not on SessionEnd alone: a run that ends on Stop or
+// StopFailure never emits SessionEnd, so keying on it would leak an entry per
+// such run. trackProgress (agentprogress.go) drops its entry on the same
+// condition, for the same reason.
+func trackSessionModel(models map[string]string, evt hookevents.Event) {
+	if evt.SessionID == "" {
+		return
+	}
+	if hookevents.IsRunEnd(evt.EventName) {
+		delete(models, evt.SessionID)
+		return
+	}
+	if evt.SubagentType == "" && evt.Model != "" {
+		models[evt.SessionID] = evt.Model
+	}
+}
+
+// SessionModel returns the top-level model a session is running, empty when the
+// store never saw its SessionStart — a session older than this daemon process,
+// or one that started before the daemon restarted.
+func (s *HookEventStore) SessionModel(sessionID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionModels[sessionID]
+}
+
+// ResolveInheritedModel replaces the "inherited" placeholder with the model the
+// spawn's session is actually running, normalised to a family word so two
+// spellings of one model do not split into two rows.
+//
+// "inherited" is not a tier, it is the absence of a decision, and a stats row
+// that reports it hides whichever default the account happened to supply — which
+// is the reading that made a quarter of runs cheap by accident (SC-5474). An
+// unknown session is left alone: an honest placeholder beats a guessed model.
+func (s *HookEventStore) ResolveInheritedModel(evt *hookevents.Event) {
+	if evt == nil || evt.Model != hookevents.ModelInherited {
+		return
+	}
+	if family := claude.ModelFamilyName(s.SessionModel(evt.SessionID)); family != "" {
+		evt.Model = family
+	}
 }

@@ -354,3 +354,65 @@ func TestHookEventStore_Persists(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "a1", got[0].AgentName)
 }
+
+// `inherited` is the absence of a decision, and the honest resolution is the
+// model the spawn's own session is running — read from SessionStart, which is
+// the one event carrying a top-level model (SC-5474).
+func TestHookStore_resolvesInheritedFromSessionStart(t *testing.T) {
+	store := NewHookEventStore()
+	store.Append(hookevents.Event{EventName: "SessionStart", SessionID: "s1", Model: "claude-opus-4-5-20260101"})
+
+	evt := hookevents.Event{
+		EventName:    "PreToolUse",
+		SessionID:    "s1",
+		SubagentType: "features-recon",
+		Model:        hookevents.ModelInherited,
+	}
+	store.ResolveInheritedModel(&evt)
+
+	assert.Equal(t, "opus", evt.Model, "the family word, so two spellings of one model do not split into two rows")
+}
+
+func TestHookStore_leavesInheritedForUnknownSession(t *testing.T) {
+	store := NewHookEventStore()
+
+	evt := hookevents.Event{EventName: "PreToolUse", SessionID: "s9", SubagentType: "human-planner", Model: hookevents.ModelInherited}
+	store.ResolveInheritedModel(&evt)
+
+	assert.Equal(t, hookevents.ModelInherited, evt.Model, "an honest placeholder beats a guessed model")
+}
+
+func TestHookStore_doesNotOverwriteAnExplicitModel(t *testing.T) {
+	store := NewHookEventStore()
+	store.Append(hookevents.Event{EventName: "SessionStart", SessionID: "s1", Model: "opus"})
+
+	evt := hookevents.Event{EventName: "PreToolUse", SessionID: "s1", SubagentType: "human-bug-fixer", Model: "sonnet"}
+	store.ResolveInheritedModel(&evt)
+
+	assert.Equal(t, "sonnet", evt.Model)
+}
+
+// The entry is dropped when the run ends, on any of the three endings — a run
+// that stops without SessionEnd would otherwise leak one entry per run.
+func TestHookStore_sessionModelClearedOnSessionEnd(t *testing.T) {
+	store := NewHookEventStore()
+	store.Append(hookevents.Event{EventName: "SessionStart", SessionID: "s1", Model: "opus"})
+	require.Equal(t, "opus", store.SessionModel("s1"))
+
+	store.Append(hookevents.Event{EventName: hookevents.EventSessionEnd, SessionID: "s1"})
+	assert.Empty(t, store.SessionModel("s1"))
+
+	evt := hookevents.Event{EventName: "PreToolUse", SessionID: "s1", SubagentType: "human-planner", Model: hookevents.ModelInherited}
+	store.ResolveInheritedModel(&evt)
+	assert.Equal(t, hookevents.ModelInherited, evt.Model)
+}
+
+// A spawn's model is the spawn's, not the session's: recording it as the
+// session's would make the next inheriting spawn report the previous spawn's
+// tier rather than the container's.
+func TestHookStore_spawnDoesNotSetTheSessionModel(t *testing.T) {
+	store := NewHookEventStore()
+	store.Append(hookevents.Event{EventName: hookevents.EventSubagentStart, SessionID: "s2", SubagentType: "human-planner", Model: "opus"})
+
+	assert.Empty(t, store.SessionModel("s2"))
+}
