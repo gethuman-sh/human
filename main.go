@@ -46,6 +46,7 @@ import (
 	"github.com/gethuman-sh/human/cmd/cmdplan"
 	"github.com/gethuman-sh/human/cmd/cmdprovider"
 	"github.com/gethuman-sh/human/cmd/cmdproxy"
+	"github.com/gethuman-sh/human/cmd/cmdreview"
 	"github.com/gethuman-sh/human/cmd/cmdslack"
 	"github.com/gethuman-sh/human/cmd/cmdstate"
 	"github.com/gethuman-sh/human/cmd/cmdstats"
@@ -389,6 +390,12 @@ Configure trackers and tools in .humanconfig.yaml or pass credentials via flags/
 	searchCmd := cmdindex.BuildSearchCmd(indexDeps)
 	searchCmd.GroupID = "shortcuts"
 	rootCmd.AddCommand(searchCmd)
+
+	// Reads the daemon host's findings record, so it forwards like search and
+	// unlike index — deliberately absent from localSubcommands.
+	reviewCmd := cmdreview.BuildReviewCmd(cmdreview.DefaultDeps())
+	reviewCmd.GroupID = "shortcuts"
+	rootCmd.AddCommand(reviewCmd)
 
 	agentCmd := cmdagent.BuildAgentCmd()
 	agentCmd.GroupID = "utility"

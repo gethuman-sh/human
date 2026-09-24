@@ -408,16 +408,18 @@ func (s *Server) executeCommand(conn net.Conn, req Request, projectDir string) {
 		}
 		req.Env["HUMAN_PROJECT_DIR"] = projectDir
 	}
-	// A forwarded "human state" command carries no way to name its own
-	// project — the scope argument is the ticket key. Resolve it here from
-	// the same registry the board driver uses, so no prompt change is needed.
-	if len(req.Args) > 0 && req.Args[0] == "state" {
-		if stateProject := s.resolveStateProject(req.Args); stateProject != "" {
-			if req.Env == nil {
-				req.Env = make(map[string]string)
-			}
-			req.Env["HUMAN_STATE_PROJECT"] = stateProject
+	// A forwarded project-scoped command carries no way to name its own
+	// project — a ticket key in its arguments is the only handle. Resolve it
+	// here from the same registry the board driver uses, so no prompt change
+	// is needed. Two commands qualify today: "state" (scope positional) and
+	// "review findings" (--key). A command added without a rule in
+	// forwardedProjectScope reads the default namespace and answers as if the
+	// project's rows did not exist.
+	if project := s.resolveForwardedProject(req.Args); project != "" {
+		if req.Env == nil {
+			req.Env = make(map[string]string)
 		}
+		req.Env["HUMAN_STATE_PROJECT"] = project
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -1607,18 +1609,45 @@ func stateScopeArg(args []string) string {
 	return cleaned[0]
 }
 
-// resolveStateProject resolves which project's state namespace a forwarded
-// "human state" command touches, by routing its scope (ticket key) argument
-// through the same ProjectRegistry.EntryForKey the board driver uses — so an
-// agent's write and the daemon's own read of that ticket's state resolve to
-// the identical project value. Single/zero registered projects, an
-// unrecognised command, or a key the registry cannot place all resolve to ""
-// (the default project), never guessing.
-func (s *Server) resolveStateProject(args []string) string {
+// forwardedProjectScope returns the ticket key a forwarded command's project
+// must be resolved from, or "" when the command is not project-scoped.
+func forwardedProjectScope(args []string) string {
+	if scope := stateScopeArg(args); scope != "" {
+		return scope
+	}
+	return reviewFindingsKeyArg(args)
+}
+
+// reviewFindingsKeyArg extracts the --key value from a forwarded
+// "human review findings …". The key is a flag rather than a positional
+// because the positionals are file paths.
+func reviewFindingsKeyArg(args []string) string {
+	if len(args) < 2 || args[0] != "review" || args[1] != "findings" {
+		return ""
+	}
+	for i := 2; i < len(args); i++ {
+		if v, ok := strings.CutPrefix(args[i], "--key="); ok {
+			return strings.TrimSpace(v)
+		}
+		if args[i] == "--key" && i+1 < len(args) {
+			return strings.TrimSpace(args[i+1])
+		}
+	}
+	return ""
+}
+
+// resolveForwardedProject resolves which project's namespace a forwarded,
+// project-scoped command touches, by routing its ticket key through the same
+// ProjectRegistry.EntryForKey the board driver uses — so an agent's write and
+// the daemon's own read of that ticket's state resolve to the identical
+// project value. Single/zero registered projects, an unrecognised command, or
+// a key the registry cannot place all resolve to "" (the default project),
+// never guessing.
+func (s *Server) resolveForwardedProject(args []string) string {
 	if s.Projects == nil || len(s.Projects.Entries()) < 2 {
 		return ""
 	}
-	scope := stateScopeArg(args)
+	scope := forwardedProjectScope(args)
 	if scope == "" {
 		return ""
 	}

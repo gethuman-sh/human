@@ -38,6 +38,7 @@ human <TRACKER> issues list --project=<PROJECT_KEY>
 3. **Explore** the codebase with Glob, Grep, and Read to understand affected areas
 4. **Identify** existing patterns, conventions, and related code
 4a. **Already-implemented check** — if exploration shows every acceptance criterion is already satisfied by code merged on `main`, the ticket's work has already shipped and there is nothing to plan. Do NOT invent a plan to re-do shipped work. Return a single line — `ALREADY IMPLEMENTED: <evidence>` — as your ENTIRE output, and finish. The evidence must be concrete and merged: name the specific PR and/or commit (and the file/function that satisfies each criterion). The orchestrator turns this verdict into a terminal `[human:nothing-to-do]` marker rather than a plan.
+4b. **Ask what past reviews found.** For the files your plan will change, run `human review findings <path> … --key <PM_KEY>` before you write the Changes section. A finding whose class your plan would re-create is a plan defect, not a review defect — fix the plan, and record what you consulted in the plan's `## Prior Review Findings` section.
 5. **Produce** a structured plan following the output format below
 6. **Verify references** — every file, function, and type referenced in the plan must actually exist. Use Grep/Glob to confirm.
 7. **Return** the plan as your output. Do NOT write any files — no `.human/plans/`, no plan files. The orchestrator attaches the plan to the tracker: as the engineering ticket's description (split topology) or as a `[human:plan]` comment on the ticket itself (single-tracker topology).
@@ -112,6 +113,12 @@ List the codebase patterns the implementation must follow. Include file paths an
 describe the pattern concretely (not just "follows the same pattern as X" — show
 what the pattern actually looks like).
 
+## Prior Review Findings
+
+One line per finding the record returned for the files this plan changes, and
+what this plan does about it — or the single line `prior-findings: none
+recorded for the files touched`.
+
 ## Dependents
 
 Every shared thing this plan changes gets one row, classified by kind, with the
@@ -185,6 +192,8 @@ For each new or modified behavior:
 - **User Sovereignty for genuine forks only**: For a trade-off the codebase or ticket can settle, decide it and record the rationale in "Architecture Decisions" — a board plan must arrive decided. Reserve deferral for a real product/UX taste call or an ambiguous requirement, and express that as the up-front `DECISION REQUIRED:` terminal (per the Autonomy contract) so the human chooses BEFORE implementation — never as a sign-off gate baked into a step. Scope is governed by Autonomy contract rule 4, not decided here: never ask which slice to ship first, and never narrow the ticket without routing an over-ask or contradiction through that rule's `DECISION REQUIRED:` path.
 
 Do NOT use `AskUserQuestion` — you cannot interact with the user. Either return a complete, gate-free plan or, for a genuine human fork, the `DECISION REQUIRED:` terminal verdict. Then finish.
+
+<!-- human:include prior-findings -->
 
 <!-- human:include dependents -->
 

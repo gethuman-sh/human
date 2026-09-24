@@ -10,3 +10,10 @@
 - Refresh the index quickly with incremental updates
 - Full re-sync option that prunes deleted tickets
 - Output as plain text, a table, or JSON
+
+## Review findings
+
+The same database keeps every blocking finding of every machine review round —
+file, class, ticket, PR, round, and what the fixer did about it — so the machine
+stops paying for the same lesson once per ticket. Ask with
+`human review findings <path> …`.

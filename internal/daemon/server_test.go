@@ -650,34 +650,34 @@ func TestStateScopeArg_FindsScopeAheadOfOrBehindFlags(t *testing.T) {
 	assert.Equal(t, "", stateScopeArg([]string{"state"}), "no subcommand")
 }
 
-func TestResolveStateProject_RoutesByRecordedOrigin(t *testing.T) {
+func TestResolveForwardedProject_RoutesByRecordedOrigin(t *testing.T) {
 	reg := twoProjectRegistry(t)
 	a := reg.Entries()[0]
 	reg.SetOrigins([]KeyOrigin{{Key: "KAN-1", Dir: a.Dir}})
 
 	srv := &Server{Projects: reg}
-	got := srv.resolveStateProject([]string{"state", "get", "KAN-1", "stage.fix"})
+	got := srv.resolveForwardedProject([]string{"state", "get", "KAN-1", "stage.fix"})
 	assert.Equal(t, a.Name, got)
 }
 
-func TestResolveStateProject_UnknownKeyResolvesToDefault(t *testing.T) {
+func TestResolveForwardedProject_UnknownKeyResolvesToDefault(t *testing.T) {
 	reg := twoProjectRegistry(t)
 	srv := &Server{Projects: reg}
-	got := srv.resolveStateProject([]string{"state", "get", "NOPE-1", "stage.fix"})
+	got := srv.resolveForwardedProject([]string{"state", "get", "NOPE-1", "stage.fix"})
 	assert.Equal(t, "", got)
 }
 
-func TestResolveStateProject_SingleProjectResolvesToDefault(t *testing.T) {
+func TestResolveForwardedProject_SingleProjectResolvesToDefault(t *testing.T) {
 	reg := oneProjectRegistry(t)
 	reg.SetOrigins([]KeyOrigin{{Key: "KAN-1", Dir: reg.Entries()[0].Dir}})
 	srv := &Server{Projects: reg}
-	got := srv.resolveStateProject([]string{"state", "get", "KAN-1", "stage.fix"})
+	got := srv.resolveForwardedProject([]string{"state", "get", "KAN-1", "stage.fix"})
 	assert.Equal(t, "", got, "single-project state stays in the default namespace")
 }
 
-func TestResolveStateProject_NoProjectsRegistered(t *testing.T) {
+func TestResolveForwardedProject_NoProjectsRegistered(t *testing.T) {
 	srv := &Server{}
-	got := srv.resolveStateProject([]string{"state", "get", "KAN-1", "stage.fix"})
+	got := srv.resolveForwardedProject([]string{"state", "get", "KAN-1", "stage.fix"})
 	assert.Equal(t, "", got)
 }
 
@@ -1994,4 +1994,31 @@ func TestDetectDestructiveIgnoresIssueLink(t *testing.T) {
 	// allow-list cannot silently start gating it.
 	_, ok := detectDestructive([]string{"jira", "issue", "link", "KAN-1", "KAN-2"})
 	assert.False(t, ok)
+}
+
+func TestReviewFindingsKeyArg(t *testing.T) {
+	assert.Equal(t, "KAN-1", reviewFindingsKeyArg([]string{"review", "findings", "a.go", "--key", "KAN-1"}))
+	assert.Equal(t, "KAN-1", reviewFindingsKeyArg([]string{"review", "findings", "a.go", "--key=KAN-1"}))
+	assert.Equal(t, "", reviewFindingsKeyArg([]string{"review", "findings", "a.go"}), "no key to resolve from")
+	assert.Equal(t, "", reviewFindingsKeyArg([]string{"review", "findings", "a.go", "--key"}), "a dangling flag names nothing")
+	assert.Equal(t, "", reviewFindingsKeyArg([]string{"jira", "issue", "get", "KAN-1"}), "not a review command")
+	assert.Equal(t, "", reviewFindingsKeyArg([]string{"review"}), "no subcommand")
+}
+
+func TestResolveForwardedProject_ReviewFindings(t *testing.T) {
+	reg := twoProjectRegistry(t)
+	a := reg.Entries()[0]
+	reg.SetOrigins([]KeyOrigin{{Key: "KAN-1", Dir: a.Dir}})
+
+	srv := &Server{Projects: reg}
+	got := srv.resolveForwardedProject([]string{"review", "findings", "a.go", "--key", "KAN-1"})
+	assert.Equal(t, a.Name, got, "a findings query reads the project its rows were written under")
+}
+
+func TestResolveForwardedProject_ReviewFindingsWithoutKeyStaysDefault(t *testing.T) {
+	reg := twoProjectRegistry(t)
+	reg.SetOrigins([]KeyOrigin{{Key: "KAN-1", Dir: reg.Entries()[0].Dir}})
+	srv := &Server{Projects: reg}
+	got := srv.resolveForwardedProject([]string{"review", "findings", "a.go"})
+	assert.Equal(t, "", got)
 }
