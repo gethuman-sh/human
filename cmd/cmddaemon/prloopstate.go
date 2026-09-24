@@ -190,6 +190,18 @@ func recordReviewRound(ctx context.Context, rec recall.FindingsRecorder, project
 		return
 	}
 	pr, round := daemon.PRLoopNumber(comments), daemon.PRReviewRounds(comments)
+	// round is a count of pr-review-started markers seen in comments (SC-5278):
+	// it is only zero when the comment thread could not be read at all (the
+	// caller's ListComments failed and passed comments as nil), because a
+	// verdict this call is ever reached for was itself read from a report a
+	// round's own started-marker anchors — a real round is never round zero.
+	// Writing anyway would land every such row at pr=0/round=0, colliding
+	// under UNIQUE(project,key,pr,round,file,slug) with any other round's
+	// leftover and corrupting FindingClassCounts. Refuse rather than guess.
+	if round <= 0 {
+		logger.Warn().Str("pm", pmKey).Msg("board PR loop: findings not recorded, comment thread unread this round")
+		return
+	}
 	rows := make([]recall.ReviewFinding, 0, len(parsed))
 	for _, f := range parsed {
 		rows = append(rows, recall.ReviewFinding{

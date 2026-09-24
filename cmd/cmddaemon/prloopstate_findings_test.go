@@ -120,6 +120,27 @@ func base1000Plus(minutes int) time.Time {
 	return time.Unix(1000, 0).Add(time.Duration(minutes) * time.Minute)
 }
 
+// The bug fixed in SC-5278: when the caller's ListComments failed it passes
+// comments as nil, so PRLoopNumber/PRReviewRounds both read 0 off the empty
+// thread. A verdict is only ever reached here because a real round's report
+// settled against that round's own started-marker anchor, so round is never
+// legitimately 0 — writing anyway would land the row at pr=0/round=0 and
+// collide with (or misattribute into) another round's bucket under
+// UNIQUE(project,key,pr,round,file,slug). recordReviewRound must refuse.
+func TestRecordReviewRound_refusesWhenThreadUnread(t *testing.T) {
+	store, err := recall.NewSQLiteStore(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	logger := zerolog.Nop()
+
+	recordReviewRound(ctx, store, "proj", "SC-1", nil, "BLOCKING a.go:1 — x — [tests] y", "h", logger)
+
+	got, err := store.FindingsForKey(ctx, "proj", "SC-1")
+	require.NoError(t, err)
+	assert.Empty(t, got, "a nil comment thread must never produce a pr=0/round=0 row")
+}
+
 // No recorder, no findings, no exit: nothing is written and nothing panics.
 func TestRecordReviewRound_toleratesNothingToRecord(t *testing.T) {
 	ctx := context.Background()
