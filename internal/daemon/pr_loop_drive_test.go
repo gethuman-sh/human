@@ -166,29 +166,45 @@ func TestAdvancePRLoop_cliStartedLoopDispatchesTheFixerOnTheBranch(t *testing.T)
 	assert.Equal(t, "/human-pr-fix SC-1 --pr=7 --branch=feat/x", l.prompt)
 }
 
-// prLoopBranch prefers the start marker's own branch, but a marker posted
+// doneStageBranch prefers the start marker's own branch, but a marker posted
 // before this fix (or a reconcile pass reading an older thread) may carry
 // none — the handoff-driven, board-started case both existing loops otherwise
 // exercise only through threads where the two sources agree. The fallback must
 // still resolve to the handoff branch rather than an empty string.
-func TestPrLoopBranch_fallsBackToHandoffWhenStartMarkerCarriesNone(t *testing.T) {
+func TestDoneStageBranch_fallsBackToHandoffWhenStartMarkerCarriesNone(t *testing.T) {
 	comments := []tracker.Comment{
 		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "1", Created: time.Unix(1, 0)},
 		{Body: "[human:pr-review-started]\npr: u\nnumber: 7", ID: "2", Created: time.Unix(2, 0)},
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	assert.Equal(t, "feat/x", prLoopBranch(comments, card))
+	assert.Equal(t, "feat/x", doneStageBranch(comments, card))
 }
 
 // The ordinary case: the start marker's own branch wins even when it differs
 // from the handoff, which is the whole point of reading it (SC-5119).
-func TestPrLoopBranch_prefersStartMarkerOverHandoff(t *testing.T) {
+func TestDoneStageBranch_prefersStartMarkerOverHandoff(t *testing.T) {
 	comments := []tracker.Comment{
 		{Body: "[human:ready-for-review]\nbranch: feat/old", ID: "1", Created: time.Unix(1, 0)},
 		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/new", ID: "2", Created: time.Unix(2, 0)},
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	assert.Equal(t, "feat/new", prLoopBranch(comments, card))
+	assert.Equal(t, "feat/new", doneStageBranch(comments, card))
+}
+
+// A stale start marker from an EARLIER round must never outrank a newer
+// handoff: a ticket that reached the done stage once (pr-review-started names
+// feat/a), then went back through implementation and handed off a different
+// branch (feat/b), resolves to feat/b — not the source-precedence winner from
+// a round the ticket has since moved past. Trusting feat/a here would deploy
+// stale work and, if feat/a happens to already be on the base, silently record
+// the NEW work as shipped via the already-merged carve-out (SC-5396).
+func TestDoneStageBranch_newerHandoffOutranksAStaleStartMarker(t *testing.T) {
+	comments := []tracker.Comment{
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/a", ID: "1", Created: time.Unix(1, 0)},
+		{Body: "[human:ready-for-review]\nbranch: feat/b", ID: "2", Created: time.Unix(2, 0)},
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, "feat/b", doneStageBranch(comments, card))
 }
 
 // A re-drive from the reconcile pass carries no exit event and evidence older

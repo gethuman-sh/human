@@ -378,8 +378,7 @@ func whereAgent(key string, card BoardCard, deps WhereDeps) *WhereAgent {
 	if deps.Progress == nil || card.Stage == "" || card.Stage == BoardHidden {
 		return nil
 	}
-	name := agentNameFor(key, card.Stage)
-	p, ok := deps.Progress(name)
+	name, p, ok := stageProgress(deps.Progress, key, card.Stage)
 	if !ok {
 		return &WhereAgent{Name: name, Known: false}
 	}
@@ -396,6 +395,22 @@ func whereAgent(key string, card BoardCard, deps WhereDeps) *WhereAgent {
 		ModelRequest:    p.ModelRequest.String(),
 		Blocked:         p.Blocked,
 	}
+}
+
+// stageProgress finds the progress record of whichever of the stage's agents
+// the daemon knows about. The done stage runs three differently named agents,
+// so composing one name from the stage reported every done-stage card as
+// unknown — which reads as "we lost track of it" rather than "nothing is
+// running" (SC-5396). The first name is reported when none is known, so an
+// unknown answer still names something a person can look for.
+func stageProgress(progress AgentProgressProbe, key string, stage BoardStage) (string, AgentProgress, bool) {
+	names := stageAgentNames(key, stage)
+	for _, n := range names {
+		if p, ok := progress(n); ok {
+			return n, p, true
+		}
+	}
+	return names[0], AgentProgress{}, false
 }
 
 // whereBudget reports what the stage has already spent. Read-only by contract:

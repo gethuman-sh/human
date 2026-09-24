@@ -207,6 +207,28 @@ func TestWhere_DistinguishesNoRecordFromNotAlive(t *testing.T) {
 	assert.False(t, report.Agent.Known)
 }
 
+// The done stage runs three differently named agents, never one composed from
+// the stage: a card whose deploy fixer is alive must report it, not an
+// unknown board-SC-1-done (SC-5396).
+func TestWhereAgent_doneStageReportsTheDeployFixer(t *testing.T) {
+	deps := WhereDeps{
+		Now: time.Unix(10_000, 0),
+		Progress: func(name string) (AgentProgress, bool) {
+			if name != "board-SC-1-deployfix" {
+				return AgentProgress{}, false
+			}
+			return AgentProgress{LastEventAt: time.Unix(9_000, 0)}, true
+		},
+	}
+	report := BuildWhere(whereDoc(t), "SC-1",
+		[]tracker.Comment{cmt(DeployFixStartedHeader+"\nbranch: feat/x", time.Unix(1000, 0))},
+		tracker.CategoryUnstarted, false, "skill", deps)
+
+	require.NotNil(t, report.Agent)
+	assert.True(t, report.Agent.Known)
+	assert.Equal(t, "board-SC-1-deployfix", report.Agent.Name)
+}
+
 // Asking where an item is must never spend the budget being asked about. The
 // deps take a READER; StageRetry.Attempts increments and must never be wired
 // here.

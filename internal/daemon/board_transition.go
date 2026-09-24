@@ -414,7 +414,7 @@ func (d BoardTransitionDeps) applyTransition(ctx context.Context, req BoardTrans
 			"pm", req.PMKey, "verdict", card.Verdict)
 	}
 
-	return d.launchForwardStage(ctx, req, card)
+	return d.launchForwardStage(ctx, req, card, comments)
 }
 
 // dispatchNonForwardMove handles the sanctioned moves that are not a single
@@ -522,7 +522,7 @@ func (d BoardTransitionDeps) dispatchNonForwardMove(ctx context.Context, req Boa
 	// the same-stage move and a conflicted deploy is a dead end that can only be
 	// escaped by re-implementing already-reviewed work (735).
 	case isDeployRetry(req.To, card):
-		err := d.runDoneStage(ctx, req, card)
+		err := d.runDoneStage(ctx, req, card, comments)
 		return true, err == nil, err
 	}
 	return false, false, nil
@@ -564,7 +564,7 @@ func (d BoardTransitionDeps) reopenResolved(ctx context.Context, req BoardTransi
 // launchForwardStage dispatches an already-sanctioned forward transition to
 // its stage launcher. Split from ApplyTransition so the gate chain and the
 // dispatch read (and count) as separate concerns.
-func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard) (launched bool, err error) {
+func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) (launched bool, err error) {
 	switch req.To {
 	case BoardPlanning:
 		return d.startAgentStage(ctx, req.PMKey, BoardPlanning, PlanningStartedHeader,
@@ -576,7 +576,7 @@ func (d BoardTransitionDeps) launchForwardStage(ctx context.Context, req BoardTr
 		return d.startAgentStage(ctx, req.PMKey, BoardVerification, ReviewStartedHeader,
 			reviewPrompt(dispatchKey(req.PMKey, card), card), req.Cause, false)
 	case BoardDoneStage:
-		err := d.runDoneStage(ctx, req, card)
+		err := d.runDoneStage(ctx, req, card, comments)
 		return err == nil, err
 	default:
 		return false, errors.WithDetails("unsupported transition target", "to", string(req.To))
@@ -1050,16 +1050,22 @@ var startDeploy = func(d BoardTransitionDeps, req BoardTransitionRequest, card B
 // loop drives reviewer→fixer to convergence before the existing deploy engine
 // un-drafts and merges the PR. The reviewer's CI gate can take many minutes, so
 // the transition request returns as soon as the loop's first marker is posted
-// and the loop reports its progress via markers. The empty-branch guard is
-// unchanged — a handoff with no branch has nothing to open.
-func (d BoardTransitionDeps) runDoneStage(_ context.Context, req BoardTransitionRequest, card BoardCard) error {
-	if card.Branch == "" {
+// and the loop reports its progress via markers. The empty-branch guard stands
+// — a card no marker names a branch for has nothing to open — but it is no
+// longer asked of the handoff alone.
+func (d BoardTransitionDeps) runDoneStage(_ context.Context, req BoardTransitionRequest, card BoardCard, comments []tracker.Comment) error {
+	branch := doneStageBranch(comments, card)
+	if branch == "" {
 		_ = postMarker(context.Background(), d.Commenter, req.PMKey, marker.Marker{
 			Type:   MarkerDeployFailed,
-			Fields: fields("reason", "no branch recorded on ready-for-review handoff"),
+			Fields: fields("reason", "no branch recorded on this ticket — no handoff, deploy or deploy-fix marker names one"),
 		})
 		return errors.WithDetails("no branch recorded for deploy", "pm", req.PMKey)
 	}
+	// The resolved branch travels on the card the loop is started with, so
+	// openDraftPRAndReview pushes the branch the deploy recorded rather than the
+	// empty handoff one. card is a value copy; nothing outside this call sees it.
+	card.Branch = branch
 	startPRReview(d, req, card)
 	return nil
 }
@@ -1327,16 +1333,44 @@ func deployFixLoopURL(comments []tracker.Comment) string {
 	return prLoopURL(comments)
 }
 
-// prLoopBranch is the branch the loop is reviewing: the one its own start
-// marker recorded, and only failing that the card's handoff branch. The loop
-// used to read the handoff alone, and a loop started by `human deploy --branch`
-// has none — so the reviewer approved, the approval marker named no branch,
-// and the merge step pushed an empty branch and reddened the card (SC-5119,
-// the first deploys through the SC-5097 route). The start marker is the
-// binding the loop already trusts for the PR number and URL.
-func prLoopBranch(comments []tracker.Comment, card BoardCard) string {
-	if branch := strings.TrimSpace(latestPrefixedLine(comments, PRReviewStartedHeader, "branch:")); branch != "" {
-		return branch
+// doneStageBranch is the branch the done stage is working on, read from
+// whichever marker actually recorded it.
+//
+// The handoff was once the sole source and three routes never write one:
+// `human deploy --branch` records the branch on [human:deploy-started]
+// (deployStartedBody) and the fixer's dispatch on [human:deploy-fix-started]
+// (dispatchDeployFixer). A loop started from the CLI therefore approved and
+// merged an empty branch (SC-5119, fixed at AdvancePRLoop and then at
+// AdvanceDeployFix), and a deploy retry refused outright with "no branch
+// recorded on ready-for-review handoff" about a branch written plainly on the
+// deploy's own start marker (SC-5396, the third and last site).
+//
+// The order is by SOURCE, not by recency: the loop's own start marker is the
+// binding it already trusts for the PR number and URL, and the handoff is the
+// weakest — it names what implementation handed over, which a later deploy may
+// have overridden.
+//
+// Source precedence only holds within ONE round: a ticket that reached the
+// done stage once, went back through implementation (start-implementation and
+// start-fix-run from `stopped` are both declared transitions), and handed off
+// a DIFFERENT branch now carries a stale PRReviewStartedHeader/
+// DeployFixStartedHeader/DeployStartedHeader from the earlier round. Trusting
+// it here — as source precedence alone would — deploys the old branch, and if
+// that branch is already on the base the engine's already-merged carve-out
+// silently records the new work as shipped. currentApproval guards the
+// identical case for the approval marker (deploy_entry.go:265-280); a binding
+// older than the newest [human:ready-for-review] handoff is ignored the same
+// way here, before source precedence is applied (SC-5396).
+func doneStageBranch(comments []tracker.Comment, card BoardCard) string {
+	handoff, hasHandoff := latestCommentWithHeader(comments, ReadyForReviewHeader)
+	for _, header := range []string{PRReviewStartedHeader, DeployFixStartedHeader, DeployStartedHeader} {
+		c, ok := latestCommentWithHeader(comments, header)
+		if !ok || (hasHandoff && commentNewer(handoff, c)) {
+			continue
+		}
+		if branch := strings.TrimSpace(parsePrefixedLine(c.Body, "branch:")); branch != "" {
+			return branch
+		}
 	}
 	return card.Branch
 }
@@ -1364,7 +1398,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 			Msg("board PR loop: re-drive found the current step unrecorded but its agent alive; leaving it to finish")
 		return nil
 	}
-	number, url, branch := prLoopNumber(comments), prLoopURL(comments), prLoopBranch(comments, card)
+	number, url, branch := prLoopNumber(comments), prLoopURL(comments), doneStageBranch(comments, card)
 	// FindingRepeated only means something at the review stage: it asks whether
 	// THIS review's finding is the one the fixer was just sent. On a fix-stage
 	// drive outcome.ReviewFinding still carries the LAST review's fingerprint —
@@ -1667,7 +1701,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		return errors.WrapWithDetails(err, "loading comments for deploy fix", "pm", pmKey)
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
-	branch := prLoopBranch(comments, card)
+	branch := doneStageBranch(comments, card)
 	if fixExit == ExitDone {
 		// The fixer resolved the conflict in a container that holds no push
 		// credentials, exactly like every other board fixer — so its deliverable is
@@ -1677,7 +1711,7 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 		// unpublished resolution would be silently discarded and the same conflict
 		// re-hit (SC-2845).
 		//
-		// The branch comes from prLoopBranch, not card.Branch directly: a
+		// The branch comes from doneStageBranch, not card.Branch directly: a
 		// handoff-less loop (`human deploy --branch`) reaches the deploy-fixer with
 		// the correct branch (dispatchDeployFixer takes it as a parameter), but
 		// card.Branch is filled only from the ready-for-review handoff and is empty
@@ -2792,7 +2826,7 @@ func isDeployRetry(to BoardStage, card BoardCard) bool {
 // doneBody builds the PR description with the PM→engineering→branch trail.
 // branch is taken as its own parameter rather than read off card.Branch: a
 // handoff-less loop (`human deploy --branch`) has no card.Branch, and a caller
-// driving the loop's own derived branch (prLoopBranch) would otherwise see it
+// driving the loop's own derived branch (doneStageBranch) would otherwise see it
 // silently dropped from the PR body.
 func doneBody(pmKey string, card BoardCard, branch string) string {
 	var b strings.Builder

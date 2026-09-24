@@ -161,7 +161,8 @@ func reconcileFailedStages(ctx context.Context, drivable DrivableCards, deps Rec
 		// thread read), even when the thread itself still shows the old
 		// failure because the fresh *-started marker has not landed yet — a
 		// give-up must never be posted over a run that is actually in flight.
-		if _, ok := alive[agentNameFor(card.Key, derived.Stage)]; ok {
+		// Every agent that can own the stage is asked: the done stage runs three (SC-5396).
+		if _, ok := liveStageAgent(alive, card.Key, derived.Stage); ok {
 			continue
 		}
 		if !recoverableFailure(card.Comments, derived, now) {

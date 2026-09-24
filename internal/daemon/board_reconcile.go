@@ -476,6 +476,21 @@ func stuckPastGrace(derived BoardCard, card ReconcileCard, probe DeployRunProbe,
 	return now.Sub(derived.StageEnteredAt) >= stuckGraceFor(derived, card.Comments)
 }
 
+// deployEngineActive reports whether THIS machine's deploy engine currently
+// owns pmKey's card — DeployBranch is between deployRunQueued and
+// deployRunFinished for it. Both the PR-loop's merge action and the deploy
+// fixer's post-fix retry call DeployBranch synchronously with no started
+// marker in between, so the done stage's newest STARTED marker still names the
+// sub-agent that just finished, not this in-process window that owns none
+// (SC-5396).
+func deployEngineActive(probe DeployRunProbe, pmKey string) bool {
+	if probe == nil {
+		return false
+	}
+	_, ok := probe(pmKey)
+	return ok
+}
+
 // recordedDeath reports whether the stage's agent is known to have died during
 // this stage: it is absent from the live listing and this machine's agent
 // record says it stopped AFTER the stage was entered, so the record is about
@@ -483,23 +498,37 @@ func stuckPastGrace(derived BoardCard, card ReconcileCard, probe DeployRunProbe,
 // stop was already adjudicated. Absent evidence never counts: a nil or failing
 // lister, an agent the record does not name, or a stop older than the stage
 // all answer false and leave the card to the ordinary grace.
-func recordedDeath(deps ReconcileDeps, agentName string, alive map[string]struct{}, stageEnteredAt time.Time) (bool, time.Time) {
-	if deps.StoppedAgents == nil {
+//
+// names is every agent that can own the stage; a done-stage card has three,
+// and a record for any of them that postdates the stage is this stage's death.
+func recordedDeath(deps ReconcileDeps, names []string, alive map[string]struct{}, stageEnteredAt time.Time) (bool, time.Time) {
+	if deps.StoppedAgents == nil || stageEnteredAt.IsZero() {
 		return false, time.Time{}
 	}
-	if _, ok := alive[agentName]; ok {
-		return false, time.Time{}
+	for _, n := range names {
+		if _, ok := alive[n]; ok {
+			return false, time.Time{}
+		}
 	}
 	stopped, err := deps.StoppedAgents()
 	if err != nil {
 		deps.Logger.Warn().Err(err).Msg("board reconcile: cannot list stopped agents, keeping the stuck grace")
 		return false, time.Time{}
 	}
-	at, ok := stopped[agentName]
-	if !ok || at.IsZero() || stageEnteredAt.IsZero() || !at.After(stageEnteredAt) {
+	var newest time.Time
+	for _, n := range names {
+		at, ok := stopped[n]
+		if !ok || at.IsZero() || !at.After(stageEnteredAt) {
+			continue
+		}
+		if at.After(newest) {
+			newest = at
+		}
+	}
+	if newest.IsZero() {
 		return false, time.Time{}
 	}
-	return true, at
+	return true, newest
 }
 
 // reconcilePRLoops re-drives a loop card the live exit hook missed: a
@@ -601,7 +630,9 @@ func reconcileOutage(ctx context.Context, drivable DrivableCards, deps Reconcile
 			continue
 		}
 		// A live agent means the relaunch already happened this cycle — leave it.
-		if _, ok := alive[agentNameFor(card.Key, derived.Stage)]; ok {
+		// Every agent that can own the stage is asked, not a name composed from
+		// the stage: the done stage runs three of them (SC-5396).
+		if _, ok := liveStageAgent(alive, card.Key, derived.Stage); ok {
 			continue
 		}
 		if since, ok := outageRunSince(card.Comments, derived.Stage); ok && deps.PostFailed != nil && now.Sub(since) > OutageWaitBound {
@@ -748,8 +779,23 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	if failedType == "" {
 		return false
 	}
-	agentName := agentNameFor(card.Key, derived.Stage)
-	if died, at := recordedDeath(deps, agentName, alive, derived.StageEnteredAt); died {
+	names := stageAgentNames(card.Key, derived.Stage)
+	liveName, isLive := liveStageAgent(alive, card.Key, derived.Stage)
+	// While THIS machine's deploy engine is actively running this card
+	// (deployRunQueued..deployRunFinished), the CI-gate/merge window runs no
+	// board agent at all — the sub-agent that owned the PREVIOUS phase (the
+	// reviewer that approved, the deploy fixer that resolved its conflict) has
+	// already exited normally, and that ordinary exit is recorded as a stop
+	// after StageEnteredAt exactly like a real death is. recordedDeath cannot
+	// tell the two apart from the stop record alone, so it must not be
+	// consulted here: this window's only clock is stuckPastGrace's
+	// DeployRunProbe branch below, which already accounts for the CI gate's
+	// own timeout (SC-5396).
+	died, at := false, time.Time{}
+	if !deployEngineActive(deps.DeployRun, card.Key) {
+		died, at = recordedDeath(deps, names, alive, derived.StageEnteredAt)
+	}
+	if died {
 		// The manager already recorded this stage's agent as stopped after the
 		// stage began, and nothing handled the exit (the card is still running).
 		// That is a death the machine has evidence for, so waiting out a grace
@@ -769,8 +815,10 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	// on the charged path unchanged.
 	var silenced bool
 	var reap SilenceReap
-	if _, ok := alive[agentName]; ok {
-		proceed, s, r := hungLiveAgent(deps, agentName, now, card.Key, derived.Stage)
+	if isLive {
+		// hungLiveAgent is handed the name that is actually alive, so the
+		// progress probe asks about the right container (SC-5396).
+		proceed, s, r := hungLiveAgent(deps, liveName, now, card.Key, derived.Stage)
 		if !proceed {
 			return false
 		}
