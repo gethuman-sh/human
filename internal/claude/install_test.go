@@ -274,6 +274,32 @@ func TestDoneGatePromptsClassifyRedSuites(t *testing.T) {
 	})
 }
 
+// TestExecutorTakesThePlansDecision locks the SC-5276 fix: the headless
+// executor no longer carries "recommend, do not decide … let the user
+// choose" — an instruction it could only satisfy by stopping to ask, which a
+// headless run cannot do. It must instead take the plan's settled approach
+// (agreeing with the planner's own contract that a board plan arrives
+// decided) and, absent one, choose and name the choice itself. The guard is
+// scoped to the executor: the reviewer and bug-analyzer prompts keep the
+// "let the user choose" line legitimately, because those run attended.
+func TestExecutorTakesThePlansDecision(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("embed", "human-executor-agent.md"))
+	require.NoError(t, err)
+	content := string(body)
+
+	assert.NotContains(t, content, "Recommend, do not decide",
+		"the executor must no longer defer a judgment call it cannot get answered")
+	assert.NotContains(t, content, "let the user choose",
+		"the executor must no longer defer a judgment call it cannot get answered")
+	assert.Contains(t, content, "The plan decides",
+		"the executor must state that a plan step's approach was already settled by the planner")
+
+	planner, err := os.ReadFile(filepath.Join("embed", "human-planner-agent.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(planner), "a board plan must arrive decided",
+		"the planner's contract must still promise the decided plan the executor now relies on")
+}
+
 func TestInstall_CreatesNewFiles(t *testing.T) {
 	fw := newMockFileWriter()
 	var buf bytes.Buffer
