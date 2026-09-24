@@ -141,6 +141,23 @@ func TestCompose_copiesShippedPartial(t *testing.T) {
 	assert.Empty(t, whole.ShippedPartialFollowOn)
 }
 
+// The nothing-to-do reason rides from the derived card onto the wire card so
+// the desktop can label a resolved planning card by why it resolved rather
+// than always reading "already shipped" (SC-5326). A card with no stated
+// reason forwards an empty ResolvedReason, matching legacy records.
+func TestCompose_carriesResolvedReason(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "duplicate"}, {Key: "SC-2", Title: "no reason"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardPlanning, State: daemon.BoardResolved, ResolvedReason: "duplicate"},
+			"SC-2": {Stage: daemon.BoardPlanning, State: daemon.BoardResolved},
+		},
+	)}, true)
+
+	assert.Equal(t, "duplicate", cardByKey(t, view, "SC-1").ResolvedReason)
+	assert.Equal(t, "", cardByKey(t, view, "SC-2").ResolvedReason)
+}
+
 // Hidden cards must still be composed: the frontend filters them, so dropping
 // them here would make "reveal hidden" impossible without a refetch.
 func TestCompose_ReturnsCardsTheViewerMayHide(t *testing.T) {
