@@ -860,6 +860,19 @@ func (c *Client) QuerySubagentModels(rng string) ([]stats.SubagentModelCount, er
 	return counts, nil
 }
 
+// QueryContainerResources fetches the container resource report for a range.
+func (c *Client) QueryContainerResources(rng string) (ContainerResourceReport, error) {
+	out, err := c.RunRemoteCapture([]string{"container-stats", "--range", rng})
+	if err != nil {
+		return ContainerResourceReport{}, err
+	}
+	var report ContainerResourceReport
+	if err := json.Unmarshal(out, &report); err != nil {
+		return ContainerResourceReport{}, errors.WrapWithDetails(err, "invalid container stats JSON")
+	}
+	return report, nil
+}
+
 // GetTicketCost fetches the durable per-ticket cost/time rollup from the daemon.
 func (c *Client) GetTicketCost(key string) (costledger.TicketCost, error) {
 	out, err := c.RunRemoteCapture([]string{"ticket-cost", key})
