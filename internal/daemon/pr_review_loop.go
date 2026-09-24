@@ -297,22 +297,28 @@ func splitFindingClass(text string) (class, rest string) {
 	return token, strings.TrimSpace(text[end+1:])
 }
 
-// isClassToken reports whether token is a class the way the reviewer prompt
-// defines one: one word of lowercase letters and hyphens, nothing else. A
-// looser check (rejecting only whitespace) let a multi-word bracket like
-// `[SC-5174] regression` parse as the class `sc-5174` — a real ticket
-// reference mistaken for a vocabulary member, corrupting criterion 4's
+// findingClasses is the closed vocabulary human-pr-reviewer-agent.md:87-93
+// declares for `[<class>]`. isClassToken enforces membership rather than mere
+// shape, because a shape-only check (one word of lowercase letters and
+// hyphens) let a token outside the set — a stray `[perf]`, or a real ticket
+// reference like `[SC-5174] regression` parsing as class `sc-5174` — through
+// as if it were a reviewer-declared category, corrupting criterion 4's
 // per-class counts (SC-5278).
+var findingClasses = map[string]bool{
+	"dependents":  true,
+	"tests":       true,
+	"correctness": true,
+	"security":    true,
+	"contract":    true,
+	"design":      true,
+	"docs":        true,
+	"process":     true,
+}
+
+// isClassToken reports whether token is a class the reviewer prompt declares,
+// not merely shaped like one.
 func isClassToken(token string) bool {
-	if token == "" {
-		return false
-	}
-	for _, r := range token {
-		if (r < 'a' || r > 'z') && r != '-' {
-			return false
-		}
-	}
-	return true
+	return findingClasses[token]
 }
 
 // stripListMarkers removes the markdown a reviewer may wrap a finding in — a
