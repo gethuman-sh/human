@@ -620,3 +620,37 @@ func TestRecreateDescription_PropagatesTheDaemonError(t *testing.T) {
 	err := newTestClient(addr, "").RecreateDescription(RecreateDescriptionRequest{Key: "SC-1"})
 	require.Error(t, err)
 }
+
+func TestQueryTicketSpend_Success(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		assert.Equal(t, []string{"ticket-stats", "--range", "7d", "--limit", "5"}, req.Args)
+		return Response{Stdout: `[{"ticket":"SC-2","costUSD":1.5,"outputTokens":900,"durationMs":5000},{"ticket":"SC-1","costUSD":0.2}]` + "\n"}
+	})
+
+	spend, err := newTestClient(addr, "tok").QueryTicketSpend("7d", 5, "")
+	require.NoError(t, err)
+	require.Len(t, spend, 2)
+	assert.Equal(t, "SC-2", spend[0].Ticket)
+	assert.Equal(t, 900, spend[0].OutputTokens)
+}
+
+// TestQueryTicketSpend_SendsExplicitProject pins the fix for the reentrant
+// call losing the caller's project: when the caller names one (its own
+// HUMAN_PROJECT_DIR), it must ride along on the wire as --project rather
+// than being left for the receiving connection to guess from its own cwd.
+func TestQueryTicketSpend_SendsExplicitProject(t *testing.T) {
+	addr := startMockDaemon(t, func(req Request) Response {
+		assert.Equal(t, []string{"ticket-stats", "--range", "7d", "--limit", "5", "--project", "proj-b"}, req.Args)
+		return Response{Stdout: `[]` + "\n"}
+	})
+
+	_, err := newTestClient(addr, "tok").QueryTicketSpend("7d", 5, "proj-b")
+	require.NoError(t, err)
+}
+
+func TestQueryTicketSpend_InvalidJSON(t *testing.T) {
+	addr := startMockDaemon(t, func(_ Request) Response { return Response{Stdout: "not json\n"} })
+	_, err := newTestClient(addr, "tok").QueryTicketSpend("7d", 5, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid ticket stats JSON")
+}

@@ -873,6 +873,33 @@ func (c *Client) QueryContainerResources(rng string) (ContainerResourceReport, e
 	return report, nil
 }
 
+// QueryTicketSpend fetches the tickets that cost the most over a range
+// ("24h" | "7d" | "30d"), most expensive first, at most limit rows.
+//
+// project, when non-empty, is sent explicitly and overrides the project the
+// receiving connection would otherwise derive from its own cwd. This command
+// runs from inside the daemon's own process when "stats tickets" is a
+// forwarded call re-entering the daemon (server.go executeCommand runs the
+// whole cobra tree in-process): the reentrant connection this method opens
+// then reports the DAEMON's cwd, not the original caller's, so a caller with
+// a real project to carry (env.Lookup(ctx, "HUMAN_PROJECT_DIR")) must pass it
+// here rather than rely on cwd. A direct (non-forwarded) caller passes "".
+func (c *Client) QueryTicketSpend(rng string, limit int, project string) ([]costledger.TicketSpend, error) {
+	args := []string{"ticket-stats", "--range", rng, "--limit", strconv.Itoa(limit)}
+	if project != "" {
+		args = append(args, "--project", project)
+	}
+	out, err := c.RunRemoteCapture(args)
+	if err != nil {
+		return nil, err
+	}
+	var spend []costledger.TicketSpend
+	if err := json.Unmarshal(out, &spend); err != nil {
+		return nil, errors.WrapWithDetails(err, "invalid ticket stats JSON")
+	}
+	return spend, nil
+}
+
 // GetTicketCost fetches the durable per-ticket cost/time rollup from the daemon.
 func (c *Client) GetTicketCost(key string) (costledger.TicketCost, error) {
 	out, err := c.RunRemoteCapture([]string{"ticket-cost", key})

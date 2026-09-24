@@ -82,7 +82,7 @@ func semverLess(a, b [3]int) bool {
 // the daemon↔client wire — new routes, new request fields, changed semantics —
 // additive or breaking alike. MinProtocol moves only for breaking changes.
 // Every bump gets a line in docs/protocol.md so the decision is auditable.
-const Protocol = 7
+const Protocol = 8
 
 // MinProtocol is the oldest client protocol this daemon still serves. Raising
 // it is the CONSCIOUS compatibility decision: the author of a breaking wire
@@ -96,7 +96,7 @@ const MinProtocol = 3
 // daemon fails with a bare "unknown command" instead of one clear
 // rebuild-the-daemon error. It rises only when the client depends on daemon
 // behavior older daemons lack.
-const MinDaemonProtocol = 7
+const MinDaemonProtocol = 8
 
 // clientSupported reports whether a client may talk to this daemon. Clients
 // that advertise a protocol get the integer gate (>= MinProtocol — newer
