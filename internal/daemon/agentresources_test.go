@@ -51,6 +51,28 @@ func (f fakeProber) EngineCapacity(context.Context) (containerres.Capacity, erro
 	return containerres.Capacity{NCPU: 2, MemTotal: 2 << 30}, nil
 }
 
+// hangingProber blocks every call on its ctx, standing in for an unreachable
+// or hung engine. It exists to pin SC-5369: RecordExit and SampleRunningAgents
+// must bound the ctx they hand the prober to containerProbeTimeout, or a
+// caller using a long-lived ctx (context.Background(), the sweep's own
+// long-lived root ctx) would block for as long as that ctx lives.
+type hangingProber struct{}
+
+func (hangingProber) ContainerStats(ctx context.Context, _ string) (containerres.Sample, error) {
+	<-ctx.Done()
+	return containerres.Sample{}, ctx.Err()
+}
+
+func (hangingProber) ContainerExitState(ctx context.Context, _ string) (containerres.ExitState, error) {
+	<-ctx.Done()
+	return containerres.ExitState{}, ctx.Err()
+}
+
+func (hangingProber) EngineCapacity(ctx context.Context) (containerres.Capacity, error) {
+	<-ctx.Done()
+	return containerres.Capacity{}, ctx.Err()
+}
+
 type recordingSink struct {
 	mu   sync.Mutex
 	rows []stats.ContainerSample
@@ -163,6 +185,45 @@ func TestRecordExit_unreadableContainerStillRecordsTheExit(t *testing.T) {
 	require.Len(t, sink.rows, 1)
 	assert.Nil(t, sink.rows[0].ExitCode, "nothing was learned, nothing is invented")
 	assert.Equal(t, uint64(0), sink.rows[0].MemUsage)
+}
+
+func TestRecordExit_boundsAHungEngineCall(t *testing.T) {
+	sink := &recordingSink{}
+	rec := &AgentExitRecorder{Prober: hangingProber{}, Sink: sink, Logger: zerolog.Nop()}
+
+	done := make(chan struct{})
+	go func() {
+		// context.Background() never expires on its own: if RecordExit did not
+		// bound the ctx it hands the prober, this call would hang for the life
+		// of the process, exactly the starvation SC-427's hard deadline exists
+		// to prevent one call upstream of it (SC-5369).
+		rec.RecordExit(context.Background(), AgentInfo{Name: "board-SC-1-implementation", ContainerID: "c1"}, ReapReason{})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * containerProbeTimeout):
+		t.Fatal("RecordExit did not bound its engine calls: a hung prober blocked it past containerProbeTimeout")
+	}
+	require.Len(t, sink.rows, 1, "a hung engine still leaves a recorded exit, with nothing learned")
+	assert.Nil(t, sink.rows[0].ExitCode)
+}
+
+func TestSampleRunningAgents_boundsAHungEngineCall(t *testing.T) {
+	lister := fakeResourceLister{agents: []AgentInfo{{Name: "board-SC-1-implementation", ContainerID: "c1"}}}
+	sink := &recordingSink{}
+
+	done := make(chan struct{})
+	go func() {
+		SampleRunningAgents(context.Background(), lister, hangingProber{}, sink, time.Now(), zerolog.Nop())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * containerProbeTimeout):
+		t.Fatal("SampleRunningAgents did not bound its engine call: a hung prober blocked the sampler tick past containerProbeTimeout")
+	}
+	assert.Empty(t, sink.rows, "an unreadable container is skipped for this tick")
 }
 
 func TestRecordExit_nilRecorderAndNilSinkAreNoOps(t *testing.T) {

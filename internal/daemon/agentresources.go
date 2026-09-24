@@ -16,6 +16,15 @@ import (
 // would make continuous.
 const AgentResourceSampleInterval = 30 * time.Second
 
+// containerProbeTimeout bounds every individual engine round-trip made from
+// the sampler loop and the exit recorder. ContainerStats deliberately blocks
+// for at least a second (it takes two CPU readings for a rate), so the bound
+// must clear that; an unreachable or hung engine must not be able to block a
+// caller past this, since both callers run on loops that must keep advancing
+// (the sampler's own ticker goroutine, and the zombie sweep's single reap
+// goroutine — SC-5369, matching the reap hard deadline's SC-427 reasoning).
+const containerProbeTimeout = 5 * time.Second
+
 // AgentLister is the slice of the zombie sweeper the sampler needs: which
 // agents are running and in which containers.
 type AgentLister interface {
@@ -68,7 +77,7 @@ func SampleRunningAgents(ctx context.Context, lister AgentLister, prober contain
 		if a.ContainerID == "" {
 			continue
 		}
-		reading, err := prober.ContainerStats(ctx, a.ContainerID)
+		reading, err := probeStats(ctx, prober, a.ContainerID)
 		if err != nil {
 			logger.Debug().Err(err).Str("agent", a.Name).Msg("resource sampler: container stats unavailable")
 			continue
@@ -103,10 +112,13 @@ func (r *AgentExitRecorder) RecordExit(ctx context.Context, a AgentInfo, reason 
 	}
 	row.Key, row.Stage = keyAndStage(a.Name)
 	if r.Prober != nil {
-		if reading, err := r.Prober.ContainerStats(ctx, a.ContainerID); err == nil {
+		// Bounded: this runs synchronously in front of the zombie sweep's reap
+		// hard deadline (SC-427), so a hung engine call here must not be able to
+		// stall the sweep goroutine indefinitely (SC-5369).
+		if reading, err := probeStats(ctx, r.Prober, a.ContainerID); err == nil {
 			applyReading(&row, reading)
 		}
-		if exit, err := r.Prober.ContainerExitState(ctx, a.ContainerID); err == nil {
+		if exit, err := probeExitState(ctx, r.Prober, a.ContainerID); err == nil {
 			code := exit.ExitCode
 			row.ExitCode = &code
 			row.OOMKilled = exit.OOMKilled
@@ -121,6 +133,21 @@ func (r *AgentExitRecorder) RecordExit(ctx context.Context, a AgentInfo, reason 
 	if err := r.Sink.InsertContainerSample(ctx, row); err != nil {
 		r.Logger.Warn().Err(err).Str("agent", a.Name).Msg("resource sampler: could not record exit")
 	}
+}
+
+// probeStats and probeExitState bound a single engine round-trip to
+// containerProbeTimeout so an unreachable or hung engine cannot block the
+// caller's loop past that, regardless of how long the caller's own ctx lives.
+func probeStats(ctx context.Context, prober containerres.Prober, containerID string) (containerres.Sample, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, containerProbeTimeout)
+	defer cancel()
+	return prober.ContainerStats(probeCtx, containerID)
+}
+
+func probeExitState(ctx context.Context, prober containerres.Prober, containerID string) (containerres.ExitState, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, containerProbeTimeout)
+	defer cancel()
+	return prober.ContainerExitState(probeCtx, containerID)
 }
 
 func exitReason(reason ReapReason) string {

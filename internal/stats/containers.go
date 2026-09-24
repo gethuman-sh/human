@@ -110,12 +110,18 @@ func (s *StatsStore) InsertContainerSample(ctx context.Context, c ContainerSampl
 }
 
 // QueryContainerResources rolls the range's samples up per stage. Runs counts
-// distinct agents, so a stage that sampled one long run fifty times reads as
-// one run, not fifty.
+// distinct container ids, not distinct agent names: a board stage agent's
+// name is deterministic and reused on every relaunch (agentname.Board, e.g.
+// "board-SC-1-implementation" — internal/daemon/agentcleanup.go), so counting
+// by agent would collapse every retry, review round and relaunch of a stage
+// on one ticket into a single run. container_id is unique per container the
+// engine ever created, so it is the correct key: a stage that sampled one
+// long run fifty times reads as one run, not fifty, and two separate runs of
+// the same stage read as two (SC-5369).
 func (s *StatsStore) QueryContainerResources(ctx context.Context, since, until time.Time) ([]StageResources, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT stage,
-		       COUNT(DISTINCT agent),
+		       COUNT(DISTINCT container_id),
 		       COUNT(*),
 		       COALESCE(MAX(mem_usage), 0),
 		       COALESCE(MAX(mem_limit), 0),

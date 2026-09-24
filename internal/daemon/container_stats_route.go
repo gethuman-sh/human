@@ -57,11 +57,11 @@ func engineCapacity(ctx context.Context, prober containerres.Prober) ContainerEn
 	if prober == nil {
 		return ContainerEngineCapacity{}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, containerProbeTimeout)
 	defer cancel()
-	cap, err := prober.EngineCapacity(ctx)
+	capacity, err := prober.EngineCapacity(ctx)
 	if err != nil {
 		return ContainerEngineCapacity{}
 	}
-	return ContainerEngineCapacity{Known: true, NCPU: cap.NCPU, MemTotalBytes: cap.MemTotal}
+	return ContainerEngineCapacity{Known: true, NCPU: capacity.NCPU, MemTotalBytes: capacity.MemTotal}
 }
