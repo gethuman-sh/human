@@ -2549,6 +2549,9 @@ func scanReadyForReview(jobs []fetchJob, results []daemon.TrackerIssuesResult, l
 		}
 	}
 	wg.Wait()
+	// The cycle is a property of the set, not of any one thread, so it is only
+	// visible once every card is derived.
+	daemon.MarkWaitCycles(cards)
 	return ready, prs, cards
 }
 

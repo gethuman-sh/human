@@ -31,9 +31,20 @@ type fakeCommenter struct {
 	// to reach "the agent started but its started marker could not be posted".
 	addErrFor string
 	nextID    int
+	// byKey holds other tickets' threads, for the paths that read a second
+	// ticket (a sequencing answer's partner); a key not in it reads comments.
+	byKey map[string][]tracker.Comment
+	// listErrFor makes reading that one key fail.
+	listErrFor string
 }
 
-func (f *fakeCommenter) ListComments(_ context.Context, _ string) ([]tracker.Comment, error) {
+func (f *fakeCommenter) ListComments(_ context.Context, key string) ([]tracker.Comment, error) {
+	if f.listErrFor != "" && f.listErrFor == key {
+		return nil, humanerrors.WithDetails("tracker unreachable", "key", key)
+	}
+	if other, ok := f.byKey[key]; ok {
+		return other, nil
+	}
 	return f.comments, nil
 }
 

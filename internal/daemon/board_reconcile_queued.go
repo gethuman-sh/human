@@ -67,6 +67,15 @@ func reconcileQueuedLaunch(ctx context.Context, drivable DrivableCards, deps Rec
 		// asked for. Nothing is charged while it waits — the card is doing exactly
 		// what it was told to.
 		if waitsFor := waitsForOf(choice); waitsFor != "" {
+			// A pair waiting for each other is released by neither finishing. The
+			// answer path refuses the shape now; one recorded before it did is
+			// reported here and on both card faces (MarkWaitCycles), never charged
+			// and never started — starting is still the outcome a person ruled out.
+			if partner := drivable.waitsForCycle(card, waitsFor); partner != "" {
+				logger.Error().Str("pm", card.Key).Str("waits for", partner).
+					Msg("board reconcile: tickets wait for each other; neither can start until a person starts one")
+				continue
+			}
 			if !deps.waitCleared(ctx, card.Key, waitsFor) {
 				continue
 			}

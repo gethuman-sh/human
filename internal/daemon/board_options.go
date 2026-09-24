@@ -309,14 +309,14 @@ func (d BoardTransitionDeps) ApplyOption(ctx context.Context, req BoardOptionReq
 	if !ok {
 		return errors.WithDetails("unknown option id", "pm", req.PMKey, "option", req.OptionID)
 	}
-	// A ticket cannot wait for itself: recording that would hold the work behind
-	// a ticket that only finishes by doing it. Refuse the click loudly and leave
-	// the block open — the stage wrote a question that cannot be answered, and
-	// silently treating it as an ordinary answer would start the very work the
-	// answer was picked to defer.
-	if chosen.WaitsFor == req.PMKey {
-		return errors.WithDetails("this answer makes the ticket wait for itself, which nothing can clear",
-			"pm", req.PMKey, "option", req.OptionID)
+	// A wait nothing can clear — on this ticket itself, or on a ticket already
+	// held on this one — is refused loudly and the block stays open: the stage
+	// wrote a question that cannot be answered, and silently treating it as an
+	// ordinary answer would start the very work the answer was picked to defer.
+	if chosen.WaitsFor != "" {
+		if err := d.refuseWaitCycle(ctx, req.PMKey, chosen.WaitsFor, req.OptionID); err != nil {
+			return err
+		}
 	}
 	return d.pursueDecision(ctx, req.PMKey, comments, stage, chosen)
 }
