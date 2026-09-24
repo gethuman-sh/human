@@ -69,7 +69,7 @@ func TestDaemonPostedMarkersSatisfyTheirContract(t *testing.T) {
 		{MarkerPRReviewStarted, prReviewStartedBody("https://example/pr/7", 7, "feat/x")},
 		{MarkerPRReviewPassed, prReviewPassedBody("feat/x", "0123456789abcdef0123456789abcdef01234567")},
 		{MarkerPRReviewPassed, prReviewPassedBody("feat/x", "")},
-		{MarkerPRFixStarted, prFixStartedBody("blocking — internal/daemon/x.go:10 the guard fires only in round 1")},
+		{MarkerPRFixStarted, prFixStartedBody("blocking — internal/daemon/x.go:10 the guard fires only in round 1", "")},
 		{MarkerDeployFixStarted, markerBody(marker.Marker{
 			Type:   MarkerDeployFixStarted,
 			Fields: fields("pr", "https://example/pr/7", "number", "7", "branch", "feat/x"),
