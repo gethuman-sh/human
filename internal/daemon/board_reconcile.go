@@ -127,6 +127,18 @@ type DriveLoop func(pmKey string) error
 // value disables every pass that would kill a run.
 type StopAgent func(agentName string) error
 
+// StoppedAgentLister reports the board agents whose record on THIS machine says
+// they have stopped, keyed by agent name, with the moment the stop was
+// recorded. Where a stop IS recorded, the stuck-running pass otherwise never
+// sees it, because a stopped agent simply leaves the live listing and the card
+// then waits out the full StuckRunningGrace for a fact the machine already
+// held (SC-5327). The production lister (cmddaemon.stoppedBoardAgents) reads
+// two sources to cover every path an agent stops through, including the
+// kill/OOM/crash reap the meta alone cannot show once DeleteMeta erases it —
+// see its doc comment for which producer feeds which case. A nil lister
+// disables the shortcut and every card keeps the grace.
+type StoppedAgentLister func() (map[string]time.Time, error)
+
 // ReconcileDeps wires the durable reconcile pass's collaborators, mirroring
 // BoardTransitionDeps and FailureDeps in the same package. Every field follows
 // the "nil disables" convention.
@@ -146,6 +158,7 @@ type ReconcileDeps struct {
 	MergedProbe    PRMergedProbe
 	PostDeployed   DeployedPoster
 	LiveAgents     LiveAgentLister
+	StoppedAgents  StoppedAgentLister
 	PostFailed     FailedMarkerPoster
 	ClosedProbe    ClosedTicketProbe
 	ChainReview    ChainReview
@@ -463,6 +476,32 @@ func stuckPastGrace(derived BoardCard, card ReconcileCard, probe DeployRunProbe,
 	return now.Sub(derived.StageEnteredAt) >= stuckGraceFor(derived, card.Comments)
 }
 
+// recordedDeath reports whether the stage's agent is known to have died during
+// this stage: it is absent from the live listing and this machine's agent
+// record says it stopped AFTER the stage was entered, so the record is about
+// the run the card shows and not about an earlier run of the same stage whose
+// stop was already adjudicated. Absent evidence never counts: a nil or failing
+// lister, an agent the record does not name, or a stop older than the stage
+// all answer false and leave the card to the ordinary grace.
+func recordedDeath(deps ReconcileDeps, agentName string, alive map[string]struct{}, stageEnteredAt time.Time) (bool, time.Time) {
+	if deps.StoppedAgents == nil {
+		return false, time.Time{}
+	}
+	if _, ok := alive[agentName]; ok {
+		return false, time.Time{}
+	}
+	stopped, err := deps.StoppedAgents()
+	if err != nil {
+		deps.Logger.Warn().Err(err).Msg("board reconcile: cannot list stopped agents, keeping the stuck grace")
+		return false, time.Time{}
+	}
+	at, ok := stopped[agentName]
+	if !ok || at.IsZero() || stageEnteredAt.IsZero() || !at.After(stageEnteredAt) {
+		return false, time.Time{}
+	}
+	return true, at
+}
+
 // reconcilePRLoops re-drives a loop card the live exit hook missed: a
 // done/running card whose newest done marker is a loop-started marker and for
 // which no loop half-agent is alive on this machine (a daemon restart lost the
@@ -709,11 +748,20 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	if failedType == "" {
 		return false
 	}
-	if !stuckPastGrace(derived, card, deps.DeployRun, now) {
+	agentName := agentNameFor(card.Key, derived.Stage)
+	if died, at := recordedDeath(deps, agentName, alive, derived.StageEnteredAt); died {
+		// The manager already recorded this stage's agent as stopped after the
+		// stage began, and nothing handled the exit (the card is still running).
+		// That is a death the machine has evidence for, so waiting out a grace
+		// meant for silence would spend fifteen minutes on a fact it already
+		// holds — measured on a killed implementation agent in the campaign
+		// (SC-5327). It falls through to the vanished-agent path below unchanged.
+		logger.Warn().Str("pm", card.Key).Str("stage", string(derived.Stage)).
+			Time("stopped_at", at).Msg("board reconcile: agent recorded as stopped during this stage, skipping the stuck grace")
+	} else if !stuckPastGrace(derived, card, deps.DeployRun, now) {
 		// Young enough to still be genuine in-flight work.
 		return false
 	}
-	agentName := agentNameFor(card.Key, derived.Stage)
 	// silenced marks a stop THIS pass chose because a live agent stopped
 	// making progress — a machine-chosen stop, not a stage failure, so it
 	// must not consume the ticket's retry budget (SC-2447). A vanished

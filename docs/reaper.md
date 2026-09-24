@@ -285,6 +285,38 @@ The deploy grace above applies here too — a `human deploy` on its CI gate has
 *no* agent by construction, so a vanished agent is not evidence a deploy is dead
 until its own timeout has passed.
 
+**A recorded death skips the grace** (`recordedDeath`, SC-5327), including the
+kill/OOM/crash reap this section is about. `stoppedBoardAgents`
+(`cmd/cmddaemon/daemon.go`) reads two sources because no single one survives
+every path an agent stops through:
+
+- the execution log's `outcome.json`, written by `PreserveExecutionArtifacts`
+  *before* the meta is deleted. That covers `human agent stop`
+  (`Manager.Stop`) **and** the automatic zombie sweep's kill/OOM/crash reap
+  (`Manager.Delete` = `stopLocked` + `DeleteMeta`): the sweep writes
+  `StatusFailed` to the meta first, `stopLocked` reads that meta and records
+  the outcome as `reaped` with the moment it ended, and only then does
+  `DeleteMeta` erase the meta record the old, meta-only lister depended on.
+  The execution log is not touched by that erasure, which is what makes it the
+  evidence for the case this pass exists for.
+- the agent meta's `StoppedAt`, written by `Manager.Refresh` (only caller:
+  `human agent list`, which writes `StatusStopped` straight to the meta and
+  never touches the execution log) — the one producer the log does not
+  capture, kept as the fallback.
+
+Where both name the same agent, the execution log's ended-at wins: it is
+written at the one choke point every remove path funnels through, so it is the
+earlier and more authoritative record of when the run actually ended. When the
+stage's agent is absent from the live listing AND either source says it
+stopped *after* the stage was entered, the card is judged on the next tick
+instead of after the grace. The record must postdate the stage: a stop older
+than the stage belongs to an earlier run whose exit was already adjudicated.
+Nothing else changes — it is the same charged vanished-agent path, with the
+same failed marker and the same retry budget; only the wait is gone. Absent
+evidence keeps the grace: no lister, a lister error, a record naming no such
+agent, or an agent still alive all leave the card to the ordinary rule. The
+`StoppedAgents` dep is nil-disabled like `LiveAgents`.
+
 ### 7. Reconcile — orphaned on a closed ticket
 
 **Owner:** `reconcileOrphanedAgents` (`internal/daemon/board_reconcile_orphan.go`).
