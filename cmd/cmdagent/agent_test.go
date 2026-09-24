@@ -8,6 +8,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/gethuman-sh/human/internal/daemon"
 )
 
 func TestBuildAgentCmd_hasSubcommands(t *testing.T) {
@@ -154,4 +159,22 @@ func TestBuildLogsCmd_followFlagRegistered(t *testing.T) {
 	if cmd.Flags().Lookup("tail") == nil {
 		t.Error("missing --tail flag")
 	}
+}
+
+// A daemon too old to take the async signal must not abort the stop: the
+// synchronous path below needs no daemon at all (SC-5397).
+func TestAsyncStopClient_protocolStaleDaemonFallsThrough(t *testing.T) {
+	if daemon.MinDaemonProtocol <= 1 {
+		t.Skip("no rejectable protocol below MinDaemonProtocol")
+	}
+	client, err := asyncStopClient(daemon.DaemonInfo{Addr: "127.0.0.1:19285", Protocol: daemon.MinDaemonProtocol - 1})
+	require.NoError(t, err)
+	assert.Nil(t, client, "a stale daemon means fall through, not fail")
+}
+
+func TestAsyncStopClient_currentDaemonReturnsClient(t *testing.T) {
+	client, err := asyncStopClient(daemon.DaemonInfo{Addr: "127.0.0.1:19285", Protocol: daemon.MinDaemonProtocol})
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	assert.Equal(t, "127.0.0.1:19285", client.Info().Addr)
 }

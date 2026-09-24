@@ -35,6 +35,10 @@ func BuildDoctorCmd() *cobra.Command {
 			}
 			printCheck(out, daemon.DoctorCheck{Name: "daemon", OK: true}, "reachable at "+info.Addr)
 
+			if err := reportProtocolGate(out, info); err != nil {
+				return err
+			}
+
 			client, err := daemon.NewClient(info)
 			if err != nil {
 				return err
@@ -62,6 +66,27 @@ func BuildDoctorCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "force a live check run instead of the cached result")
 	return cmd
+}
+
+// reportProtocolGate prints the daemon's protocol standing as a check and
+// reports whether the daemon may be queried at all.
+//
+// Returning the raw refusal made the diagnostic refuse to diagnose the one
+// condition it is most needed for: a daemon too old for this client is exactly
+// what a user runs doctor to have named (SC-5397). It is a hard stop like an
+// unreachable daemon — the report below it would come off a daemon this client
+// is not allowed to trust — but it is a NAMED one, carrying both numbers and a
+// remedy that runs.
+func reportProtocolGate(out io.Writer, info daemon.DaemonInfo) error {
+	protoErr := daemon.DaemonProtocolError(info)
+	if protoErr == nil {
+		return nil
+	}
+	printCheck(out, daemon.DoctorCheck{Name: "daemon protocol", OK: false, Severity: daemon.SeverityBlocking},
+		fmt.Sprintf("daemon speaks %d, this client needs >= %d — restart it with 'human daemon restart'",
+			info.Protocol, daemon.MinDaemonProtocol))
+	return errors.WrapWithDetails(protoErr, "daemon protocol too old for this client",
+		"daemon_protocol", info.Protocol, "client_min", daemon.MinDaemonProtocol)
 }
 
 // printCheck renders one check line. A passing check gets a check mark; a

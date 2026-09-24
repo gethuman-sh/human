@@ -122,6 +122,7 @@ func BuildDaemonCmd(cmdFactory func() *cobra.Command, version string) *cobra.Com
 	cmd.AddCommand(buildDaemonTokenCmd())
 	cmd.AddCommand(buildDaemonStatusCmd())
 	cmd.AddCommand(buildDaemonStopCmd())
+	cmd.AddCommand(buildDaemonRestartCmd())
 	return cmd
 }
 
@@ -1242,6 +1243,11 @@ func daemonChildDir(projectDirs []string) string {
 	return ""
 }
 
+// startDaemonBackground is runDaemonBackground behind a package var so
+// `daemon restart`'s test can substitute a stub and assert stop finished
+// before start was attempted, without spawning a second real daemon process.
+var startDaemonBackground = runDaemonBackground
+
 // runDaemonBackground re-execs the current binary as a detached child process.
 func runDaemonBackground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string, safe, debug bool, projectDirs []string) error {
 	out := cmd.OutOrStdout()
@@ -1481,6 +1487,46 @@ var inFlightOps = func() (int, bool) {
 	return status.InFlight, true
 }
 
+// stopDaemon is the body of `daemon stop`, factored out so `daemon restart`
+// (SC-5397) can reuse the exact same signal/drain/cleanup path instead of a
+// second copy of it that could drift from the one operators already rely on.
+// A daemon that is not running is a no-op success: restart's "replace
+// whatever build is currently running" reading holds even when nothing is.
+func stopDaemon(out io.Writer, force bool, wait time.Duration) error {
+	pid, alive := ReadAlivePid()
+	if !alive {
+		_, _ = fmt.Fprintln(out, "Daemon is not running")
+		RemovePidFile()
+		daemon.RemoveInfo()
+		return nil
+	}
+
+	// Read the in-flight count before signalling: this is the only moment
+	// the daemon can still be asked.
+	inFlight, known := 0, false
+	if !force {
+		inFlight, known = inFlightOps()
+	}
+
+	_, _ = fmt.Fprintf(out, "Stopping daemon (PID %d)...\n", pid)
+	signal, verb := stopProcess, "stop"
+	if force {
+		signal, verb = killProcess, "force-stop"
+	}
+	if err := signal(pid); err != nil {
+		return errors.WrapWithDetails(err, "failed to "+verb+" daemon", "pid", pid)
+	}
+
+	if err := awaitDaemonExit(out, pid, inFlight, wait, known, force); err != nil {
+		return err
+	}
+
+	RemovePidFile()
+	daemon.RemoveInfo()
+	_, _ = fmt.Fprintln(out, "Daemon stopped")
+	return nil
+}
+
 func buildDaemonStopCmd() *cobra.Command {
 	var force bool
 	var wait time.Duration
@@ -1498,44 +1544,87 @@ finishing N operations — instead of as a bare timeout, and --wait sits through
 process alone — unlike killing by name, which also ends every other ` + "`human`" + `
 command running on the machine, including a deploy someone is waiting on.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			out := cmd.OutOrStdout()
-
-			pid, alive := ReadAlivePid()
-			if !alive {
-				_, _ = fmt.Fprintln(out, "Daemon is not running")
-				RemovePidFile()
-				daemon.RemoveInfo()
-				return nil
-			}
-
-			// Read the in-flight count before signalling: this is the only moment
-			// the daemon can still be asked.
-			inFlight, known := 0, false
-			if !force {
-				inFlight, known = inFlightOps()
-			}
-
-			_, _ = fmt.Fprintf(out, "Stopping daemon (PID %d)...\n", pid)
-			signal, verb := stopProcess, "stop"
-			if force {
-				signal, verb = killProcess, "force-stop"
-			}
-			if err := signal(pid); err != nil {
-				return errors.WrapWithDetails(err, "failed to "+verb+" daemon", "pid", pid)
-			}
-
-			if err := awaitDaemonExit(out, pid, inFlight, wait, known, force); err != nil {
-				return err
-			}
-
-			RemovePidFile()
-			daemon.RemoveInfo()
-			_, _ = fmt.Fprintln(out, "Daemon stopped")
-			return nil
+			return stopDaemon(cmd.OutOrStdout(), force, wait)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "End the daemon immediately, abandoning in-flight work (signals this daemon only)")
 	cmd.Flags().DurationVar(&wait, "wait", stopDrainDefault, "How long to wait for in-flight work to finish (e.g. 45m to sit through a deploy)")
+	return cmd
+}
+
+// buildDaemonRestartCmd stops whatever daemon is currently running and starts
+// the binary now on disk in its place — the remedy the protocol gate's own
+// refusal names (SC-5397) when a stale daemon is otherwise unreachable by any
+// forwarded command. It reuses stopDaemon and runDaemonBackground rather than
+// duplicating either: this is exactly `human daemon stop && human daemon
+// start` run as one command, with the same flags both already take.
+// runDaemonBackground re-execs the on-disk binary directly, so restart needs
+// no cmdFactory/version of its own — those exist only for the foreground path
+// buildDaemonStartCmd takes and restart never does.
+//
+// --project defaults to the outgoing daemon's OWN recorded registration
+// (daemon.json's Projects, read before stopDaemon deletes the file) rather
+// than to nil, which buildProjectRegistry would then read as "just cwd". In
+// production the daemon is always started with explicit --project dirs
+// (internal/daemon/lifecycle.go, internal/agent/manager.go), so a restart run
+// from an unrelated cwd — or with two projects registered — would otherwise
+// silently replace the running daemon with one serving only its own cwd,
+// which is not what "replace whatever build is currently running" promises.
+// An operator who passes --project explicitly is trusted over the recording,
+// same as buildDaemonStatusCmd already trusts an explicit --addr over it.
+//
+// The listen addresses are deliberately NOT fed back the same way: daemon.json
+// records the post-replaceHost bind address (already resolved to a concrete
+// host, e.g. a container-reachable IP), not the flag form a listener expects,
+// so echoing it back could hand runDaemonBackground a host it cannot bind
+// rather than the wildcard/loopback default. An operator who bound a
+// non-default address passes --addr again, same as any other daemon start.
+func buildDaemonRestartCmd() *cobra.Command {
+	var addr string
+	var chromeAddr string
+	var proxyAddr string
+	var safe bool
+	var debug bool
+	var projectDirs []string
+	var force bool
+	var wait time.Duration
+
+	cmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the daemon, replacing whatever build is currently running",
+		Long: `Stop the running daemon and start the binary now on disk in its place.
+
+This is the remedy a too-old daemon's own refusal names: every OTHER command
+this client sends is refused once the daemon's protocol falls behind
+(` + "`human doctor`" + ` included), leaving restart — which never asks the daemon
+anything, only signals it by PID and starts a fresh process — as the way out.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			// Read BEFORE stopDaemon, which calls daemon.RemoveInfo() and
+			// destroys this: it is the only record of what the outgoing
+			// daemon had registered, and stop's success does not depend on it.
+			if !cmd.Flags().Changed("project") {
+				if info, err := daemon.ReadInfo(); err == nil {
+					for _, p := range info.Projects {
+						projectDirs = append(projectDirs, p.Dir)
+					}
+				}
+			}
+			if err := stopDaemon(out, force, wait); err != nil {
+				return err
+			}
+			return startDaemonBackground(cmd, addr, chromeAddr, proxyAddr, safe, debug, projectDirs)
+		},
+	}
+
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:19285", "Listen address (host:port)")
+	cmd.Flags().StringVar(&chromeAddr, "chrome-addr", "127.0.0.1:19286", "Chrome proxy listen address (host:port)")
+	cmd.Flags().StringVar(&proxyAddr, "proxy-addr", "127.0.0.1:19287", "HTTPS proxy listen address (host:port)")
+	cmd.Flags().BoolVar(&safe, "safe", os.Getenv("HUMAN_SAFE") == "1", "Block destructive operations for all daemon requests")
+	cmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
+	cmd.Flags().StringArrayVar(&projectDirs, "project", nil, "Project directory to register (repeatable; defaults to cwd)")
+	cmd.Flags().BoolVar(&force, "force", false, "End the daemon immediately, abandoning in-flight work (signals this daemon only)")
+	cmd.Flags().DurationVar(&wait, "wait", stopDrainDefault, "How long to wait for in-flight work to finish before restarting")
 	return cmd
 }
 

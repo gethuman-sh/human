@@ -169,7 +169,7 @@ func staleDaemonHint(stderr string) string {
 	}
 	return "\nThis command executes inside the daemon, and the running daemon's binary " +
 		"does not have it.\nRebuild human, then restart the daemon " +
-		"(`human daemon stop` and `human daemon start`), and retry.\n"
+		"(`human daemon restart`), and retry.\n"
 }
 
 // handleOAuthCallback reads line 2 of the OAuth relay protocol and delivers

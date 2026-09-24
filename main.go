@@ -602,6 +602,12 @@ func deliverHookEvent(args []string) error {
 	if c == nil {
 		return errors.WithDetails("no reachable daemon for hook delivery")
 	}
+	// `hook` runs locally only so stdin stays available; the event itself goes
+	// over the wire, so it answers the gate question that connectDaemon no
+	// longer answers for it.
+	if err := daemon.DaemonProtocolError(c.Info()); err != nil {
+		return err
+	}
 	if _, err := c.RunRemote(args); err != nil {
 		return err
 	}
@@ -733,32 +739,71 @@ var localSubcommands = map[string]bool{
 // cannot drift apart.
 var globalValueFlags = cliflags.ValueFlags
 
-// isLocalSubcommand returns true if args represent a command that must
-// execute locally rather than being forwarded to the daemon. It understands
-// space-separated value-taking flags (e.g. "--tracker work daemon") so the
-// value token is not mistaken for the subcommand.
-func isLocalSubcommand(args []string) bool {
+// scanArgs walks the global flags and returns the first positional token, the
+// dash tokens seen before it, and whether a bare "--" ended the scan first.
+//
+// It is the one walk both dispatch questions need — which subcommand is this,
+// and did the user ask for help — so the two can never disagree about where the
+// subcommand starts. The "--flag=value" form is a single token and needs no
+// skip; only the space-separated form consumes the next argument.
+func scanArgs(args []string) (sub string, flags []string, stopped bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
-			return false
-		}
-		// --version should always run locally to show the client's version.
-		if a == "--version" || a == "-v" {
-			return true
+			return "", flags, true
 		}
 		if len(a) > 0 && a[0] == '-' {
-			// Skip the value of a known value-taking flag in its space-separated
-			// form. The "--flag=value" form is a single token and needs no skip.
+			flags = append(flags, a)
 			if globalValueFlags[a] && i+1 < len(args) {
 				i++
 			}
 			continue
 		}
-		if a == "codenav" {
-			return codenavRunsLocally(args)
+		return a, flags, false
+	}
+	return "", flags, false
+}
+
+// isLocalSubcommand returns true if args represent a command that must
+// execute locally rather than being forwarded to the daemon. It understands
+// space-separated value-taking flags (e.g. "--tracker work daemon") so the
+// value token is not mistaken for the subcommand.
+func isLocalSubcommand(args []string) bool {
+	sub, flags, stopped := scanArgs(args)
+	for _, f := range flags {
+		// --version should always run locally to show the client's version.
+		if f == "--version" || f == "-v" {
+			return true
 		}
-		return localSubcommands[a]
+	}
+	if stopped {
+		return false
+	}
+	if sub == "codenav" {
+		return codenavRunsLocally(args)
+	}
+	return localSubcommands[sub]
+}
+
+// isHelpRequest reports whether args ask the binary to describe itself rather
+// than to do work: an explicit --help/-h, the `help` subcommand, or a bare
+// `human`, whose root command prints help.
+func isHelpRequest(args []string) bool {
+	sub, _, stopped := scanArgs(args)
+	if !stopped && (sub == "" || sub == "help") {
+		return true
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return false
+		}
+		if a == "--help" || a == "-h" {
+			return true
+		}
+		if len(a) > 0 && a[0] == '-' && globalValueFlags[a] && i+1 < len(args) {
+			i++
+		}
 	}
 	return false
 }
@@ -880,20 +925,53 @@ func subcmdFromBinary() string {
 	return ""
 }
 
+// dispatch is the decision main makes once per invocation: does this command go
+// to the daemon, and may it.
+type dispatch struct {
+	// forward sends the args to the daemon; false runs them in this process.
+	forward bool
+	// refuse is the protocol gate's refusal, and it is only ever set for a
+	// command that would actually be forwarded.
+	refuse error
+}
+
+// decideDispatch answers both questions for one invocation against one
+// discovered daemon.
+//
+// The order is the whole point: the gate is a property of FORWARDING, not of
+// discovery. Asking it first refused `human daemon stop` — which sends no
+// request at all, and is the remedy the refusal itself prints — leaving a
+// stranded user nothing but kill (SC-5397). It is a pure function because the
+// decision used to be an os.Exit inside main, which is why the defect shipped
+// untested.
+func decideDispatch(args []string, info daemon.DaemonInfo) dispatch {
+	if isLocalSubcommand(args) {
+		return dispatch{}
+	}
+	protoErr := daemon.DaemonProtocolError(info)
+	// Help describes the command surface of a binary, and a daemon too old to
+	// serve this client describes the wrong one. Refusing it is worse than
+	// answering it here: help is what the stranded user reaches for.
+	if isHelpRequest(args) {
+		return dispatch{forward: protoErr == nil}
+	}
+	// forward is false alongside a refusal: a refused command is never sent,
+	// only reported (main exits on d.refuse before ever consulting d.forward,
+	// but the two must not disagree about what actually happened).
+	return dispatch{forward: protoErr == nil, refuse: protoErr}
+}
+
 // connectDaemon locates the daemon and, when the address was discovered rather
 // than named by the caller, propagates the chrome and proxy addresses into the
 // process environment. It returns nil when there is no daemon to talk to, which
 // is not an error: the command then runs locally.
 //
-// The protocol refusal is the one failure that must not be swallowed — running
-// locally against a daemon that is merely too old is worse than stopping.
+// It deliberately does NOT apply the protocol gate. Discovery answers "where is
+// the daemon"; whether this invocation may speak to it is decideDispatch's
+// question, and every caller that sends a request asks it (SC-5397).
 func connectDaemon() *daemon.Client {
-	c, err := daemon.Connect()
+	c, err := daemon.ConnectUnchecked()
 	if err != nil {
-		if daemon.IsProtocolError(err) {
-			errors.LogError(err).Msg("daemon too old for this client")
-			os.Exit(1)
-		}
 		return nil
 	}
 	if os.Getenv("HUMAN_DAEMON_ADDR") == "" {
@@ -931,9 +1009,7 @@ func main() {
 		args = append([]string{sub}, args...)
 	}
 
-	// Client mode: forward to the daemon when there is one. The protocol gate is
-	// applied inside connectDaemon, so a daemon too old to serve this client is
-	// refused before any request rather than after a cryptic unknown-command.
+	// Client mode: forward to the daemon when there is one.
 	client := connectDaemon()
 
 	// Warn when the CLI binary and the running daemon are on different versions.
@@ -944,23 +1020,29 @@ func main() {
 	// Passive update notice — fires a background goroutine then reads the cache.
 	printUpdateNotice(version)
 
-	// "daemon" subcommands must run locally.
-	if client != nil && !isLocalSubcommand(args) {
-		// A forwarded command that needs the caller's branch or commits gets
-		// them settled HERE, in the caller's checkout, and sent as explicit
-		// flags: the daemon's checkout is not where the caller stands, and
-		// reading git there refused work that was right there (SC-5330).
-		args, err := cmdforward.WithCallerFacts(context.Background(), args, ".", cmdforward.RealGit())
-		if err != nil {
-			errors.LogError(err).Msg("command failed")
+	if client != nil {
+		d := decideDispatch(args, client.Info())
+		if d.refuse != nil {
+			errors.LogError(d.refuse).Msg("daemon too old for this client")
 			os.Exit(1)
 		}
-		exitCode, err := client.RunRemote(args)
-		if err != nil {
-			errors.LogError(err).Msg("remote execution failed")
-			os.Exit(1)
+		if d.forward {
+			// A forwarded command that needs the caller's branch or commits gets
+			// them settled HERE, in the caller's checkout, and sent as explicit
+			// flags: the daemon's checkout is not where the caller stands, and
+			// reading git there refused work that was right there (SC-5330).
+			fwdArgs, err := cmdforward.WithCallerFacts(context.Background(), args, ".", cmdforward.RealGit())
+			if err != nil {
+				errors.LogError(err).Msg("command failed")
+				os.Exit(1)
+			}
+			exitCode, err := client.RunRemote(fwdArgs)
+			if err != nil {
+				errors.LogError(err).Msg("remote execution failed")
+				os.Exit(1)
+			}
+			os.Exit(exitCode)
 		}
-		os.Exit(exitCode)
 	}
 
 	rootCmd := newRootCmd()
