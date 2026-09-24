@@ -179,9 +179,27 @@ silent that long. The reap log carries `model_request` so a reap that did
 happen names which answer it acted on.
 
 The reap carries its reason out as a sentinel: the synthesized `StopFailure`
-event's `ErrorType` is `reaped-silent:<idle>` (`ReapSilenceErrorType`), which
-routes the exit to the **uncharged** relaunch instead of the charged failure path
-(SC-2447). See § What a reap costs.
+event's `ErrorType` is `reaped-silent:<idle>;budget=<budget>;outstanding=<work>`
+(`ReapSilenceErrorType`, composed by `ReapReason.ErrorType`), which routes the
+exit to the **uncharged** relaunch instead of the charged failure path
+(SC-2447). See § What a reap costs. The three values are the observation the
+judgement was made on — the silence, the idle budget it exceeded, and
+`AgentProgress.OutstandingWork` at that moment (`none`, or the tool call, the
+dispatch count and the model-request state that bought the generous budget) —
+and the `*-failed` marker the reap posts records them as the fields `idle`,
+`budget` and `outstanding` beside its prose line (SC-5329). An older daemon's
+idle-only sentinel still parses, with the budget and outstanding work left
+unrecorded.
+
+The **give-up marker** posted on the `MaxSilenceReaps`+1th stop is recorded
+under the blocker contract (`shared/exit-contract.md`): `kind: other`,
+`evidence` listing every stop on the stage — each earlier one read back from
+its own marker's fields, or said to be unrecorded when an older daemon posted
+it, and the stop that spent the cap last — `attempted` naming the relaunch
+count, and `release` naming what a person should check: a stop judged with work
+outstanding, or with an unknown model-request state, points at a liveness input
+the daemon could not read (SC-4900 was one) rather than at a hang. The bound
+itself is unchanged, and the stops stay uncharged.
 
 A silence reap onto a stage that is **already** stopped, with no relaunch since,
 posts nothing, relaunches nothing, and spends no budget (SC-3857): the exit
@@ -362,7 +380,7 @@ Collected in one place, because the spares are the load-bearing part:
 
 | Ending | Charged against `DefaultStageRetries` (=2)? | Bound |
 | --- | --- | --- |
-| Silence reap (§ 4, § 5) | **No** — `relaunchSilenceReap`. The work did not fail; a judgement about the work did (SC-2447). | `MaxSilenceReaps` = 3 relaunches; the 4th posts a give-up marker naming the count and stops. A reap onto an already-stopped stage with no relaunch since costs nothing at all — it is absorbed before any of this runs (SC-3857). |
+| Silence reap (§ 4, § 5) | **No** — `relaunchSilenceReap`. The work did not fail; a judgement about the work did (SC-2447). | `MaxSilenceReaps` = 3 relaunches; the 4th posts a give-up marker naming the count and stops. The give-up is a blocker record — every stop's silence, budget and outstanding work as evidence, the relaunch count, a release condition (SC-5329) — not an ordinary stage failure. A reap onto an already-stopped stage with no relaunch since costs nothing at all — it is absorbed before any of this runs (SC-3857). |
 | Genuine death — claude gone, container unreachable, agent vanished (§ 2, § 3, § 6) | **Yes** — `tryRelaunch`. | 2 automatic relaunches per stage, then the card reds for a person. |
 | Outage (substrate unreachable) | **No** — `relaunchOutage`. | `OutageWaitBound` = 6h, then handed to a person. |
 | Needs-person walls (revoked credential, exhausted billing) | **No**, and never auto-relaunched — the next attempt hits the same wall. | — |
@@ -374,6 +392,12 @@ hidden. Both give-up markers dedup on a pinned sentinel string so two daemons
 reaching the cap at once do not both post.
 
 ## What a reap leaves behind
+
+On the ticket, a silence reap leaves its `*-failed` marker with the observation
+it was judged on (`idle`, `budget`, `outstanding`, § 4), and the give-up after
+the cap leaves the blocker record that quotes every one of them — the only
+place a person can tell, without the daemon log, whether the stops were a hang
+or a liveness input the machine was missing (SC-5329).
 
 The teardown choke point is `Manager.stopLocked` (`internal/agent/manager.go`):
 

@@ -37,6 +37,26 @@ type AgentZombieSweeper interface {
 type ReapReason struct {
 	Silent bool
 	Idle   time.Duration
+	// Budget and Outstanding complete the silence record: the budget the
+	// silence exceeded and what the agent had in flight when it was judged
+	// (SC-5329). Zero and empty for a genuine death.
+	Budget      time.Duration
+	Outstanding string
+}
+
+// Silence is the observation as the exit handler records it on the ticket.
+func (r ReapReason) Silence() SilenceReap {
+	return SilenceReap{Idle: r.Idle, Budget: r.Budget, Outstanding: r.Outstanding}
+}
+
+// ErrorType is the sentinel the synthesized StopFailure event carries: the
+// silence record for a silence reap, empty for a genuine death so the exit
+// handler takes the charged path.
+func (r ReapReason) ErrorType() string {
+	if !r.Silent {
+		return ""
+	}
+	return r.Silence().ErrorType()
 }
 
 const (
@@ -175,14 +195,14 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 				// silent past its idle budget is hung, not healthy — process
 				// liveness alone can never detect that, so fall through to
 				// the reap gate instead of sparing it (SC-1600).
-				stalled, idle, modelReq := z.hungBoardAgent(a.Name, time.Now())
+				stalled, silence, modelReq := z.hungBoardAgent(a.Name, time.Now())
 				if !stalled {
 					continue
 				}
-				logger.Warn().Str("agent", a.Name).Dur("idle", idle).
-					Str("model_request", modelReq.String()).
+				logger.Warn().Str("agent", a.Name).Dur("idle", silence.Idle).Dur("budget", silence.Budget).
+					Str("outstanding", silence.Outstanding).Str("model_request", modelReq.String()).
 					Msg("zombie sweep: board agent silent past its idle budget, reaping")
-				z.reap(ctx, sweeper, a.Name, ReapReason{Silent: true, Idle: idle}, onReaped, logger)
+				z.reap(ctx, sweeper, a.Name, ReapReason{Silent: true, Idle: silence.Idle, Budget: silence.Budget, Outstanding: silence.Outstanding}, onReaped, logger)
 				continue
 			}
 		}
@@ -210,19 +230,19 @@ func (z *zombieSweep) sweepZombieAgents(ctx context.Context, sweeper AgentZombie
 // The third result is what the daemon knew about the agent's model traffic
 // when it judged: a reap recorded without it cannot afterwards be told apart
 // from a reap taken because the daemon had lost the agent's mapping (SC-3853).
-func (z *zombieSweep) hungBoardAgent(name string, now time.Time) (bool, time.Duration, ModelRequestState) {
+func (z *zombieSweep) hungBoardAgent(name string, now time.Time) (bool, SilenceReap, ModelRequestState) {
 	if z.progress == nil {
-		return false, 0, ModelRequestUnknown
+		return false, SilenceReap{}, ModelRequestUnknown
 	}
 	if _, _, ok := parseAgentName(name); !ok {
-		return false, 0, ModelRequestUnknown
+		return false, SilenceReap{}, ModelRequestUnknown
 	}
 	p, ok := z.progress(name)
 	if !ok {
-		return false, 0, ModelRequestUnknown
+		return false, SilenceReap{}, ModelRequestUnknown
 	}
 	stalled, idle := p.Stalled(now)
-	return stalled, idle, p.ModelRequest
+	return stalled, silenceReapOf(p, idle), p.ModelRequest
 }
 
 // reap deletes one agent under a hard deadline that the sweep loop can never be

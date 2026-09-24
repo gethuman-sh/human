@@ -757,18 +757,15 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 		// code path (SC-206).
 		//
 		// A silence reap carries its reason as a sentinel ErrorType
-		// ("reaped-silent:<idle>") so the exit handler routes it to the
-		// uncharged relaunch instead of the charged failure path — the
-		// machine's own judgement must not spend the ticket's retry budget
-		// (SC-2447).
-		errorType := ""
-		if reason.Silent {
-			errorType = daemon.ReapSilenceErrorType + ":" + reason.Idle.Round(time.Second).String()
-		}
+		// (ReapReason.ErrorType: the idle, the budget it exceeded and what
+		// was outstanding) so the exit handler routes it to the uncharged
+		// relaunch instead of the charged failure path — the machine's own
+		// judgement must not spend the ticket's retry budget (SC-2447) — and
+		// records what it judged on the ticket (SC-5329).
 		hookEvents.Append(hookevents.Event{
 			EventName: hookevents.EventStopFailure,
 			AgentName: agentName,
-			ErrorType: errorType,
+			ErrorType: reason.ErrorType(),
 			Timestamp: time.Now().UTC(),
 		})
 	}, logger)
