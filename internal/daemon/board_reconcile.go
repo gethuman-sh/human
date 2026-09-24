@@ -128,16 +128,15 @@ type DriveLoop func(pmKey string) error
 type StopAgent func(agentName string) error
 
 // StoppedAgentLister reports the board agents whose record on THIS machine says
-// they have stopped, keyed by agent name, with the moment the stop was recorded.
-// A stopped record only persists from Manager.Stop (only caller: `human agent
-// stop`) or Manager.Refresh (only caller: `human agent list`, which writes
-// stopped when it finds the container already dead) — the automatic zombie
-// sweep deletes a killed/OOM-stopped/crashed agent's meta outright rather than
-// leaving it stopped, so this lister sees neither case. Where a stop IS
-// recorded, the stuck-running pass otherwise never sees it, because a stopped
-// record simply leaves the live listing and the card then waits out the full
-// StuckRunningGrace for a fact the machine already held (SC-5327). A nil
-// lister disables the shortcut and every card keeps the grace.
+// they have stopped, keyed by agent name, with the moment the stop was
+// recorded. Where a stop IS recorded, the stuck-running pass otherwise never
+// sees it, because a stopped agent simply leaves the live listing and the card
+// then waits out the full StuckRunningGrace for a fact the machine already
+// held (SC-5327). The production lister (cmddaemon.stoppedBoardAgents) reads
+// two sources to cover every path an agent stops through, including the
+// kill/OOM/crash reap the meta alone cannot show once DeleteMeta erases it —
+// see its doc comment for which producer feeds which case. A nil lister
+// disables the shortcut and every card keeps the grace.
 type StoppedAgentLister func() (map[string]time.Time, error)
 
 // ReconcileDeps wires the durable reconcile pass's collaborators, mirroring

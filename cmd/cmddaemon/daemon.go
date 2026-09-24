@@ -1024,16 +1024,44 @@ func liveBoardAgents() ([]string, error) {
 	return names, nil
 }
 
-// stoppedBoardAgents reads the agents this machine's manager has recorded as no
-// longer running, with the moment each stop was written. A stopped record only
-// persists from Manager.Stop (only caller: `human agent stop`) or
-// Manager.Refresh (only caller: `human agent list`, which writes stopped when
-// it finds the container already dead) — the automatic zombie sweep deletes a
-// killed/OOM-stopped/crashed agent's meta outright rather than leaving it
-// stopped, so this shortens the grace only for the narrower case where one of
-// those two commands ran against the stage's agent after the stage was
-// entered (SC-5327).
+// stoppedBoardAgents reads the agents this machine has recorded as no longer
+// running, with the moment each stop was written. Two sources feed it, because
+// no single one survives every path an agent stops through:
+//
+//   - the execution log's outcome.json, written by PreserveExecutionArtifacts
+//     BEFORE the meta is deleted. That covers `human agent stop`
+//     (Manager.Stop) AND the automatic zombie sweep's kill/OOM/crash reap
+//     (Manager.Delete = stopLocked + DeleteMeta) — the case the meta alone
+//     cannot show, because DeleteMeta erases the very meta stopLocked just
+//     wrote, in the same call (SC-5327).
+//   - the agent meta's StoppedAt, written by Manager.Refresh (only caller:
+//     `human agent list`, which writes StatusStopped straight to the meta and
+//     never touches the execution log) — the one producer the log does not
+//     capture.
+//
+// Where both name the same agent, the execution log's EndedAt wins: it is
+// written at the one choke point every remove path funnels through, so it is
+// the earlier and more authoritative record of when the run actually ended.
 func stoppedBoardAgents() (map[string]time.Time, error) {
+	stopped, err := stoppedBoardAgentsFromMeta()
+	if err != nil {
+		return nil, err
+	}
+	reaped, err := reapedBoardAgentsFromExecutionLog()
+	if err != nil {
+		// A broken execution-log read must not blind the meta-based half —
+		// return what the meta already told us rather than nothing.
+		return stopped, nil
+	}
+	for name, at := range reaped {
+		stopped[name] = at
+	}
+	return stopped, nil
+}
+
+// stoppedBoardAgentsFromMeta is the meta-only half of stoppedBoardAgents: the
+// producers that write StatusStopped straight to the meta and leave it there.
+func stoppedBoardAgentsFromMeta() (map[string]time.Time, error) {
 	metas, err := agent.ListMetas()
 	if err != nil {
 		return nil, err
@@ -1046,6 +1074,40 @@ func stoppedBoardAgents() (map[string]time.Time, error) {
 		stopped[m.Name] = m.StoppedAt
 	}
 	return stopped, nil
+}
+
+// reapedBoardAgentsFromExecutionLog reads the newest execution-log outcome for
+// every board agent this host holds a log for, keyed by agent name. Only board
+// agents are worth the scan: recordedDeath only ever looks up a
+// board-<key>-<stage> name, and skipping the rest avoids reading every
+// interactive agent's log on a machine that runs both. A directory with no
+// outcome.json (a run still in flight) or one with neither disposition
+// recorded is not evidence and is skipped.
+func reapedBoardAgentsFromExecutionLog() (map[string]time.Time, error) {
+	root := agent.ExecutionLogsDir()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, errors.WrapWithDetails(err, "listing execution logs", "dir", root)
+	}
+	out := make(map[string]time.Time)
+	for _, e := range entries {
+		if !e.IsDir() || !agentname.IsBoard(e.Name()) {
+			continue
+		}
+		execs, err := agent.ListExecutions(e.Name())
+		if err != nil || len(execs) == 0 {
+			continue
+		}
+		outcome := execs[0].Outcome
+		if outcome == nil || outcome.Disposition == "" || outcome.EndedAt.IsZero() {
+			continue
+		}
+		out[e.Name()] = outcome.EndedAt
+	}
+	return out, nil
 }
 
 // postFailedMarkerFunc builds the reconcile pass's marker poster. A stuck-running
