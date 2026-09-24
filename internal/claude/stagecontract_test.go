@@ -250,7 +250,7 @@ func TestStageContract_VerdictVocabulariesMatch(t *testing.T) {
 				{"human-bug-triage-agent.md", []string{"confirmed", "not-a-bug", "undetermined"}},
 				{"human-verdict-skeptic-agent.md", []string{"upheld", "refuted"}},
 				{"human-bug-verify-agent.md", []string{"DONE", "NOT DONE"}},
-				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "incomplete", "unreviewable"}},
+				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "incomplete", "unreviewable", "decision-required"}},
 			},
 		},
 		{
@@ -264,7 +264,28 @@ func TestStageContract_VerdictVocabulariesMatch(t *testing.T) {
 				{"human-security-triage-agent.md", []string{"confirmed", "not-a-bug", "undetermined"}},
 				{"human-verdict-skeptic-agent.md", []string{"upheld", "refuted"}},
 				{"human-security-verify-agent.md", []string{"DONE", "NOT DONE"}},
-				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "incomplete", "unreviewable"}},
+				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "incomplete", "unreviewable", "decision-required"}},
+			},
+		},
+		{
+			// The board review path and the out-of-band pickup path dispatch the
+			// same reviewer and must handle every value it can produce, including
+			// the two pre-verdict escapes (SC-5277).
+			skill: "human-review-skill.md",
+			cases: []struct {
+				agent  string
+				values []string
+			}{
+				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "incomplete", "unreviewable", "decision-required"}},
+			},
+		},
+		{
+			skill: "human-pickup-review-skill.md",
+			cases: []struct {
+				agent  string
+				values []string
+			}{
+				{"human-reviewer-agent.md", []string{"pass", "pass with notes", "fail", "incomplete", "unreviewable", "decision-required"}},
 			},
 		},
 	}

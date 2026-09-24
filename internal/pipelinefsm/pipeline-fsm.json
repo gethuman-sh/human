@@ -948,8 +948,8 @@
         "stage"
       ],
       "where": "board_state.go pauseOnOpenOptions",
-      "prompt": "human-review-skill.md",
-      "doc": "A stage found a genuine fork and stopped. The item is not working and not dead — it is waiting on a person, and reads as decision-needed rather than running. From in-review it is raised only for a reviewer Summary of `decision-required`, checked before any verdict is posted; a review that reaches pass/pass with notes/fail/incomplete posts that verdict and never also this marker for the same review (SC-5277)."
+      "prompt": "human-plan-skill.md, human-autofix-skill.md Step 1a/7.3, human-security-fix-skill.md Step 1a/7.3, human-review-skill.md, human-pickup-review-skill.md",
+      "doc": "A stage found a genuine fork and stopped. The item is not working and not dead — it is waiting on a person, and reads as decision-needed rather than running. From in-review/fixing/implementing it is raised only for a reviewer Summary of `decision-required`, checked before any verdict is posted by every skill that dispatches human-reviewer (human-review-skill.md, human-pickup-review-skill.md, human-autofix-skill.md, human-security-fix-skill.md); a review that reaches pass/pass with notes/fail/incomplete posts that verdict and never also this marker for the same review (SC-5277)."
     },
     {
       "name": "decision-made",

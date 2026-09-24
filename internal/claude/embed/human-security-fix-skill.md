@@ -44,7 +44,7 @@ Exhausting the budget is an honest `needs-human-work` ending, not a silent stop:
 
 In board context this run **is** the implementation stage, and the daemon reads that stage's exit from agent state key `stage.implementation` (the board stage name it looks up — distinct from the per-phase `stage.triage`/`stage.verify`/`stage.review` records this skill already writes). A run that stops without writing it hands the daemon nothing but the generic "agent finished without posting the stage handoff" diagnosis, and the retry loop charges on blind.
 
-So: **a board-context run must never exit without writing `stage.implementation`.** At every point where the run STOPS in board context — the budget-spent stop (Step 6), a `DECISION REQUIRED` options post (Step 1a), an unreviewable or twice-failed review (Step 7.3), and the clean no-fix-needed terminal (Step 3a) — record the outcome in the stage's own terms *before* returning, alongside the marker that stop already posts:
+So: **a board-context run must never exit without writing `stage.implementation`.** At every point where the run STOPS in board context — the budget-spent stop (Step 6), a `DECISION REQUIRED` options post (Step 1a), an unreviewable, decision-required, or twice-failed review (Step 7.3), and the clean no-fix-needed terminal (Step 3a) — record the outcome in the stage's own terms *before* returning, alongside the marker that stop already posts:
 
 ```bash
 human state set <SEC_KEY> stage.implementation --json --body-file - <<'EOF'
@@ -307,14 +307,14 @@ Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for se
 The reviewer writes `.human/reviews/<work-key>.md` and records its outcome in state. **Read the verdict from state, never from the file's prose:**
 
 ```bash
-human state get <WORK_KEY> stage.review --field verdict   # pass | pass with notes | fail | incomplete | unreviewable
-human state get <WORK_KEY> stage.review --field reason    # why, when unreviewable
+human state get <WORK_KEY> stage.review --field verdict   # pass | pass with notes | fail | incomplete | unreviewable | decision-required
+human state get <WORK_KEY> stage.review --field reason    # why, when unreviewable; the one-line fork, when decision-required
 human state get <WORK_KEY> stage.review --field unchecked  # dependent kinds the reviewer could not determine
 ```
 
 A non-empty `unchecked` never changes the verdict routing — carry it into the run summary's "Along the way" so a kind nobody could query is part of the story of the run rather than a silence.
 
-The five verdicts mean: the change is good (`pass`), good with notes worth recording (`pass with notes`), it has problems to fix (`fail`), it was built correctly but not every ticket acceptance criterion was met (`incomplete`), or the code could not be obtained at all (`unreviewable`).
+The verdicts mean: the change is good (`pass`), good with notes worth recording (`pass with notes`), it has problems to fix (`fail`), it was built correctly but not every ticket acceptance criterion was met (`incomplete`), or the code could not be obtained at all (`unreviewable`). `decision-required` is not a verdict at all: the reviewer examined the code and found a genuine product/scope fork it cannot resolve, exactly like the preflight fork in Step 1a.
 
 Post the outcome on the security ticket with the reviewer's **full findings** inlined under a `## Findings` section (the board detail panel shows it without opening the local `.human/reviews/<work-key>.md`):
 
@@ -346,6 +346,15 @@ REVIEW_EOF
 
   Run this once per review verdict, not once per attempt.
 - **unreviewable** — the reviewer could not obtain the code, so there are NO findings. Do NOT re-dispatch the fixer and do NOT post `[human:review-complete] verdict: fail`. Instead post `[human:review-failed]` naming the unreachable ref — `human marker post <SEC_KEY> review-failed --field reason="<reachability reason>"` — then record the stage outcome (`stage.implementation`, exit `retryable`, per "Recording the board stage outcome") and STOP (report per Step 9). No PR is merged.
+- **decision-required** — the reviewer found no verdict to give, exactly like the Step 1a preflight fork: the ticket admits two legitimate, mutually exclusive directions and building one over the other is a product call, not something more rework fixes. Do NOT re-dispatch the fixer and do NOT post `[human:review-complete]`. Post the fork as the same up-front decision block Step 1a uses, on `<SEC_KEY>`:
+  ```bash
+  human marker post <SEC_KEY> options \
+    --field stage=implementation \
+    --field context="<the decision-required one-liner from stage.review --field reason>" \
+    --field 1="<first option, one line>" \
+    --field 2="<second option, one line>"
+  ```
+  Then record the stage outcome (`stage.implementation`, exit `needs-input`, per "Recording the board stage outcome") and STOP (report per Step 9). No PR is merged; the card waits on a person exactly like the Step 1a fork.
 - **fail** or **incomplete** — feed the reviewer's findings back: re-dispatch the **human-bug-fixer** (Step 5) with the findings appended, re-run the verify gate (Step 6), then re-run the review (7.2, one new `[human:review-complete]` comment). An `incomplete` verdict means a ticket acceptance criterion was not built; route it identically to `fail` — re-dispatch the fixer with the unmet criterion appended, re-verify, and re-review under the same `budget.review.attempts`. This loops under the retry budget (`budget.review.attempts`). When the budget is spent, STOP honestly as `needs-human-work`: the handoff stays standing and NO pull request is merged.
 
 ## Step 8 — Phase 6: Deploy — end with a merged PR
