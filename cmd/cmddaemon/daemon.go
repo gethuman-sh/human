@@ -823,7 +823,7 @@ func runDaemonForeground(cmd *cobra.Command, addr, chromeAddr, proxyAddr string,
 	// events, exactly like chainReviewWith: on each loop-agent exit read the outcome
 	// it recorded (the reviewer's verdict, the fixer's exit) from the state store
 	// and hand it to the loop executor, which decides the next step.
-	advancePRLoop := advancePRLoopFunc(ctx, ds, diagnoseFailure, reviewLaunchGate, logger)
+	advancePRLoop := advancePRLoopFunc(ctx, ds, diagnoseFailure, reviewLaunchGate, openFindingsRecord(logger), logger)
 	// The deploy-fixer (SC-1557) is driven off its Stop event exactly like the PR
 	// loop: on exit read the exit it recorded in stage.deploy-fix and hand it to
 	// AdvanceDeployFix, which re-runs Deploy on `done` or reds the card otherwise.
@@ -3583,7 +3583,7 @@ func durableStageRetry(ctx context.Context, live daemon.StageRetry, reg *daemon.
 // before recording an outcome can still be explained from its artifacts; both are
 // empty when the durable reconcile pass re-drives a stalled loop, where the agent
 // is long gone (SC-1892).
-func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
+func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.BoardFailureDiagnoser, reviewLaunchGate func(context.Context) []daemon.DoctorCheck, findingsRecord recall.FindingsRecorder, logger zerolog.Logger) func(pmKey, agentName, errorType string) error {
 	return func(pmKey, agentName, errorType string) error {
 		deps, err := boardTransitionDepsFor(ds.srv.Projects, pmKey, ds.vaultResolver, ds.daemonID, logger, reviewLaunchGate, ipWiringFrom(ds))
 		if err != nil {
@@ -3598,18 +3598,38 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 		// read.
 		project := boardStateProject(ds.srv.Projects, pmKey)
 		var reviewAnchor, fixAnchor time.Time
-		if comments, cerr := deps.Commenter.ListComments(ctx, pmKey); cerr == nil {
+		var comments []tracker.Comment
+		if listed, cerr := deps.Commenter.ListComments(ctx, pmKey); cerr == nil {
+			comments = listed
 			reviewAnchor, _ = daemon.LatestMarkerTime(comments, daemon.PRReviewStartedHeader)
 			fixAnchor, _ = daemon.LatestMarkerTime(comments, daemon.PRFixStartedHeader)
 		}
 
 		verdict, reviewHead, findings, verdictRecorded, verdictFresh := readPRReviewVerdict(ctx, project, pmKey, reviewAnchor, logger)
 		exit, options, summary, fixHead, exitRecorded, exitFresh := readPRFixReport(ctx, project, pmKey, fixAnchor, logger)
+		// The record is written from the same reads the loop decides on, so what
+		// it holds is exactly what the loop saw — and only a report confirmed as
+		// this round's, never a previous round's leftover (SC-5278).
+		if verdictRecorded && verdictFresh {
+			recordReviewRound(ctx, findingsRecord, project, pmKey, comments, findings, reviewHead, logger)
+		}
+		// See fixDispositionIsFresh: exitFresh alone is not enough on a
+		// review exit, where the newest pr-fix-started marker is the
+		// PREVIOUS round's (SC-5278).
+		if fixDispositionIsFresh(comments, exitRecorded, exitFresh) {
+			recordFixDisposition(ctx, findingsRecord, project, pmKey, comments, exit, summary, logger)
+		}
+		parsed := daemon.ParseFindings(findings)
+		var finding, class string
+		if len(parsed) > 0 {
+			finding, class = parsed[0].Fingerprint(), parsed[0].ClassKey()
+		}
 		return deps.AdvancePRLoop(ctx, pmKey, daemon.PRLoopOutcome{
 			ReviewVerdict:  verdict,
 			ReviewRecorded: verdictRecorded,
 			ReviewHead:     reviewHead,
-			ReviewFinding:  daemon.FindingFingerprint(findings),
+			ReviewFinding:  finding,
+			ReviewClass:    class,
 			ReviewStale:    verdictRecorded && !verdictFresh,
 			FixExit:        exit,
 			FixRecorded:    exitRecorded,
@@ -3621,6 +3641,20 @@ func advancePRLoopFunc(ctx context.Context, ds *daemonState, diagnose daemon.Boa
 			ErrorType:      errorType,
 		})
 	}
+}
+
+// openFindingsRecord opens the durable findings record beside the search index
+// it shares a file with. The recall sync opens its own handle on that file;
+// SQLite serialises the two writers through WAL and busy_timeout, which the
+// store sets on open. A record that cannot be opened is logged and the loop
+// runs without one — the review's verdict does not depend on its archive.
+func openFindingsRecord(logger zerolog.Logger) recall.FindingsRecorder {
+	store, err := recall.NewSQLiteStore(recall.DefaultDBPath())
+	if err != nil {
+		logger.Warn().Err(err).Msg("board PR loop: findings record unavailable; rounds will not be recorded")
+		return nil
+	}
+	return store
 }
 
 // advanceDeployFixFunc builds the deploy-fixer's Stop-event driver: on the fixer's

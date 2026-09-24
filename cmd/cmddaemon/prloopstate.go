@@ -9,6 +9,8 @@ import (
 
 	"github.com/gethuman-sh/human/internal/agentstate"
 	"github.com/gethuman-sh/human/internal/daemon"
+	"github.com/gethuman-sh/human/internal/recall"
+	"github.com/gethuman-sh/human/internal/tracker"
 )
 
 // prLoopReadRecheckStep/Tries bound the read-after-write race window for the
@@ -171,4 +173,78 @@ func readStageReportSettled(ctx context.Context, project, pmKey, name string, no
 		return recorded, false
 	}
 	return recorded, fresh
+}
+
+// recordReviewRound writes a round's blocking findings to the durable findings
+// record (SC-5278). The agent state store keeps only the newest report and
+// prunes it after two weeks, so it never answered which classes of finding
+// recur; this record does, per project, ticket, PR and round. Best effort: a
+// record that cannot be written is logged and the loop goes on, because the
+// review's verdict — not its archive — is what the loop runs on.
+func recordReviewRound(ctx context.Context, rec recall.FindingsRecorder, project, pmKey string, comments []tracker.Comment, findingsText, head string, logger zerolog.Logger) {
+	if rec == nil {
+		return
+	}
+	parsed := daemon.ParseFindings(findingsText)
+	if len(parsed) == 0 {
+		return
+	}
+	pr, round := daemon.PRLoopNumber(comments), daemon.PRReviewRounds(comments)
+	// round is a count of pr-review-started markers seen in comments (SC-5278):
+	// it is only zero when the comment thread could not be read at all (the
+	// caller's ListComments failed and passed comments as nil), because a
+	// verdict this call is ever reached for was itself read from a report a
+	// round's own started-marker anchors — a real round is never round zero.
+	// Writing anyway would land every such row at pr=0/round=0, colliding
+	// under UNIQUE(project,key,pr,round,file,slug) with any other round's
+	// leftover and corrupting FindingClassCounts. Refuse rather than guess.
+	if round <= 0 {
+		logger.Warn().Str("pm", pmKey).Msg("board PR loop: findings not recorded, comment thread unread this round")
+		return
+	}
+	rows := make([]recall.ReviewFinding, 0, len(parsed))
+	for _, f := range parsed {
+		rows = append(rows, recall.ReviewFinding{
+			Project: project, Key: pmKey, PR: pr, Round: round, Head: head,
+			File: f.File, Slug: f.Slug, Class: f.Class, Text: f.Text,
+		})
+	}
+	if err := rec.RecordReviewFindings(ctx, rows); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Int("round", round).Msg("board PR loop: findings record not written")
+	}
+}
+
+// fixDispositionIsFresh reports whether a fixer's report just read may be
+// attributed to the newest review round in comments.
+//
+// exitFresh alone is not enough: it says only that the record postdates the
+// fixer's OWN most recent pr-fix-started marker, which stays true of a PRIOR
+// round's still-present report on every LATER review exit — until a new
+// fixer's write overwrites it. On the review exit of round N>=2 the newest
+// pr-fix-started marker is still round N-1's, so round N-1's report reads as
+// recorded+fresh while the round being recorded is N. Writing under exitFresh
+// alone therefore attributes round N-1's exit to round N's findings — wrong
+// every time the loop terminates on round N without a round-N fixer ever
+// running (the class-repeat/identity-repeat escalations and the round cap).
+//
+// The additional guard mirrors the one AdvancePRLoop already trusts the fix
+// report under (board_transition.go: `latestPRLoopStage(comments) ==
+// PRStageReview`/`PRStageFix`): a disposition is only this round's when the
+// fix step is actually the newest loop step, i.e. a fixer ran since the last
+// review started (SC-5278).
+func fixDispositionIsFresh(comments []tracker.Comment, exitRecorded, exitFresh bool) bool {
+	return exitRecorded && exitFresh && daemon.LatestPRLoopStage(comments) == daemon.PRStageFix
+}
+
+// recordFixDisposition attaches the fixer's exit and its one-line account to
+// the findings of the round it answered — the round whose review dispatched it,
+// which is the newest review round in the thread.
+func recordFixDisposition(ctx context.Context, rec recall.FindingsRecorder, project, pmKey string, comments []tracker.Comment, exit, note string, logger zerolog.Logger) {
+	if rec == nil || exit == "" {
+		return
+	}
+	pr, round := daemon.PRLoopNumber(comments), daemon.PRReviewRounds(comments)
+	if err := rec.SetFindingDisposition(ctx, project, pmKey, pr, round, exit, note); err != nil {
+		logger.Warn().Err(err).Str("pm", pmKey).Int("round", round).Msg("board PR loop: finding disposition not written")
+	}
 }

@@ -207,7 +207,7 @@ func TestAdvancePRLoop_RefusedFixLaunchLeavesLoopStageUnchanged(t *testing.T) {
 	for _, body := range c.added {
 		assert.NotContains(t, body, PRFixStartedHeader)
 	}
-	assert.Equal(t, PRStageReview, latestPRLoopStage(c.comments), "the loop still stands where the running step left it")
+	assert.Equal(t, PRStageReview, LatestPRLoopStage(c.comments), "the loop still stands where the running step left it")
 	assert.Equal(t, roundsBefore, prReviewRounds(c.comments), "a step that did not run costs no round")
 }
 

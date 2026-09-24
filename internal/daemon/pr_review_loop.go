@@ -116,13 +116,13 @@ func NextPRLoopAction(stage PRLoopStage, outcome string, round, budget int, repe
 	}
 }
 
-// latestPRLoopStage reports which loop step most recently started — and so just
+// LatestPRLoopStage reports which loop step most recently started — and so just
 // finished, when its agent's Stop fires the evaluation. It scans the comment
 // thread for the newest pr-review-started / pr-fix-started marker; PRStageNone
 // means the loop has not run yet (the draft PR is freshly opened). Deploy-stage
 // markers that share the done stage are ignored: only the loop's own markers
 // move the loop.
-func latestPRLoopStage(comments []tracker.Comment) PRLoopStage {
+func LatestPRLoopStage(comments []tracker.Comment) PRLoopStage {
 	stage := PRStageNone
 	var latest tracker.Comment
 	found := false
@@ -201,6 +201,48 @@ const findingFingerprintEmDash = "—"
 // here once and made two different findings collide on their shared preamble
 // — the premature escalation this bound exists to remove (SC-5174).
 func FindingFingerprint(findings string) string {
+	parsed := ParseFindings(findings)
+	if len(parsed) == 0 {
+		return ""
+	}
+	return parsed[0].Fingerprint()
+}
+
+// Finding is one blocking finding as the reviewer's prompt shapes it:
+// `BLOCKING <file>:<line> — <slug> — [<class>] <explanation>`. File and Slug
+// are normalized the way the fingerprint always was; Class is the bracketed
+// category the explanation leads with, lower-cased, or "" when the reviewer
+// named none (an older thread, a reviewer that skipped it).
+type Finding struct {
+	File  string
+	Slug  string
+	Class string
+	Text  string
+}
+
+// Fingerprint is the finding's identity across rounds: `<file> — <slug>`.
+func (f Finding) Fingerprint() string {
+	return cutFingerprintRunes(f.File + " " + findingFingerprintEmDash + " " + f.Slug)
+}
+
+// ClassKey is the finding's identity by class: `<file> — <class>`, "" when it
+// carries no class. Two findings with different slugs but the same class in
+// the same file are the same defect reported under a fresh description, which
+// is what made one log-injection defect cost three rounds (SC-5278).
+func (f Finding) ClassKey() string {
+	if f.Class == "" {
+		return ""
+	}
+	return cutFingerprintRunes(f.File + " " + findingFingerprintEmDash + " " + f.Class)
+}
+
+// ParseFindings reads every well-formed blocking finding out of a reviewer's
+// findings text, in order. The first is what FindingFingerprint reports; the
+// whole list is what the durable findings record keeps. A BLOCKING line
+// without the three-part shape ends the scan with what was read so far — as
+// FindingFingerprint always treated it: no identity, never repeated.
+func ParseFindings(findings string) []Finding {
+	var out []Finding
 	for _, line := range strings.Split(findings, "\n") {
 		line = stripListMarkers(strings.TrimSpace(line))
 		if line == "" {
@@ -210,20 +252,73 @@ func FindingFingerprint(findings string) string {
 		if len(fields) == 0 || !strings.EqualFold(strings.TrimRight(fields[0], ":"), "blocking") {
 			continue
 		}
-		parts := strings.SplitN(line, findingFingerprintEmDash, 3)
-		if len(parts) < 2 {
-			return ""
+		f, ok := parseFindingLine(line)
+		if !ok {
+			return out
 		}
-		anchor := normalizeFingerprintText(parts[0])
-		anchor = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(anchor, "blocking:"), "blocking"))
-		anchor = anchorFileOnly(anchor)
-		slug := normalizeFingerprintText(parts[1])
-		if anchor == "" || slug == "" {
-			return ""
-		}
-		return cutFingerprintRunes(anchor + " " + findingFingerprintEmDash + " " + slug)
+		out = append(out, f)
 	}
-	return ""
+	return out
+}
+
+func parseFindingLine(line string) (Finding, bool) {
+	parts := strings.SplitN(line, findingFingerprintEmDash, 3)
+	if len(parts) < 2 {
+		return Finding{}, false
+	}
+	anchor := normalizeFingerprintText(parts[0])
+	anchor = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(anchor, "blocking:"), "blocking"))
+	anchor = anchorFileOnly(anchor)
+	slug := normalizeFingerprintText(parts[1])
+	if anchor == "" || slug == "" {
+		return Finding{}, false
+	}
+	f := Finding{File: anchor, Slug: slug}
+	if len(parts) == 3 {
+		f.Class, f.Text = splitFindingClass(strings.TrimSpace(parts[2]))
+	}
+	return f, true
+}
+
+// splitFindingClass reads the `[<class>]` the explanation leads with. The
+// token is one word of letters and hyphens; anything else is explanation text.
+func splitFindingClass(text string) (class, rest string) {
+	if !strings.HasPrefix(text, "[") {
+		return "", text
+	}
+	end := strings.Index(text, "]")
+	if end < 0 {
+		return "", text
+	}
+	token := strings.ToLower(strings.TrimSpace(text[1:end]))
+	if !isClassToken(token) {
+		return "", text
+	}
+	return token, strings.TrimSpace(text[end+1:])
+}
+
+// findingClasses is the closed vocabulary human-pr-reviewer-agent.md:87-93
+// declares for `[<class>]`. isClassToken enforces membership rather than mere
+// shape, because a shape-only check (one word of lowercase letters and
+// hyphens) let a token outside the set — a stray `[perf]`, or a real ticket
+// reference like `[SC-5174] regression` parsing as class `sc-5174` — through
+// as if it were a reviewer-declared category, corrupting criterion 4's
+// per-class counts (SC-5278).
+var findingClasses = map[string]bool{
+	"dependents":  true,
+	"tests":       true,
+	"correctness": true,
+	"security":    true,
+	"contract":    true,
+	"design":      true,
+	"docs":        true,
+	"process":     true,
+}
+
+// isClassToken reports whether token is a class the reviewer prompt declares,
+// not merely shaped like one.
+func isClassToken(token string) bool {
+	return findingClasses[token]
 }
 
 // stripListMarkers removes the markdown a reviewer may wrap a finding in — a
@@ -289,6 +384,29 @@ func findingRepeated(comments []tracker.Comment, finding string) bool {
 	return finding != "" && finding == lastFixFinding(comments)
 }
 
+// lastFixClass is the class key the newest pr-fix-started marker recorded:
+// the (file, class) of the finding the fixer was last sent. Empty when the
+// finding carried no class or the marker predates the field.
+func lastFixClass(comments []tracker.Comment) string {
+	return strings.TrimSpace(latestPrefixedLine(comments, PRFixStartedHeader, "class:"))
+}
+
+// classRepeated reports that this round's blocking finding is of the class,
+// in the file, the fixer was already sent — the same defect under a fresh
+// slug. A finding without a class never repeats by class, as a finding
+// without a fingerprint never repeats by identity.
+func classRepeated(comments []tracker.Comment, classKey string) bool {
+	return classKey != "" && classKey == lastFixClass(comments)
+}
+
+// PRReviewRounds is the number of review rounds the thread has started — the
+// round a reviewer's report belongs to, for the durable findings record.
+func PRReviewRounds(comments []tracker.Comment) int { return prReviewRounds(comments) }
+
+// PRLoopNumber is the pull request the loop is running on, 0 when the thread
+// names none.
+func PRLoopNumber(comments []tracker.Comment) int { return prLoopNumber(comments) }
+
 // prReviewRounds counts completed review rounds — one per pr-review-started
 // marker — the value the decider bounds against DefaultPRReviewRounds.
 func prReviewRounds(comments []tracker.Comment) int {
@@ -338,11 +456,20 @@ type PRLoopOutcome struct {
 	// (FindingFingerprint over the report's findings), the identity the
 	// repetition bound compares across rounds.
 	ReviewFinding string
+	// ReviewClass is the class key of that finding (Finding.ClassKey: the file
+	// and the reviewer's category), the second identity the repetition bound
+	// compares — "" when the reviewer named no class.
+	ReviewClass string
 	// FindingRepeated reports that ReviewFinding is the finding the fixer was
-	// sent last round — recorded on the pr-fix-started marker — so the round
-	// changed nothing the reviewer could see. Set by the executor from the
-	// thread; the pure decider only reads it.
+	// sent last round — recorded on the pr-fix-started marker — or that
+	// ReviewClass is the class the fixer was sent in the same file, so the
+	// round changed nothing the reviewer could see. Set by the executor from
+	// the thread; the pure decider only reads it.
 	FindingRepeated bool
+	// ClassRepeated narrows FindingRepeated: the identity differed but the
+	// class in the file did not, so the escalation names the class rather than
+	// a slug the fixer never saw twice.
+	ClassRepeated bool
 	// ReviewStale/FixStale report that the corresponding record above was NOT
 	// confirmed to be this round's own write — the cmd-layer reader raced ahead
 	// of the reviewer/fixer's final write and, after its bounded settle backoff,
@@ -418,7 +545,7 @@ func (o PRLoopOutcome) stepStale(stage PRLoopStage) bool {
 // non-convergence and still escalates rather than re-reviewing forever
 // (SC-1760).
 func EvaluatePRLoop(comments []tracker.Comment, outcome PRLoopOutcome) PRLoopAction {
-	stage := latestPRLoopStage(comments)
+	stage := LatestPRLoopStage(comments)
 	if outcome.stepStale(stage) {
 		return PRActionEscalate
 	}

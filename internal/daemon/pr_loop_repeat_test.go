@@ -46,7 +46,7 @@ func TestFindingFingerprint_nonFindingLinesAreNeverAnIdentity(t *testing.T) {
 	assert.NotEqual(t, a, b)
 	assert.Equal(t, "", FindingFingerprint("Blocking findings:\nsomething without the shape"))
 	assert.Equal(t, "", FindingFingerprint("Non-blocking: only nits"))
-	assert.False(t, findingRepeated([]tracker.Comment{cmt(prFixStartedBody(""), time.Unix(1, 0))}, ""),
+	assert.False(t, findingRepeated([]tracker.Comment{cmt(prFixStartedBody("", ""), time.Unix(1, 0))}, ""),
 		"an empty identity on both sides is not a repeat")
 }
 
@@ -88,8 +88,8 @@ func TestLastFixFinding(t *testing.T) {
 	base := time.Unix(1000, 0)
 	assert.Equal(t, "", lastFixFinding([]tracker.Comment{cmt(PRFixStartedHeader, base)}))
 	comments := []tracker.Comment{
-		cmt(prFixStartedBody("first problem"), base),
-		cmt(prFixStartedBody("second problem"), base.Add(time.Minute)),
+		cmt(prFixStartedBody("first problem", ""), base),
+		cmt(prFixStartedBody("second problem", ""), base.Add(time.Minute)),
 	}
 	assert.Equal(t, "second problem", lastFixFinding(comments))
 	assert.True(t, findingRepeated(comments, "second problem"))
@@ -158,7 +158,7 @@ func TestAdvancePRLoop_sameFindingTwiceEscalatesAndNamesIt(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{
 		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "0", Created: base},
 		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "1", Created: base.Add(time.Second)},
-		{Body: prFixStartedBody(finding), ID: "2", Created: base.Add(2 * time.Second)},
+		{Body: prFixStartedBody(finding, ""), ID: "2", Created: base.Add(2 * time.Second)},
 		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "3", Created: base.Add(3 * time.Second)},
 	}}
 	l := &fakeLauncher{}
@@ -186,7 +186,7 @@ func TestAdvancePRLoop_fixStageNeverReadsFindingAsRepeated(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{
 		{Body: "[human:ready-for-review]\nbranch: feat/x", ID: "0", Created: base},
 		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/x", ID: "1", Created: base.Add(time.Second)},
-		{Body: prFixStartedBody(finding), ID: "2", Created: base.Add(2 * time.Second)},
+		{Body: prFixStartedBody(finding, ""), ID: "2", Created: base.Add(2 * time.Second)},
 	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
