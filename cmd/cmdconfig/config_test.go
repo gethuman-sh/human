@@ -175,3 +175,25 @@ func TestRunCheck_missingConfigIsCheckable(t *testing.T) {
 	require.NoError(t, RunCheck(&buf, t.TempDir(), false))
 	assert.Contains(t, buf.String(), "no-forge")
 }
+
+// agent.model cannot be judged by Document.Validate — the vocabulary is the
+// model card's and internal/config may not import it — so the check is
+// contributed by the consumer package. It is a warning: the config works, the
+// setting simply has no effect (SC-5474).
+func TestRunCheck_reportsUnknownAgentModel(t *testing.T) {
+	dir := t.TempDir()
+	writeCfg(t, dir, "shortcuts:\n  - name: board\n    role: pm\n    token: t\nforges:\n  - name: prs\n    token: t\nagent:\n  model: sonett\n")
+
+	var buf bytes.Buffer
+	require.NoError(t, RunCheck(&buf, dir, false), "a warning must not fail the command")
+	assert.Contains(t, buf.String(), "unknown-agent-model")
+}
+
+func TestRunCheck_recognisedAgentModelIsSilent(t *testing.T) {
+	dir := t.TempDir()
+	writeCfg(t, dir, "shortcuts:\n  - name: board\n    role: pm\n    token: t\nforges:\n  - name: prs\n    token: t\nagent:\n  model: sonnet\n")
+
+	var buf bytes.Buffer
+	require.NoError(t, RunCheck(&buf, dir, false))
+	assert.Contains(t, buf.String(), "nothing to report")
+}

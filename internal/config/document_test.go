@@ -496,3 +496,16 @@ func TestWrite_warningsDoNotBlock(t *testing.T) {
 
 	require.NoError(t, doc.Write())
 }
+
+// A dotted path is how the agent.model knob is read, and the interesting cases
+// are the ones that must yield "" rather than a partial answer: a missing leaf,
+// a missing parent, and a path that stops on a mapping (SC-5474).
+func TestDocument_StringAtReadsADottedPath(t *testing.T) {
+	doc := parse(t, "agent:\n  model: sonnet\n")
+
+	assert.Equal(t, "sonnet", doc.StringAt("agent.model"))
+	assert.Empty(t, doc.StringAt("agent.missing"))
+	assert.Empty(t, doc.StringAt("missing.model"))
+	assert.Empty(t, doc.StringAt("agent"), "a mapping is not a scalar")
+	assert.Equal(t, "sonnet", parse(t, "agent:\n  model: sonnet\n").StringAt("agent.model"))
+}

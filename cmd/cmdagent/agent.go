@@ -17,6 +17,7 @@ import (
 
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/agent"
+	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/daemon"
 	"github.com/gethuman-sh/human/internal/devcontainer"
 )
@@ -188,6 +189,26 @@ func newManager(cmd *cobra.Command) (*agent.Manager, func(), error) {
 	}, cleanup, nil
 }
 
+// resolveStartModel decides the container's top-level model for `human agent
+// start`. An explicit --model always wins; without one the project's own
+// agent.model applies, so "the container runs cheap here" is a property of the
+// project and not of which command started it (SC-5474). Both empty leaves the
+// account default in force.
+//
+// It is a function rather than three lines in RunE because RunE opens a Docker
+// client before it builds StartOpts, so the choice would otherwise be reachable
+// only with an engine running.
+func resolveStartModel(flagModel, configDir string) string {
+	if flagModel != "" {
+		return flagModel
+	}
+	dir := configDir
+	if dir == "" {
+		dir = "."
+	}
+	return claude.ContainerModel(dir)
+}
+
 func buildStartCmd() *cobra.Command {
 	var prompt string
 	var model string
@@ -225,7 +246,7 @@ Examples:
 			opts := agent.StartOpts{
 				Name:        name,
 				Prompt:      prompt,
-				Model:       model,
+				Model:       resolveStartModel(model, configDir),
 				SkipPerms:   skipPerms,
 				Interactive: interactive,
 				ConfigDir:   configDir,

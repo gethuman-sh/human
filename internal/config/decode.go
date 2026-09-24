@@ -53,6 +53,26 @@ func (d *Document) String(key string) string {
 	return scalarAt(d.mapping(), key)
 }
 
+// StringAt reads a scalar at a dotted path (e.g. "agent.model"), empty when the
+// path is absent or does not end in a scalar. String is the top-level case and
+// stays, because most scalars are top-level and a caller should not have to know
+// which kind it is asking for.
+func (d *Document) StringAt(path string) string {
+	node := d.mapping()
+	parts := strings.Split(path, ".")
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			return scalarAt(node, part)
+		}
+		next := mapValue(node, part)
+		if next == nil || next.Kind != yaml.MappingNode {
+			return ""
+		}
+		node = next
+	}
+	return ""
+}
+
 // Bool reads a dotted path (e.g. "board.participate"), reporting whether it was
 // set at all. The caller decides what an unset value means: some knobs default
 // on, some off, and a reader that could not tell the difference would force
