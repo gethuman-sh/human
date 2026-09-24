@@ -135,6 +135,11 @@ type ContainerState struct {
 	Status   string // "running", "exited", "created", etc.
 	Running  bool
 	ExitCode int
+	// OOMKilled is the engine's own word that the container's memory cgroup ran
+	// out. It is the one signal that separates "the machine ran out of memory"
+	// from "the agent crashed", and it is only ever set where a cgroup limit
+	// exists (SC-5369).
+	OOMKilled bool
 	// Error is what Docker recorded as the reason the container could not run.
 	// It is the only place the init failure survives once the start call has
 	// returned, and reporting it is what keeps a relaunch from blaming the name
