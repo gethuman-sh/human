@@ -28,6 +28,7 @@ func TestBuildStatsCmd_subcommands(t *testing.T) {
 		assert.Empty(t, c.GroupID, "subcommand must not name a group its parent has not registered")
 	}
 	assert.True(t, subs["subagents"], "subagents subcommand registered")
+	assert.True(t, subs["containers"], "containers subcommand registered")
 }
 
 func TestIsValidRange(t *testing.T) {

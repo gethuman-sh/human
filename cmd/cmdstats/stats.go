@@ -39,6 +39,7 @@ func BuildStatsCmd() *cobra.Command {
 	// No GroupID on the subcommand: cobra panics when a GroupID names a group
 	// its parent has not registered, and "stats" registers none.
 	cmd.AddCommand(buildSubagentsCmd())
+	cmd.AddCommand(buildContainersCmd())
 	return cmd
 }
 
