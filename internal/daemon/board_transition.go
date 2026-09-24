@@ -2187,7 +2187,14 @@ func (d BoardTransitionDeps) awaitPublishedHead(ctx context.Context, res PRResul
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			// A cancelled context here — the deploy's own timeout expiring inside
+			// this wait, or a daemon shutdown — is the same "never caught up"
+			// outcome as the local deadline above, not a CI verdict: tag it
+			// headLagged so ciFailureFixable never calls it a fixable check
+			// failure and dispatches a fixer at a green PR (SC-5395).
+			return errors.WrapWithDetails(ctx.Err(),
+				"the forge did not report the rebased head on the pull request before the deploy's context ended",
+				"pr", res.URL, "published", wantHead, "reported", reported, deployHeadLagDetail, true)
 		case <-time.After(headPollInterval):
 		}
 	}

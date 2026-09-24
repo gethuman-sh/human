@@ -126,8 +126,13 @@ func TestDeployBranch_HeadOutOfDate_ReintegratesAndMerges(t *testing.T) {
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, p.ensured, 2,
 		"a 409 that survives the retry window means the base genuinely moved — re-integrate, do not re-issue the same merge")
-	assert.GreaterOrEqual(t, p.checksPassed, 2,
-		"each re-integration re-gates CI on the head it published")
+	// Exactly 3 Passing reads: the pre-rebase gate, the round-0 regate, and the
+	// round-1 regate after the re-integration. GreaterOrEqual(2) stays green
+	// with the round>0 regate removed from mergeAfterFreshness — the exact
+	// behaviour AD3 promises (each re-integration re-gates CI on the newly
+	// published head) — so pin the count precisely (SC-5395).
+	assert.Equal(t, 3, p.checksPassed,
+		"each re-integration re-gates CI on the head it published: pre-rebase gate + round-0 regate + round-1 regate")
 	for _, b := range c.added {
 		assert.False(t, strings.HasPrefix(b, DeployFailedHeader), "must not red the card: %q", b)
 	}
@@ -165,5 +170,51 @@ func TestDeployBranch_ForgeNeverReportsPublishedHead_RedsWithoutFixer(t *testing
 	require.NotEmpty(t, failed)
 	assert.Contains(t, failed, "did not report the rebased head")
 	assert.Zero(t, l.calls, "a forge that never moved its PR resource is not something a code fixer can repair")
+	assert.Zero(t, p.merged)
+}
+
+// TestDeployBranch_ContextCancelledInHeadWait_RedsWithoutClaimingChecksFailed
+// is the SC-5395 regression for defect B: the deploy's own context expiring
+// INSIDE awaitPublishedHead's poll (not the head wait's own local deadline)
+// used to return a bare ctx.Err(), which ciFailureFixable(context.
+// DeadlineExceeded) read as a fixable CI failure — redding a green PR with
+// "CI checks failed" and dispatching a deploy fixer. deployTimeout is set
+// shorter than deployHeadWaitTimeout so the outer context, not the head
+// wait's own deadline, is what fires.
+func TestDeployBranch_ContextCancelledInHeadWait_RedsWithoutClaimingChecksFailed(t *testing.T) {
+	syncDeploy(t)
+	origHeadInterval, origHeadTimeout := headPollInterval, deployHeadWaitTimeout
+	origDeployTimeout := deployTimeout
+	headPollInterval, deployHeadWaitTimeout = time.Millisecond, time.Minute
+	deployTimeout = 5 * time.Millisecond
+	t.Cleanup(func() {
+		headPollInterval, deployHeadWaitTimeout = origHeadInterval, origHeadTimeout
+		deployTimeout = origDeployTimeout
+	})
+
+	c := &fakeCommenter{comments: deployFixReadyComments()}
+	l := &fakeLauncher{}
+	p := &fakeDeployer{
+		res:          PRResult{Number: 63, URL: "https://example/pr/63"},
+		checks:       []forge.ChecksState{forge.ChecksPassing},
+		preHead:      "0aa7fe89",
+		head:         "50358b7b",
+		forgeHeadLag: 100000,
+	}
+	deps := newDeps(c, l, p)
+	err := deployVia(t, deps, BoardTransitionRequest{PMKey: "SC-1", From: BoardVerification, To: BoardDoneStage})
+	require.Error(t, err)
+
+	var failed string
+	for _, b := range c.added {
+		if strings.HasPrefix(b, DeployFailedHeader) {
+			failed = b
+		}
+	}
+	require.NotEmpty(t, failed)
+	assert.Contains(t, failed, "did not report the rebased head")
+	assert.NotContains(t, failed, "CI checks failed",
+		"a cancelled context waiting for the published head must never be reported as a check failure")
+	assert.Zero(t, l.calls, "a cancelled context in the head wait is not a code defect a fixer can repair")
 	assert.Zero(t, p.merged)
 }
