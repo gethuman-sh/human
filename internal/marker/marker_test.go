@@ -109,6 +109,18 @@ func TestValidate_requiredFields(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "ready-for-review", Fields: map[string]string{"branch": "main", "commits": "abc"}}))
 }
 
+// SC-5476: `review` is optional and, when present, closed to "inline" — the
+// one value that says the posting run reviews the work itself.
+func TestValidate_readyForReview_reviewInline(t *testing.T) {
+	assert.NoError(t, Validate(Marker{Type: "ready-for-review", Fields: map[string]string{"branch": "b", "commits": "c", "review": "inline"}}))
+}
+
+func TestValidate_readyForReview_reviewUnknownValue(t *testing.T) {
+	err := Validate(Marker{Type: "ready-for-review", Fields: map[string]string{"branch": "b", "commits": "c", "review": "later"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be one of inline")
+}
+
 func TestValidate_headEnum(t *testing.T) {
 	assert.Error(t, Validate(Marker{Type: "bug-verdict"}))
 	assert.Error(t, Validate(Marker{Type: "bug-verdict", Head: "maybe"}))
