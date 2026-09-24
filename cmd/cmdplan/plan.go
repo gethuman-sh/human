@@ -33,10 +33,11 @@ func BuildPlanCmd(deps cmdutil.Deps) *cobra.Command {
 }
 
 // buildPlanDeferCmd surfaces the sanctioned-deferral act as one atomic verb:
-// when the planner's DECISION REQUIRED fork resolves to "ship the narrow slice
-// now + follow-on for the rest", this creates the real follow-on ticket, links
-// it related to the PM ticket, and posts the durable [human:shipped-partial]
-// trace — the single origin of partial-delivery visibility (SC-2910).
+// once a person has sanctioned "ship the narrow slice now + follow-on for the
+// rest" via a [human:option-chosen] comment (human-plan-skill.md Phase 3c),
+// this creates the real follow-on ticket, links it related to the PM ticket,
+// and posts the durable [human:shipped-partial] trace — the single origin of
+// partial-delivery visibility (SC-2910).
 func buildPlanDeferCmd(deps cmdutil.Deps) *cobra.Command {
 	var title, description string
 	var deferred []string
@@ -46,8 +47,9 @@ func buildPlanDeferCmd(deps cmdutil.Deps) *cobra.Command {
 		Long: `Record a sanctioned partial delivery: create a follow-on ticket carrying the
 deferred acceptance criteria, link it as related to the PM ticket, and post a
 [human:shipped-partial] marker on the PM ticket naming each deferred criterion
-and the new follow-on key. Invoked by the planner when its DECISION REQUIRED
-fork resolves to "ship the narrow slice now + follow-on for the rest".`,
+and the new follow-on key. Invoked once a person has sanctioned "ship the
+narrow slice now + follow-on for the rest" via a [human:option-chosen]
+comment (human-plan-skill.md Phase 3c).`,
 		Example: `  human plan defer SC-2910 --title "Per-ticket cost export" \
     --deferred "CSV export of the cost ledger" --deferred "cost webhook"`,
 		Args: cobra.ExactArgs(1),

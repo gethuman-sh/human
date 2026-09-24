@@ -104,12 +104,15 @@ human marker post <PM_KEY> options \
 
 ## Phase 3c: Honor a sanctioned deferral (ship narrow + follow-on)
 
-If the ticket carries a `[human:option-chosen]` comment whose chosen direction is
-"ship the narrow slice now + follow-on ticket for the rest" (the Autonomy-contract
-rule-4 fork), the deferral is sanctioned. BEFORE attaching the narrow plan, spawn
-the durable trace so the deferred criteria leave a real, linked ticket and the PM
-card is marked shipped-partial. Run exactly once, naming every
-acceptance criterion you are deferring:
+If the ticket carries a `[human:option-chosen]` comment whose chosen direction
+is "ship the narrow slice now + follow-on ticket for the rest" (a choice a
+person recorded — the planner itself no longer raises this as a delivery-order
+fork, but a human can still pick it when answering the over-ask/contradiction
+`DECISION REQUIRED:` that Phase 3b surfaces, per Autonomy contract rule 4), the
+deferral is sanctioned. BEFORE attaching the narrow plan, spawn the durable
+trace so the deferred criteria leave a real, linked ticket and the PM card is
+marked shipped-partial. Run exactly once, naming every acceptance criterion you
+are deferring:
 
 ```bash
 human plan defer <PM_KEY> \
