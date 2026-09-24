@@ -247,14 +247,6 @@ export const STOP_DECISION_LABELS: Record<string, { text: string; title: string 
   },
 };
 
-// agentPresent is "a container for this card is running here": live, or
-// present-but-stalled. The failed and rework badges ask about presence — is
-// something still working this card — and a hung agent is present until the
-// daemon reaps it, so it must not fall through to the absent wording (SC-5328).
-function agentPresent(liveness: string | undefined): boolean {
-  return liveness === "live" || liveness === "stalled";
-}
-
 // failedBadge renders a stage's recorded failure — and declines to render it as
 // the last word while an agent for that stage is still working here.
 //
@@ -283,7 +275,25 @@ function agentPresent(liveness: string | undefined): boolean {
 // implying it is the failed one (SC-4406).
 function failedBadge(card: QueueCard, runningLabels: Record<string, string> = RUNNING_LABELS): BadgeInfo {
   const reason = card.error || "Stage failed";
-  if (agentPresent(card.agentLiveness)) {
+  if (card.agentLiveness === "stalled") {
+    // Present, but the daemon judges it hung — not the same as a working
+    // agent, which is why this is its own arm rather than folded into "live"
+    // below: no spinner (nothing is observably progressing), and the silence
+    // rides the text the way livenessBadge's stalled arm does, so the card
+    // does not read byte-identical to a healthy run (SC-5328).
+    const elsewhere = card.runningStage ? (runningLabels[card.runningStage] ?? "working…") : "";
+    const base = elsewhere ? `still ${elsewhere} — earlier failure recorded` : "still working — earlier failure recorded";
+    const silent = formatSilence(card.agentProgress?.idleSeconds);
+    return {
+      cls: "recovering",
+      text: silent ? `${base} — agent silent ${silent}` : `${base} — agent silent past its budget`,
+      title: `${elsewhere
+        ? `A failure was recorded, but an agent is running this ticket's ${card.runningStage} stage here`
+        : `A failure was recorded for this stage, but an agent is still running it here`}, and has made no observable progress${silent ? ` for ${silent}` : ""}. The daemon stops and relaunches a hung agent on its own; no action needed yet. Recorded reason: ${reason}`,
+      spinner: false,
+    };
+  }
+  if (card.agentLiveness === "live") {
     const elsewhere = card.runningStage ? (runningLabels[card.runningStage] ?? "working…") : "";
     return {
       cls: "fixing",
@@ -368,7 +378,19 @@ function livenessBadge(base: BadgeInfo, liveness: string | undefined, deadText: 
 // dropped, whose implementation-started marker has not yet landed.
 function reworkBadge(card: QueueCard): BadgeInfo {
   const verdict = card.verdict ?? "";
-  if (agentPresent(card.agentLiveness)) {
+  if (card.agentLiveness === "stalled") {
+    // Same distinction as failedBadge's stalled arm: a fixer is present but
+    // the daemon judges it hung, so this must not read as an ordinary
+    // in-progress rework (SC-5328).
+    const silent = formatSilence(card.agentProgress?.idleSeconds);
+    return {
+      cls: "recovering",
+      text: silent ? `review found problems — fixing… — agent silent ${silent}` : "review found problems — fixing… — agent silent past its budget",
+      title: `Review found problems — a fixer is reworking the code (verdict: ${verdict}), but has made no observable progress${silent ? ` for ${silent}` : ""}. The daemon stops and relaunches a hung agent on its own; no action needed yet.`,
+      spinner: false,
+    };
+  }
+  if (card.agentLiveness === "live") {
     return {
       cls: "fixing",
       text: "review found problems — fixing…",
