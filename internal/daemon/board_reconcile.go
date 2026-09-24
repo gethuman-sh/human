@@ -198,24 +198,14 @@ func (d ReconcileDeps) gate() WorkGate {
 }
 
 // aliveAgents reads the board agents running on this machine into a set. Every
-// relaunching pass needs it and each used to build it from the same six lines.
+// relaunching pass needs it and each used to build it from the same six lines
+// until they were pulled into the one shared aliveAgentSet (board_stageagents.go)
+// so this package's two independent readers of "who is alive" cannot drift.
 // The bool reports whether the answer is usable at all: a nil lister or a failed
 // lookup cannot establish liveness, and a pass that cannot establish liveness
 // must do nothing rather than assume a card is dead.
 func (d ReconcileDeps) aliveAgents(what string) (map[string]struct{}, bool) {
-	if d.LiveAgents == nil {
-		return nil, false
-	}
-	names, err := d.LiveAgents()
-	if err != nil {
-		d.Logger.Warn().Err(err).Msg("board reconcile: cannot list live agents for " + what)
-		return nil, false
-	}
-	alive := make(map[string]struct{}, len(names))
-	for _, n := range names {
-		alive[n] = struct{}{}
-	}
-	return alive, true
+	return aliveAgentSet(d.LiveAgents, d.Logger, what)
 }
 
 // RunBoardReconcile is the durable counterpart to RunBoardFailureWatch's live
@@ -289,7 +279,7 @@ func reconcileOnce(ctx context.Context, deps ReconcileDeps) {
 	// which is this machine's business whoever owns the ticket — leaving a
 	// container alive because its ticket is someone else's would strand a process
 	// nobody else can reach.
-	if n := reconcileOrphanedHandoffs(gate.forReview(cards), deps); n > 0 {
+	if n := reconcileOrphanedHandoffs(gate.forReview(cards), deps, time.Now()); n > 0 {
 		logger.Info().Int("launched", n).Msg("board reconcile: chained review for orphaned handoffs")
 	}
 	if n := reconcileShippedFailures(ctx, gate.forOwnWork(cards), deps); n > 0 {
@@ -1036,11 +1026,19 @@ func reconcileShippedFailures(ctx context.Context, drivable DrivableCards, deps 
 // Rework for 21 hours (SC-4958, on SC-430's recovery). A pass whose correctness
 // rests on a rank accident in another file is one edit away from blind again.
 //
-// It still subsumes ApplyFix's verification-running guard. And ApplyTransition
-// re-loads live comments and no-ops when the target stage already has a running
-// marker, so even if the live hook event and a reconcile tick race, the second
-// call is a no-op at the transition layer — the two can never double-launch a
-// review.
+// It still subsumes ApplyFix's verification-running guard. It does NOT rely on
+// ApplyTransition to deduplicate: that guard (isDuplicateDrop) fires only once
+// a verification marker reads "running", and the launch this pass has to avoid
+// happens in the window BEFORE such a marker exists — the seconds between a
+// board fix run's handoff and its own [human:review-started]. The old comment
+// here claimed "the two can never double-launch a review"; it was true of the
+// two daemon paths racing each other and false of a daemon racing a container,
+// which is the race that shipped two reviewers for one handoff on SC-5396
+// (SC-5476). What prevents it now is the handoff saying so: a `review: inline`
+// handoff whose implementation container is still alive is a review in flight,
+// not an orphan, and this pass leaves it — while an inline handoff whose
+// container is gone is chained exactly as before, so SC-430's recovery is
+// untouched.
 //
 // The reachability gate guarding the chain now lives upstream: this pass receives
 // DrivableCards from the forReview gate, so a review is chained only for a handoff
@@ -1050,12 +1048,18 @@ func reconcileShippedFailures(ctx context.Context, drivable DrivableCards, deps 
 // the branch — never starting a review it could never satisfy (SC-652, now
 // enforced by construction rather than a per-path check, SC-2047). Returns the
 // number of reviews launched.
-func reconcileOrphanedHandoffs(drivable DrivableCards, deps ReconcileDeps) int {
+func reconcileOrphanedHandoffs(drivable DrivableCards, deps ReconcileDeps, now time.Time) int {
 	logger := deps.Logger
 	launched := 0
+	alive, aliveKnown := deps.aliveAgents("orphaned-handoffs")
 	for _, card := range drivable.cards {
 		derived := DeriveBoardCard(card.Comments, tracker.CategoryUnstarted, false)
 		if !handoffAwaitsReview(card.Comments) || derived.Stage != BoardImplementation || derived.State != BoardDone {
+			continue
+		}
+		if inlineReviewerOwnsHandoff(card.Comments, card.Key, alive, aliveKnown, now) {
+			logger.Debug().Str("pm", card.Key).
+				Msg("board reconcile: handoff says its own container is reviewing it and that container is alive, leaving it")
 			continue
 		}
 		// Skip-and-leave when the commits are not DEFINITELY present — a clean
