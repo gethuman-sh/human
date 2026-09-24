@@ -55,6 +55,25 @@ func ParseCommitsFromHandoff(body string) []string {
 	if !strings.HasPrefix(trimmed, ReadyForReviewHeader) {
 		return nil
 	}
+	return parseCommitsLine(trimmed)
+}
+
+// ParseCommitsFromVerdict extracts the short SHAs a [human:review-complete]
+// says it judged. A verdict is evidence about one round of work, and the field
+// is optional, so an empty answer means "this verdict does not record what it
+// judged" — never "it judged nothing" (SC-5475).
+func ParseCommitsFromVerdict(body string) []string {
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, ReviewCompleteHeader) {
+		return nil
+	}
+	return parseCommitsLine(trimmed)
+}
+
+// parseCommitsLine reads the comma-separated `commits:` line shared by the
+// handoff and the verdict. One parser, so the two sides of the comparison can
+// never disagree about what a commit list is.
+func parseCommitsLine(trimmed string) []string {
 	for line := range strings.SplitSeq(trimmed, "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "commits:")

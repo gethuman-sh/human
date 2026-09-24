@@ -90,6 +90,42 @@ func TestParseCommitsFromHandoff(t *testing.T) {
 	}
 }
 
+func TestParseCommitsFromVerdict(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "verdict with commits",
+			body: "[human:review-complete]\nverdict: pass with notes\ncommits: f93dc92c, 9a0bf0ea",
+			want: []string{"f93dc92c", "9a0bf0ea"},
+		},
+		{
+			name: "verdict without a commits line",
+			body: "[human:review-complete]\nverdict: fail",
+			want: nil,
+		},
+		{
+			name: "a handoff body is not a verdict",
+			body: "[human:ready-for-review]\nbranch: main\ncommits: abc123",
+			want: nil,
+		},
+		{
+			name: "body must start with the header so a quoted reference doesn't register",
+			body: "> [human:review-complete]\n> commits: abc123",
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseCommitsFromVerdict(tt.body)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestParsePRFromHandoff(t *testing.T) {
 	tests := []struct {
 		name string

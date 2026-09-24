@@ -258,17 +258,23 @@ func (d BoardTransitionDeps) approvalCoversPR(ctx context.Context, comments []tr
 
 // currentApproval returns the head a [human:pr-review-passed] marker approved
 // for branch, when that approval is the newest word on the review: a later
-// review round (pr-review-started) or a later handoff (ready-for-review) means
-// the work moved on, and the approval judged something else.
+// review round (pr-review-started) means the work moved on, and a later
+// handoff does too — unless that handoff hands over nothing the verdict did
+// not judge, in which case it records what the branch holds rather than a new
+// round (SC-5475). The head the caller then compares against the pull request
+// is what binds the reuse to one revision; this only decides whether the
+// approval is still the newest word.
 func currentApproval(comments []tracker.Comment, branch string) (head string, ok bool) {
 	passed, found := latestCommentWithHeader(comments, PRReviewPassedHeader)
 	if !found {
 		return "", false
 	}
-	for _, header := range []string{PRReviewStartedHeader, ReadyForReviewHeader} {
-		if later, has := latestCommentWithHeader(comments, header); has && commentNewer(later, passed) {
-			return "", false
-		}
+	if later, has := latestCommentWithHeader(comments, PRReviewStartedHeader); has && commentNewer(later, passed) {
+		return "", false
+	}
+	if later, has := latestCommentWithHeader(comments, ReadyForReviewHeader); has &&
+		commentNewer(later, passed) && handoffNamesUnjudgedCommit(comments) {
+		return "", false
 	}
 	m, parsed := marker.ParseBody(passed.Body)
 	if !parsed {

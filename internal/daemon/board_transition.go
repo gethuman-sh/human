@@ -1360,12 +1360,16 @@ func deployFixLoopURL(comments []tracker.Comment) string {
 // silently records the new work as shipped. currentApproval guards the
 // identical case for the approval marker (deploy_entry.go:265-280); a binding
 // older than the newest [human:ready-for-review] handoff is ignored the same
-// way here, before source precedence is applied (SC-5396).
+// way here, before source precedence is applied (SC-5396) — but only when
+// that handoff IS a later round. One re-posted to record the reviewer's own
+// commit names nothing the verdict did not judge, and letting it win reverts
+// a live deploy to the branch implementation handed over (SC-5475).
 func doneStageBranch(comments []tracker.Comment, card BoardCard) string {
 	handoff, hasHandoff := latestCommentWithHeader(comments, ReadyForReviewHeader)
+	newRound := hasHandoff && handoffNamesUnjudgedCommit(comments)
 	for _, header := range []string{PRReviewStartedHeader, DeployFixStartedHeader, DeployStartedHeader} {
 		c, ok := latestCommentWithHeader(comments, header)
-		if !ok || (hasHandoff && commentNewer(handoff, c)) {
+		if !ok || (newRound && commentNewer(handoff, c)) {
 			continue
 		}
 		if branch := strings.TrimSpace(parsePrefixedLine(c.Body, "branch:")); branch != "" {
