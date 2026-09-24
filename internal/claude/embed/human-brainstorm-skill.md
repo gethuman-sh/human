@@ -51,7 +51,7 @@ Wait for all 3 agents to finish before proceeding.
 Run the triage agent to deduplicate, merge, and produce the final ranked list:
 
 ```
-Task(subagent_type="brainstorm-triage", prompt="Read the shared candidates file at <candidates path from pipeline init> and the context reports from .human/brainstorms/.brainstorm-*.md, validate findings against actual code, deduplicate, rank, and write the final missing features report.")
+Task(subagent_type="brainstorm-triage", model="opus", prompt="Read the shared candidates file at <candidates path from pipeline init> and the context reports from .human/brainstorms/.brainstorm-*.md, validate findings against actual code, deduplicate, rank, and write the final missing features report.")
 ```
 
 ## After completion

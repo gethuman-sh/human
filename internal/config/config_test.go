@@ -170,3 +170,29 @@ func TestValidate_malformedYAMLReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing config file")
 }
+
+// Absent means "leave the account default in force", so a project that says
+// nothing keeps today's behaviour exactly (SC-5474).
+func TestAgentModel(t *testing.T) {
+	t.Run("absent config", func(t *testing.T) {
+		assert.Empty(t, AgentModel(t.TempDir()))
+	})
+
+	t.Run("absent field", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("project: infra\n"), 0o644))
+		assert.Empty(t, AgentModel(dir))
+	})
+
+	t.Run("set", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("agent:\n  model: sonnet\n"), 0o644))
+		assert.Equal(t, "sonnet", AgentModel(dir))
+	})
+
+	t.Run("returned as written", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("agent:\n  model: Sonett\n"), 0o644))
+		assert.Equal(t, "Sonett", AgentModel(dir), "judging the value is the model card's job, not this package's")
+	})
+}

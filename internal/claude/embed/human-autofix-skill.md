@@ -64,7 +64,7 @@ Use the exit vocabulary the board understands (`internal/daemon/board_retry.go`)
 
 <!-- human:include model-tiers -->
 
-The tiers this pipeline uses, unless you have a reason to differ: triage, planner, reviewer and every adversarial check at `opus`; bug-fixer and bug-verify at `sonnet`; preflight inherits.
+The tiers this pipeline uses, unless you have a reason to differ: root-cause triage and every adversarial check at `fable`; planner, reviewer and preflight at `opus`; bug-fixer and bug-verify at `sonnet`. Nothing in this pipeline inherits — a dispatch that names no model runs on whatever the account defaults to, which is a tier nobody chose.
 
 ## Step 1 — Parse argument
 
@@ -77,7 +77,7 @@ Then take ownership: `human assign <BUG_KEY>`. Ownership records who is working 
 Before any work, run preflight. It resolves what this run may do, settles what the evidence can settle, and surfaces a decision only a human can make **now** rather than halfway through:
 
 ```
-Task(subagent_type="human-preflight", prompt="Preflight bug ticket <BUG_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.", run_in_background=false)
+Task(subagent_type="human-preflight", model="opus", prompt="Preflight bug ticket <BUG_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.", run_in_background=false)
 ```
 
 Read its outcome from state:
@@ -138,7 +138,7 @@ human plan show <BUG_KEY>        # non-empty -> a [human:plan] comment exists; t
 Delegate to the **human-bug-triage** agent:
 
 ```
-Task(subagent_type="human-bug-triage", model="opus", prompt="Triage bug ticket <BUG_KEY>: reproduce it minimally, trace the full cause chain (symptom → proximate cause → underlying cause) with file:line evidence and the regression window, scan for sibling occurrences of the same defect pattern, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation section a non-engineer can follow.", run_in_background=false)
+Task(subagent_type="human-bug-triage", model="fable", prompt="Triage bug ticket <BUG_KEY>: reproduce it minimally, trace the full cause chain (symptom → proximate cause → underlying cause) with file:line evidence and the regression window, scan for sibling occurrences of the same defect pattern, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation section a non-engineer can follow.", run_in_background=false)
 ```
 
 It posts a `[human:bug-verdict] <verdict>` comment on the bug ticket — the ticket's permanent root-cause record: a plain-language explanation first, then the reproduction, the cause chain down to the underlying cause (not just the line that crashed), the regression window, and sibling occurrences. **Read the verdict from state, not from the agent's prose:**
@@ -171,7 +171,7 @@ For a confirmed bug the record also carries the root cause and fix outline. If t
 Dispatch the skeptic against the verdict:
 
 ```
-Task(subagent_type="human-verdict-skeptic", model="opus", prompt="Challenge the latest bug-verdict on ticket <BUG_KEY>", run_in_background=false)
+Task(subagent_type="human-verdict-skeptic", model="fable", prompt="Challenge the latest bug-verdict on ticket <BUG_KEY>", run_in_background=false)
 ```
 
 Read its outcome from state:
@@ -363,7 +363,7 @@ REVIEW_EOF
 - **pass** or **pass with notes** — a pass is the one review outcome nothing downstream checks, and it is about to be made irreversible by a merge. Before continuing, get one adversarial second opinion:
 
   ```
-  Task(subagent_type="human-second-opinion", model="opus", prompt="The pipeline is about to merge branch autofix/<work-key> for ticket <WORK_KEY> on the strength of a passing review. Lens: did-you-actually-look. Evidence: the ticket, the branch diff against main, and stage.review in agent state. Try to refute that the review examined the change. Do not read the reviewer's reasoning first.", run_in_background=false)
+  Task(subagent_type="human-second-opinion", model="fable", prompt="The pipeline is about to merge branch autofix/<work-key> for ticket <WORK_KEY> on the strength of a passing review. Lens: did-you-actually-look. Evidence: the ticket, the branch diff against main, and stage.review in agent state. Try to refute that the review examined the change. Do not read the reviewer's reasoning first.", run_in_background=false)
   ```
 
   ```bash

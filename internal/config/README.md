@@ -16,3 +16,15 @@ A single `.humanconfig.yaml` file tells `human` which issue trackers and code fo
 - Holds the whole file as one object (`config.Document`) that can be read as typed entries, changed through methods that say what they are for (`AddTracker`, `AddForge`, `RemoveTracker`, `MoveTrackerToForge`), checked against itself, and written back without losing a comment, an ordering, or a section this binary has never heard of
 - Checks a configuration against itself (`human config check`), including what two sections say **together** — the kind of rule that previously had nowhere to live and ended up smuggled into a migration command or hand-hung on one provider's loader
 - Separates "will this load" from "what will this do": a missing credential is an error, and a configuration that works while quietly costing an API quota is a warning — the class no loader can catch, because it is a prediction about behaviour rather than a shape
+- Sets the model every agent container for this project runs, so a team can run cheap by default on a small machine and expensive where it matters
+
+## Agent model
+
+```yaml
+agent:
+  model: sonnet     # opus | sonnet | haiku | fable
+```
+
+`agent.model` is the **top-level** model an agent container starts with — the one a sub-agent dispatch inherits when it names none. Absent, containers run whatever the account defaults to, exactly as before.
+
+Lowering it is safe because it cannot silently demote a judgment: every dispatch the tier policy puts at the top tier names that tier explicitly (`internal/claude/embed/shared/model-tiers.md`), so it keeps running there whatever the container default is. A value this binary does not recognise is ignored — containers fall back to the account default — and `human config check` reports it.

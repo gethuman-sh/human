@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"os"
 	"regexp"
 	"strings"
@@ -57,27 +58,27 @@ func TestModelCard_rejectsMalformedCards(t *testing.T) {
 		},
 		{
 			name: "no name",
-			raw:  `{"fallback_family":"opus","families":[{"family":"","display":"X","input_per_m":1,"output_per_m":1,"cache_create_per_m":1,"cache_read_per_m":1,"provenance":"p"}],"task_aliases":["opus"]}`,
+			raw:  `{"fallback_family":"opus","families":[{"family":"","display":"X","rank":1,"input_per_m":1,"output_per_m":1,"cache_create_per_m":1,"cache_read_per_m":1,"provenance":"p"}],"task_aliases":["opus"]}`,
 			want: "family has no name",
 		},
 		{
 			name: "no display",
-			raw:  `{"fallback_family":"opus","families":[{"family":"opus","input_per_m":1,"output_per_m":1,"cache_create_per_m":1,"cache_read_per_m":1,"provenance":"p"}],"task_aliases":["opus"]}`,
+			raw:  `{"fallback_family":"opus","families":[{"family":"opus","rank":1,"input_per_m":1,"output_per_m":1,"cache_create_per_m":1,"cache_read_per_m":1,"provenance":"p"}],"task_aliases":["opus"]}`,
 			want: "no display name",
 		},
 		{
 			name: "no provenance",
-			raw:  `{"fallback_family":"opus","families":[{"family":"opus","display":"Opus","input_per_m":1,"output_per_m":1,"cache_create_per_m":1,"cache_read_per_m":1}],"task_aliases":["opus"]}`,
+			raw:  `{"fallback_family":"opus","families":[{"family":"opus","display":"Opus","rank":1,"input_per_m":1,"output_per_m":1,"cache_create_per_m":1,"cache_read_per_m":1}],"task_aliases":["opus"]}`,
 			want: "no provenance",
 		},
 		{
 			name: "non-positive rate",
-			raw:  `{"fallback_family":"opus","families":[{"family":"opus","display":"Opus","input_per_m":1,"output_per_m":0,"cache_create_per_m":1,"cache_read_per_m":1,"provenance":"p"}],"task_aliases":["opus"]}`,
+			raw:  `{"fallback_family":"opus","families":[{"family":"opus","display":"Opus","rank":1,"input_per_m":1,"output_per_m":0,"cache_create_per_m":1,"cache_read_per_m":1,"provenance":"p"}],"task_aliases":["opus"]}`,
 			want: "non-positive rate",
 		},
 		{
 			name: "unparseable valid_until",
-			raw:  `{"fallback_family":"opus","families":[{"family":"opus","display":"Opus","input_per_m":1,"output_per_m":1,"cache_create_per_m":1,"cache_read_per_m":1,"valid_until":"31-08-2026","provenance":"p"}],"task_aliases":["opus"]}`,
+			raw:  `{"fallback_family":"opus","families":[{"family":"opus","display":"Opus","rank":1,"input_per_m":1,"output_per_m":1,"cache_create_per_m":1,"cache_read_per_m":1,"valid_until":"31-08-2026","provenance":"p"}],"task_aliases":["opus"]}`,
 			want: "parse valid_until",
 		},
 		{
@@ -111,7 +112,7 @@ func TestModelCard_rejectsMalformedCards(t *testing.T) {
 }
 
 func validFamilyJSON(family string) string {
-	return `{"family":"` + family + `","display":"D","input_per_m":1,"output_per_m":1,` +
+	return `{"family":"` + family + `","display":"D","rank":1,"input_per_m":1,"output_per_m":1,` +
 		`"cache_create_per_m":1,"cache_read_per_m":1,"provenance":"p"}`
 }
 
@@ -247,4 +248,32 @@ func TestFamilyFor_reportsWhetherTheCardKnewTheModel(t *testing.T) {
 	f, known = familyFor("gpt-4o")
 	assert.False(t, known)
 	assert.Equal(t, modelCard.fallback.Family, f.Family)
+}
+
+// A tier with no order cannot be compared, and two families sharing one makes
+// the comparison a coin toss — both are card-parse errors, so an edit that
+// introduces either fails the build rather than a later assertion (SC-5474).
+func TestModelCard_ranksAreDistinctAndOrdered(t *testing.T) {
+	assert.Equal(t, 1, modelRank("haiku"))
+	assert.Equal(t, 2, modelRank("sonnet"))
+	assert.Equal(t, 3, modelRank("opus"))
+	assert.Equal(t, 4, modelRank("fable"))
+	assert.Zero(t, modelRank("not-a-model"), "an unknown model is unordered, never lowest")
+}
+
+func TestModelCard_rejectsDuplicateRank(t *testing.T) {
+	raw := bytes.Replace(rawModelCard, []byte(`"rank": 4`), []byte(`"rank": 3`), 1)
+	_, err := parseModelCard(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "share a rank")
+}
+
+func TestModelCard_isTaskModelAliasAndFamilyName(t *testing.T) {
+	assert.True(t, IsTaskModelAlias("opus"))
+	assert.True(t, IsTaskModelAlias("  FABLE "))
+	assert.False(t, IsTaskModelAlias("gpt-4"))
+	assert.False(t, IsTaskModelAlias(""))
+	assert.Equal(t, "opus", ModelFamilyName("claude-opus-4-5-20260101"))
+	assert.Equal(t, "sonnet", ModelFamilyName("sonnet"))
+	assert.Empty(t, ModelFamilyName("  "))
 }

@@ -46,7 +46,7 @@ Wait for all 4 agents to finish before proceeding.
 Check how many candidates the analysis agents reported with `human pipeline count gardening`, then run the triage agent to validate, assess compound impact, and produce the final report with health scorecard:
 
 ```
-Task(subagent_type="gardening-triage", prompt="Read the survey report at .human/gardening/.gardening-survey.md and all candidate findings from the candidates file at <candidates path from `human pipeline init gardening`>. Validate every finding against actual code, assess compound impact, compute health scorecard grades, and write the final gardening report to the path from `human pipeline report gardening`")
+Task(subagent_type="gardening-triage", model="opus", prompt="Read the survey report at .human/gardening/.gardening-survey.md and all candidate findings from the candidates file at <candidates path from `human pipeline init gardening`>. Validate every finding against actual code, assess compound impact, compute health scorecard grades, and write the final gardening report to the path from `human pipeline report gardening`")
 ```
 
 ## Phase 4: Create Ticket

@@ -2022,3 +2022,46 @@ func TestResolveForwardedProject_ReviewFindingsWithoutKeyStaysDefault(t *testing
 	got := srv.resolveForwardedProject([]string{"review", "findings", "a.go"})
 	assert.Equal(t, "", got)
 }
+
+// Resolution happens before Append, so the ring and the stats writer see one
+// populated event rather than two different truths about which model ran the
+// spawn (SC-5474). Resolving after Append would resolve the spawn against its
+// own record, since Append is what teaches the store a session's model.
+func TestServer_HandleHookEvent_ResolvesInheritedBeforeBothSinks(t *testing.T) {
+	token := "test-token"
+	store := NewHookEventStore()
+	store.Append(hookevents.Event{EventName: "SessionStart", SessionID: "sess-m", Model: "claude-opus-4-5-20260101"})
+
+	statsStore, err := stats.NewStatsStore(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = statsStore.Close() })
+	writer := stats.NewWriter(context.Background(), statsStore, zerolog.Nop())
+
+	addr, _ := startTestServerCustom(t, token, func(s *Server) {
+		s.HookEvents = store
+		s.StatsWriter = writer
+	})
+
+	resp := sendRequest(t, addr, Request{
+		Token: token,
+		// event, session, cwd, notification, tool, error, agent, input, subagent, model
+		Args: []string{"hook-event", "PreToolUse", "sess-m", "/tmp", "", "Task", "", "", "", "features-recon", hookevents.ModelInherited},
+	})
+	require.Equal(t, 0, resp.ExitCode)
+
+	var spawn hookevents.Event
+	for _, e := range store.RecentEvents() {
+		if e.SubagentType == "features-recon" {
+			spawn = e
+		}
+	}
+	assert.Equal(t, "opus", spawn.Model, "the ring event")
+
+	writer.Close()
+	now := time.Now().UTC()
+	counts, err := statsStore.QuerySubagentModels(context.Background(), now.Add(-time.Hour), now.Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, counts, 1)
+	assert.Equal(t, "features-recon", counts[0].SubagentType)
+	assert.Equal(t, "opus", counts[0].Model, "the stats sink")
+}

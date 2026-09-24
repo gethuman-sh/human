@@ -32,7 +32,7 @@ Your job: read that handoff, run the `human-reviewer` agent against each review 
 
 3. **Run the reviewer per review key, bound to the handoff.** For each key in `engineering` (or for `<PM_KEY>` when it is absent), invoke the existing reviewer agent via the Task tool, threading the handoff's `branch`/`commits` as the binding so the agent verifies the checkout before reviewing:
    ```
-   Task(subagent_type="human-reviewer", prompt="Review changes for ticket <REVIEW_KEY> --branch=<branch> --commits=<commits>")
+   Task(subagent_type="human-reviewer", model="opus", prompt="Review changes for ticket <REVIEW_KEY> --branch=<branch> --commits=<commits>")
    ```
    Each run writes `.human/reviews/<review_key_lowercased>.md`. Review ONLY the keys named in this handoff, and post markers ONLY on `<PM_KEY>` — never on any ticket the handoff does not name.
 

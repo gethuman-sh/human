@@ -68,7 +68,7 @@ Use the exit vocabulary the board understands (`internal/daemon/board_retry.go`)
 
 <!-- human:include model-tiers -->
 
-The tiers this pipeline uses, unless you have a reason to differ: triage, planner, reviewer and every adversarial check at `opus`; bug-fixer and security-verify at `sonnet`; preflight inherits.
+The tiers this pipeline uses, unless you have a reason to differ: root-cause triage and every adversarial check at `fable`; planner, reviewer and preflight at `opus`; bug-fixer and security-verify at `sonnet`. Nothing in this pipeline inherits — a dispatch that names no model runs on whatever the account defaults to, which is a tier nobody chose.
 
 ## Step 1 — Parse argument
 
@@ -81,7 +81,7 @@ Then take ownership: `human assign <SEC_KEY>`. Ownership records who is working 
 Before any work, run preflight. It resolves what this run may do, settles what the evidence can settle, and surfaces a decision only a human can make **now** rather than halfway through:
 
 ```
-Task(subagent_type="human-preflight", prompt="Preflight security ticket <SEC_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.", run_in_background=false)
+Task(subagent_type="human-preflight", model="opus", prompt="Preflight security ticket <SEC_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.", run_in_background=false)
 ```
 
 Read its outcome from state:
@@ -135,7 +135,7 @@ human plan show <SEC_KEY>        # non-empty -> a [human:plan] comment exists; t
 Delegate to the **human-security-triage** agent:
 
 ```
-Task(subagent_type="human-security-triage", model="opus", prompt="Triage security ticket <SEC_KEY>: confirm whether the reported weakness is a real, exploitable vulnerability by tracing the source→sink data flow with file:line evidence, build the threat model (attacker, vector, asset, impact), rate severity, scan for sibling occurrences of the same weakness, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation a non-engineer can follow. Keep exploit specifics on the tracker.", run_in_background=false)
+Task(subagent_type="human-security-triage", model="fable", prompt="Triage security ticket <SEC_KEY>: confirm whether the reported weakness is a real, exploitable vulnerability by tracing the source→sink data flow with file:line evidence, build the threat model (attacker, vector, asset, impact), rate severity, scan for sibling occurrences of the same weakness, and reach a verdict. Post the verdict comment on the ticket with a plain-language Explanation a non-engineer can follow. Keep exploit specifics on the tracker.", run_in_background=false)
 ```
 
 It posts a `[human:bug-verdict] <verdict>` comment on the ticket — the permanent record: a plain-language explanation, the threat model, the severity, the source→sink cause chain, the regression window, and sibling occurrences. **Read the verdict from state, not from the agent's prose:**
@@ -165,7 +165,7 @@ If the recorded analysis stops at a proximate cause (a reachable sink without *w
 Dispatch the skeptic against the verdict, with a security lens:
 
 ```
-Task(subagent_type="human-verdict-skeptic", model="opus", prompt="Challenge the latest bug-verdict on security ticket <SEC_KEY>. Lens: try to reach the sink. Attempt to prove the path IS exploitable — an unsanitized source, an auth check that can be bypassed, a guard that does not cover the payload — before the vulnerability is dismissed.", run_in_background=false)
+Task(subagent_type="human-verdict-skeptic", model="fable", prompt="Challenge the latest bug-verdict on security ticket <SEC_KEY>. Lens: try to reach the sink. Attempt to prove the path IS exploitable — an unsanitized source, an auth check that can be bypassed, a guard that does not cover the payload — before the vulnerability is dismissed.", run_in_background=false)
 ```
 
 Read its outcome from state:
@@ -339,7 +339,7 @@ REVIEW_EOF
 - **pass** or **pass with notes** — a pass is about to be made irreversible by a merge. Before continuing, get one adversarial second opinion **through a security lens**:
 
   ```
-  Task(subagent_type="human-second-opinion", model="opus", prompt="The pipeline is about to merge branch autofix/<work-key> for security ticket <WORK_KEY> on the strength of a passing review. Lens: is-the-vulnerability-actually-closed. Evidence: the ticket's threat model, the branch diff against main, and stage.review in agent state. Try to refute that the fix closes the source→sink path — look for a residual bypass, an uncovered sibling, or a new weakness the fix introduced. Do not read the reviewer's reasoning first.", run_in_background=false)
+  Task(subagent_type="human-second-opinion", model="fable", prompt="The pipeline is about to merge branch autofix/<work-key> for security ticket <WORK_KEY> on the strength of a passing review. Lens: is-the-vulnerability-actually-closed. Evidence: the ticket's threat model, the branch diff against main, and stage.review in agent state. Try to refute that the fix closes the source→sink path — look for a residual bypass, an uncovered sibling, or a new weakness the fix introduced. Do not read the reviewer's reasoning first.", run_in_background=false)
   ```
 
   ```bash

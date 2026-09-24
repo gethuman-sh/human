@@ -178,3 +178,16 @@ func TestAsyncStopClient_currentDaemonReturnsClient(t *testing.T) {
 	require.NotNil(t, client)
 	assert.Equal(t, "127.0.0.1:19285", client.Info().Addr)
 }
+
+// Which container model runs is a property of the project, not of the command
+// that started it — but an explicit --model still wins, because a person naming
+// a tier on the command line is making the decision the setting only defaults
+// (SC-5474).
+func TestResolveStartModel(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".humanconfig.yaml"), []byte("agent:\n  model: sonnet\n"), 0o600))
+
+	assert.Equal(t, "sonnet", resolveStartModel("", dir))
+	assert.Equal(t, "opus", resolveStartModel("opus", dir), "the flag wins")
+	assert.Empty(t, resolveStartModel("", t.TempDir()), "no setting leaves the account default in force")
+}

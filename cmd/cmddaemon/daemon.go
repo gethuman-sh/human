@@ -2899,10 +2899,19 @@ type dockerAgentLauncher struct {
 // startOpts is the StartOpts this launcher asks Manager.Start for. Extracted so
 // a test can assert what a launch requests — chiefly that the shared paths
 // travel — without a Docker engine behind it.
+//
+// The container's top-level model is read from the project's own config rather
+// than left to the account default, so a team can run cheap by default on a
+// small machine (SC-5474). It is safe to lower ONLY because every dispatch whose
+// policy tier is opus now names it: without that, dropping the default here
+// silently demotes planning, review verdicts and triage. Empty leaves today's
+// behaviour untouched — Manager.BuildClaudeArgs omits --model entirely.
+// configDir is the registered project's directory on every launch path.
 func (l dockerAgentLauncher) startOpts(name, prompt, workspace, configDir, runID string) agent.StartOpts {
 	return agent.StartOpts{
 		Name:        name,
 		Prompt:      prompt,
+		Model:       claude.ContainerModel(configDir),
 		SkipPerms:   true,
 		Workspace:   workspace,
 		ConfigDir:   configDir,

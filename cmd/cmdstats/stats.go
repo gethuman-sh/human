@@ -129,6 +129,12 @@ func renderTable(out io.Writer, counts []stats.SubagentModelCount) error {
 // modelLabel renders the two non-model cases as words rather than as blanks, so
 // "ran on the parent's model" and "no attribution was ever recorded" stay
 // distinguishable on screen and not only in the database (SC-3582).
+//
+// The `inherited` case survives on purpose, and a row carrying it is now a
+// finding rather than a category: every board-launched dispatch names its tier,
+// and the daemon resolves a spawn that does not against its session's own model.
+// What is left is history recorded before that, and a session whose SessionStart
+// this daemon process never saw (SC-5474).
 func modelLabel(model string) string {
 	switch model {
 	case "":

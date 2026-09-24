@@ -49,6 +49,23 @@ func BoardParticipates(dir string) bool {
 	return value
 }
 
+// AgentModel reads the "agent.model" field from .humanconfig in dir: the
+// top-level model every agent container this project launches should run. Empty
+// when unset or the config is missing, which means "leave the account default in
+// force" — so a project that says nothing keeps today's behaviour exactly
+// (SC-5474).
+//
+// The value is returned as written. Whether it names a model this binary knows
+// is claude.ContainerModel's question, not this package's: the vocabulary lives
+// in the model card, and importing it here would cycle.
+func AgentModel(dir string) string {
+	doc, err := loadCached(dir)
+	if err != nil || doc == nil {
+		return ""
+	}
+	return doc.StringAt("agent.model")
+}
+
 // ConfigFileNames are the accepted project-config filenames. Kept as an alias of
 // the document's own list so the two can never disagree about which file is the
 // config — they were separate lists, which is the same drift in miniature.

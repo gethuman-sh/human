@@ -88,7 +88,7 @@ human pipeline state set bugs status triaging
 Run the triage agent to validate, deduplicate, and produce the final report:
 
 ```
-Task(subagent_type="findbugs-triage", prompt="Read all candidate findings from .human/bugs/.bugs-candidates.md and the recon report from .human/bugs/.findbugs-recon.md. Validate each finding against the actual code, deduplicate, assign final severity, and write the final report to the path printed by `human pipeline report bugs`. Do NOT clean up — the skill files tickets from your report first and cleans up as its final step.")
+Task(subagent_type="findbugs-triage", model="opus", prompt="Read all candidate findings from .human/bugs/.bugs-candidates.md and the recon report from .human/bugs/.findbugs-recon.md. Validate each finding against the actual code, deduplicate, assign final severity, and write the final report to the path printed by `human pipeline report bugs`. Do NOT clean up — the skill files tickets from your report first and cleans up as its final step.")
 ```
 
 ## Phase 5: File confirmed bugs as tickets

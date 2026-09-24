@@ -114,7 +114,7 @@ human pipeline state set security status triaging
 Run the triage agent to validate, deduplicate, and produce the final report:
 
 ```
-Task(subagent_type="security-triage", prompt="Read all candidate findings from .human/security/.security-candidates.md, the attack chain analysis from .human/security/.security-chains.md, and the surface map from .human/security/.security-surface.md. Validate every finding against actual code, assign severity, and write the final security report to .human/security/. Clean up intermediate files when done.")
+Task(subagent_type="security-triage", model="opus", prompt="Read all candidate findings from .human/security/.security-candidates.md, the attack chain analysis from .human/security/.security-chains.md, and the surface map from .human/security/.security-surface.md. Validate every finding against actual code, assign severity, and write the final security report to .human/security/. Clean up intermediate files when done.")
 ```
 
 ## After completion

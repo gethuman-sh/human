@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/errors"
+	"github.com/gethuman-sh/human/internal/claude"
 	"github.com/gethuman-sh/human/internal/config"
 	"github.com/gethuman-sh/human/internal/settings"
 )
@@ -91,7 +92,14 @@ func RunCheck(out io.Writer, dir string, asJSON bool) error {
 	if err != nil {
 		return err
 	}
+	// Document.Validate answers everything knowable from the file's own shape.
+	// agent.model is not one of those: judging it needs the model card, and
+	// internal/config may not import it (SC-5474). The consumer package answers
+	// its own question and the report is one list either way.
 	problems := doc.Validate()
+	if p, ok := claude.AgentModelProblem(dir); ok {
+		problems = append(problems, p)
+	}
 
 	if asJSON {
 		enc := json.NewEncoder(out)
