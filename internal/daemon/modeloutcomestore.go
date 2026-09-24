@@ -133,6 +133,8 @@ func (s *ModelOutcomeSink) store(o proxy.ModelCallOutcome) {
 			Project:           project,
 			Ticket:            o.Ticket,
 			Stage:             o.Stage,
+			Endpoint:          endpointOf(o),
+			Status:            o.StatusCode,
 			Model:             o.Model,
 			InputTokens:       o.InputTokens,
 			OutputTokens:      o.OutputTokens,
@@ -145,6 +147,16 @@ func (s *ModelOutcomeSink) store(o proxy.ModelCallOutcome) {
 			s.logger.Warn().Err(err).Str("ticket", o.Ticket).Msg("cost ledger insert failed")
 		}
 	}
+}
+
+// endpointOf renders the request line the ledger classifies by. A failure that
+// preceded any request line has no endpoint, and the ledger reads such a row
+// the way it read every row before endpoints existed.
+func endpointOf(o proxy.ModelCallOutcome) string {
+	if o.Method == "" || o.Path == "" {
+		return ""
+	}
+	return o.Method + " " + o.Path
 }
 
 // Dropped returns how many outcomes were dropped because the channel was full.

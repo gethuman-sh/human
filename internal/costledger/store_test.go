@@ -2,6 +2,7 @@ package costledger
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -367,4 +368,87 @@ func TestStore_PartialMeasurementGap(t *testing.T) {
 // verbatim when there is no ledger to consult.
 func TestTicketCost_ZeroValueIsNotAnAnswer(t *testing.T) {
 	assert.False(t, TicketCost{Ticket: "SC-1"}.LedgerRead)
+}
+
+// A row that names its endpoint is classified by it (SC-5533): a 2xx completion
+// is a call, a non-2xx completion failed, and any other endpoint on the host
+// is neither — never a call, never unmeasured, and no part of the time.
+func TestStore_ClassifiesRowsByEndpoint(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const key = "SC-KINDS"
+
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: key, Stage: "implementation", Endpoint: CompletionEndpoint, Status: 200, Model: testModel, InputTokens: 100, OutputTokens: 200, DurationMs: 4000}))
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: key, Stage: "implementation", Endpoint: CompletionEndpoint, Status: 200, DurationMs: 3000}))
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: key, Stage: "implementation", Endpoint: CompletionEndpoint, Status: 529, DurationMs: 2000}))
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: key, Stage: "implementation", Endpoint: "POST /v1/messages/count_tokens", Status: 200, DurationMs: 300}))
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: key, Stage: "implementation", Endpoint: "GET /api/hello", Status: 200, DurationMs: 200}))
+
+	rollup, err := s.TicketCost(ctx, "", key)
+	require.NoError(t, err)
+	assert.Equal(t, 2, rollup.Calls, "two 2xx completions")
+	assert.Equal(t, 1, rollup.UnmeasuredCalls, "one of them carried no usage")
+	assert.Equal(t, 1, rollup.FailedCalls, "the 529")
+	assert.Equal(t, int64(9000), rollup.TotalDurationMs, "completions and the failed wait count; the other endpoints do not")
+	assert.Positive(t, rollup.TotalCostUSD)
+}
+
+// A ticket made only of other-endpoint rows has no spend to show: the requests
+// happened, but none was a call.
+func TestStore_OnlyOtherEndpointsIsNoSpend(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: "SC-PING", Stage: "planning", Endpoint: "GET /api/hello", Status: 200, DurationMs: 50}))
+
+	rollup, err := s.TicketCost(ctx, "", "SC-PING")
+	require.NoError(t, err)
+	assert.True(t, rollup.LedgerRead)
+	assert.False(t, rollup.HasSpend)
+	assert.Zero(t, rollup.Calls)
+}
+
+// TopTicketSpend leaves other-endpoint rows out for the same reason.
+func TestStore_TopTicketSpendIgnoresOtherEndpoints(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: "SC-A", Stage: "planning", Endpoint: CompletionEndpoint, Status: 200, Model: testModel, OutputTokens: 10, DurationMs: 1000}))
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: "SC-A", Stage: "planning", Endpoint: "GET /api/hello", Status: 200, DurationMs: 900}))
+	require.NoError(t, s.InsertCall(ctx, CallRecord{Ticket: "SC-B", Stage: "planning", Endpoint: "GET /api/hello", Status: 200, DurationMs: 900}))
+
+	got, err := s.TopTicketSpend(ctx, "", time.Now().Add(-time.Hour), time.Now().Add(time.Hour), 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "SC-B made no call")
+	assert.Equal(t, "SC-A", got[0].Ticket)
+	assert.Equal(t, int64(1000), got[0].DurationMs, "the fetch's time is not model time")
+}
+
+// A ledger written before endpoints were captured opens and reads unchanged:
+// the columns are added in place and every old row keeps its old reading.
+func TestStore_MigratesInPlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "costledger.db")
+	old, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	_, err = old.Exec(`CREATE TABLE ticket_calls (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL DEFAULT '', ticket TEXT NOT NULL,
+		stage TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0, cache_create_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_read_tokens INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER NOT NULL DEFAULT 0, started_at DATETIME NOT NULL);
+		INSERT INTO ticket_calls (ticket, stage, duration_ms, started_at) VALUES ('SC-OLD', 'planning', 1000, '2026-01-01 00:00:00');`)
+	require.NoError(t, err)
+	require.NoError(t, old.Close())
+
+	s, err := NewStore(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	rollup, err := s.TicketCost(context.Background(), "", "SC-OLD")
+	require.NoError(t, err)
+	assert.Equal(t, 1, rollup.Calls, "a row from before the capture is still a call")
+	assert.Equal(t, 1, rollup.UnmeasuredCalls)
+
+	s2, err := NewStore(path)
+	require.NoError(t, err, "a second open must not trip on the columns it added")
+	require.NoError(t, s2.Close())
 }

@@ -120,6 +120,9 @@ func renderTicketCost(out io.Writer, c costledger.TicketCost) {
 			_, _ = fmt.Fprintf(out, "%d of those calls carried no token counts and price at nothing, not at zero cost\n", c.UnmeasuredCalls)
 		}
 	}
+	if c.FailedCalls > 0 {
+		_, _ = fmt.Fprintf(out, "%d further calls failed and cost nothing\n", c.FailedCalls)
+	}
 	if len(c.Stages) == 0 {
 		return
 	}

@@ -63,12 +63,13 @@ func TestRenderTicketCost_stages(t *testing.T) {
 	var buf bytes.Buffer
 	renderTicketCost(&buf, costledger.TicketCost{
 		Ticket: "SC-1", LedgerRead: true, HasSpend: true,
-		TotalCostUSD: 12.5, AnswersCostUSD: 4.2, ContextCostUSD: 8.3, TotalDurationMs: 90_000, Calls: 7, UnmeasuredCalls: 2,
+		TotalCostUSD: 12.5, AnswersCostUSD: 4.2, ContextCostUSD: 8.3, TotalDurationMs: 90_000, Calls: 7, UnmeasuredCalls: 2, FailedCalls: 3,
 		Stages: []costledger.StageCost{{Stage: "planning", CostUSD: 12.5, AnswersCostUSD: 4.2, ContextCostUSD: 8.3, DurationMs: 90_000}},
 	})
 	out := buf.String()
 	assert.Contains(t, out, "SC-1: $12.50 total (answers $4.20, context $8.30), 1m30s, 7 calls")
 	assert.Contains(t, out, "2 of those calls carried no token counts")
+	assert.Contains(t, out, "3 further calls failed and cost nothing")
 	assert.Contains(t, out, "planning")
 }
 
