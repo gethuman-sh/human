@@ -125,7 +125,7 @@ func (inv invocation) has(flag string) bool {
 	return ok
 }
 
-var handoffValueFlags = map[string]bool{"--engineering": true, "--branch": true, "--commits": true, "--notes": true}
+var handoffValueFlags = map[string]bool{"--engineering": true, "--branch": true, "--commits": true, "--notes": true, "--review": true}
 
 // handoffFacts appends --branch and --commits from the caller's checkout when
 // the invocation carries neither. Both are refused here rather than at the
