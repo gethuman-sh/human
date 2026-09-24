@@ -182,11 +182,24 @@ func BlockerKinds() []string {
 
 func blockerKindEnum() map[string][]string { return map[string][]string{"kind": BlockerKinds()} }
 
+// SilenceReapFields are what the daemon's own silence reap records on the
+// *-failed marker it posts: the observed silence, the idle budget it exceeded
+// and what the agent had outstanding when it was judged (SC-5329). Declared
+// beside the blocker fields so the give-up marker that quotes them, and
+// `human fsm marker`, name the same contract.
+func SilenceReapFields() []string { return []string{"idle", "budget", "outstanding"} }
+
+// stageFailedOptional is the optional field set of a stage's *-failed marker:
+// the headline, the blocker contract and the silence-reap record.
+func stageFailedOptional() []string {
+	return append(append([]string{"reason"}, BlockerFields()...), SilenceReapFields()...)
+}
+
 var specs = map[string]spec{
 	"plan":                  {},
 	"plan-ready":            {},
-	"planning-failed":       {optional: append([]string{"reason"}, BlockerFields()...), fieldEnum: blockerKindEnum()},
-	"implementation-failed": {optional: append([]string{"reason"}, BlockerFields()...), fieldEnum: blockerKindEnum()},
+	"planning-failed":       {optional: stageFailedOptional(), fieldEnum: blockerKindEnum()},
+	"implementation-failed": {optional: stageFailedOptional(), fieldEnum: blockerKindEnum()},
 	// Two determinations share this header on purpose (SC-2990): the ordinary
 	// refusal, and the plan-stuck escalation raised once PlanRedriveBound is
 	// spent. Which one a comment is, is the escalation field — optional
@@ -195,11 +208,11 @@ var specs = map[string]spec{
 	"ready-for-review": {required: []string{"branch", "commits"}},
 	"review-started":   {},
 	"review-complete":  {required: []string{"verdict"}},
-	"review-failed":    {required: []string{"reason"}, optional: BlockerFields(), fieldEnum: blockerKindEnum()},
+	"review-failed":    {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
 	"no-fix-needed":    {required: []string{"verdict"}},
 	"nothing-to-do":    {required: []string{"evidence"}},
 	"deploy-started":   {},
-	"deploy-failed":    {required: []string{"reason"}, optional: BlockerFields(), fieldEnum: blockerKindEnum()},
+	"deploy-failed":    {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case

@@ -569,7 +569,7 @@ func handleNeedsPersonExit(ctx context.Context, exit RunExit, kind endingKind, r
 // started or refused.
 func handleSilenceReapExit(ctx context.Context, exit RunExit, commenter tracker.Commenter, deps FailureDeps, alreadyFailed bool) bool {
 	logger := deps.Logger
-	idle, ok := silenceReapIdle(exit.ErrorType)
+	reap, ok := parseSilenceReap(exit.ErrorType)
 	if !ok || !deps.Retry.enabled() {
 		return false
 	}
@@ -582,13 +582,13 @@ func handleSilenceReapExit(ctx context.Context, exit RunExit, commenter tracker.
 	}
 	stops := silenceReapCount(exit.Comments, exit.Stage) + 1
 	if stops > MaxSilenceReaps {
-		giveUp := failureMarker(failedType, silenceReapGiveUpReason(exit.Stage, stops))
-		if err := postMarker(ctx, commenter, exit.PMKey, giveUp); err != nil {
+		giveUp := silenceReapGiveUpMarker(failedType, exit.Stage, stops, exit.Comments, reap)
+		if err := postMarker(ctx, commenter, exit.PMKey, giveUp, silenceReapFieldOrder...); err != nil {
 			logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post silence-reap give-up marker")
 		}
 		return true
 	}
-	if err := postMarker(ctx, commenter, exit.PMKey, failureMarker(failedType, silenceReapReason(idle))); err != nil {
+	if err := postMarker(ctx, commenter, exit.PMKey, silenceReapMarker(failedType, reap), silenceReapFieldOrder...); err != nil {
 		logger.Warn().Err(err).Str("agent", exit.AgentName).Msg("board failure: cannot post silence-reap marker")
 		return true
 	}
@@ -1030,6 +1030,87 @@ func silenceReapGiveUpReason(stage BoardStage, stops int) string {
 		"needs a person. Each stop was a %s, not a stage failure, and none were charged against the retry "+
 		"budget; the repetition itself is what needs a look.",
 		silenceReapGiveUpSentinel, stops, stage, silenceReapSentinel)
+}
+
+// silenceReapFieldOrder is how a silence-reap marker's fields read: the
+// headline first, then the observation this stop was judged on, then — on
+// the give-up only — the blocker contract. One order serves both markers
+// because a key absent from the marker is simply skipped.
+var silenceReapFieldOrder = []string{"reason", "idle", "budget", "outstanding", "kind", "evidence", "attempted", "release"}
+
+// silenceReapMarker composes the marker one silence reap posts: the prose
+// line as before, plus the observation as fields — the idle, the budget it
+// exceeded and what was outstanding — so a later give-up can quote every
+// earlier stop from the thread itself rather than parse its prose (SC-5329).
+func silenceReapMarker(failedType string, reap SilenceReap) marker.Marker {
+	m := failureMarker(failedType, silenceReapReason(reap.IdleText()))
+	for k, v := range reap.fields() {
+		m.Fields[k] = v
+	}
+	return m
+}
+
+// silenceReapGiveUpMarker composes the marker posted once the cap is spent.
+// It is recorded under the blocker contract (kind, evidence, attempted,
+// release — shared/exit-contract.md) rather than as an ordinary stage
+// failure: three silence stops can mean a real hang or a liveness input the
+// machine was missing (SC-4900 was one), and the person picking the card up
+// has to be able to tell which without the daemon log. The evidence is one
+// line per stop, read back from the thread's own reap markers, with the stop
+// that spent the cap last (SC-5329). The kind is `other`: none of the closed
+// set names a machine's own repeated misjudgement, and the set is not widened
+// here because grouping by it is the contract's point (SC-5250).
+func silenceReapGiveUpMarker(failedType string, stage BoardStage, stops int, comments []tracker.Comment, last SilenceReap) marker.Marker {
+	m := failureMarker(failedType, silenceReapGiveUpReason(stage, stops))
+	m.Fields["kind"] = "other"
+	m.Fields["evidence"] = silenceReapEvidence(comments, stage, last)
+	m.Fields["attempted"] = fmt.Sprintf("%d automatic relaunches after silence stops, none charged against the retry budget", stops-1)
+	m.Fields["release"] = "a person retries the " + string(stage) + " stage after checking the stops below against the agent's real activity; " +
+		"a stop judged with work outstanding, or with an unknown model-request state, points at a liveness input the daemon could not read rather than a hang"
+	return m
+}
+
+// silenceReapEvidence lists what each silence stop on stage was judged on:
+// the earlier stops from their own markers' fields, then the stop that spent
+// the cap. A marker an older daemon posted carries the idle in its prose but
+// no fields; it is counted, and said to be unrecorded, rather than guessed at.
+func silenceReapEvidence(comments []tracker.Comment, stage BoardStage, last SilenceReap) string {
+	var lines []string
+	n := 0
+	for _, c := range comments {
+		s, st, ok := ClassifyMarker(c.Body)
+		if !ok || s != stage || st != BoardFailed || !strings.Contains(c.Body, silenceReapSentinel) {
+			continue
+		}
+		n++
+		lines = append(lines, fmt.Sprintf("stop %d: %s", n, silenceStopLine(c.Body)))
+	}
+	lines = append(lines, fmt.Sprintf("stop %d (this one): %s", n+1, last.describe()))
+	return strings.Join(lines, "\n")
+}
+
+// silenceStopLine reads one earlier stop's observation off its marker.
+func silenceStopLine(body string) string {
+	m, ok := marker.ParseBody(body)
+	if !ok || m.Fields["idle"] == "" {
+		return "recorded by an older daemon without its budget or outstanding work"
+	}
+	idle, _ := time.ParseDuration(m.Fields["idle"])
+	budget, _ := time.ParseDuration(m.Fields["budget"])
+	return SilenceReap{Idle: idle, Budget: budget, Outstanding: m.Fields["outstanding"]}.describe()
+}
+
+// describe is the one-line reading of a stop for the evidence list.
+func (r SilenceReap) describe() string {
+	budget := "budget not recorded"
+	if r.Budget > 0 {
+		budget = "budget " + r.Budget.Round(time.Second).String()
+	}
+	outstanding := r.Outstanding
+	if outstanding == "" {
+		outstanding = "not recorded"
+	}
+	return "silent " + r.IdleText() + ", " + budget + ", outstanding work: " + outstanding
 }
 
 // silenceReapCount counts prior silence-reap markers already posted under

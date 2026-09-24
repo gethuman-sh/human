@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -38,23 +39,90 @@ const (
 // StopFailure event carries in its ErrorType when the reap was a silence-reap
 // — the agent went silent (no hook event AND no transcript output) past its
 // idle budget, rather than genuinely dying. The full sentinel is
-// "reaped-silent:<idle>" (e.g. "reaped-silent:18m0s"); silenceReapIdle parses
-// the idle back out. A machine-chosen stop like this must never consume the
-// stage's automatic-retry budget — the work did not fail, a judgement about
+// "reaped-silent:<idle>;budget=<budget>;outstanding=<work>" (SilenceReap.ErrorType);
+// parseSilenceReap reads it back, and still accepts the older "reaped-silent:<idle>"
+// an earlier daemon composed. A machine-chosen stop like this must never consume
+// the stage's automatic-retry budget — the work did not fail, a judgement about
 // the work did (SC-2447).
 const ReapSilenceErrorType = "reaped-silent"
 
-// silenceReapIdle reports whether errorType is a silence-reap sentinel and,
-// if so, the idle duration it carries formatted for a human to read (as
-// produced by ReapReason.Idle.Round(time.Second).String() at the point the
-// sentinel was composed). ok is false for any other errorType, including the
-// empty string a genuine StopFailure carries.
-func silenceReapIdle(errorType string) (string, bool) {
+// SilenceReap is what the machine observed at the moment it judged an agent
+// silent: how long it had been quiet, the budget that silence exceeded, and
+// what the agent had outstanding when it was judged. It travels from the
+// judgement (the zombie sweep, the stuck-running pass) to the marker the
+// reap posts, so a person reading a repeated reap can tell a real hang from a
+// liveness input the machine was missing (SC-4900 was one) without the daemon
+// log (SC-5329).
+type SilenceReap struct {
+	Idle   time.Duration
+	Budget time.Duration
+	// Outstanding is AgentProgress.OutstandingWork at the judgement — "none",
+	// or what was in flight — recorded because a reap under the generous
+	// budget with work outstanding and a reap under the short one with none
+	// are different findings that the same idle figure would hide.
+	Outstanding string
+}
+
+// silenceReapOf records a stall judgement the sweep or the reconcile pass
+// reached from p: the budget and outstanding work are read off the same
+// progress record the verdict came from, never recomputed later.
+func silenceReapOf(p AgentProgress, idle time.Duration) SilenceReap {
+	return SilenceReap{Idle: idle, Budget: p.IdleBudget(), Outstanding: p.OutstandingWork()}
+}
+
+// ErrorType composes the sentinel the synthesized StopFailure carries. The
+// idle, budget and outstanding work ride in the one string the hook event has
+// room for, so the exit handler that posts the marker sees exactly what the
+// sweep judged rather than a re-read of a record that may have moved on.
+func (r SilenceReap) ErrorType() string {
+	return ReapSilenceErrorType + ":" + r.IdleText() + ";budget=" + r.Budget.Round(time.Second).String() +
+		";outstanding=" + strings.ReplaceAll(r.Outstanding, ";", ",")
+}
+
+// IdleText is the observed silence formatted for a person to read.
+func (r SilenceReap) IdleText() string {
+	return r.Idle.Round(time.Second).String()
+}
+
+// fields renders the observation as marker fields, so the give-up can quote
+// each earlier stop from the thread instead of parsing its prose.
+func (r SilenceReap) fields() map[string]string {
+	f := map[string]string{"idle": r.IdleText()}
+	if r.Budget > 0 {
+		f["budget"] = r.Budget.Round(time.Second).String()
+	}
+	if r.Outstanding != "" {
+		f["outstanding"] = r.Outstanding
+	}
+	return f
+}
+
+// parseSilenceReap reports whether errorType is a silence-reap sentinel and,
+// if so, the observation it carries. An older daemon composed the idle alone;
+// that still parses, with a zero budget and no outstanding record, so a
+// daemon upgraded mid-run reads its predecessor's exits. ok is false for any
+// other errorType, including the empty string a genuine StopFailure carries.
+func parseSilenceReap(errorType string) (SilenceReap, bool) {
 	rest, ok := strings.CutPrefix(errorType, ReapSilenceErrorType+":")
 	if !ok || rest == "" {
-		return "", false
+		return SilenceReap{}, false
 	}
-	return rest, true
+	parts := strings.Split(rest, ";")
+	idle, err := time.ParseDuration(parts[0])
+	if err != nil {
+		return SilenceReap{}, false
+	}
+	r := SilenceReap{Idle: idle}
+	for _, part := range parts[1:] {
+		key, value, _ := strings.Cut(part, "=")
+		switch key {
+		case "budget":
+			r.Budget, _ = time.ParseDuration(value)
+		case "outstanding":
+			r.Outstanding = value
+		}
+	}
+	return r, true
 }
 
 // DefaultStageRetries bounds automatic relaunches of one stage. Two is chosen

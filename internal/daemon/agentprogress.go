@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gethuman-sh/human/internal/claude/hookevents"
@@ -115,6 +117,34 @@ type AgentProgress struct {
 // the one direction this must never fail in (SC-3853).
 func (p AgentProgress) hasOutstandingWork() bool {
 	return p.InsideTool || p.Subagents > 0 || p.ModelRequest != ModelRequestNone
+}
+
+// OutstandingWork names what the agent had in flight, for the record a reap
+// leaves on the ticket: "none", or the tool call, dispatch count and model
+// request state that bought it the generous budget. It exists so a reap can
+// be read back later against the inputs it was judged on — a silence under
+// the generous budget with a request open and a silence under the short one
+// with nothing outstanding are different findings that one idle figure would
+// hide (SC-5329).
+func (p AgentProgress) OutstandingWork() string {
+	var parts []string
+	if p.InsideTool {
+		tool := p.Tool
+		if tool == "" {
+			tool = "a tool call"
+		}
+		parts = append(parts, "inside "+tool)
+	}
+	if p.Subagents > 0 {
+		parts = append(parts, fmt.Sprintf("%d subagent(s) dispatched", p.Subagents))
+	}
+	if p.ModelRequest != ModelRequestNone {
+		parts = append(parts, "model request "+p.ModelRequest.String())
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // IdleBudget is how long this agent may stay silent before it counts as hung.

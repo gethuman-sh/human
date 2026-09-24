@@ -329,15 +329,16 @@ func reconcileOnce(ctx context.Context, deps ReconcileDeps) {
 // map) is NOT treated as stalled: killing live work on absent evidence is the
 // one failure this must never risk, and the container-liveness check has
 // already established something is running.
-func stageStalled(progress AgentProgressProbe, agentName string, now time.Time) (bool, time.Duration) {
+func stageStalled(progress AgentProgressProbe, agentName string, now time.Time) (bool, SilenceReap) {
 	if progress == nil {
-		return false, 0
+		return false, SilenceReap{}
 	}
 	p, ok := progress(agentName)
 	if !ok {
-		return false, 0
+		return false, SilenceReap{}
 	}
-	return p.Stalled(now)
+	stalled, idle := p.Stalled(now)
+	return stalled, silenceReapOf(p, idle)
 }
 
 // doneStageLoopActive reports whether the card's newest done-stage marker is a
@@ -647,30 +648,31 @@ func stuckRunningCandidate(derived BoardCard, comments []tracker.Comment) bool {
 // this pass's own judgement (silenced) plus the idle duration to report.
 // Pulled out of reconcileStuckRunning to keep that function's branching
 // inside the complexity gate.
-func hungLiveAgent(deps ReconcileDeps, agentName string, now time.Time, pmKey string, stage BoardStage) (proceed, silenced bool, idleReason string) {
+func hungLiveAgent(deps ReconcileDeps, agentName string, now time.Time, pmKey string, stage BoardStage) (proceed, silenced bool, reap SilenceReap) {
 	logger := deps.Logger
 	// A live container is not the same as a working agent: a hung agent looks
 	// perfectly healthy here, which is why a hang was previously never
 	// detected at all. Ask whether it is still making progress.
-	stalled, idle := stageStalled(deps.Progress, agentName, now)
+	stalled, silence := stageStalled(deps.Progress, agentName, now)
 	if !stalled {
-		return false, false, "" // genuinely working, however long it has been running
+		return false, false, SilenceReap{} // genuinely working, however long it has been running
 	}
 	logger.Warn().Str("pm", pmKey).Str("stage", string(stage)).
-		Dur("idle", idle).Msg("board reconcile: agent alive but making no progress, treating as hung")
+		Dur("idle", silence.Idle).Dur("budget", silence.Budget).Str("outstanding", silence.Outstanding).
+		Msg("board reconcile: agent alive but making no progress, treating as hung")
 	// A hung agent still holds its container and workspace, so it must be
 	// stopped before anything relaunches — otherwise two agents work the same
 	// stage. A stop that fails (or is unwired) leaves the card alone rather
 	// than risking that.
 	if deps.StopAgent == nil {
-		return false, false, ""
+		return false, false, SilenceReap{}
 	}
 	if err := deps.StopAgent(agentName); err != nil {
 		logger.Warn().Err(err).Str("agent", agentName).
 			Msg("board reconcile: cannot stop hung agent, leaving the card as-is")
-		return false, false, ""
+		return false, false, SilenceReap{}
 	}
-	return true, true, idle.Round(time.Second).String()
+	return true, true, silence
 }
 
 func reconcileStuckRunning(ctx context.Context, drivable DrivableCards, deps ReconcileDeps, now time.Time) int {
@@ -718,20 +720,20 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	// agent (no entry in alive) is a genuine, unexplained death and stays
 	// on the charged path unchanged.
 	var silenced bool
-	var idleReason string
+	var reap SilenceReap
 	if _, ok := alive[agentName]; ok {
-		proceed, s, reason := hungLiveAgent(deps, agentName, now, card.Key, derived.Stage)
+		proceed, s, r := hungLiveAgent(deps, agentName, now, card.Key, derived.Stage)
 		if !proceed {
 			return false
 		}
-		silenced, idleReason = s, reason
+		silenced, reap = s, r
 	}
 	// Repeated silence reaps are bounded and visible, identically to the live
 	// failure watcher's cap (SC-3074): at or over MaxSilenceReaps this stops
 	// relaunching and says a person is needed, naming the count once; skip
 	// is set when the give-up marker is already on the thread, so a second
 	// daemon reaching the same cap posts nothing more.
-	failed, givingUp, skip := stuckRunningSilenceBody(failedType, derived.Stage, card.Comments, silenced, idleReason)
+	failed, givingUp, skip := stuckRunningSilenceBody(failedType, derived.Stage, card.Comments, silenced, reap)
 	if skip {
 		return false
 	}
@@ -742,14 +744,15 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	if cause := latestStageWaitCause(card.Comments); cause != "" {
 		failed.Body = strings.TrimSpace(failed.Body + "\nafter wait cause: " + cause)
 	}
-	if err := deps.PostFailed(ctx, card.Key, markerBody(failed)); err != nil {
+	body := markerBody(failed, silenceReapFieldOrder...)
+	if err := deps.PostFailed(ctx, card.Key, body); err != nil {
 		logger.Warn().Err(err).Str("pm", card.Key).
 			Msg("board reconcile: cannot red stuck-running card")
 		return false
 	}
 	// The relaunch below decides from the thread with this marker on it, as the
 	// transition layer will see it (SC-5104).
-	card.Comments = append(card.Comments, tracker.Comment{Body: markerBody(failed), Created: now})
+	card.Comments = append(card.Comments, tracker.Comment{Body: body, Created: now})
 	if silenced {
 		if !givingUp {
 			// A live agent this pass judged hung and stopped itself: uncharged,
@@ -787,7 +790,7 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 // (skip — the dedup that keeps two daemons from both posting it). Split out
 // of reconcileStuckRunning so that function's branching stays inside the
 // complexity gate.
-func stuckRunningSilenceBody(failedType string, stage BoardStage, comments []tracker.Comment, silenced bool, idleReason string) (m marker.Marker, givingUp, skip bool) {
+func stuckRunningSilenceBody(failedType string, stage BoardStage, comments []tracker.Comment, silenced bool, reap SilenceReap) (m marker.Marker, givingUp, skip bool) {
 	if !silenced {
 		return failureMarker(failedType, stuckRunningReason(stage)), false, false
 	}
@@ -796,9 +799,9 @@ func stuckRunningSilenceBody(failedType string, stage BoardStage, comments []tra
 	}
 	stops := silenceReapCount(comments, stage) + 1
 	if stops > MaxSilenceReaps {
-		return failureMarker(failedType, silenceReapGiveUpReason(stage, stops)), true, false
+		return silenceReapGiveUpMarker(failedType, stage, stops, comments, reap), true, false
 	}
-	return failureMarker(failedType, silenceReapReason(idleReason)), false, false
+	return silenceReapMarker(failedType, reap), false, false
 }
 
 // cardPausedOnOpenOptions reports whether a card carries an open
