@@ -67,7 +67,7 @@ func AgentNamesFromContainers(containerNames []string) map[string]bool {
 // desktop overlay (applyLocal), never from Compose, so the shared board stays
 // identical for every consumer.
 //
-// The rule is three-valued plus unknown because on a board several daemons drive,
+// The rule is five-valued plus unknown because on a board several daemons drive,
 // "no agent on this machine" is only ever evidence about THIS machine.
 func MarkAgentLiveness(cards []daemon.BoardViewCard, live LiveAgents) {
 	if live.Names == nil {
