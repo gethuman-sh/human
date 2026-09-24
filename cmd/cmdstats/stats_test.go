@@ -29,6 +29,7 @@ func TestBuildStatsCmd_subcommands(t *testing.T) {
 	}
 	assert.True(t, subs["subagents"], "subagents subcommand registered")
 	assert.True(t, subs["containers"], "containers subcommand registered")
+	assert.True(t, subs["tickets"], "tickets subcommand registered")
 }
 
 func TestIsValidRange(t *testing.T) {

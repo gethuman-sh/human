@@ -40,6 +40,7 @@ func BuildStatsCmd() *cobra.Command {
 	// its parent has not registered, and "stats" registers none.
 	cmd.AddCommand(buildSubagentsCmd())
 	cmd.AddCommand(buildContainersCmd())
+	cmd.AddCommand(buildTicketsCmd())
 	return cmd
 }
 

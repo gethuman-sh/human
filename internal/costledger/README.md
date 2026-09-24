@@ -21,3 +21,8 @@ than showing a confident `$0.00`.
 
 The store lives in `~/.human/costledger.db` (SQLite, WAL) alongside the other
 daemon databases and is pruned past a generous retention window.
+
+The same record is readable from the command line: `human stats tickets` ranks
+the tickets that cost the most over a window, and `human stats tickets <KEY>`
+shows one ticket's whole-life roll-up per stage — the numbers the card detail
+shows, from the same ledger, scoped to the same project.
