@@ -55,6 +55,25 @@ func ParseCommitsFromHandoff(body string) []string {
 	if !strings.HasPrefix(trimmed, ReadyForReviewHeader) {
 		return nil
 	}
+	return parseCommitsLine(trimmed)
+}
+
+// ParseCommitsFromVerdict extracts the short SHAs a [human:review-complete]
+// says it judged. A verdict is evidence about one round of work, and the field
+// is optional, so an empty answer means "this verdict does not record what it
+// judged" — never "it judged nothing" (SC-5475).
+func ParseCommitsFromVerdict(body string) []string {
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, ReviewCompleteHeader) {
+		return nil
+	}
+	return parseCommitsLine(trimmed)
+}
+
+// parseCommitsLine reads the comma-separated `commits:` line shared by the
+// handoff and the verdict. One parser, so the two sides of the comparison can
+// never disagree about what a commit list is.
+func parseCommitsLine(trimmed string) []string {
 	for line := range strings.SplitSeq(trimmed, "\n") {
 		line = strings.TrimSpace(line)
 		rest, ok := strings.CutPrefix(line, "commits:")
@@ -88,6 +107,47 @@ func ParsePRFromHandoff(body string) string {
 		}
 	}
 	return ""
+}
+
+// HandoffReviewInline is the one value the handoff's optional `review:` line
+// takes: the run that posted the handoff is reviewing the work itself, in its
+// own container.
+//
+// The field exists because the handoff is the board's "implementation
+// finished, nothing is reviewing this" signal, and a board fix run publishes it
+// seconds before its own [human:review-started] contradicts it — three seconds
+// on SC-5396, long enough for the daemon to start a reviewer of its own. No
+// claim can arbitrate that: the in-container reviewer posts none, so claimWon
+// never sees it as a participant. The fact therefore has to travel on the
+// signal the daemon acts on rather than on a marker that has not landed yet
+// (SC-5476).
+//
+// Its ABSENCE is the original contract — chain a reviewer — so every handoff
+// written before this existed, and every handoff human-executor-agent posts,
+// keeps meaning exactly what it meant.
+const HandoffReviewInline = "inline"
+
+// ParseReviewFromHandoff extracts the value of the optional `review:` line of a
+// [human:ready-for-review] comment body. Returns "" when the body is not a
+// handoff block or carries no review: line.
+func ParseReviewFromHandoff(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if !strings.HasPrefix(trimmed, ReadyForReviewHeader) {
+		return ""
+	}
+	for line := range strings.SplitSeq(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "review:"); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
+// HandoffReviewsItself reports that the handoff body says its poster is
+// reviewing the work itself.
+func HandoffReviewsItself(body string) bool {
+	return strings.EqualFold(ParseReviewFromHandoff(body), HandoffReviewInline)
 }
 
 // IsReviewComplete reports whether the comment body is a review-complete

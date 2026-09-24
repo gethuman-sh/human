@@ -284,13 +284,15 @@ Only after a DONE verdict.
 Post the review handoff on the security (PM) ticket — the **same handoff the kanban executor posts**, so the trail and the board's `(R)` annotation work identically:
 
 ```bash
-human handoff post <SEC_KEY> --engineering <ENG_KEY> --branch autofix/<work-key>   # split topology
-human handoff post <SEC_KEY> --branch autofix/<work-key>                           # single-tracker: omit --engineering
+human handoff post <SEC_KEY> --engineering <ENG_KEY> --branch autofix/<work-key> --review inline   # split topology
+human handoff post <SEC_KEY> --branch autofix/<work-key> --review inline                           # single-tracker: omit --engineering
 ```
 
-The command derives `commits:` and `daemon:`, verifies every SHA is reachable on the branch (fetching origin first), and refuses to post otherwise. If the handoff cannot be posted (non-zero exit), STOP with an honest status report — **do not report success**.
+The command derives `commits:` and `daemon:`, verifies every SHA is reachable on the branch (fetching origin first), and refuses to post otherwise. `--review inline` is **mandatory here and in every context**: this skill reviews the fix itself in Step 7.2, and the handoff is the only thing the daemon can read before your own `[human:review-started]` lands. Without it the daemon starts a second reviewer whose verdict overwrites yours. If the handoff cannot be posted (non-zero exit), STOP with an honest status report — **do not report success**.
 
-**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review (do not run Step 8 / deploy). Do NOT push or `git ls-remote` — the branch is intentionally local.
+**Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review (do not run Step 8 / deploy). Do NOT push or `git ls-remote` — the branch is intentionally local. The `review: inline` line you posted in 7.1 is what stops the daemon launching a second review container.
+
+**The handoff is posted once, and before the review checkpoint.** 7.1 precedes 7.2's `[human:review-started]`, so the branch and commits are on the ticket before anything judges them. Never post a second `[human:ready-for-review]` after the verdict: a handoff is the start of a round, and one posted after a review reads as a new round of work. If the reviewer commits on the branch, record those commits on the verdict (7.2), not by re-posting the handoff.
 
 ### 7.2 Security review by the reviewer agent
 
@@ -318,9 +320,12 @@ The verdicts mean: the change is good (`pass`), good with notes worth recording 
 
 Post the outcome on the security ticket with the reviewer's **full findings** inlined under a `## Findings` section (the board detail panel shows it without opening the local `.human/reviews/<work-key>.md`):
 
+`commits:` names exactly what this verdict judged: the handoff's commits (`human handoff show <SEC_KEY>` returns them as JSON) plus any commit the reviewer itself made on the branch, comma-separated short SHAs. It is how the daemon tells a rebuild handed back from a record of what the branch holds — without it the comparison falls back to the clock and a later handoff re-opens a round that is over.
+
 ```bash
 human marker post <SEC_KEY> review-complete \
   --field verdict="<verdict>" \
+  --field commits="<the handoff's commits, plus any commit the reviewer made on the branch>" \
   --field reviews="<WORK_KEY>: <verdict> — .human/reviews/<work-key>.md" \
   --body-file - <<'REVIEW_EOF'
 ## Findings

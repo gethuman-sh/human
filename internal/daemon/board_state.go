@@ -390,8 +390,13 @@ func supersededByNewerMarker(placed Placement, comments []tracker.Comment) bool 
 	// second review was ever chained, the recovery sweep could not see it, and
 	// the board offered only Rework, which started another build against code
 	// that was already fixed (SC-4958).
+	// A done-stage loop is retired by a rebuild, not by bookkeeping. The arm is
+	// written as "any strictly-newer marker", and a handoff re-posted to record
+	// the reviewer's own commit is one — so a card whose PR review was live
+	// jumped back to implementation/done and a second pre-merge reviewer was
+	// launched onto commits the verdict had already judged (SC-5475).
 	return placed.State() == BoardFailed || placed.State() == BoardOutage ||
-		(placed.Stage() == BoardDoneStage && doneStageLoopActive(comments)) ||
+		(placed.Stage() == BoardDoneStage && doneStageLoopActive(comments) && !newestMarkerIsHandoffRepost(comments)) ||
 		(placed.Stage() == BoardVerification && placed.State() == BoardDone && handoffAwaitsReview(comments))
 }
 
@@ -408,10 +413,10 @@ func currentVerdict(comments []tracker.Comment) string {
 }
 
 // handoffAwaitsReview reports that the ticket's newest [human:ready-for-review]
-// is still waiting for the review that judges it — no verification marker at
-// all, or every one of them older than that handoff. It is the one fact the
-// derivation, the live chain and the recovery sweep all needed and none of them
-// had: "which round is this verdict about".
+// is still waiting for the review that judges it: no verification marker at
+// all, or a handoff posted after the newest one that hands over work no verdict
+// has judged. Recency alone was the whole test until SC-5475 — and under a
+// clock a rework round and a bookkeeping re-post are the same comment.
 func handoffAwaitsReview(comments []tracker.Comment) bool {
 	handoff, ok := latestCommentWithHeader(comments, ReadyForReviewHeader)
 	if !ok {
@@ -421,7 +426,139 @@ func handoffAwaitsReview(comments []tracker.Comment) bool {
 	if !ok {
 		return true
 	}
-	return commentNewer(handoff, judged)
+	if !commentNewer(handoff, judged) {
+		return false
+	}
+	return handoffNamesUnjudgedCommit(comments)
+}
+
+// handoffNamesUnjudgedCommit reports whether the newest handoff hands over a
+// commit the newest verdict did not judge.
+//
+// True when nothing can be compared — a verdict that records no commits, or a
+// handoff that names none — so every thread written before the verdict carried
+// its commits keeps the recency answer it has today, and SC-4958's rework case
+// (a real rebuild, handed back after a failing verdict) still chains its
+// review.
+func handoffNamesUnjudgedCommit(comments []tracker.Comment) bool {
+	judged := ParseCommitsFromVerdict(latestVerdictBody(comments))
+	handed := ParseCommitsFromHandoff(latestHandoffBody(comments))
+	if len(judged) == 0 || len(handed) == 0 {
+		return true
+	}
+	for _, sha := range handed {
+		if !commitJudged(sha, judged) {
+			return true
+		}
+	}
+	return false
+}
+
+// handoffIsBookkeepingRepost reports whether the ticket's newest handoff is a
+// repost that only records what a verdict has already judged, rather than a
+// new round: the handoff must be POSTED AFTER the newest [human:review-complete]
+// verdict — not merely name commits that verdict happens to match.
+//
+// Ordinary rework posts the handoff BEFORE the verdict that judges it (the
+// commits matching is the whole point of a passing review), and
+// handoffNamesUnjudgedCommit alone cannot tell that case apart from a genuine
+// late repost, because both end up with a handoff naming exactly what the
+// verdict judged. Recency of handoff-over-verdict is the missing half — a
+// repost is written to record a commit a review has ALREADY passed, so it can
+// only exist after that verdict; a rework's handoff necessarily precedes the
+// verdict it results in. Without this, a fresh rework round handed off and
+// re-reviewed (verdict now names exactly the handoff's commits, as every
+// current prompt does) was misread as a repost and a stale PR-loop marker
+// from a round the ticket had already moved past kept winning the branch
+// (SC-5475 follow-up).
+func handoffIsBookkeepingRepost(comments []tracker.Comment) bool {
+	handoff, ok := latestCommentWithHeader(comments, ReadyForReviewHeader)
+	if !ok {
+		return false
+	}
+	verdict, ok := latestCommentWithHeader(comments, ReviewCompleteHeader)
+	if !ok || !commentNewer(handoff, verdict) {
+		return false
+	}
+	return !handoffNamesUnjudgedCommit(comments)
+}
+
+// commitJudged matches short SHAs against full ones in either direction: the
+// handoff writes eight characters and a verdict may quote forty, and reading
+// those as different commits would re-open exactly the bug this closes.
+func commitJudged(sha string, judged []string) bool {
+	sha = strings.ToLower(strings.TrimSpace(sha))
+	for _, j := range judged {
+		j = strings.ToLower(strings.TrimSpace(j))
+		if sha == "" || j == "" {
+			continue
+		}
+		if strings.HasPrefix(sha, j) || strings.HasPrefix(j, sha) {
+			return true
+		}
+	}
+	return false
+}
+
+// newestMarkerIsHandoffRepost reports that the ticket's newest marker is a
+// handoff handing over nothing a verdict has not judged — a record of what the
+// branch now holds, not a new round, and so not a marker that retires anything.
+func newestMarkerIsHandoffRepost(comments []tracker.Comment) bool {
+	newest, ok := latestMarkerOverall(comments)
+	if !ok || !strings.HasPrefix(strings.TrimSpace(newest.comment.Body), ReadyForReviewHeader) {
+		return false
+	}
+	return !handoffNamesUnjudgedCommit(comments)
+}
+
+// latestVerdictBody returns the body of the newest [human:review-complete], or
+// "" when none is present — the mirror of latestHandoffBody, so the two sides
+// of the comparison are read the same way.
+func latestVerdictBody(comments []tracker.Comment) string {
+	latest, ok := latestCommentWithHeader(comments, ReviewCompleteHeader)
+	if !ok {
+		return ""
+	}
+	return latest.Body
+}
+
+// inlineReviewerOwnsHandoff reports that the newest handoff says its poster
+// reviews the work itself AND that reviewer is still plausibly running, so a
+// daemon launcher must start no second one.
+//
+// It is the fact handoffAwaitsReview alone cannot supply. "Nothing has judged
+// this round yet" is true for three seconds of every board fix run — between
+// the handoff and the container's own [human:review-started] — and in those
+// three seconds the daemon's launchers read a finished build with nobody
+// reviewing it and start a reviewer that nothing can arbitrate, because the
+// in-container reviewer posts no [human:claim] and so is not a participant in
+// claimWon (SC-5476, measured on SC-5396: two review-started markers one second
+// apart, two verdicts, the later overwriting the earlier).
+//
+// Liveness is what stops this trading a double review for a stuck card. An
+// inline handoff whose implementation container is GONE is an orphan and must
+// still be chained — that is SC-430, and suppressing it unconditionally would
+// reintroduce it. Where liveness cannot be established at all (no lister wired,
+// or the lookup failed) the handoff is taken at its word for StuckRunningGrace
+// and no longer: bounded trust, rather than believing it forever or not at all.
+// That deviates from this package's usual "a nil lister degrades to today's
+// behaviour" convention on purpose — here today's behaviour is the defect.
+func inlineReviewerOwnsHandoff(comments []tracker.Comment, pmKey string, alive map[string]struct{}, aliveKnown bool, now time.Time) bool {
+	handoff, ok := latestCommentWithHeader(comments, ReadyForReviewHeader)
+	if !ok || !HandoffReviewsItself(handoff.Body) {
+		return false
+	}
+	// Once a verification marker newer than the handoff exists, the inline
+	// review has recorded itself and the ordinary recency guards govern from
+	// there; this predicate has nothing left to protect.
+	if !handoffAwaitsReview(comments) {
+		return false
+	}
+	if aliveKnown {
+		_, live := liveStageAgent(alive, pmKey, BoardImplementation)
+		return live
+	}
+	return now.Sub(handoff.Created) < StuckRunningGrace
 }
 
 // latestCommentWithHeader returns the newest comment whose body starts with

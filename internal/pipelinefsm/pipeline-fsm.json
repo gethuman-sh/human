@@ -248,13 +248,14 @@
         "stage": "implementation",
         "state": "done"
       },
-      "holds": "Branch and commits are recorded on the ticket AND the commits were verified reachable on the branch before the marker was posted. Any verdict recorded BEFORE this handoff judged an earlier round and no longer governs the item.",
+      "holds": "Branch and commits are recorded on the ticket AND the commits were verified reachable on the branch before the marker was posted. A verdict recorded BEFORE this handoff no longer governs the item when the handoff names a commit that verdict did not judge; a handoff naming only judged commits records what the branch holds and leaves the verdict standing (SC-5475). The handoff also says WHO reviews it: a `review: inline` line means the run that posted it is the reviewer and owns the verification stage from this moment, before any `[human:review-started]` exists; its absence means the daemon must chain one.",
       "who_may_act": [
         "daemon",
-        "user"
+        "user",
+        "skill"
       ],
       "stale_when": "The review was never chained — the live hook was lost to a daemon restart.",
-      "if_nothing_happens": "reconcileOrphanedHandoffs chains the review for a handoff newer than the newest verification marker, but only when the commits are DEFINITELY present on this machine. A clean absence or an unreadable check leaves the card alone rather than redding work another machine may be able to serve."
+      "if_nothing_happens": "reconcileOrphanedHandoffs chains the review for a handoff newer than the newest verification marker that names a commit the verdict did not judge, but only when the commits are DEFINITELY present on this machine. A clean absence or an unreadable check leaves the card alone rather than redding work another machine may be able to serve. A `review: inline` handoff is left alone while the `board-<key>-implementation` container that posted it is alive on this machine (liveStageAgent), and chained the moment it is not — or, where liveness cannot be established, once StuckRunningGrace has passed. Without that bound this state would trade a double review for a card nobody ever reviews (SC-430 again)."
     },
     {
       "name": "in-review",
@@ -283,7 +284,7 @@
         "daemon",
         "skill"
       ],
-      "stale_when": "A [human:ready-for-review] handoff newer than the verdict. The verdict judged the round it was posted against; the rebuild it asked for has been handed back, so the item is handed-off again and awaits a fresh review.",
+      "stale_when": "A [human:ready-for-review] handoff, newer than the verdict, naming a commit the verdict did not judge. The verdict judged the round it was posted against and records which commits that was (review-complete's optional commits field), so the question is about the work, not the clock: a rebuild handed back awaits a fresh review, while a handoff re-posted to record the reviewer's own commit is not a new round and stales nothing (SC-5475).",
       "if_nothing_happens": "A passing verdict waits for the Deploy gesture. A rework hands off again, and that handoff leaves this state: chainReviewAfterCleanBuild launches the review live, and reconcileOrphanedHandoffs recovers it when the live hook is lost. The daemon also acts here on the legacy PR path."
     },
     {
@@ -694,7 +695,7 @@
       ],
       "prompt": "human-executor-agent.md, human-autofix-skill.md Step 7.1",
       "where": "posted via `human handoff post`, which verifies the commits are reachable on the branch first",
-      "doc": "Branch and commits are recorded on the ticket for whoever reviews next. The commits are verified reachable on the branch before the marker is posted, so a handoff never names work nobody else can see. A handoff from reviewed is the rework round answering a verdict: the verdict judged the round before it, so the item is handed off again and awaits a fresh review (SC-4958)."
+      "doc": "Branch and commits are recorded on the ticket for whoever reviews next. The commits are verified reachable on the branch before the marker is posted, so a handoff never names work nobody else can see. A handoff from reviewed is the rework round answering a verdict: the verdict judged the round before it, so the item is handed off again and awaits a fresh review (SC-4958). A handoff from reviewed that names only commits the verdict already judged is bookkeeping, not a round: it leaves the verdict governing and starts no review (SC-5475). The marker may also carry an optional `review:` line naming who reviews the work — `inline` when the posting run reviews it itself. Absent means the daemon chains a reviewer, which is what every handoff meant before SC-5476."
     },
     {
       "name": "implementation-failed",
@@ -726,7 +727,19 @@
       "runs": "human-reviewer",
       "marker": "[human:review-started]",
       "where": "board_failure.go chainReviewAfterCleanBuild; board_reconcile.go if that hook was lost",
-      "doc": "Automatic: a clean build whose handoff names a reachable branch flows straight into its review. A board fix run instead runs the review inline in its own container and the daemon launches no second one."
+      "doc": "Automatic: a clean build whose handoff names a reachable branch flows straight into its review. A handoff carrying `review: inline` is NOT chained here — the run that posted it is already reviewing it (start-inline-review) — unless the container that posted it is gone, which makes the handoff an orphan and this edge its recovery. The previous wording claimed the daemon simply never launches a second reviewer for a board fix run; it did, one second after the handoff, because nothing on the ticket said otherwise until SC-5476 put it there."
+    },
+    {
+      "name": "start-inline-review",
+      "src": [
+        "handed-off"
+      ],
+      "dst": "in-review",
+      "actor": "skill",
+      "runs": "human-reviewer",
+      "marker": "[human:review-started]",
+      "prompt": "human-autofix-skill.md Step 7.2, human-security-fix-skill.md Step 7.2",
+      "doc": "A board fix run reviews its own work in the same warm container: the handoff and this marker come from the same process, seconds apart. It is a real edge out of handed-off and had no row here until SC-5476, which is why nothing caught that the daemon took start-review in the gap between the two. This launcher posts no [human:claim], so claimWon cannot arbitrate it against the daemon's; what keeps the stage single-owner is the `review: inline` line on the handoff, which the daemon's launchers read before deciding to chain."
     },
     {
       "name": "review-verdict",
@@ -740,8 +753,11 @@
       "required_fields": [
         "verdict"
       ],
+      "optional_fields": [
+        "commits"
+      ],
       "prompt": "human-review-skill.md",
-      "doc": "Pass and fail are the same marker and the same state — the verdict rides in a field. Whether that verdict BLOCKS is decided once, by daemon.VerdictFailed, and shipped to the board as verdictFailed; the board never re-tests the string. A blocking verdict keeps the item out of Deploy and offers the rework gesture instead.",
+      "doc": "Pass and fail are the same marker and the same state — the verdict rides in a field. Whether that verdict BLOCKS is decided once, by daemon.VerdictFailed, and shipped to the board as verdictFailed; the board never re-tests the string. A blocking verdict keeps the item out of Deploy and offers the rework gesture instead. The optional commits field records WHICH commits the verdict judged, so a later handoff can be compared against the work rather than the clock (SC-5475).",
       "verdict_blocking": [
         "fail",
         "incomplete"

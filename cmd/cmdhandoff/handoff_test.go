@@ -187,6 +187,28 @@ func TestRunHandoffPost_explicitOverridesSkipDerivation(t *testing.T) {
 	assert.Contains(t, p.added[0], "commits: x1")
 }
 
+func TestRunHandoffPost_reviewInline(t *testing.T) {
+	stubGit(t, "main", map[string][]gitrepo.Commit{"SC-1": {{ShortSHA: "abc"}}}, map[string]bool{"abc": true})
+	p := &stubProvider{}
+	var buf bytes.Buffer
+
+	err := RunHandoffPost(context.Background(), p, &buf, ".", "SC-1", PostOptions{Branch: "b", Commits: []string{"abc"}, Review: "inline", Verify: false})
+	require.NoError(t, err)
+	require.Len(t, p.added, 1)
+	assert.Equal(t, "[human:ready-for-review]\nbranch: b\ncommits: abc\nreview: inline", p.added[0],
+		"review: must sit after commits: and before daemon:")
+}
+
+func TestRunHandoffPost_reviewRejectsUnknownValue(t *testing.T) {
+	p := &stubProvider{}
+	var buf bytes.Buffer
+
+	err := RunHandoffPost(context.Background(), p, &buf, ".", "SC-1", PostOptions{Branch: "b", Commits: []string{"abc"}, Review: "later", Verify: false})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be one of inline")
+	assert.Empty(t, p.added, "nothing posted on a rejected value")
+}
+
 func TestRunHandoffShow_parsesNewestHandoff(t *testing.T) {
 	now := time.Now()
 	p := &stubProvider{comments: []tracker.Comment{
@@ -204,6 +226,18 @@ func TestRunHandoffShow_parsesNewestHandoff(t *testing.T) {
 	assert.Contains(t, out, `"abc"`)
 	assert.Contains(t, out, `"daemon": "d-1"`)
 	assert.NotContains(t, out, "zzz", "latest handoff wins")
+}
+
+func TestRunHandoffShow_reportsReview(t *testing.T) {
+	now := time.Now()
+	p := &stubProvider{comments: []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: b\ncommits: abc\nreview: inline", Created: now},
+	}}
+	var buf bytes.Buffer
+
+	err := RunHandoffShow(context.Background(), p, &buf, "SC-1")
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), `"review": "inline"`)
 }
 
 func TestRunHandoffShow_missing(t *testing.T) {

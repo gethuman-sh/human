@@ -26,7 +26,7 @@ If a codenav query says the repo is not indexed, the daemon is still building th
 
 ## Pipeline protocol — use these instead of hand-building comments or git incantations
 - `human marker post|show|list <KEY> [TYPE]` — post/read the structured `[human:*]` handoff comments (plan, review verdicts, deploy results); validated, latest-wins
-- `human handoff post <KEY>` / `human handoff show <KEY>` — the ready-for-review handoff; post derives branch/commits/daemon and verifies the commits are pushed
+- `human handoff post <KEY> [--review inline]` / `human handoff show <KEY>` — the ready-for-review handoff; post derives branch/commits/daemon and verifies the commits are pushed. `--review inline` records that the posting run reviews the work itself, so the daemon launches no second reviewer.
 - `human commits for <KEY>` — the commits referencing a ticket; `human commits prefix <PM> [<ENG>]` — the canonical commit-subject prefix
 
 ## Ask the pipeline what to do next — before you stop and ask a person

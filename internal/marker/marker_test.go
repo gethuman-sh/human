@@ -109,6 +109,18 @@ func TestValidate_requiredFields(t *testing.T) {
 	assert.NoError(t, Validate(Marker{Type: "ready-for-review", Fields: map[string]string{"branch": "main", "commits": "abc"}}))
 }
 
+// SC-5476: `review` is optional and, when present, closed to "inline" — the
+// one value that says the posting run reviews the work itself.
+func TestValidate_readyForReview_reviewInline(t *testing.T) {
+	assert.NoError(t, Validate(Marker{Type: "ready-for-review", Fields: map[string]string{"branch": "b", "commits": "c", "review": "inline"}}))
+}
+
+func TestValidate_readyForReview_reviewUnknownValue(t *testing.T) {
+	err := Validate(Marker{Type: "ready-for-review", Fields: map[string]string{"branch": "b", "commits": "c", "review": "later"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be one of inline")
+}
+
 func TestValidate_headEnum(t *testing.T) {
 	assert.Error(t, Validate(Marker{Type: "bug-verdict"}))
 	assert.Error(t, Validate(Marker{Type: "bug-verdict", Head: "maybe"}))
@@ -199,6 +211,16 @@ func TestValidate_optionalFieldNeverRequired(t *testing.T) {
 		Type:   "needs-planning",
 		Fields: map[string]string{EscalationField: EscalationPlanStuck, "reason": "…"},
 	}))
+}
+
+// A verdict advertises which commits it judged so a later handoff can be
+// compared against the work rather than the clock (SC-5475) — but a verdict
+// that does not fill it must stay valid, since older threads and posters that
+// have not learned the field must keep parsing.
+func TestReviewComplete_advertisesTheJudgedCommits(t *testing.T) {
+	assert.Equal(t, []string{"commits"}, OptionalFields("review-complete"))
+	assert.NoError(t, Validate(Marker{Type: "review-complete", Fields: map[string]string{"verdict": "pass", "commits": "f93dc92c, 9a0bf0ea"}}))
+	assert.NoError(t, Validate(Marker{Type: "review-complete", Fields: map[string]string{"verdict": "pass"}}))
 }
 
 func TestParseBody_escalationField(t *testing.T) {

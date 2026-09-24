@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gethuman-sh/human/internal/marker"
 )
 
 func TestParseEngineeringKeysFromHandoff(t *testing.T) {
@@ -88,6 +90,42 @@ func TestParseCommitsFromHandoff(t *testing.T) {
 	}
 }
 
+func TestParseCommitsFromVerdict(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "verdict with commits",
+			body: "[human:review-complete]\nverdict: pass with notes\ncommits: f93dc92c, 9a0bf0ea",
+			want: []string{"f93dc92c", "9a0bf0ea"},
+		},
+		{
+			name: "verdict without a commits line",
+			body: "[human:review-complete]\nverdict: fail",
+			want: nil,
+		},
+		{
+			name: "a handoff body is not a verdict",
+			body: "[human:ready-for-review]\nbranch: main\ncommits: abc123",
+			want: nil,
+		},
+		{
+			name: "body must start with the header so a quoted reference doesn't register",
+			body: "> [human:review-complete]\n> commits: abc123",
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseCommitsFromVerdict(tt.body)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestParsePRFromHandoff(t *testing.T) {
 	tests := []struct {
 		name string
@@ -127,4 +165,36 @@ func TestIsReviewComplete(t *testing.T) {
 	assert.True(t, IsReviewComplete("  [human:review-complete]\nverdict: pass"))
 	assert.False(t, IsReviewComplete("[human:ready-for-review]"))
 	assert.False(t, IsReviewComplete("plain comment"))
+}
+
+func TestParseReviewFromHandoff_inline(t *testing.T) {
+	assert.Equal(t, "inline", ParseReviewFromHandoff("[human:ready-for-review]\nbranch: b\ncommits: c\nreview: inline"))
+}
+
+func TestParseReviewFromHandoff_absent(t *testing.T) {
+	assert.Equal(t, "", ParseReviewFromHandoff("[human:ready-for-review]\nbranch: b\ncommits: c"))
+}
+
+func TestParseReviewFromHandoff_notAHandoff(t *testing.T) {
+	assert.Equal(t, "", ParseReviewFromHandoff("[human:review-complete]\nverdict: pass\nreview: inline"))
+}
+
+// A body quoting the header must not trigger — matching every sibling parser's
+// prefix rule (SC-5476).
+func TestParseReviewFromHandoff_quotedHeaderDoesNotTrigger(t *testing.T) {
+	assert.Equal(t, "", ParseReviewFromHandoff("discussion\n[human:ready-for-review]\nreview: inline"))
+}
+
+// marker.Sign inserts machine:/build: into the field block by line surgery, not
+// by rebuilding it — ParseReviewFromHandoff must still find review: because it
+// scans lines by name, not position (SC-5476).
+func TestParseReviewFromHandoff_signedHandoffStillParses(t *testing.T) {
+	signed := marker.Sign("[human:ready-for-review]\nbranch: b\ncommits: c\nreview: inline", "id", "build")
+	assert.Equal(t, "inline", ParseReviewFromHandoff(signed))
+}
+
+func TestHandoffReviewsItself_caseInsensitive(t *testing.T) {
+	assert.True(t, HandoffReviewsItself("[human:ready-for-review]\nbranch: b\ncommits: c\nreview: Inline"))
+	assert.False(t, HandoffReviewsItself("[human:ready-for-review]\nbranch: b\ncommits: c"))
+	assert.False(t, HandoffReviewsItself("[human:ready-for-review]\nbranch: b\ncommits: c\nreview: later"))
 }

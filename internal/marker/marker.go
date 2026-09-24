@@ -219,15 +219,31 @@ var specs = map[string]spec{
 	// refusal, and the plan-stuck escalation raised once PlanRedriveBound is
 	// spent. Which one a comment is, is the escalation field — optional
 	// because an ordinary refusal legitimately has none (SC-4245).
-	"needs-planning":   {optional: []string{EscalationField}},
-	"ready-for-review": {required: []string{"branch", "commits"}},
-	"review-started":   {},
-	"review-complete":  {required: []string{"verdict"}},
-	"review-failed":    {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
-	"no-fix-needed":    {required: []string{"verdict"}},
-	"nothing-to-do":    {required: []string{"evidence", "reason"}, fieldEnum: nothingToDoReasonEnum()},
-	"deploy-started":   {},
-	"deploy-failed":    {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
+	"needs-planning": {optional: []string{EscalationField}},
+	// `review` is optional and closed to one value on purpose: a handoff that
+	// says nothing about who reviews it is the original contract — the daemon
+	// chains a reviewer — and a handoff whose poster reviews the work itself
+	// must say so in a word the daemon can check, not in prose it cannot
+	// (SC-5476). A misspelt value is refused here rather than read as silence.
+	"ready-for-review": {
+		required:  []string{"branch", "commits"},
+		optional:  []string{"review"},
+		fieldEnum: map[string][]string{"review": {"inline"}},
+	},
+	"review-started": {},
+	// A verdict is evidence about one round of work, and until it said WHICH
+	// commits it judged, "is this handoff newer than the verdict" could only be
+	// asked of the clock — so a handoff re-posted to record the reviewer's own
+	// commit read as a new rework round and launched a second reviewer beside
+	// the live PR review (SC-5475). Optional, not required: a verdict already on
+	// a ticket, and any poster that does not fill it, must stay parseable and
+	// keeps the recency answer (SC-4958's rework case).
+	"review-complete": {required: []string{"verdict"}, optional: []string{"commits"}},
+	"review-failed":   {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
+	"no-fix-needed":   {required: []string{"verdict"}},
+	"nothing-to-do":   {required: []string{"evidence", "reason"}, fieldEnum: nothingToDoReasonEnum()},
+	"deploy-started":  {},
+	"deploy-failed":   {required: []string{"reason"}, optional: append(BlockerFields(), SilenceReapFields()...), fieldEnum: blockerKindEnum()},
 	// A deployed marker must say HOW the work shipped, and there are two honest
 	// answers: through a pull request, or by a branch that was already in the
 	// base when the deploy ran. Requiring pr outright made the second case
