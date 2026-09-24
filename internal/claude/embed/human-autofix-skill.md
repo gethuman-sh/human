@@ -317,6 +317,8 @@ When `<BOARD_CONTEXT>` is true the branch is intentionally local (the bind-mount
 
 **Board-context exception applies here**: when `<BOARD_CONTEXT>` is true, post the handoff (so `branch:`/`commits:` are recorded for the Deploy button), then CONTINUE to the inline review (Steps 7.2–7.3) in this same warm container. STOP after the review (do not run Step 8 / deploy, which needs credentials the board container lacks). Do NOT run push-verification and do NOT `git ls-remote` — the branch is intentionally local. The `review: inline` line you posted in 7.1 is what stops the daemon launching a second review container; the Deploy button ships the reviewed fix.
 
+**The handoff is posted once, and before the review checkpoint.** 7.1 precedes 7.2's `[human:review-started]` — the same order the plan-execution run uses (`human-executor-agent.md` step 6) — so the branch and commits are on the ticket before anything judges them. Never post a second `[human:ready-for-review]` after the verdict: a handoff is the start of a round, and one posted after a review reads as a new round of work. If the reviewer commits on the branch, record those commits on the verdict (7.2), not by re-posting the handoff.
+
 ### 7.2 Review by the reviewer agent
 
 Chain straight into the review, like the kanban flow chains a clean build. This runs **inline in this same warm container in board context too** — it is no longer skipped when `<BOARD_CONTEXT>` is true; only Step 8 (deploy) is. Post the started marker, then dispatch the reviewer:
@@ -341,9 +343,12 @@ A non-empty `unchecked` never changes the verdict routing — carry it into the 
 
 The verdicts mean: the change is good (`pass`), good with notes worth recording (`pass with notes`), it has problems to fix (`fail`), it was built correctly but not every ticket acceptance criterion was met (`incomplete`), or the code could not be obtained at all — the branch is unreachable or no commits reference the key (`unreviewable`). `decision-required` is not a verdict at all: the reviewer examined the code and found a genuine product/scope fork it cannot resolve, exactly like the preflight fork in Step 1a. Post the outcome on the bug ticket (same follow-up the review pickup flow posts). The `[human:review-complete]` comment below is only for reviews that examined code and reached one of the four verdicts; `unreviewable` and `decision-required` are handled by the 7.3 gate instead. The comment is the canonical record: inline the reviewer's **full findings** under a `## Findings` section so the board detail panel shows what was found without opening the local `.human/reviews/<work-key>.md` (which stays a working artifact):
 
+`commits:` names exactly what this verdict judged: the handoff's commits (`human handoff show <BUG_KEY>` returns them as JSON) plus any commit the reviewer itself made on the branch, comma-separated short SHAs. It is how the daemon tells a rebuild handed back from a record of what the branch holds — without it the comparison falls back to the clock and a later handoff re-opens a round that is over.
+
 ```bash
 human marker post <BUG_KEY> review-complete \
   --field verdict="<verdict>" \
+  --field commits="<the handoff's commits, plus any commit the reviewer made on the branch>" \
   --field reviews="<WORK_KEY>: <verdict> — .human/reviews/<work-key>.md" \
   --body-file - <<'REVIEW_EOF'
 ## Findings

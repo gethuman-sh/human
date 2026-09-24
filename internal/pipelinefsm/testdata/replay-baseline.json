@@ -120,6 +120,14 @@
         "evidence": [
           "SC-4923"
         ]
+      },
+      "ready-for-review@pr-review": {
+        "count": 1,
+        "why": "A fix run re-posted its handoff while the machine PR review was live, to record the commit the reviewer had made on the branch. handoff-posted is declared from implementing, verifying and reviewed — never from pr-review — and the daemon acted on it anyway: it handed the card back out of the done stage, blanked the passing verdict and launched a second pre-merge reviewer. FIXED by SC-5475: the verdict now records the commits it judged, a handoff naming only those starts nothing, and the autofix skill records the reviewer's own commits on [human:review-complete] instead of re-posting the handoff. The move stays refused — it is out-of-band, not a route the machine offers.",
+        "ticket": "SC-5475",
+        "evidence": [
+          "SC-5395"
+        ]
       }
     }
   },
@@ -142,7 +150,7 @@
   "ambiguities": {
     "doc": "Markers that fit several edges leading to different states. Not defects — the header genuinely does not say which move was made, and the answer is in the marker BODY the corpus deliberately does not carry. A NEW ambiguity should fail; these should not.",
     "kinds": {
-      "bug-verdict@preflight": 14,
+      "bug-verdict@preflight": 15,
       "implementation-started@queued": 7,
       "implementation-started@stopped": 32,
       "implementation-started@substrate-down": 2

@@ -495,11 +495,14 @@ func chainReviewAfterCleanBuild(ctx context.Context, exit RunExit, commenter tra
 		// A verification marker NEWER than this exit's handoff accounts for the
 		// review: review-complete (pass OR fail verdict) is a recorded outcome the
 		// board acts on, and a review-failed marker is already retryable. Either
-		// way, do not chain a second review. Recency is the whole test — the SC-782
-		// merged case posts its review-started/complete AFTER the handoff, so its
-		// protection is exactly preserved, while a rework handoff posted after a
-		// verdict flows on to chainReviewAfterBuild instead of returning here with
-		// no warning logged (SC-4958). Only a mid-review death — the marker still
+		// way, do not chain a second review. Recency alone is not the test: the
+		// handoff must also hand over a commit no verdict has judged (SC-5475), so
+		// the SC-782 merged case — review-started/complete posted AFTER the handoff
+		// — keeps its protection exactly, a genuine rework handoff carrying new
+		// commits still flows on to chainReviewAfterBuild instead of returning here
+		// with no warning logged (SC-4958), and a handoff merely re-posted over
+		// commits the verdict already judged starts nothing. Only a mid-review
+		// death — the marker still
 		// reads "running" AND the exit itself was not clean — needs a retryable
 		// marker.
 		if vState == BoardRunning && !exit.CleanExit() {
