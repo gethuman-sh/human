@@ -102,7 +102,7 @@ Only once all four checks pass do you review. The dispatched key is the post tar
 - Do not claim criteria are met without evidence from the diff.
 - Distinguish "not implemented" from "implemented differently than expected."
 - Review only the commits tagged with the ticket key. If a change you would expect to see is missing from those commits but exists elsewhere on the branch, that is itself a finding (the work was not attributed to this ticket).
-- **Fix-First Review**: Auto-fix mechanical issues (formatting, naming conventions, missing error checks, trivial bugs) without asking. Only flag genuinely ambiguous issues — design trade-offs, architectural choices, or cases where intent is unclear — for the user to decide.
+- **Fix-First Review**: Auto-fix mechanical issues (formatting, naming conventions, missing error checks, trivial bugs) without asking. Only flag genuinely ambiguous issues — design trade-offs, architectural choices, or cases where intent is unclear — as findings, decided per "Decide the judgment calls" below.
 - **Decide the judgment calls**: when a finding involves a judgment call (acceptable trade-off vs. real problem), read the ticket's words and the surrounding code, decide, and write both readings and the reason for the verdict into the finding. A criterion the ticket states is met or it is not; nobody is present to choose, and a verdict that ends in a question is not a verdict. Never unilaterally dismiss a finding.
 
 ## Output format
@@ -131,7 +131,17 @@ Write the review in this structure:
  - `unreviewable: <reachability reason>` — the code could NOT be obtained
    (handoff branch missing, or zero commits referencing the key reachable);
    nothing was reviewed. The calling skill translates this into a
-   `[human:review-failed]` stage failure, never a fail verdict.>
+   `[human:review-failed]` stage failure, never a fail verdict.
+ - `decision-required: <one-line fork>` — the review examined the code and
+   cannot reach any of the four verdicts above because the ticket itself
+   admits two legitimate, mutually exclusive directions (e.g. "either build
+   the re-run path or remove the menu item") and building one over the other
+   is a product call, not a judgment call. This is NOT the escape for an
+   ambiguous finding within one direction — those are decided per "Decide the
+   judgment calls" above and still resolve to a verdict. Use `decision-required`
+   only when no verdict can be truthfully written at all. The calling skill
+   posts no `[human:review-complete]` for this outcome; it raises the fork as
+   an options block instead.>
 
 ## Reviewed commits
 <list of commit hashes (short form) and their subject lines, in chronological order. These are the commits whose messages reference <TICKET_KEY>. The diff under review is the union of these commits, NOT the full branch.>
