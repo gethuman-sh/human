@@ -166,6 +166,13 @@ export function buildCostSection(c, currentStage, stageEnteredAt, nowMs, current
         : allUnmeasured
             ? `<div class="detail-cost-unmeasured">${calls} call${calls === 1 ? "" : "s"} recorded no tokens, so what this cost is not known.</div>`
             : "";
+    // Failed completions (non-2xx) are distinct from unmeasured ones: they cost
+    // nothing and are reported on their own, matching the CLI renderer
+    // (cmd/cmdstats/tickets.go renderTicketCost, SC-5533).
+    const failed = c.failedCalls ?? 0;
+    const failedNote = failed > 0
+        ? `<div class="detail-cost-failed">${failed} further call${failed === 1 ? "" : "s"} failed and cost nothing.</div>`
+        : "";
     // The elapsed figure measures the same thing whatever the card is doing — the
     // time since its newest stage marker landed — but "running" is a claim about
     // the work, and this section was making it for every state. A card that failed
@@ -187,6 +194,7 @@ export function buildCostSection(c, currentStage, stageEnteredAt, nowMs, current
         `<div class="detail-cost-total">${totalLine}</div>` +
         split +
         unmeasuredNote +
+        failedNote +
         curElapsed +
         `<div class="detail-cost-stages">${stageRows}</div></section>`;
 }

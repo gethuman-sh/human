@@ -138,6 +138,10 @@ export interface TicketCost {
   // counts so could not be priced.
   calls?: number;
   unmeasuredCalls?: number;
+  // How many completions came back non-2xx: cost nothing, priced at nothing,
+  // and distinct from unmeasuredCalls — those are 2xx with no usage on them
+  // (SC-5533).
+  failedCalls?: number;
   stages: { stage: string; costUSD: number; contextCostUSD: number; answersCostUSD: number; durationMs: number }[];
 }
 
@@ -239,6 +243,14 @@ export function buildCostSection(
       : allUnmeasured
         ? `<div class="detail-cost-unmeasured">${calls} call${calls === 1 ? "" : "s"} recorded no tokens, so what this cost is not known.</div>`
         : "";
+  // Failed completions (non-2xx) are distinct from unmeasured ones: they cost
+  // nothing and are reported on their own, matching the CLI renderer
+  // (cmd/cmdstats/tickets.go renderTicketCost, SC-5533).
+  const failed = c.failedCalls ?? 0;
+  const failedNote =
+    failed > 0
+      ? `<div class="detail-cost-failed">${failed} further call${failed === 1 ? "" : "s"} failed and cost nothing.</div>`
+      : "";
   // The elapsed figure measures the same thing whatever the card is doing — the
   // time since its newest stage marker landed — but "running" is a claim about
   // the work, and this section was making it for every state. A card that failed
@@ -262,6 +274,7 @@ export function buildCostSection(
     `<div class="detail-cost-total">${totalLine}</div>` +
     split +
     unmeasuredNote +
+    failedNote +
     curElapsed +
     `<div class="detail-cost-stages">${stageRows}</div></section>`;
 }
