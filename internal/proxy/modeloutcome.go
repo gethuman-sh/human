@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/andybalholm/brotli"
 )
 
 // DefaultModelAPIHost is the model-API host whose call outcomes are accounted.
@@ -40,6 +42,14 @@ type ModelCallOutcome struct {
 	Ticket string `json:"ticket"`
 	Stage  string `json:"stage"`
 	Host   string `json:"host"`
+	// Method and Path name the request line, query string stripped: the model
+	// API host also serves the small calls a session makes around its
+	// completions (startup fetches, token counting, telemetry), and a row that
+	// cannot say which endpoint it hit cannot say whether it was ever a call
+	// worth pricing (SC-5533). Both are empty on a failure that preceded any
+	// request line. A path is routing metadata, never content (SC-2555).
+	Method string `json:"method,omitempty"`
+	Path   string `json:"path,omitempty"`
 	// StatusCode is 0 when the call failed before any response line existed
 	// (a refused/never-completed connection).
 	StatusCode int           `json:"status_code"`
@@ -155,7 +165,7 @@ const maxDecodedBody = 32 * 1024 * 1024
 // http.ReadResponse and tees the bytes straight through, and ReadResponse
 // decodes only the transfer encoding — Go's Transport is what would undo a
 // content encoding, and this path deliberately has none. So a client that sent
-// `accept-encoding: gzip` (every current Anthropic SDK does) left the captured
+// `accept-encoding: gzip` (as every Anthropic SDK did then) left the captured
 // copy compressed, and the usage scan found no `data:` line and no JSON object
 // in it: 520 attributed calls landed in the ledger with a blank model and four
 // zero counts, priced at $0.00 (SC-3440).
@@ -187,8 +197,13 @@ func decodeBody(header http.Header, body []byte) []byte {
 		fr := flate.NewReader(bytes.NewReader(body))
 		defer func() { _ = fr.Close() }()
 		r = fr
+	case "br":
+		// The client runtime now offers brotli and the edge takes it for every
+		// JSON response; only the SSE stream arrives unencoded. 847 bodies in
+		// one afternoon were skipped here as unsupported (SC-5533).
+		r = brotli.NewReader(bytes.NewReader(body))
 	default:
-		// br, zstd and anything else: not expanded here. emitOutcome reports the
+		// zstd and anything else: not expanded here. emitOutcome reports the
 		// resulting blind spot, because "this call cost nothing" and "we could
 		// not tell what it cost" are different claims and only one is true.
 		return body
@@ -317,6 +332,34 @@ func (li *LoggingInterceptor) isModelHost(host string) bool {
 	return strings.EqualFold(strings.TrimSpace(host), li.modelAPIHost())
 }
 
+// CompletionPath is the Messages API path, the one request on the model host
+// that returns usage and therefore the one the ledger prices. Matched whole:
+// `/v1/messages/count_tokens` is a sibling that costs nothing.
+const CompletionPath = "/v1/messages"
+
+// CallRef names the request a recorded outcome belongs to. It is zero for an
+// outcome recorded before a request line existed (a dial or read failure).
+type CallRef struct {
+	Method string
+	Path   string
+}
+
+// callRefOf reads the ref off a request, query string dropped: `?beta=true`
+// changes nothing about which endpoint was hit and must not fork the count.
+func callRefOf(req *http.Request) CallRef {
+	if req == nil || req.URL == nil {
+		return CallRef{}
+	}
+	return CallRef{Method: req.Method, Path: req.URL.Path}
+}
+
+// IsCompletion reports whether the ref is a Messages API completion — a call
+// whose 2xx body carries usage. Everything else on the host (startup fetches,
+// token counting, telemetry) is recorded for the record but never priced.
+func (c CallRef) IsCompletion() bool {
+	return c.Method == http.MethodPost && c.Path == CompletionPath
+}
+
 // markInflight reports one +1/-1 delta for an in-flight model request, gated
 // on the model host and nil-safe like emitOutcome — a fault in accounting
 // must never break the call it is measuring, and only the traffic that
@@ -341,7 +384,7 @@ func (li *LoggingInterceptor) markInflight(remoteAddr, host string, delta int) {
 // (SC-2847). It is nil on every path that has no response line (a transport
 // failure) and is never stored; only fixed metadata fields are read, so the
 // outcome struct stays content-free (SC-2555). No other outcome touches the body.
-func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode int, transportErr error, start time.Time, header http.Header, body []byte) {
+func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, call CallRef, statusCode int, transportErr error, start time.Time, header http.Header, body []byte) {
 	if li.RecordOutcome == nil || !li.isModelHost(host) {
 		return
 	}
@@ -362,12 +405,14 @@ func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode in
 	var inTok, outTok, cacheCreate, cacheRead int
 	if statusCode >= 200 && statusCode < 300 {
 		model, inTok, outTok, cacheCreate, cacheRead = usageFromResponse(body)
-		// A successful call whose usage would not parse is a hole in the
+		// A successful completion whose usage would not parse is a hole in the
 		// accounting, and it is invisible downstream: the ledger stores the row
 		// either way, so the ticket simply reads as costing nothing. Say so
 		// once, here, with the coding that defeated the read — the alternative
-		// is a board reporting $0.00 with total confidence (SC-3440).
-		if model == "" && len(body) > 0 {
+		// is a board reporting $0.00 with total confidence (SC-3440). Only a
+		// completion is a hole: the other endpoints never carry usage, and
+		// warning on them is what made startup traffic read as lost dollars.
+		if model == "" && len(body) > 0 && call.IsCompletion() {
 			li.Logger.Warn().
 				Str("content_encoding", header.Get("Content-Encoding")).
 				Int("body_bytes", len(body)).
@@ -378,6 +423,8 @@ func (li *LoggingInterceptor) emitOutcome(remoteAddr, host string, statusCode in
 		Ticket:            ticket,
 		Stage:             stage,
 		Host:              host,
+		Method:            call.Method,
+		Path:              call.Path,
 		Model:             model,
 		InputTokens:       inTok,
 		OutputTokens:      outTok,

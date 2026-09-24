@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gethuman-sh/human/errors"
@@ -23,9 +24,17 @@ const RetentionDays = 180
 // stored (not a computed dollar figure) so historical calls re-price correctly
 // when the single rate card changes (SC-2847 AD3).
 type CallRecord struct {
-	Project           string
-	Ticket            string
-	Stage             string
+	Project string
+	Ticket  string
+	Stage   string
+	// Endpoint is the request line without its version, "POST /v1/messages",
+	// and Status the response status. The model host serves more than
+	// completions — startup fetches, token counting, telemetry — and a row
+	// that cannot say which it was cannot be told apart from a completion
+	// whose usage failed to parse (SC-5533). Empty and 0 on rows written
+	// before either was captured.
+	Endpoint          string
+	Status            int
 	Model             string
 	InputTokens       int
 	OutputTokens      int
@@ -59,18 +68,49 @@ type TicketCost struct {
 	ContextCostUSD  float64 `json:"contextCostUSD"`
 	AnswersCostUSD  float64 `json:"answersCostUSD"`
 	TotalDurationMs int64   `json:"totalDurationMs"`
-	// Calls is how many recorded calls the roll-up is made of, and
-	// UnmeasuredCalls how many of them carried no token counts at all — the
-	// zero-token rows written before the proxy could read usage off a
-	// compressed body (SC-3440). They price at nothing because nothing was
-	// measured, not because nothing was spent, and a dollar figure that does
-	// not say so asserts a run was free (SC-4151 C7). Two tickets on this
-	// board consist of nothing else: SC-1542 (85 calls, 8m40s) and SC-3339
-	// (222 calls, 80m37s), both rendering $0.0000 beside a real duration.
+	// Calls is how many completions the roll-up is made of, and
+	// UnmeasuredCalls how many of them carried no token counts at all — a
+	// 2xx whose usage the proxy could not read (SC-3440). They price at
+	// nothing because nothing was measured, not because nothing was spent,
+	// and a dollar figure that does not say so asserts a run was free
+	// (SC-4151 C7). Two tickets on this board consist of nothing else:
+	// SC-1542 (85 calls, 8m40s) and SC-3339 (222 calls, 80m37s), both
+	// rendering $0.0000 beside a real duration.
+	//
+	// FailedCalls is how many completions came back non-2xx. They cost
+	// nothing and are not unmeasured; a run that waited on them still spent
+	// the time, so their duration counts. Requests to the host's other
+	// endpoints are in none of the three: they never carry usage, and
+	// counting them as calls is what made a quarter of every ticket's calls
+	// read as lost dollars (SC-5533). A row from before the endpoint was
+	// captured keeps its old reading — a call, unmeasured if it has no
+	// tokens — because nothing on it says otherwise.
 	Calls           int         `json:"calls"`
 	UnmeasuredCalls int         `json:"unmeasuredCalls"`
+	FailedCalls     int         `json:"failedCalls"`
 	Stages          []StageCost `json:"stages"`
 }
+
+// CompletionEndpoint is the one request on the model host that returns usage.
+const CompletionEndpoint = "POST /v1/messages"
+
+// Call kinds, as the SQL classifies each row. A row with no endpoint predates
+// the capture and is read as it always was: a call.
+const (
+	kindCall   = "call"
+	kindFailed = "failed"
+	kindOther  = "other"
+)
+
+// callKindSQL classifies a row in the query itself so every read shares the one
+// definition: a completion that answered 2xx, or a row from before endpoints
+// were recorded, is a call; a completion that answered anything else failed;
+// every other endpoint is neither.
+const callKindSQL = `CASE
+	WHEN endpoint = '' THEN 'call'
+	WHEN endpoint = '` + CompletionEndpoint + `' AND status BETWEEN 200 AND 299 THEN 'call'
+	WHEN endpoint = '` + CompletionEndpoint + `' THEN 'failed'
+	ELSE 'other' END`
 
 // Store is the durable, unbounded, per-project per-ticket ledger.
 type Store struct{ db *sql.DB }
@@ -126,6 +166,21 @@ CREATE INDEX IF NOT EXISTS idx_ticket_calls_started ON ticket_calls (started_at)
 	if err != nil {
 		return errors.WrapWithDetails(err, "ensure cost ledger schema")
 	}
+	return s.ensureColumns()
+}
+
+// ensureColumns adds the columns that arrived after the table did. SQLite has
+// no ADD COLUMN IF NOT EXISTS, so each is attempted and a duplicate-column
+// error is the "already there" answer; any other error is real.
+func (s *Store) ensureColumns() error {
+	for _, ddl := range []string{
+		"ALTER TABLE ticket_calls ADD COLUMN endpoint TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE ticket_calls ADD COLUMN status INTEGER NOT NULL DEFAULT 0",
+	} {
+		if _, err := s.db.Exec(ddl); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return errors.WrapWithDetails(err, "migrate cost ledger schema", "ddl", ddl)
+		}
+	}
 	return nil
 }
 
@@ -137,9 +192,9 @@ func (s *Store) InsertCall(ctx context.Context, r CallRecord) error {
 		started = time.Now().UTC()
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO ticket_calls (project, ticket, stage, model, input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, duration_ms, started_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Project, r.Ticket, r.Stage, r.Model, r.InputTokens, r.OutputTokens, r.CacheCreateTokens, r.CacheReadTokens, r.DurationMs, started.UTC().Format("2006-01-02 15:04:05"))
+		`INSERT INTO ticket_calls (project, ticket, stage, endpoint, status, model, input_tokens, output_tokens, cache_create_tokens, cache_read_tokens, duration_ms, started_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Project, r.Ticket, r.Stage, r.Endpoint, r.Status, r.Model, r.InputTokens, r.OutputTokens, r.CacheCreateTokens, r.CacheReadTokens, r.DurationMs, started.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return errors.WrapWithDetails(err, "insert ticket call", "ticket", r.Ticket)
 	}
@@ -153,10 +208,11 @@ func (s *Store) InsertCall(ctx context.Context, r CallRecord) error {
 func (s *Store) TicketCost(ctx context.Context, project, ticket string) (TicketCost, error) {
 	out := TicketCost{Ticket: ticket, LedgerRead: true}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT stage, model, SUM(input_tokens), SUM(output_tokens), SUM(cache_create_tokens), SUM(cache_read_tokens), SUM(duration_ms),
+		`SELECT stage, model, `+callKindSQL+` AS kind,
+		        SUM(input_tokens), SUM(output_tokens), SUM(cache_create_tokens), SUM(cache_read_tokens), SUM(duration_ms),
 		        COUNT(*),
 		        SUM(CASE WHEN input_tokens + output_tokens + cache_create_tokens + cache_read_tokens = 0 THEN 1 ELSE 0 END)
-		 FROM ticket_calls WHERE project = ? AND ticket = ? GROUP BY stage, model`,
+		 FROM ticket_calls WHERE project = ? AND ticket = ? GROUP BY stage, model, kind`,
 		project, ticket)
 	if err != nil {
 		return out, errors.WrapWithDetails(err, "query ticket cost", "ticket", ticket)
@@ -165,15 +221,22 @@ func (s *Store) TicketCost(ctx context.Context, project, ticket string) (TicketC
 
 	byStage := map[string]*StageCost{}
 	for rows.Next() {
-		var stage, model string
+		var stage, model, kind string
 		var in, outTok, cc, cr, calls, unmeasured int
 		var durMs int64
-		if err := rows.Scan(&stage, &model, &in, &outTok, &cc, &cr, &durMs, &calls, &unmeasured); err != nil {
+		if err := rows.Scan(&stage, &model, &kind, &in, &outTok, &cc, &cr, &durMs, &calls, &unmeasured); err != nil {
 			return out, errors.WrapWithDetails(err, "scan ticket cost row", "ticket", ticket)
 		}
+		if kind == kindOther {
+			continue
+		}
 		out.HasSpend = true
-		out.Calls += calls
-		out.UnmeasuredCalls += unmeasured
+		if kind == kindFailed {
+			out.FailedCalls += calls
+		} else {
+			out.Calls += calls
+			out.UnmeasuredCalls += unmeasured
+		}
 		cost := claude.CostUSD(model, in, outTok, cc, cr)
 		ctxCost := claude.CostUSD(model, in, 0, cc, cr)
 		ansCost := claude.CostUSD(model, 0, outTok, 0, 0)
@@ -252,6 +315,8 @@ type TicketSpend struct {
 // a zero-token row: those written before the proxy read usage off a compressed
 // body (SC-3440) carry no tokens to price. They still rank, because they are
 // part of the truth about a ticket: it ran, and what it cost is not known.
+// Requests to the host's other endpoints are left out entirely: they were
+// never calls, and their sub-second durations are not model time.
 func (s *Store) TopTicketSpend(ctx context.Context, project string, since, until time.Time, limit int) ([]TicketSpend, error) {
 	if limit <= 0 {
 		limit = 10
@@ -259,7 +324,7 @@ func (s *Store) TopTicketSpend(ctx context.Context, project string, since, until
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT ticket, model, SUM(input_tokens), SUM(output_tokens), SUM(cache_create_tokens), SUM(cache_read_tokens), SUM(duration_ms)
 		 FROM ticket_calls
-		 WHERE project = ? AND started_at >= ? AND started_at <= ?
+		 WHERE project = ? AND started_at >= ? AND started_at <= ? AND `+callKindSQL+` <> 'other'
 		 GROUP BY ticket, model`,
 		project, since.UTC().Format("2006-01-02 15:04:05"), until.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {

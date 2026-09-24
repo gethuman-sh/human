@@ -242,6 +242,55 @@ test("a partial measurement gap keeps the figure and qualifies it", () => {
   assert.match(html, /4 of 10 calls recorded no tokens/);
 });
 
+// SC-5533: failed (non-2xx) completions cost nothing and are reported on
+// their own, distinct from unmeasured (2xx, no usage) calls — matching the
+// CLI renderer (cmd/cmdstats/tickets.go renderTicketCost).
+test("failed completions are reported on their own, distinct from unmeasured", () => {
+  const html = buildCostSection(
+    {
+      ticket: "SC-1",
+      ledgerRead: true,
+      hasSpend: true,
+      totalCostUSD: 1.23,
+      contextCostUSD: 0.8,
+      answersCostUSD: 0.43,
+      totalDurationMs: 5000,
+      calls: 10,
+      unmeasuredCalls: 4,
+      failedCalls: 3,
+      stages: [],
+    },
+    "implementation",
+    undefined,
+    Date.now(),
+  );
+  assert.match(html, /\$1\.23/);
+  assert.match(html, /4 of 10 calls recorded no tokens/);
+  assert.match(html, /3 further calls failed and cost nothing/);
+});
+
+test("a roll-up with no failed calls prints no failed-call note", () => {
+  const html = buildCostSection(
+    {
+      ticket: "SC-1",
+      ledgerRead: true,
+      hasSpend: true,
+      totalCostUSD: 1.23,
+      contextCostUSD: 0.8,
+      answersCostUSD: 0.43,
+      totalDurationMs: 5000,
+      calls: 10,
+      unmeasuredCalls: 4,
+      failedCalls: 0,
+      stages: [],
+    },
+    "implementation",
+    undefined,
+    Date.now(),
+  );
+  assert.doesNotMatch(html, /failed and cost nothing/);
+});
+
 test("a ledger that could not be read says so, instead of claiming the ticket is unspent", () => {
   const html = buildCostSection(
     { ticket: "SC-1", ledgerRead: false, hasSpend: false, totalCostUSD: 0, contextCostUSD: 0, answersCostUSD: 0, totalDurationMs: 0, stages: [] },

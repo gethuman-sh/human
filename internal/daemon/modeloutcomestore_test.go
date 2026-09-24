@@ -161,3 +161,10 @@ func TestModelOutcomeSink_UnattributedGroupsSeparately(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, proxy.ClassNetwork, c)
 }
+
+// The ledger classifies rows by the request line the sink writes, so the line
+// the sink builds for a completion must be the one the ledger looks for.
+func TestEndpointOf_MatchesTheLedgersCompletionEndpoint(t *testing.T) {
+	assert.Equal(t, costledger.CompletionEndpoint, endpointOf(proxy.ModelCallOutcome{Method: "POST", Path: proxy.CompletionPath}))
+	assert.Equal(t, "", endpointOf(proxy.ModelCallOutcome{}), "a pre-request failure names no endpoint")
+}
