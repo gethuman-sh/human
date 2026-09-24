@@ -1043,17 +1043,26 @@ func liveBoardAgents() ([]string, error) {
 // written at the one choke point every remove path funnels through, so it is
 // the earlier and more authoritative record of when the run actually ended.
 func stoppedBoardAgents() (map[string]time.Time, error) {
-	stopped, err := stoppedBoardAgentsFromMeta()
+	metas, err := agent.ListMetas()
 	if err != nil {
 		return nil, err
 	}
+	stopped := stoppedBoardAgentsFromMeta(metas)
 	reaped, err := reapedBoardAgentsFromExecutionLog()
 	if err != nil {
 		// A broken execution-log read must not blind the meta-based half —
 		// return what the meta already told us rather than nothing.
 		return stopped, nil
 	}
+	// A stale execution-log entry (e.g. a launch whose NewExecution failed
+	// and left a prior run's outcome.json as the newest one on disk) must
+	// never overrule a meta that says the agent is running right now —
+	// otherwise a currently-live agent gets reported stopped (SC-5327).
+	running := runningBoardAgentNames(metas)
 	for name, at := range reaped {
+		if _, alive := running[name]; alive {
+			continue
+		}
 		stopped[name] = at
 	}
 	return stopped, nil
@@ -1061,11 +1070,7 @@ func stoppedBoardAgents() (map[string]time.Time, error) {
 
 // stoppedBoardAgentsFromMeta is the meta-only half of stoppedBoardAgents: the
 // producers that write StatusStopped straight to the meta and leave it there.
-func stoppedBoardAgentsFromMeta() (map[string]time.Time, error) {
-	metas, err := agent.ListMetas()
-	if err != nil {
-		return nil, err
-	}
+func stoppedBoardAgentsFromMeta(metas []agent.Meta) map[string]time.Time {
 	stopped := make(map[string]time.Time, len(metas))
 	for _, m := range metas {
 		if m.Status == agent.StatusRunning || m.StoppedAt.IsZero() {
@@ -1073,7 +1078,21 @@ func stoppedBoardAgentsFromMeta() (map[string]time.Time, error) {
 		}
 		stopped[m.Name] = m.StoppedAt
 	}
-	return stopped, nil
+	return stopped
+}
+
+// runningBoardAgentNames returns the names whose meta currently says
+// agent.StatusRunning, so the execution-log half of stoppedBoardAgents can
+// never report a live agent as stopped on the strength of a stale prior run's
+// outcome.json.
+func runningBoardAgentNames(metas []agent.Meta) map[string]struct{} {
+	running := make(map[string]struct{})
+	for _, m := range metas {
+		if m.Status == agent.StatusRunning {
+			running[m.Name] = struct{}{}
+		}
+	}
+	return running
 }
 
 // reapedBoardAgentsFromExecutionLog reads the newest execution-log outcome for
