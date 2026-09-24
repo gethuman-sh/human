@@ -71,7 +71,7 @@ func TestDeriveBoardCard_LateHandoffLeavesTheLivePRReviewAlone(t *testing.T) {
 	var chained []string
 	n := reconcileOrphanedHandoffs(reviewSet(cards, alwaysReachable), ReconcileDeps{
 		ChainReview: func(pmKey string) error { chained = append(chained, pmKey); return nil },
-	})
+	}, time.Now())
 	assert.Equal(t, 0, n)
 	assert.Empty(t, chained)
 }
