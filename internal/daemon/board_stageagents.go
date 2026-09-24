@@ -1,5 +1,7 @@
 package daemon
 
+import "github.com/rs/zerolog"
+
 // doneStageAgentStages are every agent the done stage can legitimately run
 // under. The done stage is the ONE stage whose agent name is not derivable from
 // the stage: three agents run under it and a plain deploy runs in-process under
@@ -41,4 +43,25 @@ func liveStageAgent(alive map[string]struct{}, pmKey string, stage BoardStage) (
 		}
 	}
 	return "", false
+}
+
+// aliveAgentSet reads the board agents running on this machine into a set. The
+// bool reports whether the answer is usable at all: a nil lister or a failed
+// lookup cannot establish liveness, and a caller that cannot establish liveness
+// must decide on something other than a guess. `what` names the caller in the
+// warning, so a probe failure says which pass lost its footing.
+func aliveAgentSet(lister LiveAgentLister, logger zerolog.Logger, what string) (map[string]struct{}, bool) {
+	if lister == nil {
+		return nil, false
+	}
+	names, err := lister()
+	if err != nil {
+		logger.Warn().Err(err).Msg("board: cannot list live agents for " + what)
+		return nil, false
+	}
+	alive := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		alive[n] = struct{}{}
+	}
+	return alive, true
 }

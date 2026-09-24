@@ -424,6 +424,45 @@ func handoffAwaitsReview(comments []tracker.Comment) bool {
 	return commentNewer(handoff, judged)
 }
 
+// inlineReviewerOwnsHandoff reports that the newest handoff says its poster
+// reviews the work itself AND that reviewer is still plausibly running, so a
+// daemon launcher must start no second one.
+//
+// It is the fact handoffAwaitsReview alone cannot supply. "Nothing has judged
+// this round yet" is true for three seconds of every board fix run — between
+// the handoff and the container's own [human:review-started] — and in those
+// three seconds the daemon's launchers read a finished build with nobody
+// reviewing it and start a reviewer that nothing can arbitrate, because the
+// in-container reviewer posts no [human:claim] and so is not a participant in
+// claimWon (SC-5476, measured on SC-5396: two review-started markers one second
+// apart, two verdicts, the later overwriting the earlier).
+//
+// Liveness is what stops this trading a double review for a stuck card. An
+// inline handoff whose implementation container is GONE is an orphan and must
+// still be chained — that is SC-430, and suppressing it unconditionally would
+// reintroduce it. Where liveness cannot be established at all (no lister wired,
+// or the lookup failed) the handoff is taken at its word for StuckRunningGrace
+// and no longer: bounded trust, rather than believing it forever or not at all.
+// That deviates from this package's usual "a nil lister degrades to today's
+// behaviour" convention on purpose — here today's behaviour is the defect.
+func inlineReviewerOwnsHandoff(comments []tracker.Comment, pmKey string, alive map[string]struct{}, aliveKnown bool, now time.Time) bool {
+	handoff, ok := latestCommentWithHeader(comments, ReadyForReviewHeader)
+	if !ok || !HandoffReviewsItself(handoff.Body) {
+		return false
+	}
+	// Once a verification marker newer than the handoff exists, the inline
+	// review has recorded itself and the ordinary recency guards govern from
+	// there; this predicate has nothing left to protect.
+	if !handoffAwaitsReview(comments) {
+		return false
+	}
+	if aliveKnown {
+		_, live := liveStageAgent(alive, pmKey, BoardImplementation)
+		return live
+	}
+	return now.Sub(handoff.Created) < StuckRunningGrace
+}
+
 // latestCommentWithHeader returns the newest comment whose body starts with
 // header, under the board's total order.
 func latestCommentWithHeader(comments []tracker.Comment, header string) (tracker.Comment, bool) {
