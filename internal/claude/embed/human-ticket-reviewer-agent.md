@@ -94,8 +94,13 @@ the card and relaunches you to reach the same verdict again. Post the planning s
 alongside the verdict:
 
 ```bash
-human marker post <KEY> nothing-to-do --field "evidence=<the verdict, and the key that carries the work>"
+human marker post <KEY> nothing-to-do --field "evidence=<the verdict, and the key that carries the work>" --field reason=<duplicate|escalated|rejected>
 ```
+
+`reason` is what the board labels the card with, and the post refuses a record without one: `duplicate` for
+`superseded` (another ticket carries the work), `escalated` for `escalated` (a design ticket has to be decided
+first), `rejected` for `rejected`. Never `merged` — that reason is the planner's, for work already on `main`, and
+it is the only one the board renders as "already shipped".
 
 Then stop. `ready` and `reframed` never post it — planning continues on those.
 

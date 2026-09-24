@@ -77,10 +77,10 @@ which is the failure this gate exists to catch. Never attach a plan whose
 If the planner returned an `ALREADY IMPLEMENTED: <evidence>` verdict instead of a plan — exploration showed every acceptance criterion is already satisfied by code merged on `main` — the ticket's work has already shipped. Attaching a plan and posting `[human:plan-ready]` would advance the card and re-implement shipped code, so do NOT do that. Instead:
 
 - Do NOT run the verification phases, attach any plan, or post `[human:plan-ready]`.
-- Post the terminal `[human:nothing-to-do]` marker on the PM ticket, carrying the planner's evidence (name the merged PR/commit) so the board surfaces the card as "already shipped" (resolved), not red:
+- Post the terminal `[human:nothing-to-do]` marker on the PM ticket, carrying the planner's evidence (name the merged PR/commit) and `reason=merged` — the reason is what the board labels, and `merged` is the only one it renders as "already shipped" (resolved), not red:
 
 ```bash
-human marker post <PM_KEY> nothing-to-do --field "evidence=<the planner's ALREADY IMPLEMENTED evidence — merged PR/commit>"
+human marker post <PM_KEY> nothing-to-do --field "evidence=<the planner's ALREADY IMPLEMENTED evidence — merged PR/commit>" --field reason=merged
 ```
 
 - STOP. Skip Phases 4-6 entirely. In board context this is mandatory: the workflow board's failure watcher treats `[human:nothing-to-do]` as a clean stop (resolved, no retry loop), whereas a missing `[human:plan-ready]` after a normal exit is misread as a crash and re-planned forever.
