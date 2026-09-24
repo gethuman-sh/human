@@ -17,9 +17,28 @@ import (
 // proxy for "underway" and wrong in both directions, so the criterion is now
 // live forge state. The assertions moved with the mechanism; what they protect
 // did not.
+//
+// SC-5274 removed the ordering fork altogether: a confirmed collision is
+// recorded and both tickets are built, the merge gate integrating the second
+// with the base that carries the first. The forge check stays — it is what
+// tells a recorded hint from a live collision — and the prompt now states one
+// rule about ordering instead of two that contradicted each other.
 func TestPreflight_OrdersOnlyOnWorkReallyUnderway(t *testing.T) {
 	body := string(preflightAgentContent)
 	lower := strings.ToLower(body)
+
+	// The contradiction: step 6b raised the fork on `underway` alone while the
+	// admissibility section demanded a named collision. Neither rule survives.
+	assert.NotContains(t, body, "does the ordering fork apply",
+		"6b must not raise an ordering fork on the underway signal")
+	assert.NotContains(t, body, "Ordering is admissible",
+		"the admissibility section must not license an ordering question")
+	assert.NotContains(t, body, "which goes first?",
+		"no verdict example may show the ordering fork")
+	assert.Contains(t, body, "Ordering is never asked",
+		"the prompt states one rule about ordering")
+	assert.Contains(t, body, "recorded, never asked about",
+		"a confirmed collision is recorded on the run and the run continues")
 
 	// The bug: the escalation criterion was "still open" / "open ticket".
 	assert.NotContains(t, body, "still open",
