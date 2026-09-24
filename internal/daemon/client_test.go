@@ -474,7 +474,7 @@ func TestHandleOAuthCallback_ReadError(t *testing.T) {
 // gate only refuses a too-old client and never a too-old daemon.
 func TestStaleDaemonHint(t *testing.T) {
 	hint := staleDaemonHint(`Error: unknown command "state" for "human"`)
-	if !strings.Contains(hint, "daemon") || !strings.Contains(hint, "daemon start") {
+	if !strings.Contains(hint, "daemon") || !strings.Contains(hint, "human daemon restart") {
 		t.Errorf("hint should explain the stale daemon and how to fix it, got %q", hint)
 	}
 
