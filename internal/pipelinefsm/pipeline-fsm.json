@@ -342,7 +342,7 @@
     },
     {
       "name": "deploy-fixing",
-      "doc": "A CI failure or a rebase conflict dispatched the deploy fixer instead of failing the item.",
+      "doc": "A CI failure, a rebase conflict at the gate, or a base merge that conflicted before a review round dispatched the deploy fixer instead of failing the item; a fixer sent before the review hands back to the reviewer on done (the deploy-fix-started marker's `before: review` field), the gate's fixer re-runs the deploy.",
       "board": {
         "stage": "done",
         "state": "running"
@@ -801,8 +801,8 @@
       "actor": "daemon",
       "runs": "human-pr-reviewer",
       "marker": "[human:pr-review-started]",
-      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone. This is the `human deploy` route's entry into the loop (F10): the board's Deploy drop records pr-review-started without passing through deploying (start-pr-review), so this edge is walked only by a deploy that started from the CLI — the fix skills' `human deploy <KEY> --branch`, and a person's hand-run ship. The start marker's `branch:` is the loop's own binding: the merge step, the fixer dispatch and the approval marker all read the branch from it, falling back to the handoff only when it carries none — a loop started from the CLI has no handoff, and reading the handoff alone pushed an empty branch on approval (SC-5119).",
-      "where": "internal/daemon/deploy_entry.go StartDeploy → reviewThenShip, which opens the draft (openDraftPR, shared with the board's runDoneStage) and launches the reviewer through launchPRLoopAgent"
+      "doc": "The pull request is opened as a draft, so a half-reviewed change is not mergeable by anyone. This is the `human deploy` route's entry into the loop (F10): the board's Deploy drop records pr-review-started without passing through deploying (start-pr-review), so this edge is walked only by a deploy that started from the CLI — the fix skills' `human deploy <KEY> --branch`, and a person's hand-run ship. The start marker's `branch:` is the loop's own binding: the merge step, the fixer dispatch and the approval marker all read the branch from it, falling back to the handoff only when it carries none — a loop started from the CLI has no handoff, and reading the handoff alone pushed an empty branch on approval (SC-5119). Every reviewer launch goes through launchPRReview, which first merges an advanced base into the local branch (Deployer.FreshenBranch) so the reviewer reads the integrated candidate; a conflict on that merge walks stale-base-conflict instead (SC-5279).",
+      "where": "internal/daemon/deploy_entry.go StartDeploy → reviewThenShip, which opens the draft (openDraftPR, shared with the board's runDoneStage) and launches the reviewer through launchPRReview → launchPRLoopAgent"
     },
     {
       "name": "approval-reused",
@@ -849,8 +849,8 @@
       "actor": "daemon",
       "runs": "human-pr-reviewer",
       "marker": "[human:pr-review-started]",
-      "where": "internal/daemon/board_transition.go AdvancePRLoop, PRActionReview — the same action, re-entered after a fix round",
-      "doc": "The reviewer re-reads the branch after the fixer's commit. It is the same review step rather than a different one, so what bounds the loop is the round count, not a separate escalating transition."
+      "where": "internal/daemon/board_transition.go AdvancePRLoop, PRActionReview → launchPRReview — the same action, re-entered after a fix round",
+      "doc": "The reviewer re-reads the branch after the fixer's commit. It is the same review step rather than a different one, so what bounds the loop is the round count, not a separate escalating transition. The base merge in launchPRReview runs before every round, so a base that advanced during the fix round is folded in here rather than found by the reviewer as \"branch behind main\" (SC-5279)."
     },
     {
       "name": "pr-review-passed",
@@ -895,8 +895,38 @@
       ],
       "dst": "ci-gate",
       "actor": "daemon",
-      "where": "internal/daemon/board_transition.go AdvanceDeployFix — publishes the fixer's branch, then re-enters DeployBranch",
+      "where": "internal/daemon/board_transition.go AdvanceDeployFix — publishes the fixer's branch, then re-enters DeployBranch; a deploy-fix-started marker carrying `before: review` walks resolved-before-review instead",
       "doc": "The fixer's container holds no push credentials, so its deliverable is the local branch and the daemon publishes it before re-entering the gate. Publishing first is what makes the resolution count at all: the gate reads the branch from origin, so an unpublished fix would be silently discarded and the same failure re-hit."
+    },
+    {
+      "name": "stale-base-conflict",
+      "src": [
+        "deploying",
+        "pr-fix",
+        "substrate-down"
+      ],
+      "dst": "deploy-fixing",
+      "actor": "daemon",
+      "runs": "human-deploy-fixer",
+      "marker": "[human:deploy-fix-started]",
+      "required_fields": [
+        "before"
+      ],
+      "guard": "bounded: 2 rounds, shared with ci-red",
+      "where": "internal/daemon/board_transition.go launchPRReview → deployFailedOrDispatchFixer with beforeReview — every reviewer launch site (reviewThenShip, openDraftPRAndReview, AdvancePRLoop PRActionReview, AdvanceDeployFix done) passes through it",
+      "doc": "The base advanced past the branch and merging it in conflicts. The merge is mechanical and so is its resolution, so the deploy fixer takes it BEFORE any reviewer runs: run 3 of the campaign spent a review round on \"branch behind main\" on four of six pull requests, with the reviewer finding the drift, the fixer merging the base and the reviewer reading everything again. The marker's `before: review` field is what tells the fixer's done exit to hand back to the reviewer rather than re-run the deploy. A clean merge posts nothing: the local ref moves to the merge commit and the reviewer launch proceeds on the source edge (SC-5279)."
+    },
+    {
+      "name": "resolved-before-review",
+      "src": [
+        "deploy-fixing"
+      ],
+      "dst": "pr-review",
+      "actor": "daemon",
+      "runs": "human-pr-reviewer",
+      "marker": "[human:pr-review-started]",
+      "where": "internal/daemon/board_transition.go AdvanceDeployFix — deployFixWasBeforeReview reads the newest deploy-fix-started marker; the fixer's branch is published first, then launchPRReview runs",
+      "doc": "The fixer resolved a pre-review base conflict; nothing has reviewed the integrated branch yet, so the review is what comes next, not the CI gate. launchPRReview merges the base again on the way in — a base that moved during the fix round is folded in, and a second conflict spends a second fixer round from the same bound (SC-5279)."
     },
     {
       "name": "ci-green-merged",

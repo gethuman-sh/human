@@ -482,3 +482,39 @@ var TouchedSince = func(ctx context.Context, dir, boundary string, paths []strin
 	}
 	return strings.TrimSpace(string(out)) != "", nil
 }
+
+// MergeIntoHead merges ref into the worktree's current HEAD as a merge commit
+// under the caller-supplied committer identity, so a headless worktree with no
+// global git config can still commit (SC-1135). It reports a textual conflict
+// as conflict=true with a nil error — a conflict is an outcome the caller
+// decides on (dispatch a fixer), not a failure of the merge command — and any
+// other failure as an error. Either way a half-applied merge is aborted first,
+// so a retry starts from a clean worktree. Package var so callers can stub git
+// access in tests.
+var MergeIntoHead = func(ctx context.Context, dir, ref, name, email string) (conflict bool, err error) {
+	out, runErr := runner(ctx, "git", "-C", dir,
+		"-c", "user.name="+name,
+		"-c", "user.email="+email,
+		"merge", "--no-ff", "--no-edit", ref)
+	if runErr == nil {
+		return false, nil
+	}
+	_, _ = runner(ctx, "git", "-C", dir, "merge", "--abort")
+	if strings.Contains(string(out), "CONFLICT") {
+		return true, nil
+	}
+	return false, errors.WrapWithDetails(runErr, "merging ref into HEAD", "dir", dir, "ref", ref)
+}
+
+// UpdateBranchRef moves refs/heads/<branch> in dir to newSHA, refusing when the
+// ref no longer holds expectedSHA (a concurrent writer moved it) — the local
+// twin of a lease push. An empty expectedSHA creates the ref and refuses if it
+// already exists. The branch is never checked out: the ref moves under whatever
+// worktree holds it, which is why callers reserve this for a branch no live
+// step is committing on. Package var so callers can stub git access in tests.
+var UpdateBranchRef = func(ctx context.Context, dir, branch, newSHA, expectedSHA string) error {
+	if _, err := runner(ctx, "git", "-C", dir, "update-ref", "refs/heads/"+branch, newSHA, expectedSHA); err != nil {
+		return errors.WrapWithDetails(err, "moving branch ref", "dir", dir, "branch", branch, "to", newSHA)
+	}
+	return nil
+}

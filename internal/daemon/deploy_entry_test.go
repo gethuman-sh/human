@@ -475,7 +475,7 @@ func TestDispatchDeployFixer_gateRefusalRecordsTheDeployFailure(t *testing.T) {
 		return []DoctorCheck{{ID: "claude-auth", Name: "Claude authentication", OK: false, Detail: "login wiped"}}
 	}
 
-	err := deps.dispatchDeployFixer(context.Background(), "SC-1", PRResult{Number: 7, URL: "u"}, "feat/x", "CI checks failed on the pull request")
+	err := deps.dispatchDeployFixer(context.Background(), "SC-1", PRResult{Number: 7, URL: "u"}, "feat/x", "CI checks failed on the pull request", false)
 
 	require.Error(t, err)
 	assert.Zero(t, l.calls)

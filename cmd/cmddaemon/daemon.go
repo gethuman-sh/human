@@ -3061,6 +3061,76 @@ func (p forgeDeployer) EnsureMergeable(ctx context.Context, req daemon.PRRequest
 	return true, nil
 }
 
+// FreshenBranch merges an advanced base into the LOCAL branch ref before a
+// review round (SC-5279). The local ref is what the loop's reviewer and fixer
+// read, so that is the ref that must carry the base — origin is caught up by
+// the publish at merge time. The merge runs in a detached ephemeral worktree
+// and the ref is moved afterwards with a compare-and-swap, so a branch no
+// loop step is committing on moves atomically and one another writer touched
+// is left alone. A conflict aborts the merge and reports FreshnessConflict;
+// the branch is exactly as it was.
+func (p forgeDeployer) FreshenBranch(ctx context.Context, req daemon.PRRequest) (daemon.BranchFreshness, error) {
+	dir, branch := req.WorkspaceDir, req.Branch
+	base := gitrepo.DefaultBranch(ctx, dir)
+	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	originBase := "origin/" + base
+	tip, local, err := localOrOriginTip(ctx, dir, branch)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	if gitrepo.IsAncestor(ctx, dir, originBase, tip) {
+		return daemon.FreshnessCurrent, nil
+	}
+	wt, cleanup, err := addEphemeralWorktree(ctx, dir, tip)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	defer cleanup()
+	id, loadErr := botidentity.Load(dir)
+	if loadErr != nil {
+		id = botidentity.Identity{Name: botidentity.DefaultName, Email: botidentity.DefaultEmail}
+	}
+	conflict, err := gitrepo.MergeIntoHead(ctx, wt, originBase, id.Name, id.Email)
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	if conflict {
+		return daemon.FreshnessConflict, nil
+	}
+	merged, err := gitrepo.RevParse(ctx, wt, "HEAD")
+	if err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	// A branch known only on origin has no local ref yet: create it, so the
+	// reviewer's local-first binding finds the integrated head.
+	expected := tip
+	if !local {
+		expected = ""
+	}
+	if err := gitrepo.UpdateBranchRef(ctx, dir, branch, merged, expected); err != nil {
+		return daemon.FreshnessCurrent, err
+	}
+	return daemon.FreshnessMerged, nil
+}
+
+// localOrOriginTip resolves the branch the way the loop's own agents do —
+// the local ref first, because it carries the fixer's unpublished commits,
+// and origin only when no local ref exists. It is the mirror image of
+// branchTip, which the deploy gate uses because origin is what it merges.
+func localOrOriginTip(ctx context.Context, dir, branch string) (sha string, local bool, err error) {
+	if gitrepo.BranchExistsLocal(ctx, dir, branch) {
+		sha, err = gitrepo.RevParse(ctx, dir, branch)
+		return sha, true, err
+	}
+	if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
+		return "", false, err
+	}
+	sha, err = gitrepo.RevParse(ctx, dir, "origin/"+branch)
+	return sha, false, err
+}
+
 // PublishResolvedBranch carries a deploy-fixer's conflict resolution from the
 // local branch ref to origin. The fixer runs in a board container, which holds
 // no push credentials by design — the daemon publishes on its behalf, the same

@@ -70,6 +70,16 @@ type Deployer interface {
 	// then recomputes the PR's mergeability asynchronously, and merging inside
 	// that window draws a spurious 405 — the caller must wait it out first.
 	EnsureMergeable(ctx context.Context, req PRRequest) (rebased bool, err error)
+	// FreshenBranch brings the LOCAL branch current with the base before a
+	// review round, so the reviewer reads the integrated candidate rather than
+	// the branch as it was pushed: when origin/<base> has advanced past the
+	// branch it merges the base in (a merge, never a rebase — the fixer's
+	// recorded head and the reviewer's head binding stay ancestors) and moves
+	// the local ref. A textual conflict leaves the branch untouched and is
+	// reported as FreshnessConflict for the caller to hand to the deploy fixer
+	// before any reviewer runs (SC-5279). It never pushes: the daemon publishes
+	// the branch at merge time exactly as it does the fixer's commits.
+	FreshenBranch(ctx context.Context, req PRRequest) (BranchFreshness, error)
 	// PullRequestMergeable reports the forge's own end-state (three-way) merge
 	// verdict for the PR. It is the fallback signal when the mechanical rebase in
 	// EnsureMergeable conflicts on an intermediate commit the end-state merge
@@ -95,6 +105,20 @@ type Deployer interface {
 	// freshness rebase to handle.
 	PublishResolvedBranch(ctx context.Context, workspaceDir, branch string) (published bool, err error)
 }
+
+// BranchFreshness is FreshenBranch's report of what the base merge found.
+type BranchFreshness int
+
+const (
+	// FreshnessCurrent: the branch already contains the base tip; nothing moved.
+	FreshnessCurrent BranchFreshness = iota
+	// FreshnessMerged: the base was merged into the local branch, which now
+	// heads at a merge commit the reviewer will read.
+	FreshnessMerged
+	// FreshnessConflict: the base merge conflicts; the branch is untouched and
+	// a fixer must resolve it before a reviewer can read an integrated result.
+	FreshnessConflict
+)
 
 // PRRequest carries everything needed to push a branch and open its PR.
 type PRRequest struct {
@@ -1040,9 +1064,7 @@ func (d BoardTransitionDeps) openDraftPRAndReview(ctx context.Context, pmKey str
 	if err != nil {
 		return err
 	}
-	_, err = d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
-		prReviewDispatch(pmKey, res.Number, card.Branch),
-		prReviewStartedBody(res.URL, res.Number, card.Branch))
+	_, err = d.launchPRReview(ctx, pmKey, res, card.Branch)
 	return err
 }
 
@@ -1067,6 +1089,55 @@ func (d BoardTransitionDeps) openDraftPR(ctx context.Context, pmKey, branch, tit
 	}
 	return res, d.deployFailed(pmKey, "", deployReason(
 		"could not push "+branch+" and open its draft pull request — check the branch and forge access, then re-run Deploy", err))
+}
+
+// DeployFixBeforeReviewField marks a deploy-fix-started marker whose fixer was
+// dispatched by the pre-review base merge rather than by the CI gate. The
+// fixer's done exit reads it to decide what comes next: a fixer sent before
+// the review hands back to the reviewer, one sent by the CI gate re-runs the
+// deploy (SC-5279).
+const DeployFixBeforeReviewField = "before"
+
+// deployFixBeforeReviewValue is the field's one value; the field's presence is
+// the signal, the value says what it preceded.
+const deployFixBeforeReviewValue = "review"
+
+// launchPRReview is the one way a review round starts. Before the reviewer is
+// launched the branch is brought current with the base, so what the reviewer
+// reads is the integrated candidate — the thing that will merge — rather than
+// the branch as it was pushed. Run 3 of the campaign spent a review round on
+// "branch behind main" on four of six pull requests: the reviewer found the
+// drift, the fixer merged the base, the reviewer read everything again. That
+// round is mechanical, and a conflict on it is the deploy fixer's job, not a
+// finding. A freshen that fails for any reason other than a conflict is
+// logged and the review runs on the branch as it is: the CI gate's own
+// freshness rebase still stands behind it, so nothing merges stale.
+func (d BoardTransitionDeps) launchPRReview(ctx context.Context, pmKey string, res PRResult, branch string) (launched bool, err error) {
+	fresh, freshErr := d.Deployer.FreshenBranch(ctx, PRRequest{WorkspaceDir: d.WorkspaceDir, Branch: branch})
+	if freshErr != nil {
+		d.Logger.Warn().Err(freshErr).Str("pm", pmKey).Str("branch", branch).
+			Msg("board PR loop: could not bring the branch current with the base; reviewing it as it is")
+	}
+	if fresh == FreshnessConflict {
+		conflict := errors.WithDetails("the base advanced past the branch and the merge conflicts", "pm", pmKey, "branch", branch)
+		return false, d.deployFailedOrDispatchFixer(ctx, pmKey, res,
+			"branch behind the base with a conflict — resolving it before the review", conflict, branch, true)
+	}
+	return d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
+		prReviewDispatch(pmKey, res.Number, branch),
+		prReviewStartedBody(res.URL, res.Number, branch))
+}
+
+// deployFixWasBeforeReview reports whether the newest deploy-fix-started
+// marker carries the before-review field — the record that decides where the
+// fixer's done exit continues.
+func deployFixWasBeforeReview(comments []tracker.Comment) bool {
+	started, ok := latestCommentWithHeader(comments, DeployFixStartedHeader)
+	if !ok {
+		return false
+	}
+	m, parsed := marker.ParseBody(started.Body)
+	return parsed && m.Fields[DeployFixBeforeReviewField] == deployFixBeforeReviewValue
 }
 
 // prReviewStartedBody carries the loop's PR binding on the started marker so the
@@ -1239,8 +1310,7 @@ func (d BoardTransitionDeps) AdvancePRLoop(ctx context.Context, pmKey string, ou
 	}
 	switch EvaluatePRLoop(comments, outcome) {
 	case PRActionReview:
-		_, err := d.launchPRLoopAgent(ctx, pmKey, prReviewAgentStage,
-			prReviewDispatch(pmKey, number, branch), prReviewStartedBody(url, number, branch))
+		_, err := d.launchPRReview(ctx, pmKey, PRResult{Number: number, URL: url}, branch)
 		return err
 	case PRActionFix:
 		_, err := d.launchPRLoopAgent(ctx, pmKey, prFixAgentStage,
@@ -1548,6 +1618,13 @@ func (d BoardTransitionDeps) AdvanceDeployFix(ctx context.Context, pmKey string,
 				"the deploy fixer's resolution could not be published to "+branch+" — check the branch, then re-run Deploy",
 				err))
 		}
+		// A fixer the pre-review base merge dispatched resolved a conflict the
+		// reviewer has not read yet: the review is what comes next, on the
+		// integrated branch. Only the CI gate's fixer re-runs the deploy (SC-5279).
+		if deployFixWasBeforeReview(comments) {
+			_, err := d.launchPRReview(ctx, pmKey, PRResult{Number: prLoopNumber(comments), URL: prLoopURL(comments)}, branch)
+			return err
+		}
 		return d.DeployBranch(ctx, pmKey, pmKey, doneBody(pmKey, card, branch), branch)
 	}
 	// SC-3857: the done stage was already declared dead by an earlier escalation
@@ -1699,7 +1776,7 @@ func (d BoardTransitionDeps) regateAfterRebase(ctx context.Context, pmKey string
 	logger.Info().Int("pr", res.Number).Msg("deploy: branch was stale; rebased onto the base, re-gating CI")
 	if err := d.waitForChecks(ctx, res); err != nil {
 		if ciFailureFixable(err) {
-			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
+			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch, false)
 		}
 		return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
 	}
@@ -1775,7 +1852,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 	}
 	if err := d.waitForChecks(ctx, res); err != nil {
 		if ciFailureFixable(err) {
-			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch)
+			return d.deployFailedOrDispatchFixer(ctx, pmKey, res, ciFailureHeadline(err), err, branch, false)
 		}
 		return d.deployFailed(pmKey, res.URL, deployReason(ciFailureHeadline(err), err))
 	}
@@ -1804,7 +1881,7 @@ func (d BoardTransitionDeps) DeployBranch(ctx context.Context, pmKey, title, prB
 		if !proceed {
 			return d.deployFailedOrDispatchFixer(ctx, pmKey, res,
 				"the branch conflicts with the base — resolve the conflict on "+branch+" (rebase it onto the base branch), then re-run Deploy",
-				ensureErr, branch)
+				ensureErr, branch, false)
 		}
 	}
 	if err := d.regateAfterRebase(ctx, pmKey, res, branch, rebased, logger); err != nil {
@@ -2180,10 +2257,10 @@ func (d BoardTransitionDeps) deployFailed(pmKey, prURL, reason string) error {
 // has room. Otherwise it falls back to the terminal deploy-failed marker. On a
 // successful dispatch it returns nil, releasing the deploy gate while the fixer
 // works; the fixer's Stop event drives AdvanceDeployFix, which re-runs the deploy.
-func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pmKey string, res PRResult, headline string, cause error, branch string) error {
+func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pmKey string, res PRResult, headline string, cause error, branch string, beforeReview bool) error {
 	if d.Launcher != nil {
 		if comments, err := d.Commenter.ListComments(ctx, pmKey); err == nil && deployFixRounds(comments) < DefaultDeployFixRounds {
-			return d.dispatchDeployFixer(ctx, pmKey, res, branch, headline)
+			return d.dispatchDeployFixer(ctx, pmKey, res, branch, headline, beforeReview)
 		}
 	}
 	return d.deployFailed(pmKey, res.URL, deployReason(headline, cause))
@@ -2194,7 +2271,7 @@ func (d BoardTransitionDeps) deployFailedOrDispatchFixer(ctx context.Context, pm
 // headline and the PR binding for the trail). The marker keeps the card spinning
 // rather than red while the fixer works — which is only true of a fixer that
 // exists, so it follows the launch (SC-4244).
-func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string) error {
+func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey string, res PRResult, branch, headline string, beforeReview bool) error {
 	launched, err := d.launchDeployFixAgent(ctx, pmKey, deployFixDispatch(pmKey, res.Number, branch))
 	if stderrors.Is(err, ErrLaunchGateRefused) {
 		// The deploy DID fail — the fixer is only the remedy — and a host that
@@ -2218,7 +2295,12 @@ func (d BoardTransitionDeps) dispatchDeployFixer(ctx context.Context, pmKey stri
 		Fields: fields("pr", res.URL, "number", strconv.Itoa(res.Number), "branch", branch),
 		Body:   headline,
 	}
-	if err := postMarker(ctx, d.Commenter, pmKey, m, "pr", "number", "branch"); err != nil {
+	order := []string{"pr", "number", "branch"}
+	if beforeReview {
+		m.Fields[DeployFixBeforeReviewField] = deployFixBeforeReviewValue
+		order = append(order, DeployFixBeforeReviewField)
+	}
+	if err := postMarker(ctx, d.Commenter, pmKey, m, order...); err != nil {
 		return errors.WrapWithDetails(err, "posting deploy-fix-started marker", "pm", pmKey)
 	}
 	return nil

@@ -208,9 +208,7 @@ func (d BoardTransitionDeps) reviewThenShip(ctx context.Context, req StartDeploy
 			Msg("deploy: the machine review already approved this head; shipping without a new round")
 		return shipped, d.DeployBranch(ctx, req.PMKey, req.Title, req.PRBody, req.Branch)
 	}
-	_, err = d.launchPRLoopAgent(ctx, req.PMKey, prReviewAgentStage,
-		prReviewDispatch(req.PMKey, res.Number, req.Branch),
-		prReviewStartedBody(res.URL, res.Number, req.Branch))
+	_, err = d.launchPRReview(ctx, req.PMKey, res, req.Branch)
 	if err != nil {
 		// A gate that went red between the pre-check above and this launch
 		// surfaces as ErrLaunchGateRefused: a host condition, so no marker — the

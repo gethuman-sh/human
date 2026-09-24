@@ -111,6 +111,10 @@ func (s *stubDeployer) PullRequestChecks(context.Context, string, int) (forge.Ch
 func (s *stubDeployer) ReadPullRequest(context.Context, string, int) (*forge.PullRequestState, error) {
 	return nil, nil
 }
+func (s *stubDeployer) FreshenBranch(context.Context, daemon.PRRequest) (daemon.BranchFreshness, error) {
+	return daemon.FreshnessCurrent, nil
+}
+
 func (s *stubDeployer) EnsureMergeable(context.Context, daemon.PRRequest) (bool, error) {
 	return false, nil
 }

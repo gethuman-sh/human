@@ -94,6 +94,11 @@ type fakeDeployer struct {
 	// ensureErr is returned by EnsureMergeable — a non-nil value models a branch
 	// that could not be made current with main (a real rebase conflict).
 	ensureErr error
+	// freshness is what FreshenBranch reports; freshenErr models git failing
+	// underneath it; freshened counts the calls (SC-5279).
+	freshness  BranchFreshness
+	freshenErr error
+	freshened  int
 	// ensured counts EnsureMergeable calls so a test can assert the freshness
 	// stage ran exactly once before the merge.
 	ensured int
@@ -193,6 +198,13 @@ func (f *fakeDeployer) PullRequestChecks(_ context.Context, _ string, _ int) (fo
 		f.checksPassed++
 	}
 	return state, nil
+}
+
+// FreshenBranch reports the freshness a test configured and counts the calls,
+// so a test can assert the base merge ran before the reviewer and not after.
+func (f *fakeDeployer) FreshenBranch(_ context.Context, _ PRRequest) (BranchFreshness, error) {
+	f.freshened++
+	return f.freshness, f.freshenErr
 }
 
 func (f *fakeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (bool, error) {
@@ -1054,7 +1066,7 @@ func TestDispatchDeployFixerAlreadyRunningIsNoOp(t *testing.T) {
 	l := &fakeLauncher{err: ErrAgentAlreadyRunning}
 	deps := newDeps(c, l, &fakeDeployer{})
 	err := deps.dispatchDeployFixer(context.Background(), "SC-1",
-		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed")
+		PRResult{URL: "https://example/pr/7", Number: 7}, "feat/x", "CI failed", false)
 	require.NoError(t, err)
 	require.Equal(t, 1, l.calls, "the launch must have been attempted")
 	assert.Empty(t, c.added, "a refusal records neither a fresh round nor a failure")
@@ -1511,6 +1523,10 @@ func (f *gateProbeDeployer) PullRequestChecks(_ context.Context, _ string, _ int
 
 func (f *gateProbeDeployer) ReadPullRequest(_ context.Context, _ string, _ int) (*forge.PullRequestState, error) {
 	return nil, nil
+}
+
+func (f *gateProbeDeployer) FreshenBranch(_ context.Context, _ PRRequest) (BranchFreshness, error) {
+	return FreshnessCurrent, nil
 }
 
 func (f *gateProbeDeployer) EnsureMergeable(_ context.Context, _ PRRequest) (bool, error) {

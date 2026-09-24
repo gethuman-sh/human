@@ -842,3 +842,77 @@ func TestCommitsForRev_anchorsAtGivenRev(t *testing.T) {
 		t.Errorf("args = %v, want rev anchor feat/branch", gotArgs)
 	}
 }
+
+func TestMergeIntoHead_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	conflict, err := MergeIntoHead(context.Background(), "/wt", "origin/main", "humanbot", "humanbot@users.noreply.gethuman.sh")
+	if err != nil || conflict {
+		t.Fatalf("clean merge: conflict=%v err=%v", conflict, err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/wt",
+		"-c", "user.name=humanbot",
+		"-c", "user.email=humanbot@users.noreply.gethuman.sh",
+		"merge", "--no-ff", "--no-edit", "origin/main"})
+}
+
+func TestMergeIntoHead_conflictIsAnOutcomeAndAborts(t *testing.T) {
+	var calls [][]string
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		if len(args) > 0 && args[len(args)-1] == "origin/main" {
+			return []byte("Auto-merging a.go\nCONFLICT (content): Merge conflict in a.go\n"), errors.New("exit status 1")
+		}
+		return nil, nil
+	})
+	conflict, err := MergeIntoHead(context.Background(), "/wt", "origin/main", "humanbot", "h@example.com")
+	if err != nil || !conflict {
+		t.Fatalf("conflict must be reported as an outcome: conflict=%v err=%v", conflict, err)
+	}
+	var sawAbort bool
+	for _, c := range calls {
+		if len(c) >= 2 && c[len(c)-2] == "merge" && c[len(c)-1] == "--abort" {
+			sawAbort = true
+		}
+	}
+	if !sawAbort {
+		t.Error("a conflicting merge must be aborted so the worktree is clean")
+	}
+}
+
+func TestMergeIntoHead_otherFailureIsAnError(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[len(args)-1] == "origin/main" {
+			return []byte("fatal: not a git repository"), errors.New("exit status 128")
+		}
+		return nil, nil
+	})
+	conflict, err := MergeIntoHead(context.Background(), "/wt", "origin/main", "humanbot", "h@example.com")
+	if err == nil || conflict {
+		t.Fatalf("a non-conflict failure must surface as an error: conflict=%v err=%v", conflict, err)
+	}
+}
+
+func TestUpdateBranchRef_argv(t *testing.T) {
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return nil, nil
+	})
+	if err := UpdateBranchRef(context.Background(), "/repo", "fix/x", "newsha", "oldsha"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "update-ref", "refs/heads/fix/x", "newsha", "oldsha"})
+}
+
+func TestUpdateBranchRef_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("ref moved")
+	})
+	if err := UpdateBranchRef(context.Background(), "/repo", "fix/x", "newsha", "oldsha"); err == nil {
+		t.Fatal("expected error when the ref no longer holds the expected value")
+	}
+}
