@@ -1349,9 +1349,26 @@ func deployFixLoopURL(comments []tracker.Comment) string {
 // binding it already trusts for the PR number and URL, and the handoff is the
 // weakest — it names what implementation handed over, which a later deploy may
 // have overridden.
+//
+// Source precedence only holds within ONE round: a ticket that reached the
+// done stage once, went back through implementation (start-implementation and
+// start-fix-run from `stopped` are both declared transitions), and handed off
+// a DIFFERENT branch now carries a stale PRReviewStartedHeader/
+// DeployFixStartedHeader/DeployStartedHeader from the earlier round. Trusting
+// it here — as source precedence alone would — deploys the old branch, and if
+// that branch is already on the base the engine's already-merged carve-out
+// silently records the new work as shipped. currentApproval guards the
+// identical case for the approval marker (deploy_entry.go:265-280); a binding
+// older than the newest [human:ready-for-review] handoff is ignored the same
+// way here, before source precedence is applied (SC-5396).
 func doneStageBranch(comments []tracker.Comment, card BoardCard) string {
+	handoff, hasHandoff := latestCommentWithHeader(comments, ReadyForReviewHeader)
 	for _, header := range []string{PRReviewStartedHeader, DeployFixStartedHeader, DeployStartedHeader} {
-		if branch := strings.TrimSpace(latestPrefixedLine(comments, header, "branch:")); branch != "" {
+		c, ok := latestCommentWithHeader(comments, header)
+		if !ok || (hasHandoff && commentNewer(handoff, c)) {
+			continue
+		}
+		if branch := strings.TrimSpace(parsePrefixedLine(c.Body, "branch:")); branch != "" {
 			return branch
 		}
 	}

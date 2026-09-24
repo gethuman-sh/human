@@ -318,6 +318,19 @@ evidence keeps the grace: no lister, a lister error, a record naming no such
 agent, or an agent still alive all leave the card to the ordinary rule. The
 `StoppedAgents` dep is nil-disabled like `LiveAgents`.
 
+For the done stage specifically, the shortcut is additionally disabled while
+`deployEngineActive` reports THIS machine's `DeployBranch` currently running
+for the card (queued or past the gate — the same in-process registry §5's
+deploy grace reads). Both the PR loop's merge action and the deploy fixer's
+post-fix retry call `DeployBranch` synchronously with no started marker posted
+first, so the done stage's newest *started* marker still names the sub-agent
+that just finished its OWN phase — the reviewer that approved, the fixer that
+resolved its conflict — and that agent's ordinary exit is recorded as a stop
+after `StageEnteredAt` exactly like a real death is. Without the guard,
+`recordedDeath` read that stop as evidence the CI-gate window itself had died,
+skipped `stuckPastGrace` (and its `DeployRunProbe` branch above) entirely, and
+reddened a merge that was still running (SC-5396).
+
 ### 7. Reconcile — orphaned on a closed ticket
 
 **Owner:** `reconcileOrphanedAgents` (`internal/daemon/board_reconcile_orphan.go`).

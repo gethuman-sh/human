@@ -476,6 +476,21 @@ func stuckPastGrace(derived BoardCard, card ReconcileCard, probe DeployRunProbe,
 	return now.Sub(derived.StageEnteredAt) >= stuckGraceFor(derived, card.Comments)
 }
 
+// deployEngineActive reports whether THIS machine's deploy engine currently
+// owns pmKey's card — DeployBranch is between deployRunQueued and
+// deployRunFinished for it. Both the PR-loop's merge action and the deploy
+// fixer's post-fix retry call DeployBranch synchronously with no started
+// marker in between, so the done stage's newest STARTED marker still names the
+// sub-agent that just finished, not this in-process window that owns none
+// (SC-5396).
+func deployEngineActive(probe DeployRunProbe, pmKey string) bool {
+	if probe == nil {
+		return false
+	}
+	_, ok := probe(pmKey)
+	return ok
+}
+
 // recordedDeath reports whether the stage's agent is known to have died during
 // this stage: it is absent from the live listing and this machine's agent
 // record says it stopped AFTER the stage was entered, so the record is about
@@ -766,7 +781,21 @@ func reconcileOneStuckCard(ctx context.Context, card ReconcileCard, alive map[st
 	}
 	names := stageAgentNames(card.Key, derived.Stage)
 	liveName, isLive := liveStageAgent(alive, card.Key, derived.Stage)
-	if died, at := recordedDeath(deps, names, alive, derived.StageEnteredAt); died {
+	// While THIS machine's deploy engine is actively running this card
+	// (deployRunQueued..deployRunFinished), the CI-gate/merge window runs no
+	// board agent at all — the sub-agent that owned the PREVIOUS phase (the
+	// reviewer that approved, the deploy fixer that resolved its conflict) has
+	// already exited normally, and that ordinary exit is recorded as a stop
+	// after StageEnteredAt exactly like a real death is. recordedDeath cannot
+	// tell the two apart from the stop record alone, so it must not be
+	// consulted here: this window's only clock is stuckPastGrace's
+	// DeployRunProbe branch below, which already accounts for the CI gate's
+	// own timeout (SC-5396).
+	died, at := false, time.Time{}
+	if !deployEngineActive(deps.DeployRun, card.Key) {
+		died, at = recordedDeath(deps, names, alive, derived.StageEnteredAt)
+	}
+	if died {
 		// The manager already recorded this stage's agent as stopped after the
 		// stage began, and nothing handled the exit (the card is still running).
 		// That is a death the machine has evidence for, so waiting out a grace

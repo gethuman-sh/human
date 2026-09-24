@@ -126,3 +126,92 @@ func TestRecordedDeath_AbsentEvidenceIsNotADeath(t *testing.T) {
 	require.True(t, died)
 	require.Equal(t, now, at)
 }
+
+// The regression: AdvancePRLoop posts [human:pr-review-passed] and then calls
+// DeployBranch SYNCHRONOUSLY for the CI gate (up to 45 minutes) — a window
+// with no board agent at all. The reviewer's container is torn down by its own
+// Stop hook after that marker post, so its ordinary, successful exit is
+// recorded as a stop that postdates StageEnteredAt exactly like a real death
+// would be. Without deployEngineActive, recordedDeath read that as evidence
+// the done stage died, skipped stuckPastGrace (and its DeployRunProbe branch)
+// entirely, and reddened a merge that was still running (SC-5396).
+func TestReconcileStuckRunning_DeployEngineActiveSparesAStaleReviewerStop(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", now.Add(-40*time.Minute)),
+		cmt(PRReviewStartedHeader+"\npr: u\nnumber: 7\nbranch: feat/x", now.Add(-30*time.Minute)),
+		cmt(PRReviewPassedHeader+"\nbranch: feat/x", now.Add(-10*time.Minute)),
+	}}}
+	var posted []struct{ Key, Body string }
+	deps := ReconcileDeps{
+		LiveAgents: liveAgents(),
+		StoppedAgents: stoppedAgents(map[string]time.Time{
+			agentNameFor("SC-1", prReviewAgentStage): now.Add(-9 * time.Minute), // the reviewer's ordinary exit, after pr-review-passed
+		}),
+		PostFailed: capturingPoster(&posted),
+		Retry:      StageRetry{Max: 2},
+		DeployRun:  func(string) (time.Time, bool) { return now.Add(-5 * time.Minute), true },
+		DaemonID:   "d1",
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), deps, now)
+
+	require.Equal(t, 0, n, "the CI gate is still running on this machine's own clock; the stale reviewer stop must not red it")
+	require.Empty(t, posted)
+}
+
+// Same shape for the deploy fixer: AdvanceDeployFix's ExitDone path also calls
+// DeployBranch synchronously with no started marker in between, so a resolved
+// fixer's ordinary exit must not be read as this window's death either.
+func TestReconcileStuckRunning_DeployEngineActiveSparesAStaleDeployFixerStop(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
+		cmt(DeployFixStartedHeader+"\nbranch: feat/x", now.Add(-30*time.Minute)),
+	}}}
+	var posted []struct{ Key, Body string }
+	deps := ReconcileDeps{
+		LiveAgents: liveAgents(),
+		StoppedAgents: stoppedAgents(map[string]time.Time{
+			agentNameFor("SC-1", deployFixAgentStage): now.Add(-9 * time.Minute), // resolved and exited normally
+		}),
+		PostFailed: capturingPoster(&posted),
+		Retry:      StageRetry{Max: 2},
+		DeployRun:  func(string) (time.Time, bool) { return now.Add(-5 * time.Minute), true },
+		DaemonID:   "d1",
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), deps, now)
+
+	require.Equal(t, 0, n, "the retry deploy is still running on this machine's own clock")
+	require.Empty(t, posted)
+}
+
+// Without an active DeployRun registration (a peer daemon's run, or one lost
+// to a restart) the stale-stop evidence still counts — deployEngineActive must
+// narrow the shortcut, not disable it outright.
+func TestReconcileStuckRunning_RecordedDeathStillFiresWithoutAnActiveDeployRun(t *testing.T) {
+	now := time.Unix(100_000, 0)
+	cards := []ReconcileCard{{Key: "SC-1", Comments: []tracker.Comment{
+		cmt("[human:ready-for-review]\nbranch: feat/x", now.Add(-40*time.Minute)),
+		cmt(PRReviewStartedHeader+"\npr: u\nnumber: 7\nbranch: feat/x", now.Add(-30*time.Minute)),
+		cmt(PRReviewPassedHeader+"\nbranch: feat/x", now.Add(-10*time.Minute)),
+	}}}
+	var posted []struct{ Key, Body string }
+	var attemptsCalled bool
+	var relaunched []BoardStage
+	deps := ReconcileDeps{
+		LiveAgents: liveAgents(),
+		StoppedAgents: stoppedAgents(map[string]time.Time{
+			agentNameFor("SC-1", prReviewAgentStage): now.Add(-9 * time.Minute),
+		}),
+		PostFailed: capturingPoster(&posted),
+		Retry:      chargedRetry(&attemptsCalled, &relaunched),
+		DeployRun:  func(string) (time.Time, bool) { return time.Time{}, false },
+		DaemonID:   "d1",
+	}
+
+	n := reconcileStuckRunning(context.Background(), takeoverSet(cards, alwaysReachable), deps, now)
+
+	require.Equal(t, 1, n, "with no in-process run registered, the recorded stop is still this pass's only evidence")
+	require.Len(t, posted, 1)
+}

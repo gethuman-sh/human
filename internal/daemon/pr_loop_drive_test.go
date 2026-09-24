@@ -191,6 +191,22 @@ func TestDoneStageBranch_prefersStartMarkerOverHandoff(t *testing.T) {
 	assert.Equal(t, "feat/new", doneStageBranch(comments, card))
 }
 
+// A stale start marker from an EARLIER round must never outrank a newer
+// handoff: a ticket that reached the done stage once (pr-review-started names
+// feat/a), then went back through implementation and handed off a different
+// branch (feat/b), resolves to feat/b — not the source-precedence winner from
+// a round the ticket has since moved past. Trusting feat/a here would deploy
+// stale work and, if feat/a happens to already be on the base, silently record
+// the NEW work as shipped via the already-merged carve-out (SC-5396).
+func TestDoneStageBranch_newerHandoffOutranksAStaleStartMarker(t *testing.T) {
+	comments := []tracker.Comment{
+		{Body: "[human:pr-review-started]\npr: u\nnumber: 7\nbranch: feat/a", ID: "1", Created: time.Unix(1, 0)},
+		{Body: "[human:ready-for-review]\nbranch: feat/b", ID: "2", Created: time.Unix(2, 0)},
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+	assert.Equal(t, "feat/b", doneStageBranch(comments, card))
+}
+
 // A re-drive from the reconcile pass carries no exit event and evidence older
 // than the pass. When the thread names a step with no record and that step's
 // agent is alive, the step is running, not unreadable: the re-drive stands
