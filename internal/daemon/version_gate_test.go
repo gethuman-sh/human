@@ -115,7 +115,9 @@ func TestDaemonProtocolError(t *testing.T) {
 	err := DaemonProtocolError(DaemonInfo{Protocol: MinDaemonProtocol - 1})
 	if MinDaemonProtocol > 1 {
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "rebuild and restart the daemon")
+		assert.Contains(t, err.Error(), "human daemon restart")
+		assert.NotContains(t, err.Error(), "make build && human daemon restart",
+			"the remedy must name a command that runs against a stale daemon (SC-5397)")
 	} else {
 		// MinDaemonProtocol 1 means "protocol 0" is the only lower value, and
 		// zero is the transition carve-out above — nothing to reject yet.

@@ -271,6 +271,23 @@ Examples:
 	return cmd
 }
 
+// asyncStopClient returns the client to send the async stop to, or a nil client
+// when the async path must be abandoned for the synchronous stop below.
+//
+// A daemon this client may not forward to is not a failure here: the stop that
+// follows needs no daemon at all, so refusing the whole command over a signal
+// it can do without left the container running (SC-5397).
+func asyncStopClient(info daemon.DaemonInfo) (*daemon.Client, error) {
+	client, err := daemon.NewClient(info)
+	if err != nil {
+		if daemon.IsProtocolError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return client, nil
+}
+
 func buildStopCmd() *cobra.Command {
 	var async bool
 	cmd := &cobra.Command{
@@ -281,16 +298,20 @@ func buildStopCmd() *cobra.Command {
 			if async {
 				// Signal the daemon to clean up asynchronously.
 				if info, infoErr := daemon.ReadInfo(); infoErr == nil && info.IsReachable() {
-					client, clientErr := daemon.NewClient(info)
+					client, clientErr := asyncStopClient(info)
 					if clientErr != nil {
 						return clientErr
 					}
-					if _, err := client.RunRemote([]string{"agent-stop-async", args[0]}); err != nil {
-						// A dropped async stop otherwise leaves the container for the
-						// zombie sweep with no trace; make the failure visible.
-						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: async stop signal to daemon failed for %q: %v\n", args[0], err)
+					if client != nil {
+						if _, err := client.RunRemote([]string{"agent-stop-async", args[0]}); err != nil {
+							// A dropped async stop otherwise leaves the container for the
+							// zombie sweep with no trace; make the failure visible.
+							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: async stop signal to daemon failed for %q: %v\n", args[0], err)
+						}
+						return nil
 					}
-					return nil
+					// A daemon too old to be forwarded to: fall through as if it
+					// were absent.
 				}
 				// No daemon: fall through to synchronous stop.
 			}

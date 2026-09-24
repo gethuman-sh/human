@@ -56,6 +56,32 @@ func TestNewClient_AcceptsDaemonThatAdvertisesNoProtocol(t *testing.T) {
 	assert.NotNil(t, c)
 }
 
+// The gate-free constructor is what lets `human daemon stop` hold the endpoint
+// of a daemon it may not forward to — it signals the process and sends nothing.
+func TestNewClientUnchecked_AcceptsTooOldDaemon(t *testing.T) {
+	if MinDaemonProtocol <= 1 {
+		t.Skip("no rejectable protocol below MinDaemonProtocol")
+	}
+	info := DaemonInfo{Addr: "1.2.3.4:19285", Token: "tok", ChromeAddr: "1.2.3.4:19286", Protocol: MinDaemonProtocol - 1}
+	c := NewClientUnchecked(info)
+	require.NotNil(t, c)
+	assert.Equal(t, "1.2.3.4:19285", c.Info().Addr)
+	assert.Equal(t, "1.2.3.4:19286", c.Info().ChromeAddr)
+	assert.Equal(t, ClientVersion, c.version)
+	// The caller is the one that must ask, and the answer must still be there.
+	assert.True(t, IsProtocolError(DaemonProtocolError(c.Info())))
+}
+
+func TestConnectUnchecked_ReportsUnreachableLikeConnect(t *testing.T) {
+	withMemFs(t)
+	t.Setenv("HUMAN_DAEMON_ADDR", "")
+	t.Setenv("HUMAN_DAEMON_TOKEN", "")
+
+	_, err := ConnectUnchecked()
+	require.Error(t, err)
+	assert.False(t, IsProtocolError(err))
+}
+
 func TestIsProtocolError_DistinguishesUnreachable(t *testing.T) {
 	withMemFs(t)
 	t.Setenv("HUMAN_DAEMON_ADDR", "")

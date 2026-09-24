@@ -22,21 +22,31 @@ type Client struct {
 	version string
 }
 
-// NewClient wraps an already-resolved DaemonInfo.
+// NewClient wraps an already-resolved DaemonInfo and applies the protocol gate.
 //
 // It deliberately does NOT probe the address: callers that gate on
 // IsReachable() before deciding to talk to the daemon keep making that decision
 // themselves, and the ones that do not should not start paying a dial timeout.
 //
-// The protocol gate lives here because this is the only way to obtain a client:
-// before it existed, DaemonProtocolError had one caller in main.go and every
-// other path to the daemon — the whole desktop app, every cmd/ package — reached
-// it ungated.
+// Every caller that SENDS a request uses this constructor, so no request reaches
+// a daemon too old to serve it. The one caller that needs the endpoint without
+// that permission uses NewClientUnchecked and answers the gate question itself.
 func NewClient(info DaemonInfo) (*Client, error) {
 	if err := DaemonProtocolError(info); err != nil {
 		return nil, err
 	}
-	return &Client{info: info, version: ClientVersion}, nil
+	return NewClientUnchecked(info), nil
+}
+
+// NewClientUnchecked wraps a resolved DaemonInfo WITHOUT the protocol gate.
+//
+// It exists because "where is the daemon" and "may I forward to it" are two
+// questions, and answering both in one call refused `human daemon stop` on the
+// compatibility of a request it never sends: it reads the PID file and signals
+// the process (SC-5397). A caller that goes on to send a request must consult
+// DaemonProtocolError itself.
+func NewClientUnchecked(info DaemonInfo) *Client {
+	return &Client{info: info, version: ClientVersion}
 }
 
 // Connect locates the running daemon and returns a client for it: env first,
@@ -52,6 +62,16 @@ func Connect() (*Client, error) {
 		return nil, err
 	}
 	return NewClient(info)
+}
+
+// ConnectUnchecked runs the same discovery as Connect and leaves the protocol
+// gate to the caller. See NewClientUnchecked for why the two are separate.
+func ConnectUnchecked() (*Client, error) {
+	info, err := resolveInfo()
+	if err != nil {
+		return nil, err
+	}
+	return NewClientUnchecked(info), nil
 }
 
 // Info returns the endpoint this client speaks to, including the chrome and

@@ -32,6 +32,35 @@ only the version-skew warning.
    likewise.
 4. Never reuse or renumber. The ledger is append-only.
 
+## Where the gate applies
+
+`MinDaemonProtocol` refuses **forwarding**, not running. The decision is made
+once, in `main.decideDispatch`, and only after `isLocalSubcommand` has answered
+whether the daemon is involved at all:
+
+- Commands that execute in the caller's own process — the whole `daemon` family
+  (`start`, `stop`, `restart`, `status`), `doctor`, `--version`, and everything
+  else in `main.localSubcommands` — never consult it. They must work against a
+  daemon of any protocol: `human daemon restart` is the remedy the refusal
+  prints, and a remedy that is itself refused leaves a user with only `kill`
+  (SC-5397).
+- A help request (`--help`, `-h`, `help`, or a bare `human`) is never refused
+  either. Against a daemon below the floor it is answered locally, from the
+  binary the user actually invoked — which after an upgrade is the surface they
+  need to see.
+- Everything else is forwarded, and there — and only there — a daemon below
+  `MinDaemonProtocol` stops the run with the one clear restart-the-daemon error.
+- A local command that nevertheless sends a request asks the question itself:
+  `human hook` (local only so stdin stays available) calls
+  `daemon.DaemonProtocolError` in `deliverHookEvent`, and `human doctor` reports
+  the refusal as a failing check rather than dying on it.
+
+`daemon.NewClient` keeps the gate for every caller that sends a request (the
+desktop, the proxy, `human audit`, `human stats`). `daemon.NewClientUnchecked`
+and `daemon.ConnectUnchecked` exist for the one caller that needs the endpoint
+without the permission to use it — the CLI entry point, which also propagates
+the chrome and proxy addresses from `daemon.json` for locally-run commands.
+
 ## Ledger
 
 | Protocol | Date | Change | MinProtocol | MinDaemonProtocol |
