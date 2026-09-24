@@ -19,12 +19,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/gethuman-sh/human/cmd/cmdauto"
 	"github.com/gethuman-sh/human/cmd/cmddaemon"
+	"github.com/gethuman-sh/human/cmd/cmdforward"
 	"github.com/gethuman-sh/human/cmd/cmdutil"
 	"github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/daemon"
@@ -35,7 +37,7 @@ import (
 
 // BuildDeployCmd creates the top-level "deploy" command.
 func BuildDeployCmd(deps cmdutil.Deps) *cobra.Command {
-	var branch, title string
+	var branch, title, candidates string
 	var ready, overrideDecision bool
 	cmd := &cobra.Command{
 		Use:   "deploy KEY",
@@ -62,7 +64,7 @@ that the review was skipped.`,
 				return err
 			}
 			defer resolved.Cleanup()
-			return RunDeploy(cmd.Context(), resolved.Provider, cmd.OutOrStdout(), resolved.Key, branch, title, ready, overrideDecision)
+			return RunDeploy(cmd.Context(), resolved.Provider, cmd.OutOrStdout(), resolved.Key, branch, title, ready, overrideDecision, splitList(candidates))
 		},
 	}
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch to ship (default: the ticket's review-handoff branch)")
@@ -70,6 +72,12 @@ that the review was skipped.`,
 	cmd.Flags().BoolVar(&ready, "ready", false, "Ship without waiting for the machine review: un-draft the pull request and merge once CI is green")
 	cmd.Flags().BoolVar(&overrideDecision, "override-decision", false,
 		"Deploy even while an open [human:options] decision is waiting on a person")
+	// The forwarding client fills this in from the caller's own checkout
+	// (cmdforward): the branches carrying the ticket's commits, which the
+	// daemon's checkout cannot see on the caller's behalf (SC-5330). Hidden
+	// because it is the client's to set, not a person's.
+	cmd.Flags().StringVar(&candidates, strings.TrimPrefix(cmdforward.CandidateBranchesFlag, "--"), "", "")
+	_ = cmd.Flags().MarkHidden(strings.TrimPrefix(cmdforward.CandidateBranchesFlag, "--"))
 	return cmd
 }
 
@@ -123,23 +131,17 @@ func transitionDepsFor(ctx context.Context, p tracker.Provider, key string) daem
 	return newTransitionDeps(p)
 }
 
-// RunDeploy derives branch and title, then runs the deploy gate.
-func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, branch, title string, ready, overrideDecision bool) error {
+// RunDeploy derives branch and title, then runs the deploy gate. candidates
+// are the branches the caller's checkout found carrying the ticket's commits;
+// they stand in for a missing handoff and for nothing else.
+func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, branch, title string, ready, overrideDecision bool, candidates []string) error {
 	engineering := ""
 	if branch == "" {
-		comments, err := p.ListComments(ctx, key)
+		derived, eng, err := branchFromHandoff(ctx, p, key, candidates)
 		if err != nil {
 			return err
 		}
-		m, ok := marker.Latest(comments, "ready-for-review")
-		if !ok {
-			return errors.WithDetails("no review handoff on ticket — pass --branch", "key", key)
-		}
-		branch = m.Fields["branch"]
-		engineering = m.Fields["engineering"]
-		if branch == "" {
-			return errors.WithDetails("review handoff carries no branch — pass --branch", "key", key)
-		}
+		branch, engineering = derived, eng
 	}
 	if title == "" {
 		issue, err := p.GetIssue(ctx, key)
@@ -165,6 +167,52 @@ func RunDeploy(ctx context.Context, p tracker.Provider, out io.Writer, key, bran
 	}
 	_, err = fmt.Fprint(out, outcomeLine(key, branch, res))
 	return err
+}
+
+// branchFromHandoff reads the branch off the ticket's newest review handoff,
+// and without one falls back to the single branch the caller found carrying
+// the ticket's commits. Two candidates, or none, is refused with what was
+// found: the fallback exists so a pushed branch is not refused for want of a
+// handoff (SC-5330), not so the gate guesses between branches.
+func branchFromHandoff(ctx context.Context, p tracker.Provider, key string, candidates []string) (branch, engineering string, err error) {
+	comments, err := p.ListComments(ctx, key)
+	if err != nil {
+		return "", "", err
+	}
+	m, ok := marker.Latest(comments, "ready-for-review")
+	if !ok {
+		return branchFromCandidates(key, candidates)
+	}
+	if m.Fields["branch"] == "" {
+		return "", "", errors.WithDetails("review handoff carries no branch — pass --branch", "key", key)
+	}
+	return m.Fields["branch"], m.Fields["engineering"], nil
+}
+
+func branchFromCandidates(key string, candidates []string) (branch, engineering string, err error) {
+	switch len(candidates) {
+	case 1:
+		return candidates[0], "", nil
+	case 0:
+		return "", "", errors.WithDetails("no review handoff on ticket and no branch carries its commits — pass --branch", "key", key)
+	default:
+		return "", "", errors.WithDetails("no review handoff on ticket and its commits are on several branches — pass --branch",
+			"key", key, "branches", strings.Join(candidates, ", "))
+	}
+}
+
+// splitList splits a comma-separated list, trimming blanks.
+func splitList(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // outcomeLine says where the work is now, because the outcomes leave it in

@@ -396,6 +396,45 @@ var CommitsForRev = func(ctx context.Context, dir, key, rev string) ([]Commit, e
 	return commits, nil
 }
 
+// CommitsAnywhere is CommitsForRev over every ref the repository knows —
+// local branches, remote-tracking branches and tags — for the caller who does
+// not yet know which branch carries a ticket's work and is asking git to say.
+// Package var so callers can stub git access in tests.
+var CommitsAnywhere = func(ctx context.Context, dir, key string) ([]Commit, error) {
+	return CommitsForRev(ctx, dir, key, "--all")
+}
+
+// BranchesContaining names the branches, local and remote-tracking, whose
+// history includes sha. Remote-tracking refs are reported under their branch
+// name (origin/fix/x → fix/x) so a branch that exists both locally and on
+// origin is one candidate rather than two. Two shapes name no branch of their
+// own and are dropped: the symbolic origin/HEAD, whose %(refname:short) is the
+// bare remote name "origin" (never the literal "origin/HEAD" — verified
+// against real git), and the "(no branch)" placeholder a detached-HEAD linked
+// worktree prints in place of a name (also verified: a primary checkout's
+// detached HEAD prints nothing here, but a linked worktree's does). Package
+// var so callers can stub git access in tests.
+var BranchesContaining = func(ctx context.Context, dir, sha string) ([]string, error) {
+	out, err := runner(ctx, "git", "-C", dir, "branch", "--all", "--contains", sha, "--format=%(refname:short)")
+	if err != nil {
+		return nil, errors.WrapWithDetails(err, "listing branches containing commit", "dir", dir, "sha", sha)
+	}
+	var branches []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || name == "HEAD" || name == "origin" || strings.HasPrefix(name, "(") {
+			continue
+		}
+		name = strings.TrimPrefix(name, "origin/")
+		if !seen[name] {
+			seen[name] = true
+			branches = append(branches, name)
+		}
+	}
+	return branches, nil
+}
+
 // CommitsBetween lists the commits in the range base..to (in to but not in
 // base) at dir, newest first — the newer commits a behind publish would
 // overwrite, named so the guard's error can point the reader at what to recover

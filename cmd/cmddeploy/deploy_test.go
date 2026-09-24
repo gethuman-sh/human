@@ -158,7 +158,7 @@ func TestRunDeploy_refusesWhileADecisionIsOpen(t *testing.T) {
 	})
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "deploy refused")
@@ -174,7 +174,7 @@ func TestRunDeploy_recordsTheStartBeforeTheMerge(t *testing.T) {
 	})
 	var buf bytes.Buffer
 
-	require.NoError(t, RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false))
+	require.NoError(t, RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false, nil))
 
 	require.NotEmpty(t, *events)
 	assert.Equal(t, "comment:[human:deploy-started]", (*events)[0],
@@ -192,7 +192,7 @@ func TestRunDeploy_overrideShipsWhileADecisionIsOpen(t *testing.T) {
 	})
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, true)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, true, nil)
 
 	require.NoError(t, err)
 	assert.Contains(t, *events, "engine")
@@ -207,7 +207,7 @@ func TestRunDeploy_passesTheOverrideThroughToTheEntryPoint(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false, true)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false, true, nil)
 
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
@@ -225,7 +225,7 @@ func TestRunDeploy_derivesBranchAndTitleFromHandoffAndTicket(t *testing.T) {
 	}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false, nil)
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
 	call := (*calls)[0]
@@ -242,7 +242,7 @@ func TestRunDeploy_explicitFlagsSkipDerivation(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "Custom title", false, false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "Custom title", false, false, nil)
 	require.NoError(t, err)
 	require.Len(t, *calls, 1)
 	assert.Equal(t, "release/x", (*calls)[0].branch)
@@ -254,7 +254,7 @@ func TestRunDeploy_noHandoffNoBranchFails(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no review handoff")
 	assert.Empty(t, *calls)
@@ -268,7 +268,7 @@ func TestRunDeploy_handoffWithoutBranchFails(t *testing.T) {
 	}}}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no branch")
 	assert.Empty(t, *calls)
@@ -279,7 +279,7 @@ func TestRunDeploy_engineErrorPropagates(t *testing.T) {
 	p := &stubProvider{}
 	var buf bytes.Buffer
 
-	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false, false)
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "release/x", "T", false, false, nil)
 	require.Error(t, err)
 	assert.NotContains(t, buf.String(), "Deployed")
 }
@@ -319,7 +319,7 @@ func TestRunDeploy_readyCarriesTheDraftOverrideThroughThePrelude(t *testing.T) {
 
 			var buf bytes.Buffer
 			require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf,
-				"SC-1", "release/x", "T", tc.ready, false))
+				"SC-1", "release/x", "T", tc.ready, false, nil))
 			assert.Equal(t, tc.ready, got.MergeDraftPR)
 		})
 	}
@@ -369,7 +369,7 @@ func TestRunDeploy_reportsAStartedReviewAsSuch(t *testing.T) {
 	t.Cleanup(func() { deployEntry, newTransitionDeps = prevEntry, prevDeps })
 	var buf bytes.Buffer
 
-	require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf, "SC-1", "release/x", "T", false, false))
+	require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf, "SC-1", "release/x", "T", false, false, nil))
 
 	assert.Contains(t, buf.String(), "Review started for SC-1 (release/x): https://example/pr/9")
 	assert.NotContains(t, buf.String(), "Deployed")
@@ -388,9 +388,52 @@ func TestRunDeploy_reportsAFixDispatchNotAReview(t *testing.T) {
 	t.Cleanup(func() { deployEntry, newTransitionDeps = prevEntry, prevDeps })
 	var buf bytes.Buffer
 
-	require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf, "SC-1", "release/x", "T", false, false))
+	require.NoError(t, RunDeploy(context.Background(), &stubProvider{}, &buf, "SC-1", "release/x", "T", false, false, nil))
 
 	assert.Contains(t, buf.String(), "https://example/pr/9")
 	assert.NotContains(t, buf.String(), "Review started")
 	assert.NotContains(t, buf.String(), "Deployed")
+}
+
+// Without a handoff, the one branch the caller's checkout found carrying the
+// ticket's commits is the branch to ship (SC-5330).
+func TestRunDeploy_noHandoffUsesTheSingleCandidateBranch(t *testing.T) {
+	calls := stubEngine(t, nil)
+	p := &stubProvider{issue: &tracker.Issue{Key: "SC-1", Title: "T"}}
+	var buf bytes.Buffer
+
+	require.NoError(t, RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false, []string{"fix/sc-1"}))
+
+	require.Len(t, *calls, 1)
+	assert.Equal(t, "fix/sc-1", (*calls)[0].branch)
+}
+
+// Several candidates are a question the gate must not answer by itself; the
+// refusal names them so the caller can.
+func TestRunDeploy_noHandoffSeveralCandidatesRefusesNamingThem(t *testing.T) {
+	calls := stubEngine(t, nil)
+	p := &stubProvider{}
+	var buf bytes.Buffer
+
+	err := RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false, []string{"fix/a", "fix/b"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "several branches")
+	assert.Equal(t, "fix/a, fix/b", errors.AllDetails(err)["branches"])
+	assert.Empty(t, *calls)
+}
+
+// A recorded handoff keeps precedence over whatever the caller's checkout
+// found: the handoff is the reviewed binding.
+func TestRunDeploy_handoffOutranksCandidates(t *testing.T) {
+	calls := stubEngine(t, nil)
+	p := &stubProvider{comments: []tracker.Comment{
+		{Body: "[human:ready-for-review]\nbranch: feat/x\ncommits: abc", Created: time.Now()},
+	}, issue: &tracker.Issue{Key: "SC-1", Title: "T"}}
+	var buf bytes.Buffer
+
+	require.NoError(t, RunDeploy(context.Background(), p, &buf, "SC-1", "", "", false, false, []string{"fix/other"}))
+
+	require.Len(t, *calls, 1)
+	assert.Equal(t, "feat/x", (*calls)[0].branch)
 }

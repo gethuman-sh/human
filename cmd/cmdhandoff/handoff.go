@@ -122,7 +122,7 @@ func RunHandoffPost(ctx context.Context, p tracker.Provider, out io.Writer, dir,
 
 	commits := opts.Commits
 	if len(commits) == 0 {
-		derived, err := deriveCommits(ctx, dir, key, branch, opts.Engineering)
+		derived, err := DeriveCommits(ctx, dir, key, branch, opts.Engineering)
 		if err != nil {
 			return err
 		}
@@ -184,12 +184,16 @@ func RunHandoffShow(ctx context.Context, p tracker.Provider, out io.Writer, key 
 	return enc.Encode(h)
 }
 
-// deriveCommits collects the short SHAs referencing the work keys (the
+// DeriveCommits collects the short SHAs referencing the work keys (the
 // engineering keys in split topology, the ticket itself otherwise), oldest
 // first so the handoff reads in commit order. Discovery is anchored at the
 // handed-off BRANCH, not HEAD — in a board workspace the caller's checkout
 // usually sits on main while the work lives on the branch (the 1087 deadlock).
-func deriveCommits(ctx context.Context, dir, key, branch string, engineering []string) ([]string, error) {
+// Exported because the forwarding client runs the same derivation in the
+// caller's checkout before the request reaches the daemon (SC-5330): the
+// branch and its commits are facts about where the caller stands, which the
+// daemon's own checkout cannot answer on their behalf.
+func DeriveCommits(ctx context.Context, dir, key, branch string, engineering []string) ([]string, error) {
 	workKeys := engineering
 	if len(workKeys) == 0 {
 		workKeys = []string{key}
