@@ -1127,6 +1127,62 @@ func TestUnpublishedCommits_realGit(t *testing.T) {
 	}
 }
 
+// TestMergesCleanly_realGit checks the two outcomes reconcileWithOrigin relies
+// on: a change that touches content the other side already touches conflicts
+// (the shape of a person's manual conflict resolution), and a change on
+// content the other side never touches merges cleanly (the shape of a commit
+// the other side has nowhere at all).
+func TestMergesCleanly_realGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	prev := runner
+	runner = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, name, args...).Output()
+	}
+	t.Cleanup(func() { runner = prev })
+
+	repoDir := t.TempDir()
+	run(t, repoDir, "init", "--quiet", "-b", "main")
+	run(t, repoDir, "config", "user.email", "test@example.com")
+	run(t, repoDir, "config", "user.name", "test")
+	writeFile(t, repoDir, "f.txt", "base\n")
+	run(t, repoDir, "add", "f.txt")
+	run(t, repoDir, "commit", "--quiet", "-m", "base")
+
+	run(t, repoDir, "checkout", "--quiet", "-b", "same-line")
+	writeFile(t, repoDir, "f.txt", "base\nsame-line-edit\n")
+	run(t, repoDir, "add", "f.txt")
+	run(t, repoDir, "commit", "--quiet", "-m", "edit f.txt")
+
+	run(t, repoDir, "checkout", "--quiet", "-b", "other-line", "main")
+	writeFile(t, repoDir, "f.txt", "base\nother-line-edit\n")
+	run(t, repoDir, "add", "f.txt")
+	run(t, repoDir, "commit", "--quiet", "-m", "conflicting edit f.txt")
+
+	run(t, repoDir, "checkout", "--quiet", "-b", "unrelated", "main")
+	writeFile(t, repoDir, "g.txt", "new file\n")
+	run(t, repoDir, "add", "g.txt")
+	run(t, repoDir, "commit", "--quiet", "-m", "add g.txt")
+
+	ctx := context.Background()
+	clean, err := MergesCleanly(ctx, repoDir, "other-line", "same-line")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if clean {
+		t.Error("two edits of the same line must conflict, not merge cleanly")
+	}
+
+	clean, err = MergesCleanly(ctx, repoDir, "other-line", "unrelated")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !clean {
+		t.Error("a new file untouched by the other side must merge cleanly")
+	}
+}
+
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {

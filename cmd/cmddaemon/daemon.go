@@ -3128,9 +3128,16 @@ func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) (publ
 //
 // What decides is what each side contains, never which ref this machine holds:
 //   - origin contains everything local has: origin is the newer work, adopt it.
-//   - exactly one side contains the current base tip: that side is the newer work.
-//     A deploy-fixer's resolution is local and contains the base (SC-2845); a
-//     person's repair is on origin and contains the base (SC-5596).
+//   - exactly one side contains the current base tip: that side is USUALLY the
+//     newer work (a deploy-fixer's resolution is local and contains the base,
+//     SC-2845; a person's repair is on origin and contains the base, SC-5596) —
+//     but base-containment is only a hint, not proof the other side is a
+//     subset, so adopting origin over local is confirmed with a merge-tree
+//     probe first: a local commit that merges CLEANLY into origin touches
+//     content origin has nowhere at all (e.g. an unpushed PR-loop fix) and is
+//     never silently dropped; a local commit that CONFLICTS with origin is
+//     consistent with origin already being a resolution of it, and origin is
+//     trusted as the base-containment hint says.
 //   - neither side is distinguished by the base: compare by CONTENT, because a
 //     rebase rewrites SHAs while changing nothing, and a side carrying no change
 //     the other lacks is not work to protect.
@@ -3154,7 +3161,27 @@ func reconcileWithOrigin(ctx context.Context, dir, branch, localSHA, originSHA s
 		if localHasBase {
 			return publishLease, nil
 		}
-		return publishAdopt, nil
+		// origin carries the base and local does not, but base-containment alone
+		// does not prove origin is a superset: local may still hold a commit
+		// (e.g. a PR-loop fixer's commit, which is never pushed) that origin's
+		// rebuilt history has nowhere at all. Patch-id (UnpublishedCommits) can't
+		// tell that case apart from a person's manual conflict resolution, which
+		// re-authors the same edit against different context and so never
+		// matches by patch-id either, despite carrying nothing lost — that is
+		// precisely the shape this arm exists to adopt (SC-5596). A merge-tree
+		// probe distinguishes them: local's change CONFLICTING with origin means
+		// origin already touches the same region (consistent with a resolution),
+		// so origin is trusted as designed; a CLEAN merge proves local adds
+		// content origin has nowhere, and must not be silently discarded —
+		// refuse by falling through to the named-heads comparison instead.
+		clean, err := gitrepo.MergesCleanly(ctx, dir, originSHA, localSHA)
+		if err != nil {
+			return publishLease, err
+		}
+		if !clean {
+			return publishAdopt, nil
+		}
+		return reconcileByContent(ctx, dir, branch, localSHA, originSHA)
 	}
 	return reconcileByContent(ctx, dir, branch, localSHA, originSHA)
 }

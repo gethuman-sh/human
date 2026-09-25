@@ -112,7 +112,9 @@ type Deployer interface {
 	// origin and would re-run the same conflicting rebase (SC-2845). It reports
 	// whether it published: a local ref that is absent, unchanged, or does not
 	// yet contain the base tip is no resolution, and is left for the deploy's own
-	// freshness rebase to handle.
+	// freshness rebase to handle; a local ref origin has already overtaken (the
+	// reconciliation adopts origin's tip instead of pushing) also reports false,
+	// because nothing of the fixer's was carried (SC-5596).
 	PublishResolvedBranch(ctx context.Context, workspaceDir, branch string) (published bool, err error)
 }
 

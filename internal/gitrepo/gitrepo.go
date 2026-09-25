@@ -492,6 +492,33 @@ var UnpublishedCommits = func(ctx context.Context, dir, upstream, branch string)
 	return commits, nil
 }
 
+// MergesCleanly reports whether merging theirs into ours would apply without a
+// content conflict, at the object level only (`git -C <dir> merge-tree
+// --write-tree --quiet <ours> <theirs>`) — no ref moves and no working tree is
+// touched. Patch-id comparison (UnpublishedCommits) cannot tell a commit whose
+// change is genuinely absent from ours apart from one a person already folded
+// into a differently-shaped resolution commit: the same edit re-authored
+// against different surrounding context is a different patch-id even though
+// nothing is lost. A conflicting merge is exactly that overlap signature — ours
+// already touches the same region theirs does, consistent with ours being a
+// resolution of it — while a CLEAN merge proves theirs adds content ours does
+// not have in any form, which is real work a caller must not discard (SC-5596).
+// git exits 0 for a clean merge and 1 for a conflicted one; any other exit
+// (a bad ref, a spawn failure) is a real error. Package var so callers can
+// stub git access in tests.
+var MergesCleanly = func(ctx context.Context, dir, ours, theirs string) (bool, error) {
+	_, err := runner(ctx, "git", "-C", dir, "merge-tree", "--write-tree", "--quiet", ours, theirs)
+	switch {
+	case err == nil:
+		return true, nil
+	case cleanAbsence(err):
+		return false, nil // exit 1: a real content conflict, not an error
+	default:
+		return false, errors.WrapWithDetails(err, "probing merge cleanliness",
+			"dir", dir, "ours", ours, "theirs", theirs)
+	}
+}
+
 // CurrentBranch returns the checked-out branch name of the repository at dir
 // (running `git -C <dir> rev-parse --abbrev-ref HEAD`). A detached HEAD yields
 // "HEAD", which callers should treat as "no branch". Package var so callers can

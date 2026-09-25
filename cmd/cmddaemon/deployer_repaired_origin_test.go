@@ -112,6 +112,82 @@ func TestFreshenBranch_ReadsTheRepairNotTheStaleLocalRef(t *testing.T) {
 	}
 }
 
+// unpublishedFixerRepo builds the geometry a PR-loop fixer leaves behind: it
+// commits a real change to the LOCAL branch ref and never pushes (the FSM
+// guarantee). Meanwhile origin gains the base through an ACTOR UNAWARE of the
+// fixer's commit — a second clone that merges main into the branch, or the
+// forge's own "Update branch" button — so origin ends up containing the base
+// while the local ref, built before that merge, does not. The fixer's commit
+// touches a file the base merge never does: nothing about it overlaps origin's
+// change, so nothing about origin's history could be "a resolution of it".
+func unpublishedFixerRepo(t *testing.T) (ws, branch, fixerCommit, originTip string) {
+	t.Helper()
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	runGit(t, root, "init", "--bare", "-b", "main", origin)
+	ws = filepath.Join(root, "ws")
+	runGit(t, root, "clone", origin, ws)
+
+	write(t, ws, "a.txt", "one\n")
+	runGit(t, ws, "add", "a.txt")
+	runGit(t, ws, "commit", "-m", "base")
+	runGit(t, ws, "push", "-u", "origin", "main")
+
+	branch = "feat"
+	runGit(t, ws, "checkout", "-b", branch)
+	runGit(t, ws, "push", "-u", "origin", branch)
+
+	// The fixer commits locally, on an unrelated file, and never pushes.
+	write(t, ws, "fix.txt", "the fixer's change\n")
+	runGit(t, ws, "add", "fix.txt")
+	runGit(t, ws, "commit", "-m", "pr-fix: address review comment")
+	fixerCommit = runGit(t, ws, "rev-parse", "HEAD")
+
+	// A second clone, unaware of the fixer's commit, merges an advanced base
+	// into the branch and pushes — the "Update branch" shape.
+	human := filepath.Join(root, "human")
+	runGit(t, root, "clone", origin, human)
+	runGit(t, human, "checkout", branch)
+	runGit(t, human, "checkout", "main")
+	write(t, human, "b.txt", "main advanced\n")
+	runGit(t, human, "add", "b.txt")
+	runGit(t, human, "commit", "-m", "advance")
+	runGit(t, human, "push", "origin", "main")
+	runGit(t, human, "checkout", branch)
+	runGit(t, human, "merge", "--no-edit", "main")
+	runGit(t, human, "push", "origin", branch)
+	originTip = runGit(t, human, "rev-parse", "HEAD")
+
+	runGit(t, ws, "fetch", "origin")
+	return ws, branch, fixerCommit, originTip
+}
+
+// TestPushBranch_RefusesToDropAnUnpublishedFixerCommit is the SC-5596 round-2
+// reproduction: base-containment alone said origin was the newer work and
+// adopted it, silently moving refs/heads/<branch> off the fixer's commit even
+// though origin has it nowhere. It must refuse instead, leaving both the local
+// ref and origin untouched, so the fixer's work is never lost to a card the
+// reviewer then reads and approves without the fix.
+func TestPushBranch_RefusesToDropAnUnpublishedFixerCommit(t *testing.T) {
+	requireGit(t)
+	ws, branch, fixerCommit, originTip := unpublishedFixerRepo(t)
+
+	_, err := forgeDeployer{}.pushBranch(context.Background(), ws, branch)
+	if err == nil {
+		t.Fatal("adopting origin must not silently drop the fixer's unpublished commit")
+	}
+	if !strings.Contains(err.Error(), "pr-fix") {
+		t.Errorf("the refusal must name the fixer's commit, got: %v", err)
+	}
+	if tip := runGit(t, ws, "rev-parse", branch); tip != fixerCommit {
+		t.Errorf("the local ref must still hold the fixer's commit: %s = %s, want %s", branch, tip, fixerCommit)
+	}
+	runGit(t, ws, "fetch", "origin")
+	if tip := runGit(t, ws, "rev-parse", "origin/"+branch); tip != originTip {
+		t.Errorf("origin/%s must be untouched at %s, got %s", branch, originTip, tip)
+	}
+}
+
 // Neither side is a ghost: each carries a change the other does not, and both
 // contain the base. Nothing mechanical can choose, so the publish refuses and
 // names both heads — it never deletes either side's work.
