@@ -569,7 +569,7 @@
       "marker": "[human:options]",
       "state_key": "stage.implementation exit=needs-input",
       "prompt": "human-autofix-skill.md Step 1a",
-      "doc": "The one place the pipeline asks a question, asked up front rather than halfway through. Which of two colliding tickets goes first is not among its questions: a confirmed collision is recorded on the run and both are built, the merge gate integrating the second with the base that carries the first (SC-5274)."
+      "doc": "The one place the pipeline asks a question, asked up front rather than halfway through. Which of two colliding tickets goes first is not among its questions: a confirmed collision is recorded on the run and both are built, the merge gate integrating the second with the base that carries the first (SC-5274). Every preflight run is a bug or security fix, so a scope fork is not among its questions either: the ticket's Expected list is already the acceptance, and whether to do one of its items is never a question. The only fork this transition ever fires for is a person's own open work on the ticket (SC-5704)."
     },
     {
       "name": "triage-verdict-confirmed",

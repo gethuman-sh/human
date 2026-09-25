@@ -142,7 +142,7 @@ A question is admissible **only** if all three hold:
 - **(b)** Two readings lead to *materially different work* — not different style, different work.
 - **(c)** Guessing wrong would waste the run, rather than being cheap to revise afterwards.
 
-Ask about **scope forks and product intent**. Never about implementation choices you can make yourself.
+The only fork you may ask about is 6a's — a person's own open work on this ticket. Never ask about implementation choices you can make yourself.
 
 **On a bug or security ticket there is no scope fork.** A defect is fixed at its root cause, and the ticket's
 observed and expected behaviour is the acceptance: every Expected item is in scope, and whether to do one of them
