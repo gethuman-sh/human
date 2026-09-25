@@ -147,8 +147,10 @@ interface Card {
   // What this viewer's machine could see of the agent behind the card:
   // "live" | "dead" | "recovering" | "elsewhere" | "stalled", absent when
   // unknown (SC-3569). "recovering" is dead-but-not-yet-the-person's-turn: the
-  // daemon's own StuckRunningGrace relaunch is still due for this card's
-  // class. "stalled" is present-but-hung: the daemon's own AgentProgress
+  // daemon's own StuckRunningGrace relaunch is still due for a running
+  // planning/implementation/verification card, or reconcilePRLoops' own
+  // reconcile tick is still due for a done-stage PR review<->fix card
+  // (SC-5091). "stalled" is present-but-hung: the daemon's own AgentProgress
   // judgement, carried through agentProgress below (SC-5328). Filled by the
   // desktop overlay (applyLocal → board.MarkAgentLiveness), never by the
   // daemon.

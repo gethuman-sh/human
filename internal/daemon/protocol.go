@@ -309,10 +309,13 @@ type BoardViewCard struct {
 	// AgentLive, AgentDead, AgentRecovering, AgentElsewhere, AgentStalled, or ""
 	// for unknown.
 	// AgentRecovering is AgentDead's softer sibling: the agent is gone, but the
-	// daemon's own StuckRunningGrace relaunch is not yet due for this card's
-	// class, so it must render in the machine register rather than ask a
-	// person to retry work the machine hasn't had its turn at yet (SC-3569 PR
-	// review finding).
+	// daemon's own recovery for this card's class is not yet due, so it must
+	// render in the machine register rather than ask a person to retry work
+	// the machine hasn't had its turn at yet (SC-3569 PR review finding). Two
+	// classes, two clocks: StuckRunningGrace from StageEnteredAt for a running
+	// planning/implementation/verification card, and reconcilePRLoops' own
+	// reconcile tick from the agent's recorded stop for a done-stage PR
+	// review<->fix card (SC-5091).
 	// AgentStalled is "present, and the daemon judges it hung": the container
 	// is running but the agent has gone silent past the budget its
 	// outstanding work grants it (SC-5328) — still the machine's register,

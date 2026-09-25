@@ -51,8 +51,10 @@ export interface QueueCard {
   // is running here; "dead" = the stage is this machine's to run, nothing is
   // running it, and the daemon's own recovery pass for this class has already
   // had its turn; "recovering" = same absence, but that recovery pass is not
-  // yet due (a running planning/implementation/verification card before
-  // StuckRunningGrace) — dead, but still the machine's turn, not the person's;
+  // yet due — a running planning/implementation/verification card before
+  // StuckRunningGrace, or a done-stage PR review<->fix card whose half is
+  // recorded as stopped within reconcilePRLoops' own reconcile tick (SC-5091)
+  // — dead, but still the machine's turn, not the person's;
   // "elsewhere" = another machine's daemon owns the stage, so it cannot be seen
   // from here; "stalled" = present, but the daemon judges it hung (derived from
   // agentProgress below). ABSENT means unknown — render exactly as before,

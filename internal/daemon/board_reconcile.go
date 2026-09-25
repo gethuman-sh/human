@@ -132,7 +132,7 @@ type StopAgent func(agentName string) error
 // recorded. Where a stop IS recorded, the stuck-running pass otherwise never
 // sees it, because a stopped agent simply leaves the live listing and the card
 // then waits out the full StuckRunningGrace for a fact the machine already
-// held (SC-5327). The production lister (cmddaemon.stoppedBoardAgents) reads
+// held (SC-5327). The production lister (agent.StoppedBoardAgents) reads
 // two sources to cover every path an agent stops through, including the
 // kill/OOM/crash reap the meta alone cannot show once DeleteMeta erases it —
 // see its doc comment for which producer feeds which case. A nil lister

@@ -287,9 +287,9 @@ The deploy grace above applies here too — a `human deploy` on its CI gate has
 until its own timeout has passed.
 
 **A recorded death skips the grace** (`recordedDeath`, SC-5327), including the
-kill/OOM/crash reap this section is about. `stoppedBoardAgents`
-(`cmd/cmddaemon/daemon.go`) reads two sources because no single one survives
-every path an agent stops through:
+kill/OOM/crash reap this section is about. `agent.StoppedBoardAgents`
+(`internal/agent/stoppedboard.go`) reads two sources because no single one
+survives every path an agent stops through:
 
 - the execution log's `outcome.json`, written by `PreserveExecutionArtifacts`
   *before* the meta is deleted. That covers `human agent stop`

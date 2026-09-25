@@ -25,6 +25,25 @@ import (
 // retry at the same instant the daemon started one.
 const agentLaunchGrace = daemon.QueuedLaunchGrace + time.Minute
 
+// prLoopRedriveGrace bounds how long after a PR-loop half's recorded stop the
+// card still reads as machine-owed recovery rather than as a person's turn.
+//
+// Derived from the pass that actually re-drives the loop, never a number of its
+// own, for the reason agentLaunchGrace states: reconcilePRLoops runs only
+// inside reconcileOnce (board_reconcile.go:233), on BoardReconcileInterval
+// perturbed by up to ±BoardReconcileJitter, so the latest a re-drive can land
+// after an exit is interval×(1+jitter). The extra minute is the same margin
+// agentLaunchGrace carries, so the board can never ask for a retry in the
+// instant the daemon starts one. A function rather than a const because both
+// inputs are vars the daemon's own tests shorten.
+func prLoopRedriveGrace() time.Duration {
+	worst := daemon.BoardReconcileInterval
+	if daemon.BoardReconcileJitter > 0 {
+		worst = time.Duration(float64(daemon.BoardReconcileInterval) * (1 + daemon.BoardReconcileJitter))
+	}
+	return worst + time.Minute
+}
+
 // LiveAgents is what ONE machine can see about running board agents at the
 // moment the overlay is applied.
 type LiveAgents struct {
@@ -35,6 +54,14 @@ type LiveAgents struct {
 	// running"). Nil leaves every card unknown, per the LiveAgentLister
 	// precedent that a liveness that cannot be established is never acted on.
 	Names map[string]bool
+	// StoppedAt is when THIS machine recorded each board agent as stopped, by
+	// agent name (agent.StoppedBoardAgents). It is the only clock that says
+	// when an agent ENDED: StageEnteredAt is the start marker's time, which for
+	// a mid-flight PR review is tens of minutes earlier and cannot distinguish
+	// a reviewer that just exited from one that never ran. A nil or missing
+	// entry is not a claim that the agent is alive — it leaves the card on the
+	// verdict it had before this existed (SC-5091).
+	StoppedAt map[string]time.Time
 	// DaemonID is this host's daemon id — the value this machine signs onto the
 	// markers it posts (DaemonInfo.DaemonID). Empty when it could not be read,
 	// which also leaves liveness unknown: without it, a missing agent cannot be
@@ -112,12 +139,11 @@ func livenessOf(card daemon.BoardViewCard, live LiveAgents) string {
 	if withinGrace(card.StageEnteredAt, live.Now, agentLaunchGrace) {
 		return ""
 	}
-	if recoverableByStuckRunning(card) && withinGrace(card.StageEnteredAt, live.Now, daemon.StuckRunningGrace) {
-		// Past agentLaunchGrace but not yet past StuckRunningGrace, and this is
-		// exactly the class reconcileStuckRunning owns (board_reconcile.go:482):
-		// the daemon's own bounded relaunch is still due on this very
-		// timestamp. Saying AgentDead here would send the reader to retry work
-		// the machine has not yet had its turn to fix.
+	if machineOwesATry(card, names, live) {
+		// The agent is gone, but the daemon's own recovery for this card's
+		// class has not yet had its turn. Saying AgentDead here paints the
+		// amber --turn-person register and asks for a retry of work the
+		// machine is about to do by itself.
 		return daemon.AgentRecovering
 	}
 	return daemon.AgentDead
@@ -133,27 +159,81 @@ func stalledHere(card daemon.BoardViewCard, agent string, live LiveAgents) bool 
 	return p != nil && p.Agent == agent && p.DaemonID == live.DaemonID && p.Stalled
 }
 
-// recoverableByStuckRunning reports whether a card belongs to the class
-// reconcileStuckRunning owns: a running planning/implementation/verification
-// card (board_reconcile.go:379, board_transition.go:1946-1959 name exactly
-// these three plus done). Deliberately narrower than that failedHeaderFor set:
-// a running done-stage card is a PR review<->fix loop, which
-// reconcilePRLoops re-drives with NO grace at all (board_reconcile.go:253), so
-// it must keep reading dead the moment agentLaunchGrace passes rather than
-// wait out StuckRunningGrace too. A verification/done/verdict=failed card is
-// never BoardRunning (it derives BoardDone), so it is excluded here already
-// and stays on the dead path unchanged — that is the ticket's headline
-// SC-1542 case and must not soften.
-func recoverableByStuckRunning(card daemon.BoardViewCard) bool {
+// machineOwesATry reports whether the daemon's own recovery for this card is
+// still due, so a missing agent here is the machine's turn rather than the
+// person's. Two classes, and they do NOT share a clock:
+//
+//   - A running planning/implementation/verification card is the class
+//     reconcileStuckRunning owns (board_reconcile.go:379). That pass measures
+//     StuckRunningGrace from the same StageEnteredAt this overlay reads, so the
+//     marker's own timestamp answers it.
+//   - A running done-stage card is a PR review<->fix loop, re-driven by
+//     reconcilePRLoops instead. That pass takes no grace of its own, but "no
+//     grace" is not "immediately": it runs only on the reconcile tick, one to
+//     three minutes apart, and reading it as instant is what put every card of
+//     a campaign run into the amber "agent not running — Retry it" register
+//     for the minutes after its reviewer simply finished (SC-5091). Its clock
+//     cannot be StageEnteredAt — that is when the review STARTED, long past
+//     agentLaunchGrace by the time a real review ends — so it is the agent's
+//     recorded stop, and absent that record the card is left on AgentDead
+//     exactly as before.
+//
+// A verification/done/verdict=failed card is never BoardRunning (it derives
+// BoardDone), so no pass recovers it and it stays on the dead path unchanged —
+// the SC-1542 case, which must not soften.
+func machineOwesATry(card daemon.BoardViewCard, names []string, live LiveAgents) bool {
 	if card.State != string(daemon.BoardRunning) {
 		return false
 	}
 	switch daemon.BoardStage(card.Stage) {
 	case daemon.BoardPlanning, daemon.BoardImplementation, daemon.BoardVerification:
-		return true
+		return withinGrace(card.StageEnteredAt, live.Now, daemon.StuckRunningGrace)
+	case daemon.BoardDoneStage:
+		return withinPRLoopRedrive(card, names, live)
 	default:
 		return false
 	}
+}
+
+// withinPRLoopRedrive reports whether a done-stage loop card's newest recorded
+// stop is recent enough that reconcilePRLoops has not yet had its turn.
+//
+// The stop must postdate the stage to be ABOUT this stage — the guard
+// recordedDeath applies for the same reason (board_reconcile.go:494): a half
+// that stopped before the current started marker belongs to an earlier round,
+// already adjudicated, and reading it here would hold a genuinely abandoned
+// card in the machine register indefinitely.
+func withinPRLoopRedrive(card daemon.BoardViewCard, names []string, live LiveAgents) bool {
+	if card.DeployPhase != daemon.DeployPhasePRReview && card.DeployPhase != daemon.DeployPhasePRFix {
+		return false
+	}
+	entered, err := time.Parse(time.RFC3339, card.StageEnteredAt)
+	if err != nil {
+		return false
+	}
+	stopped := newestStopAfter(names, live.StoppedAt, entered)
+	if stopped.IsZero() {
+		return false
+	}
+	return live.Now.Sub(stopped) < prLoopRedriveGrace()
+}
+
+// newestStopAfter returns the latest recorded stop among names that postdates
+// entered, or the zero time when none does. Either loop half legitimately owns
+// the card between rounds, so the newest of the two is the one that ended the
+// work the card is showing.
+func newestStopAfter(names []string, stopped map[string]time.Time, entered time.Time) time.Time {
+	var newest time.Time
+	for _, n := range names {
+		at, ok := stopped[n]
+		if !ok || at.IsZero() || !at.After(entered) {
+			continue
+		}
+		if at.After(newest) {
+			newest = at
+		}
+	}
+	return newest
 }
 
 // withinGrace reports whether the card's stage marker is too fresh, against
