@@ -794,6 +794,11 @@ func stuckCardLivenessVerdict(card ReconcileCard, derived BoardCard, alive map[s
 		// Young enough to still be genuine in-flight work.
 		return false, false, SilenceReap{}
 	}
+	// silenced marks a stop THIS pass chose because a live agent stopped
+	// making progress — a machine-chosen stop, not a stage failure, so it
+	// must not consume the ticket's retry budget (SC-2447). A vanished
+	// agent (no entry in alive) is a genuine, unexplained death and stays
+	// on the charged path unchanged.
 	if liveName, isLive := liveStageAgent(alive, card.Key, derived.Stage); isLive {
 		// hungLiveAgent is handed the name that is actually alive, so the
 		// progress probe asks about the right container (SC-5396).
