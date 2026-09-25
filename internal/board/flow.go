@@ -48,7 +48,13 @@ func AssessFlow(cards []daemon.BoardViewCard, now time.Time) daemon.BoardFlow {
 		if ok && at.After(progressAt) {
 			progressAt = at
 		}
-		pending := flowInFlightStates[c.State]
+		// A card held by a sequencing answer (WaitsFor != "") started nothing and
+		// owes no advance until the ticket it waits for is done — the same carve-out
+		// AgentNamesForCard makes for the analogous liveness judgement
+		// (internal/daemon/board_liveness.go), for the same reason: without it a
+		// queued card deliberately parked on a person's decision reads exactly like
+		// one whose launch died, and the stall it causes can never clear on its own.
+		pending := flowInFlightStates[c.State] && c.WaitsFor == ""
 		if pending {
 			inFlight = append(inFlight, c.Key)
 		}

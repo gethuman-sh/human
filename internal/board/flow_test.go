@@ -103,6 +103,20 @@ func TestAssessFlow_QueuedCountsAsInFlight(t *testing.T) {
 	assert.Equal(t, 1, flow.InFlight)
 }
 
+// A card held by a sequencing answer started nothing and owes no advance until
+// the ticket it waits for is done — the same carve-out AgentNamesForCard makes
+// for the analogous liveness judgement. Without it a permanent, unclearable
+// stall is asserted while the machine is behaving exactly as told (SC-3577).
+func TestAssessFlow_WaitsForHoldIsIdleNotStalled(t *testing.T) {
+	held := flowCard("SC-1", "queued", 14*time.Hour)
+	held.WaitsFor = "SC-2"
+
+	flow := AssessFlow([]daemon.BoardViewCard{held}, flowNow)
+
+	assert.Equal(t, daemon.BoardFlowIdle, flow.State)
+	assert.Zero(t, flow.InFlight)
+}
+
 // An outage card is work the machine took on and still owes an advance on (AD4).
 func TestAssessFlow_OutageCountsAsInFlight(t *testing.T) {
 	flow := AssessFlow([]daemon.BoardViewCard{flowCard("SC-1", "outage", 5*time.Hour)}, flowNow)
