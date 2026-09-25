@@ -335,6 +335,14 @@ func parseAgentName(name string) (pmKey string, stage BoardStage, ok bool) {
 // stage's completion). All errors carry details for the client.
 func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTransitionRequest) error {
 	_, err := d.applyTransition(ctx, req)
+	// A machine-driven move carries a Cause (the build→review chain, a
+	// poll-boundary recovery); a person's drag does not. The machine keeps the
+	// old silence on a lost claim — the winner starts the stage and nothing is
+	// waiting on an answer — while the person is told why their drop started
+	// nothing, the same rule the awaiting-decision refusal follows (SC-5094).
+	if stderrors.Is(err, ErrClaimLost) && req.Cause != "" {
+		return nil
+	}
 	return err
 }
 
@@ -342,7 +350,14 @@ func (d BoardTransitionDeps) ApplyTransition(ctx context.Context, req BoardTrans
 // whether a launch actually happened, so the retry accounting never charges an
 // attempt for a refusal that started nothing (SC-2989).
 func (d BoardTransitionDeps) ApplyRetryTransition(ctx context.Context, req BoardTransitionRequest) (launched bool, err error) {
-	return d.applyTransition(ctx, req)
+	launched, err = d.applyTransition(ctx, req)
+	if stderrors.Is(err, ErrClaimLost) {
+		// Nothing started and nothing failed: another daemon has the stage. Reported
+		// as a refusal so the attempt is refunded rather than charged to a launch
+		// this machine never made (SC-2989).
+		return false, nil
+	}
+	return launched, err
 }
 
 // applyTransition is the shared body behind both public entries. It reports
@@ -808,14 +823,22 @@ func (d BoardTransitionDeps) startAgentStage(ctx context.Context, pmKey string, 
 	}
 	// Claim before start: with several daemons on one board, arbitrate who
 	// launches this stage so the work is picked up exactly once (SC-660 rule 2).
-	// A loser backs off silently — not an error — leaving the started marker and
-	// the launch to the winning daemon.
-	won, err := d.winClaim(ctx, pmKey, stage)
+	// A loser starts nothing and leaves the started marker and the launch to the
+	// winning daemon — always logged here, and reported to the caller as
+	// ErrClaimLost so a person who asked for the launch is told why (SC-5094).
+	won, winner, err := d.winClaim(ctx, pmKey, stage)
 	if err != nil {
 		return false, err
 	}
 	if !won {
-		return false, nil
+		// Losing is not a failure — the winner is starting the work — but it must
+		// not be invisible. Silence here is what made a drag onto a stage this
+		// daemon had locked itself out of look like a no-op for five minutes
+		// (SC-5094); the two public entries decide who hears about it.
+		d.Logger.Info().Str("pm", pmKey).Str("stage", string(stage)).
+			Str("winning claim", winner.ID).Str("winning daemon", winner.DaemonID).
+			Msg("board stage launch refused: another claim for this stage won the race; leaving the launch to it")
+		return false, claimLostError(pmKey, stage, winner)
 	}
 	// Snapshot the thread BEFORE the launch: this is the last instant the previous
 	// stage's done marker is the newest done-state marker, i.e. the eligibility
@@ -1033,7 +1056,10 @@ func (d BoardTransitionDeps) refuseIfUnplanned(ctx context.Context, pmKey string
 	}
 	d.Logger.Info().Str("pm", pmKey).
 		Msg("board stage: implementation refused — ticket has no plan; driving it into planning")
-	if _, err := d.startAgentStage(ctx, pmKey, BoardPlanning, PlanningStartedHeader, planPrompt(pmKey), WaitCauseRetry, false); err != nil {
+	// A lost claim here is another daemon driving the same card into planning —
+	// the drive happened, just not on this machine. Reporting it as this
+	// implementation refusal's error would name the wrong stage (SC-5094).
+	if _, err := d.startAgentStage(ctx, pmKey, BoardPlanning, PlanningStartedHeader, planPrompt(pmKey), WaitCauseRetry, false); err != nil && !stderrors.Is(err, ErrClaimLost) {
 		return true, err
 	}
 	return true, nil
