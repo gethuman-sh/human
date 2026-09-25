@@ -44,7 +44,10 @@ func TestDetect_StandaloneRunMayShip(t *testing.T) {
 }
 
 func TestDetect_NoAgentNameIsStandalone(t *testing.T) {
-	set := Detect(context.Background(), hasRemote)
+	// HUMAN_AGENT_NAME is ambient in a board-dispatched container and
+	// env.Lookup falls back to it — the explicit empty override makes "no
+	// agent name" hold regardless of what the process environment carries.
+	set := Detect(withAgent(""), hasRemote)
 
 	require.False(t, set.BoardContext)
 	require.True(t, set.CanPush)

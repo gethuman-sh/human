@@ -46,17 +46,24 @@ jobs:
         with:
           go-version-file: go.mod
       - run: sudo apt-get install -y fuse3
-      - run: go tool gotestsum -- -coverprofile=coverage.out $(go list ./... | grep -v /cmd/)
-      - name: Check coverage threshold
-        run: >-
-          go tool cover -func=coverage.out |
-          awk '/^total:/{gsub(/%/,"",$NF); printf "Total coverage: %s%%\n", $NF;
-          if ($NF+0 < 80.0) {print "::error::Coverage below 80% threshold"; exit 1}
-          else {print "OK: meets 80% threshold"}}'
+      # The package set (GATE_PKGS) and the 80% threshold live in the Makefile,
+      # and this job runs that target rather than restating the command. They
+      # used to be two copies of one expression that both filtered out cmd/, and
+      # that is how 88 test files ran in no gate at all for weeks (SC-3877). One
+      # copy cannot drift from itself. Codecov uploads coverage-threshold.out —
+      # the same profile the in-repo 80% threshold measures — not the raw
+      # coverage.out: coverage.out is now the unfiltered ./... run (76.3%),
+      # and uploading that would fail Codecov's default project status against
+      # the old /cmd/-filtered baseline (84.0%) for a drop the in-repo gate
+      # already accounts for via COVERAGE_EXCLUDE. coverage-threshold.out
+      # tracks COVERAGE_EXCLUDE automatically, so this needs no edit when cmd/
+      # coverage is later raised and the exclusion shrinks or empties.
+      - name: Test and coverage threshold
+        run: make coverage-check
       - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.out
+          files: coverage-threshold.out
 
   security:
     runs-on: ubuntu-24.04
