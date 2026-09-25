@@ -73,21 +73,67 @@ install: desktop
 test:
 	go tool gotestsum ./...
 
+# GATE_PKGS is the package set EVERY test gate runs — the pre-push one below and
+# the CI one, which invokes these targets rather than restating them. It is one
+# variable because the bug it fixes was one filter living in three copies: from
+# 0f23ff06 (SC-2173, where the CI workflow was incidental) a `go list` piped
+# through a filter that dropped every /cmd/ package sat in check-test, in
+# coverage and in ci.yml, with no commit, comment or ticket recording a reason,
+# and 88 _test.go files / 17,510 lines
+# under cmd/ — the daemon command layer, the board driver, the deploy path, the
+# stage-retry logic, the PR loop — ran in no gate that could fail a push or a
+# merge. Two cmd/cmddaemon assertions were red on main for five days behind it
+# and nothing could see them (SC-3877).
+#
+# Narrowing this narrows every gate at once, which is the point: a filter must
+# not be able to live in one gate and not the other. Override it on the command
+# line to run a subset locally; do not edit the default without saying why here.
+#
+# Cost of the cmd/ packages, measured 2026-09-25 on this tree: `make check-test`
+# went 65.6s -> 66.9s (+1.3s), second of two warm-cache runs each way.
+GATE_PKGS ?= ./...
+
+# COVERAGE_EXCLUDE is a grep pattern; profile lines matching it are held out of
+# the 80% threshold below. It scopes the DENOMINATOR ONLY — every package in
+# GATE_PKGS still runs, in every gate — and coverage-check prints the exclusion
+# on every run, so a passing gate can never quietly mean "measured less than it
+# looks like". Empty means nothing is excluded.
+#
+# cmd/ sits here because folding it into the profile measured 76.3% total
+# against the 80% floor on 2026-09-25 (cmd/ alone: 52.1%) — the threshold would
+# go red on the very commit that closed the gate's hole. The tests RUN; only
+# the denominator is scoped, and excluding these lines reproduces the
+# pre-change number exactly (84.0%), because without -coverpkg a package's
+# coverage comes only from its own tests. Raising cmd/ coverage and emptying
+# this is the follow-up (SC-3877).
+COVERAGE_EXCLUDE ?= /cmd/
+
 # check-test is the pre-push test gate. It runs the suite fresh (-count=1) so a
 # stale go test cache can never mask a failure — the cached `test` target above
-# stays fast for local iteration, but `check` must not trust it. Scoped to CI's
-# package set (excluding /cmd/). The coverage threshold is intentionally NOT
-# enforced here: it is environment-sensitive (fuse-backed tests skip without
-# fuse3 installed, under-reporting locally) and is enforced by CI instead.
+# stays fast for local iteration, but `check` must not trust it. The coverage
+# threshold is intentionally NOT enforced here: it is environment-sensitive
+# (fuse-backed tests skip without fuse3 installed, under-reporting locally) and
+# is enforced by CI instead. The package set it runs is echoed first, so the
+# gate's own output states what it covered.
 check-test:
-	go tool gotestsum -- -count=1 $$(go list ./... | grep -v /cmd/)
+	@echo "test package set: $(GATE_PKGS)"
+	go tool gotestsum -- -count=1 $(GATE_PKGS)
 
 coverage:
-	go tool gotestsum -- -coverprofile=coverage.out $$(go list ./... | grep -v /cmd/)
+	@echo "coverage package set: $(GATE_PKGS)"
+	go tool gotestsum -- -coverprofile=coverage.out $(GATE_PKGS)
 	go tool cover -func=coverage.out
 
 coverage-check: coverage
-	@go tool cover -func=coverage.out | awk '/^total:/{gsub(/%/,"",$$NF); printf "Total coverage: %s%%\n", $$NF; if ($$NF+0 < 80.0) {print "FAIL: below 80% threshold"; exit 1} else {print "OK: meets 80% threshold"}}'
+	@if [ -n "$(COVERAGE_EXCLUDE)" ]; then \
+		echo "coverage threshold: EXCLUDING profile lines matching '$(COVERAGE_EXCLUDE)' — those packages still run in every gate; the reason is at COVERAGE_EXCLUDE in the Makefile"; \
+		grep -v -- '$(COVERAGE_EXCLUDE)' coverage.out > coverage-threshold.out || true; \
+	else \
+		echo "coverage threshold: all of $(GATE_PKGS), nothing excluded"; \
+		cp coverage.out coverage-threshold.out; \
+	fi
+	@test "$$(wc -l < coverage-threshold.out)" -gt 1 || { echo "FAIL: the coverage profile is empty after exclusion — the threshold would pass by measuring nothing"; exit 1; }
+	@go tool cover -func=coverage-threshold.out | awk '/^total:/{gsub(/%/,"",$$NF); printf "Total coverage: %s%%\n", $$NF; if ($$NF+0 < 80.0) {print "FAIL: below 80% threshold"; exit 1} else {print "OK: meets 80% threshold"}}'
 
 fuzz:
 	go test -run=^$$ -fuzz=FuzzSanitizeFTSQuery -fuzztime=30s ./internal/index/...

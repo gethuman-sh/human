@@ -263,7 +263,7 @@ By default increase versions for a release by 0.1.0
  
 Run 'make test' before and after changes. Run 'make lint' after changes. **ALWAYS** run 'make check' before pushing.
 
-Treat tests as a second source of truth. **ALWAYS** check for failing tests if the code is wrong or the test is wrong. Fix accordingly. Testcoverage is not allowed to fall below 80%.
+Treat tests as a second source of truth. **ALWAYS** check for failing tests if the code is wrong or the test is wrong. Fix accordingly. Testcoverage is not allowed to fall below 80%. The gates RUN every package including `cmd/`; the 80% denominator excludes `cmd/` (`COVERAGE_EXCLUDE` in the Makefile, with the measured figure and its reason), and `make coverage-check` prints that exclusion on every run so a green threshold never means more than it measured (SC-3877).
 
 Apply these refactorings after changes to keep code testable:
 - 'Extract Interface': Accept interfaces instead of concrete types if possible.
