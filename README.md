@@ -242,6 +242,7 @@ proxy:
   mode: allowlist    # or "blocklist"
   domains:
     - "*.github.com"
+    - "github.com"
     - "api.openai.com"
     - "registry.npmjs.org"
 ```
@@ -249,6 +250,7 @@ proxy:
 - `allowlist`: only listed domains pass, everything else blocked
 - `blocklist`: only listed domains blocked, everything else passes
 - No `proxy:` section: block all (safe default)
+- Wildcard `*.example.com` matches subdomains but not `example.com` itself — list the apex separately when it is needed (git remotes use `github.com`)
 
 Enable in `devcontainer.json` using the [treehouse](https://github.com/gethuman-sh/treehouse) devcontainer Feature:
 
@@ -408,6 +410,7 @@ proxy:
   mode: allowlist
   domains:
     - "*.github.com"
+    - "github.com"
 
 # Bot identity attributed to pipeline agent commits (defaults to humanbot),
 # so authorship alone separates agent work from developer work.

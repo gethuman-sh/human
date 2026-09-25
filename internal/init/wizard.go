@@ -269,8 +269,14 @@ type WizardState struct {
 }
 
 // DefaultProxyDomains provides a sensible allowlist for new projects.
+//
+// github.com is listed beside *.github.com because the matcher is DNS-style and
+// a wildcard never covers the apex (internal/proxy/policy.go), while git remotes
+// live on the bare host — without the apex entry every freshly initialised
+// project shipped containers that could not fetch (SC-5593).
 var DefaultProxyDomains = []string{
 	"*.github.com",
+	"github.com",
 	"api.openai.com",
 	"claude.ai",
 	"*.googleapis.com",

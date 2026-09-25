@@ -72,6 +72,7 @@ proxy:
   mode: allowlist    # or "blocklist"
   domains:
     - "*.github.com"
+    - "github.com"
     - "api.openai.com"
     - "registry.npmjs.org"
 ```

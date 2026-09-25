@@ -121,6 +121,7 @@ proxy:
   domains:
     - "*.anthropic.com"
     - "*.github.com"
+    - "github.com"      # the wildcard above covers subdomains only; git remotes use the apex
     - "*.googleapis.com"
   intercept:  # domains to MITM for traffic logging (requires CA cert trust)
     - "api.anthropic.com"
