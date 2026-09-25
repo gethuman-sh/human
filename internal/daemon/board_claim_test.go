@@ -231,13 +231,15 @@ func TestClaimWon_ownStaleClaimsDoNotContend(t *testing.T) {
 	assert.True(t, won, "a daemon must not lose the claim race to its own earlier claims")
 	assert.Empty(t, winner.ID)
 
-	// And it wins NOW, not five minutes from now: the measured lockout was the
-	// identical call only succeeding once the OLD leftover claims aged out via
-	// ClaimTTL (here, long past their own expiry at +3m/+4m) — evaluated right up
-	// to the edge of the FRESH claim's own TTL window, so this checks the
-	// same-daemon exemption itself rather than the rivals' unrelated expiry.
-	wonLater, _ := claimWon(comments, BoardImplementation, "3", "d1", now.Add(ClaimTTL-time.Second))
+	// And it keeps winning while the leftovers are STILL LIVE: the lockout must
+	// not come back as a mere delay. +2m is inside every claim's TTL window (the
+	// leftovers expire at +3m/+4m, the fresh claim at +5m), so the same-daemon
+	// exemption is what carries this call — past +4m the leftovers age out on
+	// their own and the assertion would hold even with the exemption removed.
+	wonLater, _ := claimWon(comments, BoardImplementation, "3", "d1", now.Add(2*time.Minute))
 	assert.True(t, wonLater)
+	require.Len(t, liveClaims(comments, BoardImplementation, now.Add(2*time.Minute)), 3,
+		"all three claims must still be live there, or the check tests expiry rather than the exemption")
 }
 
 // Supersession is same-daemon only: a peer's lower, live claim still wins, and
