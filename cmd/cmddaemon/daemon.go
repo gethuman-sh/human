@@ -3044,7 +3044,7 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 	// When the branch already exists on origin (a re-push after a rebase/retry) a
 	// plain push is rejected on a diverged tip, so lease-push against the recorded
 	// remote SHA — advancing the remote without clobbering a concurrent push (735).
-	if err := p.pushBranch(ctx, req.WorkspaceDir, req.Branch); err != nil {
+	if _, err := p.pushBranch(ctx, req.WorkspaceDir, req.Branch); err != nil {
 		return daemon.PRResult{}, err
 	}
 
@@ -3071,36 +3071,189 @@ func (p forgeDeployer) PushAndCreatePR(ctx context.Context, req daemon.PRRequest
 	return daemon.PRResult{URL: pr.URL, Number: pr.Number, Draft: pr.Draft}, nil
 }
 
-// pushBranch pushes branch to origin, lease-pushing against the current remote
-// tip when the branch already exists there (a re-push after a rebase) and plain-
-// pushing a brand-new branch. A lease push advances a diverged remote without
-// overwriting a concurrent push; a plain push of a fresh branch has no remote tip
-// to lease against.
-func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) error {
+// publishAction is what reconcileWithOrigin decided a publish must do when the
+// local ref and the origin ref are not the same commit.
+type publishAction int
+
+const (
+	// publishLease: this machine's ref carries the newer work — lease-push it.
+	publishLease publishAction = iota
+	// publishAdopt: origin carries the newer work — move the local ref to it and
+	// publish nothing.
+	publishAdopt
+)
+
+// pushBranch publishes branch to origin, but only after deciding which side of a
+// branch that moved on both ends is the newer work (reconcileWithOrigin). It
+// reports whether anything was published: an adopted origin tip is not a publish,
+// and a caller that treats it as one claims work that did not happen.
+func (p forgeDeployer) pushBranch(ctx context.Context, dir, branch string) (published bool, err error) {
 	if !gitrepo.BranchExistsRemote(ctx, dir, branch) {
-		return gitrepo.Push(ctx, dir, branch)
+		return true, gitrepo.Push(ctx, dir, branch)
 	}
-	sourceSHA, err := gitrepo.RevParse(ctx, dir, branch)
+	if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
+		return false, err
+	}
+	localSHA, err := gitrepo.RevParse(ctx, dir, branch)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if err := refuseIfBehind(ctx, dir, branch, sourceSHA); err != nil {
-		return err
-	}
-	remoteSHA, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+	originSHA, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return gitrepo.PushWithLease(ctx, dir, branch, remoteSHA)
+	if localSHA == originSHA {
+		return false, nil // origin already serves this commit
+	}
+	action, err := reconcileWithOrigin(ctx, dir, branch, localSHA, originSHA)
+	if err != nil {
+		return false, err
+	}
+	if action == publishAdopt {
+		// Origin carries work this machine's ref does not — in practice a branch a
+		// person repaired on the forge because a red card told them to. Take it and
+		// publish nothing: origin is already what the deploy must build on (SC-5596).
+		return false, adoptPublishedTip(ctx, dir, branch, originSHA)
+	}
+	return true, gitrepo.PushWithLease(ctx, dir, branch, originSHA)
 }
 
-// refuseIfBehind is the never-publish-behind-origin guard shared by every deploy
-// publish site. --force-with-lease guards a DIVERGED remote but not a source
-// that is strictly BEHIND origin, so without this a frozen or stale local tip
-// silently overwrites newer origin work — the exact data loss SC-2322 exposes.
-// It fetches origin/<branch> fresh, then refuses ONLY when sourceSHA is strictly
-// behind origin (an ancestor of, and not equal to, the origin tip); the equal
-// case proceeds and the ahead/diverged case is left to the existing lease. The
+// reconcileWithOrigin decides which side of a branch is the newer work before a
+// publish overwrites the other. --force-with-lease cannot decide it: the lease is
+// taken against the origin SHA read moments earlier, so it only refuses a writer
+// that moves origin DURING the push and always authorises the push it guards. The
+// behind guard does not see this either — a branch repaired on the forge is
+// DIVERGED, not behind — which is how a force-pushed repair was force-pushed away
+// (SC-5596).
+//
+// What decides is what each side contains, never which ref this machine holds:
+//   - origin contains everything local has: origin is the newer work, adopt it.
+//   - exactly one side contains the current base tip: that side is USUALLY the
+//     newer work (a deploy-fixer's resolution is local and contains the base,
+//     SC-2845; a person's repair is on origin and contains the base, SC-5596) —
+//     but base-containment is only a hint, not proof the other side is a
+//     subset, so adopting origin over local is confirmed with a merge-tree
+//     probe first: a local commit that merges CLEANLY into origin touches
+//     content origin has nowhere at all (e.g. an unpushed PR-loop fix) and is
+//     never silently dropped; a local commit that CONFLICTS with origin is
+//     consistent with origin already being a resolution of it, and origin is
+//     trusted as the base-containment hint says.
+//   - neither side is distinguished by the base: compare by CONTENT, because a
+//     rebase rewrites SHAs while changing nothing, and a side carrying no change
+//     the other lacks is not work to protect.
+//   - both carry a change the other lacks: nothing mechanical can choose, so
+//     refuse and name both heads.
+func reconcileWithOrigin(ctx context.Context, dir, branch, localSHA, originSHA string) (publishAction, error) {
+	if gitrepo.IsAncestor(ctx, dir, localSHA, originSHA) {
+		return publishAdopt, nil // strictly behind: origin is a superset
+	}
+	if gitrepo.IsAncestor(ctx, dir, originSHA, localSHA) {
+		return publishLease, nil // strictly ahead: an ordinary advance
+	}
+	base := gitrepo.DefaultBranch(ctx, dir)
+	if err := gitrepo.Fetch(ctx, dir, base); err != nil {
+		return publishLease, err
+	}
+	originBase := "origin/" + base
+	localHasBase := gitrepo.IsAncestor(ctx, dir, originBase, localSHA)
+	originHasBase := gitrepo.IsAncestor(ctx, dir, originBase, originSHA)
+	if localHasBase != originHasBase {
+		if localHasBase {
+			return publishLease, nil
+		}
+		// origin carries the base and local does not, but base-containment alone
+		// does not prove origin is a superset: local may still hold a commit
+		// (e.g. a PR-loop fixer's commit, which is never pushed) that origin's
+		// rebuilt history has nowhere at all. Patch-id (UnpublishedCommits) can't
+		// tell that case apart from a person's manual conflict resolution, which
+		// re-authors the same edit against different context and so never
+		// matches by patch-id either, despite carrying nothing lost — that is
+		// precisely the shape this arm exists to adopt (SC-5596). A merge-tree
+		// probe distinguishes them: a local change CONFLICTING with origin means
+		// origin already touches the same region (consistent with a resolution),
+		// so origin is trusted as designed; a CLEAN apply proves local adds
+		// content origin has nowhere, and must not be silently discarded —
+		// refuse by falling through to the named-heads comparison instead.
+		//
+		// The probe is per COMMIT, not per branch: the local ref usually holds
+		// the stale conflicting commit AND, on top of it, the unrelated commit
+		// worth protecting, and a whole-branch merge conflicts on the stale one
+		// and would carry the clean one off the branch with it, silently.
+		protected, err := anyAppliesCleanly(ctx, dir, "origin/"+branch, branch, originSHA)
+		if err != nil {
+			return publishLease, err
+		}
+		if !protected {
+			return publishAdopt, nil
+		}
+		return reconcileByContent(ctx, dir, branch, localSHA, originSHA)
+	}
+	return reconcileByContent(ctx, dir, branch, localSHA, originSHA)
+}
+
+// anyAppliesCleanly reports whether any commit on branch that upstream lacks
+// (by patch-id) would apply cleanly onto tip on its own. Each commit is probed
+// by its OWN change, not by the history under it, so one conflicting commit
+// cannot answer for the commits stacked on top of it (SC-5596).
+func anyAppliesCleanly(ctx context.Context, dir, upstream, branch, tip string) (bool, error) {
+	localOnly, err := gitrepo.UnpublishedCommits(ctx, dir, upstream, branch)
+	if err != nil {
+		return false, err
+	}
+	for _, c := range localOnly {
+		clean, err := gitrepo.AppliesCleanly(ctx, dir, tip, c.SHA)
+		if err != nil {
+			return false, err
+		}
+		if clean {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// reconcileByContent decides a divergence the base tip cannot, comparing the two
+// sides by patch-id so a rebased or amended copy of the same change is not
+// mistaken for work only one side has. The refusal's MESSAGE names both heads and
+// both sides' commits, not just its details, because errors.CauseChain renders
+// err.Error() into the deploy-failed marker — the same reason refuseIfBehind does.
+func reconcileByContent(ctx context.Context, dir, branch, localSHA, originSHA string) (publishAction, error) {
+	originRef := "origin/" + branch
+	localOnly, err := gitrepo.UnpublishedCommits(ctx, dir, originRef, branch)
+	if err != nil {
+		return publishLease, err
+	}
+	if len(localOnly) == 0 {
+		return publishAdopt, nil
+	}
+	originOnly, err := gitrepo.UnpublishedCommits(ctx, dir, branch, originRef)
+	if err != nil {
+		return publishLease, err
+	}
+	if len(originOnly) == 0 {
+		return publishLease, nil
+	}
+	return publishLease, errors.WithDetails(
+		"refusing to publish %s: this machine's ref (%s) and origin (%s) have diverged and each carries changes the other does not:\nonly on this machine:\n%s\nonly on origin:\n%s\nresolve it on the branch, then re-run Deploy",
+		"branch", branch,
+		"local", localSHA,
+		"origin", originSHA,
+		"localOnly", describeCommits(localOnly),
+		"originOnly", describeCommits(originOnly),
+	)
+}
+
+// refuseIfBehind is the never-publish-behind-origin guard for EnsureMergeable's
+// rebase publish, which leases a detached rebase result (a raw SHA, not a branch
+// ref this machine can adopt origin into) against the origin tip it fetched
+// before rebasing (branchTip); pushBranch decides the equivalent question
+// through reconcileWithOrigin instead, since it has a local ref to adopt onto.
+// --force-with-lease guards a DIVERGED remote but not a source that is strictly
+// BEHIND origin, so without this a frozen or stale local tip silently overwrites
+// newer origin work — the exact data loss SC-2322 exposes. It fetches
+// origin/<branch> fresh, then refuses ONLY when sourceSHA is strictly behind
+// origin (an ancestor of, and not equal to, the origin tip); the equal case
+// proceeds and the ahead/diverged case is left to the existing lease. The
 // refusal error's MESSAGE (not just its structured details) names the commits
 // that would be lost, because errors.CauseChain renders err.Error() text — so
 // the deploy-failed marker can point the reader at what to recover.
@@ -3442,20 +3595,52 @@ func detectFastTierTestCommand(dir string) (cmdName string, args []string, err e
 	return "", nil, errors.WithDetails("no fast test tier runner found for project", "dir", dir)
 }
 
-// localOrOriginTip resolves the branch the way the loop's own agents do —
-// the local ref first, because it carries the fixer's unpublished commits,
-// and origin only when no local ref exists. It is the mirror image of
-// branchTip, which the deploy gate uses because origin is what it merges.
+// localOrOriginTip resolves the branch the way the loop's own agents do — the
+// local ref first, because it carries the fixer's unpublished commits, and origin
+// only when no local ref exists. "Local first" is not "local wins": a local ref
+// can be a ghost of a branch someone repaired on the forge, and merging the base
+// into the ghost re-finds a conflict the real branch does not have and reds the
+// card on it (SC-5596). So when origin carries the branch too, the two are
+// reconciled by the same rule the publish uses, and a local ref that carries
+// nothing origin lacks is moved to origin before anything reads it. It is the
+// mirror image of branchTip, which the deploy gate uses because origin is what it
+// merges.
 func localOrOriginTip(ctx context.Context, dir, branch string) (sha string, local bool, err error) {
-	if gitrepo.BranchExistsLocal(ctx, dir, branch) {
-		sha, err = gitrepo.RevParse(ctx, dir, branch)
-		return sha, true, err
+	if !gitrepo.BranchExistsLocal(ctx, dir, branch) {
+		if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
+			return "", false, err
+		}
+		sha, err = gitrepo.RevParse(ctx, dir, "origin/"+branch)
+		return sha, false, err
+	}
+	localSHA, err := gitrepo.RevParse(ctx, dir, branch)
+	if err != nil {
+		return "", true, err
+	}
+	if !gitrepo.BranchExistsRemote(ctx, dir, branch) {
+		return localSHA, true, nil
 	}
 	if err := gitrepo.Fetch(ctx, dir, branch); err != nil {
-		return "", false, err
+		return "", true, err
 	}
-	sha, err = gitrepo.RevParse(ctx, dir, "origin/"+branch)
-	return sha, false, err
+	originSHA, err := gitrepo.RevParse(ctx, dir, "origin/"+branch)
+	if err != nil {
+		return "", true, err
+	}
+	if localSHA == originSHA {
+		return localSHA, true, nil
+	}
+	action, err := reconcileWithOrigin(ctx, dir, branch, localSHA, originSHA)
+	if err != nil {
+		return "", true, err
+	}
+	if action != publishAdopt {
+		return localSHA, true, nil
+	}
+	if err := adoptPublishedTip(ctx, dir, branch, originSHA); err != nil {
+		return "", true, err
+	}
+	return originSHA, true, nil
 }
 
 // PublishResolvedBranch carries a deploy-fixer's conflict resolution from the
@@ -3472,7 +3657,8 @@ func localOrOriginTip(ctx context.Context, dir, branch string) (sha string, loca
 // untouched for EnsureMergeable's own freshness rebase to handle, so a fixer
 // that reported done without moving the branch cannot make the deploy publish
 // something unexamined. The publish itself goes through pushBranch, inheriting
-// the never-publish-behind-origin guard and the lease against a concurrent push.
+// the reconciliation that decides whether the local resolution or origin carries
+// the newer work, and the lease against a concurrent push.
 func (p forgeDeployer) PublishResolvedBranch(ctx context.Context, dir, branch string) (bool, error) {
 	if !gitrepo.BranchExistsLocal(ctx, dir, branch) {
 		return false, nil
@@ -3502,10 +3688,14 @@ func (p forgeDeployer) PublishResolvedBranch(ctx context.Context, dir, branch st
 			return false, nil // already published — nothing to carry
 		}
 	}
-	if err := p.pushBranch(ctx, dir, branch); err != nil {
+	// The publish goes through pushBranch, so a resolution that origin has already
+	// overtaken is ADOPTED rather than pushed over — and then nothing was carried,
+	// which is what this reports (SC-5596).
+	published, err := p.pushBranch(ctx, dir, branch)
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return published, nil
 }
 
 // branchTip resolves the commit the freshness rebase starts from, preferring

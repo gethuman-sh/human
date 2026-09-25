@@ -18,11 +18,16 @@ type freshenGitStubs struct {
 	calls []string
 
 	localBranch bool
-	localTip    string
-	originTip   string
-	current     bool
-	conflict    bool
-	mergeErr    error
+	// remoteBranch stubs BranchExistsRemote, the probe localOrOriginTip now makes
+	// before trusting a local ref: false (the default) keeps every case that
+	// predates SC-5596 on the local-only path, unreconciled and never touching
+	// origin a second time.
+	remoteBranch bool
+	localTip     string
+	originTip    string
+	current      bool
+	conflict     bool
+	mergeErr     error
 
 	// fastTierFails/fastTierErr stub the post-merge fast-tier check
 	// (fastTierRunner). Both default false/nil — a clean pass — so the
@@ -42,11 +47,13 @@ func (s *freshenGitStubs) install() {
 	prevDefault, prevFetch, prevExistsLocal, prevRevParse := gitrepo.DefaultBranch, gitrepo.Fetch, gitrepo.BranchExistsLocal, gitrepo.RevParse
 	prevIsAncestor, prevAdd, prevRemove := gitrepo.IsAncestor, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove
 	prevMerge, prevUpdate := gitrepo.MergeIntoHead, gitrepo.UpdateBranchRef
+	prevExistsRemote := gitrepo.BranchExistsRemote
 	prevFastTier := fastTierRunner
 	s.t.Cleanup(func() {
 		gitrepo.DefaultBranch, gitrepo.Fetch, gitrepo.BranchExistsLocal, gitrepo.RevParse = prevDefault, prevFetch, prevExistsLocal, prevRevParse
 		gitrepo.IsAncestor, gitrepo.WorktreeAdd, gitrepo.WorktreeRemove = prevIsAncestor, prevAdd, prevRemove
 		gitrepo.MergeIntoHead, gitrepo.UpdateBranchRef = prevMerge, prevUpdate
+		gitrepo.BranchExistsRemote = prevExistsRemote
 		fastTierRunner = prevFastTier
 	})
 	fastTierCalls := 0
@@ -68,6 +75,7 @@ func (s *freshenGitStubs) install() {
 		return nil
 	}
 	gitrepo.BranchExistsLocal = func(_ context.Context, _, _ string) bool { return s.localBranch }
+	gitrepo.BranchExistsRemote = func(_ context.Context, _, _ string) bool { return s.remoteBranch }
 	gitrepo.RevParse = func(_ context.Context, _, rev string) (string, error) {
 		switch {
 		case rev == "HEAD":
@@ -119,6 +127,22 @@ func TestFreshenBranch_currentBranchIsLeftAlone(t *testing.T) {
 	}
 	if s.saw("worktree-add") || s.saw("merge") || s.saw("update-ref") {
 		t.Fatalf("a branch that contains the base tip must not be touched: %v", s.calls)
+	}
+}
+
+// A local ref that also exists on origin, at the SAME tip, is reconciled (the
+// remote probe fires, an extra "fetch fix/x") but there is nothing to adopt —
+// the merge proceeds exactly as the local-only case (SC-5596).
+func TestFreshenBranch_localRefEqualToOriginIsNotReconciled(t *testing.T) {
+	s := &freshenGitStubs{t: t, localBranch: true, remoteBranch: true, localTip: "local1", originTip: "local1"}
+	got, err := freshen(t, s)
+	if err != nil || got != daemon.FreshnessMerged {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	for _, want := range []string{"fetch fix/x", "update-ref fix/x mergedtip local1"} {
+		if !s.saw(want) {
+			t.Errorf("missing %q in %v", want, s.calls)
+		}
 	}
 }
 
