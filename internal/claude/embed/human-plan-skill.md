@@ -209,7 +209,7 @@ Re-planning posts a new `[human:plan]` comment; the latest wins, never edit old 
 does not advance the card and neither does any state record — a plan comment is
 content, not a stage signal. Post it yourself, every time. The daemon will
 complete a handoff for a run that attached its plan and then died before
-posting it (SC-5090), but that is a repair, not the protocol: it posts no
+posting it, but that is a repair, not the protocol: it posts no
 `engineering:` field, so it cannot cover split topology, and a run that could
 have posted its own handoff and did not has left the trail saying a machine
 finished its work.
