@@ -38,14 +38,34 @@ var boardStages = map[string]bool{
 // thirty seconds and at fourteen hours, and exactly the same when the agent
 // behind it has been dead since yesterday.
 //
+// since bounds the search to entries at or after it — the boundary between what
+// THIS run wrote and whatever an earlier, unrelated run left in the same
+// per-ticket-key store. The store is keyed on the ticket alone, so a card's
+// phase records accumulate for the ticket's whole life with no clearing path; a
+// stage reaped or crashed before writing anything would otherwise borrow a
+// previous run's phase and assert it, past tense, as its own (SC-3656 PR review
+// finding). The zero time considers every entry, unbounded: it is what a
+// caller passes when it has no boundary to give, and it is on the CALLER to
+// decide whether "no boundary" still means something safe to show. For a
+// running card it does — a running card's StageRunStartedAt is never empty,
+// since its BoardRunning marker is what makes it running in the first place.
+// For an ended card with no StageRunStartedAt, unbounded means searching the
+// whole ticket-wide scope with nothing scoping it to this run, which is
+// exactly the borrowed-phase defect above; attachActivity withholds the phase
+// for that case instead of calling this function unbounded (SC-3656 PR review
+// finding, round 3).
+//
 // Empty name means nothing was recorded, which is honest: a run that wrote no
 // phase gets no phase shown rather than an invented one.
-func LatestActivity(entries []agentstate.Entry) (string, time.Time) {
+func LatestActivity(entries []agentstate.Entry, since time.Time) (string, time.Time) {
 	var name string
 	var at time.Time
 	for _, e := range entries {
 		phase, ok := strings.CutPrefix(e.Name, StagePrefix)
 		if !ok || phase == "" || boardStages[phase] {
+			continue
+		}
+		if e.UpdatedAt.Before(since) {
 			continue
 		}
 		// A phase namespace can nest (stage.pr-review.round); the head is the phase.

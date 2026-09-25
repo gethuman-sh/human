@@ -56,6 +56,7 @@ import {
   isReplannable,
   forwardDropAllowed,
   badgeInfo,
+  bugFailedText,
   cardError,
   sortByHandOrder,
   insertKeyAt,
@@ -66,8 +67,9 @@ import {
   safetyPollShouldReconcile,
   safetyReconcileError,
   RUNNING_LABELS,
+  flowNotice,
 } from "./board-queue.js";
-import type { DeploySide, AgentProgress } from "./board-queue.js";
+import type { DeploySide, AgentProgress, BoardFlow } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import type { Box, Drawn, Side } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
@@ -139,6 +141,11 @@ interface Card {
   // while the fixer runs, absent for a plain deploy. badgeInfo reads it so the
   // badge names the half that is actually running instead of "deploying…".
   deployPhase?: string;
+  // Which review→fix round a running done-stage card is in, and the bound it
+  // runs against. badgeInfo appends "round 3 of 8" to the badge; absent on every
+  // card that is not mid-loop, which renders exactly as before.
+  prReviewRound?: number;
+  prReviewRoundCap?: number;
   // On a FAILED card only: another stage of the same ticket still showing a
   // start. The Go overlay joins it into the liveness question and badgeInfo
   // names it, so a red card with a live agent behind it says which stage is
@@ -250,6 +257,9 @@ interface BoardData {
   // project's .humanconfig "ui" section (SC-3409). Absent means the
   // stylesheet's :root default applies.
   dimPercent?: number;
+  // Pipeline-level flow signal (SC-3577). Absent means the board makes no
+  // claim about whether work is moving — which is not the same as "flowing".
+  flow?: BoardFlow;
 }
 
 
@@ -1228,7 +1238,9 @@ function renderBugCard(card: Card): HTMLElement {
     // so, with the recorded reason a hover away.
     const failed = el.querySelector<HTMLElement>(".badge.failed");
     if (failed) {
-      failed.textContent = "✕ error";
+      // The pane's own wording, carrying the phase the run reached — the board
+      // badge's past tense must survive the louder rewrite, not be erased by it.
+      failed.textContent = bugFailedText(card);
       if (card.error) failed.title = card.error;
     }
   }
@@ -2533,6 +2545,23 @@ function render(): void {
   } else {
     banner.classList.add("hidden");
   }
+  // Rendered on every pass, so the signal clears itself the moment a fetch
+  // reports motion again — nothing has to remember to take it down.
+  const flowStrip = document.getElementById("flow-strip")!;
+  const notice = flowNotice(current.flow, new Date());
+  flowStrip.classList.remove("stalled", "unknown");
+  if (notice) {
+    flowStrip.classList.add(notice.level);
+    // Unhide BEFORE writing the text: a display:none subtree is outside the
+    // accessibility tree, so a live region mutated while hidden is generally not
+    // announced. And re-writing an unchanged string would make a polite region
+    // re-announce on every safety poll for as long as the stall lasts.
+    flowStrip.classList.remove("hidden");
+    if (flowStrip.textContent !== notice.text) flowStrip.textContent = notice.text;
+  } else {
+    flowStrip.textContent = "";
+    flowStrip.classList.add("hidden");
+  }
   // The detail panel lives outside #board, so the rebuild above never touches
   // it — it only needs its card data refreshed from the new board state.
   refreshTicketDetail();
@@ -2890,7 +2919,7 @@ async function reconcile(opts: { safety?: boolean } = {}): Promise<void> {
     // stands; the fetch failure is surfaced as itself, in the banner.
     current = opts.safety
       ? safetyReconcileError(current, errMessage(err))
-      : { cards: [], dockerAvailable: current.dockerAvailable, error: errMessage(err) };
+      : { cards: [], dockerAvailable: current.dockerAvailable, error: errMessage(err), flow: undefined };
   }
   if (pendingIdeas.length) {
     // A fetched Ideas card whose key matches the pending capture's key IS

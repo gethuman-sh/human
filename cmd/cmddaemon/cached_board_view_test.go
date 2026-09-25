@@ -71,3 +71,22 @@ func TestCachedBoardViewFunc_CarriesNoStaleBanner(t *testing.T) {
 
 	assert.Empty(t, view.Error)
 }
+
+// The remembered snapshot can be arbitrarily old, so a flow claim decoded from
+// it is a statement about a moment that has passed — exactly the claim
+// serveLastGoodView drops for the same reason (SC-3577). Both routes share one
+// decode point, so this must hold here even though this route carries no
+// staleness banner of its own.
+func TestCachedBoardViewFunc_DropsTheFlowClaim(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := daemon.NewProjectRegistry([]string{dir})
+	require.NoError(t, err)
+	cache := tmpCache(t)
+	view := placedView()
+	view.Flow = &daemon.BoardFlow{State: daemon.BoardFlowFlowing}
+	rememberBoardView(cache, dir, view, zerolog.Nop())
+
+	served := cachedBoardViewFunc(reg, cache)()
+
+	assert.Nil(t, served.Flow, "a cached board this old cannot claim work is flowing")
+}

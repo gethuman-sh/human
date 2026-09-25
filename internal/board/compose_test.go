@@ -158,6 +158,26 @@ func TestCompose_carriesResolvedReason(t *testing.T) {
 	assert.Equal(t, "", cardByKey(t, view, "SC-2").ResolvedReason)
 }
 
+// The daemon→wire hop is the one silent-drop point for a new board-card field
+// (SC-5326 r1); this pins it for the review-loop round.
+func TestCompose_carriesPRReviewRound(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "mid loop"}, {Key: "SC-2", Title: "not in the loop"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {Stage: daemon.BoardDoneStage, State: daemon.BoardRunning, DeployPhase: "pr-review", PRReviewRound: 3, PRReviewRoundCap: 8},
+			"SC-2": {Stage: daemon.BoardDoneStage, State: daemon.BoardRunning},
+		},
+	)}, true)
+
+	c1 := cardByKey(t, view, "SC-1")
+	assert.Equal(t, 3, c1.PRReviewRound)
+	assert.Equal(t, 8, c1.PRReviewRoundCap)
+
+	c2 := cardByKey(t, view, "SC-2")
+	assert.Equal(t, 0, c2.PRReviewRound)
+	assert.Equal(t, 0, c2.PRReviewRoundCap)
+}
+
 // Hidden cards must still be composed: the frontend filters them, so dropping
 // them here would make "reveal hidden" impossible without a refetch.
 func TestCompose_ReturnsCardsTheViewerMayHide(t *testing.T) {
@@ -309,6 +329,7 @@ func TestCompose_NonPMTrackerFailureIsNamed(t *testing.T) {
 // this is the payload the whole board renders from.
 func TestCompose_CarriesTicketAndRunFacts(t *testing.T) {
 	entered := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	runStarted := time.Date(2026, 7, 30, 11, 0, 0, 0, time.UTC)
 	view := Compose([]daemon.TrackerIssuesResult{pmResult(
 		[]tracker.Issue{{
 			Key: "SC-1", Title: "one", URL: "https://example/1",
@@ -318,7 +339,7 @@ func TestCompose_CarriesTicketAndRunFacts(t *testing.T) {
 			Stage: daemon.BoardImplementation, State: daemon.BoardRunning,
 			Branch: "autofix/sc-1", PRURL: "https://example/pr/1",
 			EngineeringKey: "HUM-1", Verdict: "pass", DeployPhase: "pr-review",
-			StageEnteredAt: entered, StageDaemonID: "d1",
+			StageEnteredAt: entered, StageRunStartedAt: runStarted, StageDaemonID: "d1",
 			RunningStage: daemon.BoardVerification,
 			Options:      []daemon.BoardOption{{ID: "1", Label: "A"}}, OptionsContext: "why",
 		}},
@@ -335,6 +356,7 @@ func TestCompose_CarriesTicketAndRunFacts(t *testing.T) {
 	assert.Equal(t, "pass", c.Verdict)
 	assert.Equal(t, "pr-review", c.DeployPhase)
 	assert.Equal(t, entered.Format(time.RFC3339), c.StageEnteredAt)
+	assert.Equal(t, runStarted.Format(time.RFC3339), c.StageRunStartedAt, "the run boundary attachActivity bounds LatestActivity to must survive composition")
 	assert.Equal(t, "human", c.Tracker)
 	assert.Equal(t, "shortcut", c.TrackerKind)
 	assert.True(t, c.Bug, "a bug label must reach the Bugs pane")
@@ -482,4 +504,35 @@ func TestMarkBlocked_NoBlockersLeavesBothEmpty(t *testing.T) {
 	markBlocked(cards, map[string][]string{})
 	assert.Empty(t, cards[0].Blockers)
 	assert.Empty(t, cards[0].BlockersOffBoard)
+}
+
+// The flow claim must ride the composed board: without it every consumer would
+// have to derive pipeline motion itself, which is the duplication Compose exists
+// to prevent (SC-3577).
+func TestCompose_AttachesTheFlowClaim(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{pmResult(
+		[]tracker.Issue{{Key: "SC-1", Title: "wedged"}},
+		map[string]daemon.BoardCard{
+			"SC-1": {
+				Stage:          daemon.BoardImplementation,
+				State:          daemon.BoardRunning,
+				StageEnteredAt: time.Now().Add(-3 * time.Hour),
+			},
+		},
+	)}, true)
+
+	require.NotNil(t, view.Flow, "the board must carry a flow claim")
+	assert.Equal(t, daemon.BoardFlowStalled, view.Flow.State)
+	assert.Equal(t, []string{"SC-1"}, view.Flow.Keys)
+}
+
+// A board with no PM-role tracker makes NO flow claim: the notice explaining the
+// misconfiguration is the only thing that should speak (SC-3577).
+func TestCompose_NoPMTrackerMakesNoFlowClaim(t *testing.T) {
+	view := Compose([]daemon.TrackerIssuesResult{{
+		TrackerName: "human", TrackerKind: "linear", Project: "eng",
+	}}, false)
+
+	assert.Nil(t, view.Flow, "a board with no PM tracker knows nothing about flow")
+	assert.NotEmpty(t, view.Notice)
 }

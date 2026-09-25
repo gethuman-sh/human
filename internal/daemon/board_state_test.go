@@ -449,6 +449,92 @@ func TestDeriveBoardCard_stageEnteredAt(t *testing.T) {
 	assert.True(t, backlog.StageEnteredAt.IsZero(), "a no-marker backlog card carries no stage time")
 }
 
+// StageRunStartedAt is the boundary board.LatestActivity bounds its search to
+// (SC-3656 PR review finding): a stage.* phase record accumulates in the same
+// per-ticket-key store for the ticket's whole life, so a card must be able to
+// tell its OWN run's writes from an earlier stage's leftover ones. For a
+// running card the newest marker in the stage IS the started marker, so it
+// coincides with StageEnteredAt.
+func TestDeriveBoardCard_stageRunStartedAt_runningCoincidesWithStageEnteredAt(t *testing.T) {
+	started := time.Unix(1000, 0)
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ImplementationStartedHeader, started),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, started, card.StageEnteredAt)
+	assert.Equal(t, started, card.StageRunStartedAt)
+}
+
+// For an ENDED card the terminal (failed) marker is the newest in the stage and
+// stamps StageEnteredAt, but StageRunStartedAt must stay pinned to the started
+// marker that opened the run which actually produced that outcome — earlier
+// than the failure itself, and the bound any phase record from THIS run was
+// written after.
+func TestDeriveBoardCard_stageRunStartedAt_failedPinsToTheStartedMarkerNotTheFailure(t *testing.T) {
+	started := time.Unix(1000, 0)
+	failed := time.Unix(2000, 0)
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ImplementationStartedHeader, started),
+		cmt(ImplementationFailedHeader, failed),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, failed, card.StageEnteredAt, "the failure is the newest marker and decides the state")
+	assert.Equal(t, started, card.StageRunStartedAt, "the boundary is when THIS run began, not when it ended")
+}
+
+// A relaunch within the same stage posts its own started marker; the boundary
+// must track the LATEST one — the run that actually produced the current
+// outcome — not an earlier attempt's.
+func TestDeriveBoardCard_stageRunStartedAt_trackedLatestOfSeveralRestarts(t *testing.T) {
+	firstStart := time.Unix(1000, 0)
+	firstFail := time.Unix(1500, 0)
+	secondStart := time.Unix(2000, 0)
+	secondFail := time.Unix(2500, 0)
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ImplementationStartedHeader, firstStart),
+		cmt(ImplementationFailedHeader, firstFail),
+		cmt(ImplementationStartedHeader, secondStart),
+		cmt(ImplementationFailedHeader, secondFail),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, secondFail, card.StageEnteredAt)
+	assert.Equal(t, secondStart, card.StageRunStartedAt, "bounds to the run that produced the CURRENT outcome")
+}
+
+// A card with no started marker at all (e.g. only a plan-ready) carries no run
+// boundary. For a card in a state that shows a phase at all, attachActivity
+// treats that as nothing to read against rather than falling back to an
+// unbounded search of the whole ticket-wide scope (SC-3656 PR review finding,
+// round 3).
+func TestDeriveBoardCard_stageRunStartedAt_zeroWithNoStartedMarker(t *testing.T) {
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt("[human:plan-ready]", time.Unix(5000, 0)),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.True(t, card.StageRunStartedAt.IsZero())
+}
+
+// SC-910: a strictly-newer marker in an EARLIER-ranked stage supersedes a stale
+// failure in the furthest one, and card.Stage moves off `furthest`. The run
+// boundary must follow card.Stage, not `furthest` — bounding to the stage the
+// card no longer sits in would search the wrong stage's markers entirely and
+// (here) find an unrelated review-started time instead of this implementation
+// run's own start.
+func TestDeriveBoardCard_stageRunStartedAt_followsSupersededPlacementNotFurthest(t *testing.T) {
+	reviewStarted := time.Unix(1000, 0)
+	reviewFailed := time.Unix(2000, 0)
+	implStarted := time.Unix(3000, 0) // strictly newer, supersedes the stale review failure
+	card := DeriveBoardCard([]tracker.Comment{
+		cmt(ReviewStartedHeader, reviewStarted),
+		cmt(ReviewFailedHeader, reviewFailed),
+		cmt(ImplementationStartedHeader, implStarted),
+	}, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardImplementation, card.Stage, "the newer marker must have superseded the stale verification failure")
+	assert.Equal(t, implStarted, card.StageEnteredAt)
+	assert.Equal(t, implStarted, card.StageRunStartedAt, "must bound to the stage the card actually landed in")
+}
+
 // A running stage's deciding marker stamped with a daemon id must carry that
 // id onto the derived card, so the stuck-running reconcile pass can tell a
 // peer daemon's live card from its own (SC-1450).
@@ -961,6 +1047,60 @@ func TestDeriveBoardCard_DeployPhaseFollowsTheNewestHalf(t *testing.T) {
 	}
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	assert.Equal(t, DeployPhasePRReview, card.DeployPhase)
+}
+
+// A running loop card's badge round is the same count the loop itself acts
+// on — one review-started marker is round 1.
+func TestDeriveBoardCard_PRLoopRoundIsTheReviewCount(t *testing.T) {
+	comments := reviewStartedComments(1, "https://example/pr/7", 7, "feat/x")
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, 1, card.PRReviewRound)
+	assert.Equal(t, DefaultPRReviewRounds, card.PRReviewRoundCap)
+	assert.Equal(t, "pr-review", card.DeployPhase)
+}
+
+// A card seven rounds in reads differently from a card at round one — the
+// number, not just the alternating label, must move.
+func TestDeriveBoardCard_PRLoopRoundAtSeven(t *testing.T) {
+	comments := reviewStartedComments(7, "https://example/pr/7", 7, "feat/x")
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, 7, card.PRReviewRound)
+	assert.Equal(t, DefaultPRReviewRounds, card.PRReviewRoundCap)
+}
+
+// The fix half of the loop carries the same round count as the review half.
+func TestDeriveBoardCard_PRLoopRoundOnTheFixHalf(t *testing.T) {
+	comments := reviewStartedComments(3, "https://example/pr/7", 7, "feat/x")
+	comments = append(comments, cmt(PRFixStartedHeader, time.Unix(100, 0)))
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, DeployPhasePRFix, card.DeployPhase)
+	assert.Equal(t, 3, card.PRReviewRound)
+}
+
+// A plain deploy is not in the loop at all: no round, no bound.
+func TestDeriveBoardCard_PRLoopRoundEmptyForPlainDeploy(t *testing.T) {
+	comments := []tracker.Comment{cmt(DeployStartedHeader, time.Unix(2, 0))}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, 0, card.PRReviewRound)
+	assert.Equal(t, 0, card.PRReviewRoundCap)
+}
+
+// A failed loop card's question is how far it got (its recorded phase), not
+// which round it was on — the round is deliberately excluded from a red card.
+func TestDeriveBoardCard_PRLoopRoundEmptyOnAFailedLoopCard(t *testing.T) {
+	comments := []tracker.Comment{
+		cmt(prReviewStartedBody("https://example/pr/7", 7, "feat/x"), time.Unix(2, 0)),
+		cmt(markerBody(failureMarker(MarkerPRReviewFailed, "boom")), time.Unix(3, 0)),
+	}
+	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
+
+	assert.Equal(t, BoardFailed, card.State)
+	assert.Equal(t, DeployPhasePRReview, card.DeployPhase, "agent lookup keeps it")
+	assert.Equal(t, 0, card.PRReviewRound)
 }
 
 // TestDeployPhaseFor_FailedLoopCard covers SC-4151 A1's derivation half: a red

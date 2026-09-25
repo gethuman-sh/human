@@ -41,6 +41,13 @@ export interface QueueCard {
   // Done-stage sub-phase: "pr-review" while the machine reviewer runs, "pr-fix"
   // while the fixer runs, absent for a plain deploy.
   deployPhase?: string;
+  // Which round of the pre-merge review→fix loop a running done-stage card is
+  // in, and the outer bound it runs against. Both absent on every other card and
+  // from any daemon predating them, which renders exactly as before: the two
+  // loop halves alternate their word, so round 1 and round 7 are otherwise the
+  // same card.
+  prReviewRound?: number;
+  prReviewRoundCap?: number;
   // On a FAILED card only: another stage of the same ticket whose own newest
   // marker is a start. The card shows one stage at a time, so a failure
   // recorded in one paints over a run still going in another; this names the
@@ -332,6 +339,15 @@ function failedBadge(card: QueueCard, runningLabels: Record<string, string> = RU
       spinner: true,
     };
   }
+  // The phase the run reached, in the past tense the state has earned: no
+  // spinner, no age. A crashed or reaped stage writes no blocker record, so this
+  // is the only thing on the card that says how far it got (SC-3656). The
+  // stalled and live arms above deliberately do NOT carry it — they assert work
+  // is still happening, and a past tense beside a present one is a
+  // contradiction, not extra information.
+  if (card.activity) {
+    return { cls: "failed", text: `✕ stopped while ${card.activity}`, title: `${reason} — stopped while ${card.activity}` };
+  }
   return { cls: "failed", text: "✕", title: reason };
 }
 
@@ -478,6 +494,26 @@ function activityAge(at: string | undefined, nowMs: number): string {
   return `(${sinceText(at, nowMs)})`;
 }
 
+// roundText names the review→fix round a loop card is in — "round 3 of 8", or
+// "round 3" from a daemon that ships the number without the bound. Empty for
+// every card that is not in the loop and for a count that could not be read: a
+// round the board cannot state is stated as nothing, never as zero. The single
+// `>= 1` guard covers absent, zero and non-finite alike.
+export function roundText(card: QueueCard): string {
+  const n = card.prReviewRound ?? 0;
+  if (card.stage !== "done" || !(n >= 1)) return "";
+  const bound = card.prReviewRoundCap ?? 0;
+  return bound > 0 ? `round ${n} of ${bound}` : `round ${n}`;
+}
+
+// bugFailedText is the Bugs pane's louder failed-badge wording, carrying the
+// phase the run reached when one was recorded. The pane overwrites the board's
+// bare ✕, so without this it is the one surface where a dead fix run still
+// throws away how far it got.
+export function bugFailedText(card: QueueCard): string {
+  return card.activity ? `✕ error — stopped while ${card.activity}` : "✕ error";
+}
+
 export function badgeInfo(
   card: QueueCard,
   nowMs: number = Date.now(),
@@ -529,10 +565,15 @@ export function badgeInfo(
     // (SC-4151 B4), so a badge could say "triaging…" over a record six hours
     // old. The age now rides the badge once it is old enough to mean something.
     const age = activityAge(card.activityAt, nowMs);
-    const text = card.activity ? `${card.activity}…${age !== "" ? ` ${age}` : ""}` : stageText;
-    const title = card.activity
+    const base = card.activity ? `${card.activity}…${age !== "" ? ` ${age}` : ""}` : stageText;
+    // Which round of the loop, when the card is in one. The two halves alternate
+    // their word every round, so motion was visible and repetition was not.
+    const round = roundText(card);
+    const text = round ? `${base} — ${round}` : base;
+    const baseTitle = card.activity
       ? `Agent running — ${card.activity}${card.activityAt ? `, last recorded ${sinceText(card.activityAt, nowMs)}` : ""}`
       : "Agent running";
+    const title = round ? `${baseTitle} — pre-merge review→fix ${round}` : baseTitle;
     return livenessBadge(
       { cls: "running", text, title, spinner: true },
       card.agentLiveness,
@@ -590,19 +631,24 @@ export function badgeInfo(
   }
   if (card.state === "failed") return failedBadge(card, runningLabels);
   if (card.state === "resolved") {
+    // A resolved run did not crash, so the phase it last recorded is named as
+    // history rather than as an abort — but it is still named: a resolution says
+    // what was concluded, not how far the run got before concluding it.
+    const phase = card.activity ? ` — last phase: ${card.activity}` : "";
+    const phaseTitle = card.activity ? ` Last recorded phase: ${card.activity}.` : "";
     if (card.stage === "planning") {
       // Nothing left to plan: a terminal outcome, never red, never deployable
       // (ticket 454). The badge says WHICH determination it was; a record with
       // no reason (posted before one was required) is named as a resolution
       // without claiming the work shipped (SC-5326).
       const reason = RESOLVED_REASON_LABELS[card.resolvedReason ?? ""];
-      if (reason) return { cls: "resolved", ...reason };
-      return { cls: "resolved", text: "nothing to plan", title: "The planning stage ended with nothing to plan; the ticket's nothing-to-do record has the evidence" };
+      if (reason) return { cls: "resolved", text: `${reason.text}${phase}`, title: `${reason.title}${phaseTitle}` };
+      return { cls: "resolved", text: `nothing to plan${phase}`, title: `The planning stage ended with nothing to plan; the ticket's nothing-to-do record has the evidence${phaseTitle}` };
     }
     // An autofix run whose triage concluded no fix is warranted (not-a-bug or
     // undetermined): a successful terminal outcome, never red, never deployable
     // (ticket 405).
-    return { cls: "resolved", text: "no fix needed", title: "Triage concluded no fix is warranted" };
+    return { cls: "resolved", text: `no fix needed${phase}`, title: `Triage concluded no fix is warranted${phaseTitle}` };
   }
   if (card.stage === "verification" && card.state === "done" && verdictFailed(card)) {
     return reworkBadge(card);
@@ -697,6 +743,17 @@ export function sortByHandOrder<T extends { key: string }>(cards: T[], order: st
   );
 }
 
+// BoardFlow is the pipeline-level "is work flowing" datum from daemon.BoardFlow.
+// Absent means the board makes no claim (an older daemon, or a stale board whose
+// cards are too old to say anything true about motion).
+export interface BoardFlow {
+  state: string;
+  since?: string;
+  inFlight?: number;
+  keys?: string[];
+  unreadable?: number;
+}
+
 export interface BoardPayload<C> {
   cards?: C[];
   dockerAvailable?: boolean;
@@ -707,6 +764,8 @@ export interface BoardPayload<C> {
   // Declared not-mine dimming, in percent of full opacity; absent means the
   // stylesheet default applies (SC-3409).
   dimPercent?: number;
+  // Pipeline-level flow signal; absent means no claim (SC-3577).
+  flow?: BoardFlow;
 }
 
 export interface BoardState<C> {
@@ -717,6 +776,8 @@ export interface BoardState<C> {
   truncation: string;
   columnOrder?: Record<string, string[]>;
   dimPercent?: number;
+  // Pipeline-level flow signal; absent means no claim (SC-3577).
+  flow?: BoardFlow;
 }
 
 // boardStateFromPayload normalizes a BoardData fetch into the runtime `current`
@@ -733,6 +794,7 @@ export function boardStateFromPayload<C>(payload: BoardPayload<C>, suppressError
     truncation: payload.truncation || "",
     columnOrder: payload.columnOrder,
     dimPercent: payload.dimPercent,
+    flow: payload.flow,
   };
 }
 
@@ -881,16 +943,19 @@ export function safetyPollShouldReconcile(_daemonReachable: boolean): boolean {
 // failure as an explicit staleness banner. An already-empty board shows the
 // plain error unchanged.
 export function safetyReconcileError<C>(
-  prev: { cards: C[]; dockerAvailable: boolean; columnOrder?: Record<string, string[]> },
+  prev: { cards: C[]; dockerAvailable: boolean; columnOrder?: Record<string, string[]>; flow?: BoardFlow },
   message: string,
-): { cards: C[]; dockerAvailable: boolean; error: string; columnOrder?: Record<string, string[]> } {
+): { cards: C[]; dockerAvailable: boolean; error: string; columnOrder?: Record<string, string[]>; flow?: BoardFlow } {
   if (prev.cards.length > 0) {
-    return { ...prev, error: `Board may be stale — ${message}` };
+    // The cards are kept because they are the last thing known to be true; the
+    // flow claim is not, because it was a statement about a moment that has now
+    // passed unverified. Keeping cards and dropping the claim is the honest pair.
+    return { ...prev, error: `Board may be stale — ${message}`, flow: undefined };
   }
   // Docker was not what failed and was not probed, so the last known answer
   // stands. Reporting it unavailable here disabled every agent-launching
   // gesture with the tooltip "Docker required" (SC-4151 G17).
-  return { cards: [], dockerAvailable: prev.dockerAvailable, error: message };
+  return { cards: [], dockerAvailable: prev.dockerAvailable, error: message, flow: undefined };
 }
 
 // isReopenable reports a card the pipeline RESOLVED: it concluded there is
@@ -901,4 +966,55 @@ export function safetyReconcileError<C>(
 // human override; the machine still never retries a terminal of its own accord.
 export function isReopenable(card: QueueCard): boolean {
   return card.state === "resolved";
+}
+
+// flowAge renders an elapsed span for the flow strip. Local rather than shared
+// with board-detail's fmtDuration for the reason recorded there: a two-line
+// formatter is not worth a module edge between two files that import nothing.
+function flowAge(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+export interface FlowNotice {
+  level: "stalled" | "unknown";
+  text: string;
+}
+
+// flowNotice turns the daemon's flow datum into the one line the board shows,
+// and into null whenever the board should stay quiet.
+//
+// Silence is the default and the point: idle is a legitimate resting state, and
+// a signal that also fires when nothing is wrong is a signal nobody reads. Only
+// a stall (a demand) and an unknown (an admission) earn the strip.
+export function flowNotice(flow: BoardFlow | undefined, now: Date): FlowNotice | null {
+  if (!flow) return null;
+  if (flow.state !== "stalled" && flow.state !== "unknown") return null;
+
+  const inFlight = flow.inFlight ?? 0;
+  const keys = flow.keys ?? [];
+  const named = keys.length ? ` — ${keys.join(", ")}${inFlight > keys.length ? ` +${inFlight - keys.length} more` : ""}` : "";
+  const tickets = `${inFlight} ticket${inFlight === 1 ? "" : "s"}`;
+
+  if (flow.state === "unknown") {
+    const unreadable = flow.unreadable ?? 0;
+    const why = unreadable > 0
+      ? `${unreadable} ticket${unreadable === 1 ? "" : "s"} could not be read this refresh`
+      : "no progress timestamp could be read";
+    return {
+      level: "unknown",
+      text: `Pipeline flow unknown — ${why}, so the board cannot tell idle from stalled.`,
+    };
+  }
+
+  const parsed = flow.since ? Date.parse(flow.since) : NaN;
+  const age = Number.isNaN(parsed)
+    ? "an unusual length of time"
+    : flowAge(Math.max(0, now.getTime() - parsed));
+  return {
+    level: "stalled",
+    text: `Pipeline stalled — nothing has advanced for ${age}. ${tickets} still marked in flight${named}.`,
+  };
 }

@@ -220,6 +220,14 @@ type BoardViewCard struct {
 	// landed (RFC3339); the board's age badge renders how long the card has
 	// been sitting. Empty when the card has no derived stage yet.
 	StageEnteredAt string `json:"stageEnteredAt,omitempty"`
+	// StageRunStartedAt is when the current run occurrence of the card's stage
+	// began (RFC3339) — the "-started" marker, earlier than StageEnteredAt for
+	// an ended card and equal to it for a running one. Not rendered by the
+	// frontend; the daemon's own attachActivity uses it to bound which
+	// stage.* phase records belong to THIS run rather than an earlier one left
+	// in the same per-ticket store (SC-3656). Empty when the stage has no
+	// started marker.
+	StageRunStartedAt string `json:"stageRunStartedAt,omitempty"`
 	// DeployPhase names the done-stage sub-phase of a running card: "pr-review"
 	// while the machine reviewer runs, "pr-fix" while the fixer runs, empty for
 	// a plain deploy. Both halves of the loop are named because they are
@@ -228,6 +236,16 @@ type BoardViewCard struct {
 	// explicit field copy below — the daemon→desktop hop is a Go copy, not a
 	// JSON re-tag.
 	DeployPhase string `json:"deployPhase,omitempty"`
+	// PRReviewRound / PRReviewRoundCap are which round of the pre-merge
+	// review→fix loop a RUNNING done-stage card is in and the outer bound it
+	// runs against (DefaultPRReviewRounds, 8). Zero on every other card — and
+	// zero is load-bearing: the badge then renders exactly as it did before
+	// rather than claiming a round it could not read. The bound is shipped
+	// rather than copied into the frontend because it is a daemon constant that
+	// has already moved once (SC-5174), and a stale copy would render
+	// "round 8 of 3". Populated by the explicit field copy in compose.go.
+	PRReviewRound    int `json:"prReviewRound,omitempty"`
+	PRReviewRoundCap int `json:"prReviewRoundCap,omitempty"`
 	// RunningStage names another stage of a FAILED card's ticket whose own
 	// newest marker is a start — the run the card's single (stage, state) pair
 	// cannot show. The viewer joins it into the liveness question so a red card
@@ -404,4 +422,55 @@ type BoardView struct {
 	// keep their spinners (SC-4151). Empty on every live board and on snapshots
 	// written before this existed, which then read exactly as they did.
 	CachedAt string `json:"cachedAt,omitempty"`
+	// Flow is the board's pipeline-level answer to "is work flowing" — the one
+	// question the columns and the doctor LED between them never ask (SC-3577).
+	// A nil Flow is a deliberate ABSENCE of claim, not "flowing": a board served
+	// from cache after a failed refresh knows nothing current about motion, and
+	// asserting either state from stale cards is the confident-but-wrong answer
+	// this signal exists to avoid.
+	Flow *BoardFlow `json:"flow,omitempty"`
+}
+
+// Board flow states — whether the PIPELINE is producing, as distinct from
+// whether any one card is. Only BoardFlowStalled and BoardFlowUnknown are
+// demands on attention; the other two are reported so a consumer can see the
+// signal clear, and render nothing.
+const (
+	// BoardFlowFlowing: something advanced within FlowStallAfter.
+	BoardFlowFlowing = "flowing"
+	// BoardFlowIdle: nothing is in flight, so there is nothing to advance.
+	// A legitimate resting state — an empty backlog, a machine deliberately not
+	// running — and it must stay silent.
+	BoardFlowIdle = "idle"
+	// BoardFlowStalled: work is marked running or queued and no marker has
+	// landed anywhere on the board for FlowStallAfter.
+	BoardFlowStalled = "stalled"
+	// BoardFlowUnknown: the in-flight set could not be observed this refresh,
+	// so idle and stalled cannot be told apart. Said plainly rather than guessed.
+	BoardFlowUnknown = "unknown"
+)
+
+// BoardFlow reports whether the pipeline as a whole is producing anything.
+//
+// It is deliberately built from the MARKER TRAIL rather than from liveness:
+// a container that exists proves only that something was started, and the shape
+// this signal must catch is work that is marked running while nothing advances.
+// Only what the tickets themselves recorded counts as motion.
+type BoardFlow struct {
+	// State is one of the BoardFlow* constants. The frontend maps it to human
+	// phrasing (flowNotice) — the daemon carries the datum, not the copy.
+	State string `json:"state"`
+	// Since is the RFC3339 instant of the most recent observed progress
+	// anywhere on the board. Empty when no card carries a marker timestamp.
+	Since string `json:"since,omitempty"`
+	// InFlight counts the cards the machine has taken on (running, queued or
+	// outage) and therefore owes an advance on.
+	InFlight int `json:"inFlight,omitempty"`
+	// Keys names up to FlowKeySample of those tickets so the signal points at
+	// the work rather than only at a number.
+	Keys []string `json:"keys,omitempty"`
+	// Unreadable counts cards whose marker trail could not be read this refresh.
+	// Any of these could be advancing work, which is why their presence turns a
+	// stall claim into BoardFlowUnknown.
+	Unreadable int `json:"unreadable,omitempty"`
 }

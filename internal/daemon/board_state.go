@@ -103,6 +103,20 @@ type BoardCard struct {
 	// current stage — for a plan-done card, when the current plan landed. The
 	// board renders it as an age badge so work rotting in a queue is visible.
 	StageEnteredAt time.Time `json:"stage_entered_at,omitzero"`
+	// StageRunStartedAt is the Created time of the newest "-started" marker in
+	// the card's current stage — the boundary between phase records (stage.fix,
+	// stage.verify, …) the CURRENT run itself wrote and whatever an earlier,
+	// unrelated run left in the same per-ticket-key agentstate store. Those
+	// records accumulate for the ticket's whole life with no clearing path
+	// (agentstate.DefaultRetention is 14d), so without a lower bound a stage
+	// reaped or crashed before writing anything borrows a PREVIOUS run's phase
+	// and asserts it in the past tense about a run that never reached it
+	// (SC-3656 PR review finding). For a running card this coincides with
+	// StageEnteredAt (the started marker IS the newest marker in the stage);
+	// for an ended (failed/resolved) card it is earlier, bounding in the run
+	// that actually produced the outcome. Zero when the stage carries no
+	// started marker at all.
+	StageRunStartedAt time.Time `json:"stage_run_started_at,omitzero"`
 	// StageDaemonID is the posting daemon signed onto that same deciding marker
 	// (the machine: field, read via ParseDaemonID). It tells the durable
 	// stuck-running reconcile pass which daemon owns a running stage, so a peer
@@ -128,6 +142,18 @@ type BoardCard struct {
 	// review findings…" instead of "deploying…" so the loop is visible while it
 	// runs.
 	DeployPhase string `json:"deploy_phase,omitempty"`
+	// PRReviewRound is which round of the pre-merge review→fix loop a RUNNING
+	// done-stage card is in, and PRReviewRoundCap the outer bound it runs
+	// against (DefaultPRReviewRounds). Both are zero on every other card, and
+	// zero renders exactly as the card rendered before.
+	//
+	// The two loop halves alternate their badge word, so a card at round one and
+	// a card at round seven read identically: alternating labels can show motion,
+	// only the round can show the motion is circular. The number is not new —
+	// prReviewRounds is the counter the loop's own outer bound reads — it has
+	// simply never left the daemon.
+	PRReviewRound    int `json:"pr_review_round,omitempty"`
+	PRReviewRoundCap int `json:"pr_review_round_cap,omitempty"`
 	// Degraded marks a card whose comment thread could not be read this scan
 	// (a ListComments error/timeout). It is set at the fetch-error site, never
 	// by DeriveBoardCard (which only runs on a successful fetch). Stage/State
@@ -222,6 +248,11 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card := cardAt(placed)
 	card.HasPlan, card.HasRelatedRecord = hasPlan, hasRelated
 	card.StageEnteredAt, card.StageDaemonID = latest.Created, ParseDaemonID(latest.Body)
+	// card.Stage, not furthest: a superseded placement (SC-910) can move the
+	// card to a stage other than the one stageRank found furthest, and the
+	// boundary must track wherever `latest` — and so StageEnteredAt — actually
+	// landed, or it would bound the search to a stage the card no longer sits in.
+	card.StageRunStartedAt = latestRunStartInStage(comments, card.Stage)
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
@@ -240,6 +271,7 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 		card.WaitsFor = waitsForOf(latest)
 	}
 	card.DeployPhase = deployPhaseFor(card, comments)
+	card.PRReviewRound, card.PRReviewRoundCap = prLoopRoundFor(card, comments)
 	card.RunningStage = runningStageElsewhere(comments, card.placement())
 	card.StopDecision, card.StopLinkedKey, card.StopReasoning = ticketReviewStop(latest)
 	card.ResolvedReason = nothingToDoReason(latest)
@@ -577,6 +609,27 @@ func latestCommentWithHeader(comments []tracker.Comment, header string) (tracker
 	return latest, have
 }
 
+// latestRunStartInStage returns when the current run occurrence of stage began
+// — the Created time of the newest marker in stage whose state is BoardRunning
+// ("-started", or a mid-run marker like a passed review that keeps the card
+// running). Restarts within the same stage each post their own started marker,
+// so the newest one is the boundary for the run that produced the stage's
+// CURRENT outcome, not an earlier attempt's. Zero when the stage has no such
+// marker (a card with no recorded activity yet).
+func latestRunStartInStage(comments []tracker.Comment, stage BoardStage) time.Time {
+	var start time.Time
+	for _, c := range comments {
+		p, ok := fromMarker(c.Body)
+		if !ok || p.Stage() != stage || p.State() != BoardRunning {
+			continue
+		}
+		if start.IsZero() || c.Created.After(start) {
+			start = c.Created
+		}
+	}
+	return start
+}
+
 // latestCommentInStage returns the newest board marker classified into stage.
 func latestCommentInStage(comments []tracker.Comment, stage BoardStage) (tracker.Comment, bool) {
 	var latest tracker.Comment
@@ -622,6 +675,31 @@ func deployPhaseFor(card BoardCard, comments []tracker.Comment) string {
 		return doneStageStartedHalf(comments)
 	}
 	return ""
+}
+
+// prLoopRoundFor is which review→fix round a running loop card is in, with the
+// bound it runs against, or (0, 0) for every card that is not one.
+//
+// A failed loop card is deliberately excluded even though deployPhaseFor still
+// names its half: that half exists for AgentNamesForCard, not for the badge,
+// and a red card's question is how far it got (its recorded phase), not which
+// round it was on. A count of zero — a thread whose review markers cannot be
+// read — is returned as zero rather than as "round 0": an unreadable count must
+// degrade to the badge exactly as it rendered before, never to an invented one.
+//
+// The count is thread-wide rather than scoped to this attempt, because that is
+// the number EvaluatePRLoop itself acts on against the same bound: a board that
+// disagreed with the loop's own escalation arithmetic would be worse than one
+// that agrees with it.
+func prLoopRoundFor(card BoardCard, comments []tracker.Comment) (round, bound int) {
+	if card.Stage != BoardDoneStage || card.State != BoardRunning || card.DeployPhase == "" {
+		return 0, 0
+	}
+	n := prReviewRounds(comments)
+	if n <= 0 {
+		return 0, 0
+	}
+	return n, DefaultPRReviewRounds
 }
 
 // derivePRURL resolves the card's PR link, newest-marker-first: a deployed

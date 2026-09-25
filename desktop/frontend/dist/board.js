@@ -16,7 +16,7 @@ import { initMockupsView, showMockups, setPendingMockupSlug, setChosenMockup, } 
 import { initSettingsView, showSettings, settingsIndex, saveSetting, setPaletteOpener, setActiveSection, } from "./settingsview.js";
 import { initPalette, openPalette, isPaletteChord } from "./palette.js";
 import { initStatsView, showStats, startStatsPoll, stopStatsPoll, } from "./statsview.js";
-import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, reworkKind, isReviewRetryable, isReopenable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, RUNNING_LABELS, } from "./board-queue.js";
+import { QUEUES, QUEUE_TRANSITION_TO, queueOf, isReworkable, reworkKind, isReviewRetryable, isReopenable, ageBadge, isReplannable, forwardDropAllowed, badgeInfo, bugFailedText, cardError, sortByHandOrder, insertKeyAt, boardStateFromPayload, isReadyToDeploy, deployableCards, deployControlView, safetyPollShouldReconcile, safetyReconcileError, RUNNING_LABELS, flowNotice, } from "./board-queue.js";
 import { linksWithin, arrowPath, plan, gapsBySide } from "./board-arrows.js";
 import { buildDeployControl } from "./board-deploy.js";
 import { buildCostSection, buildDetailSections, buildOptionsSection, buildShippedPartialSection, buildStopDecisionSection } from "./board-detail.js";
@@ -721,7 +721,9 @@ function renderBugCard(card) {
         // so, with the recorded reason a hover away.
         const failed = el.querySelector(".badge.failed");
         if (failed) {
-            failed.textContent = "✕ error";
+            // The pane's own wording, carrying the phase the run reached — the board
+            // badge's past tense must survive the louder rewrite, not be erased by it.
+            failed.textContent = bugFailedText(card);
             if (card.error)
                 failed.title = card.error;
         }
@@ -1911,6 +1913,25 @@ function render() {
     else {
         banner.classList.add("hidden");
     }
+    // Rendered on every pass, so the signal clears itself the moment a fetch
+    // reports motion again — nothing has to remember to take it down.
+    const flowStrip = document.getElementById("flow-strip");
+    const notice = flowNotice(current.flow, new Date());
+    flowStrip.classList.remove("stalled", "unknown");
+    if (notice) {
+        flowStrip.classList.add(notice.level);
+        // Unhide BEFORE writing the text: a display:none subtree is outside the
+        // accessibility tree, so a live region mutated while hidden is generally not
+        // announced. And re-writing an unchanged string would make a polite region
+        // re-announce on every safety poll for as long as the stall lasts.
+        flowStrip.classList.remove("hidden");
+        if (flowStrip.textContent !== notice.text)
+            flowStrip.textContent = notice.text;
+    }
+    else {
+        flowStrip.textContent = "";
+        flowStrip.classList.add("hidden");
+    }
     // The detail panel lives outside #board, so the rebuild above never touches
     // it — it only needs its card data refreshed from the new board state.
     refreshTicketDetail();
@@ -2259,7 +2280,7 @@ async function reconcile(opts = {}) {
         // stands; the fetch failure is surfaced as itself, in the banner.
         current = opts.safety
             ? safetyReconcileError(current, errMessage(err))
-            : { cards: [], dockerAvailable: current.dockerAvailable, error: errMessage(err) };
+            : { cards: [], dockerAvailable: current.dockerAvailable, error: errMessage(err), flow: undefined };
     }
     if (pendingIdeas.length) {
         // A fetched Ideas card whose key matches the pending capture's key IS

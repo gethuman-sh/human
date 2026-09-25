@@ -81,7 +81,7 @@ Then take ownership: `human assign <SEC_KEY>`. Ownership records who is working 
 Before any work, run preflight. It resolves what this run may do, settles what the evidence can settle, and surfaces a decision only a human can make **now** rather than halfway through:
 
 ```
-Task(subagent_type="human-preflight", model="opus", prompt="Preflight security ticket <SEC_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made, and surface any genuine product/scope fork as a DECISION REQUIRED terminal.", run_in_background=false)
+Task(subagent_type="human-preflight", model="opus", prompt="Preflight security ticket <SEC_KEY> before an autonomous fix run: resolve capabilities, mirror decisions already made. There is no scope fork on a security ticket: the defect is fixed at its root cause and every Expected item is in scope; the only DECISION REQUIRED is a person's own open work on this ticket (step 6a).", run_in_background=false)
 ```
 
 Read its outcome from state:
