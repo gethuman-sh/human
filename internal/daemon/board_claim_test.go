@@ -76,7 +76,7 @@ func TestCommentNewer(t *testing.T) {
 // unrelated *-started for the stage but carries a HIGHER comment ID is genuinely
 // newer than that launch, so it must stay live rather than being dropped as
 // fulfilled.
-func TestLiveClaimIDs_sameSecondClaimAfterStartedStaysLive(t *testing.T) {
+func TestLiveClaims_sameSecondClaimAfterStartedStaysLive(t *testing.T) {
 	tie := time.Unix(2000, 0)
 	comments := []tracker.Comment{
 		{ID: "10", Body: ImplementationStartedHeader, Created: tie},
@@ -231,15 +231,53 @@ func TestClaimWon_ownStaleClaimsDoNotContend(t *testing.T) {
 	assert.True(t, won, "a daemon must not lose the claim race to its own earlier claims")
 	assert.Empty(t, winner.ID)
 
-	// And it keeps winning while the leftovers are STILL LIVE: the lockout must
-	// not come back as a mere delay. +2m is inside every claim's TTL window (the
-	// leftovers expire at +3m/+4m, the fresh claim at +5m), so the same-daemon
-	// exemption is what carries this call — past +4m the leftovers age out on
-	// their own and the assertion would hold even with the exemption removed.
+	// And it keeps winning while the leftovers are STILL within their TTL window:
+	// the lockout must not come back as a mere delay. +2m is inside every claim's
+	// TTL window (the leftovers expire at +3m/+4m, the fresh claim at +5m), so the
+	// per-daemon collapse in liveClaims — not expiry — is what carries this call.
 	wonLater, _ := claimWon(comments, BoardImplementation, "3", "d1", now.Add(2*time.Minute))
 	assert.True(t, wonLater)
-	require.Len(t, liveClaims(comments, BoardImplementation, now.Add(2*time.Minute)), 3,
-		"all three claims must still be live there, or the check tests expiry rather than the exemption")
+	require.Len(t, liveClaims(comments, BoardImplementation, now.Add(2*time.Minute)), 1,
+		"the daemon's three own claims collapse to its single newest live one")
+}
+
+// SC-5094 (PR 575 round 1): two claims from the SAME daemon, posted concurrently
+// so NEITHER fulfils nor expires the other, must still yield exactly one
+// winner. An earlier version of the fix exempted a same-daemon claim from ever
+// beating another same-daemon claim inside claimWon's win check; that exemption
+// is symmetric, so each of the two concurrent claims exempted the OTHER and both
+// reported won=true — two launchers reaching for the same Docker container name.
+// Collapsing to one live claim per daemon in liveClaims (rather than exempting
+// pairwise in claimWon) is what keeps this to one winner.
+func TestClaimWon_concurrentSameDaemonClaimsYieldExactlyOneWinner(t *testing.T) {
+	now := time.Unix(100000, 0)
+	comments := []tracker.Comment{
+		claimComment("5", BoardImplementation, "d1", now),
+		claimComment("7", BoardImplementation, "d1", now),
+	}
+	won5, _ := claimWon(comments, BoardImplementation, "5", "d1", now)
+	won7, _ := claimWon(comments, BoardImplementation, "7", "d1", now)
+	assert.False(t, won5, "the older of two concurrent same-daemon claims must not also win")
+	assert.True(t, won7, "the newer concurrent claim is this daemon's sole live one and wins")
+}
+
+// A peer's lower, live claim still beats a daemon's own claims even after they
+// collapse to their newest: the collapse changes what contends WITHIN d1, not
+// the arbitration between d1 and a peer.
+func TestClaimWon_peerBeatsCollapsedSameDaemonClaims(t *testing.T) {
+	now := time.Unix(100000, 0)
+	comments := []tracker.Comment{
+		claimComment("6", BoardImplementation, "d2", now),
+		claimComment("5", BoardImplementation, "d1", now),
+		claimComment("7", BoardImplementation, "d1", now),
+	}
+	won6, winner6 := claimWon(comments, BoardImplementation, "6", "d2", now)
+	won7, winner7 := claimWon(comments, BoardImplementation, "7", "d1", now)
+	assert.True(t, won6, "the peer's lower claim wins even against d1's collapsed claim")
+	assert.Empty(t, winner6.ID)
+	assert.False(t, won7, "d1's collapsed (newest) claim still loses to the lower peer claim")
+	assert.Equal(t, "6", winner7.ID)
+	assert.Equal(t, "d2", winner7.DaemonID)
 }
 
 // Supersession is same-daemon only: a peer's lower, live claim still wins, and

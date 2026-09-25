@@ -98,13 +98,10 @@ func (d BoardTransitionDeps) winClaim(ctx context.Context, pmKey string, stage B
 // be identified refuses to win, so a lost id never risks a double launch (a
 // later reconcile pass retries).
 //
-// A daemon never contends with ITSELF. Its own earlier claims for the stage are
-// skipped, because the claim it just posted is the only one it will ever launch
-// — an older one is a leftover, not a rival. Without that, two launches that
-// failed after claiming (a *-failed marker does not fulfil a claim, so both
-// stayed live for ClaimTTL) made the next attempt lose the race to its own
-// leftovers, and the stage was unusable for five minutes (SC-5094). This is the
-// daemon identity rule 1 the arbitration always claimed to key on.
+// A daemon never contends with ITSELF: liveClaims already collapses every
+// daemon's claims for the stage to its single newest live one, so myClaimID
+// only ever meets ANOTHER daemon's claim here (or fails mineLive because a
+// newer claim of its own superseded it — see liveClaims).
 func claimWon(comments []tracker.Comment, stage BoardStage, myClaimID, myDaemonID string, now time.Time) (won bool, winner claimWinner) {
 	if strings.TrimSpace(myClaimID) == "" {
 		myClaimID = newestOwnClaimID(comments, stage, myDaemonID)
@@ -128,9 +125,6 @@ func claimWon(comments []tracker.Comment, stage BoardStage, myClaimID, myDaemonI
 		if c.ID == myClaimID {
 			continue
 		}
-		if myDaemonID != "" && ParseDaemonID(c.Body) == myDaemonID {
-			continue // my own earlier claim: a leftover of mine, not a rival
-		}
 		if !claimIDLess(c.ID, myClaimID) {
 			continue
 		}
@@ -144,14 +138,29 @@ func claimWon(comments []tracker.Comment, stage BoardStage, myClaimID, myDaemonI
 	return true, claimWinner{}
 }
 
-// liveClaims returns the stage's claims that are neither fulfilled nor expired.
+// liveClaims returns the stage's claims that are neither fulfilled nor expired,
+// collapsed to at most ONE entry per identified daemon: its newest live claim.
 // A claim is fulfilled once a *-started marker for the stage lands at or after
 // it (the launch it represents happened), and expired once ClaimTTL elapses with
-// no such marker (the claimant crashed before launching). Only live claims
-// contend, so a fulfilled or dead claim never wedges the stage. Whether a live
-// claim contends with a PARTICULAR daemon is claimWon's question, not this one's.
+// no such marker (the claimant crashed before launching); a fulfilled or dead
+// claim never wedges the stage.
+//
+// The per-daemon collapse is the daemon identity rule (SC-660 rule 1) applied to
+// arbitration: a daemon's own earlier claim for the stage is a leftover of ITS
+// OWN retry, never a rival to its own newer one, so at most one of a daemon's
+// claims may ever contend. Collapsing here — rather than exempting a same-daemon
+// claim inside claimWon's win check — is what keeps that true even when two of a
+// daemon's own claims are concurrently live: an unconditional exemption there
+// let each of the two exempt the other and both report won=true, which is a
+// double launch, not a resolved race (SC-5094). Two prior failed launches
+// leaving their claims live (a *-failed marker does not fulfil a claim) was the
+// scenario that motivated the rule; the collapse handles both that sequential
+// case and the concurrent one identically. An unsigned claim (no daemon id) has
+// no identity to collapse against and is kept as its own entry, mirroring the
+// un-provisioned daemon's no-op in winClaim.
 func liveClaims(comments []tracker.Comment, stage BoardStage, now time.Time) []tracker.Comment {
 	startedComment, hasStarted := latestStartedFor(comments, stage)
+	newestByDaemon := map[string]tracker.Comment{}
 	var live []tracker.Comment
 	for _, c := range comments {
 		st, ok := claimStage(c.Body)
@@ -164,6 +173,16 @@ func liveClaims(comments []tracker.Comment, stage BoardStage, now time.Time) []t
 		if now.Sub(c.Created) > ClaimTTL {
 			continue // expired: claimant crashed before posting *-started
 		}
+		daemonID := ParseDaemonID(c.Body)
+		if daemonID == "" {
+			live = append(live, c) // unsigned: no identity to collapse against
+			continue
+		}
+		if cur, ok := newestByDaemon[daemonID]; !ok || commentNewer(c, cur) {
+			newestByDaemon[daemonID] = c
+		}
+	}
+	for _, c := range newestByDaemon {
 		live = append(live, c)
 	}
 	return live
