@@ -9,13 +9,13 @@ import (
 	"testing"
 )
 
-// TestPushBranch_RefusesBehindSource_LeavesOriginTip drives pushBranch against a
+// TestPushBranch_AdoptsOriginWhenTheSourceIsBehind drives pushBranch against a
 // real repository where the local source tip is strictly BEHIND origin: origin
-// carries newer work the local ref never saw. A lease push leases against
-// origin's own tip, so --force-with-lease would happily overwrite the newer
-// work with the older one. pushBranch must instead refuse, name the commit that
-// would be lost, and leave origin untouched (SC-2322).
-func TestPushBranch_RefusesBehindSource_LeavesOriginTip(t *testing.T) {
+// carries newer work the local ref never saw. Origin is a strict superset of the
+// local ref here, so reconcileWithOrigin takes it rather than refusing — the
+// newer work still survives, which is what SC-2322 protects; it is only
+// pointless to refuse a publish that would not have lost anything (SC-5596).
+func TestPushBranch_AdoptsOriginWhenTheSourceIsBehind(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
@@ -55,17 +55,21 @@ func TestPushBranch_RefusesBehindSource_LeavesOriginTip(t *testing.T) {
 	newTip := strings.TrimSpace(runGit(t, ws, "rev-parse", "HEAD"))
 	runGit(t, ws, "reset", "--hard", oldTip)
 
-	err := forgeDeployer{}.pushBranch(context.Background(), ws, branch)
-	if err == nil {
-		t.Fatal("pushBranch must refuse to publish a source behind origin")
+	published, err := forgeDeployer{}.pushBranch(context.Background(), ws, branch)
+	if err != nil {
+		t.Fatalf("a source behind origin must be adopted, not refused, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "newer work that must survive") {
-		t.Errorf("error must name the commit that would be lost, got: %v", err)
+	if published {
+		t.Error("nothing was published: origin already carried the newer work")
 	}
 
-	// Origin still holds the newer tip — nothing was overwritten.
+	// Origin still holds the newer tip — nothing was overwritten, and the local
+	// ref catches up to it instead of staying a stale ghost (SC-5596).
 	runGit(t, ws, "fetch", "origin")
 	if tip := strings.TrimSpace(runGit(t, ws, "rev-parse", "origin/"+branch)); tip != newTip {
 		t.Errorf("origin/%s = %s, want the preserved newer tip %s", branch, tip, newTip)
+	}
+	if tip := strings.TrimSpace(runGit(t, ws, "rev-parse", branch)); tip != newTip {
+		t.Errorf("the local ref must adopt origin: %s = %s, want %s (old tip was %s)", branch, tip, newTip, oldTip)
 	}
 }
