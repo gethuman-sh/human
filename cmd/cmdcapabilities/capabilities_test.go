@@ -28,7 +28,12 @@ func run(t *testing.T, ctx context.Context, probe capabilities.RemoteProbe, args
 func hasRemote(context.Context) bool { return true }
 
 func TestCapabilities_TextOutputForAStandaloneRun(t *testing.T) {
-	out := run(t, context.Background(), hasRemote)
+	// HUMAN_AGENT_NAME is ambient in a board-dispatched container (this very
+	// test can run inside one) and env.Lookup falls back to it — the empty
+	// override makes "standalone" hold regardless of what the process
+	// environment happens to carry, instead of only on a bare dev machine.
+	ctx := env.WithEnv(context.Background(), map[string]string{"HUMAN_AGENT_NAME": ""})
+	out := run(t, ctx, hasRemote)
 
 	require.Contains(t, out, "push       yes")
 	require.Contains(t, out, "deploy     yes")
