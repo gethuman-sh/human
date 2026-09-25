@@ -413,6 +413,9 @@ func findOption(opts []BoardOption, id string) (BoardOption, bool) {
 // [human:ticket-review] verdict exists yet, so planPrompt re-runs the gate with
 // the choice injected; a plain planning decision already carries a verdict, so
 // planPrompt skips the gate and goes straight to planning (SC-2137).
+//
+// A fix-pipeline ticket never reaches here — launchDecidedStage routes it to its
+// own pipeline before building a stage prompt (SC-5793).
 func stagePrompt(stage BoardStage, pmKey string, card BoardCard) string {
 	switch stage {
 	case BoardPlanning:

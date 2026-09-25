@@ -39,9 +39,11 @@ type fsmDoc struct {
 		Name      string   `json:"name"`
 		Src       []string `json:"src"`
 		Dst       string   `json:"dst"`
+		Actor     string   `json:"actor"`
 		Marker    string   `json:"marker"`
 		Where     string   `json:"where"`
 		Guard     string   `json:"guard"`
+		Doc       string   `json:"doc"`
 		MovesItem *bool    `json:"moves_item"`
 	} `json:"events"`
 	Unclassified struct {
@@ -196,4 +198,52 @@ func TestPipelineFSM_ReviewedGuardsTheCheckoutAgainstTheImplementationContainer(
 		"the document's budget must be the code's budget")
 	assert.Equal(t, 15*time.Minute, DeployCheckoutWaitBound,
 		"the code's budget must be the document's budget")
+}
+
+// SC-5793: every planning start classifies the ticket's pipeline first, and the
+// document has to say so — `human fsm where` serves this prose to the agents and
+// to a person reading a stuck card, and a planning transition that silently means
+// "feature" is the bug this ticket fixed.
+func TestPipelineFSM_PlanningTransitionsNameTheFixClassification(t *testing.T) {
+	doc := loadFSMDoc(t)
+	byName := map[string]struct {
+		src    []string
+		dst    string
+		doc    string
+		guard  string
+		where  string
+		actor  string
+		marker string
+	}{}
+	for _, e := range doc.Events {
+		byName[e.Name] = struct {
+			src    []string
+			dst    string
+			doc    string
+			guard  string
+			where  string
+			actor  string
+			marker string
+		}{e.Src, e.Dst, e.Doc, e.Guard, e.Where, e.Actor, e.Marker}
+	}
+
+	for _, name := range []string{"start-planning", "reopen-planning", "launch-refused-no-plan"} {
+		e, ok := byName[name]
+		require.True(t, ok, "%s is missing from the document", name)
+		assert.Contains(t, e.guard, "classifyFixPipeline",
+			"%s: the classification is a guard on this transition, not a footnote", name)
+		assert.Contains(t, e.doc, "SC-5793", "%s: say why the classification is there", name)
+	}
+
+	resumed, ok := byName["fix-resumed-instead-of-planning"]
+	require.True(t, ok, "the transition a classified planning start takes is missing")
+	assert.Equal(t, "preflight", resumed.dst)
+	assert.Equal(t, "daemon", resumed.actor)
+	assert.Equal(t, ImplementationStartedHeader, resumed.marker)
+	assert.Contains(t, resumed.where, "refuseIfUnplanned")
+	assert.Contains(t, resumed.where, "launchPlanningOrFix")
+	assert.ElementsMatch(t, []string{"implementing", "stopped", "substrate-down", "queued"}, resumed.src)
+
+	assert.Contains(t, byName["start-fix-run"].src, "nothing-to-do",
+		"re-opening a nothing-to-do on a bug resumes the fix pipeline")
 }

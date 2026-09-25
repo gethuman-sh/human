@@ -163,7 +163,7 @@ func TestNeedsPlanningNotRepostedButDrivenWhenAlreadySurfaced(t *testing.T) {
 	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
 	for _, a := range c.added {
@@ -192,7 +192,7 @@ func TestNeedsPlanningNotRepostedWhenLaterFailureLands(t *testing.T) {
 	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
 	needsPlanningPosts := 0
@@ -211,7 +211,7 @@ func TestNeedsPlanningNotRepostedWhenLaterFailureLands(t *testing.T) {
 func TestRefuseUnplannedProceedsOnReadError(t *testing.T) {
 	deps := newDeps(&fakeCommenter{}, &fakeLauncher{}, &fakeDeployer{})
 	deps.Commenter = listErrCommenter{&fakeCommenter{}}
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.False(t, refused, "a read blip must not be treated as a missing plan")
 }
@@ -222,12 +222,12 @@ func TestRefuseUnplannedScope(t *testing.T) {
 	c := &fakeCommenter{}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
 	t.Run("non-implementation stage", func(t *testing.T) {
-		refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardPlanning, true)
+		refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardPlanning, true)
 		require.NoError(t, err)
 		assert.False(t, refused)
 	})
 	t.Run("requiresPlan false", func(t *testing.T) {
-		refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, false)
+		refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, false)
 		require.NoError(t, err)
 		assert.False(t, refused)
 	})
@@ -240,7 +240,7 @@ func TestRefuseUnplannedScope(t *testing.T) {
 func TestRefuseUnplannedReportsPostError(t *testing.T) {
 	c := &fakeCommenter{addErr: errors.New("comment api down")}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.Error(t, err)
 	assert.True(t, refused)
 }
@@ -254,7 +254,7 @@ func TestUnplannedDrivenIntoPlanning(t *testing.T) {
 	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
 	require.Len(t, c.added, 2)
@@ -273,7 +273,7 @@ func TestUnplannedQuietWhilePlanningRuns(t *testing.T) {
 	}}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
 	assert.Empty(t, c.added)
@@ -321,7 +321,7 @@ func TestUnplannedEscalationRecognisedByFieldNotProse(t *testing.T) {
 	c := &fakeCommenter{comments: append(twoSpentCycles(), cmt(rewordedEscalation, time.Unix(7, 0)))}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
 	assert.Empty(t, c.added, "a standing escalation must be said once, whatever words it used")
@@ -338,7 +338,7 @@ func TestUnplannedEscalationLegacyProseStillRecognised(t *testing.T) {
 	c := &fakeCommenter{comments: append(twoSpentCycles(), cmt(legacyEscalation, time.Unix(7, 0)))}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
 	assert.Empty(t, c.added, "a standing escalation must be said once, whatever words it used")
@@ -391,7 +391,7 @@ func TestUnplannedEscalatesAfterBound(t *testing.T) {
 	c := &fakeCommenter{comments: twoSpentCycles()}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
 	require.Len(t, c.added, 1)
@@ -414,7 +414,7 @@ func TestUnplannedEscalationSaidOnce(t *testing.T) {
 		cmt(planStuckBody(2, cmt(NeedsPlanningHeader, time.Unix(1, 0))), time.Unix(7, 0)))}
 	l := &fakeLauncher{}
 	deps := newDeps(c, l, &fakeDeployer{})
-	refused, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
+	refused, _, err := deps.refuseIfUnplanned(context.Background(), "SC-1", BoardImplementation, true)
 	require.NoError(t, err)
 	assert.True(t, refused)
 	assert.Empty(t, c.added)
