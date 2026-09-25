@@ -103,6 +103,20 @@ type BoardCard struct {
 	// current stage — for a plan-done card, when the current plan landed. The
 	// board renders it as an age badge so work rotting in a queue is visible.
 	StageEnteredAt time.Time `json:"stage_entered_at,omitzero"`
+	// StageRunStartedAt is the Created time of the newest "-started" marker in
+	// the card's current stage — the boundary between phase records (stage.fix,
+	// stage.verify, …) the CURRENT run itself wrote and whatever an earlier,
+	// unrelated run left in the same per-ticket-key agentstate store. Those
+	// records accumulate for the ticket's whole life with no clearing path
+	// (agentstate.DefaultRetention is 14d), so without a lower bound a stage
+	// reaped or crashed before writing anything borrows a PREVIOUS run's phase
+	// and asserts it in the past tense about a run that never reached it
+	// (SC-3656 PR review finding). For a running card this coincides with
+	// StageEnteredAt (the started marker IS the newest marker in the stage);
+	// for an ended (failed/resolved) card it is earlier, bounding in the run
+	// that actually produced the outcome. Zero when the stage carries no
+	// started marker at all.
+	StageRunStartedAt time.Time `json:"stage_run_started_at,omitzero"`
 	// StageDaemonID is the posting daemon signed onto that same deciding marker
 	// (the machine: field, read via ParseDaemonID). It tells the durable
 	// stuck-running reconcile pass which daemon owns a running stage, so a peer
@@ -234,6 +248,11 @@ func DeriveBoardCard(comments []tracker.Comment, statusType tracker.Category, is
 	card := cardAt(placed)
 	card.HasPlan, card.HasRelatedRecord = hasPlan, hasRelated
 	card.StageEnteredAt, card.StageDaemonID = latest.Created, ParseDaemonID(latest.Body)
+	// card.Stage, not furthest: a superseded placement (SC-910) can move the
+	// card to a stage other than the one stageRank found furthest, and the
+	// boundary must track wherever `latest` — and so StageEnteredAt — actually
+	// landed, or it would bound the search to a stage the card no longer sits in.
+	card.StageRunStartedAt = latestRunStartInStage(comments, card.Stage)
 	card.EngineeringKey = firstEngineeringKey(comments)
 	card.Branch = latestPrefixedLine(comments, ReadyForReviewHeader, "branch:")
 	card.Commits = latestPrefixedLine(comments, ReadyForReviewHeader, "commits:")
@@ -588,6 +607,27 @@ func latestCommentWithHeader(comments []tracker.Comment, header string) (tracker
 		}
 	}
 	return latest, have
+}
+
+// latestRunStartInStage returns when the current run occurrence of stage began
+// — the Created time of the newest marker in stage whose state is BoardRunning
+// ("-started", or a mid-run marker like a passed review that keeps the card
+// running). Restarts within the same stage each post their own started marker,
+// so the newest one is the boundary for the run that produced the stage's
+// CURRENT outcome, not an earlier attempt's. Zero when the stage has no such
+// marker (a card with no recorded activity yet).
+func latestRunStartInStage(comments []tracker.Comment, stage BoardStage) time.Time {
+	var start time.Time
+	for _, c := range comments {
+		p, ok := fromMarker(c.Body)
+		if !ok || p.Stage() != stage || p.State() != BoardRunning {
+			continue
+		}
+		if start.IsZero() || c.Created.After(start) {
+			start = c.Created
+		}
+	}
+	return start
 }
 
 // latestCommentInStage returns the newest board marker classified into stage.

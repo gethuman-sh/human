@@ -38,14 +38,26 @@ var boardStages = map[string]bool{
 // thirty seconds and at fourteen hours, and exactly the same when the agent
 // behind it has been dead since yesterday.
 //
+// since bounds the search to entries at or after it — the boundary between what
+// THIS run wrote and whatever an earlier, unrelated run left in the same
+// per-ticket-key store. The store is keyed on the ticket alone, so a card's
+// phase records accumulate for the ticket's whole life with no clearing path; a
+// stage reaped or crashed before writing anything would otherwise borrow a
+// previous run's phase and assert it, past tense, as its own (SC-3656 PR review
+// finding). Pass the zero time to consider every entry, which a caller with no
+// run boundary to give (a card with no derived stage) falls back to.
+//
 // Empty name means nothing was recorded, which is honest: a run that wrote no
 // phase gets no phase shown rather than an invented one.
-func LatestActivity(entries []agentstate.Entry) (string, time.Time) {
+func LatestActivity(entries []agentstate.Entry, since time.Time) (string, time.Time) {
 	var name string
 	var at time.Time
 	for _, e := range entries {
 		phase, ok := strings.CutPrefix(e.Name, StagePrefix)
 		if !ok || phase == "" || boardStages[phase] {
+			continue
+		}
+		if e.UpdatedAt.Before(since) {
 			continue
 		}
 		// A phase namespace can nest (stage.pr-review.round); the head is the phase.

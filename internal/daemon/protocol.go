@@ -220,6 +220,14 @@ type BoardViewCard struct {
 	// landed (RFC3339); the board's age badge renders how long the card has
 	// been sitting. Empty when the card has no derived stage yet.
 	StageEnteredAt string `json:"stageEnteredAt,omitempty"`
+	// StageRunStartedAt is when the current run occurrence of the card's stage
+	// began (RFC3339) — the "-started" marker, earlier than StageEnteredAt for
+	// an ended card and equal to it for a running one. Not rendered by the
+	// frontend; the daemon's own attachActivity uses it to bound which
+	// stage.* phase records belong to THIS run rather than an earlier one left
+	// in the same per-ticket store (SC-3656). Empty when the stage has no
+	// started marker.
+	StageRunStartedAt string `json:"stageRunStartedAt,omitempty"`
 	// DeployPhase names the done-stage sub-phase of a running card: "pr-review"
 	// while the machine reviewer runs, "pr-fix" while the fixer runs, empty for
 	// a plain deploy. Both halves of the loop are named because they are

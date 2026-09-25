@@ -74,6 +74,7 @@ func Compose(results []daemon.TrackerIssuesResult, dockerAvailable bool) daemon.
 			ShippedPartial:         card.ShippedPartial,
 			ShippedPartialFollowOn: card.ShippedPartialFollowOn,
 			StageEnteredAt:         formatStageTime(card.StageEnteredAt),
+			StageRunStartedAt:      formatStageTime(card.StageRunStartedAt),
 			DeployPhase:            card.DeployPhase,
 			PRReviewRound:          card.PRReviewRound,
 			PRReviewRoundCap:       card.PRReviewRoundCap,
