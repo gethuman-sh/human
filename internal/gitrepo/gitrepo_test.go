@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -549,6 +551,35 @@ func TestCommitsBetween_error(t *testing.T) {
 	}
 }
 
+func TestUnpublishedCommits_keepsOnlyTheUnmatchedSide(t *testing.T) {
+	out := "+ aaa1111222233334444 fix\n" + "- bbb2222333344445555 already there\n"
+	var gotArgs []string
+	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		gotArgs = append([]string{name}, args...)
+		return []byte(out), nil
+	})
+	commits, err := UnpublishedCommits(context.Background(), "/repo", "origin/feat", "feat")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(commits) != 1 {
+		t.Fatalf("commits = %d, want 1 (only the '+' line)", len(commits))
+	}
+	if commits[0].SHA != "aaa1111222233334444" || commits[0].ShortSHA != "aaa1111" || commits[0].Subject != "fix" {
+		t.Errorf("commit = %+v", commits[0])
+	}
+	assertArgs(t, gotArgs, []string{"git", "-C", "/repo", "cherry", "-v", "origin/feat", "feat"})
+}
+
+func TestUnpublishedCommits_error(t *testing.T) {
+	withRunner(t, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, errors.New("unknown revision")
+	})
+	if _, err := UnpublishedCommits(context.Background(), "/repo", "origin/feat", "feat"); err == nil {
+		t.Fatal("expected error when git cherry fails")
+	}
+}
+
 func TestRebaseHead_argv(t *testing.T) {
 	var gotArgs []string
 	withRunner(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -1039,6 +1070,67 @@ func TestBranchesContaining_realGit(t *testing.T) {
 	want := []string{"fix/x", "main"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("branches = %v, want %v (origin's symbolic HEAD and the detached worktree's \"(no branch)\" must not surface as candidates)", got, want)
+	}
+}
+
+// TestUnpublishedCommits_realGit checks the patch-id comparison against real
+// git: a rebase rewrites every SHA while changing no content, so the rebased
+// copy must report zero unpublished commits against its own pre-rebase self,
+// while a commit unique to the other side is still found.
+func TestUnpublishedCommits_realGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	prev := runner
+	runner = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, name, args...).Output()
+	}
+	t.Cleanup(func() { runner = prev })
+
+	repoDir := t.TempDir()
+	run(t, repoDir, "init", "--quiet", "-b", "main")
+	run(t, repoDir, "config", "user.email", "test@example.com")
+	run(t, repoDir, "config", "user.name", "test")
+	writeFile(t, repoDir, "f.txt", "base\n")
+	run(t, repoDir, "add", "f.txt")
+	run(t, repoDir, "commit", "--quiet", "-m", "base")
+
+	run(t, repoDir, "checkout", "--quiet", "-b", "feat")
+	writeFile(t, repoDir, "feature.txt", "feature\n")
+	run(t, repoDir, "add", "feature.txt")
+	run(t, repoDir, "commit", "--quiet", "-m", "add feature")
+
+	run(t, repoDir, "checkout", "--quiet", "main")
+	writeFile(t, repoDir, "f.txt", "base\nadvance\n")
+	run(t, repoDir, "add", "f.txt")
+	run(t, repoDir, "commit", "--quiet", "-m", "advance")
+
+	// feat2 is feat rebased onto the advanced main — same content, new SHAs.
+	run(t, repoDir, "checkout", "--quiet", "-b", "feat2", "feat")
+	run(t, repoDir, "rebase", "--quiet", "main")
+
+	ctx := context.Background()
+	got, err := UnpublishedCommits(ctx, repoDir, "feat2", "feat")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("feat vs its rebased copy feat2 = %v, want none (a rebase changes no content)", got)
+	}
+
+	got, err = UnpublishedCommits(ctx, repoDir, "feat", "main")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].Subject != "advance" {
+		t.Errorf("main vs feat = %v, want the single main-only commit \"advance\"", got)
+	}
+}
+
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
