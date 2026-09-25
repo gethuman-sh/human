@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	stderrors "errors"
 	"strconv"
 	"strings"
 
@@ -362,6 +363,13 @@ func (d BoardTransitionDeps) pursueDecision(ctx context.Context, pmKey string, c
 
 	card := DeriveBoardCard(comments, tracker.CategoryUnstarted, false)
 	launched, err := d.launchDecidedStage(ctx, pmKey, stage, card, comments, chosen.Label)
+	if stderrors.Is(err, ErrClaimLost) {
+		// The lost claim this comment already named. It is a refusal, not a
+		// failure: the choice stays recorded, the card derives to queued, and the
+		// winning daemon starts the stage. Reporting it as an error would also red
+		// pursueSoleDirection, which the daemon takes for itself (SC-5094).
+		launched, err = false, nil
+	}
 	if err != nil {
 		return err
 	}

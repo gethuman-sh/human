@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	humanerrors "github.com/gethuman-sh/human/errors"
 	"github.com/gethuman-sh/human/internal/marker"
 	"github.com/gethuman-sh/human/internal/tracker"
 )
@@ -81,7 +82,7 @@ func TestLiveClaimIDs_sameSecondClaimAfterStartedStaysLive(t *testing.T) {
 		{ID: "10", Body: ImplementationStartedHeader, Created: tie},
 		claimComment("11", BoardImplementation, "d1", tie),
 	}
-	ids := liveClaimIDs(comments, BoardImplementation, tie)
+	ids := claimIDs(liveClaims(comments, BoardImplementation, tie))
 	assert.Equal(t, []string{"11"}, ids)
 
 	// A claim with a LOWER id than the started marker was posted before the
@@ -90,7 +91,17 @@ func TestLiveClaimIDs_sameSecondClaimAfterStartedStaysLive(t *testing.T) {
 		{ID: "11", Body: ImplementationStartedHeader, Created: tie},
 		claimComment("10", BoardImplementation, "d1", tie),
 	}
-	assert.Empty(t, liveClaimIDs(older, BoardImplementation, tie))
+	assert.Empty(t, liveClaims(older, BoardImplementation, tie))
+}
+
+// claimIDs renders live claims as their server ids, the shape the arbitration
+// assertions read.
+func claimIDs(cs []tracker.Comment) []string {
+	var ids []string
+	for _, c := range cs {
+		ids = append(ids, c.ID)
+	}
+	return ids
 }
 
 func TestClaimWon_singleClaimWins(t *testing.T) {
@@ -98,7 +109,8 @@ func TestClaimWon_singleClaimWins(t *testing.T) {
 	comments := []tracker.Comment{
 		claimComment("5", BoardImplementation, "d1", now),
 	}
-	assert.True(t, claimWon(comments, BoardImplementation, "5", "d1", now))
+	won, _ := claimWon(comments, BoardImplementation, "5", "d1", now)
+	assert.True(t, won)
 }
 
 func TestClaimWon_lowestIDWins(t *testing.T) {
@@ -108,8 +120,10 @@ func TestClaimWon_lowestIDWins(t *testing.T) {
 		claimComment("9", BoardImplementation, "d2", now),
 	}
 	// The lower id wins; the higher id backs off.
-	assert.True(t, claimWon(comments, BoardImplementation, "7", "d1", now))
-	assert.False(t, claimWon(comments, BoardImplementation, "9", "d2", now))
+	won, _ := claimWon(comments, BoardImplementation, "7", "d1", now)
+	assert.True(t, won)
+	won, _ = claimWon(comments, BoardImplementation, "9", "d2", now)
+	assert.False(t, won)
 }
 
 func TestClaimWon_numericNotLexical(t *testing.T) {
@@ -119,8 +133,10 @@ func TestClaimWon_numericNotLexical(t *testing.T) {
 		claimComment("9", BoardImplementation, "d1", now),
 		claimComment("10", BoardImplementation, "d2", now),
 	}
-	assert.True(t, claimWon(comments, BoardImplementation, "9", "d1", now))
-	assert.False(t, claimWon(comments, BoardImplementation, "10", "d2", now))
+	won, _ := claimWon(comments, BoardImplementation, "9", "d1", now)
+	assert.True(t, won)
+	won, _ = claimWon(comments, BoardImplementation, "10", "d2", now)
+	assert.False(t, won)
 }
 
 func TestClaimWon_supersededByStartedBacksOff(t *testing.T) {
@@ -133,8 +149,10 @@ func TestClaimWon_supersededByStartedBacksOff(t *testing.T) {
 		claimComment("9", BoardImplementation, "d2", now.Add(-2*time.Second)),
 		cmt(ImplementationStartedHeader, now.Add(-time.Second)),
 	}
-	assert.False(t, claimWon(comments, BoardImplementation, "7", "d1", now))
-	assert.False(t, claimWon(comments, BoardImplementation, "9", "d2", now))
+	won, _ := claimWon(comments, BoardImplementation, "7", "d1", now)
+	assert.False(t, won)
+	won, _ = claimWon(comments, BoardImplementation, "9", "d2", now)
+	assert.False(t, won)
 }
 
 func TestClaimWon_expiredCompetitorIgnored(t *testing.T) {
@@ -146,7 +164,8 @@ func TestClaimWon_expiredCompetitorIgnored(t *testing.T) {
 		claimComment("3", BoardImplementation, "dead", now.Add(-2*ClaimTTL)),
 		claimComment("8", BoardImplementation, "d1", now),
 	}
-	assert.True(t, claimWon(comments, BoardImplementation, "8", "d1", now))
+	won, _ := claimWon(comments, BoardImplementation, "8", "d1", now)
+	assert.True(t, won)
 }
 
 func TestClaimWon_retryAfterPreviousRunWins(t *testing.T) {
@@ -159,7 +178,8 @@ func TestClaimWon_retryAfterPreviousRunWins(t *testing.T) {
 		cmt(ImplementationFailedHeader+"\nboom", now.Add(-30*time.Minute)),
 		claimComment("20", BoardImplementation, "d1", now),
 	}
-	assert.True(t, claimWon(comments, BoardImplementation, "20", "d1", now))
+	won, _ := claimWon(comments, BoardImplementation, "20", "d1", now)
+	assert.True(t, won)
 }
 
 func TestClaimWon_recoversOwnIDWhenNotEchoed(t *testing.T) {
@@ -168,7 +188,8 @@ func TestClaimWon_recoversOwnIDWhenNotEchoed(t *testing.T) {
 		claimComment("4", BoardImplementation, "d1", now),
 	}
 	// Backend did not echo an id: the claim is recovered by this daemon's stamp.
-	assert.True(t, claimWon(comments, BoardImplementation, "", "d1", now))
+	won, _ := claimWon(comments, BoardImplementation, "", "d1", now)
+	assert.True(t, won)
 }
 
 func TestClaimWon_unidentifiableRefusesToWin(t *testing.T) {
@@ -178,7 +199,8 @@ func TestClaimWon_unidentifiableRefusesToWin(t *testing.T) {
 	}
 	// No echoed id and no claim carrying our daemon id: refuse to win rather than
 	// risk a double launch.
-	assert.False(t, claimWon(comments, BoardImplementation, "", "d1", now))
+	won, _ := claimWon(comments, BoardImplementation, "", "d1", now)
+	assert.False(t, won)
 }
 
 func TestClaimWon_otherStageDoesNotContend(t *testing.T) {
@@ -188,13 +210,104 @@ func TestClaimWon_otherStageDoesNotContend(t *testing.T) {
 		claimComment("2", BoardPlanning, "d2", now),
 		claimComment("6", BoardImplementation, "d1", now),
 	}
-	assert.True(t, claimWon(comments, BoardImplementation, "6", "d1", now))
+	won, _ := claimWon(comments, BoardImplementation, "6", "d1", now)
+	assert.True(t, won)
 }
 
-// A provisioned daemon that loses the claim launches nothing and posts no
-// started marker — it backs off silently (no error), leaving the stage to the
-// lower-id claimant.
-func TestStartAgentStage_claimLoserBacksOff(t *testing.T) {
+// SC-5094: two launches failed after posting their claim, leaving both claims
+// standing (a *-failed marker does not fulfil a claim). The daemon's own fresh
+// claim must not lose the race to its own leftovers — and must not have to wait
+// out ClaimTTL to win it.
+func TestClaimWon_ownStaleClaimsDoNotContend(t *testing.T) {
+	now := time.Unix(100000, 0)
+	comments := []tracker.Comment{
+		claimComment("1", BoardImplementation, "d1", now.Add(-2*time.Minute)),
+		cmt(ImplementationFailedHeader+"\nreason: boom", now.Add(-2*time.Minute).Add(time.Second)),
+		claimComment("2", BoardImplementation, "d1", now.Add(-time.Minute)),
+		cmt(ImplementationFailedHeader+"\nreason: boom", now.Add(-time.Minute).Add(time.Second)),
+		claimComment("3", BoardImplementation, "d1", now),
+	}
+	won, winner := claimWon(comments, BoardImplementation, "3", "d1", now)
+	assert.True(t, won, "a daemon must not lose the claim race to its own earlier claims")
+	assert.Empty(t, winner.ID)
+
+	// And it wins NOW, not five minutes from now: the measured lockout was the
+	// identical call only succeeding once the OLD leftover claims aged out via
+	// ClaimTTL (here, long past their own expiry at +3m/+4m) — evaluated right up
+	// to the edge of the FRESH claim's own TTL window, so this checks the
+	// same-daemon exemption itself rather than the rivals' unrelated expiry.
+	wonLater, _ := claimWon(comments, BoardImplementation, "3", "d1", now.Add(ClaimTTL-time.Second))
+	assert.True(t, wonLater)
+}
+
+// Supersession is same-daemon only: a peer's lower, live claim still wins, and
+// the loser learns who won so the refusal can name it.
+func TestClaimWon_peerLowerClaimStillWins(t *testing.T) {
+	now := time.Unix(100000, 0)
+	comments := []tracker.Comment{
+		claimComment("2", BoardImplementation, "d2", now),
+		claimComment("5", BoardImplementation, "d1", now),
+	}
+	won, winner := claimWon(comments, BoardImplementation, "5", "d1", now)
+	assert.False(t, won)
+	assert.Equal(t, "2", winner.ID)
+	assert.Equal(t, "d2", winner.DaemonID)
+}
+
+// The winner reported is the LOWEST blocking claim, whatever order the tracker
+// returned the thread in.
+func TestClaimWon_winnerIsLowestBlockingClaim(t *testing.T) {
+	now := time.Unix(100000, 0)
+	comments := []tracker.Comment{
+		claimComment("4", BoardImplementation, "d3", now),
+		claimComment("2", BoardImplementation, "d2", now),
+		claimComment("9", BoardImplementation, "d1", now),
+	}
+	won, winner := claimWon(comments, BoardImplementation, "9", "d1", now)
+	assert.False(t, won)
+	assert.Equal(t, "2", winner.ID)
+	assert.Equal(t, "d3", ParseDaemonID(comments[0].Body)) // fixture sanity
+}
+
+// SC-5094 end to end: the campaign thread — two claims from THIS daemon, each
+// followed by a failed launch — and a Build retry that must start an agent
+// immediately rather than bouncing for ClaimTTL. Driven through a signing
+// commenter so the claim this daemon posts carries machine: d1 exactly as in
+// production.
+func TestStartAgentStage_ownStaleClaimsDoNotBlockRetry(t *testing.T) {
+	now := time.Now()
+	c := &fakeCommenter{
+		comments: []tracker.Comment{
+			// Close enough to now that this retry stays under StageWaitThreshold: a
+			// [human:stage-wait] marker is an unrelated, orthogonal signal and would
+			// otherwise inflate c.added beyond the claim/started pair this test checks.
+			cmt(PlanReadyHeader, now.Add(-3*time.Minute)),
+			claimComment("1", BoardImplementation, "d1", now.Add(-2*time.Minute)),
+			cmt(ImplementationFailedHeader+"\nreason: boom", now.Add(-2*time.Minute).Add(time.Second)),
+			claimComment("2", BoardImplementation, "d1", now.Add(-time.Minute)),
+			cmt(ImplementationFailedHeader+"\nreason: boom", now.Add(-time.Minute).Add(time.Second)),
+		},
+		nextID: 2, // this daemon's fresh claim gets id "3" — higher than both leftovers
+	}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	deps.Commenter = marker.NewSigningCommenter(c, "d1", "rev1")
+	deps.DaemonID = "d1"
+
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardImplementation, To: BoardImplementation})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, l.calls, "the retry must launch, not lose to this daemon's own stale claims")
+	require.Len(t, c.added, 2)
+	assert.Contains(t, c.added[0], ClaimHeader)
+	assert.Contains(t, c.added[1], ImplementationStartedHeader)
+}
+
+// A person's drag that loses the claim race is REFUSED with a reason naming the
+// winner: it starts nothing here, and a drop that starts nothing must not look
+// like a drop that did nothing (SC-5094).
+func TestStartAgentStage_claimLoserSaysWhy(t *testing.T) {
 	competitorAt := time.Now()
 	c := &fakeCommenter{
 		comments: []tracker.Comment{
@@ -210,15 +323,57 @@ func TestStartAgentStage_claimLoserBacksOff(t *testing.T) {
 
 	err := deps.ApplyTransition(context.Background(),
 		BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrClaimLost)
+	assert.Contains(t, humanerrors.CauseChain(err), "other", "the refusal names the daemon that won")
 
 	assert.Zero(t, l.calls, "loser must not launch")
-	// Only the claim was posted; no started marker.
 	require.Len(t, c.added, 1)
 	assert.Contains(t, c.added[0], ClaimHeader)
 	for _, body := range c.added {
 		assert.NotContains(t, body, ImplementationStartedHeader)
 	}
+}
+
+// A machine-driven move carries a Cause and keeps the old silence: the winner is
+// starting the stage and nobody is waiting on an answer.
+func TestStartAgentStage_chainedLaunchLosesClaimSilently(t *testing.T) {
+	competitorAt := time.Now()
+	c := &fakeCommenter{
+		comments: []tracker.Comment{
+			cmt("[human:plan-ready]", competitorAt.Add(-time.Minute)),
+			claimComment("1", BoardImplementation, "other", competitorAt),
+		},
+		nextID: 100,
+	}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	deps.DaemonID = "d1"
+
+	err := deps.ApplyTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation, Cause: WaitCauseChain})
+	require.NoError(t, err)
+	assert.Zero(t, l.calls)
+}
+
+// The automatic retry sees a refusal, not a failure, so its attempt is refunded
+// (SC-2989) rather than charged for a launch another daemon made.
+func TestApplyRetryTransition_lostClaimIsARefusalNotAnError(t *testing.T) {
+	competitorAt := time.Now()
+	c := &fakeCommenter{
+		comments: []tracker.Comment{
+			cmt("[human:plan-ready]", competitorAt.Add(-time.Minute)),
+			claimComment("1", BoardImplementation, "other", competitorAt),
+		},
+		nextID: 100,
+	}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	deps.DaemonID = "d1"
+
+	launched, err := deps.ApplyRetryTransition(context.Background(),
+		BoardTransitionRequest{PMKey: "SC-1", From: BoardPlanning, To: BoardImplementation})
+	require.NoError(t, err)
+	assert.False(t, launched)
 }
 
 // A provisioned daemon that holds the lowest claim proceeds to post the started
@@ -283,7 +438,7 @@ func TestClaimMarker_notClassified(t *testing.T) {
 func TestWinClaim_noDaemonIDSkips(t *testing.T) {
 	c := &fakeCommenter{}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
-	won, err := deps.winClaim(context.Background(), "SC-1", BoardImplementation)
+	won, _, err := deps.winClaim(context.Background(), "SC-1", BoardImplementation)
 	require.NoError(t, err)
 	assert.True(t, won)
 	assert.Empty(t, c.added, "no claim posted when un-provisioned")
@@ -294,13 +449,13 @@ func TestWinClaim_postErrorPropagates(t *testing.T) {
 	c := &fakeCommenter{addErr: errors.New("tracker down")}
 	deps := newDeps(c, &fakeLauncher{}, &fakeDeployer{})
 	deps.DaemonID = "d1"
-	_, err := deps.winClaim(context.Background(), "SC-1", BoardImplementation)
+	_, _, err := deps.winClaim(context.Background(), "SC-1", BoardImplementation)
 	require.Error(t, err)
 }
 
 // A failure re-reading the thread after claiming surfaces as an error.
 func TestWinClaim_reReadErrorPropagates(t *testing.T) {
 	deps := BoardTransitionDeps{Commenter: listErrCommenter{&fakeCommenter{}}, DaemonID: "d1"}
-	_, err := deps.winClaim(context.Background(), "SC-1", BoardImplementation)
+	_, _, err := deps.winClaim(context.Background(), "SC-1", BoardImplementation)
 	require.Error(t, err)
 }

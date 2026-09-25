@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	stderrors "errors"
 	"math/big"
 	"strings"
 	"time"
@@ -15,9 +16,10 @@ import (
 // stage's *-started marker. When several daemons watch the same board they can
 // decide to launch the same stage at the same instant; each posts a claim, then
 // re-reads the thread, and the claim with the lowest server-assigned comment ID
-// wins (SC-660 rule 2). Losers back off silently. Like PlanCommentHeader and
-// CloseFailedHeader it is content, not a stage transition — it MUST never join
-// orderedMarkerSpecs, so ClassifyMarker never sees it and it never moves a card.
+// wins (SC-660 rule 2). A loser starts nothing and leaves the launch to the
+// winner. Like PlanCommentHeader and CloseFailedHeader it is content, not a
+// stage transition — it MUST never join orderedMarkerSpecs, so ClassifyMarker
+// never sees it and it never moves a card.
 const ClaimHeader = "[human:claim]"
 
 // ClaimStagePrefix is the marker-body line naming the stage a claim is for, so
@@ -36,12 +38,31 @@ var ClaimTTL = 5 * time.Minute
 // claimNow is the clock the claim gate reads, indirected so tests can pin it.
 var claimNow = time.Now
 
+// ErrClaimLost is the sentinel for a stage this daemon did not win: a live claim
+// with a lower comment id holds it, so the daemon that posted it is starting the
+// work and this one must not. A sentinel rather than a plain error because the
+// two sides of the race mean different things to different callers — a machine
+// driven chain or retry backs off without a word (the winner's own markers move
+// the card within seconds), while a person who asked for the launch is told why
+// nothing started. Mirrors ErrLaunchGateRefused (SC-5108) for the other launch
+// that starts nothing (SC-5094).
+var ErrClaimLost = stderrors.New("another daemon holds the winning claim for this stage")
+
+// claimWinner names the claim that beat this daemon's, so a refusal can say who
+// is starting the work instead of only that nothing started. Zero when this
+// daemon won, or when its own claim could not be identified at all.
+type claimWinner struct {
+	ID       string // the winning claim's server comment id
+	DaemonID string // the daemon that posted it; empty for an unsigned claim
+}
+
 // winClaim posts this daemon's claim for a stage, re-reads the thread, and
 // reports whether this daemon holds the lowest live claim — the winner that may
-// proceed to launch. Losers get (false, nil) and back off silently. It is the
-// cross-daemon arbiter for rule 2: N daemons that decide to launch the same
-// stage at the same instant each post a claim, and exactly one — the lowest
-// server comment ID — wins, deterministically and without new infrastructure.
+// proceed to launch. A loser starts nothing; whether that is reported depends on
+// who asked for the launch (claimLostError). It is the cross-daemon arbiter for
+// rule 2: N daemons that decide to launch the same stage at the same instant
+// each post a claim, and exactly one — the lowest server comment ID — wins,
+// deterministically and without new infrastructure.
 //
 // Claim arbitration is keyed on the daemon identity (rule 1). An un-provisioned
 // daemon (empty DaemonID) has no identity to contend with, so it skips the claim
@@ -49,65 +70,89 @@ var claimNow = time.Now
 // the signing decorator's empty-machine no-op. The claim body is signed at the
 // commenter choke point, so the daemon id round-trips as the marker's machine:
 // field for claimWon to read back.
-func (d BoardTransitionDeps) winClaim(ctx context.Context, pmKey string, stage BoardStage) (bool, error) {
+func (d BoardTransitionDeps) winClaim(ctx context.Context, pmKey string, stage BoardStage) (won bool, winner claimWinner, err error) {
 	if strings.TrimSpace(d.DaemonID) == "" {
-		return true, nil
+		return true, claimWinner{}, nil
 	}
 	body := markerBody(marker.Marker{Type: MarkerClaim, Fields: fields("stage", string(stage))})
 	posted, err := d.Commenter.AddComment(ctx, pmKey, body)
 	if err != nil {
-		return false, errors.WrapWithDetails(err, "posting stage claim", "pm", pmKey, "stage", string(stage))
+		return false, claimWinner{}, errors.WrapWithDetails(err, "posting stage claim", "pm", pmKey, "stage", string(stage))
 	}
 	comments, err := d.Commenter.ListComments(ctx, pmKey)
 	if err != nil {
-		return false, errors.WrapWithDetails(err, "re-reading thread after claim", "pm", pmKey, "stage", string(stage))
+		return false, claimWinner{}, errors.WrapWithDetails(err, "re-reading thread after claim", "pm", pmKey, "stage", string(stage))
 	}
 	myID := ""
 	if posted != nil {
 		myID = posted.ID
 	}
-	return claimWon(comments, stage, myID, d.DaemonID, claimNow()), nil
+	won, winner = claimWon(comments, stage, myID, d.DaemonID, claimNow())
+	return won, winner, nil
 }
 
 // claimWon reports whether this daemon's claim is the lowest live claim for the
-// stage. myClaimID is the server id echoed by AddComment; when a backend does
-// not echo one it is recovered from the thread as the newest claim carrying this
-// daemon's id. A claim that cannot be identified refuses to win, so a lost id
-// never risks a double launch (a later reconcile pass retries).
-func claimWon(comments []tracker.Comment, stage BoardStage, myClaimID, myDaemonID string, now time.Time) bool {
+// stage and, when it is not, which claim beat it. myClaimID is the server id
+// echoed by AddComment; when a backend does not echo one it is recovered from
+// the thread as the newest claim carrying this daemon's id. A claim that cannot
+// be identified refuses to win, so a lost id never risks a double launch (a
+// later reconcile pass retries).
+//
+// A daemon never contends with ITSELF. Its own earlier claims for the stage are
+// skipped, because the claim it just posted is the only one it will ever launch
+// — an older one is a leftover, not a rival. Without that, two launches that
+// failed after claiming (a *-failed marker does not fulfil a claim, so both
+// stayed live for ClaimTTL) made the next attempt lose the race to its own
+// leftovers, and the stage was unusable for five minutes (SC-5094). This is the
+// daemon identity rule 1 the arbitration always claimed to key on.
+func claimWon(comments []tracker.Comment, stage BoardStage, myClaimID, myDaemonID string, now time.Time) (won bool, winner claimWinner) {
 	if strings.TrimSpace(myClaimID) == "" {
 		myClaimID = newestOwnClaimID(comments, stage, myDaemonID)
 	}
 	if myClaimID == "" {
-		return false
+		return false, claimWinner{}
 	}
-	live := liveClaimIDs(comments, stage, now)
+	live := liveClaims(comments, stage, now)
 	mineLive := false
-	for _, id := range live {
-		if id == myClaimID {
+	for _, c := range live {
+		if c.ID == myClaimID {
 			mineLive = true
 			break
 		}
 	}
 	if !mineLive {
-		return false
+		return false, claimWinner{}
 	}
-	for _, id := range live {
-		if id != myClaimID && claimIDLess(id, myClaimID) {
-			return false
+	beaten := claimWinner{}
+	for _, c := range live {
+		if c.ID == myClaimID {
+			continue
+		}
+		if myDaemonID != "" && ParseDaemonID(c.Body) == myDaemonID {
+			continue // my own earlier claim: a leftover of mine, not a rival
+		}
+		if !claimIDLess(c.ID, myClaimID) {
+			continue
+		}
+		if beaten.ID == "" || claimIDLess(c.ID, beaten.ID) {
+			beaten = claimWinner{ID: c.ID, DaemonID: ParseDaemonID(c.Body)}
 		}
 	}
-	return true
+	if beaten.ID != "" {
+		return false, beaten
+	}
+	return true, claimWinner{}
 }
 
-// liveClaimIDs returns the ids of the stage's claims that are neither fulfilled
-// nor expired. A claim is fulfilled once a *-started marker for the stage lands
-// at or after it (the launch it represents happened), and expired once ClaimTTL
-// elapses with no such marker (the claimant crashed before launching). Only live
-// claims contend, so a fulfilled or dead claim never wedges the stage.
-func liveClaimIDs(comments []tracker.Comment, stage BoardStage, now time.Time) []string {
+// liveClaims returns the stage's claims that are neither fulfilled nor expired.
+// A claim is fulfilled once a *-started marker for the stage lands at or after
+// it (the launch it represents happened), and expired once ClaimTTL elapses with
+// no such marker (the claimant crashed before launching). Only live claims
+// contend, so a fulfilled or dead claim never wedges the stage. Whether a live
+// claim contends with a PARTICULAR daemon is claimWon's question, not this one's.
+func liveClaims(comments []tracker.Comment, stage BoardStage, now time.Time) []tracker.Comment {
 	startedComment, hasStarted := latestStartedFor(comments, stage)
-	var ids []string
+	var live []tracker.Comment
 	for _, c := range comments {
 		st, ok := claimStage(c.Body)
 		if !ok || st != stage {
@@ -119,9 +164,30 @@ func liveClaimIDs(comments []tracker.Comment, stage BoardStage, now time.Time) [
 		if now.Sub(c.Created) > ClaimTTL {
 			continue // expired: claimant crashed before posting *-started
 		}
-		ids = append(ids, c.ID)
+		live = append(live, c)
 	}
-	return ids
+	return live
+}
+
+// claimLostError renders a lost race as something a person can act on. It wraps
+// ErrClaimLost so a machine-driven caller can recognise and swallow it, and it
+// names the winning daemon in the MESSAGE rather than only in the details,
+// because the board surfaces the cause chain alone (desktop daemonCause).
+func claimLostError(pmKey string, stage BoardStage, winner claimWinner) error {
+	switch {
+	case winner.ID == "":
+		return errors.WrapWithDetails(ErrClaimLost,
+			"this machine's claim on the stage could not be identified, so nothing was started here",
+			"pm", pmKey, "stage", string(stage))
+	case winner.DaemonID == "":
+		return errors.WrapWithDetails(ErrClaimLost,
+			"another daemon claimed this stage first and is starting it; nothing started here",
+			"pm", pmKey, "stage", string(stage), "winning claim", winner.ID)
+	default:
+		return errors.WrapWithDetails(ErrClaimLost,
+			"daemon %s claimed this stage first and is starting it; nothing started here",
+			"winning daemon", winner.DaemonID, "pm", pmKey, "stage", string(stage), "winning claim", winner.ID)
+	}
 }
 
 // latestStartedFor returns the newest *-started marker comment for a stage, reusing

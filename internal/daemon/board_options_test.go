@@ -136,6 +136,39 @@ func TestApplyOptionPostsChoiceAndRelaunches(t *testing.T) {
 	assert.Contains(t, l.prompt, OptionChosenHeader)
 }
 
+// A lost claim on the decided stage keeps the choice recorded and queues the
+// card instead of erroring: another daemon's live, lower-id claim is already
+// starting the work (SC-5094).
+func TestApplyOption_lostClaimKeepsTheChoiceAndQueuesTheCard(t *testing.T) {
+	base := time.Now().Add(-time.Hour)
+	c := &fakeCommenter{
+		comments: []tracker.Comment{
+			cmt(PlanReadyHeader, base.Add(-time.Minute)),
+			cmt(ImplementationStartedHeader, base),
+			cmt(ReviewCompleteHeader+"\nverdict: fail", base.Add(1*time.Minute)),
+			cmt(optionsBody, base.Add(2*time.Minute)),
+			// Live (recent), unlike the rest of this fixture's hour-old thread: a
+			// claim that old would already be past ClaimTTL and not contend.
+			claimComment("1", BoardImplementation, "other", time.Now()),
+		},
+		nextID: 10,
+	}
+	l := &fakeLauncher{}
+	deps := newDeps(c, l, &fakeDeployer{})
+	deps.DaemonID = "d1"
+
+	err := deps.ApplyOption(context.Background(), BoardOptionRequest{PMKey: "SC-9", OptionID: "2"})
+	require.NoError(t, err)
+
+	require.Len(t, c.added, 2)
+	assert.Contains(t, c.added[0], OptionChosenHeader)
+	assert.Contains(t, c.added[1], ClaimHeader)
+	for _, body := range c.added {
+		assert.NotContains(t, body, ImplementationStartedHeader)
+	}
+	assert.Zero(t, l.calls)
+}
+
 // A block naming the planning stage relaunches the planner, not the executor.
 func TestApplyOptionPlanningStage(t *testing.T) {
 	c := &fakeCommenter{comments: []tracker.Comment{
