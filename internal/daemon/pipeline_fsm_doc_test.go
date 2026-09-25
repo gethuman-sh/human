@@ -8,7 +8,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,18 +30,26 @@ import (
 type fsmDoc struct {
 	Initial string `json:"initial"`
 	States  []struct {
-		Name     string `json:"name"`
-		Terminal bool   `json:"terminal"`
+		Name             string `json:"name"`
+		Terminal         bool   `json:"terminal"`
+		Holds            string `json:"holds"`
+		IfNothingHappens string `json:"if_nothing_happens"`
 	} `json:"states"`
 	Events []struct {
-		Name   string   `json:"name"`
-		Src    []string `json:"src"`
-		Dst    string   `json:"dst"`
-		Marker string   `json:"marker"`
+		Name      string   `json:"name"`
+		Src       []string `json:"src"`
+		Dst       string   `json:"dst"`
+		Marker    string   `json:"marker"`
+		Where     string   `json:"where"`
+		Guard     string   `json:"guard"`
+		MovesItem *bool    `json:"moves_item"`
 	} `json:"events"`
 	Unclassified struct {
 		Markers []string `json:"markers"`
 	} `json:"unclassified_markers"`
+	Invariants struct {
+		Constants map[string]string `json:"constants"`
+	} `json:"invariants"`
 }
 
 func loadFSMDoc(t *testing.T) fsmDoc {
@@ -133,4 +143,57 @@ func TestPipelineFSM_EveryPromptedMarkerIsAccountedFor(t *testing.T) {
 	require.Empty(t, orphans,
 		"these markers are posted by a prompt but are neither a transition nor listed as deliberately not one — "+
 			"decide which they are and record it in internal/pipelinefsm/pipeline-fsm.json")
+}
+
+// SC-5691: the deploy works the same checkout the implementation container
+// holds, and since SC-782 the verdict is posted from inside that container
+// minutes before it exits. The document said nothing about it —
+// reviewed.if_nothing_happens waited only "for the Deploy gesture" — so the
+// guard has to be in the prose an agent is served (`human fsm where`) as well
+// as in the code.
+func TestPipelineFSM_ReviewedGuardsTheCheckoutAgainstTheImplementationContainer(t *testing.T) {
+	doc := loadFSMDoc(t)
+
+	var reviewed struct{ holds, ifNothing string }
+	for _, s := range doc.States {
+		if s.Name == "reviewed" {
+			reviewed.holds, reviewed.ifNothing = s.Holds, s.IfNothingHappens
+		}
+	}
+	require.NotEmpty(t, reviewed.ifNothing, "the document must declare a reviewed state")
+	assert.Contains(t, reviewed.ifNothing, "implementation container",
+		"reviewed must say the Deploy waits for the container that holds the checkout")
+	assert.Contains(t, reviewed.ifNothing, "DeployCheckoutWaitBound",
+		"the wait must name its bound, so a reader is told the number instead of the name")
+	assert.Contains(t, reviewed.holds, "SC-782",
+		"reviewed must say why a verdict is not evidence the checkout is free")
+
+	found := false
+	for _, e := range doc.Events {
+		if e.Name != "deploy-launch-deferred" {
+			continue
+		}
+		found = true
+		require.Equal(t, []string{"reviewed"}, e.Src)
+		assert.Equal(t, "reviewed", e.Dst, "a deferred launch moves nothing")
+		require.NotNil(t, e.MovesItem)
+		assert.False(t, *e.MovesItem, "it must declare moves_item: false")
+		assert.Empty(t, e.Marker, "the absence of a marker IS the behaviour")
+		assert.Contains(t, e.Where, "awaitCheckoutFree", "name the code that defers")
+	}
+	assert.True(t, found, "deploy-launch-deferred is missing from the document")
+
+	for _, name := range []string{"start-pr-review", "redeploy-after-outage", "start-deploy"} {
+		for _, e := range doc.Events {
+			if e.Name == name {
+				assert.Contains(t, e.Guard, "checkout",
+					"%s enters the done stage, so it must declare the checkout interlock as a guard", name)
+			}
+		}
+	}
+
+	assert.Contains(t, doc.Invariants.Constants["DeployCheckoutWaitBound"], "15m",
+		"the document's budget must be the code's budget")
+	assert.Equal(t, 15*time.Minute, DeployCheckoutWaitBound,
+		"the code's budget must be the document's budget")
 }
