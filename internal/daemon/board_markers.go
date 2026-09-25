@@ -94,28 +94,36 @@ const (
 	// fact spelled two ways, and the protocol's writer takes the type while the
 	// board's readers match the header. Two literals would be one edit away from
 	// disagreeing.
-	MarkerDeployed               = "deployed"
-	MarkerDeployFailed           = "deploy-failed"
-	MarkerNeedsPlanning          = "needs-planning"
-	MarkerPRReviewFailed         = "pr-review-failed"
-	MarkerReviewFailed           = "review-failed"
-	MarkerPipeline               = "pipeline"
-	MarkerOptions                = "options"
-	MarkerOptionChosen           = "option-chosen"
-	MarkerStageWait              = "stage-wait"
-	MarkerClaim                  = "claim"
-	MarkerCloseFailed            = "close-failed"
-	MarkerRunCancelled           = "run-cancelled"
-	MarkerPlanningFailed         = "planning-failed"
-	MarkerImplementationFailed   = "implementation-failed"
-	MarkerPlanningOutage         = "planning-outage"
-	MarkerImplementationOutage   = "implementation-outage"
-	MarkerReviewOutage           = "review-outage"
-	MarkerDeployOutage           = "deploy-outage"
-	MarkerPRReviewStarted        = "pr-review-started"
-	MarkerPRReviewPassed         = "pr-review-passed"
-	MarkerPRFixStarted           = "pr-fix-started"
-	MarkerDeployFixStarted       = "deploy-fix-started"
+	MarkerDeployed             = "deployed"
+	MarkerDeployFailed         = "deploy-failed"
+	MarkerNeedsPlanning        = "needs-planning"
+	MarkerPRReviewFailed       = "pr-review-failed"
+	MarkerReviewFailed         = "review-failed"
+	MarkerPipeline             = "pipeline"
+	MarkerOptions              = "options"
+	MarkerOptionChosen         = "option-chosen"
+	MarkerStageWait            = "stage-wait"
+	MarkerClaim                = "claim"
+	MarkerCloseFailed          = "close-failed"
+	MarkerRunCancelled         = "run-cancelled"
+	MarkerPlanningFailed       = "planning-failed"
+	MarkerImplementationFailed = "implementation-failed"
+	MarkerPlanningOutage       = "planning-outage"
+	MarkerImplementationOutage = "implementation-outage"
+	MarkerReviewOutage         = "review-outage"
+	MarkerDeployOutage         = "deploy-outage"
+	MarkerPRReviewStarted      = "pr-review-started"
+	MarkerPRReviewPassed       = "pr-review-passed"
+	MarkerPRFixStarted         = "pr-fix-started"
+	MarkerDeployFixStarted     = "deploy-fix-started"
+	// MarkerDeployRetry records that a PERSON re-ran Deploy on a red card. It
+	// exists because the deploy-fix budget is counted over the ticket's whole
+	// life: once spent, nothing the machine reads could tell a person asking for
+	// another attempt from the machine looping, so the retry reproduced its own
+	// failure and offered no way out (SC-5595). Durable on the ticket rather
+	// than held in memory, because the failure that spends it happens minutes
+	// later, in another goroutine and possibly another process.
+	MarkerDeployRetry            = "deploy-retry"
 	MarkerHandoffCheckUnreadable = "handoff-check-unreadable"
 	// MarkerLateResultReconciled records that a stage's result arrived after the
 	// stage had already been marked failed, with no relaunch marker between the
@@ -201,6 +209,14 @@ const (
 	// Each occurrence is one deploy-fix round — the budget counts them (deployFixRounds),
 	// except one followed by a deploy-outage: an outage exit is refunded, not charged.
 	DeployFixStartedHeader = "[human:" + MarkerDeployFixStarted + "]"
+
+	// DeployRetryHeader marks the grant described at MarkerDeployRetry. Like
+	// PlanCommentHeader / CloseFailedHeader / ClaimHeader it is content, NOT a
+	// stage transition: it MUST never join orderedMarkerSpecs, so ClassifyMarker
+	// never sees it and it never moves a card. The movement a retry causes is
+	// already recorded by the [human:pr-review-started] marker runDoneStage
+	// posts (the start-pr-review transition).
+	DeployRetryHeader = "[human:" + MarkerDeployRetry + "]"
 
 	// Outage markers are the NON-failing transient twin of the *-failed headers,
 	// one per relaunchable stage. A stage that reported the substrate it needs was
@@ -430,6 +446,7 @@ var daemonMarkerTypes = []string{
 	MarkerPRReviewPassed,
 	MarkerPRFixStarted,
 	MarkerDeployFixStarted,
+	MarkerDeployRetry,
 	MarkerHandoffCheckUnreadable,
 	MarkerLateResultReconciled,
 	MarkerIdeaDraft,
