@@ -1127,12 +1127,11 @@ func TestUnpublishedCommits_realGit(t *testing.T) {
 	}
 }
 
-// TestMergesCleanly_realGit checks the two outcomes reconcileWithOrigin relies
-// on: a change that touches content the other side already touches conflicts
-// (the shape of a person's manual conflict resolution), and a change on
-// content the other side never touches merges cleanly (the shape of a commit
-// the other side has nowhere at all).
-func TestMergesCleanly_realGit(t *testing.T) {
+// TestAppliesCleanly_realGit checks the outcomes reconcileWithOrigin relies
+// on, against real git: a conflicting commit does not apply, and an unrelated
+// commit stacked on top of it does — the stacked shape is the one a
+// whole-history probe gets wrong.
+func TestAppliesCleanly_realGit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -1159,28 +1158,41 @@ func TestMergesCleanly_realGit(t *testing.T) {
 	writeFile(t, repoDir, "f.txt", "base\nother-line-edit\n")
 	run(t, repoDir, "add", "f.txt")
 	run(t, repoDir, "commit", "--quiet", "-m", "conflicting edit f.txt")
+	conflicting := revParse(t, repoDir, "HEAD")
 
-	run(t, repoDir, "checkout", "--quiet", "-b", "unrelated", "main")
+	// The shape that matters: an unrelated commit stacked ON TOP of the
+	// conflicting one. Its history conflicts with same-line; its own change
+	// does not.
 	writeFile(t, repoDir, "g.txt", "new file\n")
 	run(t, repoDir, "add", "g.txt")
 	run(t, repoDir, "commit", "--quiet", "-m", "add g.txt")
+	stacked := revParse(t, repoDir, "HEAD")
 
 	ctx := context.Background()
-	clean, err := MergesCleanly(ctx, repoDir, "other-line", "same-line")
+	clean, err := AppliesCleanly(ctx, repoDir, "same-line", conflicting)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if clean {
-		t.Error("two edits of the same line must conflict, not merge cleanly")
+		t.Error("two edits of the same line must conflict, not apply cleanly")
 	}
 
-	clean, err = MergesCleanly(ctx, repoDir, "other-line", "unrelated")
+	clean, err = AppliesCleanly(ctx, repoDir, "same-line", stacked)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !clean {
-		t.Error("a new file untouched by the other side must merge cleanly")
+		t.Error("a new file's commit must apply cleanly even when the commit under it conflicts")
 	}
+}
+
+func revParse(t *testing.T, dir, ref string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", ref).Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s: %v", ref, err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func writeFile(t *testing.T, dir, name, content string) {

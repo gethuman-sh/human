@@ -3169,21 +3169,47 @@ func reconcileWithOrigin(ctx context.Context, dir, branch, localSHA, originSHA s
 		// re-authors the same edit against different context and so never
 		// matches by patch-id either, despite carrying nothing lost — that is
 		// precisely the shape this arm exists to adopt (SC-5596). A merge-tree
-		// probe distinguishes them: local's change CONFLICTING with origin means
+		// probe distinguishes them: a local change CONFLICTING with origin means
 		// origin already touches the same region (consistent with a resolution),
-		// so origin is trusted as designed; a CLEAN merge proves local adds
+		// so origin is trusted as designed; a CLEAN apply proves local adds
 		// content origin has nowhere, and must not be silently discarded —
 		// refuse by falling through to the named-heads comparison instead.
-		clean, err := gitrepo.MergesCleanly(ctx, dir, originSHA, localSHA)
+		//
+		// The probe is per COMMIT, not per branch: the local ref usually holds
+		// the stale conflicting commit AND, on top of it, the unrelated commit
+		// worth protecting, and a whole-branch merge conflicts on the stale one
+		// and would carry the clean one off the branch with it, silently.
+		protected, err := anyAppliesCleanly(ctx, dir, "origin/"+branch, branch, originSHA)
 		if err != nil {
 			return publishLease, err
 		}
-		if !clean {
+		if !protected {
 			return publishAdopt, nil
 		}
 		return reconcileByContent(ctx, dir, branch, localSHA, originSHA)
 	}
 	return reconcileByContent(ctx, dir, branch, localSHA, originSHA)
+}
+
+// anyAppliesCleanly reports whether any commit on branch that upstream lacks
+// (by patch-id) would apply cleanly onto tip on its own. Each commit is probed
+// by its OWN change, not by the history under it, so one conflicting commit
+// cannot answer for the commits stacked on top of it (SC-5596).
+func anyAppliesCleanly(ctx context.Context, dir, upstream, branch, tip string) (bool, error) {
+	localOnly, err := gitrepo.UnpublishedCommits(ctx, dir, upstream, branch)
+	if err != nil {
+		return false, err
+	}
+	for _, c := range localOnly {
+		clean, err := gitrepo.AppliesCleanly(ctx, dir, tip, c.SHA)
+		if err != nil {
+			return false, err
+		}
+		if clean {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // reconcileByContent decides a divergence the base tip cannot, comparing the two

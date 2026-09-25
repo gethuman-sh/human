@@ -188,6 +188,38 @@ func TestPushBranch_RefusesToDropAnUnpublishedFixerCommit(t *testing.T) {
 	}
 }
 
+// TestPushBranch_RefusesToDropAnUnpublishedCommitBehindAStaleOne is the SC-5596
+// round-3 reproduction: the local ref holds the stale conflicting commit AND, on
+// top of it, an unpublished commit on a file origin never touches. A whole-branch
+// merge probe conflicts on the stale commit and so adopted origin over both —
+// the unrelated commit left the branch with no error and a green deploy. The
+// commit is probed on its own, applies cleanly, and the publish must refuse.
+func TestPushBranch_RefusesToDropAnUnpublishedCommitBehindAStaleOne(t *testing.T) {
+	requireGit(t)
+	ws, branch, repaired, _ := repairedOriginRepo(t)
+	runGit(t, ws, "checkout", branch)
+	write(t, ws, "fix.txt", "the fixer's change\n")
+	runGit(t, ws, "add", "fix.txt")
+	runGit(t, ws, "commit", "-m", "pr-fix: unrelated unpublished work")
+	fixerCommit := runGit(t, ws, "rev-parse", "HEAD")
+	runGit(t, ws, "checkout", "main")
+
+	_, err := forgeDeployer{}.pushBranch(context.Background(), ws, branch)
+	if err == nil {
+		t.Fatal("a conflicting stale commit must not carry an unrelated unpublished commit off the branch")
+	}
+	if !strings.Contains(err.Error(), "pr-fix") {
+		t.Errorf("the refusal must name the unpublished commit, got: %v", err)
+	}
+	if tip := runGit(t, ws, "rev-parse", branch); tip != fixerCommit {
+		t.Errorf("the local ref must still hold the unpublished commit: %s = %s, want %s", branch, tip, fixerCommit)
+	}
+	runGit(t, ws, "fetch", "origin")
+	if tip := runGit(t, ws, "rev-parse", "origin/"+branch); tip != repaired {
+		t.Errorf("origin/%s must be untouched at %s, got %s", branch, repaired, tip)
+	}
+}
+
 // Neither side is a ghost: each carries a change the other does not, and both
 // contain the base. Nothing mechanical can choose, so the publish refuses and
 // names both heads — it never deletes either side's work.
